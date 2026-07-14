@@ -1,0 +1,13 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.next/
+.pnpm-store/
+.turbo/
+coverage/
+dist/
+node_modules/
+playwright-report/
+test-results/
+*.log

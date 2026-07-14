@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+  - workers/*
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
