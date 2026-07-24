@@ -1,0 +1,13 @@
+{
+  "name": "@novus/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The local Novus coding-agent worker.",
+  "scripts": {
+    "start": "node --experimental-strip-types src/worker.ts"
+  },
+  "dependencies": {
+    "@novus/contracts": "workspace:*"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "@novus/session-service",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The authoritative multiplayer session and event service."
+}

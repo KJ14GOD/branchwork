@@ -1,28 +1,16 @@
 {
-  "name": "branchwork",
+  "name": "novus",
   "version": "0.0.0",
   "private": true,
-  "packageManager": "pnpm@11.7.0",
+  "description": "A multiplayer coding harness for humans and AI agents.",
+  "packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72",
   "engines": {
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "pnpm -r build",
-    "dev": "pnpm --parallel --filter @branchwork/web --filter @branchwork/api dev",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "lint": "pnpm -r lint",
-    "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck"
-  },
-  "devDependencies": {
-    "@eslint/js": "9.39.5",
-    "@types/node": "24.13.3",
-    "eslint": "9.39.5",
-    "eslint-config-next": "16.2.10",
-    "prettier": "3.9.5",
-    "typescript": "6.0.3",
-    "typescript-eslint": "8.63.0",
-    "vitest": "4.1.10"
+    "build": "pnpm --recursive --if-present build",
+    "dev": "pnpm --recursive --parallel --if-present dev",
+    "typecheck": "pnpm --recursive --if-present typecheck",
+    "test": "pnpm --recursive --if-present test"
   }
 }

@@ -1,13 +1,35 @@
-.DS_Store
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+build/
+.vite/
+
+# Test output
+coverage/
+test-results/
+playwright-report/
+
+# Environment and secrets
 .env
 .env.*
 !.env.example
-.next/
-.pnpm-store/
-.turbo/
-coverage/
-dist/
-node_modules/
-playwright-report/
-test-results/
+
+# Local databases and runtime state
+*.db
+*.db-shm
+*.db-wal
+.novus/
+
+# Logs
 *.log
+
+# Operating systems and editors
+.DS_Store
+.idea/
+.vscode/
+
+# TypeScript
+*.tsbuildinfo

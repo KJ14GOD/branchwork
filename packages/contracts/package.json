@@ -1,18 +1,13 @@
 {
-  "name": "@branchwork/contracts",
+  "name": "@novus/contracts",
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "description": "Shared Novus event, command, and API contracts.",
   "exports": {
-    ".": "./src/index.ts"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "lint": "eslint src",
-    "test": "vitest run --passWithNoTests",
-    "typecheck": "tsc --noEmit"
+    ".": "./src/contracts.ts"
   },
   "dependencies": {
-    "zod": "4.4.3"
+    "zod": "^4.4.3"
   }
 }

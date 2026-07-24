@@ -1,0 +1,6 @@
+{
+  "name": "@novus/guest",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The browser client for guests joining a Novus session."
+}
