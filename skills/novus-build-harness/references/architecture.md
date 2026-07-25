@@ -19,6 +19,8 @@ worker.ts
       → search_repository
       → read_file
       → propose_patch (preview only, never writes)
+      → approval gate (write and dangerous classes)
+      → apply_patch (the only tool that mutates the repository)
       → ordered tool events
   → final grounded response
        │
@@ -40,6 +42,7 @@ authority and reaches the host only through the event stream.
 | `apps/worker/src/anthropic-model.ts` | Anthropic message/tool translation |
 | `apps/worker/src/agent-runner.ts` | Bounded model/tool execution loop |
 | `apps/worker/src/tools.ts` | Repository-confined native tools |
+| `apps/worker/src/policy.ts` | Permission classes and the approval gate |
 | `apps/worker/src/diff.ts` | Dependency-free unified diff rendering |
 | `apps/worker/src/event-server.ts` | Loopback SSE stream of one session's log |
 | `apps/worker/src/worker.ts` | Current executable composition root |
@@ -65,6 +68,12 @@ authority and reaches the host only through the event stream.
 - A renderer that streams the timeline live, validates every event against the
   shared contract before display, renders proposed patches as reviewable
   diffs, and exposes real actions through a `/` command palette.
+- Permissioned patch application. `apply_patch` re-reads the file, refuses when
+  it drifted from the proposal's base content, and refuses to apply twice.
+- An approval boundary in front of every write and dangerous tool, emitting
+  `tool.approval_requested` then `tool.approved` or `tool.denied`. With no gate
+  configured the default denies, so a missing policy cannot silently permit a
+  write. A denial returns to the model as an explained decision.
 - Tool failures returned to the model as observations (`is_error` tool results)
   so it can correct a rejected call, recorded as `tool.failed` events.
 - Sixteen-step emergency loop ceiling, a three-consecutive-failure cap, and a
@@ -74,7 +83,8 @@ authority and reaches the host only through the event stream.
 
 - The runnable goal and participant/session IDs are still hardcoded.
 - The event store is in memory.
-- A proposed patch cannot yet be applied; there is no approval boundary.
+- The approval gate is programmatic only. Nothing asks a human at approval
+  time; the host pre-authorises tools before the run starts.
 - No command execution, tests, Git tools, cancellation, persistence, cost
   accounting, or session resume exists yet.
 - Routing is fixed to one model.
@@ -99,10 +109,11 @@ authority and reaches the host only through the event stream.
 
 ## Next milestone
 
-Add permissioned patch application. `apply_patch` should take a `patchId` from
-an existing proposal, re-read the file, refuse to write when it no longer
-matches the recorded base content, and pass through an explicit approval
-boundary that emits `tool.approval_requested` and `tool.approved` events.
+Add command and test execution — capability 4. `run_command` and `run_tests`
+are the first dangerous-class tools, so they inherit the approval gate but need
+their own containment: an explicit argv rather than a shell string, a working
+directory confined to the repository, a timeout, output caps, and redaction of
+environment values before command output enters an event.
 
-This is the first Write-class tool, so it is also where the permission classes
-in V1_README become real rather than implied.
+The approval gate should also gain a human-facing implementation, so a run can
+pause for a decision rather than only consulting a pre-authorised allow list.

@@ -46,10 +46,19 @@ export const ProposePatchToolCallSchema = z.object({
   }),
 });
 
+export const ApplyPatchToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("apply_patch"),
+  input: z.object({
+    patchId: IdSchema,
+  }),
+});
+
 export const ToolCallSchema = z.discriminatedUnion("name", [
   ReadFileToolCallSchema,
   SearchRepositoryToolCallSchema,
   ProposePatchToolCallSchema,
+  ApplyPatchToolCallSchema,
 ]);
 
 export type ToolCall = z.infer<typeof ToolCallSchema>;
@@ -94,10 +103,23 @@ export const ProposePatchToolResultSchema = z.object({
   }),
 });
 
+export const ApplyPatchToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("apply_patch"),
+  output: z.object({
+    patchId: IdSchema,
+    path: z.string().min(1),
+    status: z.literal("applied"),
+    additions: z.number().int().nonnegative(),
+    deletions: z.number().int().nonnegative(),
+  }),
+});
+
 export const ToolResultSchema = z.discriminatedUnion("name", [
   ReadFileToolResultSchema,
   SearchRepositoryToolResultSchema,
   ProposePatchToolResultSchema,
+  ApplyPatchToolResultSchema,
 ]);
 
 export type ToolResult = z.infer<typeof ToolResultSchema>;
@@ -208,6 +230,37 @@ export const ToolCompletedEventSchema = EventEnvelopeSchema.extend({
   }),
 });
 
+// Write and dangerous tool calls cross an approval boundary before they run.
+// The request and its resolution are both recorded, so a receipt can show who
+// authorised every consequential action.
+export const ToolApprovalRequestedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("tool.approval_requested"),
+  payload: z.object({
+    runId: IdSchema,
+    call: ToolCallSchema,
+    toolClass: z.enum(["write", "dangerous"]),
+  }),
+});
+
+export const ToolApprovedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("tool.approved"),
+  payload: z.object({
+    runId: IdSchema,
+    toolCallId: IdSchema,
+    approvedBy: IdSchema,
+  }),
+});
+
+export const ToolDeniedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("tool.denied"),
+  payload: z.object({
+    runId: IdSchema,
+    toolCallId: IdSchema,
+    deniedBy: IdSchema,
+    reason: z.string().min(1),
+  }),
+});
+
 // A tool that rejects is an observation, not the end of the run: the message
 // is returned to the model so it can correct the call.
 export const ToolFailedEventSchema = EventEnvelopeSchema.extend({
@@ -234,6 +287,9 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   RunProgressEventSchema,
   DirectionSubmittedEventSchema,
   ToolRequestedEventSchema,
+  ToolApprovalRequestedEventSchema,
+  ToolApprovedEventSchema,
+  ToolDeniedEventSchema,
   ToolCompletedEventSchema,
   ToolFailedEventSchema,
   RunCompletedEventSchema,
@@ -264,6 +320,21 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   ToolRequestedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ToolApprovalRequestedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ToolApprovedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ToolDeniedEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,

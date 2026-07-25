@@ -8,7 +8,9 @@ import { InMemorySessionEventStore } from "@novus/session-service";
 
 import { AgentRunner } from "./agent-runner.ts";
 import { FixedModelRouter, ScriptedModelAdapter } from "./model.ts";
+import { AllowListApprovalGate } from "./policy.ts";
 import {
+  ApplyPatchTool,
   ProposePatchTool,
   ReadFileTool,
   SearchRepositoryTool,
@@ -389,6 +391,211 @@ test("a run that cannot recover fails with an event rather than throwing", async
 
   // It gives up at the consecutive-failure cap, well before the step ceiling.
   assert.equal(tool.calls, 3);
+});
+
+const patchSelection = { provider: "scripted", model: "patch-applier" };
+
+// Proposes a patch, then applies whatever patchId came back.
+const applyingAdapter = {
+  selection: patchSelection,
+  async complete(request: {
+    toolExchanges: readonly {
+      status: string;
+      result?: { name: string; output: Record<string, unknown> };
+    }[];
+  }) {
+    const proposal = request.toolExchanges.find(
+      (exchange) =>
+        exchange.status === "ok" && exchange.result?.name === "propose_patch",
+    );
+
+    if (!proposal) {
+      return {
+        type: "tool_call" as const,
+        call: {
+          id: "propose-call",
+          name: "propose_patch" as const,
+          input: {
+            path: "greet.ts",
+            intent: "Greet with an exclamation mark.",
+            edits: [
+              {
+                oldText: "return `hello ${name}`;",
+                newText: "return `hello ${name}!`;",
+              },
+            ],
+          },
+        },
+      };
+    }
+
+    const applied = request.toolExchanges.length > 1;
+
+    if (applied) {
+      return { type: "final" as const, summary: "Done." };
+    }
+
+    return {
+      type: "tool_call" as const,
+      call: {
+        id: "apply-call",
+        name: "apply_patch" as const,
+        input: {
+          patchId: proposal.result!.output.patchId as string,
+        },
+      },
+    };
+  },
+};
+
+const buildPatchRunner = (
+  repositoryPath: string,
+  eventStore: InMemorySessionEventStore,
+  gate?: AllowListApprovalGate,
+) => {
+  const proposeTool = new ProposePatchTool(repositoryPath);
+
+  return new AgentRunner(
+    eventStore,
+    new FixedModelRouter(patchSelection),
+    [applyingAdapter],
+    [proposeTool, new ApplyPatchTool(repositoryPath, proposeTool)],
+    gate,
+  );
+};
+
+test("apply_patch writes the file once approved", async () => {
+  const repositoryPath = await mkdtemp(join(tmpdir(), "novus-apply-"));
+  const filePath = join(repositoryPath, "greet.ts");
+  await writeFile(filePath, `${originalSource}\n`, "utf8");
+
+  const eventStore = new InMemorySessionEventStore();
+  const runner = buildPatchRunner(
+    repositoryPath,
+    eventStore,
+    new AllowListApprovalGate(["apply_patch"], "host"),
+  );
+
+  try {
+    const result = await runner.run({
+      sessionId: "apply-session",
+      actorId: "agent-1",
+      goal: "Improve the greeting.",
+    });
+
+    const requested = result.events.find(
+      (event) => event.type === "tool.approval_requested",
+    );
+    assert.equal(requested?.type, "tool.approval_requested");
+
+    if (requested?.type === "tool.approval_requested") {
+      assert.equal(requested.payload.toolClass, "write");
+      assert.equal(requested.payload.call.name, "apply_patch");
+    }
+
+    const approved = result.events.find(
+      (event) => event.type === "tool.approved",
+    );
+    assert.equal(approved?.type, "tool.approved");
+
+    if (approved?.type === "tool.approved") {
+      assert.equal(approved.payload.approvedBy, "host");
+    }
+
+    // The approval precedes the write in the ordered log.
+    const approvalIndex = result.events.findIndex(
+      (event) => event.type === "tool.approved",
+    );
+    const appliedIndex = result.events.findIndex(
+      (event) =>
+        event.type === "tool.completed" &&
+        event.payload.result.name === "apply_patch",
+    );
+    assert.ok(approvalIndex >= 0 && approvalIndex < appliedIndex);
+
+    assert.match(await readFile(filePath, "utf8"), /hello \$\{name\}!/);
+  } finally {
+    await rm(repositoryPath, { recursive: true, force: true });
+  }
+});
+
+test("a denied apply_patch leaves the working tree untouched", async () => {
+  const repositoryPath = await mkdtemp(join(tmpdir(), "novus-denied-"));
+  const filePath = join(repositoryPath, "greet.ts");
+  await writeFile(filePath, `${originalSource}\n`, "utf8");
+
+  const eventStore = new InMemorySessionEventStore();
+  // No gate configured: writes must be denied, never silently allowed.
+  const runner = buildPatchRunner(repositoryPath, eventStore);
+
+  try {
+    const result = await runner.run({
+      sessionId: "denied-session",
+      actorId: "agent-1",
+      goal: "Improve the greeting.",
+    });
+
+    const denied = result.events.find((event) => event.type === "tool.denied");
+    assert.equal(denied?.type, "tool.denied");
+
+    if (denied?.type === "tool.denied") {
+      assert.match(denied.payload.reason, /no approval gate is configured/);
+    }
+
+    assert.ok(!result.events.some((event) => event.type === "tool.approved"));
+    assert.equal(await readFile(filePath, "utf8"), `${originalSource}\n`);
+  } finally {
+    await rm(repositoryPath, { recursive: true, force: true });
+  }
+});
+
+test("apply_patch refuses a file that changed after the proposal", async () => {
+  const repositoryPath = await mkdtemp(join(tmpdir(), "novus-drift-"));
+  const filePath = join(repositoryPath, "greet.ts");
+  await writeFile(filePath, `${originalSource}\n`, "utf8");
+
+  const proposeTool = new ProposePatchTool(repositoryPath);
+  const applyTool = new ApplyPatchTool(repositoryPath, proposeTool);
+
+  try {
+    const proposed = await proposeTool.execute({
+      id: "propose-call",
+      name: "propose_patch",
+      input: {
+        path: "greet.ts",
+        intent: "Greet with an exclamation mark.",
+        edits: [
+          {
+            oldText: "return `hello ${name}`;",
+            newText: "return `hello ${name}!`;",
+          },
+        ],
+      },
+    });
+
+    assert.equal(proposed.name, "propose_patch");
+
+    // Someone edits the file between proposal and application.
+    await writeFile(filePath, "export const greet = () => {};\n", "utf8");
+
+    if (proposed.name === "propose_patch") {
+      await assert.rejects(
+        applyTool.execute({
+          id: "apply-call",
+          name: "apply_patch",
+          input: { patchId: proposed.output.patchId },
+        }),
+        /changed after this patch was proposed/,
+      );
+    }
+
+    assert.equal(
+      await readFile(filePath, "utf8"),
+      "export const greet = () => {};\n",
+    );
+  } finally {
+    await rm(repositoryPath, { recursive: true, force: true });
+  }
 });
 
 test("propose_patch rejects an ambiguous edit", async () => {

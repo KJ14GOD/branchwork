@@ -7,7 +7,9 @@ import { AgentRunner } from "./agent-runner.ts";
 import { AnthropicModelAdapter } from "./anthropic-model.ts";
 import { startEventServer } from "./event-server.ts";
 import { FixedModelRouter } from "./model.ts";
+import { AllowListApprovalGate, DenyAllApprovalGate } from "./policy.ts";
 import {
+  ApplyPatchTool,
   ProposePatchTool,
   ReadFileTool,
   SearchRepositoryTool,
@@ -18,8 +20,11 @@ const DEFAULT_GOAL =
 
 const modelSelection = {
   provider: "anthropic",
-  model: "claude-sonnet-5",
+  model: "claude-opus-5",
 };
+
+// Writes are denied unless the operator opts in for this run.
+const allowWrites = process.env.NOVUS_ALLOW_WRITES === "1";
 
 const sessionId = process.env.NOVUS_SESSION ?? "session-1";
 const goal = process.argv.slice(2).join(" ").trim() || DEFAULT_GOAL;
@@ -39,8 +44,37 @@ eventStore.subscribe((event) => {
     );
   }
 
+  if (event.type === "tool.approval_requested") {
+    console.log(
+      `? ${event.payload.call.name} requires ${event.payload.toolClass} approval`,
+    );
+  }
+
+  if (event.type === "tool.approved") {
+    console.log(`● approved by ${event.payload.approvedBy}`);
+  }
+
+  if (event.type === "tool.denied") {
+    console.log(`⊘ denied: ${event.payload.reason}`);
+  }
+
+  if (event.type === "tool.failed") {
+    console.log(`✗ ${event.payload.name}: ${event.payload.message}`);
+  }
+
+  if (event.type === "run.failed") {
+    console.log(`✗ run failed: ${event.payload.reason}`);
+  }
+
   if (event.type === "tool.completed") {
     const { result } = event.payload;
+
+    if (result.name === "apply_patch") {
+      console.log(
+        `✓ apply_patch ${result.output.path} (+${result.output.additions}/-${result.output.deletions}, written)`,
+      );
+      return;
+    }
 
     if (result.name === "propose_patch") {
       console.log(
@@ -58,8 +92,12 @@ const eventServer = await startEventServer(eventStore);
 
 console.log(`novus worker · session ${sessionId}`);
 console.log(`repository ${repositoryPath}`);
+console.log(
+  `writes      ${allowWrites ? "approved (NOVUS_ALLOW_WRITES=1)" : "denied — set NOVUS_ALLOW_WRITES=1 to permit apply_patch"}`,
+);
 console.log(`events     ${eventServer.url}/events?session=${sessionId}\n`);
 
+const proposePatchTool = new ProposePatchTool(repositoryPath);
 const agentRunner = new AgentRunner(
   eventStore,
   new FixedModelRouter(modelSelection),
@@ -67,8 +105,12 @@ const agentRunner = new AgentRunner(
   [
     new SearchRepositoryTool(repositoryPath),
     new ReadFileTool(repositoryPath),
-    new ProposePatchTool(repositoryPath),
+    proposePatchTool,
+    new ApplyPatchTool(repositoryPath, proposePatchTool),
   ],
+  allowWrites
+    ? new AllowListApprovalGate(["apply_patch"], "host")
+    : new DenyAllApprovalGate(),
 );
 
 try {

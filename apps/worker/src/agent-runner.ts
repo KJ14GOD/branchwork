@@ -10,6 +10,11 @@ import type {
   ModelRouter,
   ModelToolExchange,
 } from "./model.ts";
+import {
+  classifyTool,
+  DenyAllApprovalGate,
+  type ApprovalGate,
+} from "./policy.ts";
 import type { AgentTool } from "./tools.ts";
 
 export type AgentRunInput = {
@@ -40,17 +45,22 @@ export class AgentRunner {
   private readonly router: ModelRouter;
   private readonly adapters: readonly ModelAdapter[];
   private readonly tools: readonly AgentTool[];
+  private readonly approvals: ApprovalGate;
 
   constructor(
     eventStore: InMemorySessionEventStore,
     router: ModelRouter,
     adapters: readonly ModelAdapter[],
     tools: readonly AgentTool[],
+    // Absent a configured gate, write and dangerous tools are denied rather
+    // than silently allowed.
+    approvals: ApprovalGate = new DenyAllApprovalGate(),
   ) {
     this.eventStore = eventStore;
     this.router = router;
     this.adapters = adapters;
     this.tools = tools;
+    this.approvals = approvals;
   }
 
   async run(input: AgentRunInput): Promise<AgentRunResult> {
@@ -145,6 +155,57 @@ export class AgentRunner {
 
       if (!tool) {
         return failRun(`No tool is configured for ${response.call.name}.`);
+      }
+
+      const toolClass = classifyTool(response.call.name);
+
+      if (toolClass !== "read") {
+        this.eventStore.append({
+          sessionId: input.sessionId,
+          actorId: input.actorId,
+          type: "tool.approval_requested",
+          payload: { runId: run.id, call: response.call, toolClass },
+        });
+
+        const decision = await this.approvals.review({
+          call: response.call,
+          toolClass,
+        });
+
+        if (!decision.approved) {
+          this.eventStore.append({
+            sessionId: input.sessionId,
+            actorId: input.actorId,
+            type: "tool.denied",
+            payload: {
+              runId: run.id,
+              toolCallId: response.call.id,
+              deniedBy: decision.deniedBy,
+              reason: decision.reason,
+            },
+          });
+
+          // A denial is a decision, not a malfunction: tell the model why and
+          // let it respond, without counting toward the failure budget.
+          toolExchanges.push({
+            status: "error",
+            call: response.call,
+            message: `Denied: ${decision.reason}`,
+          });
+
+          continue;
+        }
+
+        this.eventStore.append({
+          sessionId: input.sessionId,
+          actorId: input.actorId,
+          type: "tool.approved",
+          payload: {
+            runId: run.id,
+            toolCallId: response.call.id,
+            approvedBy: decision.approvedBy,
+          },
+        });
       }
 
       let result;

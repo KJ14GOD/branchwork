@@ -6,6 +6,7 @@ import { AgentRunner } from "./agent-runner.ts";
 import { startEventServer } from "./event-server.ts";
 import { FixedModelRouter, type ModelRequest, type ModelResponse } from "./model.ts";
 import {
+  ApplyPatchTool,
   ProposePatchTool,
   ReadFileTool,
   SearchRepositoryTool,
@@ -79,10 +80,20 @@ const script: ModelResponse[] = [
       },
     },
   },
+  // Attempts the write. The fixture configures no approval gate, so this is
+  // denied and the repository is left untouched.
+  {
+    type: "tool_call",
+    call: {
+      id: "call-5",
+      name: "apply_patch",
+      input: { patchId: "resolved-at-runtime" },
+    },
+  },
   {
     type: "final",
     summary:
-      "Proposed a doc comment above AgentRunner in apps/worker/src/agent-runner.ts. The patch is a preview only — nothing was written to the working tree.",
+      "Proposed a doc comment above AgentRunner in apps/worker/src/agent-runner.ts. The write was denied, so nothing reached the working tree.",
   },
 ];
 
@@ -91,7 +102,27 @@ const adapter = {
   async complete(request: ModelRequest): Promise<ModelResponse> {
     await new Promise((resolve) => setTimeout(resolve, 450));
 
-    return script[request.toolExchanges.length] ?? script.at(-1)!;
+    const step = script[request.toolExchanges.length] ?? script.at(-1)!;
+
+    // Substitute the patchId the real propose_patch tool actually returned.
+    if (step.type === "tool_call" && step.call.name === "apply_patch") {
+      const proposal = request.toolExchanges.find(
+        (exchange) =>
+          exchange.status === "ok" && exchange.result.name === "propose_patch",
+      );
+
+      if (proposal?.status === "ok" && proposal.result.name === "propose_patch") {
+        return {
+          type: "tool_call",
+          call: {
+            ...step.call,
+            input: { patchId: proposal.result.output.patchId },
+          },
+        };
+      }
+    }
+
+    return step;
   },
 };
 
@@ -101,6 +132,9 @@ const eventServer = await startEventServer(eventStore);
 console.log(`novus fixture · session ${sessionId}`);
 console.log(`events ${eventServer.url}/events?session=${sessionId}\n`);
 
+const proposePatchTool = new ProposePatchTool(repositoryPath);
+// No approval gate: the fixture demonstrates the boundary denying a write, so
+// running it never modifies the repository.
 const runner = new AgentRunner(
   eventStore,
   new FixedModelRouter(selection),
@@ -108,7 +142,8 @@ const runner = new AgentRunner(
   [
     new SearchRepositoryTool(repositoryPath),
     new ReadFileTool(repositoryPath),
-    new ProposePatchTool(repositoryPath),
+    proposePatchTool,
+    new ApplyPatchTool(repositoryPath, proposePatchTool),
   ],
 );
 

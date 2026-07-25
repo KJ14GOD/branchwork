@@ -1,5 +1,5 @@
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { rgPath } from "@vscode/ripgrep";
 
@@ -248,6 +248,9 @@ export type PatchProposal = {
   intent: string;
   baseContent: string;
   proposedContent: string;
+  additions: number;
+  deletions: number;
+  appliedAt: string | null;
 };
 
 const countOccurrences = (haystack: string, needle: string): number => {
@@ -280,6 +283,14 @@ export class ProposePatchTool implements AgentTool {
 
   getProposal(patchId: string): PatchProposal | undefined {
     return this.proposals.get(patchId);
+  }
+
+  markApplied(patchId: string): void {
+    const proposal = this.proposals.get(patchId);
+
+    if (proposal) {
+      proposal.appliedAt = new Date().toISOString();
+    }
   }
 
   async execute(call: ToolCall): Promise<ToolResult> {
@@ -339,6 +350,9 @@ export class ProposePatchTool implements AgentTool {
       intent: call.input.intent,
       baseContent,
       proposedContent,
+      additions,
+      deletions,
+      appliedAt: null,
     });
 
     return ToolResultSchema.parse({
@@ -352,6 +366,78 @@ export class ProposePatchTool implements AgentTool {
         diff,
         additions,
         deletions,
+      },
+    });
+  }
+}
+
+export interface PatchProposalSource {
+  getProposal(patchId: string): PatchProposal | undefined;
+  markApplied(patchId: string): void;
+}
+
+/**
+ * Writes a previously proposed patch to the working tree.
+ *
+ * This is the only tool that mutates the repository, so it refuses anything it
+ * cannot account for: an unknown proposal, a proposal already applied, or a
+ * file whose contents drifted from what the diff was computed against. The
+ * approval boundary lives in the runner — by the time this executes, the call
+ * has already been authorised.
+ */
+export class ApplyPatchTool implements AgentTool {
+  readonly name = "apply_patch";
+  private readonly repositoryPath: string;
+  private readonly proposals: PatchProposalSource;
+
+  constructor(repositoryPath: string, proposals: PatchProposalSource) {
+    this.repositoryPath = resolve(repositoryPath);
+    this.proposals = proposals;
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The apply_patch tool cannot execute ${call.name}.`);
+    }
+
+    const proposal = this.proposals.getProposal(call.input.patchId);
+
+    if (!proposal) {
+      throw new Error(
+        `No patch proposal exists for ${call.input.patchId}. Call propose_patch first and apply the id it returns.`,
+      );
+    }
+
+    if (proposal.appliedAt) {
+      throw new Error(
+        `Patch ${proposal.patchId} was already applied at ${proposal.appliedAt}.`,
+      );
+    }
+
+    const { targetPath } = await resolveInsideRepository(
+      this.repositoryPath,
+      proposal.path,
+    );
+    const currentContent = await readFile(targetPath, "utf8");
+
+    if (currentContent !== proposal.baseContent) {
+      throw new Error(
+        `${proposal.path} changed after this patch was proposed, so the diff no longer applies. Re-read the file and propose the change again.`,
+      );
+    }
+
+    await writeFile(targetPath, proposal.proposedContent, "utf8");
+    this.proposals.markApplied(proposal.patchId);
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        patchId: proposal.patchId,
+        path: proposal.path,
+        status: "applied",
+        additions: proposal.additions,
+        deletions: proposal.deletions,
       },
     });
   }

@@ -101,6 +101,23 @@ const PROPOSE_PATCH_TOOL = {
   },
 };
 
+const APPLY_PATCH_TOOL = {
+  name: "apply_patch",
+  description:
+    "Apply a patch you previously proposed, writing it to the working tree. Takes the patchId returned by propose_patch. This requires human approval and may be denied. It fails if the file changed since the patch was proposed.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      patchId: {
+        type: "string",
+        description: "The patchId returned by a previous propose_patch call.",
+      },
+    },
+    required: ["patchId"],
+    additionalProperties: false,
+  },
+};
+
 const buildMessages = (request: ModelRequest): MessageParam[] => {
   const messages: MessageParam[] = [
     {
@@ -162,8 +179,13 @@ export class AnthropicModelAdapter implements ModelAdapter {
       model: this.selection.model,
       max_tokens: 4_096,
       system:
-        "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. When a change is needed, call propose_patch — you cannot write to the working tree, so a reviewed proposal is the only way your change reaches the code.",
-      tools: [SEARCH_REPOSITORY_TOOL, READ_FILE_TOOL, PROPOSE_PATCH_TOOL],
+        "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. When a change is needed, call propose_patch to produce a reviewable diff, then call apply_patch with the patchId it returns to write it. apply_patch requires human approval and may be denied — if it is, explain what you would have changed rather than trying to work around the denial.",
+      tools: [
+        SEARCH_REPOSITORY_TOOL,
+        READ_FILE_TOOL,
+        PROPOSE_PATCH_TOOL,
+        APPLY_PATCH_TOOL,
+      ],
       tool_choice: {
         type: "auto",
         disable_parallel_tool_use: true,

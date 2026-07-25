@@ -10,6 +10,9 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "run.progress": "·",
   "direction.submitted": "»",
   "tool.requested": "→",
+  "tool.approval_requested": "?",
+  "tool.approved": "●",
+  "tool.denied": "⊘",
   "tool.completed": "✓",
   "tool.failed": "✗",
   "run.completed": "■",
@@ -25,7 +28,11 @@ const summariseCall = (call: Extract<SessionEvent, { type: "tool.requested" }>["
     return `"${call.input.query}"${call.input.path ? ` in ${call.input.path}` : ""}`;
   }
 
-  return `${call.input.path} · ${call.input.edits.length} edit${call.input.edits.length === 1 ? "" : "s"}`;
+  if (call.name === "propose_patch") {
+    return `${call.input.path} · ${call.input.edits.length} edit${call.input.edits.length === 1 ? "" : "s"}`;
+  }
+
+  return call.input.patchId;
 };
 
 const ToolResultPanel = ({
@@ -119,6 +126,28 @@ export const EventRow = ({
       case "run.completed":
         return <span className="event__text">{event.payload.summary}</span>;
 
+      case "tool.approval_requested":
+        return (
+          <span className="event__text event__text--muted">
+            <span className="tool__name">{event.payload.call.name}</span>{" "}
+            requires {event.payload.toolClass} approval
+          </span>
+        );
+
+      case "tool.approved":
+        return (
+          <span className="event__text event__text--approved">
+            Approved by {event.payload.approvedBy}
+          </span>
+        );
+
+      case "tool.denied":
+        return (
+          <span className="event__text event__text--error">
+            Denied by {event.payload.deniedBy} — {event.payload.reason}
+          </span>
+        );
+
       case "tool.failed":
         return (
           <span className="event__text event__text--error">
@@ -157,6 +186,20 @@ export const EventRow = ({
                 deletions: result.output.deletions,
               }}
             />
+          );
+        }
+
+        if (result.name === "apply_patch") {
+          return (
+            <span className="event__text">
+              Applied {result.output.path}{" "}
+              <span className="patch__count patch__count--add">
+                +{result.output.additions}
+              </span>{" "}
+              <span className="patch__count patch__count--del">
+                −{result.output.deletions}
+              </span>
+            </span>
           );
         }
 
