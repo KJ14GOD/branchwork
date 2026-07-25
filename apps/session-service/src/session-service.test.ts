@@ -77,3 +77,33 @@ test("rejects an invalid event payload", () => {
     ),
   );
 });
+
+test("notifies subscribers when an event is appended", () => {
+  const eventStore = new InMemorySessionEventStore();
+  const receivedTypes: string[] = [];
+  const unsubscribe = eventStore.subscribe((event) => {
+    receivedTypes.push(event.type);
+  });
+
+  eventStore.append({
+    sessionId: "subscription-session",
+    actorId: "agent-1",
+    type: "run.progress",
+    payload: {
+      runId: "run-1",
+      message: "Searching repository",
+    },
+  });
+  unsubscribe();
+  eventStore.append({
+    sessionId: "subscription-session",
+    actorId: "agent-1",
+    type: "run.progress",
+    payload: {
+      runId: "run-1",
+      message: "This should not be observed",
+    },
+  });
+
+  assert.deepEqual(receivedTypes, ["run.progress"]);
+});

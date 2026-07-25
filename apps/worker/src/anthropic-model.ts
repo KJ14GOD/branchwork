@@ -29,6 +29,34 @@ const READ_FILE_TOOL = {
   },
 };
 
+const SEARCH_REPOSITORY_TOOL = {
+  name: "search_repository",
+  description:
+    "Search text across files in the selected repository. Returns repository-relative paths, line numbers, and matching lines. Use this to discover relevant files before reading them.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      query: {
+        type: "string",
+        description: "Text or regular expression to search for.",
+      },
+      path: {
+        type: "string",
+        description:
+          "Optional repository-relative directory to search. Defaults to the entire repository.",
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: 100,
+        description: "Maximum number of matching lines. Defaults to 30.",
+      },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
+
 const buildMessages = (request: ModelRequest): MessageParam[] => {
   const messages: MessageParam[] = [
     {
@@ -83,8 +111,12 @@ export class AnthropicModelAdapter implements ModelAdapter {
       model: this.selection.model,
       max_tokens: 4_096,
       system:
-        "You are a coding agent investigating a local repository. Use read_file when repository evidence is needed. Never invent file contents.",
-      tools: [READ_FILE_TOOL],
+        "You are a coding agent investigating a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents.",
+      tools: [SEARCH_REPOSITORY_TOOL, READ_FILE_TOOL],
+      tool_choice: {
+        type: "auto",
+        disable_parallel_tool_use: true,
+      },
       messages: buildMessages(request),
     });
 

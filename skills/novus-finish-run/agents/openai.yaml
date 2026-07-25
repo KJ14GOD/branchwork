@@ -1,0 +1,4 @@
+interface:
+  display_name: "Novus Finish Run"
+  short_description: "Verify and publish a completed Novus coding run"
+  default_prompt: "Use $novus-finish-run to verify, commit, and push the current Novus coding run."

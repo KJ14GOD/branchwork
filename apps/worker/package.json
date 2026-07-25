@@ -12,6 +12,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.114.0",
     "@novus/contracts": "workspace:*",
-    "@novus/session-service": "workspace:*"
+    "@novus/session-service": "workspace:*",
+    "@vscode/ripgrep": "^1.18.0"
   }
 }

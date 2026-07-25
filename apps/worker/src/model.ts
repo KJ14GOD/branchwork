@@ -62,7 +62,7 @@ export class ScriptedModelAdapter implements ModelAdapter {
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const toolResult = request.toolExchanges[0]?.result;
 
-    if (!toolResult) {
+    if (!toolResult || toolResult.name !== "read_file") {
       return {
         type: "tool_call",
         call: {

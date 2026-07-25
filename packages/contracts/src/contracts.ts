@@ -10,7 +10,7 @@ export const ModelSelectionSchema = z.object({
 
 export type ModelSelection = z.infer<typeof ModelSelectionSchema>;
 
-export const ToolCallSchema = z.object({
+export const ReadFileToolCallSchema = z.object({
   id: IdSchema,
   name: z.literal("read_file"),
   input: z.object({
@@ -18,9 +18,24 @@ export const ToolCallSchema = z.object({
   }),
 });
 
+export const SearchRepositoryToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("search_repository"),
+  input: z.object({
+    query: z.string().min(1),
+    path: z.string().min(1).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+  }),
+});
+
+export const ToolCallSchema = z.discriminatedUnion("name", [
+  ReadFileToolCallSchema,
+  SearchRepositoryToolCallSchema,
+]);
+
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 
-export const ToolResultSchema = z.object({
+export const ReadFileToolResultSchema = z.object({
   toolCallId: IdSchema,
   name: z.literal("read_file"),
   output: z.object({
@@ -28,6 +43,26 @@ export const ToolResultSchema = z.object({
     content: z.string(),
   }),
 });
+
+export const SearchRepositoryToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("search_repository"),
+  output: z.object({
+    query: z.string().min(1),
+    matches: z.array(
+      z.object({
+        path: z.string().min(1),
+        line: z.number().int().positive(),
+        text: z.string(),
+      }),
+    ),
+  }),
+});
+
+export const ToolResultSchema = z.discriminatedUnion("name", [
+  ReadFileToolResultSchema,
+  SearchRepositoryToolResultSchema,
+]);
 
 export type ToolResult = z.infer<typeof ToolResultSchema>;
 

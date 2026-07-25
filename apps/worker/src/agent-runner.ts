@@ -29,6 +29,8 @@ const selectionsMatch = (
 ): boolean =>
   first.provider === second.provider && first.model === second.model;
 
+const MAX_MODEL_STEPS = 16;
+
 export class AgentRunner {
   private readonly eventStore: InMemorySessionEventStore;
   private readonly router: ModelRouter;
@@ -88,7 +90,7 @@ export class AgentRunner {
 
     const toolExchanges: ModelToolExchange[] = [];
 
-    for (let step = 0; step < 8; step += 1) {
+    for (let step = 0; step < MAX_MODEL_STEPS; step += 1) {
       const response = await adapter.complete({
         goal: input.goal,
         toolExchanges,
