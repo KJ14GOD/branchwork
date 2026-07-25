@@ -5,11 +5,12 @@
   "type": "module",
   "description": "The local Novus coding-agent worker.",
   "scripts": {
-    "start": "node --experimental-strip-types src/worker.ts",
+    "start": "node --env-file=../../.env --experimental-strip-types src/worker.ts",
     "test": "node --experimental-strip-types --test src/agent-runner.test.ts",
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.114.0",
     "@novus/contracts": "workspace:*",
     "@novus/session-service": "workspace:*"
   }

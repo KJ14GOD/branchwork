@@ -2,11 +2,14 @@ import {
   RunSchema,
   type ModelSelection,
   type SessionEvent,
-  type ToolResult,
 } from "@novus/contracts";
 import { InMemorySessionEventStore } from "@novus/session-service";
 
-import type { ModelAdapter, ModelRouter } from "./model.ts";
+import type {
+  ModelAdapter,
+  ModelRouter,
+  ModelToolExchange,
+} from "./model.ts";
 import type { AgentTool } from "./tools.ts";
 
 export type AgentRunInput = {
@@ -83,12 +86,12 @@ export class AgentRunner {
       },
     });
 
-    const toolResults: ToolResult[] = [];
+    const toolExchanges: ModelToolExchange[] = [];
 
     for (let step = 0; step < 8; step += 1) {
       const response = await adapter.complete({
         goal: input.goal,
-        toolResults,
+        toolExchanges,
       });
 
       if (response.type === "final") {
@@ -127,7 +130,10 @@ export class AgentRunner {
       }
 
       const result = await tool.execute(response.call);
-      toolResults.push(result);
+      toolExchanges.push({
+        call: response.call,
+        result,
+      });
 
       this.eventStore.append({
         sessionId: input.sessionId,

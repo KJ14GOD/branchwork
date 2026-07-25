@@ -5,9 +5,14 @@ import {
   type ToolResult,
 } from "@novus/contracts";
 
+export type ModelToolExchange = {
+  call: ToolCall;
+  result: ToolResult;
+};
+
 export type ModelRequest = {
   goal: string;
-  toolResults: readonly ToolResult[];
+  toolExchanges: readonly ModelToolExchange[];
 };
 
 export type ModelRoutingRequest = {
@@ -55,7 +60,7 @@ export class ScriptedModelAdapter implements ModelAdapter {
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    const toolResult = request.toolResults[0];
+    const toolResult = request.toolExchanges[0]?.result;
 
     if (!toolResult) {
       return {
