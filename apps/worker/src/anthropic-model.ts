@@ -124,11 +124,18 @@ const buildMessages = (request: ModelRequest): MessageParam[] => {
     messages.push({
       role: "user",
       content: [
-        {
-          type: "tool_result",
-          tool_use_id: exchange.call.id,
-          content: JSON.stringify(exchange.result.output),
-        },
+        exchange.status === "ok"
+          ? {
+              type: "tool_result",
+              tool_use_id: exchange.call.id,
+              content: JSON.stringify(exchange.result.output),
+            }
+          : {
+              type: "tool_result",
+              tool_use_id: exchange.call.id,
+              content: exchange.message,
+              is_error: true,
+            },
       ],
     });
   }

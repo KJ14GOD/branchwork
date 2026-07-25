@@ -41,9 +41,24 @@ const script: ModelResponse[] = [
     },
   },
   {
+    // A miss on exact text: the model gets the error back and corrects it.
     type: "tool_call",
     call: {
       id: "call-3",
+      name: "propose_patch",
+      input: {
+        path: "apps/worker/src/agent-runner.ts",
+        intent: "Document AgentRunner.",
+        edits: [
+          { oldText: "export class AgentRunnerz {", newText: "// nope" },
+        ],
+      },
+    },
+  },
+  {
+    type: "tool_call",
+    call: {
+      id: "call-4",
       name: "propose_patch",
       input: {
         path: "apps/worker/src/agent-runner.ts",

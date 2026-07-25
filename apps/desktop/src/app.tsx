@@ -44,6 +44,7 @@ export const App = () => {
 
   const run = events.find((event) => event.type === "run.started");
   const completed = events.findLast((event) => event.type === "run.completed");
+  const failed = events.findLast((event) => event.type === "run.failed");
 
   const toolCalls = useMemo(
     () => events.filter((event) => event.type === "tool.requested"),
@@ -167,7 +168,13 @@ export const App = () => {
     };
   }, []);
 
-  const runStatus = completed ? "completed" : run ? "running" : "idle";
+  const runStatus = failed
+    ? "failed"
+    : completed
+      ? "completed"
+      : run
+        ? "running"
+        : "idle";
 
   return (
     <div className="shell">

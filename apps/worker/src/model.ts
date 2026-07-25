@@ -5,10 +5,15 @@ import {
   type ToolResult,
 } from "@novus/contracts";
 
-export type ModelToolExchange = {
-  call: ToolCall;
-  result: ToolResult;
-};
+/**
+ * One completed tool turn as the model sees it.
+ *
+ * A rejected tool is still an exchange — the model receives the error and can
+ * correct the call on the next turn instead of the run ending.
+ */
+export type ModelToolExchange =
+  | { status: "ok"; call: ToolCall; result: ToolResult }
+  | { status: "error"; call: ToolCall; message: string };
 
 export type ModelRequest = {
   goal: string;
@@ -60,7 +65,9 @@ export class ScriptedModelAdapter implements ModelAdapter {
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    const toolResult = request.toolExchanges[0]?.result;
+    const exchange = request.toolExchanges[0];
+    const toolResult =
+      exchange?.status === "ok" ? exchange.result : undefined;
 
     if (!toolResult || toolResult.name !== "read_file") {
       return {

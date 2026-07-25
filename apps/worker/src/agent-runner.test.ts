@@ -225,9 +225,7 @@ test("a proposed patch reaches the session event log", async () => {
   // proposal crosses the runner and lands in the ordered event log.
   const adapter = {
     selection,
-    async complete(request: {
-      toolExchanges: readonly { result: { name: string } }[];
-    }) {
+    async complete(request: { toolExchanges: readonly unknown[] }) {
       if (request.toolExchanges.length === 0) {
         return {
           type: "tool_call" as const,
@@ -285,6 +283,112 @@ test("a proposed patch reaches the session event log", async () => {
   } finally {
     await rm(repositoryPath, { recursive: true, force: true });
   }
+});
+
+const failingSelection = { provider: "scripted", model: "retrying" };
+
+// A tool that rejects the first N calls, then succeeds.
+class FlakyTool {
+  readonly name = "read_file" as const;
+  calls = 0;
+  readonly failures: number;
+
+  constructor(failures: number) {
+    this.failures = failures;
+  }
+
+  async execute(call: { id: string }) {
+    this.calls += 1;
+
+    if (this.calls <= this.failures) {
+      throw new Error(`transient failure ${this.calls}`);
+    }
+
+    return {
+      toolCallId: call.id,
+      name: "read_file" as const,
+      output: { path: "ok.txt", content: "recovered" },
+    };
+  }
+}
+
+const retryingAdapter = {
+  selection: failingSelection,
+  async complete(request: { toolExchanges: readonly { status: string }[] }) {
+    const recovered = request.toolExchanges.some(
+      (exchange) => exchange.status === "ok",
+    );
+
+    if (recovered) {
+      return { type: "final" as const, summary: "Recovered after a failure." };
+    }
+
+    return {
+      type: "tool_call" as const,
+      call: {
+        id: `call-${request.toolExchanges.length}`,
+        name: "read_file" as const,
+        input: { path: "ok.txt" },
+      },
+    };
+  },
+};
+
+test("a tool error returns to the model instead of ending the run", async () => {
+  const eventStore = new InMemorySessionEventStore();
+  const tool = new FlakyTool(1);
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(failingSelection),
+    [retryingAdapter],
+    [tool],
+  );
+
+  const result = await runner.run({
+    sessionId: "retry-session",
+    actorId: "agent-1",
+    goal: "Read the file.",
+  });
+
+  const failure = result.events.find((event) => event.type === "tool.failed");
+  assert.equal(failure?.type, "tool.failed");
+
+  if (failure?.type === "tool.failed") {
+    assert.match(failure.payload.message, /transient failure 1/);
+  }
+
+  // The model was given the error and retried, so the run still completes.
+  assert.equal(tool.calls, 2);
+  assert.ok(result.events.some((event) => event.type === "tool.completed"));
+  assert.ok(result.events.some((event) => event.type === "run.completed"));
+  assert.ok(!result.events.some((event) => event.type === "run.failed"));
+});
+
+test("a run that cannot recover fails with an event rather than throwing", async () => {
+  const eventStore = new InMemorySessionEventStore();
+  const tool = new FlakyTool(Number.POSITIVE_INFINITY);
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(failingSelection),
+    [retryingAdapter],
+    [tool],
+  );
+
+  const result = await runner.run({
+    sessionId: "stuck-session",
+    actorId: "agent-1",
+    goal: "Read the file.",
+  });
+
+  const failed = result.events.findLast((event) => event.type === "run.failed");
+  assert.equal(failed?.type, "run.failed");
+
+  if (failed?.type === "run.failed") {
+    assert.match(failed.payload.reason, /3 tool calls in a row/);
+  }
+
+  // It gives up at the consecutive-failure cap, well before the step ceiling.
+  assert.equal(tool.calls, 3);
 });
 
 test("propose_patch rejects an ambiguous edit", async () => {

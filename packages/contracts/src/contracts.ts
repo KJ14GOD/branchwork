@@ -208,6 +208,26 @@ export const ToolCompletedEventSchema = EventEnvelopeSchema.extend({
   }),
 });
 
+// A tool that rejects is an observation, not the end of the run: the message
+// is returned to the model so it can correct the call.
+export const ToolFailedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("tool.failed"),
+  payload: z.object({
+    runId: IdSchema,
+    toolCallId: IdSchema,
+    name: z.string().min(1),
+    message: z.string().min(1),
+  }),
+});
+
+export const RunFailedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("run.failed"),
+  payload: z.object({
+    runId: IdSchema,
+    reason: z.string().min(1),
+  }),
+});
+
 export const SessionEventSchema = z.discriminatedUnion("type", [
   SessionCreatedEventSchema,
   RunStartedEventSchema,
@@ -215,7 +235,9 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   DirectionSubmittedEventSchema,
   ToolRequestedEventSchema,
   ToolCompletedEventSchema,
+  ToolFailedEventSchema,
   RunCompletedEventSchema,
+  RunFailedEventSchema,
 ]);
 
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
@@ -251,7 +273,17 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     sequence: true,
     occurredAt: true,
   }),
+  ToolFailedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
   RunCompletedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunFailedEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,

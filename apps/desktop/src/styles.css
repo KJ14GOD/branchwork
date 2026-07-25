@@ -264,6 +264,10 @@ kbd {
   color: var(--text-muted);
 }
 
+.event__text--error {
+  color: var(--del);
+}
+
 .event--highlight {
   border-left-color: var(--border-strong);
   margin-left: -12px;

@@ -11,7 +11,9 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "direction.submitted": "»",
   "tool.requested": "→",
   "tool.completed": "✓",
+  "tool.failed": "✗",
   "run.completed": "■",
+  "run.failed": "✗",
 };
 
 const summariseCall = (call: Extract<SessionEvent, { type: "tool.requested" }>["payload"]["call"]): string => {
@@ -116,6 +118,21 @@ export const EventRow = ({
 
       case "run.completed":
         return <span className="event__text">{event.payload.summary}</span>;
+
+      case "tool.failed":
+        return (
+          <span className="event__text event__text--error">
+            <span className="tool__name">{event.payload.name}</span>{" "}
+            {event.payload.message}
+          </span>
+        );
+
+      case "run.failed":
+        return (
+          <span className="event__text event__text--error">
+            {event.payload.reason}
+          </span>
+        );
 
       case "tool.requested":
         return (

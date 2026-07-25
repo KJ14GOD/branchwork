@@ -31,6 +31,10 @@ const selectionsMatch = (
 
 const MAX_MODEL_STEPS = 16;
 
+// A tool error returns to the model as an observation, but a model that cannot
+// recover after this many consecutive failures is looping, not correcting.
+const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+
 export class AgentRunner {
   private readonly eventStore: InMemorySessionEventStore;
   private readonly router: ModelRouter;
@@ -89,6 +93,18 @@ export class AgentRunner {
     });
 
     const toolExchanges: ModelToolExchange[] = [];
+    let consecutiveFailures = 0;
+
+    const failRun = (reason: string): AgentRunResult => {
+      this.eventStore.append({
+        sessionId: input.sessionId,
+        actorId: input.actorId,
+        type: "run.failed",
+        payload: { runId: run.id, reason },
+      });
+
+      return { runId: run.id, events: this.eventStore.list(input.sessionId) };
+    };
 
     for (let step = 0; step < MAX_MODEL_STEPS; step += 1) {
       const response = await adapter.complete({
@@ -128,11 +144,48 @@ export class AgentRunner {
       );
 
       if (!tool) {
-        throw new Error(`No tool is configured for ${response.call.name}.`);
+        return failRun(`No tool is configured for ${response.call.name}.`);
       }
 
-      const result = await tool.execute(response.call);
+      let result;
+
+      try {
+        result = await tool.execute(response.call);
+      } catch (error) {
+        const message = (error as Error).message;
+
+        toolExchanges.push({
+          status: "error",
+          call: response.call,
+          message,
+        });
+
+        this.eventStore.append({
+          sessionId: input.sessionId,
+          actorId: input.actorId,
+          type: "tool.failed",
+          payload: {
+            runId: run.id,
+            toolCallId: response.call.id,
+            name: response.call.name,
+            message,
+          },
+        });
+
+        consecutiveFailures += 1;
+
+        if (consecutiveFailures >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+          return failRun(
+            `The agent failed ${consecutiveFailures} tool calls in a row without recovering. Last error: ${message}`,
+          );
+        }
+
+        continue;
+      }
+
+      consecutiveFailures = 0;
       toolExchanges.push({
+        status: "ok",
         call: response.call,
         result,
       });
@@ -148,6 +201,8 @@ export class AgentRunner {
       });
     }
 
-    throw new Error("The agent exceeded the maximum number of tool steps.");
+    return failRun(
+      `The agent exceeded the ${MAX_MODEL_STEPS}-step ceiling without finishing.`,
+    );
   }
 }

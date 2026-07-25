@@ -65,15 +65,16 @@ authority and reaches the host only through the event stream.
 - A renderer that streams the timeline live, validates every event against the
   shared contract before display, renders proposed patches as reviewable
   diffs, and exposes real actions through a `/` command palette.
-- Sixteen-step emergency loop ceiling.
+- Tool failures returned to the model as observations (`is_error` tool results)
+  so it can correct a rejected call, recorded as `tool.failed` events.
+- Sixteen-step emergency loop ceiling, a three-consecutive-failure cap, and a
+  `run.failed` event on every unsuccessful exit — a run never ends by throwing.
 
 ## Known limitations
 
 - The runnable goal and participant/session IDs are still hardcoded.
 - The event store is in memory.
 - A proposed patch cannot yet be applied; there is no approval boundary.
-- A tool error aborts the whole run instead of returning to the model as a
-  recoverable observation, so one unmatched `oldText` ends the run.
 - No command execution, tests, Git tools, cancellation, persistence, cost
   accounting, or session resume exists yet.
 - Routing is fixed to one model.
@@ -103,6 +104,5 @@ an existing proposal, re-read the file, refuse to write when it no longer
 matches the recorded base content, and pass through an explicit approval
 boundary that emits `tool.approval_requested` and `tool.approved` events.
 
-Return tool failures to the model as observations before that lands. Patch
-proposals miss on exact text often enough that an aborted run is the common
-case, not the exception.
+This is the first Write-class tool, so it is also where the permission classes
+in V1_README become real rather than implied.
