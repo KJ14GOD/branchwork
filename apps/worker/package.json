@@ -6,6 +6,7 @@
   "description": "The local Novus coding-agent worker.",
   "scripts": {
     "start": "node --env-file=../../.env --experimental-strip-types src/worker.ts",
+    "demo": "node --experimental-strip-types src/demo.ts",
     "test": "node --experimental-strip-types --test src/agent-runner.test.ts src/diff.test.ts",
     "typecheck": "tsc --project tsconfig.json"
   },

@@ -21,9 +21,14 @@ worker.ts
       → propose_patch (preview only, never writes)
       → ordered tool events
   → final grounded response
+       │
+       └── event-server.ts (SSE, loopback only)
+             → apps/desktop renderer timeline
 ```
 
-The model requests tools but never executes host operations itself.
+The model requests tools but never executes host operations itself. The
+renderer is a read-only projection of the event log; it holds no execution
+authority and reaches the host only through the event stream.
 
 ## Current packages
 
@@ -36,7 +41,10 @@ The model requests tools but never executes host operations itself.
 | `apps/worker/src/agent-runner.ts` | Bounded model/tool execution loop |
 | `apps/worker/src/tools.ts` | Repository-confined native tools |
 | `apps/worker/src/diff.ts` | Dependency-free unified diff rendering |
+| `apps/worker/src/event-server.ts` | Loopback SSE stream of one session's log |
 | `apps/worker/src/worker.ts` | Current executable composition root |
+| `apps/worker/src/demo.ts` | Scripted run for renderer development |
+| `apps/desktop` | Vite/React renderer: timeline, diff review, `/` palette |
 
 ## Implemented capability
 
@@ -51,7 +59,12 @@ The model requests tools but never executes host operations itself.
   proposal retains the content it was computed against so a later application
   step can detect drift.
 - Ordered `run.started`, progress, tool request/result, and completion events.
-- Live event subscriptions for terminal output and future UI streaming.
+- Live event subscriptions for terminal output and UI streaming.
+- SSE event transport bound to loopback, with `since`/`Last-Event-ID` resume and
+  mid-handshake buffering so a reconnect never drops or reorders an event.
+- A renderer that streams the timeline live, validates every event against the
+  shared contract before display, renders proposed patches as reviewable
+  diffs, and exposes real actions through a `/` command palette.
 - Sixteen-step emergency loop ceiling.
 
 ## Known limitations
@@ -66,7 +79,11 @@ The model requests tools but never executes host operations itself.
 - Routing is fixed to one model.
 - Skills are stored in `skills/` but are not yet discovered or loaded by the
   Novus runtime.
-- The desktop and guest package manifests exist, but no product UI is active.
+- The renderer observes but cannot act: no goal entry, direction, approval, or
+  cancellation reaches the worker yet. The event stream is one-directional.
+- There is no Electron shell, so the renderer runs in a browser and the host
+  security boundary is loopback binding rather than a preload bridge.
+- The guest package manifest exists, but no guest client is active.
 
 ## Non-negotiable invariants
 

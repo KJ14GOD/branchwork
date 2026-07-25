@@ -1,0 +1,285 @@
+import { useEffect, useMemo, useState } from "react";
+
+import type { SessionEvent } from "@novus/contracts";
+
+import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
+import { EventRow } from "./components/event-row.tsx";
+import { useSessionEvents } from "./use-session-events.ts";
+
+const ENDPOINT = import.meta.env.VITE_NOVUS_ENDPOINT ?? "http://127.0.0.1:4319";
+const SESSION_ID = import.meta.env.VITE_NOVUS_SESSION ?? "session-1";
+
+type Filter = "all" | "tools" | "patches";
+
+const isPatchEvent = (
+  event: SessionEvent,
+): event is Extract<SessionEvent, { type: "tool.completed" }> =>
+  event.type === "tool.completed" &&
+  event.payload.result.name === "propose_patch";
+
+const formatElapsed = (events: SessionEvent[]): string => {
+  const first = events.at(0);
+  const last = events.at(-1);
+
+  if (!first || !last) {
+    return "—";
+  }
+
+  const ms =
+    new Date(last.occurredAt).getTime() - new Date(first.occurredAt).getTime();
+
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+
+  return `${(ms / 1000).toFixed(1)}s`;
+};
+
+export const App = () => {
+  const { events, status, reconnect } = useSessionEvents(ENDPOINT, SESSION_ID);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [raw, setRaw] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [highlighted, setHighlighted] = useState<number | null>(null);
+
+  const run = events.find((event) => event.type === "run.started");
+  const completed = events.findLast((event) => event.type === "run.completed");
+
+  const toolCalls = useMemo(
+    () => events.filter((event) => event.type === "tool.requested"),
+    [events],
+  );
+  const patches = useMemo(() => events.filter(isPatchEvent), [events]);
+
+  const totals = useMemo(
+    () =>
+      patches.reduce(
+        (accumulator, event) => {
+          const { output } = event.payload.result as Extract<
+            SessionEvent,
+            { type: "tool.completed" }
+          >["payload"]["result"] & { name: "propose_patch" };
+
+          return {
+            additions: accumulator.additions + output.additions,
+            deletions: accumulator.deletions + output.deletions,
+          };
+        },
+        { additions: 0, deletions: 0 },
+      ),
+    [patches],
+  );
+
+  const visible = useMemo(() => {
+    if (filter === "tools") {
+      return events.filter(
+        (event) =>
+          event.type === "tool.requested" || event.type === "tool.completed",
+      );
+    }
+
+    if (filter === "patches") {
+      return events.filter(isPatchEvent);
+    }
+
+    return events;
+  }, [events, filter]);
+
+  const jumpTo = (sequence: number) => {
+    setHighlighted(sequence);
+    document
+      .getElementById(`event-${sequence}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  const commands: Command[] = [
+    {
+      id: "filter-all",
+      label: "Show all events",
+      hint: `${events.length}`,
+      run: () => setFilter("all"),
+    },
+    {
+      id: "filter-tools",
+      label: "Show tool activity only",
+      hint: `${toolCalls.length}`,
+      run: () => setFilter("tools"),
+    },
+    {
+      id: "filter-patches",
+      label: "Show proposed patches only",
+      hint: `${patches.length}`,
+      run: () => setFilter("patches"),
+    },
+    {
+      id: "raw",
+      label: raw ? "Hide raw event payloads" : "Show raw event payloads",
+      run: () => setRaw((value) => !value),
+    },
+    {
+      id: "reconnect",
+      label: "Reconnect event stream",
+      hint: status,
+      run: reconnect,
+    },
+  ];
+
+  const latestPatch = patches.at(-1);
+
+  if (latestPatch) {
+    const { output } = latestPatch.payload.result as Extract<
+      SessionEvent,
+      { type: "tool.completed" }
+    >["payload"]["result"] & { name: "propose_patch" };
+
+    commands.push(
+      {
+        id: "jump-patch",
+        label: `Jump to latest patch · ${output.path}`,
+        run: () => jumpTo(latestPatch.sequence),
+      },
+      {
+        id: "copy-patch",
+        label: "Copy latest patch diff",
+        run: () => {
+          void navigator.clipboard.writeText(output.diff);
+        },
+      },
+    );
+  }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
+
+      if (event.key === "/" && !typing) {
+        event.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  const runStatus = completed ? "completed" : run ? "running" : "idle";
+
+  return (
+    <div className="shell">
+      <header className="titlebar">
+        <span className="titlebar__mark">Novus</span>
+        <div className="titlebar__meta">
+          <span>{SESSION_ID}</span>
+          {run?.type === "run.started" ? (
+            <span>
+              {run.payload.run.model.provider}/{run.payload.run.model.model}
+            </span>
+          ) : null}
+          <span>{runStatus}</span>
+        </div>
+        <span className="titlebar__spacer" />
+        <span className={`status status--${status === "live" ? "live" : status === "error" ? "error" : "idle"}`}>
+          <span className="status__dot" />
+          {status}
+        </span>
+        <span className="titlebar__hint">
+          <kbd>/</kbd> commands
+        </span>
+      </header>
+
+      <div className="body">
+        <aside className="rail">
+          <div className="rail__section">
+            <div className="rail__label">Goal</div>
+            <div className="rail__goal">
+              {run?.type === "run.started"
+                ? run.payload.run.goal
+                : "Waiting for a run"}
+            </div>
+          </div>
+
+          <div className="rail__section">
+            <div className="rail__label">Run</div>
+            <div className="stat">
+              <span>events</span>
+              <span className="stat__value">{events.length}</span>
+            </div>
+            <div className="stat">
+              <span>tool calls</span>
+              <span className="stat__value">{toolCalls.length}</span>
+            </div>
+            <div className="stat">
+              <span>patches</span>
+              <span className="stat__value">{patches.length}</span>
+            </div>
+            <div className="stat">
+              <span>lines</span>
+              <span className="stat__value">
+                <span style={{ color: "var(--add)" }}>+{totals.additions}</span>{" "}
+                <span style={{ color: "var(--del)" }}>−{totals.deletions}</span>
+              </span>
+            </div>
+            <div className="stat">
+              <span>elapsed</span>
+              <span className="stat__value">{formatElapsed(events)}</span>
+            </div>
+          </div>
+
+          {toolCalls.length > 0 ? (
+            <div>
+              <div className="rail__label" style={{ padding: "0 14px 8px" }}>
+                Tool calls
+              </div>
+              {toolCalls.map((event) => (
+                <button
+                  key={event.eventId}
+                  type="button"
+                  className={`jump${highlighted === event.sequence ? " jump--active" : ""}`}
+                  onClick={() => jumpTo(event.sequence)}
+                >
+                  <span className="jump__seq">{event.sequence}</span>
+                  <span className="jump__name">
+                    {event.type === "tool.requested"
+                      ? event.payload.call.name
+                      : ""}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </aside>
+
+        <main className="timeline">
+          {visible.length === 0 ? (
+            <div className="timeline__empty">
+              {status === "error"
+                ? `No connection to ${ENDPOINT}. Start the worker with pnpm --filter @novus/worker start.`
+                : "Waiting for events…"}
+            </div>
+          ) : (
+            visible.map((event) => (
+              <EventRow
+                key={event.eventId}
+                event={event}
+                raw={raw}
+                highlighted={highlighted === event.sequence}
+              />
+            ))
+          )}
+        </main>
+      </div>
+
+      {paletteOpen ? (
+        <CommandOverlay
+          commands={commands}
+          onClose={() => setPaletteOpen(false)}
+        />
+      ) : null}
+    </div>
+  );
+};
