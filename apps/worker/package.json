@@ -5,9 +5,12 @@
   "type": "module",
   "description": "The local Novus coding-agent worker.",
   "scripts": {
-    "start": "node --experimental-strip-types src/worker.ts"
+    "start": "node --experimental-strip-types src/worker.ts",
+    "test": "node --experimental-strip-types --test src/agent-runner.test.ts",
+    "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
-    "@novus/contracts": "workspace:*"
+    "@novus/contracts": "workspace:*",
+    "@novus/session-service": "workspace:*"
   }
 }

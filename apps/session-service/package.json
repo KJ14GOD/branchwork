@@ -2,5 +2,16 @@
   "name": "@novus/session-service",
   "version": "0.0.0",
   "private": true,
-  "description": "The authoritative multiplayer session and event service."
+  "type": "module",
+  "description": "The authoritative multiplayer session and event service.",
+  "exports": {
+    ".": "./src/session-service.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test src/session-service.test.ts",
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@novus/contracts": "workspace:*"
+  }
 }

@@ -1,24 +1,28 @@
-import {SessionEventSchema} from "@novus/contracts"
+import { InMemorySessionEventStore } from "@novus/session-service";
 
+import { AgentRunner } from "./agent-runner.ts";
+import { FixedModelRouter, ScriptedModelAdapter } from "./model.ts";
+import { ReadFileTool } from "./tools.ts";
 
-function appendSession(scheme: SessionEventSchema): string{
+const modelSelection = {
+  provider: "scripted",
+  model: "scripted-v1",
+};
 
-}
+const eventStore = new InMemorySessionEventStore();
+const router = new FixedModelRouter(modelSelection);
+const modelAdapter = new ScriptedModelAdapter(modelSelection);
+const agentRunner = new AgentRunner(
+  eventStore,
+  router,
+  [modelAdapter],
+  [new ReadFileTool(process.cwd())],
+);
 
-
-const event = SessionEventSchema.parse({
-    id: "event-1",
-    sessionId: "session-1",
-    sequence: 0,
-    actorId: "agent-1",
-    occurredAt: new Date().toISOString(),
-    type: "run.progress",
-    payload: {
-      runId: "run-1",
-      message: "Reading repository",
-    },
+const result = await agentRunner.run({
+  sessionId: "session-1",
+  actorId: "agent-1",
+  goal: "Inspect the project configuration",
 });
 
-
-console.log(event); 
-console.log(secondEvent);
+console.log(JSON.stringify(result.events, null, 2));

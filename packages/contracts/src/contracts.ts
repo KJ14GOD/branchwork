@@ -3,7 +3,35 @@ import { z } from "zod";
 const IdSchema = z.string().min(1);
 const TimestampSchema = z.string().datetime();
 
-// shared repo
+export const ModelSelectionSchema = z.object({
+  provider: z.string().min(1),
+  model: z.string().min(1),
+});
+
+export type ModelSelection = z.infer<typeof ModelSelectionSchema>;
+
+export const ToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("read_file"),
+  input: z.object({
+    path: z.string().min(1),
+  }),
+});
+
+export type ToolCall = z.infer<typeof ToolCallSchema>;
+
+export const ToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("read_file"),
+  output: z.object({
+    path: z.string().min(1),
+    content: z.string(),
+  }),
+});
+
+export type ToolResult = z.infer<typeof ToolResultSchema>;
+
+// session
 export const SessionSchema = z.object({
   id: IdSchema,
   repositoryPath: z.string().min(1),
@@ -40,6 +68,7 @@ export const RunSchema = z.object({
     "cancelled",
   ]),
   startedBy: IdSchema,
+  model: ModelSelectionSchema,
   createdAt: TimestampSchema,
 });
 
@@ -47,7 +76,7 @@ export type Run = z.infer<typeof RunSchema>;
 
 
 const EventEnvelopeSchema = z.object({
-  id: IdSchema,
+  eventId: IdSchema,
   sessionId: IdSchema,
   sequence: z.number().int().nonnegative(),
   actorId: IdSchema,
@@ -92,12 +121,70 @@ export const RunCompletedEventSchema = EventEnvelopeSchema.extend({
   }),
 });
 
+export const ToolRequestedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("tool.requested"),
+  payload: z.object({
+    runId: IdSchema,
+    call: ToolCallSchema,
+  }),
+});
+
+export const ToolCompletedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("tool.completed"),
+  payload: z.object({
+    runId: IdSchema,
+    result: ToolResultSchema,
+  }),
+});
+
 export const SessionEventSchema = z.discriminatedUnion("type", [
   SessionCreatedEventSchema,
   RunStartedEventSchema,
   RunProgressEventSchema,
   DirectionSubmittedEventSchema,
+  ToolRequestedEventSchema,
+  ToolCompletedEventSchema,
   RunCompletedEventSchema,
 ]);
 
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
+
+export const SessionEventDraftSchema = z.discriminatedUnion("type", [
+  SessionCreatedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunStartedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunProgressEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  DirectionSubmittedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ToolRequestedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ToolCompletedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunCompletedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+]);
+
+export type SessionEventDraft = z.infer<typeof SessionEventDraftSchema>;
