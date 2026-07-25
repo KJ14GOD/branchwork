@@ -9,9 +9,12 @@ export type Command = {
 
 export const CommandOverlay = ({
   commands,
+  onAsk,
   onClose,
 }: {
   commands: Command[];
+  // Free text that matches no command is a question for the agent.
+  onAsk: ((goal: string) => void) | null;
   onClose: () => void;
 }) => {
   const [query, setQuery] = useState("");
@@ -29,10 +32,26 @@ export const CommandOverlay = ({
       return commands;
     }
 
-    return commands.filter((command) =>
+    const filtered = commands.filter((command) =>
       command.label.toLowerCase().includes(needle),
     );
-  }, [commands, query]);
+
+    if (onAsk) {
+      // The ask leads: anything the user types is more likely a question than
+      // a command they half-remembered.
+      return [
+        {
+          id: "ask",
+          label: `Ask — ${query.trim()}`,
+          hint: "enter",
+          run: () => onAsk(query.trim()),
+        },
+        ...filtered,
+      ];
+    }
+
+    return filtered;
+  }, [commands, onAsk, query]);
 
   useEffect(() => {
     setActive(0);
@@ -78,7 +97,7 @@ export const CommandOverlay = ({
           className="palette__input"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Run a command"
+          placeholder={onAsk ? "Ask the agent, or run a command" : "Run a command"}
           spellCheck={false}
         />
         {matches.length === 0 ? (

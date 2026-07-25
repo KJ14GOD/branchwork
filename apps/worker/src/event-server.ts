@@ -1,13 +1,62 @@
-import { createServer, type Server } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 
 import type { SessionEvent } from "@novus/contracts";
+import {
+  CreateSessionRequestSchema,
+  SubmitTurnRequestSchema,
+} from "@novus/contracts/protocol";
 import type { InMemorySessionEventStore } from "@novus/session-service";
+
+import type { Session, SessionRegistry } from "./session-registry.ts";
 
 const HEARTBEAT_MS = 15_000;
 
 export type EventServerOptions = {
   port?: number;
   host?: string;
+  /** Supplied when the server should also accept session and turn commands. */
+  sessions?: SessionRegistry;
+};
+
+const MAX_BODY_BYTES = 1_000_000;
+
+const readJsonBody = (request: IncomingMessage): Promise<unknown> =>
+  new Promise((resolveBody, rejectBody) => {
+    let body = "";
+
+    request.on("data", (chunk: Buffer) => {
+      body += chunk.toString("utf8");
+
+      if (body.length > MAX_BODY_BYTES) {
+        rejectBody(new Error("Request body is too large."));
+        request.destroy();
+      }
+    });
+
+    request.on("end", () => {
+      try {
+        resolveBody(JSON.parse(body || "{}"));
+      } catch {
+        rejectBody(new Error("Request body is not valid JSON."));
+      }
+    });
+
+    request.on("error", rejectBody);
+  });
+
+const sendJson = (
+  response: ServerResponse,
+  status: number,
+  payload: unknown,
+): void => {
+  response
+    .writeHead(status, { "content-type": "application/json" })
+    .end(JSON.stringify(payload));
 };
 
 export type EventServer = {
@@ -83,10 +132,83 @@ export const startEventServer = (
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? Number(process.env.NOVUS_PORT ?? 4319);
 
+  const sessions = options.sessions;
+
+  const describe = (session: Session) => ({
+    id: session.id,
+    repositoryPath: session.repositoryPath,
+    allowWrites: session.allowWrites,
+    createdAt: session.createdAt,
+  });
+
+  const handleCommand = async (
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string,
+  ): Promise<boolean> => {
+    if (!sessions) {
+      return false;
+    }
+
+    if (pathname === "/sessions" && request.method === "GET") {
+      sendJson(response, 200, { sessions: sessions.list().map(describe) });
+      return true;
+    }
+
+    if (pathname === "/sessions" && request.method === "POST") {
+      const parsed = CreateSessionRequestSchema.safeParse(
+        await readJsonBody(request),
+      );
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "repositoryPath is required." });
+        return true;
+      }
+
+      try {
+        const session = await sessions.create(parsed.data);
+        sendJson(response, 201, describe(session));
+      } catch (error) {
+        sendJson(response, 400, { error: (error as Error).message });
+      }
+
+      return true;
+    }
+
+    const turnMatch = /^\/sessions\/([^/]+)\/turns$/.exec(pathname);
+
+    if (turnMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(turnMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = SubmitTurnRequestSchema.safeParse(
+        await readJsonBody(request),
+      );
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "A non-empty goal is required." });
+        return true;
+      }
+
+      // Accepted, not completed: progress arrives on the event stream.
+      void sessions.submitTurn(session, parsed.data.goal);
+      sendJson(response, 202, { accepted: true });
+      return true;
+    }
+
+    return false;
+  };
+
   const server: Server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
 
     response.setHeader("Access-Control-Allow-Origin", "*");
+    response.setHeader("Access-Control-Allow-Headers", "content-type");
+    response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 
     if (request.method === "OPTIONS") {
       response.writeHead(204).end();
@@ -101,7 +223,16 @@ export const startEventServer = (
     }
 
     if (url.pathname !== "/events") {
-      response.writeHead(404).end();
+      void handleCommand(request, response, url.pathname)
+        .then((handled) => {
+          if (!handled) {
+            response.writeHead(404).end();
+          }
+        })
+        .catch((error: unknown) => {
+          sendJson(response, 400, { error: (error as Error).message });
+        });
+
       return;
     }
 

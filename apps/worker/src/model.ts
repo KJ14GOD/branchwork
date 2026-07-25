@@ -15,8 +15,19 @@ export type ModelToolExchange =
   | { status: "ok"; call: ToolCall; result: ToolResult }
   | { status: "error"; call: ToolCall; message: string };
 
-export type ModelRequest = {
+/** A turn that already finished, replayed to the model as prior context. */
+export type CompletedTurn = {
   goal: string;
+  exchanges: readonly ModelToolExchange[];
+  summary: string;
+};
+
+export type ModelRequest = {
+  /** Earlier turns in this session, oldest first. */
+  history: readonly CompletedTurn[];
+  /** The goal being worked on right now. */
+  goal: string;
+  /** Tool exchanges within the current turn. */
   toolExchanges: readonly ModelToolExchange[];
 };
 

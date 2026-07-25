@@ -6,6 +6,7 @@ import {
 import { InMemorySessionEventStore } from "@novus/session-service";
 
 import type {
+  CompletedTurn,
   ModelAdapter,
   ModelRouter,
   ModelToolExchange,
@@ -46,6 +47,9 @@ export class AgentRunner {
   private readonly adapters: readonly ModelAdapter[];
   private readonly tools: readonly AgentTool[];
   private readonly approvals: ApprovalGate;
+  // One runner is one session. Finished turns stay here so a follow-up
+  // question carries the earlier conversation.
+  private readonly history: CompletedTurn[] = [];
 
   constructor(
     eventStore: InMemorySessionEventStore,
@@ -118,11 +122,18 @@ export class AgentRunner {
 
     for (let step = 0; step < MAX_MODEL_STEPS; step += 1) {
       const response = await adapter.complete({
+        history: this.history,
         goal: input.goal,
         toolExchanges,
       });
 
       if (response.type === "final") {
+        this.history.push({
+          goal: input.goal,
+          exchanges: [...toolExchanges],
+          summary: response.summary,
+        });
+
         this.eventStore.append({
           sessionId: input.sessionId,
           actorId: input.actorId,

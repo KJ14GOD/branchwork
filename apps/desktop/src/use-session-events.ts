@@ -19,18 +19,31 @@ export type SessionStream = {
  */
 export const useSessionEvents = (
   endpoint: string,
-  sessionId: string,
+  sessionId: string | null,
 ): SessionStream => {
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [attempt, setAttempt] = useState(0);
   const seen = useRef(new Set<number>());
+  const streamed = useRef<string | null>(null);
 
   const reconnect = useCallback(() => {
     setAttempt((value) => value + 1);
   }, []);
 
   useEffect(() => {
+    if (!sessionId) {
+      return;
+    }
+
+    // Only a different session starts a new timeline. A manual reconnect
+    // re-runs this effect too, and must not discard what we already have.
+    if (streamed.current !== sessionId) {
+      streamed.current = sessionId;
+      seen.current = new Set();
+      setEvents([]);
+    }
+
     const url = new URL(`${endpoint}/events`);
     url.searchParams.set("session", sessionId);
 

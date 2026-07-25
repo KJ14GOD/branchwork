@@ -598,6 +598,58 @@ test("apply_patch refuses a file that changed after the proposal", async () => {
   }
 });
 
+test("a second turn carries the first turn's conversation", async () => {
+  const selection = { provider: "scripted", model: "conversational" };
+  const seenHistories: number[] = [];
+  const seenGoals: string[] = [];
+
+  const adapter = {
+    selection,
+    async complete(request: {
+      history: readonly { goal: string; summary: string }[];
+      goal: string;
+    }) {
+      seenHistories.push(request.history.length);
+      seenGoals.push(request.goal);
+
+      return {
+        type: "final" as const,
+        summary: `answered: ${request.goal}`,
+      };
+    },
+  };
+
+  const eventStore = new InMemorySessionEventStore();
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(selection),
+    [adapter],
+    [],
+  );
+
+  await runner.run({ sessionId: "chat", actorId: "human", goal: "first" });
+  await runner.run({ sessionId: "chat", actorId: "human", goal: "second" });
+  const result = await runner.run({
+    sessionId: "chat",
+    actorId: "human",
+    goal: "third",
+  });
+
+  // Each turn sees every earlier turn; the current goal is never in history.
+  assert.deepEqual(seenHistories, [0, 1, 2]);
+  assert.deepEqual(seenGoals, ["first", "second", "third"]);
+
+  // Every turn is its own run in the ordered log.
+  assert.equal(
+    result.events.filter((event) => event.type === "run.started").length,
+    3,
+  );
+  assert.equal(
+    result.events.filter((event) => event.type === "run.completed").length,
+    3,
+  );
+});
+
 test("propose_patch rejects an ambiguous edit", async () => {
   const repositoryPath = await mkdtemp(join(tmpdir(), "novus-ambiguous-"));
   const filePath = join(repositoryPath, "repeat.ts");

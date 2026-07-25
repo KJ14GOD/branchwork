@@ -4,10 +4,11 @@ import type { SessionEvent } from "@novus/contracts";
 
 import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
 import { EventRow } from "./components/event-row.tsx";
+import { OpenRepository } from "./components/open-repository.tsx";
+import { useSession } from "./use-session.ts";
 import { useSessionEvents } from "./use-session-events.ts";
 
 const ENDPOINT = import.meta.env.VITE_NOVUS_ENDPOINT ?? "http://127.0.0.1:4319";
-const SESSION_ID = import.meta.env.VITE_NOVUS_SESSION ?? "session-1";
 
 type Filter = "all" | "tools" | "patches";
 
@@ -36,7 +37,18 @@ const formatElapsed = (events: SessionEvent[]): string => {
 };
 
 export const App = () => {
-  const { events, status, reconnect } = useSessionEvents(ENDPOINT, SESSION_ID);
+  const {
+    session,
+    opening,
+    error: sessionError,
+    open,
+    ask,
+    close,
+  } = useSession(ENDPOINT);
+  const { events, status, reconnect } = useSessionEvents(
+    ENDPOINT,
+    session?.id ?? null,
+  );
   const [filter, setFilter] = useState<Filter>("all");
   const [raw, setRaw] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -168,20 +180,51 @@ export const App = () => {
     };
   }, []);
 
-  const runStatus = failed
-    ? "failed"
-    : completed
-      ? "completed"
-      : run
-        ? "running"
-        : "idle";
+  // A run is in flight when the newest run.started has no matching terminator.
+  const lastStarted = events.findLast((event) => event.type === "run.started");
+  const lastEnded = events.findLast(
+    (event) => event.type === "run.completed" || event.type === "run.failed",
+  );
+  const busy = Boolean(
+    lastStarted && (!lastEnded || lastEnded.sequence < lastStarted.sequence),
+  );
+  const runStatus = busy
+    ? "working"
+    : failed
+      ? "failed"
+      : completed
+        ? "idle"
+        : run
+          ? "running"
+          : "idle";
+
+  if (!session) {
+    return (
+      <div className="shell">
+        <header className="titlebar">
+          <span className="titlebar__mark">Novus</span>
+        </header>
+        <OpenRepository onOpen={open} opening={opening} error={sessionError} />
+      </div>
+    );
+  }
 
   return (
     <div className="shell">
       <header className="titlebar">
         <span className="titlebar__mark">Novus</span>
         <div className="titlebar__meta">
-          <span>{SESSION_ID}</span>
+          <button
+            className="titlebar__repo"
+            type="button"
+            onClick={close}
+            title="Close this repository"
+          >
+            {session.repositoryPath}
+          </button>
+          {session.allowWrites ? (
+            <span className="titlebar__writes">writes on</span>
+          ) : null}
           {run?.type === "run.started" ? (
             <span>
               {run.payload.run.model.provider}/{run.payload.run.model.model}
@@ -195,7 +238,7 @@ export const App = () => {
           {status}
         </span>
         <span className="titlebar__hint">
-          <kbd>/</kbd> commands
+          <kbd>/</kbd> ask
         </span>
       </header>
 
@@ -264,9 +307,13 @@ export const App = () => {
         <main className="timeline">
           {visible.length === 0 ? (
             <div className="timeline__empty">
-              {status === "error"
-                ? `No connection to ${ENDPOINT}. Start the worker with pnpm --filter @novus/worker start.`
-                : "Waiting for events…"}
+              {status === "error" ? (
+                `No connection to ${ENDPOINT}. Start the worker with pnpm --filter @novus/worker start.`
+              ) : (
+                <>
+                  Press <kbd>/</kbd> and type a question to start.
+                </>
+              )}
             </div>
           ) : (
             visible.map((event) => (
@@ -284,6 +331,9 @@ export const App = () => {
       {paletteOpen ? (
         <CommandOverlay
           commands={commands}
+          onAsk={(goal) => {
+            void ask(goal);
+          }}
           onClose={() => setPaletteOpen(false)}
         />
       ) : null}

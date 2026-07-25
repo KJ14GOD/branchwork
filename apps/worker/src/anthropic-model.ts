@@ -10,6 +10,7 @@ import type {
   ModelAdapter,
   ModelRequest,
   ModelResponse,
+  ModelToolExchange,
 } from "./model.ts";
 
 const READ_FILE_TOOL = {
@@ -118,15 +119,11 @@ const APPLY_PATCH_TOOL = {
   },
 };
 
-const buildMessages = (request: ModelRequest): MessageParam[] => {
-  const messages: MessageParam[] = [
-    {
-      role: "user",
-      content: request.goal,
-    },
-  ];
-
-  for (const exchange of request.toolExchanges) {
+const appendExchanges = (
+  messages: MessageParam[],
+  exchanges: readonly ModelToolExchange[],
+): void => {
+  for (const exchange of exchanges) {
     messages.push({
       role: "assistant",
       content: [
@@ -156,6 +153,20 @@ const buildMessages = (request: ModelRequest): MessageParam[] => {
       ],
     });
   }
+};
+
+const buildMessages = (request: ModelRequest): MessageParam[] => {
+  const messages: MessageParam[] = [];
+
+  // Replay finished turns so a follow-up question keeps the earlier context.
+  for (const turn of request.history) {
+    messages.push({ role: "user", content: turn.goal });
+    appendExchanges(messages, turn.exchanges);
+    messages.push({ role: "assistant", content: turn.summary });
+  }
+
+  messages.push({ role: "user", content: request.goal });
+  appendExchanges(messages, request.toolExchanges);
 
   return messages;
 };

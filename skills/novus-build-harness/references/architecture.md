@@ -12,7 +12,8 @@ skills, evaluation, routing, forks, comparison, and eventually shared control.
 ## Current execution
 
 ```text
-worker.ts
+worker.ts (long-lived server)
+  → SessionRegistry (one session per selected repository)
   → FixedModelRouter
   → AnthropicModelAdapter (Claude Sonnet 5)
   → AgentRunner
@@ -43,6 +44,8 @@ authority and reaches the host only through the event stream.
 | `apps/worker/src/agent-runner.ts` | Bounded model/tool execution loop |
 | `apps/worker/src/tools.ts` | Repository-confined native tools |
 | `apps/worker/src/policy.ts` | Permission classes and the approval gate |
+| `apps/worker/src/session-registry.ts` | Per-repository sessions and turn queueing |
+| `packages/contracts/src/protocol.ts` | HTTP contract between a client and the worker |
 | `apps/worker/src/diff.ts` | Dependency-free unified diff rendering |
 | `apps/worker/src/event-server.ts` | Loopback SSE stream of one session's log |
 | `apps/worker/src/worker.ts` | Current executable composition root |
@@ -68,6 +71,15 @@ authority and reaches the host only through the event stream.
 - A renderer that streams the timeline live, validates every event against the
   shared contract before display, renders proposed patches as reviewable
   diffs, and exposes real actions through a `/` command palette.
+- Multi-turn sessions. A runner keeps finished turns and replays them, so a
+  follow-up question resolves against the earlier conversation. Each turn is
+  its own run in the ordered log; turns within a session are serialised.
+- Repository selection at runtime. Tools are constructed per session, so a
+  client can point the worker at any directory without restarting it, and one
+  session's tools cannot reach another's repository.
+- A bidirectional client contract: `POST /sessions` to open a repository and
+  `POST /sessions/:id/turns` to ask. Progress is never in the response — it
+  arrives on the event stream, keeping the log the single source of truth.
 - Permissioned patch application. `apply_patch` re-reads the file, refuses when
   it drifted from the proposal's base content, and refuses to apply twice.
 - An approval boundary in front of every write and dangerous tool, emitting
@@ -81,8 +93,13 @@ authority and reaches the host only through the event stream.
 
 ## Known limitations
 
-- The runnable goal and participant/session IDs are still hardcoded.
-- The event store is in memory.
+- The event store is in memory, and a client's session is React state only, so
+  reloading the page returns to the repository picker even though the worker
+  still holds the session.
+- Conversation history grows without compaction, so a long session will
+  eventually exceed the context window.
+- There is no Electron shell yet, so the "desktop" app is a browser page and
+  the repository is chosen by typing a path rather than a native picker.
 - The approval gate is programmatic only. Nothing asks a human at approval
   time; the host pre-authorises tools before the run starts.
 - No command execution, tests, Git tools, cancellation, persistence, cost
@@ -109,7 +126,12 @@ authority and reaches the host only through the event stream.
 
 ## Next milestone
 
-Add command and test execution — capability 4. `run_command` and `run_tests`
+Wrap the renderer in an Electron shell: main process, preload bridge, native
+directory picker, and the worker spawned as a child process so the host is one
+application rather than two terminals. Persist the chosen session so a reload
+resumes it instead of returning to the picker.
+
+Then command and test execution — capability 4. `run_command` and `run_tests`
 are the first dangerous-class tools, so they inherit the approval gate but need
 their own containment: an explicit argv rather than a shell string, a working
 directory confined to the repository, a timeout, output caps, and redaction of

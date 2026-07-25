@@ -100,6 +100,101 @@ kbd {
   text-align: center;
 }
 
+.titlebar__repo {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.titlebar__repo:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.titlebar__writes {
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  color: var(--add);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ---------- open repository ---------- */
+
+.open {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18vh;
+}
+
+.open__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(520px, calc(100vw - 48px));
+  padding: 22px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.open__label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.open__input {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.open__input:focus {
+  border-color: var(--text-dim);
+}
+
+.open__toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+.open__toggle input {
+  margin-top: 2px;
+  accent-color: var(--text-muted);
+}
+
+.open__submit {
+  align-self: flex-start;
+  padding: 7px 16px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.open__submit:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+
+.open__submit:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.open__error {
+  color: var(--del);
+  line-height: 1.6;
+}
+
 .status {
   display: inline-flex;
   align-items: center;
