@@ -88,7 +88,14 @@ eventStore.subscribe((event) => {
   }
 });
 
-const eventServer = await startEventServer(eventStore);
+let eventServer;
+
+try {
+  eventServer = await startEventServer(eventStore);
+} catch (error) {
+  console.error((error as Error).message);
+  process.exit(1);
+}
 
 console.log(`novus worker · session ${sessionId}`);
 console.log(`repository ${repositoryPath}`);

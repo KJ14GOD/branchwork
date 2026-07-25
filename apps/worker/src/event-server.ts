@@ -81,7 +81,7 @@ export const startEventServer = (
   // Bound to the loopback interface: the host machine stays the execution
   // authority, and nothing on the network can read a session's event log.
   const host = options.host ?? "127.0.0.1";
-  const port = options.port ?? 4319;
+  const port = options.port ?? Number(process.env.NOVUS_PORT ?? 4319);
 
   const server: Server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
@@ -148,7 +148,20 @@ export const startEventServer = (
     });
   });
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        reject(
+          new Error(
+            `Port ${port} is already in use — another Novus worker is probably still running. Stop it, or set NOVUS_PORT to a free port.`,
+          ),
+        );
+        return;
+      }
+
+      reject(error);
+    });
+
     server.listen(port, host, () => {
       resolve({
         url: `http://${host}:${port}`,

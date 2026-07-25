@@ -127,7 +127,15 @@ const adapter = {
 };
 
 const eventStore = new InMemorySessionEventStore();
-const eventServer = await startEventServer(eventStore);
+
+let eventServer;
+
+try {
+  eventServer = await startEventServer(eventStore);
+} catch (error) {
+  console.error((error as Error).message);
+  process.exit(1);
+}
 
 console.log(`novus fixture · session ${sessionId}`);
 console.log(`events ${eventServer.url}/events?session=${sessionId}\n`);
