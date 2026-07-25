@@ -28,9 +28,28 @@ export const SearchRepositoryToolCallSchema = z.object({
   }),
 });
 
+export const ProposePatchToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("propose_patch"),
+  input: z.object({
+    path: z.string().min(1),
+    intent: z.string().min(1),
+    edits: z
+      .array(
+        z.object({
+          oldText: z.string().min(1),
+          newText: z.string(),
+        }),
+      )
+      .min(1)
+      .max(20),
+  }),
+});
+
 export const ToolCallSchema = z.discriminatedUnion("name", [
   ReadFileToolCallSchema,
   SearchRepositoryToolCallSchema,
+  ProposePatchToolCallSchema,
 ]);
 
 export type ToolCall = z.infer<typeof ToolCallSchema>;
@@ -59,9 +78,26 @@ export const SearchRepositoryToolResultSchema = z.object({
   }),
 });
 
+// A proposal is a preview only. `status` stays "proposed" until a separate,
+// permissioned application step writes it to the working tree.
+export const ProposePatchToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("propose_patch"),
+  output: z.object({
+    patchId: IdSchema,
+    path: z.string().min(1),
+    intent: z.string().min(1),
+    status: z.literal("proposed"),
+    diff: z.string().min(1),
+    additions: z.number().int().nonnegative(),
+    deletions: z.number().int().nonnegative(),
+  }),
+});
+
 export const ToolResultSchema = z.discriminatedUnion("name", [
   ReadFileToolResultSchema,
   SearchRepositoryToolResultSchema,
+  ProposePatchToolResultSchema,
 ]);
 
 export type ToolResult = z.infer<typeof ToolResultSchema>;

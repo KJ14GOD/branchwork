@@ -57,6 +57,50 @@ const SEARCH_REPOSITORY_TOOL = {
   },
 };
 
+const PROPOSE_PATCH_TOOL = {
+  name: "propose_patch",
+  description:
+    "Propose an edit to one file in the selected repository. Novus computes and returns a unified diff preview. This does not modify the working tree — the change is only a proposal awaiting human review. Read the file first so every oldText is exact.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      path: {
+        type: "string",
+        description: "Repository-relative path to the file to edit.",
+      },
+      intent: {
+        type: "string",
+        description: "One sentence describing what this change accomplishes.",
+      },
+      edits: {
+        type: "array",
+        minItems: 1,
+        maxItems: 20,
+        description: "Exact-match replacements, applied in order.",
+        items: {
+          type: "object",
+          properties: {
+            oldText: {
+              type: "string",
+              description:
+                "Exact existing text to replace. It must appear exactly once in the file; include surrounding lines when needed to make it unique.",
+            },
+            newText: {
+              type: "string",
+              description:
+                "Replacement text. Use an empty string to delete the matched text.",
+            },
+          },
+          required: ["oldText", "newText"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["path", "intent", "edits"],
+    additionalProperties: false,
+  },
+};
+
 const buildMessages = (request: ModelRequest): MessageParam[] => {
   const messages: MessageParam[] = [
     {
@@ -111,8 +155,8 @@ export class AnthropicModelAdapter implements ModelAdapter {
       model: this.selection.model,
       max_tokens: 4_096,
       system:
-        "You are a coding agent investigating a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents.",
-      tools: [SEARCH_REPOSITORY_TOOL, READ_FILE_TOOL],
+        "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. When a change is needed, call propose_patch — you cannot write to the working tree, so a reviewed proposal is the only way your change reaches the code.",
+      tools: [SEARCH_REPOSITORY_TOOL, READ_FILE_TOOL, PROPOSE_PATCH_TOOL],
       tool_choice: {
         type: "auto",
         disable_parallel_tool_use: true,

@@ -18,6 +18,7 @@ worker.ts
   → AgentRunner
       → search_repository
       → read_file
+      → propose_patch (preview only, never writes)
       → ordered tool events
   → final grounded response
 ```
@@ -34,6 +35,7 @@ The model requests tools but never executes host operations itself.
 | `apps/worker/src/anthropic-model.ts` | Anthropic message/tool translation |
 | `apps/worker/src/agent-runner.ts` | Bounded model/tool execution loop |
 | `apps/worker/src/tools.ts` | Repository-confined native tools |
+| `apps/worker/src/diff.ts` | Dependency-free unified diff rendering |
 | `apps/worker/src/worker.ts` | Current executable composition root |
 
 ## Implemented capability
@@ -44,6 +46,10 @@ The model requests tools but never executes host operations itself.
 - UTF-8 file reading.
 - Repository traversal and symlink-escape protection.
 - Explicit denial of `.env` and `.git` access.
+- Structured patch proposal from exact-match edits, rendered as a unified diff
+  with `status: "proposed"`. The working tree is never written, and each
+  proposal retains the content it was computed against so a later application
+  step can detect drift.
 - Ordered `run.started`, progress, tool request/result, and completion events.
 - Live event subscriptions for terminal output and future UI streaming.
 - Sixteen-step emergency loop ceiling.
@@ -52,8 +58,11 @@ The model requests tools but never executes host operations itself.
 
 - The runnable goal and participant/session IDs are still hardcoded.
 - The event store is in memory.
-- No patching, command execution, tests, Git tools, cancellation, persistence,
-  cost accounting, or session resume exists yet.
+- A proposed patch cannot yet be applied; there is no approval boundary.
+- A tool error aborts the whole run instead of returning to the model as a
+  recoverable observation, so one unmatched `oldText` ends the run.
+- No command execution, tests, Git tools, cancellation, persistence, cost
+  accounting, or session resume exists yet.
 - Routing is fixed to one model.
 - Skills are stored in `skills/` but are not yet discovered or loaded by the
   Novus runtime.
@@ -72,6 +81,11 @@ The model requests tools but never executes host operations itself.
 
 ## Next milestone
 
-Add structured patch proposal and diff preview without immediately mutating the
-working tree. After the proposed patch is visible and validated, add an explicit
-approval boundary before application.
+Add permissioned patch application. `apply_patch` should take a `patchId` from
+an existing proposal, re-read the file, refuse to write when it no longer
+matches the recorded base content, and pass through an explicit approval
+boundary that emits `tool.approval_requested` and `tool.approved` events.
+
+Return tool failures to the model as observations before that lands. Patch
+proposals miss on exact text often enough that an aborted run is the common
+case, not the exception.

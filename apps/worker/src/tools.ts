@@ -9,6 +9,8 @@ import {
   type ToolResult,
 } from "@novus/contracts";
 
+import { buildUnifiedDiff } from "./diff.ts";
+
 export interface AgentTool {
   readonly name: ToolCall["name"];
   execute(call: ToolCall): Promise<ToolResult>;
@@ -235,6 +237,121 @@ export class SearchRepositoryTool implements AgentTool {
       output: {
         query: call.input.query,
         matches,
+      },
+    });
+  }
+}
+
+export type PatchProposal = {
+  patchId: string;
+  path: string;
+  intent: string;
+  baseContent: string;
+  proposedContent: string;
+};
+
+const countOccurrences = (haystack: string, needle: string): number => {
+  let count = 0;
+  let index = haystack.indexOf(needle);
+
+  while (index !== -1) {
+    count += 1;
+    index = haystack.indexOf(needle, index + needle.length);
+  }
+
+  return count;
+};
+
+/**
+ * Turns model-proposed exact-match edits into a reviewable unified diff.
+ *
+ * The working tree is never written. Each accepted proposal is retained with
+ * the content it was computed against so a later permissioned application step
+ * can detect a file that changed after the proposal was made.
+ */
+export class ProposePatchTool implements AgentTool {
+  readonly name = "propose_patch";
+  private readonly repositoryPath: string;
+  private readonly proposals = new Map<string, PatchProposal>();
+
+  constructor(repositoryPath: string) {
+    this.repositoryPath = resolve(repositoryPath);
+  }
+
+  getProposal(patchId: string): PatchProposal | undefined {
+    return this.proposals.get(patchId);
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The propose_patch tool cannot execute ${call.name}.`);
+    }
+
+    const { repositoryRoot, targetPath } = await resolveInsideRepository(
+      this.repositoryPath,
+      call.input.path,
+    );
+
+    if (!(await stat(targetPath)).isFile()) {
+      throw new Error("propose_patch requires a repository file path.");
+    }
+
+    const baseContent = await readFile(targetPath, "utf8");
+    let proposedContent = baseContent;
+
+    for (const [index, edit] of call.input.edits.entries()) {
+      const occurrences = countOccurrences(proposedContent, edit.oldText);
+
+      if (occurrences === 0) {
+        throw new Error(
+          `Edit ${index + 1} does not apply: oldText was not found in ${call.input.path}.`,
+        );
+      }
+
+      if (occurrences > 1) {
+        throw new Error(
+          `Edit ${index + 1} is ambiguous: oldText matches ${occurrences} locations in ${call.input.path}. Include more surrounding context.`,
+        );
+      }
+
+      // A replacer function keeps `$&` and friends in newText literal.
+      proposedContent = proposedContent.replace(
+        edit.oldText,
+        () => edit.newText,
+      );
+    }
+
+    if (proposedContent === baseContent) {
+      throw new Error("propose_patch produced no change to the file.");
+    }
+
+    const path = relative(repositoryRoot, targetPath);
+    const { diff, additions, deletions } = buildUnifiedDiff(
+      path,
+      baseContent,
+      proposedContent,
+    );
+    const patchId = crypto.randomUUID();
+
+    this.proposals.set(patchId, {
+      patchId,
+      path,
+      intent: call.input.intent,
+      baseContent,
+      proposedContent,
+    });
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        patchId,
+        path,
+        intent: call.input.intent,
+        status: "proposed",
+        diff,
+        additions,
+        deletions,
       },
     });
   }

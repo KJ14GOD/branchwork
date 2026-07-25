@@ -5,7 +5,11 @@ import { InMemorySessionEventStore } from "@novus/session-service";
 import { AgentRunner } from "./agent-runner.ts";
 import { AnthropicModelAdapter } from "./anthropic-model.ts";
 import { FixedModelRouter } from "./model.ts";
-import { ReadFileTool, SearchRepositoryTool } from "./tools.ts";
+import {
+  ProposePatchTool,
+  ReadFileTool,
+  SearchRepositoryTool,
+} from "./tools.ts";
 
 const modelSelection = {
   provider: "anthropic",
@@ -25,7 +29,17 @@ eventStore.subscribe((event) => {
   }
 
   if (event.type === "tool.completed") {
-    console.log(`✓ ${event.payload.result.name}`);
+    const { result } = event.payload;
+
+    if (result.name === "propose_patch") {
+      console.log(
+        `✓ propose_patch ${result.output.path} (+${result.output.additions}/-${result.output.deletions}, proposed only)`,
+      );
+      console.log(result.output.diff);
+      return;
+    }
+
+    console.log(`✓ ${result.name}`);
   }
 });
 
@@ -39,6 +53,7 @@ const agentRunner = new AgentRunner(
   [
     new SearchRepositoryTool(repositoryPath),
     new ReadFileTool(repositoryPath),
+    new ProposePatchTool(repositoryPath),
   ],
 );
 
@@ -46,7 +61,7 @@ const result = await agentRunner.run({
   sessionId: "session-1",
   actorId: "agent-1",
   goal:
-    "Find where Novus orchestrates an agent run. Explain the execution flow and cite the relevant repository-relative files.",
+    "Find the AgentRunner class that orchestrates a Novus run, then propose a patch adding a short doc comment above the class describing its role. Search and read before proposing.",
 });
 
 const completedEvent = result.events.findLast(
