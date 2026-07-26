@@ -33,3 +33,4 @@ playwright-report/
 
 # TypeScript
 *.tsbuildinfo
+dist-electron/

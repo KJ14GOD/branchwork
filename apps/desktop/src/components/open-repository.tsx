@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { bridge } from "../bridge.ts";
+
 export const OpenRepository = ({
   onOpen,
   opening,
@@ -11,6 +13,7 @@ export const OpenRepository = ({
 }) => {
   const [path, setPath] = useState("");
   const [allowWrites, setAllowWrites] = useState(false);
+  const host = bridge();
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -20,18 +23,37 @@ export const OpenRepository = ({
     }
   };
 
+  const browse = async () => {
+    const chosen = await host?.pickDirectory();
+
+    if (chosen) {
+      setPath(chosen);
+    }
+  };
+
   return (
     <div className="open">
       <form className="open__panel" onSubmit={submit}>
         <div className="open__label">Open a repository</div>
-        <input
-          className="open__input"
-          value={path}
-          onChange={(event) => setPath(event.target.value)}
-          placeholder="/Users/you/code/your-project"
-          spellCheck={false}
-          autoFocus
-        />
+        <div className="open__row">
+          <input
+            className="open__input"
+            value={path}
+            onChange={(event) => setPath(event.target.value)}
+            placeholder="/Users/you/code/your-project"
+            spellCheck={false}
+            autoFocus
+          />
+          {host ? (
+            <button
+              className="open__browse"
+              type="button"
+              onClick={() => void browse()}
+            >
+              Browse…
+            </button>
+          ) : null}
+        </div>
         <label className="open__toggle">
           <input
             type="checkbox"

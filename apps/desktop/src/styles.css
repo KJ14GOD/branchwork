@@ -64,6 +64,17 @@ button {
   background: var(--surface);
 }
 
+/* Inside the shell the window's traffic lights overlay the titlebar. */
+:root[data-shell="electron"] .titlebar {
+  padding-left: 84px;
+  -webkit-app-region: drag;
+}
+
+:root[data-shell="electron"] .titlebar button,
+:root[data-shell="electron"] .titlebar kbd {
+  -webkit-app-region: no-drag;
+}
+
 .titlebar__mark {
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -143,6 +154,25 @@ kbd {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-dim);
+}
+
+.open__row {
+  display: flex;
+  gap: 8px;
+}
+
+.open__browse {
+  flex: none;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.open__browse:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
 }
 
 .open__input {

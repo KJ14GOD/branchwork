@@ -2,13 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { SessionEvent } from "@novus/contracts";
 
+import { bridge } from "./bridge.ts";
 import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
 import { EventRow } from "./components/event-row.tsx";
 import { OpenRepository } from "./components/open-repository.tsx";
 import { useSession } from "./use-session.ts";
 import { useSessionEvents } from "./use-session-events.ts";
 
-const ENDPOINT = import.meta.env.VITE_NOVUS_ENDPOINT ?? "http://127.0.0.1:4319";
+const FALLBACK_ENDPOINT =
+  import.meta.env.VITE_NOVUS_ENDPOINT ?? "http://127.0.0.1:4319";
 
 type Filter = "all" | "tools" | "patches";
 
@@ -37,6 +39,16 @@ const formatElapsed = (events: SessionEvent[]): string => {
 };
 
 export const App = () => {
+  // Inside the Electron shell the main process owns the worker and tells us
+  // where it is listening; in a browser we fall back to the default port.
+  const [endpoint, setEndpoint] = useState(FALLBACK_ENDPOINT);
+
+  useEffect(() => {
+    void bridge()
+      ?.workerUrl()
+      .then(setEndpoint);
+  }, []);
+
   const {
     session,
     opening,
@@ -44,9 +56,9 @@ export const App = () => {
     open,
     ask,
     close,
-  } = useSession(ENDPOINT);
+  } = useSession(endpoint);
   const { events, status, reconnect } = useSessionEvents(
-    ENDPOINT,
+    endpoint,
     session?.id ?? null,
   );
   const [filter, setFilter] = useState<Filter>("all");
@@ -308,7 +320,7 @@ export const App = () => {
           {visible.length === 0 ? (
             <div className="timeline__empty">
               {status === "error" ? (
-                `No connection to ${ENDPOINT}. Start the worker with pnpm --filter @novus/worker start.`
+                `No connection to ${endpoint}.`
               ) : (
                 <>
                   Press <kbd>/</kbd> and type a question to start.
