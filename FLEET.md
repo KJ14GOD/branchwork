@@ -31,6 +31,7 @@ forgets to claim it is stopped, not trusted.
 ./scripts/fleet.sh add <slice> "<task>"   cut the worktree and write the brief
 ./scripts/fleet.sh list                   branches, drift from main, dirt, lock
 ./scripts/fleet.sh status                 same, plus run the gate in each slice
+./scripts/fleet.sh integrate [slice...]   gate the slices merged together
 ./scripts/fleet.sh tmux                   one window per slice, already cd'd in
 ./scripts/fleet.sh launch <slice>         print the command to drive it yourself
 ./scripts/fleet.sh run <slice> [rounds]   drive it unattended until green
@@ -58,6 +59,28 @@ beside it without coordination.
 
 When a slice is denied the lock, the right move is not to wait — it is to build
 the part of the slice that does not touch the boundary, then acquire afterwards.
+
+## Testing slices together before you merge
+
+A worktree can only ever hold one slice, so `status` showing every slice GREEN
+proves each one works *alone*. It says nothing about whether they work together —
+two slices can pass separately and still break combined, because they touched the
+same function from different directions or one added a field the other does not
+handle.
+
+```
+./scripts/fleet.sh integrate                 # every slice
+./scripts/fleet.sh integrate a b             # just these
+```
+
+This cuts a scratch branch from main, merges the slices onto it, and runs the
+gate on the combination. Main is never touched. A conflicting slice is reported
+by filename and backed out so the others still get judged, and the whole branch
+is destroyed and rebuilt on the next run — so fix what it finds in the slice that
+owns the behaviour, never in the integration worktree.
+
+Green apart and red together is the result worth having. It is much cheaper to
+learn here than after a merge to main.
 
 ## Subagents
 

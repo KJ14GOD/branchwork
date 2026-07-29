@@ -9,6 +9,7 @@
 #   ./scripts/fleet.sh add <slice> "<task>"   create the worktree and brief
 #   ./scripts/fleet.sh list                   worktrees, branches, drift, lock
 #   ./scripts/fleet.sh status                 same, plus run the gate in each
+#   ./scripts/fleet.sh integrate [slice...]   gate the slices merged together
 #   ./scripts/fleet.sh launch <slice>         print the command to drive it
 #   ./scripts/fleet.sh run <slice> [rounds]   drive it unattended until green
 #   ./scripts/fleet.sh rm <slice>             tear one down
@@ -32,10 +33,13 @@ usage() {
   exit 1
 }
 
+# Underscore-prefixed directories are the fleet's own scratch space, not slices
+# anyone is working in, so they stay out of list, status, and tmux.
 slices() {
   [ -d "$fleet" ] || return 0
   for d in "$fleet"/*/; do
     [ -d "$d" ] || continue
+    case "$(basename "$d")" in _*) continue ;; esac
     basename "$d"
   done
 }
@@ -167,6 +171,66 @@ $task"
 
     echo "── $slice still RED after $rounds rounds — needs a human ──" >&2
     (cd "$dir" && ./scripts/gate.sh) || true
+    exit 1
+    ;;
+
+  integrate)
+    # Two slices that are each green alone can still be broken together: they
+    # touch the same function from different directions, or both add a field the
+    # other does not handle. Nothing in a worktree can discover that, because a
+    # worktree only ever contains one slice.
+    #
+    # So assemble them somewhere disposable. This merges the named slices (or
+    # every slice) onto a scratch branch cut from main and runs the gate on the
+    # combination. Main is never touched, and a bad result costs a directory.
+    shift || true
+    targets="${*:-$(slices)}"
+    [ -n "$targets" ] || { echo "no slices to integrate" >&2; exit 1; }
+
+    dir="$fleet/_integration"
+    branch="fleet/_integration"
+
+    git -C "$root" worktree remove "$dir" --force 2>/dev/null || true
+    git -C "$root" branch -D "$branch" 2>/dev/null || true
+    mkdir -p "$fleet"
+    git -C "$root" worktree add -b "$branch" "$dir" main >/dev/null
+
+    conflicted=""
+    for slice in $targets; do
+      if git -C "$dir" merge --no-ff -m "integrate $slice" "fleet/$slice" >/dev/null 2>&1; then
+        echo "merged   $slice"
+      else
+        # Report which files, then back the merge out so the remaining slices
+        # still get their turn. One conflicting pair should not hide the rest.
+        echo "CONFLICT $slice"
+        git -C "$dir" diff --name-only --diff-filter=U | sed 's/^/           /'
+        git -C "$dir" merge --abort 2>/dev/null || true
+        conflicted="${conflicted}${slice} "
+      fi
+    done
+
+    echo
+    if [ -n "$conflicted" ]; then
+      echo "conflicts: $conflicted"
+      echo "Those slices overlap. Land one, rebase the other onto main, re-run."
+    fi
+
+    (cd "$dir" && pnpm install --prefer-offline --silent) || {
+      echo "install failed in the integration worktree" >&2; exit 1; }
+
+    echo "── gate on the combination ──"
+    if (cd "$dir" && ./scripts/gate.sh); then
+      echo
+      echo "The merged result is green. Inspect it at:"
+      echo "  $dir"
+      [ -n "$conflicted" ] && echo "(excluding the conflicted slices above)"
+      exit 0
+    fi
+
+    echo
+    echo "Green apart, red together — that is what this command is for." >&2
+    echo "Fix it in the slice that owns the behaviour, not here: this branch is" >&2
+    echo "thrown away and rebuilt on the next integrate." >&2
     exit 1
     ;;
 
