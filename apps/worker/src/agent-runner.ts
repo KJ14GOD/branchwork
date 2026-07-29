@@ -41,7 +41,23 @@ const selectionsMatch = (
 ): boolean =>
   first.provider === second.provider && first.model === second.model;
 
-const MAX_MODEL_STEPS = 16;
+// Raised from 16 after a benchmark failure, and only after reading the
+// trajectory that caused it — the rule is that a ceiling is never lifted to
+// hide repetition.
+//
+// The small-feature benchmark spends eleven steps orienting in a repository it
+// has never seen (one list_directory, five read_file, another list_directory,
+// four more read_file) before it proposes anything. That is not a loop; it is
+// what reading an unfamiliar multi-file codebase costs. It then had five steps
+// left for a change spanning two files and ran out mid-edit, having never
+// reached run_tests — so the run failed for want of turns rather than for want
+// of an answer.
+//
+// Sixteen was sized for the single-file bug fix that was the only benchmark at
+// the time. Forty leaves room to read, change several files, run the tests, and
+// respond to what they said. The failure budget below is what actually catches
+// a stuck agent, and it is unchanged.
+const MAX_MODEL_STEPS = 40;
 
 // A tool error returns to the model as an observation, but a model that cannot
 // recover after this many consecutive failures is looping, not correcting.
