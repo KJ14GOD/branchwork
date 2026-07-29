@@ -1,0 +1,4 @@
+interface:
+  display_name: "Novus Run App"
+  short_description: "Launch Novus and confirm it is actually working"
+  default_prompt: "Use $novus-run-app to start Novus and verify it came up."

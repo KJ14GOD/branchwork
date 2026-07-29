@@ -1,0 +1,1 @@
+../../../skills/novus-merge-slice/SKILL.md

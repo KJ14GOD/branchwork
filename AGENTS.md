@@ -53,6 +53,11 @@ Nothing below is loaded automatically. Go read it when the task calls for it.
 
 ## Process
 
-`skills/novus-build-harness` governs how capabilities get built (one vertical slice:
-contract → model schema → runner → tool/policy → event → test). `skills/novus-finish-run`
-governs commit and push. Both are symlinked into `.claude/skills/`.
+Each of these is a procedure with decisions in it, not a topic. All are symlinked
+into `.claude/skills/` so both harnesses load the same file.
+
+- `novus-build-harness` — how a capability gets built: one vertical slice,
+  contract → model schema → runner → tool/policy → event → test.
+- `novus-run-app` — launching the app or the worker, and proving it came up.
+- `novus-merge-slice` — landing a finished parallel slice back into main.
+- `novus-finish-run` — commit and push.
