@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm *)",
+      "Bash(node --experimental-strip-types *)",
+      "Bash(node --env-file=.env --experimental-strip-types *)",
+      "Bash(env -u ANTHROPIC_API_KEY *)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git show*)",
+      "Bash(git branch*)",
+      "Bash(git ls-files*)",
+      "Bash(git check-ignore*)",
+      "Bash(git worktree list*)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(curl -s http://127.0.0.1:*)",
+      "Bash(curl -s --max-time * http://127.0.0.1:*)",
+      "Bash(pkill -f src/worker.ts)",
+      "Bash(pkill -f src/demo.ts)",
+      "Bash(pkill -f vite)",
+      "Bash(pkill -f Electron)"
+    ]
+  }
+}
