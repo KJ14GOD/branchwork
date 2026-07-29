@@ -5,6 +5,8 @@ import { dirname, resolve } from "node:path";
 
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 
+import { serveRenderer, type RendererHost } from "./renderer-host.ts";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(here, "../../..");
 const workerEntry = resolve(repositoryRoot, "apps/worker/src/worker.ts");
@@ -25,6 +27,15 @@ const HEALTH_TIMEOUT_MS = 15_000;
 
 let worker: ChildProcess | null = null;
 let window: BrowserWindow | null = null;
+let rendererHost: RendererHost | null = null;
+/**
+ * The origin the window is allowed to be at.
+ *
+ * Vite's in development, the loopback file server's once there is no Vite. Both
+ * are `http://127.0.0.1:<port>`, which is what the worker's origin rule admits;
+ * `file://` is not, and was the bug.
+ */
+let rendererOrigin: string | null = null;
 
 /**
  * Runs the worker as a child process.
@@ -111,12 +122,22 @@ const createWindow = (): void => {
     return { action: "deny" };
   });
 
-  const devServer = process.env.VITE_DEV_SERVER_URL;
+  // The preload bridge hands out the worker's access token, so it must stay
+  // attached to our own pages only. With a `file://` window this mattered less;
+  // now that the renderer sits on an http origin, an ordinary link or a
+  // scripted `location =` could carry a remote page into a window that answers
+  // `novus:access-token`. It cannot leave the origin it was opened at.
+  window.webContents.on("will-navigate", (event, url) => {
+    if (rendererOrigin && new URL(url).origin === rendererOrigin) {
+      return;
+    }
 
-  if (devServer) {
-    void window.loadURL(devServer);
-  } else {
-    void window.loadFile(resolve(here, "../dist/index.html"));
+    event.preventDefault();
+    void shell.openExternal(url);
+  });
+
+  if (rendererOrigin) {
+    void window.loadURL(rendererOrigin);
   }
 };
 
@@ -139,6 +160,39 @@ ipcMain.handle("novus:pick-directory", async () => {
   return result.canceled ? null : (result.filePaths[0] ?? null);
 });
 
+/**
+ * Decides where the window loads from, before there is a window.
+ *
+ * In development Vite is already serving the renderer and the dev server URL is
+ * handed to us. Otherwise the build output is on disk and needs an origin, so
+ * we serve it ourselves rather than opening it as a file — see
+ * `renderer-host.ts` for why that distinction decides whether the app works at
+ * all.
+ */
+const prepareRenderer = async (): Promise<boolean> => {
+  const devServer = process.env.VITE_DEV_SERVER_URL;
+
+  if (devServer) {
+    rendererOrigin = new URL(devServer).origin;
+
+    return true;
+  }
+
+  try {
+    rendererHost = await serveRenderer(resolve(here, "../dist"));
+    rendererOrigin = rendererHost.origin;
+
+    return true;
+  } catch (error) {
+    dialog.showErrorBox(
+      "Novus could not serve its interface",
+      `${(error as Error).message}\n\nRun \`pnpm --filter @novus/desktop build\` first if this is a source checkout.`,
+    );
+
+    return false;
+  }
+};
+
 void app.whenReady().then(async () => {
   startWorker();
 
@@ -151,6 +205,12 @@ void app.whenReady().then(async () => {
     );
   }
 
+  if (!(await prepareRenderer())) {
+    app.quit();
+
+    return;
+  }
+
   createWindow();
 
   app.on("activate", () => {
@@ -160,9 +220,12 @@ void app.whenReady().then(async () => {
   });
 });
 
-const stopWorker = (): void => {
+const shutdown = (): void => {
   worker?.kill();
   worker = null;
+
+  void rendererHost?.close();
+  rendererHost = null;
 };
 
 app.on("window-all-closed", () => {
@@ -171,5 +234,5 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", stopWorker);
-process.on("exit", stopWorker);
+app.on("before-quit", shutdown);
+process.on("exit", shutdown);
