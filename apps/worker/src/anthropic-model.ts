@@ -235,12 +235,19 @@ const appendExchanges = (
     messages.push({
       role: "assistant",
       content: [
-        {
-          type: "tool_use",
-          id: exchange.call.id,
-          name: exchange.call.name,
-          input: exchange.call.input,
-        },
+        exchange.status === "invalid"
+          ? {
+              type: "tool_use",
+              id: exchange.id,
+              name: exchange.name,
+              input: exchange.input,
+            }
+          : {
+              type: "tool_use",
+              id: exchange.call.id,
+              name: exchange.call.name,
+              input: exchange.call.input,
+            },
       ],
     });
     messages.push({
@@ -254,7 +261,10 @@ const appendExchanges = (
             }
           : {
               type: "tool_result",
-              tool_use_id: exchange.call.id,
+              // An invalid call has no ToolCall to read an id from; the raw
+              // tool_use id is what the provider needs to pair the result with.
+              tool_use_id:
+                exchange.status === "invalid" ? exchange.id : exchange.call.id,
               content: exchange.message,
               is_error: true,
             },
@@ -325,15 +335,29 @@ export class AnthropicModelAdapter implements ModelAdapter {
     const toolUse = message.content.find((block) => block.type === "tool_use");
 
     if (toolUse?.type === "tool_use") {
-      return {
-        type: "tool_call",
-        call: ToolCallSchema.parse({
+      const call = ToolCallSchema.safeParse({
+        id: toolUse.id,
+        name: toolUse.name,
+        input: toolUse.input,
+      });
+
+      if (!call.success) {
+        // Not thrown. The contract is still the boundary — this call does not
+        // become a ToolCall and no tool will run — but the model is told what
+        // it got wrong and given the turn back.
+        return {
+          type: "invalid_tool_call",
           id: toolUse.id,
           name: toolUse.name,
           input: toolUse.input,
-        }),
-        usage,
-      };
+          message: call.error.issues
+            .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
+            .join("; "),
+          usage,
+        };
+      }
+
+      return { type: "tool_call", call: call.data, usage };
     }
 
     const summary = message.content

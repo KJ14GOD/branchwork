@@ -709,3 +709,53 @@ test("propose_patch rejects protected repository files", async () => {
     await rm(repositoryPath, { recursive: true, force: true });
   }
 });
+
+test("a malformed tool call is an observation, not the end of the run", async () => {
+  // Found by a live benchmark: the model returned propose_patch with `edits` as
+  // a string. ToolCallSchema.parse threw inside the adapter, the throw escaped
+  // the run loop, and the run ended with no run.failed and no receipt — an
+  // agent that simply stopped, with nothing in the log saying why.
+  const eventStore = new InMemorySessionEventStore();
+  let asked = 0;
+
+  const adapter: ModelAdapter = {
+    selection: { provider: "anthropic", model: "test" },
+    async complete() {
+      asked += 1;
+
+      if (asked === 1) {
+        return {
+          type: "invalid_tool_call",
+          id: "call-1",
+          name: "propose_patch",
+          input: { path: "a.ts", intent: "fix", edits: "not an array" },
+          message: "input.edits: expected array, received string",
+        };
+      }
+
+      return { type: "final", summary: "Recovered and finished." };
+    },
+  };
+
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(adapter.selection),
+    [adapter],
+    [],
+  );
+
+  const result = await runner.run({
+    sessionId: "malformed-session",
+    actorId: "agent-1",
+    goal: "Exercise a malformed tool call",
+  });
+
+  const types = result.events.map((event) => event.type);
+
+  // The run finished, and the model got a turn back to correct itself.
+  assert.ok(types.includes("run.completed"), "the run did not finish");
+  assert.ok(!types.includes("run.failed"));
+  assert.ok(types.includes("tool.failed"), "the malformed call was not recorded");
+  assert.ok(types.includes("receipt.created"), "a finished run produced no receipt");
+  assert.equal(asked, 2, "the model was not given another turn");
+});

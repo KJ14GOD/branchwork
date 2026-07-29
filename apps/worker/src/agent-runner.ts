@@ -287,6 +287,45 @@ export class AgentRunner {
         };
       }
 
+      if (response.type === "invalid_tool_call") {
+        // The model asked for a real tool with arguments the contract refuses.
+        // Nothing runs, and the run does not end: the model is told what was
+        // wrong and takes the next turn. Before this, the adapter threw and the
+        // throw escaped the loop — no run.failed, no receipt, an agent that
+        // simply stopped with nothing in the log saying why.
+        this.eventStore.append({
+          sessionId: input.sessionId,
+          actorId: input.actorId,
+          type: "tool.failed",
+          payload: {
+            runId: run.id,
+            toolCallId: response.id,
+            name: response.name,
+            message: response.message,
+          },
+        });
+
+        toolExchanges.push({
+          status: "invalid",
+          id: response.id,
+          name: response.name,
+          input: response.input,
+          message: `The arguments did not match the tool's contract — ${response.message}. Read the tool's schema and call it again.`,
+        });
+
+        // Counted like any other failure. A model that cannot produce a
+        // well-formed call after several tries is looping, not correcting.
+        consecutiveFailures += 1;
+
+        if (consecutiveFailures >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+          return failRun(
+            `The agent produced ${consecutiveFailures} malformed tool calls in a row. Last error: ${response.message}`,
+          );
+        }
+
+        continue;
+      }
+
       this.eventStore.append({
         sessionId: input.sessionId,
         actorId: input.actorId,

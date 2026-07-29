@@ -13,7 +13,23 @@ import {
  */
 export type ModelToolExchange =
   | { status: "ok"; call: ToolCall; result: ToolResult }
-  | { status: "error"; call: ToolCall; message: string };
+  | { status: "error"; call: ToolCall; message: string }
+  /**
+   * A tool call that never became one.
+   *
+   * The model asked for a real tool with arguments the contract rejects — an
+   * `edits` that arrived as a string rather than an array, say. There is no
+   * ToolCall to carry, so this holds the raw request instead. It still has to
+   * reach the model as a result, because the provider requires one for every
+   * tool_use and because a model that is not told what was wrong repeats it.
+   */
+  | {
+      status: "invalid";
+      id: string;
+      name: string;
+      input: unknown;
+      message: string;
+    };
 
 /** A turn that already finished, replayed to the model as prior context. */
 export type CompletedTurn = {
@@ -51,6 +67,23 @@ export type ModelResponse =
   | {
       type: "tool_call";
       call: ToolCall;
+      usage?: ModelUsage;
+    }
+  /**
+   * The model asked for a tool in a shape the contract refuses.
+   *
+   * Returned rather than thrown. A throw here escapes the run loop before any
+   * terminal event, so the run ends with no run.failed and no receipt — the
+   * agent simply stops, and nothing in the log says why. That is the one thing
+   * the boundary is supposed to prevent: a malformed request is an observation
+   * the model can correct, not a reason to lose the run.
+   */
+  | {
+      type: "invalid_tool_call";
+      id: string;
+      name: string;
+      input: unknown;
+      message: string;
       usage?: ModelUsage;
     }
   | {
