@@ -1,4 +1,4 @@
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -36,9 +36,40 @@ const isProtectedPath = (repositoryRoot: string, targetPath: string): boolean =>
   return segments.includes(".git") || isEnvironmentFile;
 };
 
+/**
+ * `realpath` for a path that may no longer exist.
+ *
+ * Resolving the deepest ancestor that does exist and re-attaching the missing
+ * tail keeps every symlink in the path resolved — which is the part that makes
+ * the confinement check mean anything — while still producing an answer for a
+ * file that was just deleted. Only a missing component is walked past; any
+ * other filesystem error is the caller's to see.
+ */
+const realpathAllowingMissing = async (targetPath: string): Promise<string> => {
+  let candidate = targetPath;
+
+  for (;;) {
+    try {
+      return resolve(await realpath(candidate), relative(candidate, targetPath));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const parent = dirname(candidate);
+
+      if ((code !== "ENOENT" && code !== "ENOTDIR") || parent === candidate) {
+        throw error;
+      }
+
+      candidate = parent;
+    }
+  }
+};
+
 const resolveInsideRepository = async (
   repositoryPath: string,
   requestedPath: string,
+  // git_diff reports on what changed, and a deletion is a change. Every other
+  // caller wants the path to exist, so this stays opt-in.
+  options: { allowMissing?: boolean } = {},
 ): Promise<{ repositoryRoot: string; targetPath: string }> => {
   if (isAbsolute(requestedPath)) {
     throw new Error("Tools only accept repository-relative paths.");
@@ -51,7 +82,9 @@ const resolveInsideRepository = async (
     throw new Error("Tools cannot access paths outside the repository.");
   }
 
-  const targetPath = await realpath(unresolvedPath);
+  const targetPath = options.allowMissing
+    ? await realpathAllowingMissing(unresolvedPath)
+    : await realpath(unresolvedPath);
 
   if (isOutside(repositoryRoot, targetPath)) {
     throw new Error("Tools cannot access paths outside the repository.");
@@ -928,8 +961,14 @@ export class ListDirectoryTool implements AgentTool {
     }
 
     const found = await readdir(targetPath, { withFileTypes: true });
-    const entries = found
-      .filter((entry) => !isProtectedPath(repositoryRoot, resolve(targetPath, entry.name)))
+    // Count what the agent is allowed to see, not what the directory holds.
+    // Truncation is measured after the protected entries are dropped, because
+    // a directory of exactly the cap plus a .env loses nothing and reporting
+    // otherwise sends the agent looking for entries that were never withheld.
+    const visible = found.filter(
+      (entry) => !isProtectedPath(repositoryRoot, resolve(targetPath, entry.name)),
+    );
+    const entries = visible
       .slice(0, MAX_DIRECTORY_ENTRIES)
       .map((entry) => ({
         name: entry.name,
@@ -948,7 +987,7 @@ export class ListDirectoryTool implements AgentTool {
       output: {
         path: relative(repositoryRoot, targetPath),
         entries,
-        truncated: found.length > MAX_DIRECTORY_ENTRIES,
+        truncated: visible.length > MAX_DIRECTORY_ENTRIES,
       },
     });
   }
@@ -977,6 +1016,13 @@ export class GitStatusTool implements AgentTool {
         "status",
         "--porcelain=v1",
         "--branch",
+        // -z is what makes this parseable. Without it a rename is printed as
+        // `R  old -> new` on one line and a path containing a space or a
+        // non-ASCII byte is C-quoted, so slicing the line yields either the
+        // arrow sentence or a path with quotes in it — neither of which names
+        // a file. With -z each record is NUL-terminated, nothing is quoted,
+        // and a rename's original path is simply the record that follows.
+        "-z",
       ]);
     } catch (error) {
       // Null clean, not false. A repository we could not read is unknown, and
@@ -988,30 +1034,49 @@ export class GitStatusTool implements AgentTool {
       });
     }
 
-    const lines = porcelain.split("\n").filter(Boolean);
-    const branchLine = lines.find((line) => line.startsWith("##"));
+    const records = porcelain.split("\0").filter(Boolean);
+    const branchRecord = records.find((record) => record.startsWith("##"));
     const branch =
-      branchLine?.replace(/^## /, "").split(/\.\.\.|\s/)[0] ?? null;
+      branchRecord?.replace(/^## /, "").split(/\.\.\.|\s/)[0] ?? null;
 
-    const listed = lines.filter((line) => !line.startsWith("##"));
-    const files = listed
-      // An untracked node_modules is tens of thousands of lines, and every one
-      // of them would land in the model's context and the event log.
-      .slice(0, MAX_DIRECTORY_ENTRIES)
-      .map((line) => ({
-        // Porcelain v1 is a two-character status followed by a space.
-        status: line.slice(0, 2).trim() || "?",
-        path: line.slice(3),
-        staged: line[0] !== " " && line[0] !== "?",
-      }));
+    const files: Array<{ status: string; path: string; staged: boolean }> = [];
+
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index]!;
+
+      if (record.startsWith("##")) {
+        continue;
+      }
+
+      // Porcelain v1 is a two-character status followed by a space.
+      const status = record.slice(0, 2);
+      // A rename or a copy spends a second record on the path it came from.
+      // Skipping it matters twice over: it is not a file that changed, and
+      // read as a status line its first two characters are part of a filename.
+      // The path reported is the destination — the file that exists now, and
+      // the one every other tool can be pointed at.
+      if (/[RC]/.test(status)) {
+        index += 1;
+      }
+
+      files.push({
+        status: status.trim() || "?",
+        path: record.slice(3),
+        staged: status[0] !== " " && status[0] !== "?",
+      });
+    }
+
+    // An untracked node_modules is tens of thousands of entries, and every one
+    // of them would land in the model's context and the event log.
+    const reported = files.slice(0, MAX_DIRECTORY_ENTRIES);
 
     return ToolResultSchema.parse({
       toolCallId: call.id,
       name: this.name,
       output: {
         branch: branch || null,
-        clean: files.length === 0,
-        files,
+        clean: reported.length === 0,
+        files: reported,
       },
     });
   }
@@ -1047,9 +1112,18 @@ export class GitDiffTool implements AgentTool {
     if (call.input.path) {
       // Resolved through the same guard as every other path, and passed after
       // `--` so a filename can never be read as an option.
+      //
+      // A deleted file is the one case where the guard has to answer about a
+      // path that is not there. "Read back what my patch changed" is what this
+      // tool is for, and a deletion is a change; resolving through realpath
+      // meant the diff that proves the file is gone was the diff it refused to
+      // produce. Nothing is relaxed: the missing tail is re-attached to the
+      // resolved ancestor, so an absolute path, a `..` escape, a symlinked
+      // parent and a .env are all still refused.
       const { targetPath } = await resolveInsideRepository(
         this.repositoryPath,
         call.input.path,
+        { allowMissing: true },
       );
       const requested = relative(repositoryRoot, targetPath);
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -120,6 +120,36 @@ test("git_status reports a clean tree, then a dirty one", async () => {
   assert.equal(dirty.output.files.length, 1);
   assert.equal(dirty.output.files[0]?.path, "tracked.txt");
   assert.equal(dirty.output.files[0]?.staged, false);
+});
+
+test("git_status names the file a rename produced, not the arrow", async () => {
+  const root = await gitRepository();
+  await writeFile(join(root, "sp ace.txt"), "spaced\n");
+  await run("git", ["add", "."], { cwd: root });
+  await run("git", ["commit", "-qm", "second"], { cwd: root });
+  await run("git", ["mv", "tracked.txt", "renamed.txt"], { cwd: root });
+  await run("git", ["mv", "sp ace.txt", "sp aced.txt"], { cwd: root });
+
+  const result = await new GitStatusTool(root).execute({
+    id: "30",
+    name: "git_status",
+    input: {},
+  });
+
+  if (result.name !== "git_status") return assert.fail("wrong result");
+
+  const paths = result.output.files.map((file) => file.path);
+
+  // Porcelain v1 prints `R  old -> new` on one line and C-quotes a path that
+  // contains a space. Slicing the line yielded `tracked.txt -> renamed.txt`
+  // and `"sp ace.txt" -> "sp aced.txt"` — strings no other tool can be given.
+  assert.deepEqual(paths.sort(), ["renamed.txt", "sp aced.txt"]);
+  assert.equal(result.output.files.length, 2);
+
+  for (const file of result.output.files) {
+    assert.equal(file.status, "R");
+    assert.equal(file.staged, true);
+  }
 });
 
 test("git_status says unknown rather than clean when git cannot run", async () => {
@@ -293,4 +323,82 @@ test("git_diff will not diff a path outside the repository", async () => {
       }),
     /outside the repository/,
   );
+});
+
+test("git_diff can diff a file that was deleted", async () => {
+  const root = await gitRepository();
+  await rm(join(root, "tracked.txt"));
+
+  // "Read back what my patch changed" is what this tool is for, and a deletion
+  // is a change. Resolving the path through realpath meant the one diff that
+  // proves the file is gone was the one diff it refused to produce.
+  const result = await new GitDiffTool(root).execute({
+    id: "31",
+    name: "git_diff",
+    input: { path: "tracked.txt" },
+  });
+
+  if (result.name !== "git_diff") return assert.fail("wrong result");
+
+  assert.equal(result.output.filesChanged, 1);
+  assert.match(result.output.diff, /deleted file/);
+  assert.match(result.output.diff, /-one/);
+});
+
+test("a missing path is still confined to the repository", async () => {
+  const root = await gitRepository();
+  await symlink(tmpdir(), join(root, "escape"));
+
+  // The confinement is the same rule as before: the missing tail is re-attached
+  // to the deepest ancestor that does exist, resolved through its symlinks.
+  // Allowing a path to be absent must not allow it to be anywhere.
+  for (const path of ["../../etc/passwd", "escape/missing.txt"]) {
+    await assert.rejects(
+      () =>
+        new GitDiffTool(root).execute({
+          id: "32",
+          name: "git_diff",
+          input: { path },
+        }),
+      /outside the repository/,
+      path,
+    );
+  }
+
+  // A deleted .env is refused for being .env, not for being gone.
+  await assert.rejects(
+    () =>
+      new GitDiffTool(root).execute({
+        id: "33",
+        name: "git_diff",
+        input: { path: ".env" },
+      }),
+    /protected repository paths/,
+  );
+});
+
+test("list_directory does not claim truncation for entries it filtered", async () => {
+  // A directory holding exactly the cap plus a .env: nothing is dropped, so
+  // reporting truncation sends the agent looking for entries that never
+  // existed. The count has to be taken after the protected entries are gone.
+  const root = await mkdtemp(join(tmpdir(), "novus-full-"));
+
+  await Promise.all(
+    Array.from({ length: 500 }, (_unused, index) =>
+      writeFile(join(root, `file-${String(index).padStart(3, "0")}.txt`), "x\n"),
+    ),
+  );
+  await writeFile(join(root, ".env"), "ANTHROPIC_API_KEY=leak\n");
+
+  const result = await new ListDirectoryTool(root).execute({
+    id: "34",
+    name: "list_directory",
+    input: {},
+  });
+
+  if (result.name !== "list_directory") return assert.fail("wrong result");
+
+  assert.equal(result.output.entries.length, 500);
+  assert.ok(!result.output.entries.some((entry) => entry.name === ".env"));
+  assert.equal(result.output.truncated, false);
 });

@@ -338,6 +338,84 @@ test("a heading does not swallow the line beneath it", () => {
   assert.match(redacted, /loaded 3 profiles/);
 });
 
+// A second audit, of the rules rather than the bypasses: what redaction does to
+// output that holds no secret at all, and what it does when the shape it reaches
+// into is not the shape it expected.
+
+test("a value already redacted keeps the reason that named it", () => {
+  const redact = createRedactor({ environment: {} });
+
+  // The dotenv pass runs first and marks the whole file. The assignment rule
+  // then matched the marker as a value and rewrote it, losing the reason and
+  // stranding the bracket its own value class had stopped short of:
+  // `API_KEY=[redacted:env-file]` came back as `API_KEY=[redacted:env-value]]`.
+  assert.equal(
+    redact.redactText(`API_KEY=${redactionMarker("env-file")}`),
+    `API_KEY=${redactionMarker("env-file")}`,
+  );
+
+  const shared = redact.redactEvent(
+    commandEvent("cat .env", "API_KEY=abcdef1234567890\nPORT=4319\n"),
+  );
+
+  assert.equal(shared.type, "tool.completed");
+  assert.equal(shared.payload.result.name, "run_command");
+
+  const { stdout } = shared.payload.result.output;
+
+  assert.match(stdout, /^API_KEY=\[redacted:env-file\]$/m);
+  assert.doesNotMatch(stdout, /\]\]/);
+});
+
+test("a compiler diagnostic about a file with a secret name survives", () => {
+  const redact = createRedactor({ environment: {} });
+
+  // `keys.ts` is a filename, not a field, and the rest of the line is the error
+  // that explains the failure. A path with a `/` never matched the rule at all,
+  // so this hit grep, node --test locations and root-level tsc output only.
+  for (const line of [
+    "  keys.ts:12:5 - error TS2322: Type 'string' is not assignable to type 'number'.",
+    "keys.ts:12:  const total = subtotal + tax",
+  ]) {
+    assert.equal(redact.redactText(line), line);
+  }
+});
+
+test("a source location does not shelter the rest of its line", () => {
+  const redact = createRedactor({ environment: {} });
+
+  // The exemption above declines a name; it must not skip past what follows,
+  // which is what a value taking the rest of the line would have done.
+  assert.equal(
+    redact.redactText("keys.ts:12:5 - error: api_key: hunter2secret"),
+    `keys.ts:12:5 - error: api_key: ${redactionMarker("env-value")}`,
+  );
+
+  // And a real secret name is not a filename, whatever its value looks like.
+  for (const line of [
+    "password: 12:30",
+    "token: 123456789:AAHfiqkabcdefghijklmnop",
+  ]) {
+    assert.doesNotMatch(redact.redactText(line), /12:30|AAHfiqk/);
+  }
+});
+
+test("redaction cannot end a run by throwing on a shape it did not expect", () => {
+  const redact = createRedactor({ environment: {} });
+
+  // The cast is the point: this is the event a later contract change produces,
+  // and the throw would land in the event store's unguarded listener loop and
+  // propagate out of append into the run.
+  const malformed = {
+    ...commandEvent("cat .env", "API_KEY=abcdef1234567890\n"),
+  } as unknown as SessionEvent;
+
+  delete (malformed as { payload: { result: { output?: unknown } } }).payload
+    .result.output;
+
+  assert.doesNotThrow(() => redact.redactEvent(malformed));
+});
+
 test("SSH_AUTH_SOCK's path is not registered as a literal secret", () => {
   const socket = "/private/tmp/com.apple.launchd.AbCdEf/Listeners";
   const redact = createRedactor({ environment: { SSH_AUTH_SOCK: socket } });
