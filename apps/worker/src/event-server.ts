@@ -12,6 +12,7 @@ import {
 } from "@novus/contracts/protocol";
 import type { InMemorySessionEventStore } from "@novus/session-service";
 
+import { createRedactor, type Redactor } from "./redaction.ts";
 import type { Session, SessionRegistry } from "./session-registry.ts";
 
 const HEARTBEAT_MS = 15_000;
@@ -21,6 +22,8 @@ export type EventServerOptions = {
   host?: string;
   /** Supplied when the server should also accept session and turn commands. */
   sessions?: SessionRegistry;
+  /** Defaults to a redactor seeded from the worker's own environment. */
+  redactor?: Redactor;
 };
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -64,11 +67,24 @@ export type EventServer = {
   close: () => Promise<void>;
 };
 
+/**
+ * The outbound edge of the worker, and therefore where redaction happens.
+ *
+ * The store above holds the host's privileged log and keeps it complete. This
+ * function writes the copy that reaches a client — today the desktop renderer,
+ * next the session service and every guest behind it — so a secret that
+ * survives this line has left the machine. Redaction belongs here rather than
+ * at `store.append` precisely because the two copies are allowed to differ:
+ * see the boundary note at the top of `redaction.ts`.
+ */
 const writeSse = (
   write: (chunk: string) => void,
   event: SessionEvent,
+  redactor: Redactor,
 ): void => {
-  write(`id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`);
+  const shareable = redactor.redactEvent(event);
+
+  write(`id: ${event.sequence}\ndata: ${JSON.stringify(shareable)}\n\n`);
 };
 
 /**
@@ -83,6 +99,7 @@ const streamSession = (
   sessionId: string,
   since: number,
   write: (chunk: string) => void,
+  redactor: Redactor,
 ): (() => void) => {
   const pending: SessionEvent[] = [];
   let flushed = false;
@@ -93,7 +110,7 @@ const streamSession = (
     }
 
     if (flushed) {
-      writeSse(write, event);
+      writeSse(write, event, redactor);
       return;
     }
 
@@ -105,14 +122,14 @@ const streamSession = (
     .filter((event) => event.sequence >= since);
 
   for (const event of backlog) {
-    writeSse(write, event);
+    writeSse(write, event, redactor);
   }
 
   let lastSequence = backlog.at(-1)?.sequence ?? since - 1;
 
   for (const event of pending) {
     if (event.sequence > lastSequence) {
-      writeSse(write, event);
+      writeSse(write, event, redactor);
       lastSequence = event.sequence;
     }
   }
@@ -133,6 +150,9 @@ export const startEventServer = (
   const port = options.port ?? Number(process.env.NOVUS_PORT ?? 4319);
 
   const sessions = options.sessions;
+  // Built once, at startup: the snapshot of secret-looking environment values
+  // is taken before any run can add to the environment.
+  const redactor = options.redactor ?? createRedactor();
 
   const describe = (session: Session) => ({
     id: session.id,
@@ -272,9 +292,15 @@ export const startEventServer = (
       connection: "keep-alive",
     });
 
-    const unsubscribe = streamSession(store, sessionId, since, (chunk) => {
-      response.write(chunk);
-    });
+    const unsubscribe = streamSession(
+      store,
+      sessionId,
+      since,
+      (chunk) => {
+        response.write(chunk);
+      },
+      redactor,
+    );
 
     const heartbeat = setInterval(() => {
       response.write(": heartbeat\n\n");
@@ -301,8 +327,15 @@ export const startEventServer = (
     });
 
     server.listen(port, host, () => {
+      // Reported from the socket rather than from the requested port, so
+      // port 0 — an ephemeral port, which is what a test wants — still yields
+      // a URL that can be connected to.
+      const address = server.address();
+      const boundPort =
+        address !== null && typeof address === "object" ? address.port : port;
+
       resolve({
-        url: `http://${host}:${port}`,
+        url: `http://${host}:${boundPort}`,
         close: () =>
           new Promise((closed) => {
             server.close(() => closed());
