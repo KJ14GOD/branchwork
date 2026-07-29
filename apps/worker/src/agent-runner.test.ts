@@ -7,7 +7,11 @@ import test from "node:test";
 import { InMemorySessionEventStore } from "@novus/session-service";
 
 import { AgentRunner } from "./agent-runner.ts";
-import { FixedModelRouter, ScriptedModelAdapter } from "./model.ts";
+import {
+  FixedModelRouter,
+  ScriptedModelAdapter,
+  type ModelAdapter,
+} from "./model.ts";
 import { AllowListApprovalGate } from "./policy.ts";
 import {
   ApplyPatchTool,
