@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { promisify } from "node:util";
 
 import type { ToolCall } from "@novus/contracts";
 import type { InMemorySessionEventStore } from "@novus/session-service";
@@ -20,6 +22,30 @@ import {
   SearchRepositoryTool,
 } from "./tools.ts";
 
+const run = promisify(execFile);
+
+/**
+ * The commit a session opened against.
+ *
+ * Read once, at session creation, so every receipt in the session names the
+ * same reproducible base. Null when the directory is not a Git checkout, which
+ * is allowed — the repository still works, the receipt just cannot cite a
+ * revision.
+ */
+const readHeadRevision = async (
+  repositoryPath: string,
+): Promise<string | null> => {
+  try {
+    const { stdout } = await run("git", ["rev-parse", "HEAD"], {
+      cwd: repositoryPath,
+    });
+
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+};
+
 export type HostDefaults = {
   allowWrites: boolean;
   allowCommands: boolean;
@@ -36,6 +62,7 @@ export type Session = {
   repositoryPath: string;
   allowWrites: boolean;
   allowCommands: boolean;
+  startingRevision: string | null;
   runner: AgentRunner;
   createdAt: string;
   /** Serialises turns so a second submission cannot interleave with a run. */
@@ -132,6 +159,7 @@ export class SessionRegistry {
       throw new Error(`Not a directory: ${repositoryPath}`);
     }
 
+    const startingRevision = await readHeadRevision(repositoryPath);
     const allowWrites = options.allowWrites ?? this.defaults.allowWrites;
     const allowCommands = options.allowCommands ?? this.defaults.allowCommands;
     const proposePatchTool = new ProposePatchTool(repositoryPath);
@@ -140,6 +168,7 @@ export class SessionRegistry {
       repositoryPath,
       allowWrites,
       allowCommands,
+      startingRevision,
       createdAt: new Date().toISOString(),
       queue: Promise.resolve(),
       runner: new AgentRunner(
@@ -155,6 +184,7 @@ export class SessionRegistry {
           new RunTestsTool(repositoryPath),
         ],
         buildApprovalGate(allowWrites, allowCommands),
+        startingRevision,
       ),
     };
 

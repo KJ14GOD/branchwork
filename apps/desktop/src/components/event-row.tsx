@@ -17,6 +17,7 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "tool.failed": "✗",
   "run.completed": "■",
   "run.failed": "✗",
+  "receipt.created": "▣",
 };
 
 const summariseCall = (call: Extract<SessionEvent, { type: "tool.requested" }>["payload"]["call"]): string => {
@@ -210,6 +211,42 @@ export const EventRow = ({
             {event.payload.reason}
           </span>
         );
+
+      case "receipt.created": {
+        const { receipt } = event.payload;
+        const failing = receipt.tests.filter((test) => !test.passed).length;
+        // Lead with what a reviewer checks first: did it change anything, and
+        // did the tests agree.
+        const parts = [
+          `${receipt.filesChanged.length} file${receipt.filesChanged.length === 1 ? "" : "s"} changed`,
+          receipt.tests.length === 0
+            ? "tests not run"
+            : failing === 0
+              ? `${receipt.tests.length} test run${receipt.tests.length === 1 ? "" : "s"} passed`
+              : `${failing} of ${receipt.tests.length} test runs failed`,
+          `${receipt.usage.modelCalls} model call${receipt.usage.modelCalls === 1 ? "" : "s"}`,
+          `${receipt.usage.inputTokens + receipt.usage.outputTokens} tokens`,
+          `${Math.round(receipt.elapsedMs / 100) / 10}s`,
+        ];
+
+        return (
+          <span
+            className={
+              failing > 0
+                ? "event__text event__text--error"
+                : "event__text event__text--muted"
+            }
+          >
+            {parts.join(" · ")}
+            {receipt.startingRevision ? (
+              <span className="event__type">
+                {" "}
+                · base {receipt.startingRevision.slice(0, 8)}
+              </span>
+            ) : null}
+          </span>
+        );
+      }
 
       case "tool.requested":
         return (

@@ -263,6 +263,11 @@ export class AnthropicModelAdapter implements ModelAdapter {
       messages: buildMessages(request),
     });
 
+    const usage = {
+      inputTokens: message.usage.input_tokens,
+      outputTokens: message.usage.output_tokens,
+    };
+
     const toolUse = message.content.find((block) => block.type === "tool_use");
 
     if (toolUse?.type === "tool_use") {
@@ -273,6 +278,7 @@ export class AnthropicModelAdapter implements ModelAdapter {
           name: toolUse.name,
           input: toolUse.input,
         }),
+        usage,
       };
     }
 
@@ -289,6 +295,7 @@ export class AnthropicModelAdapter implements ModelAdapter {
     return {
       type: "final",
       summary,
+      usage,
     };
   }
 }

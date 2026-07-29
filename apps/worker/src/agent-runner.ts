@@ -16,6 +16,7 @@ import {
   DenyAllApprovalGate,
   type ApprovalGate,
 } from "./policy.ts";
+import { buildReceipt, type ReceiptUsage } from "./receipt.ts";
 import type { AgentTool } from "./tools.ts";
 
 export type AgentRunInput = {
@@ -47,6 +48,8 @@ export class AgentRunner {
   private readonly adapters: readonly ModelAdapter[];
   private readonly tools: readonly AgentTool[];
   private readonly approvals: ApprovalGate;
+  /** Frozen when the session opened, so a receipt names a reproducible base. */
+  private readonly startingRevision: string | null;
   // One runner is one session. Finished turns stay here so a follow-up
   // question carries the earlier conversation.
   private readonly history: CompletedTurn[] = [];
@@ -59,12 +62,14 @@ export class AgentRunner {
     // Absent a configured gate, write and dangerous tools are denied rather
     // than silently allowed.
     approvals: ApprovalGate = new DenyAllApprovalGate(),
+    startingRevision: string | null = null,
   ) {
     this.eventStore = eventStore;
     this.router = router;
     this.adapters = adapters;
     this.tools = tools;
     this.approvals = approvals;
+    this.startingRevision = startingRevision;
   }
 
   async run(input: AgentRunInput): Promise<AgentRunResult> {
@@ -108,6 +113,30 @@ export class AgentRunner {
 
     const toolExchanges: ModelToolExchange[] = [];
     let consecutiveFailures = 0;
+    const usage: ReceiptUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      modelCalls: 0,
+    };
+
+    // Emitted after the terminal event, so the receipt can read it back and
+    // report how the run actually ended rather than how it was expected to.
+    const emitReceipt = (): void => {
+      const receipt = buildReceipt(
+        this.eventStore.list(input.sessionId),
+        run.id,
+        { startingRevision: this.startingRevision, usage },
+      );
+
+      if (receipt) {
+        this.eventStore.append({
+          sessionId: input.sessionId,
+          actorId: input.actorId,
+          type: "receipt.created",
+          payload: { runId: run.id, receipt },
+        });
+      }
+    };
 
     const failRun = (reason: string): AgentRunResult => {
       this.eventStore.append({
@@ -116,6 +145,8 @@ export class AgentRunner {
         type: "run.failed",
         payload: { runId: run.id, reason },
       });
+
+      emitReceipt();
 
       return { runId: run.id, events: this.eventStore.list(input.sessionId) };
     };
@@ -126,6 +157,13 @@ export class AgentRunner {
         goal: input.goal,
         toolExchanges,
       });
+
+      usage.modelCalls += 1;
+
+      if (response.usage) {
+        usage.inputTokens += response.usage.inputTokens;
+        usage.outputTokens += response.usage.outputTokens;
+      }
 
       if (response.type === "final") {
         this.history.push({
@@ -143,6 +181,8 @@ export class AgentRunner {
             summary: response.summary,
           },
         });
+
+        emitReceipt();
 
         return {
           runId: run.id,

@@ -51,11 +51,14 @@ test("records a complete run using the selected model", async () => {
         "tool.requested",
         "tool.completed",
         "run.completed",
+        // The receipt is emitted after the terminal event, so it can report how
+        // the run actually ended rather than how it was expected to.
+        "receipt.created",
       ],
     );
     assert.deepEqual(
       result.events.map((event) => event.sequence),
-      [0, 1, 2, 3, 4],
+      [0, 1, 2, 3, 4, 5],
     );
 
     const startedEvent = result.events[0];
