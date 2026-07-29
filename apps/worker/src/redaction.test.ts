@@ -265,3 +265,85 @@ test("the tool request that carried the secret is redacted too", () => {
     false,
   );
 });
+
+// The three bypasses a post-merge audit found. Each one reached the artifact a
+// guest reads most, and each was invisible to the tests that shipped with the
+// rule, so they are pinned by the auditor's own examples.
+
+test("a secret added in a diff is redacted, not skipped for its + marker", () => {
+  const redact = createRedactor({ environment: {} });
+
+  // The prefix class did not include + or -, so every added and removed line of
+  // a unified diff went through untouched while the same text as a context line
+  // was redacted. An agent writing a credential into a config file is exactly
+  // the accident this rule is for.
+  const diff = [
+    "--- a/config.env",
+    "+++ b/config.env",
+    "@@ -1 +1,2 @@",
+    " EXISTING=fine",
+    "+API_KEY=abcdef1234567890",
+    "-SECRET_TOKEN=zyxwvu0987654321",
+  ].join("\n");
+
+  const redacted = redact.redactText(diff);
+
+  assert.doesNotMatch(redacted, /abcdef1234567890/);
+  assert.doesNotMatch(redacted, /zyxwvu0987654321/);
+  // The names stay, so the diff is still reviewable.
+  assert.match(redacted, /\+API_KEY=/);
+  assert.match(redacted, /-SECRET_TOKEN=/);
+});
+
+test("a block-style YAML secret is not shielded by its parent key", () => {
+  const redact = createRedactor({ environment: {} });
+
+  // The operator allowed whitespace across a newline, so `environment:` matched
+  // with its indented child as the value, decided `environment` was innocent,
+  // and returned the whole block unredacted.
+  const compose = [
+    "services:",
+    "  db:",
+    "    environment:",
+    "      POSTGRES_PASSWORD: s3cr3tvalue123",
+    "      POSTGRES_USER: novus",
+  ].join("\n");
+
+  const redacted = redact.redactText(compose);
+
+  assert.doesNotMatch(redacted, /s3cr3tvalue123/);
+  assert.match(redacted, /POSTGRES_USER: novus/);
+});
+
+test("a bare secret name after a diff marker or list dash is still a field", () => {
+  const redact = createRedactor({ environment: {} });
+
+  const redacted = redact.redactText(
+    ["+  password: hunter2password", "- token: abcdefgh12345678"].join("\n"),
+  );
+
+  assert.doesNotMatch(redacted, /hunter2password/);
+  assert.doesNotMatch(redacted, /abcdefgh12345678/);
+});
+
+test("a heading does not swallow the line beneath it", () => {
+  const redact = createRedactor({ environment: {} });
+
+  // The same newline-crossing bug fired the other way, destroying the sentence
+  // that explains a failure — which the rule's own comment promised to keep.
+  const redacted = redact.redactText(
+    "Credentials:\n  loaded 3 profiles from ~/.aws/config",
+  );
+
+  assert.match(redacted, /loaded 3 profiles/);
+});
+
+test("SSH_AUTH_SOCK's path is not registered as a literal secret", () => {
+  const socket = "/private/tmp/com.apple.launchd.AbCdEf/Listeners";
+  const redact = createRedactor({ environment: { SSH_AUTH_SOCK: socket } });
+
+  // It reads as a secret name and holds a socket path. Registering it means
+  // every mention anywhere is replaced, including the message explaining why an
+  // SSH push failed.
+  assert.match(redact.redactText(`socket at ${socket} is live`), /Listeners/);
+});

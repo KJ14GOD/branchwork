@@ -103,13 +103,23 @@ const escapeForRegExp = (value: string): string =>
  * if the exact string the harness authenticates with turns up in a command's
  * stdout, it does not leave.
  */
+const ENVIRONMENT_EXCEPTIONS = new Set(["SSH_AUTH_SOCK"]);
+
 const knownSecretsFrom = (
   environment: Readonly<Record<string, string | undefined>>,
 ): string[] => {
   const values = new Set<string>();
 
   for (const [name, value] of Object.entries(environment)) {
-    if (value === undefined || !looksLikeSecretName(name)) {
+    // Same exception the child-environment scrub already makes: SSH_AUTH_SOCK
+    // reads as a secret name but holds a socket path, and registering that path
+    // as a literal means every mention of it anywhere in any output gets
+    // replaced — including the messages explaining an SSH failure.
+    if (
+      value === undefined ||
+      ENVIRONMENT_EXCEPTIONS.has(name) ||
+      !looksLikeSecretName(name)
+    ) {
       continue;
     }
 
@@ -146,14 +156,28 @@ const API_KEY_PATTERNS: readonly RegExp[] = [
 const AUTHORIZATION_VALUE = /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{16,}/g;
 
 // `NAME=value` in a shell command, a Dockerfile, a CI file, or source.
+//
+// `+` and `-` are in the prefix class because a unified diff is the artifact
+// this most needs to cover. Without them every added and removed line was
+// skipped while the identical text as context was redacted — so an agent adding
+// a credential to a config file, the exact accident this rule exists for,
+// produced a diff that shipped the secret to every viewer.
 const ASSIGNMENT =
-  /(^|[\s'"`(;&|{[,])([A-Za-z_][A-Za-z0-9_]{0,63})(\s*=\s*)("(?:[^"\\\n]|\\.)*"|'[^'\n]*'|[^\s'"`;&|)\]},]+)/g;
+  /(^|[\s'"`(;&|{[,+-])([A-Za-z_][A-Za-z0-9_]{0,63})(\s*=\s*)("(?:[^"\\\n]|\\.)*"|'[^'\n]*'|[^\s'"`;&|)\]},]+)/g;
 
 // `name: value` in JSON, YAML, or an HTTP header. The unquoted form runs to the
 // end of the line rather than the first space, because `Authorization: Bearer x`
 // puts the part worth hiding after a space.
+//
+// The operator is `[^\S\n]` rather than `\s` on purpose. With `\s` the spacing
+// after the colon could cross a line ending, so a harmless parent key —
+// `environment:` — matched with its own indented child as the value, decided
+// the parent was not a secret name, and returned the whole block unredacted.
+// Every block-style YAML secret went through: docker-compose passwords, CI
+// `env:` blocks, Kubernetes `data:`. It also fired the other way, swallowing
+// the line after any heading that happened to end in a colon.
 const FIELD =
-  /(^|[\s{,[`'"])(["']?)([A-Za-z_][A-Za-z0-9_.-]{0,63})\2(\s*:\s*)("(?:[^"\\\n]|\\.)*"|'[^'\n]*'|[^\n,}\]]+)/g;
+  /(^|[\s{,[`'"+-])(["']?)([A-Za-z_][A-Za-z0-9_.-]{0,63})\2([^\S\n]*:[^\S\n]*)("(?:[^"\\\n]|\\.)*"|'[^'\n]*'|[^\n,}\]]+)/g;
 
 // Where a `name:` is structure rather than English. A field takes the rest of
 // its line, so firing on prose — "could not find the key: config.ts is missing"
@@ -317,8 +341,15 @@ export const createRedactor = (options: RedactorOptions = {}): Redactor => {
         }
 
         const lineStart = whole.lastIndexOf("\n", offset) + 1;
+        // A diff marker or a YAML sequence dash is still the start of the line
+        // as far as structure goes. Without this, `+  password: hunter2` and
+        // `- password: hunter2` were treated as prose while `api_key:` in the
+        // same position was redacted — and `password`, `secret`, `token` are
+        // exactly the bare names that appear that way.
         const opensTheLine =
-          whole.slice(lineStart, offset + prefix.length).trim() === "";
+          whole
+            .slice(lineStart, offset + prefix.length)
+            .replace(/^[+\-\s]*/, "") === "";
 
         if (
           !opensTheLine &&
