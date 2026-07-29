@@ -37,10 +37,10 @@ That asymmetry is the risk this document exists to prevent, and it grows on its
 own: harness work is legible and satisfying, so it keeps getting picked up while
 the shared-control half stays theoretical. Two concrete rules follow from it.
 
-- **The agent cannot yet verify its own work.** There is no `run_command` and no
-  `run_tests`, so it edits blind and Milestone 2's exit condition — the bug-fix
-  benchmark plus a reproducible diff and test receipt — is unreachable. This is
-  the single largest functional hole.
+- ~~**The agent cannot yet verify its own work.**~~ Fixed 2026-07-29:
+  `run_command` and `run_tests` exist, are `dangerous` class, and are opted into
+  with `NOVUS_ALLOW_COMMANDS=1`. Milestone 2's exit condition now turns on the
+  receipt alone.
 - **Events do not survive a restart.** The event log is supposed to be the source
   of truth with current state as a projection. It is an array in memory, so
   Milestone 1 is not actually finished and everything in Milestone 4 that
@@ -415,15 +415,23 @@ Exit condition: a fake worker event appears identically in the host and guest UI
 - [x] Model adapter and BYOK credential storage
 - [~] Context assembly — goal plus prior turns; no repository context yet
 - [~] Native read/search/patch/command/Git/test tools — `read_file`,
-      `search_repository`, `propose_patch`, `apply_patch` exist. `run_command`,
-      `run_tests`, `git_status`, `git_diff`, `list_directory` do not.
+      `search_repository`, `propose_patch`, `apply_patch`, `run_command`,
+      `run_tests` exist. `git_status`, `git_diff`, `list_directory` do not.
 - [x] State machine and permission checks
 - [x] Streaming execution timeline
 - [ ] Final receipt
 
 Exit condition: the agent completes the bug-fix benchmark locally and produces a
-reproducible diff and test receipt. **Not met:** without `run_tests` the agent
-cannot tell whether its own patch worked, and there is no receipt to produce.
+reproducible diff and test receipt. **Not met:** the diff and the test result are
+both reachable now, but nothing assembles them into a receipt.
+
+Command execution is denied by default and opted into with
+`NOVUS_ALLOW_COMMANDS=1`, kept separate from `NOVUS_ALLOW_WRITES` because
+approving a reviewable diff and approving arbitrary code are different
+decisions. Note that the allow-list gate pre-authorises rather than asking per
+call, so that flag is blanket authorisation for the session — a per-call human
+gate is still owed, and is what Milestone 3's approval flow should replace it
+with.
 
 ### Milestone 3 — multiplayer control
 
