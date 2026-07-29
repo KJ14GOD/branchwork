@@ -10,7 +10,7 @@ import {
   CreateSessionRequestSchema,
   SubmitTurnRequestSchema,
 } from "@novus/contracts/protocol";
-import type { InMemorySessionEventStore } from "@novus/session-service";
+import type { SessionEventStore } from "@novus/session-service";
 
 import { createRedactor, type Redactor } from "./redaction.ts";
 import type { Session, SessionRegistry } from "./session-registry.ts";
@@ -95,7 +95,7 @@ const writeSse = (
  * append landing mid-handshake is delivered in sequence rather than dropped.
  */
 const streamSession = (
-  store: InMemorySessionEventStore,
+  store: SessionEventStore,
   sessionId: string,
   since: number,
   write: (chunk: string) => void,
@@ -120,8 +120,11 @@ const streamSession = (
   // Deliberately the tolerant read. A single row this build cannot parse — a
   // log written before a contract change — must cost that row, not the worker
   // process, and this runs inside an HTTP handler where a throw is fatal.
-  const { events, unreadable } = store.readable(sessionId);
-  const backlog = events.filter((event) => event.sequence >= since);
+  // `since` goes into the SQL rather than a filter here, so a reconnect reads
+  // and validates only the rows it is about to send. `unreadable` therefore
+  // counts damage at or after `since` — a row this client was never going to
+  // receive is not a gap in what it receives.
+  const { events: backlog, unreadable } = store.readable(sessionId, since);
 
   if (unreadable > 0) {
     // A comment line: every SSE client ignores it, and it is visible to anyone
@@ -152,7 +155,7 @@ const streamSession = (
 };
 
 export const startEventServer = (
-  store: InMemorySessionEventStore,
+  store: SessionEventStore,
   options: EventServerOptions = {},
 ): Promise<EventServer> => {
   // Bound to the loopback interface: the host machine stays the execution

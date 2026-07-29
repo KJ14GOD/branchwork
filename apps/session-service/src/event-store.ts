@@ -271,11 +271,6 @@ export class SessionEventStore {
  * Same SQLite engine, same schema, same sequencing — only the file is missing.
  * Tests and the scripted demo want exactly that, and they should not have to
  * describe it differently from the durable store they are standing in for.
- *
- * Keep it memberless. `event-server.ts` still types its parameters on this
- * name, and a durable store is only accepted there because the two classes are
- * structurally identical. Adding anything here breaks that call site until the
- * annotation moves to `SessionEventStore`, which is where it belongs.
  */
 export class InMemorySessionEventStore extends SessionEventStore {
   constructor() {
