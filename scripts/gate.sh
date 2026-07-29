@@ -8,6 +8,13 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
+# Without this the gate runs on whatever Node the caller happened to have. The
+# Stop hook calls this script, so "whatever Node" was Node 22 for every agent in
+# the fleet — which fails the engine check and, worse, leaves pnpm's managed
+# install half-written for the next caller.
+. "$(git rev-parse --show-toplevel)/scripts/toolchain.sh"
+novus_use_node || exit 1
+
 failed=""
 
 step() {
