@@ -30,8 +30,14 @@ harness half is real: a typed agent loop with a step ceiling and a failure
 budget, four tools, a propose-then-apply patch flow where proposing writes
 nothing and applying refuses a file that drifted, path confinement that survives
 symlinks, deny-by-default permissions, and an event stream the desktop renders
-live. The multiplayer half is a 54-line in-memory event store. `apps/guest` is a
-`package.json` with nothing behind it.
+live. The multiplayer half is a 54-line in-memory event store.
+
+`apps/guest` is no longer empty: a browser client reads the same ordered log the
+desktop reads, resumes by sequence after a drop, and names which failure it is
+looking at instead of showing a blank timeline. It is one viewer, though, not
+multiplayer — it talks straight to the worker over loopback because the session
+service in the architecture below does not exist. No invite, no authentication,
+no presence, no roles, and nothing a guest can do but watch.
 
 That asymmetry is the risk this document exists to prevent, and it grows on its
 own: harness work is legible and satisfying, so it keeps getting picked up while

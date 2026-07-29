@@ -1,8 +1,9 @@
 # Novus
 
 A multiplayer coding harness for humans and AI agents. pnpm workspace: `apps/worker`
-(agent loop, tools, event server), `apps/desktop` (React + Electron), `packages/contracts`
-(the Zod boundary both sides share).
+(agent loop, tools, event server), `apps/desktop` (React + Electron), `apps/guest`
+(read-only browser viewer of one session's event log), `packages/contracts` (the Zod
+boundary all of them share).
 
 ## Gate
 
@@ -28,7 +29,12 @@ pnpm typecheck && pnpm test && git diff --check
 - **Writes are denied by default.** `DenyAllApprovalGate` is the fallback, so a missing
   gate denies rather than allows. `NOVUS_ALLOW_WRITES=1` opts in. `apply_patch` is the
   only tool in the write class.
-- Ports: worker `4319` (`NOVUS_PORT`), Vite `5273`. Both loopback-only.
+- **The guest talks to the worker, not to a session service.** There is no relay,
+  invite, or authentication yet, so `apps/guest` is a second browser on the host
+  machine reading `/events` directly. Start it with `pnpm --filter @novus/guest dev`
+  and open `?session=<id>`; the join screen lists what `GET /sessions` reports.
+- Ports: worker `4319` (`NOVUS_PORT`), desktop Vite `5273`, guest Vite `5274`. All
+  loopback-only.
 - Other env: `NOVUS_REPO`, `NOVUS_SESSION`.
 
 ## Invariants
