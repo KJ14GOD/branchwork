@@ -15,6 +15,13 @@ export type GuestConnection =
   | { kind: "idle" }
   /** Asking the worker whether this session exists. */
   | { kind: "locating" }
+  /**
+   * Nothing was attempted, and nothing will be until the link changes: the
+   * address is not a loopback worker, or connecting to it faulted. Terminal on
+   * purpose — a state that retries forever is how "locating" became a stuck
+   * screen that read as progress.
+   */
+  | { kind: "stopped"; reason: string }
   /** The worker did not answer at all. */
   | { kind: "unreachable"; detail: string; attempt: number; retryAt: number }
   /** The worker answered, and has no session with this id. */
@@ -108,6 +115,13 @@ export const describeConnection = (
         label: "locating",
         tone: "idle",
         emptyTimeline: `Looking for session ${sessionId} on ${endpoint}…`,
+      };
+
+    case "stopped":
+      return {
+        label: "not connected",
+        tone: "error",
+        emptyTimeline: `${connection.reason} Nothing was read, so this timeline is empty for that reason and not because the run is quiet.`,
       };
 
     case "unreachable":

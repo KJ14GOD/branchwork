@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --project tsconfig.json",
-    "test": "node --experimental-strip-types --test src/timeline.test.ts"
+    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'"
   },
   "dependencies": {
     "@novus/contracts": "workspace:*",

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { SessionEventSchema, type SessionEvent } from "@novus/contracts";
 import type { SessionSummary } from "@novus/contracts/protocol";
 
+import { resolveEndpoint } from "./endpoint.ts";
 import {
   mergeEvent,
   resumeSequence,
@@ -67,6 +68,24 @@ export const useGuestSession = (
       return;
     }
 
+    // Before anything else, because everything below assumes the address is
+    // one a URL can be built from and one the guest is willing to talk to.
+    // This used to be assumed, and `new URL("nonsense/events")` threw out of
+    // the unawaited async block below — leaving the screen on "locating"
+    // forever, which is the one shape of failure this client exists to avoid.
+    const address = resolveEndpoint(endpoint);
+
+    if (address.kind === "refused") {
+      streamed.current = null;
+      held.current = [];
+      setEvents([]);
+      setSession(null);
+      setKnown([]);
+      setConnection({ kind: "stopped", reason: address.reason });
+
+      return;
+    }
+
     // Only a different session starts a new timeline. A reconnect keeps what it
     // already has and asks for the rest.
     if (streamed.current !== sessionId) {
@@ -95,7 +114,7 @@ export const useGuestSession = (
     };
 
     const open = (blind: boolean) => {
-      const url = new URL(`${endpoint}/events`);
+      const url = new URL(`${address.endpoint}/events`);
       url.searchParams.set("session", sessionId);
       url.searchParams.set("since", String(resumeSequence(held.current)));
 
@@ -144,16 +163,23 @@ export const useGuestSession = (
       });
     };
 
-    void (async () => {
+    const locate = async () => {
       setConnection((current) =>
         current.kind === "live" || current.kind === "connecting"
           ? current
           : { kind: "locating" },
       );
 
-      const listing = await fetchSessions(endpoint, controller.signal);
+      const listing = await fetchSessions(address.endpoint, controller.signal);
 
       if (cancelled) {
+        return;
+      }
+
+      if (listing.kind === "refused") {
+        setKnown([]);
+        setConnection({ kind: "stopped", reason: listing.reason });
+
         return;
       }
 
@@ -195,7 +221,23 @@ export const useGuestSession = (
 
       setSession(match);
       open(false);
-    })();
+    };
+
+    // A rejection here has nowhere to go — there is no caller to catch it and
+    // no render that would show it — so an exception would simply stop the
+    // sequence with the screen still saying "locating". Whatever it was, say so
+    // rather than leaving a stall that reads like work in progress.
+    void locate().catch((cause: unknown) => {
+      if (cancelled) {
+        return;
+      }
+
+      console.error("The guest failed while locating the session", cause);
+      setConnection({
+        kind: "stopped",
+        reason: `The guest could not reach ${address.endpoint}: ${cause instanceof Error ? cause.message : String(cause)}.`,
+      });
+    });
 
     return () => {
       cancelled = true;

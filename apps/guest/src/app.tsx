@@ -59,6 +59,11 @@ const useNow = (active: boolean): number => {
 };
 
 export const App = () => {
+  // Held exactly as it was written, including when it is nonsense or points
+  // somewhere a guest will not go. `resolveEndpoint` decides that, at the two
+  // places that would otherwise act on it, and the refusal is shown with the
+  // address that caused it — quietly swapping in the default would erase the
+  // evidence that the link was crafted rather than mistyped.
   const [endpoint, setEndpoint] = useState(
     () => readParam("endpoint") ?? DEFAULT_ENDPOINT,
   );
@@ -138,9 +143,21 @@ export const App = () => {
             retrying in {countdown}s{attempt}
           </span>
         ) : null}
-        <button className="notice__retry" type="button" onClick={retry}>
-          Retry now
-        </button>
+        {connection.kind === "stopped" ? (
+          // Retrying a refused address only refuses it again. Changing the
+          // worker is the move, so that is the button offered.
+          <button
+            className="notice__retry"
+            type="button"
+            onClick={() => setSessionId(null)}
+          >
+            Choose another worker
+          </button>
+        ) : (
+          <button className="notice__retry" type="button" onClick={retry}>
+            Retry now
+          </button>
+        )}
       </div>
     </div>
   );
