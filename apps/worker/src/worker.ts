@@ -88,7 +88,7 @@ const sessions = new SessionRegistry(
   eventStore,
   new FixedModelRouter(modelSelection),
   [new AnthropicModelAdapter(modelSelection)],
-  allowCommands,
+  { allowWrites, allowCommands },
 );
 
 let eventServer;

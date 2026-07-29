@@ -217,9 +217,15 @@ export const startEventServer = (
     }
 
     if (url.pathname === "/health") {
-      response
-        .writeHead(200, { "content-type": "application/json" })
-        .end(JSON.stringify({ status: "ok" }));
+      // Carries the host's permission defaults so a client can seed its own
+      // controls instead of guessing and contradicting the environment.
+      response.writeHead(200, { "content-type": "application/json" }).end(
+        JSON.stringify({
+          status: "ok",
+          allowWrites: sessions?.hostDefaults().allowWrites ?? false,
+          allowCommands: sessions?.hostDefaults().allowCommands ?? false,
+        }),
+      );
       return;
     }
 

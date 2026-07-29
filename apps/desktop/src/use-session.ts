@@ -1,7 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
+  HostCapabilitiesSchema,
   SessionSummarySchema,
+  type HostCapabilities,
   type SessionSummary,
 } from "@novus/contracts/protocol";
 
@@ -9,7 +11,13 @@ export type SessionState = {
   session: SessionSummary | null;
   opening: boolean;
   error: string | null;
-  open: (repositoryPath: string, allowWrites: boolean) => Promise<void>;
+  open: (
+    repositoryPath: string,
+    allowWrites: boolean,
+    allowCommands: boolean,
+  ) => Promise<void>;
+  /** What the host permits, or null until the worker has answered. */
+  capabilities: HostCapabilities | null;
   ask: (goal: string) => Promise<void>;
   close: () => void;
 };
@@ -32,11 +40,45 @@ const readError = async (response: Response): Promise<string> => {
  */
 export const useSession = (endpoint: string): SessionState => {
   const [session, setSession] = useState<SessionSummary | null>(null);
+  const [capabilities, setCapabilities] = useState<HostCapabilities | null>(
+    null,
+  );
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Asked once, on the way in. A worker that is not up yet simply leaves this
+  // null, and the controls stay off — the safe direction to fail.
+  useEffect(() => {
+    let cancelled = false;
+
+    void fetch(`${endpoint}/health`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: unknown) => {
+        if (cancelled || body === null) {
+          return;
+        }
+
+        const parsed = HostCapabilitiesSchema.safeParse(body);
+
+        if (parsed.success) {
+          setCapabilities(parsed.data);
+        }
+      })
+      .catch(() => {
+        // The open screen already reports an unreachable worker.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [endpoint]);
+
   const open = useCallback(
-    async (repositoryPath: string, allowWrites: boolean) => {
+    async (
+      repositoryPath: string,
+      allowWrites: boolean,
+      allowCommands: boolean,
+    ) => {
       setOpening(true);
       setError(null);
 
@@ -44,7 +86,7 @@ export const useSession = (endpoint: string): SessionState => {
         const response = await fetch(`${endpoint}/sessions`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ repositoryPath, allowWrites }),
+          body: JSON.stringify({ repositoryPath, allowWrites, allowCommands }),
         });
 
         if (!response.ok) {
@@ -92,5 +134,5 @@ export const useSession = (endpoint: string): SessionState => {
     setError(null);
   }, []);
 
-  return { session, opening, error, open, ask, close };
+  return { session, capabilities, opening, error, open, ask, close };
 };

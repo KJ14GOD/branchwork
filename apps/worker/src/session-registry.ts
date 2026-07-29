@@ -20,6 +20,11 @@ import {
   SearchRepositoryTool,
 } from "./tools.ts";
 
+export type HostDefaults = {
+  allowWrites: boolean;
+  allowCommands: boolean;
+};
+
 export type SessionOptions = {
   repositoryPath: string;
   allowWrites?: boolean | undefined;
@@ -79,24 +84,29 @@ export class SessionRegistry {
   private readonly router: ModelRouter;
   private readonly adapters: readonly ModelAdapter[];
   /**
-   * Whether this host permits command execution at all.
+   * What this host permits when a request does not say.
    *
-   * The ceiling lives here rather than in the request because the host is the
-   * execution authority. A client may decline commands for its own session; it
-   * must never be able to grant itself execution the operator did not enable.
+   * Both permissions work the same way on purpose. Before, writes came only
+   * from the client's checkbox and commands came only from the environment,
+   * so setting NOVUS_ALLOW_WRITES=1 and then seeing an unchecked box was a
+   * reasonable thing to be confused by.
    */
-  private readonly commandsPermitted: boolean;
+  private readonly defaults: HostDefaults;
 
   constructor(
     eventStore: InMemorySessionEventStore,
     router: ModelRouter,
     adapters: readonly ModelAdapter[],
-    commandsPermitted = false,
+    defaults: HostDefaults = { allowWrites: false, allowCommands: false },
   ) {
     this.eventStore = eventStore;
     this.router = router;
     this.adapters = adapters;
-    this.commandsPermitted = commandsPermitted;
+    this.defaults = defaults;
+  }
+
+  hostDefaults(): HostDefaults {
+    return this.defaults;
   }
 
   list(): Session[] {
@@ -122,11 +132,8 @@ export class SessionRegistry {
       throw new Error(`Not a directory: ${repositoryPath}`);
     }
 
-    const allowWrites = options.allowWrites ?? false;
-    // Omitted means "whatever the host permits", so enabling the flag reaches
-    // sessions opened from the desktop app and not only the command line.
-    const allowCommands =
-      this.commandsPermitted && (options.allowCommands ?? true);
+    const allowWrites = options.allowWrites ?? this.defaults.allowWrites;
+    const allowCommands = options.allowCommands ?? this.defaults.allowCommands;
     const proposePatchTool = new ProposePatchTool(repositoryPath);
     const session: Session = {
       id: crypto.randomUUID(),

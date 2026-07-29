@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+import type { HostCapabilities } from "@novus/contracts/protocol";
 
 import { bridge } from "../bridge.ts";
 
@@ -6,20 +8,38 @@ export const OpenRepository = ({
   onOpen,
   opening,
   error,
+  capabilities,
 }: {
-  onOpen: (repositoryPath: string, allowWrites: boolean) => void;
+  onOpen: (
+    repositoryPath: string,
+    allowWrites: boolean,
+    allowCommands: boolean,
+  ) => void;
   opening: boolean;
   error: string | null;
+  /** What the host permits, or null until the worker has answered. */
+  capabilities: HostCapabilities | null;
 }) => {
   const [path, setPath] = useState("");
   const [allowWrites, setAllowWrites] = useState(false);
+  const [allowCommands, setAllowCommands] = useState(false);
   const host = bridge();
+
+  // Seed from the host rather than defaulting to off. An operator who set
+  // NOVUS_ALLOW_WRITES=1 and then saw an unchecked box had no way to tell
+  // whether the variable was ignored or the control was.
+  useEffect(() => {
+    if (capabilities) {
+      setAllowWrites(capabilities.allowWrites);
+      setAllowCommands(capabilities.allowCommands);
+    }
+  }, [capabilities]);
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
 
     if (path.trim()) {
-      onOpen(path.trim(), allowWrites);
+      onOpen(path.trim(), allowWrites, allowCommands);
     }
   };
 
@@ -62,6 +82,16 @@ export const OpenRepository = ({
           />
           <span>
             Allow writes — the agent may apply patches to this repository
+          </span>
+        </label>
+        <label className="open__toggle">
+          <input
+            type="checkbox"
+            checked={allowCommands}
+            onChange={(event) => setAllowCommands(event.target.checked)}
+          />
+          <span>
+            Allow commands — the agent may run programs and your test suite
           </span>
         </label>
         <button className="open__submit" type="submit" disabled={opening}>

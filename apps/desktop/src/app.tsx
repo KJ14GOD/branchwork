@@ -51,6 +51,7 @@ export const App = () => {
 
   const {
     session,
+    capabilities,
     opening,
     error: sessionError,
     open,
@@ -216,7 +217,12 @@ export const App = () => {
         <header className="titlebar">
           <span className="titlebar__mark">Novus</span>
         </header>
-        <OpenRepository onOpen={open} opening={opening} error={sessionError} />
+        <OpenRepository
+            onOpen={open}
+            opening={opening}
+            error={sessionError}
+            capabilities={capabilities}
+          />
       </div>
     );
   }

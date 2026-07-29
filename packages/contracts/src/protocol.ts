@@ -7,12 +7,26 @@ import { z } from "zod";
  * without touching the domain model.
  */
 
+// What this host is configured to permit, before any one session narrows it.
+// The client reads this to seed its permission controls, so an operator who set
+// NOVUS_ALLOW_WRITES=1 sees the box already ticked rather than an unchecked box
+// that silently contradicts their environment.
+export const HostCapabilitiesSchema = z.object({
+  status: z.literal("ok"),
+  allowWrites: z.boolean(),
+  allowCommands: z.boolean(),
+});
+
+export type HostCapabilities = z.infer<typeof HostCapabilitiesSchema>;
+
 export const CreateSessionRequestSchema = z.object({
   repositoryPath: z.string().min(1),
+  // Omitted means "use the host's default". Present wins: the operator opening
+  // the repository is the host, on a loopback-only API, so the control they are
+  // looking at is the authority for that session. If session creation is ever
+  // exposed to a remote guest, this needs to become a ceiling rather than a
+  // default — the guest must not be able to widen what the host configured.
   allowWrites: z.boolean().optional(),
-  // Omitted means "whatever the host permits". A client can narrow this to
-  // false; it can never widen it, because the host's NOVUS_ALLOW_COMMANDS is
-  // the ceiling and the host is the execution authority.
   allowCommands: z.boolean().optional(),
 });
 
