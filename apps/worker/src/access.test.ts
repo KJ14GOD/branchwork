@@ -3,23 +3,22 @@ import test from "node:test";
 
 import { InMemorySessionEventStore } from "@novus/session-service";
 
+import { FixedModelRouter } from "./model.ts";
+import { SessionRegistry } from "./session-registry.ts";
+
 import { isAllowedOrigin, mintAccessToken, offeredToken, tokensMatch } from "./access.ts";
 import { startEventServer } from "./event-server.ts";
 
 const TOKEN = "test-token-abcdefghijklmnop";
 
-// `null` rather than `undefined` for "no token": passing undefined to a
-// defaulted parameter selects the default, which would have quietly started a
-// guarded server for the one test that needs an unguarded one.
+// `null` is now how a caller says "no gate" out loud — the option is required,
+// so forgetting it is a type error rather than an open server.
 const withServer = async (
   run: (url: string) => Promise<void>,
   token: string | null = TOKEN,
 ): Promise<void> => {
   const store = new InMemorySessionEventStore();
-  const server = await startEventServer(store, {
-    port: 0,
-    ...(token === null ? {} : { token }),
-  });
+  const server = await startEventServer(store, { port: 0, token });
 
   try {
     await run(server.url);
@@ -176,4 +175,86 @@ test("a worker started without a token still serves, for tests only", async () =
     assert.equal(response.status, 200);
     await response.body?.cancel();
   }, null);
+});
+
+
+/**
+ * The two routes the vulnerability was actually about.
+ *
+ * The rest of this file tested GET routes, because the helper above builds a
+ * server with no session registry — and without one these two return 404
+ * whatever the token says, so they would have passed while asserting nothing.
+ * "Any site could POST a turn and start an agent run" is the sentence that
+ * justified this work, and until now nothing held it.
+ */
+const withCommandServer = async (
+  run: (url: string) => Promise<void>,
+): Promise<void> => {
+  const store = new InMemorySessionEventStore();
+  const sessions = new SessionRegistry(
+    store,
+    new FixedModelRouter({ provider: "anthropic", model: "test" }),
+    [],
+  );
+  const server = await startEventServer(store, { port: 0, token: TOKEN, sessions });
+
+  try {
+    await run(server.url);
+  } finally {
+    await server.close();
+  }
+};
+
+test("opening a repository requires the token", async () => {
+  await withCommandServer(async (url) => {
+    const anonymous = await fetch(`${url}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repositoryPath: "/tmp" }),
+    });
+
+    assert.equal(anonymous.status, 401);
+
+    // And the same request with the token gets past the gate — a 401 for every
+    // caller would satisfy the assertion above while breaking the product.
+    const authorised = await fetch(`${url}/sessions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: JSON.stringify({ repositoryPath: "/definitely/not/a/repository" }),
+    });
+
+    assert.notEqual(authorised.status, 401);
+  });
+});
+
+test("submitting a turn requires the token", async () => {
+  await withCommandServer(async (url) => {
+    const response = await fetch(`${url}/sessions/any-session/turns`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ goal: "do something in this repository" }),
+    });
+
+    // This is the drive-by: a page the user merely had open, starting a run.
+    assert.equal(response.status, 401);
+  });
+});
+
+test("a hostile page cannot POST a turn even holding the token", async () => {
+  await withCommandServer(async (url) => {
+    const response = await fetch(`${url}/sessions/any-session/turns`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://evil.example",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: JSON.stringify({ goal: "do something in this repository" }),
+    });
+
+    assert.equal(response.status, 403);
+  });
 });

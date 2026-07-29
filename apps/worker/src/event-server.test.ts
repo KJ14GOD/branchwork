@@ -67,9 +67,7 @@ const readStream = async (url: string, expectedEvents: number) => {
 
 test("a known key in the store never reaches a connected client", async () => {
   const store = new InMemorySessionEventStore();
-  const server = await startEventServer(store, {
-    port: 0,
-    redactor: createRedactor({
+  const server = await startEventServer(store, { port: 0, token: null, redactor: createRedactor({
       environment: { ANTHROPIC_API_KEY: PROVIDER_KEY },
     }),
   });
@@ -99,9 +97,7 @@ test("a known key in the store never reaches a connected client", async () => {
 
 test("an event with nothing sensitive in it arrives unchanged", async () => {
   const store = new InMemorySessionEventStore();
-  const server = await startEventServer(store, {
-    port: 0,
-    redactor: createRedactor({
+  const server = await startEventServer(store, { port: 0, token: null, redactor: createRedactor({
       environment: { ANTHROPIC_API_KEY: PROVIDER_KEY },
     }),
   });

@@ -164,9 +164,7 @@ const withServer = async (
   }) => Promise<void>,
 ): Promise<void> => {
   const store = new InMemorySessionEventStore();
-  const server = await startEventServer(store, {
-    port: 0,
-    redactor: createRedactor({ environment: {} }),
+  const server = await startEventServer(store, { port: 0, token: null, redactor: createRedactor({ environment: {} }),
   });
 
   try {

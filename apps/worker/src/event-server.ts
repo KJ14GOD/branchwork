@@ -28,11 +28,13 @@ export type EventServerOptions = {
   /**
    * Required on every request except /health.
    *
-   * Omitted only by tests that are not exercising access control. A worker
-   * started without one is open to every page in the user's browser, so
-   * worker.ts always supplies it.
+   * Not optional, and `null` has to be written out. AGENTS.md states the
+   * convention for the other boundary — a missing approval gate denies rather
+   * than allows — and an `if (token)` check inverted it here: a caller who
+   * simply forgot got no gate at all and no warning. The demo server was
+   * already that caller.
    */
-  token?: string;
+  token: string | null;
 };
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -165,7 +167,7 @@ const streamSession = (
 
 export const startEventServer = (
   store: SessionEventStore,
-  options: EventServerOptions = {},
+  options: EventServerOptions,
 ): Promise<EventServer> => {
   // Bound to the loopback interface: the host machine stays the execution
   // authority, and nothing on the network can read a session's event log.
@@ -273,7 +275,7 @@ export const startEventServer = (
 
     // /health is deliberately open: it is how a client discovers the worker is
     // up and what it permits, and it carries nothing about any session.
-    if (token && url.pathname !== "/health") {
+    if (token !== null && url.pathname !== "/health") {
       const offered = offeredToken(request.headers.authorization, url);
 
       if (!offered || !tokensMatch(token, offered)) {

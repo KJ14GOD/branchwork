@@ -44,12 +44,19 @@ const startWorker = (): void => {
     },
   );
 
+  // The worker prints an invite line carrying the token, which is correct on a
+  // host's own terminal but not here: forwarding it verbatim would put the
+  // credential in the launching shell's scrollback, contradicting the whole
+  // reason it is passed through IPC instead of the page URL.
+  const withoutToken = (text: string): string =>
+    text.split(ACCESS_TOKEN).join("[redacted:access-token]");
+
   worker.stdout?.on("data", (chunk: Buffer) => {
-    process.stdout.write(`[worker] ${chunk.toString("utf8")}`);
+    process.stdout.write(`[worker] ${withoutToken(chunk.toString("utf8"))}`);
   });
 
   worker.stderr?.on("data", (chunk: Buffer) => {
-    process.stderr.write(`[worker] ${chunk.toString("utf8")}`);
+    process.stderr.write(`[worker] ${withoutToken(chunk.toString("utf8"))}`);
   });
 
   worker.on("error", (error) => {

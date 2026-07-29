@@ -3,7 +3,10 @@ import { fileURLToPath } from "node:url";
 import { InMemorySessionEventStore } from "@novus/session-service";
 
 import { AgentRunner } from "./agent-runner.ts";
+import { mintAccessToken } from "./access.ts";
 import { startEventServer } from "./event-server.ts";
+
+const demoToken = mintAccessToken();
 import { FixedModelRouter, type ModelRequest, type ModelResponse } from "./model.ts";
 import {
   ApplyPatchTool,
@@ -131,7 +134,10 @@ const eventStore = new InMemorySessionEventStore();
 let eventServer;
 
 try {
-  eventServer = await startEventServer(eventStore);
+  // The demo streams real repository contents through the real read tools, so
+  // it gets a real token like anything else. Printed because the whole point of
+  // the demo is watching it from a browser.
+  eventServer = await startEventServer(eventStore, { token: demoToken });
 } catch (error) {
   console.error((error as Error).message);
   process.exit(1);

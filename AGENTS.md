@@ -29,13 +29,20 @@ pnpm typecheck && pnpm test && git diff --check
 - **Writes are denied by default.** `DenyAllApprovalGate` is the fallback, so a missing
   gate denies rather than allows. `NOVUS_ALLOW_WRITES=1` opts in. `apply_patch` is the
   only tool in the write class.
-- **The guest talks to the worker, not to a session service.** There is no relay,
-  invite, or authentication yet, so `apps/guest` is a second browser on the host
-  machine reading `/events` directly. Start it with `pnpm --filter @novus/guest dev`
-  and open `?session=<id>`; the join screen lists what `GET /sessions` reports.
+- **The worker requires a token on every route except `/health`.** It mints one
+  per process and prints an invite line carrying it; `NOVUS_TOKEN` pins one
+  instead and must be at least 32 characters. Requests also have to come from a
+  loopback origin or no origin at all, so a page on the open internet is refused
+  before its token is even read.
+- **The guest talks to the worker, not to a session service.** There is still no
+  relay or presence, so `apps/guest` is a second browser on the host machine
+  reading `/events` directly — but it now needs the token. Start it with
+  `pnpm --filter @novus/guest dev` and open the invite URL the worker printed;
+  `?session=<id>` alone gets a 401.
 - Ports: worker `4319` (`NOVUS_PORT`), desktop Vite `5273`, guest Vite `5274`. All
   loopback-only.
-- Other env: `NOVUS_REPO`, `NOVUS_SESSION`.
+- Other env: `NOVUS_REPO`, `NOVUS_SESSION`, `NOVUS_TOKEN`, `NOVUS_GUEST_PORT`,
+  `NOVUS_DB`, `NOVUS_REDACT_PATTERNS`.
 
 ## Invariants
 

@@ -11,6 +11,7 @@ import { startEventServer } from "./event-server.ts";
 import { FixedModelRouter } from "./model.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { mintAccessToken } from "./access.ts";
+import { createRedactor } from "./redaction.ts";
 import { killRunningCommands } from "./tools.ts";
 
 const modelSelection = {
@@ -25,7 +26,16 @@ const allowCommands = process.env.NOVUS_ALLOW_COMMANDS === "1";
 // authorised is a token somebody still has, so the default is deliberately not
 // durable — NOVUS_TOKEN exists for the case where a client must be configured
 // ahead of time.
-const accessToken = process.env.NOVUS_TOKEN?.trim() || mintAccessToken();
+const pinnedToken = process.env.NOVUS_TOKEN?.trim();
+
+if (pinnedToken !== undefined && pinnedToken.length < 32) {
+  console.error(
+    `NOVUS_TOKEN is ${pinnedToken.length} characters. A pinned token survives every restart, so a short one is a guessable one — use at least 32, or unset it and let the worker mint one.`,
+  );
+  process.exit(1);
+}
+
+const accessToken = pinnedToken || mintAccessToken();
 const guestPort = Number(process.env.NOVUS_GUEST_PORT ?? 5274);
 const goal = process.argv.slice(2).join(" ").trim();
 
@@ -133,6 +143,14 @@ try {
   eventServer = await startEventServer(eventStore, {
     sessions,
     token: accessToken,
+    // Seeded explicitly. The redactor otherwise learns its literals from
+    // process.env, which knows the token only when the host pinned NOVUS_TOKEN
+    // — a minted one lives in this process alone, so without this it would be
+    // the one secret the outgoing stream had never heard of.
+    redactor: createRedactor({
+      environment: process.env,
+      knownSecrets: [accessToken],
+    }),
   });
 } catch (error) {
   console.error((error as Error).message);

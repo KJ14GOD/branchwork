@@ -377,6 +377,14 @@ export type RedactorOptions = {
   environment?: Readonly<Record<string, string | undefined>>;
   /** User-configured secret patterns, in addition to the built-in shapes. */
   patterns?: readonly RegExp[];
+  /**
+   * Literals to redact that no environment variable holds.
+   *
+   * The worker's access token is minted in-process unless the host pinned one,
+   * so scanning the environment would find it in exactly the configuration
+   * where it is least sensitive and miss it in the default one.
+   */
+  knownSecrets?: readonly string[];
 };
 
 /**
@@ -406,7 +414,12 @@ const configuredPatterns = (
 
 export const createRedactor = (options: RedactorOptions = {}): Redactor => {
   const environment = options.environment ?? process.env;
-  const known = knownSecretsFrom(environment);
+  const known = [
+    ...knownSecretsFrom(environment),
+    ...(options.knownSecrets ?? []).filter(
+      (secret) => secret.trim().length >= MIN_KNOWN_SECRET_LENGTH,
+    ),
+  ];
   const knownPattern =
     known.length === 0
       ? undefined
