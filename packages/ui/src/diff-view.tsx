@@ -1,18 +1,12 @@
 /**
- * Renders a proposed patch the way the host renders it.
- *
- * Copied from the desktop renderer rather than shared. A guest and a host now
- * draw the same diff, which is the second implementation that would justify
- * lifting this into a UI package — but that is a change to the host app, and
- * the host app belongs to whoever is editing it. Extract it once, deliberately,
- * with both callers in front of you.
+ * A diff, drawn the one way both clients draw it.
  *
  * The lines themselves are drawn by `DiffLines`, which `git_diff` reuses: a
  * patch has a path, an intent and counters to put above the diff, and a Git
  * diff has none of those, but below the header they are the same picture.
  */
 
-import { parseUnifiedDiff } from "../diff.ts";
+import { parseUnifiedDiff } from "./diff.ts";
 
 export const DiffLines = ({ diff }: { diff: string }) => (
   <div className="diff">

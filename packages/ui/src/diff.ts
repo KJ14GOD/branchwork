@@ -12,6 +12,14 @@
  * So the state is tracked rather than guessed. Inside a hunk, the first column
  * is the marker Git wrote; outside one, the line is a header and is passed
  * through whole.
+ *
+ * This is the reconciliation of the two copies that used to exist. They were
+ * fixed in different directions — the host learned to pass headers through, the
+ * guest learned to track the hunk — and hunk state is the stronger of the two,
+ * because it subsumes the header fix and additionally gets a removed line whose
+ * text happens to begin with `--` right. Patch diffs parse exactly as they did
+ * on both sides: the worker always writes ---, +++ and an @@ header, so the
+ * first hunk opens before any line the two implementations disagreed about.
  */
 
 export type DiffLineKind = "meta" | "hunk" | "context" | "add" | "del";

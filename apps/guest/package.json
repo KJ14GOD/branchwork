@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@novus/contracts": "workspace:*",
+    "@novus/ui": "workspace:*",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

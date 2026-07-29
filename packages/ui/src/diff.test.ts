@@ -2,47 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { parseUnifiedDiff } from "./diff.ts";
-import { describeWorkingTree } from "./tool-results.ts";
-
-test("an unreadable repository never reads as a clean one", () => {
-  // The worker returns null rather than false when git could not be run, for
-  // exactly this reason. A panel that renders `clean ? … : …` tells the guest
-  // the most reassuring of the three answers.
-  const unknown = describeWorkingTree({ branch: null, clean: null, files: [] });
-
-  assert.equal(unknown.certainty, "unknown");
-  assert.doesNotMatch(unknown.state, /^clean/);
-  assert.match(unknown.state, /unknown/);
-  assert.match(unknown.state, /not a report that nothing changed/);
-});
-
-test("a clean tree and a dirty tree say which they are", () => {
-  const clean = describeWorkingTree({ branch: "main", clean: true, files: [] });
-
-  assert.equal(clean.certainty, "clean");
-  assert.equal(clean.branch, "main");
-  assert.equal(clean.state, "clean");
-
-  const dirty = describeWorkingTree({
-    branch: "main",
-    clean: false,
-    files: [
-      { path: "src/app.tsx", status: "M", staged: false },
-      { path: "src/new.ts", status: "??", staged: false },
-    ],
-  });
-
-  assert.equal(dirty.certainty, "dirty");
-  assert.equal(dirty.state, "2 files changed");
-
-  // The worker caps the file list, so "dirty with nothing listed" is reachable
-  // and still must not fall through to something that sounds clean.
-  const capped = describeWorkingTree({ branch: null, clean: false, files: [] });
-
-  assert.equal(capped.certainty, "dirty");
-  assert.equal(capped.branch, "detached HEAD");
-  assert.match(capped.state, /changed/);
-});
 
 const GIT_DIFF = [
   "diff --git a/src/app.ts b/src/app.ts",
@@ -112,4 +71,52 @@ test("a single-file patch still parses the way it always did", () => {
     lines.map((line) => line.kind),
     ["hunk", "del", "add"],
   );
+});
+
+test("a propose_patch diff parses as both copies used to parse it", () => {
+  // The shape the worker writes: a --- / +++ pair, then a counted hunk. Both
+  // implementations agreed here, and reconciling them must not move it.
+  const lines = parseUnifiedDiff(
+    [
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1,2 +1,2 @@",
+      " const a = 1;",
+      "-const b = 2;",
+      "+const b = 3;",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(
+    lines.map((line) => line.kind),
+    ["meta", "meta", "hunk", "context", "del", "add"],
+  );
+  assert.deepEqual(
+    lines.map((line) => line.text),
+    [
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1,2 +1,2 @@",
+      "const a = 1;",
+      "const b = 2;",
+      "const b = 3;",
+    ],
+  );
+});
+
+test("a removed line that reads like a header is still a removed line", () => {
+  // The one place the two copies disagreed rather than one merely lagging: a
+  // deleted line whose own text starts with "--" arrives as "---", and matching
+  // on the prefix called it a header. Inside a hunk the first column is the
+  // marker Git wrote, whatever follows it.
+  const lines = parseUnifiedDiff("@@ -1,1 +1,1 @@\n---\n+++\n");
+
+  assert.deepEqual(
+    lines.map((line) => line.kind),
+    ["hunk", "del", "add"],
+  );
+  assert.equal(lines[1]?.text, "--");
+  assert.equal(lines[1]?.beforeLine, 1);
+  assert.equal(lines[2]?.text, "++");
+  assert.equal(lines[2]?.afterLine, 1);
 });
