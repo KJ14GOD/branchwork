@@ -195,10 +195,16 @@ console.log(
 const relayUrl = process.env.NOVUS_RELAY_URL?.trim();
 const relayToken = process.env.NOVUS_RELAY_TOKEN?.trim();
 
-if (relayUrl && relayToken) {
-  publishToRelay(eventStore, {
+const relaySession = process.env.NOVUS_RELAY_SESSION?.trim();
+
+if (relayUrl && relayToken && relaySession) {
+  const publisher = publishToRelay(eventStore, {
     url: relayUrl,
     token: relayToken,
+    // One session per publisher, because one token authorises one session. A
+    // worker hosting several would otherwise send all of them under the same
+    // token and the relay would file them under whichever one it names.
+    sessionId: relaySession,
     // Its own redaction, on its own path. Every outbound route does this rather
     // than trusting that some earlier one did.
     redactor: createRedactor({
@@ -207,15 +213,24 @@ if (relayUrl && relayToken) {
     }),
   });
 
-  console.log(`relay   publishing to ${relayUrl}`);
+  console.log(`relay   publishing session ${relaySession} to ${relayUrl}`);
+
+  // The drop count is only useful if something can read it.
+  process.on("exit", () => {
+    if (publisher.dropped() > 0) {
+      console.error(
+        `relay   ${publisher.dropped()} event(s) never reached the relay; the shared copy is short by that many`,
+      );
+    }
+  });
   // The invite a teammate elsewhere can actually use. The loopback one below
   // only works for somebody sitting at this machine.
   console.log(
     `invite  http://127.0.0.1:${guestPort}/?relay=${encodeURIComponent(relayUrl)}&token=<their token from POST /sessions/:id/invite>`,
   );
-} else if (relayUrl || relayToken) {
+} else if (relayUrl || relayToken || relaySession) {
   console.error(
-    "relay   NOVUS_RELAY_URL and NOVUS_RELAY_TOKEN must both be set; publishing is off",
+    "relay   NOVUS_RELAY_URL, NOVUS_RELAY_TOKEN and NOVUS_RELAY_SESSION must all be set; publishing is off",
   );
 }
 

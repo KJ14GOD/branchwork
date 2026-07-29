@@ -53,6 +53,7 @@ test("events reach the relay once it is connected", async () => {
   const publisher = publishToRelay(store, {
     url: "ws://relay.test",
     token: "publish-token",
+    sessionId: SESSION,
     redactor: createRedactor({ environment: {} }),
     connect: () => fake.socket,
   });
@@ -72,6 +73,7 @@ test("events queue while disconnected and go out on reconnect", async () => {
   const publisher = publishToRelay(store, {
     url: "ws://relay.test",
     token: "publish-token",
+    sessionId: SESSION,
     redactor: createRedactor({ environment: {} }),
     connect: () => fake.socket,
   });
@@ -95,6 +97,7 @@ test("a relay that is down does not stop the run", async () => {
   const publisher = publishToRelay(store, {
     url: "ws://relay.test",
     token: "publish-token",
+    sessionId: SESSION,
     redactor: createRedactor({ environment: {} }),
     connect: () => {
       throw new Error("relay unreachable");
@@ -114,6 +117,7 @@ test("what leaves is redacted, even though the store's copy is not", async () =>
   const publisher = publishToRelay(store, {
     url: "ws://relay.test",
     token: "publish-token",
+    sessionId: SESSION,
     redactor: createRedactor({ environment: { ANTHROPIC_API_KEY: KEY } }),
     connect: () => fake.socket,
   });
@@ -155,6 +159,7 @@ test("a full queue drops events and says how many", async () => {
   const publisher = publishToRelay(store, {
     url: "ws://relay.test",
     token: "publish-token",
+    sessionId: SESSION,
     redactor: createRedactor({ environment: {} }),
     maxQueued: 2,
     connect: () => fake.socket,
@@ -169,5 +174,106 @@ test("a full queue drops events and says how many", async () => {
   // sacrificed to preserve a shared copy nobody is reading.
   assert.equal(publisher.dropped(), 1);
   assert.equal(store.list(SESSION).length, 3);
+  publisher.close();
+});
+
+test("only the session this publisher carries goes out", async () => {
+  const store = new InMemorySessionEventStore();
+  const fake = fakeSocket();
+  const publisher = publishToRelay(store, {
+    url: "ws://relay.test",
+    token: "publish-token",
+    sessionId: SESSION,
+    redactor: createRedactor({ environment: {} }),
+    connect: () => fake.socket,
+  });
+
+  fake.open();
+  store.append(progress("mine"));
+  store.append({
+    sessionId: "somebody-elses-session",
+    actorId: "agent-1",
+    type: "run.progress",
+    payload: { runId: "run-2", message: "theirs" },
+  });
+  await delay(10);
+
+  // The store's subscribe is process-wide and a worker hosts many sessions.
+  // One relay token authorises one session, so an unfiltered publisher sent a
+  // guest somebody else's repository.
+  assert.equal(fake.sent.length, 1);
+  assert.match(fake.sent[0] ?? "", /mine/);
+  assert.doesNotMatch(fake.sent[0] ?? "", /theirs/);
+  publisher.close();
+});
+
+test("a file the agent read does not leave the host", async () => {
+  const store = new InMemorySessionEventStore();
+  const fake = fakeSocket();
+  const publisher = publishToRelay(store, {
+    url: "ws://relay.test",
+    token: "publish-token",
+    sessionId: SESSION,
+    redactor: createRedactor({ environment: {} }),
+    connect: () => fake.socket,
+  });
+
+  fake.open();
+  store.append({
+    sessionId: SESSION,
+    actorId: "agent-1",
+    type: "tool.completed",
+    payload: {
+      runId: "run-1",
+      result: {
+        toolCallId: "c1",
+        name: "read_file",
+        output: {
+          path: "src/private.ts",
+          content: "const companySecretAlgorithm = 42;",
+        },
+      },
+    },
+  });
+  await delay(10);
+
+  // Redaction removes secrets; it does not decide whether source may leave.
+  // V1 says source stays local, and the file's contents are the repository.
+  assert.doesNotMatch(fake.sent[0] ?? "", /companySecretAlgorithm/);
+  // The path stays, because what the agent looked at is what a reviewer follows.
+  assert.match(fake.sent[0] ?? "", /src\/private\.ts/);
+  publisher.close();
+});
+
+test("the host's own filesystem path does not leave with the session", async () => {
+  const store = new InMemorySessionEventStore();
+  const fake = fakeSocket();
+  const publisher = publishToRelay(store, {
+    url: "ws://relay.test",
+    token: "publish-token",
+    sessionId: SESSION,
+    redactor: createRedactor({ environment: {} }),
+    connect: () => fake.socket,
+  });
+
+  fake.open();
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "session.created",
+    payload: {
+      session: {
+        id: SESSION,
+        repositoryPath: "/Users/someone/private/work",
+        goal: "Fix the thing",
+        status: "active",
+        createdAt: new Date().toISOString(),
+      },
+    },
+  });
+  await delay(10);
+
+  assert.doesNotMatch(fake.sent[0] ?? "", /Users\/someone/);
+  assert.match(fake.sent[0] ?? "", /Fix the thing/);
   publisher.close();
 });

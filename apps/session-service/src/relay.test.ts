@@ -7,8 +7,8 @@ import type { SessionEvent, SessionEventDraft } from "@novus/contracts";
 import { fixedTokens, startRelay, type Relay } from "./relay.ts";
 
 const SESSION = "shared-session";
-const PUBLISH = "publish-token-abcdefghijklmnop";
-const WATCH = "watch-token-abcdefghijklmnopq";
+const PUBLISH = "publish-token-abcdefghijklmnopqrstuvwxyz012345";
+const WATCH = "watch-token-abcdefghijklmnopqrstuvwxyz0123456";
 
 const progress = (message: string, sequence: number) => ({
   eventId: `event-${message}`,
@@ -202,16 +202,16 @@ test("an event the contract rejects never reaches a guest", async () => {
 test("sessions do not leak into one another", async () => {
   const relay = await startRelay({
     authorize: (token, intent) => {
-      if (token === "a-publish" && intent === "publish") return "session-a";
-      if (token === "b-watch" && intent === "watch") return "session-b";
+      if (token === "a-publish-token-abcdefghijklmnopqrstuvwx" && intent === "publish") return "session-a";
+      if (token === "b-watch-token-abcdefghijklmnopqrstuvwxyz" && intent === "watch") return "session-b";
 
       return null;
     },
   });
 
   try {
-    const workerA = await connect(relay.url, "a-publish", "publish");
-    const guestB = await connect(relay.url, "b-watch", "watch", 0);
+    const workerA = await connect(relay.url, "a-publish-token-abcdefghijklmnopqrstuvwx", "publish");
+    const guestB = await connect(relay.url, "b-watch-token-abcdefghijklmnopqrstuvwxyz", "watch", 0);
 
     workerA.send({ ...progress("private", 0), sessionId: "session-a" });
     await delay(80);
@@ -222,4 +222,43 @@ test("sessions do not leak into one another", async () => {
   } finally {
     await relay.close();
   }
+});
+
+test("a short token is refused at construction, not at connection time", () => {
+  // An empty expected token matches an empty offered one, which would have
+  // authorised everybody. Better to fail where the mistake was made.
+  assert.throws(() => fixedTokens(SESSION, "", ""), /at least 32/);
+  assert.throws(() => fixedTokens(SESSION, "short", WATCH), /at least 32/);
+});
+
+test("the session a guest sees is the one their token names", async () => {
+  await withRelay(async (relay) => {
+    const worker = await connect(relay.url, PUBLISH, "publish");
+    const guest = await connect(relay.url, WATCH, "watch", 0);
+
+    // A compromised worker labelling events as another session must not be
+    // able to have a guest render them: routing is by token, so the body's
+    // claim is overwritten with the session that token authorised.
+    worker.send({ ...progress("mislabelled", 0), sessionId: "some-other-session" });
+    await guest.settled(1);
+
+    assert.equal(guest.frames[0]?.sessionId, SESSION);
+    worker.close();
+    guest.close();
+  });
+});
+
+test("history is a copy, so a caller cannot edit the log", async () => {
+  await withRelay(async (relay) => {
+    const worker = await connect(relay.url, PUBLISH, "publish");
+    const guest = await connect(relay.url, WATCH, "watch", 0);
+
+    worker.send(progress("recorded", 0));
+    await guest.settled(1);
+
+    relay.history(SESSION).length = 0;
+    assert.equal(relay.history(SESSION).length, 1);
+    worker.close();
+    guest.close();
+  });
 });

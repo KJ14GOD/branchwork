@@ -27,6 +27,20 @@ type RelaySequence = number;
 type Publisher = { socket: WebSocket; sessionId: string };
 type Subscriber = { socket: WebSocket; sessionId: string };
 
+/**
+ * What one session, and one service, may consume.
+ *
+ * The relay is shared. A worker holding a valid publish token and looping is
+ * indistinguishable from a busy one until something says where the limit is,
+ * and an unbounded in-memory log with a 100 MiB default frame size is a service
+ * that a single client can take down by accident.
+ */
+const MAX_EVENTS_PER_SESSION = 10_000;
+const MAX_SESSIONS = 100;
+const MAX_FRAME_BYTES = 1024 * 1024;
+/** A subscriber that stops reading must not become the server's memory problem. */
+const MAX_SUBSCRIBER_BACKLOG_BYTES = 8 * 1024 * 1024;
+
 export type RelayOptions = {
   port?: number;
   host?: string;
@@ -70,12 +84,27 @@ export const fixedTokens = (
   sessionId: string,
   publishToken: string,
   watchToken: string,
-): RelayOptions["authorize"] =>
-  (token, intent) => {
+): RelayOptions["authorize"] => {
+  // An empty expected token matches an empty offered one, which would authorise
+  // everybody. The worker refuses a pinned token under 32 characters for the
+  // same reason; this is the shared service, where it matters more.
+  for (const [name, value] of [
+    ["publish", publishToken],
+    ["watch", watchToken],
+  ] as const) {
+    if (value.trim().length < 32) {
+      throw new Error(
+        `The ${name} token is ${value.trim().length} characters. A relay token guards a shared service — use at least 32.`,
+      );
+    }
+  }
+
+  return (token, intent) => {
     const expected = intent === "publish" ? publishToken : watchToken;
 
     return tokensMatch(expected, token) ? sessionId : null;
   };
+};
 
 export const startRelay = (options: RelayOptions): Promise<Relay> => {
   const host = options.host ?? "127.0.0.1";
@@ -89,8 +118,10 @@ export const startRelay = (options: RelayOptions): Promise<Relay> => {
   const subscribers = new Set<Subscriber>();
   const publishers = new Set<Publisher>();
 
-  const historyFor = (sessionId: string): SessionEvent[] =>
-    log.get(sessionId) ?? [];
+  // Copied: handing back the internal array lets a caller mutate the log.
+  const historyFor = (sessionId: string): SessionEvent[] => [
+    ...(log.get(sessionId) ?? []),
+  ];
 
   const server: Server = createServer((_request, response) => {
     // Nothing but WebSocket lives here. An HTTP GET is a client that has the
@@ -99,7 +130,10 @@ export const startRelay = (options: RelayOptions): Promise<Relay> => {
     response.end("This endpoint speaks WebSocket only.\n");
   });
 
-  const sockets = new WebSocketServer({ noServer: true });
+  const sockets = new WebSocketServer({
+    noServer: true,
+    maxPayload: MAX_FRAME_BYTES,
+  });
 
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
@@ -129,9 +163,21 @@ export const startRelay = (options: RelayOptions): Promise<Relay> => {
     const frame = JSON.stringify(event);
 
     for (const subscriber of subscribers) {
-      if (subscriber.sessionId === sessionId && subscriber.socket.readyState === 1) {
-        subscriber.socket.send(frame);
+      if (subscriber.sessionId !== sessionId || subscriber.socket.readyState !== 1) {
+        continue;
       }
+
+      // A client that has stopped reading buffers server-side without limit.
+      // Dropping it is better than letting one stalled guest exhaust the
+      // service everyone else is using.
+      if (subscriber.socket.bufferedAmount > MAX_SUBSCRIBER_BACKLOG_BYTES) {
+        subscriber.socket.close();
+        subscribers.delete(subscriber);
+
+        continue;
+      }
+
+      subscriber.socket.send(frame);
     }
   };
 
@@ -163,11 +209,34 @@ export const startRelay = (options: RelayOptions): Promise<Relay> => {
 
       const history = log.get(sessionId) ?? [];
 
-      // Re-sequenced on arrival. The worker's own sequence is meaningful in the
-      // worker's log and says nothing about the order this service accepted
-      // things in — which is the order every guest must agree on.
+      if (!log.has(sessionId) && log.size >= MAX_SESSIONS) {
+        socket.send(
+          JSON.stringify({ error: "rejected", reason: "too many sessions" }),
+        );
+
+        return;
+      }
+
+      if (history.length >= MAX_EVENTS_PER_SESSION) {
+        // Refused rather than evicted. A guest resuming by sequence would read
+        // an evicted prefix as a gap it could never fill, and silently serving
+        // a truncated history is worse than saying the session is too long.
+        socket.send(
+          JSON.stringify({ error: "rejected", reason: "session log is full" }),
+        );
+
+        return;
+      }
+
+      // Re-sequenced and re-labelled on arrival. The sequence is the order this
+      // service accepted things in, which is the order every guest must agree
+      // on. The session id is the one the token authorised — a publisher is
+      // trusted to be the host of *its* session, and taking the id from the
+      // body would let a compromised one label events as any session it liked
+      // and have a guest render them.
       const relayed = SessionEventSchema.parse({
         ...parsed.data,
+        sessionId,
         sequence: history.length as RelaySequence,
       });
 

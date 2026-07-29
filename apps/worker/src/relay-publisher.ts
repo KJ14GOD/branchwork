@@ -2,6 +2,7 @@ import type { SessionEvent } from "@novus/contracts";
 import type { SessionEventStore } from "@novus/session-service";
 
 import type { Redactor } from "./redaction.ts";
+import { shareableEvent } from "./shareable.ts";
 
 /**
  * Pushes this worker's events to the relay, so somebody elsewhere can watch.
@@ -21,6 +22,16 @@ import type { Redactor } from "./redaction.ts";
 export type RelayPublisherOptions = {
   url: string;
   token: string;
+  /**
+   * The one session this publisher carries.
+   *
+   * `store.subscribe` is process-wide and a worker hosts many sessions, so
+   * without this every session's events went out under a token that names one
+   * of them — a guest invited to watch one repository received another. The
+   * loopback path this replaces has always filtered; the path that leaves the
+   * machine did not.
+   */
+  sessionId: string;
   redactor: Redactor;
   /**
    * How many events to hold while disconnected.
@@ -127,10 +138,14 @@ export const publishToRelay = (
   };
 
   const unsubscribe = store.subscribe((event) => {
-    // Redacted here rather than trusted to have been redacted earlier. This is
-    // an outbound path, and the rule for outbound paths is that each one does
-    // it — a second route that forgot would be the leak.
-    const shareable = options.redactor.redactEvent(event);
+    if (event.sessionId !== options.sessionId) {
+      return;
+    }
+
+    // Two different questions, asked in order. Shareability decides whether a
+    // field may leave the host at all; redaction removes secrets from what is
+    // left. A log with no secrets in it still contains the repository.
+    const shareable = options.redactor.redactEvent(shareableEvent(event));
 
     if (queue.length >= maxQueued) {
       dropped += 1;
