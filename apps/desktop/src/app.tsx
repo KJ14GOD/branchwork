@@ -237,6 +237,9 @@ export const App = () => {
           {session.allowWrites ? (
             <span className="titlebar__writes">writes on</span>
           ) : null}
+          {session.allowCommands ? (
+            <span className="titlebar__writes">commands on</span>
+          ) : null}
           {run?.type === "run.started" ? (
             <span>
               {run.payload.run.model.provider}/{run.payload.run.model.model}

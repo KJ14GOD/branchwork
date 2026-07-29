@@ -78,15 +78,25 @@ export class SessionRegistry {
   private readonly eventStore: InMemorySessionEventStore;
   private readonly router: ModelRouter;
   private readonly adapters: readonly ModelAdapter[];
+  /**
+   * Whether this host permits command execution at all.
+   *
+   * The ceiling lives here rather than in the request because the host is the
+   * execution authority. A client may decline commands for its own session; it
+   * must never be able to grant itself execution the operator did not enable.
+   */
+  private readonly commandsPermitted: boolean;
 
   constructor(
     eventStore: InMemorySessionEventStore,
     router: ModelRouter,
     adapters: readonly ModelAdapter[],
+    commandsPermitted = false,
   ) {
     this.eventStore = eventStore;
     this.router = router;
     this.adapters = adapters;
+    this.commandsPermitted = commandsPermitted;
   }
 
   list(): Session[] {
@@ -113,7 +123,10 @@ export class SessionRegistry {
     }
 
     const allowWrites = options.allowWrites ?? false;
-    const allowCommands = options.allowCommands ?? false;
+    // Omitted means "whatever the host permits", so enabling the flag reaches
+    // sessions opened from the desktop app and not only the command line.
+    const allowCommands =
+      this.commandsPermitted && (options.allowCommands ?? true);
     const proposePatchTool = new ProposePatchTool(repositoryPath);
     const session: Session = {
       id: crypto.randomUUID(),

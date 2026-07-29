@@ -7,6 +7,7 @@ import { AnthropicModelAdapter } from "./anthropic-model.ts";
 import { startEventServer } from "./event-server.ts";
 import { FixedModelRouter } from "./model.ts";
 import { SessionRegistry } from "./session-registry.ts";
+import { killRunningCommands } from "./tools.ts";
 
 const modelSelection = {
   provider: "anthropic",
@@ -87,6 +88,7 @@ const sessions = new SessionRegistry(
   eventStore,
   new FixedModelRouter(modelSelection),
   [new AnthropicModelAdapter(modelSelection)],
+  allowCommands,
 );
 
 let eventServer;
@@ -129,6 +131,13 @@ if (goal) {
 
 console.log("\nready — press ctrl+c to stop");
 
-process.on("SIGINT", () => {
-  void eventServer.close().then(() => process.exit(0));
-});
+// Commands run in their own process group so a timeout can kill the whole tree.
+// That also means Ctrl-C no longer reaches them, so a quit would otherwise
+// leave a test suite running invisibly after the worker is gone.
+const shutdown = (code: number) => {
+  killRunningCommands();
+  void eventServer.close().then(() => process.exit(code));
+};
+
+process.on("SIGINT", () => shutdown(0));
+process.on("SIGTERM", () => shutdown(143));

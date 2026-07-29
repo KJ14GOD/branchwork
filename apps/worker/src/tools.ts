@@ -348,6 +348,22 @@ const refuseDestructiveCommand = (
   }
 };
 
+// Detached children outlive a Ctrl-C on the worker, because they are no longer
+// in its process group. Tracking them lets the worker take them down on the way
+// out instead of leaving a test suite running invisibly.
+const runningGroups = new Set<number>();
+
+export const killRunningCommands = (): void => {
+  for (const pid of runningGroups) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+  runningGroups.clear();
+};
+
 const runProcess = (
   repositoryRoot: string,
   command: string,
@@ -402,6 +418,10 @@ const runProcess = (
     child.stdout.on("data", (chunk: Buffer) => collect(chunk, "stdout"));
     child.stderr.on("data", (chunk: Buffer) => collect(chunk, "stderr"));
 
+    if (child.pid !== undefined) {
+      runningGroups.add(child.pid);
+    }
+
     let settled = false;
     let drainTimer: NodeJS.Timeout | undefined;
 
@@ -412,6 +432,10 @@ const runProcess = (
       settled = true;
       clearTimeout(timer);
       clearTimeout(drainTimer);
+
+      if (child.pid !== undefined) {
+        runningGroups.delete(child.pid);
+      }
 
       resolveRun({
         command: [command, ...args].join(" "),
@@ -448,6 +472,9 @@ const runProcess = (
       clearTimeout(timer);
       clearTimeout(drainTimer);
       settled = true;
+      if (child.pid !== undefined) {
+        runningGroups.delete(child.pid);
+      }
       rejectRun(
         new Error(
           `Unable to run ${command}: ${(error as NodeJS.ErrnoException).code === "ENOENT" ? `${command} was not found on PATH` : error.message}`,
@@ -460,6 +487,11 @@ const runProcess = (
     // close alone is what hung. Prefer close when it arrives — it means every
     // byte was collected — but never wait for it longer than a short drain.
     child.on("exit", (code) => {
+      // Disarm the timeout here, not only in settle. Leaving it armed through
+      // the drain lets a command that exited cleanly just before the deadline
+      // be reported as timed out — and run_tests turns that into a passing
+      // suite reported as failed.
+      clearTimeout(timer);
       drainTimer = setTimeout(() => settle(code), 200);
     });
 
