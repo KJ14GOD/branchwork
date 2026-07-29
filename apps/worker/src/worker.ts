@@ -10,6 +10,7 @@ import { AnthropicModelAdapter } from "./anthropic-model.ts";
 import { startEventServer } from "./event-server.ts";
 import { FixedModelRouter } from "./model.ts";
 import { SessionRegistry } from "./session-registry.ts";
+import { mintAccessToken } from "./access.ts";
 import { killRunningCommands } from "./tools.ts";
 
 const modelSelection = {
@@ -20,6 +21,12 @@ const modelSelection = {
 // Writes are denied unless the operator opts in.
 const allowWrites = process.env.NOVUS_ALLOW_WRITES === "1";
 const allowCommands = process.env.NOVUS_ALLOW_COMMANDS === "1";
+// Minted per process unless the host pins one. A token that outlives the run it
+// authorised is a token somebody still has, so the default is deliberately not
+// durable — NOVUS_TOKEN exists for the case where a client must be configured
+// ahead of time.
+const accessToken = process.env.NOVUS_TOKEN?.trim() || mintAccessToken();
+const guestPort = Number(process.env.NOVUS_GUEST_PORT ?? 5274);
 const goal = process.argv.slice(2).join(" ").trim();
 
 const databasePath = defaultDatabasePath();
@@ -123,7 +130,10 @@ const sessions = new SessionRegistry(
 let eventServer;
 
 try {
-  eventServer = await startEventServer(eventStore, { sessions });
+  eventServer = await startEventServer(eventStore, {
+    sessions,
+    token: accessToken,
+  });
 } catch (error) {
   console.error((error as Error).message);
   process.exit(1);
@@ -136,6 +146,12 @@ console.log(
 );
 console.log(
   `commands ${allowCommands ? "approved (NOVUS_ALLOW_COMMANDS=1)" : "denied — set NOVUS_ALLOW_COMMANDS=1 to permit run_command and run_tests"}`,
+);
+// Printed on the host's own terminal, which is the one place the token is
+// already trusted. Everything else — the event log, the shared stream, a
+// guest's screen — must never see it.
+console.log(
+  `access  token required · guest invite: http://127.0.0.1:${guestPort}/?endpoint=${encodeURIComponent(eventServer.url)}&token=${accessToken}`,
 );
 
 // A goal on the command line opens a session immediately; otherwise the worker

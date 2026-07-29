@@ -21,9 +21,17 @@ export type SessionListing =
   /** The address was never contacted. See `resolveEndpoint`. */
   | { kind: "refused"; reason: string };
 
+/**
+ * A guest's credential, taken from the invite link.
+ *
+ * The worker refuses an unauthenticated caller, so a guest without a token gets
+ * a 401 rather than an empty list — which is the honest outcome: they were sent
+ * a link that did not include one, or a stale one.
+ */
 export const fetchSessions = async (
   endpoint: string,
   signal: AbortSignal,
+  token?: string,
 ): Promise<SessionListing> => {
   // Checked here rather than at the caller because this is the only fetch the
   // guest makes, and a rule enforced at the boundary cannot be forgotten by
@@ -37,13 +45,24 @@ export const fetchSessions = async (
   let response: Response;
 
   try {
-    response = await fetch(`${address.endpoint}/sessions`, { signal });
+    response = await fetch(`${address.endpoint}/sessions`, {
+      signal,
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
   } catch (cause) {
     return { kind: "unreachable", detail: (cause as Error).message };
   }
 
   // A worker started without a session registry answers 404 here. It can still
   // stream events, so this is a narrower blindness than being offline.
+  if (response.status === 401) {
+    return {
+      kind: "refused",
+      reason:
+        "This worker requires an invite token. The link you followed did not carry one, or it is no longer valid.",
+    };
+  }
+
   if (response.status === 404) {
     return { kind: "unlisted" };
   }

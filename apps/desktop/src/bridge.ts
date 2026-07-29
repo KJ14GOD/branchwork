@@ -1,5 +1,6 @@
 export type NovusBridge = {
   workerUrl: () => Promise<string>;
+  accessToken: () => Promise<string>;
   pickDirectory: () => Promise<string | null>;
 };
 
