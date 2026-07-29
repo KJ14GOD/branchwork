@@ -117,9 +117,20 @@ const streamSession = (
     pending.push(event);
   });
 
-  const backlog = store
-    .list(sessionId)
-    .filter((event) => event.sequence >= since);
+  // Deliberately the tolerant read. A single row this build cannot parse — a
+  // log written before a contract change — must cost that row, not the worker
+  // process, and this runs inside an HTTP handler where a throw is fatal.
+  const { events, unreadable } = store.readable(sessionId);
+  const backlog = events.filter((event) => event.sequence >= since);
+
+  if (unreadable > 0) {
+    // A comment line: every SSE client ignores it, and it is visible to anyone
+    // reading the stream directly. Silently serving a short log would be worse.
+    write(`: ${unreadable} unreadable event(s) skipped\n\n`);
+    console.warn(
+      `session ${sessionId}: ${unreadable} event(s) could not be parsed and were skipped`,
+    );
+  }
 
   for (const event of backlog) {
     writeSse(write, event, redactor);

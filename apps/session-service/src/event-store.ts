@@ -108,6 +108,10 @@ export class SessionEventStore {
       // WAL a reader never blocks the writer, so replaying history cannot
       // stall the agent that is still producing it.
       this.database.exec("PRAGMA journal_mode = WAL");
+      // Without a busy timeout a second worker on the same file does not queue
+      // behind the write lock, it fails immediately with SQLITE_BUSY. Waiting
+      // is what the sequencing comment above promises.
+      this.database.exec("PRAGMA busy_timeout = 5000");
     }
 
     this.database.exec(SCHEMA);
@@ -134,8 +138,9 @@ export class SessionEventStore {
     const draft = SessionEventDraftSchema.parse(draftInput);
 
     // Reading the next sequence and claiming it are one step. Nothing else in
-    // this process can interleave, but a second process on the same file can,
-    // and BEGIN IMMEDIATE is what makes it wait rather than duplicate.
+    // this process can interleave, and a second process on the same file takes
+    // the write lock rather than racing for the same number — so a sequence is
+    // never duplicated and never skipped.
     this.database.exec("BEGIN IMMEDIATE");
 
     let event: SessionEvent;
@@ -179,6 +184,32 @@ export class SessionEventStore {
 
   list(sessionId: string): SessionEvent[] {
     return this.listStatement.all(sessionId).map(readEventColumn);
+  }
+
+  /**
+   * The readable part of a session's log, and a count of what was not.
+   *
+   * `list` is strict on purpose — a row it cannot parse is a real problem and
+   * saying so is the honest answer for a store. But the log now outlives the
+   * build that wrote it, and `packages/contracts` changes with almost every
+   * capability, so a database written by an older build holds rows this one
+   * cannot read. Strictness on a serving path turns that into an unhandled
+   * throw inside an HTTP handler, which ends the worker process rather than the
+   * request. One stale row should cost its own line, not the session.
+   */
+  readable(sessionId: string): { events: SessionEvent[]; unreadable: number } {
+    const events: SessionEvent[] = [];
+    let unreadable = 0;
+
+    for (const row of this.listStatement.all(sessionId)) {
+      try {
+        events.push(readEventColumn(row));
+      } catch {
+        unreadable += 1;
+      }
+    }
+
+    return { events, unreadable };
   }
 
   /** Every session the log has heard of, in the order each first appeared. */

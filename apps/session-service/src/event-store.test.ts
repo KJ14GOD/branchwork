@@ -176,3 +176,47 @@ test("takes the database location from NOVUS_DB when it is set", () => {
     }
   }
 });
+
+test("readable() skips a row it cannot parse and counts it", () => {
+  // The log now outlives the build that wrote it, and the event union changes
+  // with almost every capability, so a database written by an older build holds
+  // rows this one cannot read. list() throwing is right for a store; the
+  // serving path needs an answer that is not "kill the process".
+  const file = join(mkdtempSync(join(tmpdir(), "novus-readable-")), "e.db");
+  const store = new SessionEventStore({ databasePath: file });
+
+  store.append({
+    sessionId: "s1",
+    actorId: "a",
+    type: "run.progress",
+    payload: { runId: "r1", message: "readable" },
+  });
+
+  const raw = new DatabaseSync(file);
+  raw
+    .prepare(
+      `INSERT INTO session_events
+         (session_id, sequence, event_id, type, actor_id, occurred_at, event)
+       VALUES (?,?,?,?,?,?,?)`,
+    )
+    .run(
+      "s1",
+      1,
+      "written-by-an-older-build",
+      "run.progress",
+      "a",
+      new Date().toISOString(),
+      JSON.stringify({ type: "an.event.this.build.does.not.know", payload: {} }),
+    );
+  raw.close();
+
+  assert.throws(() => store.list("s1"));
+
+  const { events, unreadable } = store.readable("s1");
+
+  assert.equal(unreadable, 1);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, "run.progress");
+
+  store.close();
+});
