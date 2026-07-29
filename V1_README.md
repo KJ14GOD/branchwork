@@ -66,6 +66,43 @@ Before starting anything from the roadmap in `README.md`, check it against this
 section. Work that widens the harness while multiplayer stays at 54 lines is
 moving away from V1, however good the work is.
 
+## Benchmark results
+
+All three Evaluation tasks pass against the real model, 2026-07-29. One run
+each — an existence proof, not a rate.
+
+| Task | Result | Model calls | Files changed |
+| --- | --- | --- | --- |
+| Bug fix | pass | 8 | 1 |
+| Small feature | pass | 21 | 4 |
+| Repository reasoning | pass | 15 | 1 |
+
+Each scores against a hidden regression test the agent never sees, and the
+scorer re-runs the suites itself rather than believing what the agent reported.
+A run that edits the committed tests is refused outright.
+
+Repository reasoning is the one worth reading. Its fixture has a shared range
+selector that is closed at both ends; the daily rollup double-counts midnight
+because of it, and the obvious fix — narrowing the selector — makes the whole
+visible suite pass while silently breaking the retention caller that depends on
+the closed bound. Verified: with that fix the visible suite is 18/18 green and
+the hidden test fails. The agent did not take it. It read the other caller,
+explained why compaction needs the closed upper bound, and changed the day
+boundary in the one place that wanted it.
+
+Small feature failed twice before it passed, and both failures were the
+harness's rather than the model's. The first hit a sixteen-step ceiling with
+eleven steps spent legitimately reading an unfamiliar repository. The second
+died when the model sent a malformed tool call and the validation error escaped
+the run loop, ending the run with no receipt and nothing in the log explaining
+it. Both are fixed, and the second is why the loop is bounded by a budget rather
+than a step count.
+
+What this does not establish: one run per task says nothing about a rate, all
+three fixtures are small, and only the private leg of the Evaluation grid has
+been measured — the shared run with a human intervention and the two forked
+attempts both need Milestones 3 and 4.
+
 ## Demo
 
 1. The host opens the Novus macOS app.
