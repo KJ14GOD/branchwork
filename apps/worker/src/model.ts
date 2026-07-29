@@ -35,14 +35,28 @@ export type ModelRoutingRequest = {
   goal: string;
 };
 
+/**
+ * What one model call consumed.
+ *
+ * Reported by the adapter rather than estimated by the runner, because only the
+ * provider knows what it actually billed — a locally counted approximation in a
+ * receipt would be a guess wearing the costume of evidence.
+ */
+export type ModelUsage = {
+  inputTokens: number;
+  outputTokens: number;
+};
+
 export type ModelResponse =
   | {
       type: "tool_call";
       call: ToolCall;
+      usage?: ModelUsage;
     }
   | {
       type: "final";
       summary: string;
+      usage?: ModelUsage;
     };
 
 export interface ModelAdapter {

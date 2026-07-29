@@ -17,6 +17,7 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "tool.failed": "✗",
   "run.completed": "■",
   "run.failed": "✗",
+  "receipt.created": "▣",
 };
 
 const summariseCall = (call: Extract<SessionEvent, { type: "tool.requested" }>["payload"]["call"]): string => {
@@ -210,6 +211,58 @@ export const EventRow = ({
             {event.payload.reason}
           </span>
         );
+
+      case "receipt.created": {
+        const { receipt } = event.payload;
+        const failing = receipt.tests.filter((test) => !test.passed).length;
+        const tokens = receipt.usage.inputTokens + receipt.usage.outputTokens;
+        // A green suite that ran before the final edit says nothing about the
+        // diff this receipt is attached to, so it does not get to read as a
+        // plain pass.
+        const verdict =
+          receipt.tests.length === 0
+            ? "tests not run"
+            : failing > 0
+              ? `${failing} of ${receipt.tests.length} test runs failed`
+              : receipt.testsFollowedFinalChange === false
+                ? "tests passed, but before the last change"
+                : `${receipt.tests.length} test run${receipt.tests.length === 1 ? "" : "s"} passed`;
+
+        // Lead with what a reviewer checks first: did it change anything, and
+        // did the tests agree.
+        const parts = [
+          `${receipt.filesChanged.length} file${receipt.filesChanged.length === 1 ? "" : "s"} changed`,
+          verdict,
+          `${receipt.usage.modelCalls} model call${receipt.usage.modelCalls === 1 ? "" : "s"}`,
+          receipt.usage.callsMissingUsage > 0
+            ? `≥${tokens} tokens`
+            : `${tokens} tokens`,
+          `${Math.round(receipt.elapsedMs / 100) / 10}s`,
+        ];
+
+        return (
+          <span
+            className={
+              failing > 0
+                ? "event__text event__text--error"
+                : "event__text event__text--muted"
+            }
+          >
+            {parts.join(" · ")}
+            {receipt.base.revision ? (
+              <span className="event__type">
+                {" "}
+                · base {receipt.base.revision.slice(0, 8)}
+                {receipt.base.dirty === true
+                  ? " + uncommitted"
+                  : receipt.base.dirty === null
+                    ? " + unknown state"
+                    : ""}
+              </span>
+            ) : null}
+          </span>
+        );
+      }
 
       case "tool.requested":
         return (

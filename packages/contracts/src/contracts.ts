@@ -230,6 +230,122 @@ export const RunSchema = z.object({
 export type Run = z.infer<typeof RunSchema>;
 
 
+/**
+ * What a finished run proves about itself.
+ *
+ * Assembled from the event log rather than accumulated alongside it, so the
+ * receipt cannot claim anything the ordered history does not already contain.
+ * If the two ever disagree, the events are right and the receipt is a bug.
+ *
+ * Cost in currency is deliberately absent. Token counts are exact and come from
+ * the provider; a price per token is a table that goes stale, and a stale number
+ * inside a document whose whole purpose is evidence is worse than no number.
+ * Cost belongs with routing, which V1 defers.
+ */
+export const RunReceiptSchema = z.object({
+  runId: IdSchema,
+  sessionId: IdSchema,
+  goal: z.string().min(1),
+  model: ModelSelectionSchema,
+  status: z.enum(["completed", "failed"]),
+  // Read at the start of *this run*, not once per session: a second turn opens
+  // on top of the first turn's writes, so a session-wide revision would name a
+  // base that no longer describes what the run started from.
+  base: z.object({
+    revision: z.string().min(1).nullable(),
+    // A revision alone claims more reproducibility than it can deliver. An
+    // uncommitted tree means the base is that commit *plus* changes nobody
+    // recorded, and a reviewer has to know which of the two they are looking at.
+    //
+    // Null when it could not be determined. `false` has to mean "checked, and
+    // clean" — reporting a failed check as clean would make the maximally dirty
+    // repository, the one whose status output was too large to read, look like
+    // the tidiest.
+    dirty: z.boolean().nullable(),
+  }),
+  startedAt: TimestampSchema,
+  finishedAt: TimestampSchema,
+  elapsedMs: z.number().int().nonnegative(),
+  usage: z.object({
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    modelCalls: z.number().int().nonnegative(),
+    // Calls whose adapter reported nothing. When this is above zero the totals
+    // are a floor, not a count, and anything displaying them has to say so
+    // rather than print a confident number that is quietly short.
+    //
+    // Provider-side retries are invisible here for the same reason: the SDK
+    // reports usage for the response it finally returned, not for the attempts
+    // it made, so a retried call under-reports against what was billed.
+    callsMissingUsage: z.number().int().nonnegative(),
+  }),
+  toolCalls: z.array(
+    z.object({
+      toolCallId: IdSchema,
+      name: z.string().min(1),
+      outcome: z.enum(["completed", "failed", "denied"]),
+    }),
+  ),
+  // One entry per file, not per patch. Two patches to the same file are one
+  // changed file, and counting them twice inflates the headline number that is
+  // the first thing anyone reads.
+  //
+  // Covers apply_patch only. A run that writes through run_command — codegen, a
+  // formatter, `sed -i` — changed files that are not listed here, and the event
+  // log records the command rather than its effect. Closing that gap needs a
+  // diff against `base` at the end of the run, which is Milestone 4 work; until
+  // then this is the set of *patched* files, not the set of changed ones.
+  //
+  // additions and deletions are summed across patches to the same file, so a
+  // later patch rewriting lines an earlier one added is counted in both. The
+  // `patches` count sits beside them so the numbers cannot be mistaken for a
+  // net diff against base.
+  filesChanged: z.array(
+    z.object({
+      path: z.string().min(1),
+      additions: z.number().int().nonnegative(),
+      deletions: z.number().int().nonnegative(),
+      patches: z.number().int().positive(),
+      /** Sequence of the last patch to this file, so order stays recoverable. */
+      sequence: z.number().int().nonnegative(),
+    }),
+  ),
+  tests: z.array(
+    z.object({
+      command: z.string().min(1),
+      passed: z.boolean(),
+      exitCode: z.number().int().nullable(),
+      durationMs: z.number().int().nonnegative(),
+      sequence: z.number().int().nonnegative(),
+    }),
+  ),
+  /**
+   * Whether the last test run happened after the last file change.
+   *
+   * A green suite that ran *before* the final edit says nothing about the diff
+   * this receipt is attached to, and the flat lists above cannot show that on
+   * their own. Null when the run has no tests or no changes, where the question
+   * does not arise.
+   *
+   * Inherits the limit above: it compares against the last *patch*, so a file
+   * written by run_command after the tests ran will not make this false.
+   */
+  testsFollowedFinalChange: z.boolean().nullable(),
+  approvals: z.array(
+    z.object({
+      toolCallId: IdSchema,
+      decision: z.enum(["approved", "denied"]),
+      actorId: IdSchema,
+      reason: z.string().min(1).optional(),
+    }),
+  ),
+  // Present on completion; absent when the run failed, where `failure` explains.
+  summary: z.string().min(1).optional(),
+  failure: z.string().min(1).optional(),
+});
+
+export type RunReceipt = z.infer<typeof RunReceiptSchema>;
+
 const EventEnvelopeSchema = z.object({
   eventId: IdSchema,
   sessionId: IdSchema,
@@ -335,6 +451,16 @@ export const ToolFailedEventSchema = EventEnvelopeSchema.extend({
   }),
 });
 
+// Emitted once per run, after run.completed or run.failed, so the receipt can
+// summarise the terminal event too.
+export const ReceiptCreatedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("receipt.created"),
+  payload: z.object({
+    runId: IdSchema,
+    receipt: RunReceiptSchema,
+  }),
+});
+
 export const RunFailedEventSchema = EventEnvelopeSchema.extend({
   type: z.literal("run.failed"),
   payload: z.object({
@@ -356,6 +482,7 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   ToolFailedEventSchema,
   RunCompletedEventSchema,
   RunFailedEventSchema,
+  ReceiptCreatedEventSchema,
 ]);
 
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
@@ -417,6 +544,11 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   RunFailedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ReceiptCreatedEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,

@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { promisify } from "node:util";
 
 import type { ToolCall } from "@novus/contracts";
 import type { InMemorySessionEventStore } from "@novus/session-service";
@@ -19,6 +21,46 @@ import {
   RunTestsTool,
   SearchRepositoryTool,
 } from "./tools.ts";
+
+const run = promisify(execFile);
+
+/**
+ * The commit a run starts from, and whether the tree already differs from it.
+ *
+ * Read per run rather than per session, because a second turn opens on top of
+ * the first turn's writes. Null revision when the directory is not a Git
+ * checkout, which is allowed — the repository still works, the receipt just
+ * cannot cite a base. A dirty tree is reported rather than hidden: the base is
+ * then that commit *plus* changes nobody recorded, and a reviewer has to be
+ * able to tell those apart.
+ */
+const readRepositoryBase = async (
+  repositoryPath: string,
+): Promise<{ revision: string | null; dirty: boolean | null }> => {
+  // Bounded and separately caught. This runs after run.started is emitted, in
+  // the critical path of every run, so a git call that stalls on a large repo
+  // or a network filesystem would leave the UI showing a run that never
+  // continues — and a rejection here would end a run that had already begun.
+  const git = (args: string[]) =>
+    run("git", args, {
+      cwd: repositoryPath,
+      timeout: 5_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+
+  const revision = await git(["rev-parse", "HEAD"])
+    .then(({ stdout }) => stdout.trim() || null)
+    .catch(() => null);
+
+  // Null, not false. A failed check reported as clean would make the maximally
+  // dirty repository — the one whose status output was too large to read — look
+  // like the tidiest one.
+  const dirty = await git(["status", "--porcelain"])
+    .then(({ stdout }) => stdout.trim().length > 0)
+    .catch(() => null);
+
+  return { revision, dirty };
+};
 
 export type HostDefaults = {
   allowWrites: boolean;
@@ -155,6 +197,7 @@ export class SessionRegistry {
           new RunTestsTool(repositoryPath),
         ],
         buildApprovalGate(allowWrites, allowCommands),
+        () => readRepositoryBase(repositoryPath),
       ),
     };
 

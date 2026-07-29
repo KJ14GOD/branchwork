@@ -16,6 +16,11 @@ import {
   DenyAllApprovalGate,
   type ApprovalGate,
 } from "./policy.ts";
+import {
+  buildReceipt,
+  type ReceiptUsage,
+  type RepositoryBase,
+} from "./receipt.ts";
 import type { AgentTool } from "./tools.ts";
 
 export type AgentRunInput = {
@@ -47,6 +52,14 @@ export class AgentRunner {
   private readonly adapters: readonly ModelAdapter[];
   private readonly tools: readonly AgentTool[];
   private readonly approvals: ApprovalGate;
+  /**
+   * Reads the repository base for a run, at the moment that run starts.
+   *
+   * Asked per run rather than once per session: a second turn opens on top of
+   * whatever the first turn wrote, so a session-wide revision would name a base
+   * that no longer describes what the run began from.
+   */
+  private readonly readBase: () => Promise<RepositoryBase>;
   // One runner is one session. Finished turns stay here so a follow-up
   // question carries the earlier conversation.
   private readonly history: CompletedTurn[] = [];
@@ -59,12 +72,17 @@ export class AgentRunner {
     // Absent a configured gate, write and dangerous tools are denied rather
     // than silently allowed.
     approvals: ApprovalGate = new DenyAllApprovalGate(),
+    readBase: () => Promise<RepositoryBase> = async () => ({
+      revision: null,
+      dirty: false,
+    }),
   ) {
     this.eventStore = eventStore;
     this.router = router;
     this.adapters = adapters;
     this.tools = tools;
     this.approvals = approvals;
+    this.readBase = readBase;
   }
 
   async run(input: AgentRunInput): Promise<AgentRunResult> {
@@ -108,6 +126,56 @@ export class AgentRunner {
 
     const toolExchanges: ModelToolExchange[] = [];
     let consecutiveFailures = 0;
+    const usage: ReceiptUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      modelCalls: 0,
+      callsMissingUsage: 0,
+    };
+    // Reading the base is reporting, not execution: a run that has already
+    // emitted run.started must not die because git was unavailable.
+    const base = await this.readBase().catch(() => ({
+      revision: null,
+      dirty: null,
+    }));
+
+    // Emitted after the terminal event, so the receipt can read it back and
+    // report how the run actually ended rather than how it was expected to.
+    const emitReceipt = (): void => {
+      // A receipt is a report about a run, so it must never be able to end one.
+      // Validation here, or any subscriber the append notifies, would otherwise
+      // turn a finished run into a rejected promise — losing the very result
+      // the receipt exists to describe.
+      try {
+        const receipt = buildReceipt(
+          this.eventStore.list(input.sessionId),
+          run.id,
+          { base, usage },
+        );
+
+        if (receipt) {
+          this.eventStore.append({
+            sessionId: input.sessionId,
+            actorId: input.actorId,
+            type: "receipt.created",
+            payload: { runId: run.id, receipt },
+          });
+        }
+      } catch (error) {
+        // Say so where the run is. A receipt that silently stops being produced
+        // is indistinguishable from one that was never wanted, and stderr on
+        // the host is not somewhere a reviewer of the session will look.
+        this.eventStore.append({
+          sessionId: input.sessionId,
+          actorId: input.actorId,
+          type: "run.progress",
+          payload: {
+            runId: run.id,
+            message: `No receipt was produced: ${(error as Error).message}`,
+          },
+        });
+      }
+    };
 
     const failRun = (reason: string): AgentRunResult => {
       this.eventStore.append({
@@ -116,6 +184,8 @@ export class AgentRunner {
         type: "run.failed",
         payload: { runId: run.id, reason },
       });
+
+      emitReceipt();
 
       return { runId: run.id, events: this.eventStore.list(input.sessionId) };
     };
@@ -126,6 +196,17 @@ export class AgentRunner {
         goal: input.goal,
         toolExchanges,
       });
+
+      usage.modelCalls += 1;
+
+      if (response.usage) {
+        usage.inputTokens += response.usage.inputTokens;
+        usage.outputTokens += response.usage.outputTokens;
+      } else {
+        // Counted, not ignored: the totals become a floor and anything showing
+        // them has to say so rather than print a number that is quietly short.
+        usage.callsMissingUsage += 1;
+      }
 
       if (response.type === "final") {
         this.history.push({
@@ -143,6 +224,8 @@ export class AgentRunner {
             summary: response.summary,
           },
         });
+
+        emitReceipt();
 
         return {
           runId: run.id,
