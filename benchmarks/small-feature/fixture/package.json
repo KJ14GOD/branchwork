@@ -1,0 +1,10 @@
+{
+  "name": "queryfilter-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A saved-search filter language missing one operator. The small-feature benchmark fixture.",
+  "scripts": {
+    "test": "node --test 'tests/*.test.js'"
+  }
+}

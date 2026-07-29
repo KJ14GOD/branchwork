@@ -1,5 +1,13 @@
 import { spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,12 +22,18 @@ import { SessionRegistry } from "./session-registry.ts";
 import { killRunningCommands } from "./tools.ts";
 
 /**
- * The bug-fix benchmark from V1_README's *Evaluation* section, and its scorer.
+ * The three benchmarks from V1_README's *Evaluation* section, and their scorer.
  *
  * Milestone 2's exit condition is "the agent completes the bug-fix benchmark
  * locally and produces a reproducible diff and test receipt". Every part of
  * that sentence existed before this file did, and none of it had been observed
  * happening at once. This runs it and says what actually occurred.
+ *
+ * The other two tasks the same section asks for — a feature spread across
+ * several files, and a change whose obvious form is wrong until you have read
+ * something the failing test does not mention — score identically, because the
+ * thing being scored is the same thing: a diff, a receipt, and a suite re-run
+ * by somebody other than the agent. Only the fixture and the goal differ.
  *
  * Two things are load-bearing about how it scores. It re-runs the fixture's own
  * suite itself rather than believing the run_tests result the agent saw, and it
@@ -30,20 +44,41 @@ import { killRunningCommands } from "./tools.ts";
  */
 
 const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
-const BENCHMARK_DIR = join(REPO_ROOT, "benchmarks", "bug-fix");
-const FIXTURE_DIR = join(BENCHMARK_DIR, "fixture");
-const HIDDEN_TEST_SOURCE = join(BENCHMARK_DIR, "hidden", "regression.test.js");
-const GOAL_FILE = join(BENCHMARK_DIR, "goal.txt");
+const BENCHMARKS_DIR = join(REPO_ROOT, "benchmarks");
+
+export const BENCHMARK_NAMES = [
+  "bug-fix",
+  "small-feature",
+  "repo-reasoning",
+] as const;
+
+export type BenchmarkName = (typeof BENCHMARK_NAMES)[number];
+
+export const isBenchmarkName = (value: string): value is BenchmarkName =>
+  (BENCHMARK_NAMES as readonly string[]).includes(value);
+
+/**
+ * What the scratch copy of each fixture is called on disk.
+ *
+ * Only cosmetic — it is the directory name a human sees in `--keep` output and
+ * in a stack trace — but a fixture that arrives as `benchmark-run` in every
+ * failure report is harder to talk about than one that arrives as `retention`.
+ */
+const SCRATCH_DIRECTORY: Record<BenchmarkName, string> = {
+  "bug-fix": "throttle",
+  "small-feature": "queryfilter",
+  "repo-reasoning": "retention",
+};
 
 // Copied in only after the agent has stopped, so it is never on disk while the
 // agent can search, read, or run it. The leading dot also keeps it out of the
 // fixture's own `tests/*.test.js` glob if the ordering ever changed.
 const HIDDEN_TEST_DIR = ".novus-hidden";
 
-const SCRIPTED_SELECTION: ModelSelection = {
+const scriptedSelection = (benchmark: BenchmarkName): ModelSelection => ({
   provider: "scripted",
-  model: "bug-fix-fixture",
-};
+  model: `${benchmark}-fixture`,
+});
 
 const LIVE_SELECTION: ModelSelection = {
   provider: "anthropic",
@@ -67,6 +102,7 @@ export type BenchmarkCheck = {
 };
 
 export type BenchmarkResult = {
+  benchmark: BenchmarkName;
   variant: BenchmarkVariant;
   model: ModelSelection;
   goal: string;
@@ -202,7 +238,7 @@ const git = async (
  * than asserted.
  */
 export class ScriptedBugFixAdapter implements ModelAdapter {
-  readonly selection: ModelSelection = SCRIPTED_SELECTION;
+  readonly selection: ModelSelection = scriptedSelection("bug-fix");
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const step = request.toolExchanges.length;
@@ -336,12 +372,389 @@ export class ScriptedBugFixAdapter implements ModelAdapter {
   }
 }
 
-const buildAdapter = (variant: BenchmarkVariant): ModelAdapter =>
+/**
+ * The id of the most recent proposal, for a script that patches more than once.
+ *
+ * The bug-fix script proposes once and can look for the first proposal that
+ * survived. A script that patches three files cannot: it has to apply the one
+ * it just made, so this walks backwards and takes the newest.
+ */
+const lastPatchId = (request: ModelRequest): string | null => {
+  for (let index = request.toolExchanges.length - 1; index >= 0; index -= 1) {
+    const exchange = request.toolExchanges[index];
+
+    if (
+      exchange?.status === "ok" &&
+      exchange.result.name === "propose_patch"
+    ) {
+      return exchange.result.output.patchId;
+    }
+  }
+
+  return null;
+};
+
+const applyOrGiveUp = (request: ModelRequest, what: string): ModelResponse => {
+  const patchId = lastPatchId(request);
+
+  if (patchId === null) {
+    return {
+      type: "final",
+      summary: `No patch proposal survived for ${what}, so there was nothing to apply.`,
+    };
+  }
+
+  return {
+    type: "tool_call",
+    call: {
+      id: crypto.randomUUID(),
+      name: "apply_patch",
+      input: { patchId },
+    },
+  };
+};
+
+/**
+ * The deterministic model for the small-feature benchmark.
+ *
+ * Three proposals and three applications, one file each, because a patch names
+ * a single path. That sequence — propose, apply, propose against a file the
+ * script has not re-read since the last write, apply again — is the part of the
+ * harness the single-file bug-fix script never touches. Only the choosing is
+ * canned; the anchors are matched against the real files by the real tool, so a
+ * fixture edited without updating this script fails loudly rather than quietly
+ * producing a smaller diff.
+ */
+export class ScriptedSmallFeatureAdapter implements ModelAdapter {
+  readonly selection: ModelSelection = scriptedSelection("small-feature");
+
+  async complete(request: ModelRequest): Promise<ModelResponse> {
+    const step = request.toolExchanges.length;
+
+    if (step === 0) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "list_directory",
+          input: { path: "src" },
+        },
+      };
+    }
+
+    if (step === 1) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "read_file",
+          input: { path: "src/tokenize.js" },
+        },
+      };
+    }
+
+    if (step === 2) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "propose_patch",
+          input: {
+            path: "src/tokenize.js",
+            intent:
+              "Declare the membership operator and read its operand as a list of options.",
+            edits: [
+              {
+                oldText: [
+                  '  { id: "contains", spelling: "~", operand: "scalar" },',
+                  "];",
+                ].join("\n"),
+                newText: [
+                  '  { id: "contains", spelling: "~", operand: "scalar" },',
+                  '  { id: "isOneOf", spelling: "in", operand: "list" },',
+                  "];",
+                ].join("\n"),
+              },
+              {
+                oldText: [
+                  "  throw new SyntaxError(",
+                  '    `operator "${operator.spelling}" declares operand kind "${operator.operand}", which the lexer does not know how to read`,',
+                  "  );",
+                ].join("\n"),
+                newText: [
+                  '  if (operator.operand === "list") {',
+                  '    const options = text.split("|").map((option) => option.trim());',
+                  "",
+                  "    if (options.some((option) => option.length === 0)) {",
+                  "      throw new SyntaxError(",
+                  '        `"${operator.spelling}" was given an empty option in "${text}"`,',
+                  "      );",
+                  "    }",
+                  "",
+                  "    return options;",
+                  "  }",
+                  "",
+                  "  throw new SyntaxError(",
+                  '    `operator "${operator.spelling}" declares operand kind "${operator.operand}", which the lexer does not know how to read`,',
+                  "  );",
+                ].join("\n"),
+              },
+            ],
+          },
+        },
+      };
+    }
+
+    if (step === 3) {
+      return applyOrGiveUp(request, "the lexer");
+    }
+
+    if (step === 4) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "propose_patch",
+          input: {
+            path: "src/evaluate.js",
+            intent:
+              "Match when the field equals any option, comparing on the string form as equals does.",
+            edits: [
+              {
+                oldText: [
+                  "  contains: (value, operand) => String(value).includes(operand),",
+                  "};",
+                ].join("\n"),
+                newText: [
+                  "  contains: (value, operand) => String(value).includes(operand),",
+                  "  isOneOf: (value, options) =>",
+                  "    options.some((option) => String(value) === option),",
+                  "};",
+                ].join("\n"),
+              },
+            ],
+          },
+        },
+      };
+    }
+
+    if (step === 5) {
+      return applyOrGiveUp(request, "the predicate");
+    }
+
+    if (step === 6) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "propose_patch",
+          input: {
+            path: "src/explain.js",
+            intent:
+              "Describe a membership clause, with the comma-and-or rule for three or more options.",
+            edits: [
+              {
+                oldText: "export const DESCRIPTIONS = {",
+                newText: [
+                  "const listOptions = (options) => {",
+                  "  if (options.length < 2) {",
+                  '    return options.join("");',
+                  "  }",
+                  "",
+                  "  if (options.length === 2) {",
+                  "    return `${options[0]} or ${options[1]}`;",
+                  "  }",
+                  "",
+                  '  return `${options.slice(0, -1).join(", ")}, or ${options.at(-1)}`;',
+                  "};",
+                  "",
+                  "export const DESCRIPTIONS = {",
+                ].join("\n"),
+              },
+              {
+                oldText: [
+                  "  contains: (field, operand) => `${field} contains ${operand}`,",
+                  "};",
+                ].join("\n"),
+                newText: [
+                  "  contains: (field, operand) => `${field} contains ${operand}`,",
+                  "  isOneOf: (field, options) => `${field} is one of ${listOptions(options)}`,",
+                  "};",
+                ].join("\n"),
+              },
+            ],
+          },
+        },
+      };
+    }
+
+    if (step === 7) {
+      return applyOrGiveUp(request, "the description");
+    }
+
+    if (step === 8) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "run_tests",
+          input: { args: [] },
+        },
+      };
+    }
+
+    const tests = request.toolExchanges.find(
+      (exchange) =>
+        exchange.status === "ok" && exchange.result.name === "run_tests",
+    );
+
+    if (tests?.status === "ok" && tests.result.name === "run_tests") {
+      return {
+        type: "final",
+        summary: tests.result.output.passed
+          ? "Membership is now declared in the operator table with a list operand, implemented in the predicates, and described in the explanations. The glue was left alone. The fixture's suite passes."
+          : `The three patches were applied but the suite still fails (exit ${tests.result.output.exitCode}).`,
+      };
+    }
+
+    return {
+      type: "final",
+      summary: "The run ended without a test result to report.",
+    };
+  }
+}
+
+/**
+ * The deterministic model for the repository-reasoning benchmark.
+ *
+ * It takes the path the task is asking for rather than the short one: it
+ * searches for every caller of the shared range function and reads both of them
+ * before it proposes anything, and then patches the caller that is wrong rather
+ * than the function they share. That the script does this proves the fixture and
+ * the scorer work end to end. It proves nothing whatsoever about whether a model
+ * would have read the second caller first — only the live run says that.
+ */
+export class ScriptedRepoReasoningAdapter implements ModelAdapter {
+  readonly selection: ModelSelection = scriptedSelection("repo-reasoning");
+
+  async complete(request: ModelRequest): Promise<ModelResponse> {
+    const step = request.toolExchanges.length;
+
+    if (step === 0) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "search_repository",
+          input: { query: "entriesBetween", limit: 20 },
+        },
+      };
+    }
+
+    if (step === 1) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "read_file",
+          input: { path: "src/rollup.js" },
+        },
+      };
+    }
+
+    if (step === 2) {
+      // The other caller, before touching anything. This is the step the whole
+      // benchmark is about.
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "read_file",
+          input: { path: "src/purge.js" },
+        },
+      };
+    }
+
+    if (step === 3) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "propose_patch",
+          input: {
+            path: "src/rollup.js",
+            intent:
+              "Ask for the day as a half-open span, since the range selector's closed upper bound is what retention depends on.",
+            edits: [
+              {
+                oldText:
+                  "      count: entriesBetween(entries, dayStart, dayStart + DAY_MS).length,",
+                newText: [
+                  "      // A day ends at the instant before the next one starts. entriesBetween",
+                  "      // is closed at both ends and retention needs it to stay that way, so the",
+                  "      // half-open day is expressed here, in the caller that wants one.",
+                  "      count: entriesBetween(entries, dayStart, dayStart + DAY_MS - 1)",
+                  "        .length,",
+                ].join("\n"),
+              },
+            ],
+          },
+        },
+      };
+    }
+
+    if (step === 4) {
+      return applyOrGiveUp(request, "the rollup");
+    }
+
+    if (step === 5) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "run_tests",
+          input: { args: [] },
+        },
+      };
+    }
+
+    const tests = request.toolExchanges.find(
+      (exchange) =>
+        exchange.status === "ok" && exchange.result.name === "run_tests",
+    );
+
+    if (tests?.status === "ok" && tests.result.name === "run_tests") {
+      return {
+        type: "final",
+        summary: tests.result.output.passed
+          ? "The rollup asked for a whole day as a closed range, so consecutive days overlapped at midnight and an entry there was counted twice. The range selector is closed at both ends on purpose — retention's window ends at now, and the newest entry is stamped now — so the day is made half-open in the rollup instead. The fixture's suite passes."
+          : `The patch was applied but the suite still fails (exit ${tests.result.output.exitCode}).`,
+      };
+    }
+
+    return {
+      type: "final",
+      summary: "The run ended without a test result to report.",
+    };
+  }
+}
+
+const SCRIPTED_ADAPTERS: Record<BenchmarkName, () => ModelAdapter> = {
+  "bug-fix": () => new ScriptedBugFixAdapter(),
+  "small-feature": () => new ScriptedSmallFeatureAdapter(),
+  "repo-reasoning": () => new ScriptedRepoReasoningAdapter(),
+};
+
+const buildAdapter = (
+  benchmark: BenchmarkName,
+  variant: BenchmarkVariant,
+): ModelAdapter =>
   variant === "live"
     ? new AnthropicModelAdapter(LIVE_SELECTION)
-    : new ScriptedBugFixAdapter();
+    : SCRIPTED_ADAPTERS[benchmark]();
 
 export type BenchmarkOptions = {
+  benchmark: BenchmarkName;
   variant: BenchmarkVariant;
   /**
    * A model to run instead of the variant's own.
@@ -365,23 +778,26 @@ export type BenchmarkOptions = {
  * fresh per run and committed to its own Git repository so the diff the
  * benchmark reports is a diff against a named base.
  */
-export const runBugFixBenchmark = async (
+export const runBenchmark = async (
   options: BenchmarkOptions,
 ): Promise<BenchmarkResult> => {
   const startedAt = Date.now();
-  const goal = (await readFile(GOAL_FILE, "utf8")).trim();
+  const benchmarkDir = join(BENCHMARKS_DIR, options.benchmark);
+  const fixtureDir = join(benchmarkDir, "fixture");
+  const hiddenDir = join(benchmarkDir, "hidden");
+  const goal = (await readFile(join(benchmarkDir, "goal.txt"), "utf8")).trim();
   const scratchParent = await mkdtemp(join(tmpdir(), "novus-benchmark-"));
-  const scratchPath = join(scratchParent, "throttle");
+  const scratchPath = join(scratchParent, SCRATCH_DIRECTORY[options.benchmark]);
   const artifactsPath =
     options.artifactsPath ??
     join(
       REPO_ROOT,
       ".novus",
       "benchmarks",
-      `${new Date().toISOString().replaceAll(":", "-")}-${options.variant}`,
+      `${new Date().toISOString().replaceAll(":", "-")}-${options.benchmark}-${options.variant}`,
     );
 
-  await cp(FIXTURE_DIR, scratchPath, { recursive: true });
+  await cp(fixtureDir, scratchPath, { recursive: true });
   await git(scratchPath, ["init", "--quiet", "--initial-branch=benchmark"]);
   await git(scratchPath, ["add", "--all"]);
   await git(scratchPath, ["commit", "--quiet", "--message", "fixture"]);
@@ -401,7 +817,8 @@ export const runBugFixBenchmark = async (
 
   const baseline = await runProcess(scratchPath, "npm", ["test"]);
 
-  const adapter = options.adapter ?? buildAdapter(options.variant);
+  const adapter =
+    options.adapter ?? buildAdapter(options.benchmark, options.variant);
   const eventStore = new InMemorySessionEventStore();
   const sessions = new SessionRegistry(
     eventStore,
@@ -477,15 +894,31 @@ export const runBugFixBenchmark = async (
 
   const visible = await runProcess(scratchPath, "npm", ["test"]);
 
+  // Every file in the benchmark's hidden/ directory, named explicitly rather
+  // than globbed: these are spawned without a shell, so a pattern would arrive
+  // at Node as a literal and quietly match nothing — a hidden suite that ran no
+  // tests and exited 0 would be the scorer agreeing with everything again.
   await mkdir(join(scratchPath, HIDDEN_TEST_DIR), { recursive: true });
-  await cp(
-    HIDDEN_TEST_SOURCE,
-    join(scratchPath, HIDDEN_TEST_DIR, "regression.test.js"),
+
+  const hiddenFiles = (await readdir(hiddenDir))
+    .filter((file) => file.endsWith(".test.js"))
+    .sort();
+
+  if (hiddenFiles.length === 0) {
+    throw new Error(
+      `The ${options.benchmark} benchmark has no hidden test in ${hiddenDir}, so a pass would mean only that the agent satisfied the tests it could read.`,
+    );
+  }
+
+  await Promise.all(
+    hiddenFiles.map((file) =>
+      cp(join(hiddenDir, file), join(scratchPath, HIDDEN_TEST_DIR, file)),
+    ),
   );
 
   const hidden = await runProcess(scratchPath, "node", [
     "--test",
-    join(HIDDEN_TEST_DIR, "regression.test.js"),
+    ...hiddenFiles.map((file) => join(HIDDEN_TEST_DIR, file)),
   ]);
 
   const diffProduced = diffOutcome.stdout.trim().length > 0;
@@ -536,6 +969,7 @@ export const runBugFixBenchmark = async (
   ];
 
   const result: BenchmarkResult = {
+    benchmark: options.benchmark,
     variant: options.variant,
     model: adapter.selection,
     goal,
@@ -616,7 +1050,7 @@ const formatUsage = (receipt: RunReceipt | null): string => {
 export const formatBenchmarkResult = (result: BenchmarkResult): string => {
   const lines = [
     "",
-    `bug-fix benchmark · ${result.variant} · ${result.model.provider}/${result.model.model}`,
+    `${result.benchmark} benchmark · ${result.variant} · ${result.model.provider}/${result.model.model}`,
     "",
   ];
 
@@ -667,11 +1101,54 @@ if (invokedDirectly) {
       ? "live"
       : "scripted";
 
-  const result = await runBugFixBenchmark({
-    variant,
-    keepScratch: argv.includes("--keep"),
-  });
+  const named = argv.filter((argument) => !argument.startsWith("-"));
+  const unknown = named.filter((argument) => !isBenchmarkName(argument));
 
-  console.log(formatBenchmarkResult(result));
-  process.exit(result.verdict === "PASS" ? 0 : 1);
+  if (unknown.length > 0) {
+    console.error(
+      `Unknown benchmark: ${unknown.join(", ")}. Known: ${BENCHMARK_NAMES.join(", ")}.`,
+    );
+    process.exit(2);
+  }
+
+  const selected: readonly BenchmarkName[] =
+    named.length > 0 && !argv.includes("--all")
+      ? (named as BenchmarkName[])
+      : BENCHMARK_NAMES;
+
+  // Sequential on purpose. Each run spawns a test suite and a coding agent
+  // against its own scratch repository, and the numbers a benchmark reports —
+  // elapsed time above all — mean less when three of them were competing for
+  // the same machine.
+  const results: BenchmarkResult[] = [];
+
+  for (const benchmark of selected) {
+    const result = await runBenchmark({
+      benchmark,
+      variant,
+      keepScratch: argv.includes("--keep"),
+    });
+
+    console.log(formatBenchmarkResult(result));
+    results.push(result);
+  }
+
+  if (results.length > 1) {
+    console.log(
+      [
+        "",
+        ...results.map(
+          (result) =>
+            `  ${result.verdict === "PASS" ? "✓" : "✗"} ${result.benchmark.padEnd(16)} ${result.verdict}`,
+        ),
+        "",
+        `BENCHMARKS ${results.every((result) => result.verdict === "PASS") ? "PASS" : "FAIL"} · ${results.filter((result) => result.verdict === "PASS").length}/${results.length}`,
+        "",
+      ].join("\n"),
+    );
+  }
+
+  process.exit(
+    results.every((result) => result.verdict === "PASS") ? 0 : 1,
+  );
 }
