@@ -763,3 +763,106 @@ test("a malformed tool call is an observation, not the end of the run", async ()
   assert.ok(types.includes("receipt.created"), "a finished run produced no receipt");
   assert.equal(asked, 2, "the model was not given another turn");
 });
+
+test("direction submitted mid-run reaches the model at the next turn", async () => {
+  const eventStore = new InMemorySessionEventStore();
+  const seen: string[] = [];
+  let asked = 0;
+
+  const adapter: ModelAdapter = {
+    selection: { provider: "anthropic", model: "test" },
+    async complete(request) {
+      asked += 1;
+      seen.push(request.goal);
+
+      if (asked === 1) {
+        // Arrives while the first turn is in flight, which is the case V1
+        // cares about: a human typing while the agent is already working.
+        eventStore.append({
+          sessionId: "steered-session",
+          actorId: "teammate-1",
+          type: "direction.submitted",
+          payload: {
+            runId: "steered-session",
+            direction: "Do not change the token schema",
+          },
+        });
+
+        return { type: "tool_call", call: { id: "c1", name: "read_file", input: { path: "package.json" } } };
+      }
+
+      return { type: "final", summary: "Done." };
+    },
+  };
+
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(adapter.selection),
+    [adapter],
+    [new ReadFileTool(process.cwd())],
+  );
+
+  const result = await runner.run({
+    sessionId: "steered-session",
+    actorId: "agent-1",
+    goal: "Original goal",
+  });
+
+  // The first turn saw only the goal — direction never lands mid-call.
+  assert.equal(seen[0], "Original goal");
+  // The second saw it, once, and the log says so.
+  assert.match(seen[1] ?? "", /Do not change the token schema/);
+  assert.equal(
+    result.events.filter((event) => event.type === "direction.applied").length,
+    1,
+  );
+});
+
+test("direction already applied is not applied again", async () => {
+  const eventStore = new InMemorySessionEventStore();
+  const goals: string[] = [];
+  let asked = 0;
+
+  const adapter: ModelAdapter = {
+    selection: { provider: "anthropic", model: "test" },
+    async complete(request) {
+      asked += 1;
+      goals.push(request.goal);
+
+      return asked < 3
+        ? { type: "tool_call", call: { id: `c${asked}`, name: "read_file", input: { path: "package.json" } } }
+        : { type: "final", summary: "Done." };
+    },
+  };
+
+  eventStore.append({
+    sessionId: "once-session",
+    actorId: "teammate-1",
+    type: "direction.submitted",
+    payload: { runId: "once-session", direction: "Keep the public API stable" },
+  });
+
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(adapter.selection),
+    [adapter],
+    [new ReadFileTool(process.cwd())],
+  );
+
+  const result = await runner.run({
+    sessionId: "once-session",
+    actorId: "agent-1",
+    goal: "Original goal",
+  });
+
+  // Reading pending direction out of the log is what makes this true: a queue
+  // beside the log is how the same direction gets applied on every turn.
+  assert.equal(
+    result.events.filter((event) => event.type === "direction.applied").length,
+    1,
+  );
+  assert.equal(
+    goals.filter((goal) => goal.includes("Keep the public API stable")).length,
+    1,
+  );
+});

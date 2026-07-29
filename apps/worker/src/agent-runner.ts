@@ -118,6 +118,54 @@ export class AgentRunner {
     this.budget = budget;
   }
 
+  /**
+   * Direction submitted but not yet applied, marked applied as it is returned.
+   *
+   * Read from the event log rather than a queue, because the log already has to
+   * be the record of what happened — a second structure holding the same facts
+   * is how a direction gets applied twice, or dropped and never explained.
+   */
+  private drainDirection(
+    sessionId: string,
+    runId: string,
+    actorId: string,
+  ): string[] {
+    const events = this.eventStore.list(sessionId);
+    const applied = new Set(
+      events
+        .filter((event) => event.type === "direction.applied")
+        .map((event) =>
+          event.type === "direction.applied" ? event.payload.directionEventId : "",
+        ),
+    );
+
+    const pending = events.filter(
+      (event) =>
+        event.type === "direction.submitted" && !applied.has(event.eventId),
+    );
+
+    for (const event of pending) {
+      if (event.type !== "direction.submitted") {
+        continue;
+      }
+
+      this.eventStore.append({
+        sessionId,
+        actorId,
+        type: "direction.applied",
+        payload: {
+          runId,
+          directionEventId: event.eventId,
+          direction: event.payload.direction,
+        },
+      });
+    }
+
+    return pending.flatMap((event) =>
+      event.type === "direction.submitted" ? [event.payload.direction] : [],
+    );
+  }
+
   async run(input: AgentRunInput): Promise<AgentRunResult> {
     const modelSelection = this.router.select({ goal: input.goal });
     const adapter = this.adapters.find((candidate) =>
@@ -259,9 +307,22 @@ export class AgentRunner {
         return failRun(`The run ${stopped}.`);
       }
 
+      // Direction is folded in here, between turns, and nowhere else. V1 is
+      // explicit that a human does not mutate a prompt that is already
+      // executing: the runtime finishes the current atomic tool action first,
+      // and this is that boundary. Anything submitted mid-call waits for it.
+      //
+      // The log is what says which direction is outstanding, rather than a
+      // queue held beside it. Two places tracking the same thing is how a
+      // direction gets applied twice or silently dropped.
+      const pending = this.drainDirection(input.sessionId, run.id, input.actorId);
+      const steered = pending.length === 0
+        ? input.goal
+        : `${input.goal}\n\nDirection from the session, applied at this turn:\n${pending.map((line) => `- ${line}`).join("\n")}`;
+
       const response = await adapter.complete({
         history: this.history,
-        goal: input.goal,
+        goal: steered,
         toolExchanges,
       });
 
