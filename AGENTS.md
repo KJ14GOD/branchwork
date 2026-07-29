@@ -50,6 +50,9 @@ Nothing below is loaded automatically. Go read it when the task calls for it.
 - `V1_README.md` — the V1 scope contract, including what is *explicitly
   excluded*, the security boundary, and the build order. Read before proposing
   work that widens scope.
+- `FLEET.md` — how several agents run on this repo at once: worktree per slice,
+  the lock on `packages/contracts`, and which slices can run beside each other.
+  Read before starting parallel work.
 
 ## Process
 

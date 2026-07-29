@@ -23,11 +23,25 @@
       "Bash(pkill -f Electron)",
       "Bash(./scripts/gate.sh)",
       "Bash(./scripts/fleet.sh *)",
+      "Bash(./scripts/contract-lock.sh *)",
       "Bash(git worktree add *)",
       "Bash(git worktree remove *)"
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/contract-guard.sh",
+            "timeout": 10,
+            "statusMessage": "Checking the contract lock"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
