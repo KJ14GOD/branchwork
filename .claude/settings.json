@@ -20,7 +20,28 @@
       "Bash(pkill -f src/worker.ts)",
       "Bash(pkill -f src/demo.ts)",
       "Bash(pkill -f vite)",
-      "Bash(pkill -f Electron)"
+      "Bash(pkill -f Electron)",
+      "Bash(./scripts/gate.sh)",
+      "Bash(./scripts/fleet.sh *)",
+      "Bash(git worktree add *)",
+      "Bash(git worktree remove *)"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/stop-gate.sh",
+            "timeout": 180,
+            "statusMessage": "Checking the gate"
+          }
+        ]
+      }
+    ]
+  },
+  "worktree": {
+    "baseRef": "head"
   }
 }
