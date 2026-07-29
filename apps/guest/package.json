@@ -2,5 +2,24 @@
   "name": "@novus/guest",
   "version": "0.0.0",
   "private": true,
-  "description": "The browser client for guests joining a Novus session."
+  "type": "module",
+  "description": "The browser client for guests joining a Novus session.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --project tsconfig.json",
+    "test": "node --experimental-strip-types --test src/timeline.test.ts"
+  },
+  "dependencies": {
+    "@novus/contracts": "workspace:*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "vite": "^7.1.9"
+  }
 }
