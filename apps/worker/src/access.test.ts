@@ -4,6 +4,7 @@ import test from "node:test";
 import { InMemorySessionEventStore } from "@novus/session-service";
 
 import { FixedModelRouter } from "./model.ts";
+import { ParticipantRegistry } from "./participants.ts";
 import { SessionRegistry } from "./session-registry.ts";
 
 import { isAllowedOrigin, mintAccessToken, offeredToken, tokensMatch } from "./access.ts";
@@ -256,5 +257,144 @@ test("a hostile page cannot POST a turn even holding the token", async () => {
     });
 
     assert.equal(response.status, 403);
+  });
+});
+
+/**
+ * Roles, enforced on the routes rather than merely declared.
+ *
+ * The registry's own tests prove the capability table is right. These prove the
+ * server consults it — which is the part that was decorative until now, because
+ * every caller held the same token and the server had no way to tell them apart.
+ */
+const withParticipants = async (
+  run: (context: {
+    url: string;
+    ownerToken: string;
+    add: (role: "editor" | "reviewer" | "viewer") => string;
+  }) => Promise<void>,
+): Promise<void> => {
+  const store = new InMemorySessionEventStore();
+  const sessions = new SessionRegistry(
+    store,
+    new FixedModelRouter({ provider: "anthropic", model: "test" }),
+    [],
+  );
+  const participants = new ParticipantRegistry();
+  const ownerToken = "owner-token-abcdefghijklmnop";
+
+  participants.add(
+    { sessionId: "host", name: "Host", kind: "human", role: "owner" },
+    ownerToken,
+  );
+
+  const server = await startEventServer(store, {
+    port: 0,
+    token: ownerToken,
+    sessions,
+    participants,
+  });
+
+  try {
+    await run({
+      url: server.url,
+      ownerToken,
+      add: (role) =>
+        participants.add({
+          sessionId: "host",
+          name: role,
+          kind: "human",
+          role,
+        }).token,
+    });
+  } finally {
+    await server.close();
+  }
+};
+
+test("a viewer may watch and may not steer", async () => {
+  await withParticipants(async ({ url, add }) => {
+    const viewer = add("viewer");
+
+    const watching = await fetch(`${url}/events?session=s1&token=${viewer}`);
+    assert.equal(watching.status, 200);
+    await watching.body?.cancel();
+
+    const steering = await fetch(`${url}/sessions/any/turns`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${viewer}`,
+      },
+      body: JSON.stringify({ goal: "do something" }),
+    });
+
+    // 403 and not 401: the token is valid and the person is in the session.
+    // What they are is what disqualifies them.
+    assert.equal(steering.status, 403);
+  });
+});
+
+test("a reviewer may direct but may not steer", async () => {
+  await withParticipants(async ({ url, add }) => {
+    const reviewer = add("reviewer");
+
+    const steering = await fetch(`${url}/sessions/any/turns`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${reviewer}`,
+      },
+      body: JSON.stringify({ goal: "take over the run" }),
+    });
+    assert.equal(steering.status, 403);
+
+    // V1's reviewer comments, evaluates and approves without executing. The
+    // 404 is the session id, not the permission — the capability check passed.
+    const directing = await fetch(`${url}/sessions/any/direction`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${reviewer}`,
+      },
+      body: JSON.stringify({ goal: "do not change the token schema" }),
+    });
+    assert.notEqual(directing.status, 403);
+  });
+});
+
+test("only the owner can invite", async () => {
+  await withParticipants(async ({ url, ownerToken, add }) => {
+    const editor = add("editor");
+
+    const refused = await fetch(`${url}/sessions/any/invite`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${editor}`,
+      },
+      body: JSON.stringify({ name: "Someone", role: "viewer" }),
+    });
+    assert.equal(refused.status, 403);
+
+    const allowed = await fetch(`${url}/sessions/any/invite`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${ownerToken}`,
+      },
+      body: JSON.stringify({ name: "Someone", role: "viewer" }),
+    });
+    assert.notEqual(allowed.status, 403);
+  });
+});
+
+test("a token belonging to nobody is refused even when it looks right", async () => {
+  await withParticipants(async ({ url }) => {
+    const response = await fetch(`${url}/events?session=s1`, {
+      headers: { authorization: "Bearer owner-token-abcdefghijklmnoq" },
+    });
+
+    assert.equal(response.status, 401);
   });
 });

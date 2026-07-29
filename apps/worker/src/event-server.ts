@@ -13,6 +13,12 @@ import {
 import type { SessionEventStore } from "@novus/session-service";
 
 import { isAllowedOrigin, offeredToken, tokensMatch } from "./access.ts";
+import {
+  roleCan,
+  type Capability,
+  type Membership,
+  type ParticipantRegistry,
+} from "./participants.ts";
 import { createRedactor, type Redactor } from "./redaction.ts";
 import type { Session, SessionRegistry } from "./session-registry.ts";
 
@@ -35,6 +41,15 @@ export type EventServerOptions = {
    * already that caller.
    */
   token: string | null;
+  /**
+   * Who holds which token, when the session has more than one person in it.
+   *
+   * Supplied, every request is attributed to a participant and each route
+   * checks a capability rather than mere possession of the host's token.
+   * Omitted, the single `token` above is the whole of access control, which is
+   * the right shape for a worker nobody has been invited to.
+   */
+  participants?: ParticipantRegistry;
 };
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -175,6 +190,7 @@ export const startEventServer = (
   const port = options.port ?? Number(process.env.NOVUS_PORT ?? 4319);
 
   const sessions = options.sessions;
+  const participants = options.participants;
   const token = options.token;
   // Built once, at startup: the snapshot of secret-looking environment values
   // is taken before any run can add to the environment.
@@ -189,6 +205,7 @@ export const startEventServer = (
   });
 
   const handleCommand = async (
+    caller: Membership | null,
     request: IncomingMessage,
     response: ServerResponse,
     pathname: string,
@@ -219,6 +236,97 @@ export const startEventServer = (
         sendJson(response, 400, { error: (error as Error).message });
       }
 
+      return true;
+    }
+
+    const directionMatch = /^\/sessions\/([^/]+)\/direction$/.exec(pathname);
+
+    if (directionMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(directionMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = SubmitTurnRequestSchema.safeParse(
+        await readJsonBody(request),
+      );
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "A non-empty direction is required." });
+        return true;
+      }
+
+      // Recorded, not applied. V1 is explicit that a human does not mutate a
+      // prompt that is already executing: this enters the log now so everyone
+      // sees it was received, and the runtime folds it into the next model turn
+      // at a boundary of its own choosing.
+      const event = store.append({
+        sessionId: session.id,
+        actorId: caller?.participant.id ?? "host",
+        type: "direction.submitted",
+        payload: { runId: session.id, direction: parsed.data.goal },
+      });
+
+      sendJson(response, 202, { accepted: true, eventId: event.eventId });
+      return true;
+    }
+
+    const inviteMatch = /^\/sessions\/([^/]+)\/invite$/.exec(pathname);
+
+    if (inviteMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(inviteMatch[1]!));
+
+      if (!session || !participants) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const body = (await readJsonBody(request)) as {
+        name?: unknown;
+        role?: unknown;
+      };
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      const role = body.role;
+
+      if (name === "" || typeof role !== "string") {
+        sendJson(response, 400, { error: "A name and a role are required." });
+        return true;
+      }
+
+      if (!["editor", "reviewer", "viewer"].includes(role)) {
+        // An owner cannot mint a second owner. Ownership moves by handoff,
+        // which both parties see; minting one would make two people believe
+        // they hold execution authority.
+        sendJson(response, 400, {
+          error:
+            "Invite an editor, reviewer, or viewer. Ownership transfers by handoff, not by invitation.",
+        });
+        return true;
+      }
+
+      const membership = participants.add({
+        sessionId: session.id,
+        name,
+        kind: "human",
+        role: role as "editor" | "reviewer" | "viewer",
+      });
+
+      store.append({
+        sessionId: session.id,
+        actorId: caller?.participant.id ?? "host",
+        type: "participant.joined",
+        payload: { participant: membership.participant },
+      });
+
+      // The token is returned exactly once, here. Nothing stores it anywhere it
+      // can be read back — a registry that could re-issue a credential would be
+      // a way to impersonate whoever holds it.
+      sendJson(response, 201, {
+        participant: membership.participant,
+        token: membership.token,
+      });
       return true;
     }
 
@@ -275,17 +383,55 @@ export const startEventServer = (
 
     // /health is deliberately open: it is how a client discovers the worker is
     // up and what it permits, and it carries nothing about any session.
+    let caller: Membership | null = null;
+
     if (token !== null && url.pathname !== "/health") {
       const offered = offeredToken(request.headers.authorization, url);
 
-      if (!offered || !tokensMatch(token, offered)) {
+      if (!offered) {
         sendJson(response, 401, {
           error:
             "This worker requires an access token. The desktop app supplies it; a guest needs the token from the invite link.",
         });
         return;
       }
+
+      caller = participants?.resolve(offered) ?? null;
+
+      // Falling back to the bare token keeps a worker nobody was invited to
+      // working exactly as before. Once there are participants, a token that
+      // names one is the only way in — an invite that was revoked stops
+      // working rather than degrading to host access.
+      if (caller === null && !tokensMatch(token, offered)) {
+        sendJson(response, 401, {
+          error: "That token does not belong to anyone in this session.",
+        });
+        return;
+      }
     }
+
+    /**
+     * Whether the caller may do this, and a 403 with the reason if not.
+     *
+     * A capability rather than a role name, because the routes should not have
+     * opinions about which roles exist — that belongs in one table, so adding a
+     * role later does not mean auditing every handler.
+     */
+    const refusedFor = (capability: Capability): boolean => {
+      if (caller === null) {
+        return false;
+      }
+
+      if (roleCan(caller.participant.role, capability)) {
+        return false;
+      }
+
+      sendJson(response, 403, {
+        error: `A ${caller.participant.role} cannot ${capability} in this session.`,
+      });
+
+      return true;
+    };
 
     if (url.pathname === "/health") {
       // Carries the host's permission defaults so a client can seed its own
@@ -300,8 +446,24 @@ export const startEventServer = (
       return;
     }
 
+    // What each route asks of a caller. Kept as a table beside the routing
+    // rather than inside each handler, so the answer to "who can do what" is
+    // one thing to read and one thing to change.
+    const required: Capability =
+      url.pathname === "/events" || request.method === "GET"
+        ? "watch"
+        : /^\/sessions\/[^/]+\/direction$/.test(url.pathname)
+          ? "direct"
+          : /^\/sessions\/[^/]+\/invite$/.test(url.pathname)
+            ? "invite"
+            : "steer";
+
+    if (refusedFor(required)) {
+      return;
+    }
+
     if (url.pathname !== "/events") {
-      void handleCommand(request, response, url.pathname)
+      void handleCommand(caller, request, response, url.pathname)
         .then((handled) => {
           if (!handled) {
             response.writeHead(404).end();

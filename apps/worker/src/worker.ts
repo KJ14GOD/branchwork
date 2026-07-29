@@ -11,6 +11,7 @@ import { startEventServer } from "./event-server.ts";
 import { FixedModelRouter } from "./model.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { mintAccessToken } from "./access.ts";
+import { ParticipantRegistry } from "./participants.ts";
 import { createRedactor } from "./redaction.ts";
 import { killRunningCommands } from "./tools.ts";
 
@@ -36,6 +37,20 @@ if (pinnedToken !== undefined && pinnedToken.length < 32) {
 }
 
 const accessToken = pinnedToken || mintAccessToken();
+
+// The host is a participant like anyone else, holding the token it already had.
+// Making the owner explicit is what lets every other route ask a question about
+// the caller rather than about mere possession of a secret.
+const participants = new ParticipantRegistry();
+const host = participants.add(
+  {
+    sessionId: "host",
+    name: process.env.NOVUS_HOST_NAME?.trim() || "Host",
+    kind: "human",
+    role: "owner",
+  },
+  accessToken,
+);
 const guestPort = Number(process.env.NOVUS_GUEST_PORT ?? 5274);
 const goal = process.argv.slice(2).join(" ").trim();
 
@@ -142,6 +157,7 @@ let eventServer;
 try {
   eventServer = await startEventServer(eventStore, {
     sessions,
+    participants,
     token: accessToken,
     // Seeded explicitly. The redactor otherwise learns its literals from
     // process.env, which knows the token only when the host pinned NOVUS_TOKEN
