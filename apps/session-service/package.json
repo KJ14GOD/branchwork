@@ -8,10 +8,14 @@
     ".": "./src/session-service.ts"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test src/event-store.test.ts src/session-service.test.ts",
+    "test": "node --experimental-strip-types --test 'src/*.test.ts'",
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
-    "@novus/contracts": "workspace:*"
+    "@novus/contracts": "workspace:*",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
   }
 }
