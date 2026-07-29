@@ -831,15 +831,79 @@ const MAX_DIRECTORY_ENTRIES = 500;
 const MAX_DIFF_CHARS = 48_000;
 const GIT_TIMEOUT_MS = 15_000;
 
+// Configuration that turns reading a repository into running its code.
+//
+// `.git/config` belongs to whoever wrote the repository, and these tools were
+// classified read — meaning they execute with no approval at all. Git will
+// happily honour `diff.external`, a `textconv` filter, or `core.fsmonitor` from
+// that file and run whatever it names. Classifying run_tests as dangerous to
+// avoid trusting a repository to be benign, and then trusting it here, was the
+// mistake; these overrides are what make the read classification true.
+const GIT_CONFIG_OVERRIDES = [
+  "-c", "diff.external=",
+  "-c", "diff.textconv=",
+  "-c", "core.fsmonitor=",
+  "-c", "core.pager=cat",
+  "-c", "core.hooksPath=/dev/null",
+  "-c", "core.quotePath=false",
+];
+
+// Git reads more than the repository's own config. A GIT_DIR or GIT_WORK_TREE
+// inherited from the worker silently points these tools somewhere else, and
+// GIT_EXTERNAL_DIFF is the environment's version of the config above. The
+// secret scrub is inherited too, so anything git does spawn cannot read the
+// provider key out of its environment.
+const gitEnvironment = (): NodeJS.ProcessEnv => {
+  const environment = scrubbedEnvironment();
+
+  for (const name of Object.keys(environment)) {
+    if (name.startsWith("GIT_")) {
+      delete environment[name];
+    }
+  }
+
+  environment["GIT_CONFIG_GLOBAL"] = "/dev/null";
+  environment["GIT_CONFIG_SYSTEM"] = "/dev/null";
+  environment["GIT_TERMINAL_PROMPT"] = "0";
+
+  return environment;
+};
+
 const runGit = (
   repositoryRoot: string,
   args: readonly string[],
 ): Promise<string> =>
-  execFileAsync("git", [...args], {
+  execFileAsync("git", [...GIT_CONFIG_OVERRIDES, ...args], {
     cwd: repositoryRoot,
+    env: gitEnvironment(),
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: 16 * 1024 * 1024,
   }).then(({ stdout }) => stdout);
+
+/**
+ * Refuses to report on a repository larger than the one that was selected.
+ *
+ * Git walks up from the working directory to find its top level, so pointing
+ * Novus at a subdirectory of a checkout would let these tools describe — and
+ * diff — files above the selected root. Every other tool is confined by
+ * resolveInsideRepository; this is the same rule for the one that asks Git
+ * instead of the filesystem.
+ */
+const assertRepositoryRoot = async (repositoryRoot: string): Promise<void> => {
+  const topLevel = (await runGit(repositoryRoot, ["rev-parse", "--show-toplevel"]))
+    .trim();
+
+  if (!topLevel || (await realpath(topLevel)) !== repositoryRoot) {
+    throw new Error(
+      "The selected directory is inside a larger Git repository. Git tools report on the selected repository only, so open its root instead.",
+    );
+  }
+};
+
+// Never diff a file the other tools refuse to read. `git diff` has no notion of
+// a protected path, so an unqualified diff of a tracked .env prints the secrets
+// read_file exists to withhold.
+const PROTECTED_PATHSPECS = [":(exclude).env", ":(exclude).env.*"];
 
 export class ListDirectoryTool implements AgentTool {
   readonly name = "list_directory";
@@ -908,6 +972,7 @@ export class GitStatusTool implements AgentTool {
     let porcelain: string;
 
     try {
+      await assertRepositoryRoot(repositoryRoot);
       porcelain = await runGit(repositoryRoot, [
         "status",
         "--porcelain=v1",
@@ -928,8 +993,11 @@ export class GitStatusTool implements AgentTool {
     const branch =
       branchLine?.replace(/^## /, "").split(/\.\.\.|\s/)[0] ?? null;
 
-    const files = lines
-      .filter((line) => !line.startsWith("##"))
+    const listed = lines.filter((line) => !line.startsWith("##"));
+    const files = listed
+      // An untracked node_modules is tens of thousands of lines, and every one
+      // of them would land in the model's context and the event log.
+      .slice(0, MAX_DIRECTORY_ENTRIES)
       .map((line) => ({
         // Porcelain v1 is a two-character status followed by a space.
         status: line.slice(0, 2).trim() || "?",
@@ -963,22 +1031,34 @@ export class GitDiffTool implements AgentTool {
     }
 
     const repositoryRoot = await realpath(this.repositoryPath);
+    await assertRepositoryRoot(repositoryRoot);
+
     const staged = call.input.staged ?? false;
-    const args = ["diff", "--no-color"];
+    // --no-ext-diff and --no-textconv restate the config overrides as flags.
+    // Belt and braces on the one tool where being wrong runs a program.
+    const args = ["diff", "--no-color", "--no-ext-diff", "--no-textconv"];
 
     if (staged) {
       args.push("--staged");
     }
 
+    args.push("--");
+
     if (call.input.path) {
-      // Resolved through the same guard as every other path, then passed after
+      // Resolved through the same guard as every other path, and passed after
       // `--` so a filename can never be read as an option.
       const { targetPath } = await resolveInsideRepository(
         this.repositoryPath,
         call.input.path,
       );
-      args.push("--", relative(repositoryRoot, targetPath));
+      const requested = relative(repositoryRoot, targetPath);
+
+      // An empty relative path means the repository root, which Git rejects as
+      // a pathspec. "." is what it wants.
+      args.push(requested || ".");
     }
+
+    args.push(...PROTECTED_PATHSPECS);
 
     const diff = await runGit(repositoryRoot, args);
     const filesChanged = (diff.match(/^diff --git /gm) ?? []).length;

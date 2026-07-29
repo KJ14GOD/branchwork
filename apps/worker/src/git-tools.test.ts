@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -179,6 +179,106 @@ test("git_diff separates staged from unstaged", async () => {
 
   assert.equal(unstaged.output.filesChanged, 0);
   assert.equal(staged.output.filesChanged, 1);
+});
+
+test("git_diff does not run a program the repository asked it to", async () => {
+  const root = await gitRepository();
+  const marker = join(root, "EXECUTED");
+
+  await writeFile(
+    join(root, "ext.sh"),
+    `#!/bin/sh\ntouch ${JSON.stringify(marker)}\necho ran\n`,
+    { mode: 0o755 },
+  );
+  // .git/config belongs to whoever wrote the repository. These tools run with
+  // no approval, so honouring this would be arbitrary execution by any repo the
+  // agent is pointed at.
+  await run("git", ["config", "diff.external", join(root, "ext.sh")], {
+    cwd: root,
+  });
+  await writeFile(join(root, "tracked.txt"), "changed\n");
+
+  const result = await new GitDiffTool(root).execute({
+    id: "20",
+    name: "git_diff",
+    input: {},
+  });
+
+  if (result.name !== "git_diff") return assert.fail("wrong result");
+
+  await assert.rejects(() => stat(marker), "the external diff program ran");
+  assert.match(result.output.diff, /^diff --git/m);
+  assert.doesNotMatch(result.output.diff, /ran/);
+});
+
+test("git_status does not run the repository's fsmonitor hook", async () => {
+  const root = await gitRepository();
+  const marker = join(root, "FSMONITOR");
+
+  await writeFile(
+    join(root, "fsm.sh"),
+    `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  await run("git", ["config", "core.fsmonitor", join(root, "fsm.sh")], {
+    cwd: root,
+  });
+
+  await new GitStatusTool(root).execute({
+    id: "21",
+    name: "git_status",
+    input: {},
+  });
+
+  await assert.rejects(() => stat(marker), "the fsmonitor program ran");
+});
+
+test("git_diff never prints the contents of .env", async () => {
+  const root = await gitRepository();
+
+  await writeFile(join(root, ".env"), "SECRET=before\n");
+  await run("git", ["add", "-f", ".env"], { cwd: root });
+  await run("git", ["commit", "-qm", "env"], { cwd: root });
+  await writeFile(join(root, ".env"), "SECRET=after\n");
+  await writeFile(join(root, "tracked.txt"), "changed\n");
+
+  const result = await new GitDiffTool(root).execute({
+    id: "22",
+    name: "git_diff",
+    input: {},
+  });
+
+  if (result.name !== "git_diff") return assert.fail("wrong result");
+
+  // read_file refuses .env; a diff that prints it is the same disclosure by
+  // another route.
+  assert.doesNotMatch(result.output.diff, /SECRET=after/);
+  assert.match(result.output.diff, /tracked\.txt/);
+});
+
+test("git tools refuse a directory inside a larger repository", async () => {
+  const root = await gitRepository();
+  const inner = join(root, "packages", "inner");
+
+  await mkdir(inner, { recursive: true });
+  await writeFile(join(inner, "own.txt"), "inner\n");
+
+  // Git walks up to find its top level, so reporting from here would describe
+  // — and diff — files above the directory that was actually selected.
+  await assert.rejects(
+    () =>
+      new GitDiffTool(inner).execute({ id: "23", name: "git_diff", input: {} }),
+    /inside a larger Git repository/,
+  );
+
+  const status = await new GitStatusTool(inner).execute({
+    id: "24",
+    name: "git_status",
+    input: {},
+  });
+
+  if (status.name !== "git_status") return assert.fail("wrong result");
+  assert.equal(status.output.clean, null);
 });
 
 test("git_diff will not diff a path outside the repository", async () => {
