@@ -419,11 +419,19 @@ Exit condition: a fake worker event appears identically in the host and guest UI
       `run_tests` exist. `git_status`, `git_diff`, `list_directory` do not.
 - [x] State machine and permission checks
 - [x] Streaming execution timeline
-- [ ] Final receipt
+- [x] Final receipt
 
 Exit condition: the agent completes the bug-fix benchmark locally and produces a
-reproducible diff and test receipt. **Not met:** the diff and the test result are
-both reachable now, but nothing assembles them into a receipt.
+reproducible diff and test receipt. **Reachable, unproven:** every part exists —
+patch, test run, and a `receipt.created` event assembled from the run's own
+events. What has not happened is the benchmark itself. The three repeatable
+tasks under *Evaluation* are now the gate on calling Milestone 2 done, and until
+one is run end to end this is a claim about the parts rather than the whole.
+
+The receipt reports files it *patched*. A run that writes through `run_command` —
+codegen, a formatter — changes files the receipt does not list, and the
+"tests ran after the last change" check inherits that blind spot. Closing it
+needs a diff against the base at run end, which belongs with Milestone 4.
 
 Command execution is denied by default and opted into with
 `NOVUS_ALLOW_COMMANDS=1`, kept separate from `NOVUS_ALLOW_WRITES` because
