@@ -31,12 +31,19 @@ forgets to claim it is stopped, not trusted.
 ./scripts/fleet.sh add <slice> "<task>"   cut the worktree and write the brief
 ./scripts/fleet.sh list                   branches, drift from main, dirt, lock
 ./scripts/fleet.sh status                 same, plus run the gate in each slice
+./scripts/fleet.sh tmux                   one window per slice, already cd'd in
 ./scripts/fleet.sh launch <slice>         print the command to drive it yourself
 ./scripts/fleet.sh run <slice> [rounds]   drive it unattended until green
 ./scripts/fleet.sh rm <slice>             tear it down, releasing the lock
 
 ./scripts/contract-lock.sh acquire|release|status|force-release
 ```
+
+`tmux` builds a `novus` session: window 0 is the main repo — the one checkout no
+agent writes to, where you watch status and merge from — and one window per
+slice, each already in its worktree with `claude "$(cat .fleet-task)"` typed but
+**not** sent. Read the brief, press Enter. Re-running attaches rather than
+rebuilding, so it is safe to call again after adding a slice.
 
 `run` uses `--permission-mode acceptEdits`: file edits inside the worktree go
 through, commands still respect `.claude/settings.json`. Override with
@@ -51,6 +58,22 @@ beside it without coordination.
 
 When a slice is denied the lock, the right move is not to wait — it is to build
 the part of the slice that does not touch the boundary, then acquire afterwards.
+
+## Subagents
+
+Four exist, and each answers a question you do not want filling a slice's own
+context. Ask for them by name.
+
+| Agent | When | Answers |
+| --- | --- | --- |
+| `contract-mapper` | Before taking the lock | If this schema changes, what breaks — and is it worth the lock? |
+| `scope-warden` | Before writing a brief | Is this V1, or is the README talking? |
+| `merge-guard` | Before merging | Does this branch violate an invariant? |
+| `Explore` | Any time | Where does X live, without reading the files into this session? |
+
+`contract-mapper` is the one that pays for itself repeatedly: holding the
+boundary is expensive for every other slice, so knowing the full reach of a
+change before you claim it is what keeps the lock held briefly.
 
 ## Merging
 

@@ -170,6 +170,37 @@ $task"
     exit 1
     ;;
 
+  tmux)
+    command -v tmux >/dev/null || { echo "tmux is not installed: brew install tmux" >&2; exit 1; }
+    [ -n "$(slices)" ] || { echo "no slices yet — ./scripts/fleet.sh add <slice> \"<task>\"" >&2; exit 1; }
+
+    session=novus
+    if tmux has-session -t "$session" 2>/dev/null; then
+      echo "attaching to the existing '$session' session"
+    else
+      # Window 0 is the main repo: this is where you watch status and merge from,
+      # and it is deliberately not a slice so there is always one checkout that
+      # no agent is writing to.
+      tmux new-session -d -s "$session" -n main -c "$root"
+      tmux send-keys -t "$session:main" './scripts/fleet.sh status' C-m
+
+      for slice in $(slices); do
+        dir="$fleet/$slice"
+        tmux new-window -t "$session" -n "$slice" -c "$dir"
+        # Pre-typed, not sent: starting several agents is the human's call, and
+        # a slice whose brief has drifted should be read before it runs.
+        tmux send-keys -t "$session:$slice" 'claude "$(cat .fleet-task)"'
+      done
+      tmux select-window -t "$session:main"
+    fi
+
+    if [ -n "${TMUX:-}" ]; then
+      tmux switch-client -t "$session"
+    else
+      tmux attach-session -t "$session"
+    fi
+    ;;
+
   rm)
     slice="${2:-}"
     [ -n "$slice" ] || usage
