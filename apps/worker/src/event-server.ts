@@ -340,6 +340,12 @@ export const startEventServer = (
       "cache-control": "no-cache",
       connection: "keep-alive",
     });
+    // Node holds headers until the first body write, and a session with no
+    // backlog writes nothing until its first event. Without this a client
+    // joining a quiet session is never acknowledged — EventSource does not fire
+    // open, and the guest shows "connecting" until the fifteen-second heartbeat
+    // flushes the response, which is indistinguishable from a dead worker.
+    response.flushHeaders();
 
     const unsubscribe = streamSession(
       store,
