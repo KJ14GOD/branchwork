@@ -208,6 +208,11 @@ if (relayUrl && relayToken) {
   });
 
   console.log(`relay   publishing to ${relayUrl}`);
+  // The invite a teammate elsewhere can actually use. The loopback one below
+  // only works for somebody sitting at this machine.
+  console.log(
+    `invite  http://127.0.0.1:${guestPort}/?relay=${encodeURIComponent(relayUrl)}&token=<their token from POST /sessions/:id/invite>`,
+  );
 } else if (relayUrl || relayToken) {
   console.error(
     "relay   NOVUS_RELAY_URL and NOVUS_RELAY_TOKEN must both be set; publishing is off",

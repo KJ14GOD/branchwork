@@ -34,11 +34,12 @@ pnpm typecheck && pnpm test && git diff --check
   instead and must be at least 32 characters. Requests also have to come from a
   loopback origin or no origin at all, so a page on the open internet is refused
   before its token is even read.
-- **The guest talks to the worker, not to a session service.** There is still no
-  relay or presence, so `apps/guest` is a second browser on the host machine
-  reading `/events` directly — but it now needs the token. Start it with
-  `pnpm --filter @novus/guest dev` and open the invite URL the worker printed;
-  `?session=<id>` alone gets a 401.
+- **The guest reads from whichever it is pointed at.** With `?relay=` in the URL
+  it reads the session from the relay and never contacts the worker, which is
+  what lets a teammate be on another machine. Without it, it talks to the worker
+  over loopback as before — a host watching their own run should not need a
+  relay standing up. Either way `?token=` is required; `?session=<id>` alone
+  gets a 401. A relay off this machine must be `wss://`.
 - Ports: worker `4319` (`NOVUS_PORT`), desktop Vite `5273`, guest Vite `5274`. All
   loopback-only.
 - **Relay publishing is opt-in and outbound.** Set both `NOVUS_RELAY_URL` and

@@ -87,3 +87,66 @@ export const resolveEndpoint = (raw: string): EndpointCheck => {
 
   return { kind: "ok", endpoint: url.origin };
 };
+
+/**
+ * Where a guest may reach a relay, which is a different question.
+ *
+ * The rule above exists because the worker is a loopback service: an address
+ * that is not loopback is not a worker, so refusing it costs nothing. A relay
+ * is the opposite — the entire point is that it sits somewhere both the host
+ * and a teammate can reach, so the loopback rule would refuse every real one.
+ *
+ * The concern does not go away with it. An invite link still chooses the host
+ * this client talks to, and a fabricated session drawn under a Novus badge is
+ * still worth refusing. What replaces the loopback rule is transport security:
+ * anything not on this machine must be `wss://`, so an invite cannot quietly
+ * point a teammate at a plaintext socket that anyone on the path can read or
+ * rewrite. Plain `ws://` stays legal for loopback, because that is a developer
+ * running the relay locally and there is no path to be on.
+ */
+export const resolveRelay = (raw: string): EndpointCheck => {
+  const trimmed = raw.trim();
+
+  if (trimmed === "") {
+    return {
+      kind: "refused",
+      reason: "No relay address was given. An invite link carries one.",
+    };
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return {
+      kind: "refused",
+      reason: `"${trimmed}" is not a URL, so there is nothing to connect to.`,
+    };
+  }
+
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    return {
+      kind: "refused",
+      reason: `A relay speaks WebSocket, and "${trimmed}" is ${url.protocol.replace(":", "")}.`,
+    };
+  }
+
+  if (url.username !== "" || url.password !== "") {
+    // `wss://relay.example@evil.example` resolves to evil.example. The part
+    // before the @ is not the host, and it is written to look like one.
+    return {
+      kind: "refused",
+      reason: `"${trimmed}" hides its real host behind credentials, which is how a link is made to look like somewhere it is not.`,
+    };
+  }
+
+  if (url.protocol === "ws:" && !LOOPBACK_HOSTS.has(url.hostname)) {
+    return {
+      kind: "refused",
+      reason: `"${trimmed}" is an unencrypted connection to ${url.hostname}. A relay off this machine must be wss:// — anyone on the path can otherwise read the session or rewrite it.`,
+    };
+  }
+
+  return { kind: "ok", endpoint: url.origin };
+};

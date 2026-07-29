@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { resolveEndpoint } from "./endpoint.ts";
+import { resolveEndpoint, resolveRelay } from "./endpoint.ts";
 import { describeConnection } from "./timeline.ts";
 import { fetchSessions } from "./worker-api.ts";
 
@@ -112,4 +112,35 @@ test("a refused endpoint ends in a stated failure, not a stuck locating", () => 
   assert.notEqual(stopped.label, locating.label);
   assert.match(stopped.emptyTimeline, /evil\.example is not this machine/);
   assert.match(stopped.emptyTimeline, /not because the run is quiet/);
+});
+
+test("a relay may be remote, but only over an encrypted connection", () => {
+  // The loopback rule is right for a worker and would refuse every real relay,
+  // which is the whole point of having one.
+  assert.equal(resolveRelay("wss://relay.example.com").kind, "ok");
+  assert.equal(resolveRelay("ws://127.0.0.1:4400").kind, "ok");
+  assert.equal(resolveRelay("ws://localhost:4400").kind, "ok");
+
+  // Plaintext off this machine is refused: an invite must not be able to point
+  // a teammate at a socket anyone on the path can read or rewrite.
+  const plaintext = resolveRelay("ws://relay.example.com");
+  assert.equal(plaintext.kind, "refused");
+  assert.match(plaintext.kind === "refused" ? plaintext.reason : "", /wss:\/\//);
+});
+
+test("a relay address cannot hide its host behind credentials", () => {
+  // Resolves to evil.example. The part before the @ is written to look like
+  // the host and is not.
+  const disguised = resolveRelay("wss://relay.example.com@evil.example");
+  assert.equal(disguised.kind, "refused");
+  assert.match(
+    disguised.kind === "refused" ? disguised.reason : "",
+    /hides its real host/,
+  );
+});
+
+test("a relay address must speak WebSocket", () => {
+  assert.equal(resolveRelay("https://relay.example.com").kind, "refused");
+  assert.equal(resolveRelay("nonsense").kind, "refused");
+  assert.equal(resolveRelay("").kind, "refused");
 });

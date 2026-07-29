@@ -4,6 +4,7 @@ import { SessionEventSchema, type SessionEvent } from "@novus/contracts";
 import type { SessionSummary } from "@novus/contracts/protocol";
 
 import { resolveEndpoint } from "./endpoint.ts";
+import { watchRelay } from "./relay-client.ts";
 import {
   mergeEvent,
   resumeSequence,
@@ -38,6 +39,15 @@ export const useGuestSession = (
   sessionId: string | null,
   /** From the invite link. The worker refuses a guest without it. */
   token: string | null,
+  /**
+   * A relay, when the invite carries one.
+   *
+   * Present, the guest reads the session from there and never contacts the
+   * worker — which is what lets a teammate be somewhere else. Absent, it talks
+   * to the worker over loopback exactly as before, because a host watching
+   * their own run should not need a relay standing up to do it.
+   */
+  relay: string | null = null,
 ): GuestSession => {
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [connection, setConnection] = useState<GuestConnection>({
@@ -68,6 +78,36 @@ export const useGuestSession = (
       setConnection({ kind: "idle" });
 
       return;
+    }
+
+    if (relay !== null && token !== null) {
+      // The relay path is deliberately simpler than the worker path: there is
+      // no session list to pre-check, because the relay only ever serves the
+      // session its token is good for. A token that names nothing is refused
+      // during the handshake rather than after a lookup.
+      streamed.current = sessionId;
+      setConnection({ kind: "connecting" });
+
+      const connection = watchRelay(
+        { relay, token, since: resumeSequence(held.current) },
+        {
+          onOpen: () => {
+            failures.current = 0;
+            setConnection({ kind: "live", blind: true });
+          },
+          onEvent: (event) => {
+            held.current = mergeEvent(held.current, event);
+            setEvents(held.current);
+          },
+          onRefused: (reason) => setConnection({ kind: "stopped", reason }),
+          onClosed: (reason) =>
+            setConnection((current) =>
+              current.kind === "stopped" ? current : { kind: "stopped", reason },
+            ),
+        },
+      );
+
+      return () => connection.close();
     }
 
     // Before anything else, because everything below assumes the address is
@@ -254,7 +294,7 @@ export const useGuestSession = (
       clearTimeout(timer);
       source?.close();
     };
-  }, [endpoint, sessionId, attempt]);
+  }, [endpoint, sessionId, attempt, token, relay]);
 
   return { events, connection, session, known, retry };
 };
