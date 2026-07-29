@@ -12,6 +12,7 @@
 #   ./scripts/fleet.sh integrate [slice...]   gate the slices merged together
 #   ./scripts/fleet.sh launch <slice>         print the command to drive it
 #   ./scripts/fleet.sh run <slice> [rounds]   drive it unattended until green
+#   ./scripts/fleet.sh merge <slice>          merge into main, gated both sides
 #   ./scripts/fleet.sh rm <slice>             tear one down
 #
 # packages/contracts is the bottleneck: exactly one slice may own it at a time.
@@ -20,7 +21,18 @@
 
 set -uo pipefail
 
-root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+# Anchor to the main worktree, never to whichever one the caller is standing in.
+# Deriving the fleet directory from the current root means running this from
+# inside a slice looks for ../novus-fleet relative to that slice — a path that
+# does not exist — and reports an empty fleet instead of failing. A wrong answer
+# that looks like a valid one is worse than an error, and the same mistake makes
+# `merge` a silent no-op because a slice is already up to date with itself.
+#
+# The first entry of `git worktree list` is the main worktree, by definition and
+# from anywhere — which is exactly the question being asked here.
+root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" worktree list --porcelain |
+  head -1 | sed 's|^worktree ||')"
+[ -n "$root" ] || { echo "not inside a Git repository" >&2; exit 1; }
 fleet="$(dirname "$root")/novus-fleet"
 cmd="${1:-list}"
 
@@ -263,6 +275,48 @@ $task"
     else
       tmux attach-session -t "$session"
     fi
+    ;;
+
+  merge)
+    # Running `git merge fleet/x` while standing in fleet/x's own worktree
+    # reports "Already up to date" and changes nothing — the branch is of course
+    # up to date with itself. It looks like a successful merge. This does the
+    # merge in the main checkout regardless of where it was invoked from, and
+    # gates before and after, because a slice that was green alone can still be
+    # red once it meets main.
+    slice="${2:-}"
+    [ -n "$slice" ] || usage
+    branch="fleet/$slice"
+
+    git -C "$root" rev-parse --verify --quiet "$branch" >/dev/null || {
+      echo "no such branch: $branch" >&2; exit 1; }
+
+    if [ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
+      echo "main has uncommitted changes — commit or stash before merging." >&2
+      exit 1
+    fi
+
+    dir="$fleet/$slice"
+    if [ -d "$dir" ] && ! (cd "$dir" && ./scripts/gate.sh >/dev/null 2>&1); then
+      echo "$slice is not green on its own — fix it there first." >&2
+      exit 1
+    fi
+
+    git -C "$root" merge --no-ff "$branch" || {
+      echo "merge stopped. Resolve in $root, or 'git -C $root merge --abort'." >&2
+      exit 1; }
+
+    if (cd "$root" && ./scripts/gate.sh); then
+      echo
+      echo "merged $slice · main is green"
+      echo "tear it down with: ./scripts/fleet.sh rm $slice"
+      exit 0
+    fi
+
+    echo >&2
+    echo "Green alone, red merged. Main is left at the merge so you can see it;" >&2
+    echo "'git -C $root reset --hard HEAD~1' undoes it." >&2
+    exit 1
     ;;
 
   rm)
