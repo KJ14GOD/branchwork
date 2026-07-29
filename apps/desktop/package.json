@@ -9,8 +9,10 @@
     "dev": "vite",
     "app": "vite",
     "build": "vite build",
+    "start": "electron .",
     "preview": "vite preview",
-    "typecheck": "tsc --project tsconfig.json"
+    "typecheck": "tsc --project tsconfig.json",
+    "test": "node --experimental-strip-types --test 'electron/*.test.ts'"
   },
   "dependencies": {
     "@novus/contracts": "workspace:*",
