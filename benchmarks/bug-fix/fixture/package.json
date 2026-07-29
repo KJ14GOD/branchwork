@@ -1,0 +1,10 @@
+{
+  "name": "throttle-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A token bucket with one real bug in it. The bug-fix benchmark fixture.",
+  "scripts": {
+    "test": "node --test 'tests/*.test.js'"
+  }
+}

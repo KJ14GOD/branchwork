@@ -41,7 +41,7 @@ no presence, no roles, and nothing a guest can do but watch.
 
 That asymmetry is the risk this document exists to prevent, and it grows on its
 own: harness work is legible and satisfying, so it keeps getting picked up while
-the shared-control half stays theoretical. Two concrete rules follow from it.
+the shared-control half stays theoretical. Three concrete rules follow from it.
 
 - ~~**The agent cannot yet verify its own work.**~~ Fixed 2026-07-29:
   `run_command` and `run_tests` exist, are `dangerous` class, and are opted into
@@ -53,6 +53,14 @@ the shared-control half stays theoretical. Two concrete rules follow from it.
   sequence numbers. What still does not survive a restart is the *session* — the
   worker does not read prior sessions back on start-up, so the history is
   durable and nothing yet reopens it. That reader is Milestone 4's to build.
+- ~~**Nothing has ever been benchmarked.**~~ Fixed 2026-07-29: the bug-fix task
+  under *Evaluation* now exists as a fixture, a runner, and a scorer, and it has
+  been run against the real model once. It passed. That is the harness half
+  moving from asserted to measured, and it does not move the multiplayer half at
+  all — the other two evaluation tasks are unwritten, and the shared and forked
+  run configurations the same section asks for cannot be run until Milestones 3
+  and 4 exist. See Milestone 2's exit condition for exactly what the one run
+  does and does not establish.
 
 Before starting anything from the roadmap in `README.md`, check it against this
 section. Work that widens the harness while multiplayer stays at 54 lines is
@@ -379,9 +387,19 @@ Potentially sensitive values are redacted before events leave the worker:
 V1 needs three repeatable benchmark tasks:
 
 1. **Bug fix:** a repository with a failing test and a hidden regression test.
+   Built. `benchmarks/bug-fix/`, run with `./scripts/benchmark.sh`, scored by
+   `apps/worker/src/benchmark.ts`.
 2. **Small feature:** a clear request requiring changes across several files.
+   Not built.
 3. **Repository reasoning:** a task where the obvious local change is wrong
-   without understanding a dependency elsewhere in the repository.
+   without understanding a dependency elsewhere in the repository. Not built.
+
+A benchmark fixture is committed and never run in place. The runner copies it to
+a scratch Git repository under the system temporary directory, and that copy is
+the only thing writes and commands are enabled against — the runner refuses to
+proceed against a path it did not create there, because enabling both
+permissions is only defensible for a directory that is disposable by
+construction.
 
 For each benchmark, run:
 
@@ -403,6 +421,12 @@ Record:
 V1 is promising when multiplayer improves decision quality or human coordination
 without making every small task slower.
 
+Of that grid — three tasks by three configurations — one cell has been filled:
+the bug-fix task, run privately, once, on 2026-07-29. It passed. The two shared
+configurations are not blocked on writing more benchmarks; they are blocked on
+Milestones 3 and 4, which is the same asymmetry *Where we actually are* names
+at the top of this document.
+
 ## Build order
 
 ### Milestone 1 — foundation
@@ -422,19 +446,52 @@ Exit condition: a fake worker event appears identically in the host and guest UI
 - [x] Repository selection
 - [x] Model adapter and BYOK credential storage
 - [~] Context assembly — goal plus prior turns; no repository context yet
-- [~] Native read/search/patch/command/Git/test tools — `read_file`,
-      `search_repository`, `propose_patch`, `apply_patch`, `run_command`,
-      `run_tests` exist. `git_status`, `git_diff`, `list_directory` do not.
+- [x] Native read/search/patch/command/Git/test tools — all nine exist and are
+      wired into every session. The live benchmark run below reached for five of
+      them unprompted.
 - [x] State machine and permission checks
 - [x] Streaming execution timeline
 - [x] Final receipt
 
 Exit condition: the agent completes the bug-fix benchmark locally and produces a
-reproducible diff and test receipt. **Reachable, unproven:** every part exists —
-patch, test run, and a `receipt.created` event assembled from the run's own
-events. What has not happened is the benchmark itself. The three repeatable
-tasks under *Evaluation* are now the gate on calling Milestone 2 done, and until
-one is run end to end this is a claim about the parts rather than the whole.
+reproducible diff and test receipt. **Met 2026-07-29, once.** The benchmark is
+`benchmarks/bug-fix/`: a token bucket whose refill accumulator is reset to *now*
+instead of advanced by the intervals it credited, so a caller polling faster
+than the refill interval destroys its own credit a fraction at a time and starves
+forever. `./scripts/benchmark.sh --live` copies that fixture to a scratch Git
+repository, hands the agent a goal, and scores what comes back.
+
+The live run, against `anthropic/claude-opus-5`: eight model calls, seven tool
+calls, 40,996 in / 3,443 out, 62s. It read the module, listed the directory,
+read the README and the failing test, proposed one patch, applied it, and ran
+the suite. It identified the cause correctly — that the discreteness was
+intended and the bookkeeping was the bug — fixed it by advancing `lastRefillAt`
+by `earned * intervalMs`, and reported what the suite actually said. The receipt
+cites base `667b1f53`, one file changed (+9/-3), one test run that followed the
+final change, and two approvals.
+
+What makes that a result rather than a self-report is the scoring. The runner
+re-runs the fixture's own suite itself rather than believing the `run_tests`
+observation the agent saw, and then runs a hidden regression test that is not in
+the fixture, is not named by its test script, and is copied in only after the
+agent has stopped. The hidden test uses different intervals and refill rates than
+the visible one and pins the properties the visible suite only implies, so
+deleting the assertion, special-casing the failing input, or replacing discrete
+refill with a continuous trickle all score as failures. The scorer is itself
+tested against an agent that cheats — it neuters the failing assertion, `npm test`
+goes green, and the benchmark returns FAIL naming both the modified test file and
+the hidden test.
+
+What this does not establish. One run is an existence proof, not a rate: nothing
+here says how often the agent succeeds, and the fixture is one small
+single-file bug rather than a repository anyone works in. The other two tasks
+under *Evaluation* — small feature, repository reasoning — do not exist. Nor do
+two of the three run configurations that section asks for; a shared run with a
+human intervention and two forked attempts compared are Milestone 3 and 4 work,
+so what has been measured is the private leg alone. The deterministic variant
+runs in the gate and keeps the *harness* path proven without a provider call,
+but it proves the harness carries a fix, not that a model finds one, and no
+count of green gates substitutes for the live run above.
 
 The receipt reports files it *patched*. A run that writes through `run_command` —
 codegen, a formatter — changes files the receipt does not list, and the
