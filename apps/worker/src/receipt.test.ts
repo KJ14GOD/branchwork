@@ -13,7 +13,10 @@ const USAGE = {
   modelCalls: 3,
   callsMissingUsage: 0,
 };
-const BASE = { revision: null, dirty: false };
+const BASE: { revision: string | null; dirty: boolean | null } = {
+  revision: null,
+  dirty: false,
+};
 
 const storeWithRun = (): InMemorySessionEventStore => {
   const store = new InMemorySessionEventStore();
@@ -321,6 +324,22 @@ test("a denial names the tool that was refused", () => {
   // "denied" alone loses the one fact a reviewer needs: denied *what*.
   assert.equal(receipt.toolCalls[0]?.name, "run_command");
   assert.equal(receipt.toolCalls[0]?.outcome, "denied");
+});
+
+test("an undeterminable tree is unknown, not clean", () => {
+  const store = storeWithRun();
+  applyPatch(store, "src/auth.ts");
+  complete(store);
+
+  // Reporting a failed check as clean would make the maximally dirty
+  // repository — the one whose status output could not be read — look tidiest.
+  const receipt = buildReceipt(store.list(SESSION), RUN, {
+    base: { revision: "abc1234def", dirty: null },
+    usage: USAGE,
+  });
+
+  assert.ok(receipt);
+  assert.equal(receipt.base.dirty, null);
 });
 
 test("a run that has not finished has no receipt", () => {

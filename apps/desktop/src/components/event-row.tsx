@@ -253,7 +253,11 @@ export const EventRow = ({
               <span className="event__type">
                 {" "}
                 · base {receipt.base.revision.slice(0, 8)}
-                {receipt.base.dirty ? " + uncommitted" : ""}
+                {receipt.base.dirty === true
+                  ? " + uncommitted"
+                  : receipt.base.dirty === null
+                    ? " + unknown state"
+                    : ""}
               </span>
             ) : null}
           </span>

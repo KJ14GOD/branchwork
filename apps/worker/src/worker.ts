@@ -77,7 +77,7 @@ eventStore.subscribe((event) => {
         Math.round(receipt.elapsedMs / 100) / 10
       }s${
         receipt.base.revision
-          ? ` · base ${receipt.base.revision.slice(0, 8)}${receipt.base.dirty ? " + uncommitted" : ""}`
+          ? ` · base ${receipt.base.revision.slice(0, 8)}${receipt.base.dirty === true ? " + uncommitted" : receipt.base.dirty === null ? " + unknown state" : ""}`
           : ""
       }`,
     );

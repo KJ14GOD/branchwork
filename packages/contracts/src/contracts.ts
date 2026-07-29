@@ -256,7 +256,12 @@ export const RunReceiptSchema = z.object({
     // A revision alone claims more reproducibility than it can deliver. An
     // uncommitted tree means the base is that commit *plus* changes nobody
     // recorded, and a reviewer has to know which of the two they are looking at.
-    dirty: z.boolean(),
+    //
+    // Null when it could not be determined. `false` has to mean "checked, and
+    // clean" — reporting a failed check as clean would make the maximally dirty
+    // repository, the one whose status output was too large to read, look like
+    // the tidiest.
+    dirty: z.boolean().nullable(),
   }),
   startedAt: TimestampSchema,
   finishedAt: TimestampSchema,
@@ -284,6 +289,17 @@ export const RunReceiptSchema = z.object({
   // One entry per file, not per patch. Two patches to the same file are one
   // changed file, and counting them twice inflates the headline number that is
   // the first thing anyone reads.
+  //
+  // Covers apply_patch only. A run that writes through run_command — codegen, a
+  // formatter, `sed -i` — changed files that are not listed here, and the event
+  // log records the command rather than its effect. Closing that gap needs a
+  // diff against `base` at the end of the run, which is Milestone 4 work; until
+  // then this is the set of *patched* files, not the set of changed ones.
+  //
+  // additions and deletions are summed across patches to the same file, so a
+  // later patch rewriting lines an earlier one added is counted in both. The
+  // `patches` count sits beside them so the numbers cannot be mistaken for a
+  // net diff against base.
   filesChanged: z.array(
     z.object({
       path: z.string().min(1),
@@ -310,6 +326,9 @@ export const RunReceiptSchema = z.object({
    * this receipt is attached to, and the flat lists above cannot show that on
    * their own. Null when the run has no tests or no changes, where the question
    * does not arise.
+   *
+   * Inherits the limit above: it compares against the last *patch*, so a file
+   * written by run_command after the tests ran will not make this false.
    */
   testsFollowedFinalChange: z.boolean().nullable(),
   approvals: z.array(

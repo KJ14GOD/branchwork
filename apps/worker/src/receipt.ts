@@ -13,7 +13,7 @@ export type ReceiptUsage = {
 
 export type RepositoryBase = {
   revision: string | null;
-  dirty: boolean;
+  dirty: boolean | null;
 };
 
 export type ReceiptContext = {

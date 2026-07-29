@@ -132,7 +132,12 @@ export class AgentRunner {
       modelCalls: 0,
       callsMissingUsage: 0,
     };
-    const base = await this.readBase();
+    // Reading the base is reporting, not execution: a run that has already
+    // emitted run.started must not die because git was unavailable.
+    const base = await this.readBase().catch(() => ({
+      revision: null,
+      dirty: null,
+    }));
 
     // Emitted after the terminal event, so the receipt can read it back and
     // report how the run actually ended rather than how it was expected to.
@@ -157,7 +162,18 @@ export class AgentRunner {
           });
         }
       } catch (error) {
-        console.error(`receipt not produced: ${(error as Error).message}`);
+        // Say so where the run is. A receipt that silently stops being produced
+        // is indistinguishable from one that was never wanted, and stderr on
+        // the host is not somewhere a reviewer of the session will look.
+        this.eventStore.append({
+          sessionId: input.sessionId,
+          actorId: input.actorId,
+          type: "run.progress",
+          payload: {
+            runId: run.id,
+            message: `No receipt was produced: ${(error as Error).message}`,
+          },
+        });
       }
     };
 

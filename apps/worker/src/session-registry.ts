@@ -36,20 +36,30 @@ const run = promisify(execFile);
  */
 const readRepositoryBase = async (
   repositoryPath: string,
-): Promise<{ revision: string | null; dirty: boolean }> => {
-  try {
-    const [head, status] = await Promise.all([
-      run("git", ["rev-parse", "HEAD"], { cwd: repositoryPath }),
-      run("git", ["status", "--porcelain"], { cwd: repositoryPath }),
-    ]);
+): Promise<{ revision: string | null; dirty: boolean | null }> => {
+  // Bounded and separately caught. This runs after run.started is emitted, in
+  // the critical path of every run, so a git call that stalls on a large repo
+  // or a network filesystem would leave the UI showing a run that never
+  // continues — and a rejection here would end a run that had already begun.
+  const git = (args: string[]) =>
+    run("git", args, {
+      cwd: repositoryPath,
+      timeout: 5_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
 
-    return {
-      revision: head.stdout.trim() || null,
-      dirty: status.stdout.trim().length > 0,
-    };
-  } catch {
-    return { revision: null, dirty: false };
-  }
+  const revision = await git(["rev-parse", "HEAD"])
+    .then(({ stdout }) => stdout.trim() || null)
+    .catch(() => null);
+
+  // Null, not false. A failed check reported as clean would make the maximally
+  // dirty repository — the one whose status output was too large to read — look
+  // like the tidiest one.
+  const dirty = await git(["status", "--porcelain"])
+    .then(({ stdout }) => stdout.trim().length > 0)
+    .catch(() => null);
+
+  return { revision, dirty };
 };
 
 export type HostDefaults = {
