@@ -49,11 +49,11 @@ const ARRIVAL_TIMEOUT_MS = 5_000;
 /**
  * A minimal SSE client.
  *
- * Deliberately does not await the response before returning. The worker never
- * calls `flushHeaders`, so a connection to a session with nothing to send is
- * not acknowledged until something is written to it — awaiting here would
- * deadlock every test that connects before it appends. The last test in this
- * file is about exactly that.
+ * Deliberately does not await the response before returning. Connecting and
+ * then appending is the ordinary shape of these tests, and awaiting the
+ * response first would serialise the two. The worker now flushes its headers
+ * immediately, so a connection is acknowledged before anything is written —
+ * the last test in this file is what holds that.
  *
  * Frames are split on the blank line rather than counted, because a heartbeat
  * and the `unreadable` notice are also frames and neither carries data. A test
@@ -352,41 +352,42 @@ test("resuming past the end of the log delivers nothing until the log arrives th
 });
 
 /**
- * A gap, recorded as a test because it is cheap to state and expensive to
- * rediscover.
+ * The fifteen seconds a quiet session used to look dead for.
  *
- * `streamSession` writes the status line and the headers through `writeHead`
- * and then writes nothing until an event exists. Node holds headers back until
- * the first body write, so a client connecting to a session with an empty
- * backlog is not acknowledged at all: `fetch` does not resolve, `EventSource`
- * does not fire `open`, and the guest stays on "connecting" until the 15-second
- * heartbeat finally flushes the response. Joining a quiet session therefore
- * looks indistinguishable from a worker that is down, for fifteen seconds.
+ * `streamSession` writes its status line and headers through `writeHead`, and
+ * Node holds those back until the first body write. A session with no backlog
+ * writes nothing until its first event, so a joining client was not acknowledged
+ * at all: `fetch` did not resolve, `EventSource` never fired `open`, and the
+ * guest sat on "connecting" until the 15-second heartbeat finally flushed the
+ * response. Joining a quiet session was indistinguishable from a worker being
+ * down, in the client written specifically so that a stuck state never reads as
+ * progress.
  *
- * One line fixes it — `response.flushHeaders()` after `writeHead` in
- * `event-server.ts` — which is a source change this slice does not own. When
- * that lands, this test fails, and the right response is to delete it.
+ * This arrived as a characterisation test asserting the defect, written by the
+ * agent that found it while it could not reach the event server to fix it. The
+ * fix is one `flushHeaders()` call, and this is the same test inverted: it now
+ * holds the behaviour rather than documenting its absence.
  */
-test("a quiet session does not acknowledge a connection until it writes (known gap)", async () => {
+test("a quiet session acknowledges a connection before it has anything to send", async () => {
   await withServer(async ({ store, url }) => {
     const joining = connect(url, { since: 0 });
-    const pending = Symbol("still pending");
-    const outcome = await Promise.race([
+
+    // The point is that this resolves without anything being appended first.
+    // 750ms is far below the 15s heartbeat that used to be the only thing that
+    // flushed the response, so passing this cannot be the old behaviour.
+    const acknowledged = await Promise.race([
       joining.ready(),
-      delay(750, pending as unknown as number),
+      delay(750, -1),
     ]);
 
     assert.equal(
-      outcome,
-      pending as unknown as number,
-      "the connection was acknowledged before anything was written — the flushHeaders gap is closed, so delete this test",
+      acknowledged,
+      200,
+      "the connection was not acknowledged before the first write — flushHeaders has regressed",
     );
 
-    // The first event flushes the headers, and only then does the client learn
-    // it was connected all along.
+    // And it is a working stream, not merely an open socket.
     store.append(progress("first-sign-of-life"));
-
-    assert.equal(await joining.ready(), 200);
     await joining.settle(1);
     assert.deepEqual(joining.ids(), [0]);
 
