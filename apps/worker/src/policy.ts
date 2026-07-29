@@ -15,6 +15,14 @@ const TOOL_CLASSES: Record<ToolCall["name"], ToolClass> = {
   // Proposing a patch computes a diff in memory and writes nothing.
   propose_patch: "read",
   apply_patch: "write",
+  // Executing anything is dangerous by definition: a command can write, delete,
+  // or reach the network, and Novus cannot know which from the argument vector.
+  run_command: "dangerous",
+  // run_tests is dangerous for the same reason and not a milder case of it. A
+  // test suite is arbitrary code that the repository chose, so classifying it
+  // as read because it is *usually* harmless would be trusting the repository
+  // to be benign — exactly the assumption the tool classes exist to avoid.
+  run_tests: "dangerous",
 };
 
 export const classifyTool = (name: ToolCall["name"]): ToolClass =>

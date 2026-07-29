@@ -10,6 +10,10 @@ import { z } from "zod";
 export const CreateSessionRequestSchema = z.object({
   repositoryPath: z.string().min(1),
   allowWrites: z.boolean().optional(),
+  // Omitted means "whatever the host permits". A client can narrow this to
+  // false; it can never widen it, because the host's NOVUS_ALLOW_COMMANDS is
+  // the ceiling and the host is the execution authority.
+  allowCommands: z.boolean().optional(),
 });
 
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
@@ -18,6 +22,7 @@ export const SessionSummarySchema = z.object({
   id: z.string().min(1),
   repositoryPath: z.string().min(1),
   allowWrites: z.boolean(),
+  allowCommands: z.boolean(),
   createdAt: z.string().datetime(),
 });
 

@@ -119,6 +119,63 @@ const APPLY_PATCH_TOOL = {
   },
 };
 
+const RUN_COMMAND_TOOL = {
+  name: "run_command",
+  description:
+    "Run a program inside the selected repository and return its exit code, stdout, and stderr. The command runs without a shell, so pipes, redirection, globs, and operators like && are not interpreted — pass the program name and each argument separately. Requires human approval and may be denied.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      command: {
+        type: "string",
+        description:
+          "Program name resolved on PATH, such as 'node' or 'git'. Not a path and not a shell line.",
+      },
+      args: {
+        type: "array",
+        maxItems: 64,
+        items: { type: "string" },
+        description:
+          "Arguments, one array element each. For example ['status', '--short'].",
+      },
+      timeoutMs: {
+        type: "integer",
+        minimum: 1000,
+        maximum: 600000,
+        description: "Kill the command after this long. Defaults to 120000.",
+      },
+    },
+    required: ["command"],
+    additionalProperties: false,
+  },
+};
+
+const RUN_TESTS_TOOL = {
+  name: "run_tests",
+  description:
+    "Run the repository's own test suite and report whether it passed. Use this to verify a change you applied actually works, before claiming it does. Requires human approval and may be denied.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      args: {
+        type: "array",
+        maxItems: 32,
+        items: { type: "string" },
+        description:
+          "Optional extra arguments passed to the test script, such as a filename to narrow the run.",
+      },
+      timeoutMs: {
+        type: "integer",
+        minimum: 1000,
+        maximum: 600000,
+        description: "Kill the run after this long. Defaults to 120000.",
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
 const appendExchanges = (
   messages: MessageParam[],
   exchanges: readonly ModelToolExchange[],
@@ -190,12 +247,14 @@ export class AnthropicModelAdapter implements ModelAdapter {
       model: this.selection.model,
       max_tokens: 4_096,
       system:
-        "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. When a change is needed, call propose_patch to produce a reviewable diff, then call apply_patch with the patchId it returns to write it. apply_patch requires human approval and may be denied — if it is, explain what you would have changed rather than trying to work around the denial.",
+        "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. When a change is needed, call propose_patch to produce a reviewable diff, then call apply_patch with the patchId it returns to write it. After applying a change, call run_tests to confirm it works, and report what the tests actually said rather than asserting success. apply_patch, run_command, and run_tests require human approval and may be denied — if one is, explain what you would have done rather than trying to work around the denial.",
       tools: [
         SEARCH_REPOSITORY_TOOL,
         READ_FILE_TOOL,
         PROPOSE_PATCH_TOOL,
         APPLY_PATCH_TOOL,
+        RUN_COMMAND_TOOL,
+        RUN_TESTS_TOOL,
       ],
       tool_choice: {
         type: "auto",

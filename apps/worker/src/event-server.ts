@@ -138,6 +138,7 @@ export const startEventServer = (
     id: session.id,
     repositoryPath: session.repositoryPath,
     allowWrites: session.allowWrites,
+    allowCommands: session.allowCommands,
     createdAt: session.createdAt,
   });
 

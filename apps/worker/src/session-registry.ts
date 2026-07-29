@@ -1,6 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import type { ToolCall } from "@novus/contracts";
 import type { InMemorySessionEventStore } from "@novus/session-service";
 
 import { AgentRunner } from "./agent-runner.ts";
@@ -14,28 +15,56 @@ import {
   ApplyPatchTool,
   ProposePatchTool,
   ReadFileTool,
+  RunCommandTool,
+  RunTestsTool,
   SearchRepositoryTool,
 } from "./tools.ts";
 
 export type SessionOptions = {
   repositoryPath: string;
   allowWrites?: boolean | undefined;
+  allowCommands?: boolean | undefined;
 };
 
 export type Session = {
   id: string;
   repositoryPath: string;
   allowWrites: boolean;
+  allowCommands: boolean;
   runner: AgentRunner;
   createdAt: string;
   /** Serialises turns so a second submission cannot interleave with a run. */
   queue: Promise<unknown>;
 };
 
-const buildApprovalGate = (allowWrites: boolean): ApprovalGate =>
-  allowWrites
-    ? new AllowListApprovalGate(["apply_patch"], "host")
+/**
+ * Command execution is opted into separately from writing.
+ *
+ * Approving `apply_patch` means approving a diff that was reviewable before it
+ * was applied. Approving `run_command` means approving arbitrary code, which
+ * can read any file the host user can — including the `.env` that path
+ * confinement keeps away from `read_file`. Those are different decisions, so
+ * folding commands into NOVUS_ALLOW_WRITES would silently widen a permission
+ * someone already granted for a much narrower reason.
+ */
+const buildApprovalGate = (
+  allowWrites: boolean,
+  allowCommands: boolean,
+): ApprovalGate => {
+  const allowed: ToolCall["name"][] = [];
+
+  if (allowWrites) {
+    allowed.push("apply_patch");
+  }
+
+  if (allowCommands) {
+    allowed.push("run_command", "run_tests");
+  }
+
+  return allowed.length > 0
+    ? new AllowListApprovalGate(allowed, "host")
     : new DenyAllApprovalGate();
+};
 
 /**
  * Owns one agent session per selected repository.
@@ -49,15 +78,25 @@ export class SessionRegistry {
   private readonly eventStore: InMemorySessionEventStore;
   private readonly router: ModelRouter;
   private readonly adapters: readonly ModelAdapter[];
+  /**
+   * Whether this host permits command execution at all.
+   *
+   * The ceiling lives here rather than in the request because the host is the
+   * execution authority. A client may decline commands for its own session; it
+   * must never be able to grant itself execution the operator did not enable.
+   */
+  private readonly commandsPermitted: boolean;
 
   constructor(
     eventStore: InMemorySessionEventStore,
     router: ModelRouter,
     adapters: readonly ModelAdapter[],
+    commandsPermitted = false,
   ) {
     this.eventStore = eventStore;
     this.router = router;
     this.adapters = adapters;
+    this.commandsPermitted = commandsPermitted;
   }
 
   list(): Session[] {
@@ -84,11 +123,16 @@ export class SessionRegistry {
     }
 
     const allowWrites = options.allowWrites ?? false;
+    // Omitted means "whatever the host permits", so enabling the flag reaches
+    // sessions opened from the desktop app and not only the command line.
+    const allowCommands =
+      this.commandsPermitted && (options.allowCommands ?? true);
     const proposePatchTool = new ProposePatchTool(repositoryPath);
     const session: Session = {
       id: crypto.randomUUID(),
       repositoryPath,
       allowWrites,
+      allowCommands,
       createdAt: new Date().toISOString(),
       queue: Promise.resolve(),
       runner: new AgentRunner(
@@ -100,8 +144,10 @@ export class SessionRegistry {
           new ReadFileTool(repositoryPath),
           proposePatchTool,
           new ApplyPatchTool(repositoryPath, proposePatchTool),
+          new RunCommandTool(repositoryPath),
+          new RunTestsTool(repositoryPath),
         ],
-        buildApprovalGate(allowWrites),
+        buildApprovalGate(allowWrites, allowCommands),
       ),
     };
 

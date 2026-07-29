@@ -242,6 +242,382 @@ export class SearchRepositoryTool implements AgentTool {
   }
 }
 
+type CommandOutcome = {
+  command: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+};
+
+const DEFAULT_TIMEOUT_MS = 120_000;
+
+// Enough to read a stack trace or a failing test report, small enough that one
+// runaway command cannot fill the model's context. Each stream is capped
+// separately so a chatty stdout cannot hide the stderr that explains the failure.
+const MAX_STREAM_CHARS = 32_000;
+
+// Secrets are removed from the child's environment rather than trusted not to be
+// printed. The model sees this command's stdout, so `run_command env` would
+// otherwise hand it the provider key that the harness itself is authenticating
+// with.
+//
+// This narrows the blast radius; it does not close it. A command can still read
+// any file the user can, including .env — the path confinement that protects
+// read_file cannot protect a program Novus does not interpret. That is the
+// reason run_command is classified dangerous and denied by default: for this
+// tool the approval gate *is* the boundary, not a formality in front of one.
+const SECRET_PATTERN = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH/i;
+
+// Names that read as secrets but are not. SSH_AUTH_SOCK is a socket path, and
+// removing it breaks every `git fetch` and `git push` over SSH with an auth
+// error that says nothing about the cause.
+const ENVIRONMENT_EXCEPTIONS = new Set(["SSH_AUTH_SOCK"]);
+
+const scrubbedEnvironment = (): NodeJS.ProcessEnv => {
+  const environment: NodeJS.ProcessEnv = {};
+
+  for (const [name, value] of Object.entries(process.env)) {
+    if (ENVIRONMENT_EXCEPTIONS.has(name) || !SECRET_PATTERN.test(name)) {
+      environment[name] = value;
+    }
+  }
+
+  return environment;
+};
+
+// V1_README: Novus must never use `git reset --hard`, overwrite uncommitted user
+// work, or silently modify the host's primary branch.
+//
+// Read this for what it is. It stops the destructive git command an agent
+// reaches for by habit, where an operator approving "run a command" would have
+// no realistic chance of catching it. It is *not* a security boundary and must
+// never be treated as one: `run_command bash -c '...'` reaches a shell as a
+// program and walks straight past every rule here. The approval gate is the
+// control. If that gate is ever widened to allow commands without review, this
+// list is not what makes it safe.
+//
+// Subcommands are matched anywhere in the vector rather than at args[0], since
+// `git -c key=value reset --hard` is the same command with a prefix.
+const REFUSED_GIT_SUBCOMMANDS: ReadonlyArray<{
+  match: (args: readonly string[]) => boolean;
+  reason: string;
+}> = [
+  {
+    match: (args) => args.includes("reset") && args.includes("--hard"),
+    reason: "git reset --hard discards uncommitted work irreversibly",
+  },
+  {
+    match: (args) =>
+      args.includes("clean") &&
+      args.some((argument) => /^-[a-z]*f/i.test(argument)),
+    reason: "git clean -f deletes untracked files irreversibly",
+  },
+  {
+    match: (args) =>
+      args.includes("checkout") &&
+      (args.includes("--force") || args.includes("-f")),
+    reason: "git checkout --force overwrites uncommitted work",
+  },
+  {
+    match: (args) =>
+      args.includes("push") &&
+      (args.includes("--force") ||
+        args.includes("-f") ||
+        args.includes("--force-with-lease")),
+    reason: "git push --force rewrites published history",
+  },
+];
+
+const refuseDestructiveCommand = (
+  command: string,
+  args: readonly string[],
+): void => {
+  if (basename(command) !== "git") {
+    return;
+  }
+
+  for (const rule of REFUSED_GIT_SUBCOMMANDS) {
+    if (rule.match(args)) {
+      throw new Error(
+        `Refused: ${rule.reason}. Novus does not run this even with approval.`,
+      );
+    }
+  }
+};
+
+// Detached children outlive a Ctrl-C on the worker, because they are no longer
+// in its process group. Tracking them lets the worker take them down on the way
+// out instead of leaving a test suite running invisibly.
+const runningGroups = new Set<number>();
+
+export const killRunningCommands = (): void => {
+  for (const pid of runningGroups) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+  runningGroups.clear();
+};
+
+const runProcess = (
+  repositoryRoot: string,
+  command: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<CommandOutcome> =>
+  new Promise((resolveRun, rejectRun) => {
+    const startedAt = Date.now();
+    let stdout = "";
+    let stderr = "";
+    let truncated = false;
+    let timedOut = false;
+
+    // shell: false is the load-bearing argument. With a shell, every string the
+    // model produced would be re-parsed for operators and substitutions.
+    //
+    // detached gives the child its own process group so a timeout can kill the
+    // whole tree. `npm test` and `pnpm test` are launchers, so killing only the
+    // direct child leaves the real test runner alive — and a survivor holding
+    // the stdout pipe means `close` never fires and the tool call never
+    // settles. That hangs the session queue permanently, which is a worse
+    // failure than the timeout it was supposed to handle.
+    const child = spawn(command, [...args], {
+      cwd: repositoryRoot,
+      env: scrubbedEnvironment(),
+      shell: false,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const collect = (chunk: Buffer, stream: "stdout" | "stderr"): void => {
+      const text = chunk.toString("utf8");
+
+      if (stream === "stdout") {
+        if (stdout.length >= MAX_STREAM_CHARS) {
+          truncated = true;
+          return;
+        }
+        stdout += text.slice(0, MAX_STREAM_CHARS - stdout.length);
+        truncated = truncated || stdout.length >= MAX_STREAM_CHARS;
+        return;
+      }
+
+      if (stderr.length >= MAX_STREAM_CHARS) {
+        truncated = true;
+        return;
+      }
+      stderr += text.slice(0, MAX_STREAM_CHARS - stderr.length);
+      truncated = truncated || stderr.length >= MAX_STREAM_CHARS;
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => collect(chunk, "stdout"));
+    child.stderr.on("data", (chunk: Buffer) => collect(chunk, "stderr"));
+
+    if (child.pid !== undefined) {
+      runningGroups.add(child.pid);
+    }
+
+    let settled = false;
+    let drainTimer: NodeJS.Timeout | undefined;
+
+    const settle = (code: number | null): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(drainTimer);
+
+      if (child.pid !== undefined) {
+        runningGroups.delete(child.pid);
+      }
+
+      resolveRun({
+        command: [command, ...args].join(" "),
+        // A signalled process reports a null code. Reporting 0 for a process
+        // the timeout killed would read as success.
+        exitCode: code,
+        timedOut,
+        durationMs: Date.now() - startedAt,
+        stdout,
+        stderr,
+        truncated,
+      });
+    };
+
+    const killTree = (): void => {
+      // Negating the pid targets the process group, taking descendants with it.
+      try {
+        if (child.pid !== undefined) {
+          process.kill(-child.pid, "SIGKILL");
+          return;
+        }
+      } catch {
+        // The group is already gone, or was never created; fall through.
+      }
+      child.kill("SIGKILL");
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree();
+    }, timeoutMs);
+
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      clearTimeout(drainTimer);
+      settled = true;
+      if (child.pid !== undefined) {
+        runningGroups.delete(child.pid);
+      }
+      rejectRun(
+        new Error(
+          `Unable to run ${command}: ${(error as NodeJS.ErrnoException).code === "ENOENT" ? `${command} was not found on PATH` : error.message}`,
+        ),
+      );
+    });
+
+    // `exit` fires when the process ends; `close` waits for its stdio to reach
+    // EOF, which a surviving descendant can hold open indefinitely. Settling on
+    // close alone is what hung. Prefer close when it arrives — it means every
+    // byte was collected — but never wait for it longer than a short drain.
+    child.on("exit", (code) => {
+      // Disarm the timeout here, not only in settle. Leaving it armed through
+      // the drain lets a command that exited cleanly just before the deadline
+      // be reported as timed out — and run_tests turns that into a passing
+      // suite reported as failed.
+      clearTimeout(timer);
+      drainTimer = setTimeout(() => settle(code), 200);
+    });
+
+    child.on("close", (code) => settle(code));
+  });
+
+export class RunCommandTool implements AgentTool {
+  readonly name = "run_command";
+  private readonly repositoryPath: string;
+
+  constructor(repositoryPath: string) {
+    this.repositoryPath = resolve(repositoryPath);
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The run_command tool cannot execute ${call.name}.`);
+    }
+
+    if (call.input.command.includes("/") || call.input.command.includes("\\")) {
+      throw new Error(
+        "run_command takes a program name resolved on PATH, not a path. Pass arguments in args.",
+      );
+    }
+
+    refuseDestructiveCommand(call.input.command, call.input.args);
+
+    const repositoryRoot = await realpath(this.repositoryPath);
+    const outcome = await runProcess(
+      repositoryRoot,
+      call.input.command,
+      call.input.args,
+      call.input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    );
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: outcome,
+    });
+  }
+}
+
+type PackageManager = { command: string; args: readonly string[] };
+
+const LOCKFILE_PACKAGE_MANAGERS: ReadonlyArray<[string, string]> = [
+  ["pnpm-lock.yaml", "pnpm"],
+  ["yarn.lock", "yarn"],
+  ["package-lock.json", "npm"],
+  ["bun.lockb", "bun"],
+];
+
+const detectTestCommand = async (
+  repositoryRoot: string,
+): Promise<PackageManager> => {
+  let manifest: { scripts?: Record<string, string> };
+
+  try {
+    manifest = JSON.parse(
+      await readFile(resolve(repositoryRoot, "package.json"), "utf8"),
+    );
+  } catch {
+    throw new Error(
+      "run_tests found no package.json in the repository root, so it cannot tell how this project runs its tests.",
+    );
+  }
+
+  if (!manifest.scripts?.test) {
+    throw new Error(
+      'run_tests requires a "test" script in package.json. Add one, or use run_command to invoke the test runner directly.',
+    );
+  }
+
+  for (const [lockfile, manager] of LOCKFILE_PACKAGE_MANAGERS) {
+    try {
+      await stat(resolve(repositoryRoot, lockfile));
+      return { command: manager, args: ["test"] };
+    } catch {
+      continue;
+    }
+  }
+
+  return { command: "npm", args: ["test"] };
+};
+
+/**
+ * Runs the repository's own test script.
+ *
+ * This is the tool that lets a run answer "did my change work" with evidence
+ * instead of assertion. It deliberately does not accept a command: the project
+ * declares how its tests run, and a model choosing that for itself could report
+ * a green suite it selected for being green.
+ */
+export class RunTestsTool implements AgentTool {
+  readonly name = "run_tests";
+  private readonly repositoryPath: string;
+
+  constructor(repositoryPath: string) {
+    this.repositoryPath = resolve(repositoryPath);
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The run_tests tool cannot execute ${call.name}.`);
+    }
+
+    const repositoryRoot = await realpath(this.repositoryPath);
+    const runner = await detectTestCommand(repositoryRoot);
+    const outcome = await runProcess(
+      repositoryRoot,
+      runner.command,
+      [...runner.args, ...call.input.args],
+      call.input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    );
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        ...outcome,
+        passed: outcome.exitCode === 0 && !outcome.timedOut,
+      },
+    });
+  }
+}
+
 export type PatchProposal = {
   patchId: string;
   path: string;

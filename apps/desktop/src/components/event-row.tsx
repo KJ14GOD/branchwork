@@ -32,6 +32,14 @@ const summariseCall = (call: Extract<SessionEvent, { type: "tool.requested" }>["
     return `${call.input.path} · ${call.input.edits.length} edit${call.input.edits.length === 1 ? "" : "s"}`;
   }
 
+  if (call.name === "run_command") {
+    return [call.input.command, ...call.input.args].join(" ");
+  }
+
+  if (call.name === "run_tests") {
+    return call.input.args.length > 0 ? call.input.args.join(" ") : "full suite";
+  }
+
   return call.input.patchId;
 };
 
@@ -70,6 +78,46 @@ const ToolResultPanel = ({
           </li>
         ))}
       </ul>
+    );
+  }
+
+  if (result.name === "run_command" || result.name === "run_tests") {
+    // stderr first: when a command fails the reason is almost always there, and
+    // a long stdout would otherwise push it out of view.
+    const streams = [result.output.stderr, result.output.stdout]
+      .filter(Boolean)
+      .join("\n");
+    const verdict = result.name === "run_tests"
+      ? result.output.passed
+        ? "passed · "
+        : "failed · "
+      : "";
+
+    return (
+      <div className="kv">
+        <span className="kv__key">command</span>
+        <span className="kv__value">{result.output.command}</span>
+        <span className="kv__key">outcome</span>
+        <span className="kv__value">
+          {verdict}
+          {result.output.timedOut
+            ? "timed out"
+            : result.output.exitCode === null
+              ? "killed"
+              : `exit ${result.output.exitCode}`}
+          {" · "}
+          {Math.round(result.output.durationMs / 100) / 10}s
+        </span>
+        {streams && (
+          <>
+            <span className="kv__key">output</span>
+            <pre className="kv__value">
+              {streams}
+              {result.output.truncated ? "\n… truncated" : ""}
+            </pre>
+          </>
+        )}
+      </div>
     );
   }
 
@@ -206,7 +254,13 @@ export const EventRow = ({
         const summary =
           result.name === "read_file"
             ? result.output.path
-            : `${result.output.matches.length} match${result.output.matches.length === 1 ? "" : "es"} for "${result.output.query}"`;
+            : result.name === "search_repository"
+              ? `${result.output.matches.length} match${result.output.matches.length === 1 ? "" : "es"} for "${result.output.query}"`
+              : result.name === "run_tests"
+                ? result.output.passed
+                  ? "tests passed"
+                  : "tests failed"
+                : result.output.command;
 
         return (
           <div className="tool">
