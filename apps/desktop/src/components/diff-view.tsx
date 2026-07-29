@@ -55,6 +55,16 @@ export const parseUnifiedDiff = (diff: string): DiffLine[] => {
       continue;
     }
 
+    // Only a line that opens with a space is context, and only context carries
+    // a leading marker worth stripping. Everything else here is a header —
+    // `diff --git a/x b/x`, `index abc..def`, `new file mode` — and treating it
+    // as context both ate its first character and advanced the line numbers for
+    // a line that is not part of the file.
+    if (!raw.startsWith(" ")) {
+      lines.push({ kind: "meta", text: raw, beforeLine: null, afterLine: null });
+      continue;
+    }
+
     lines.push({
       kind: "context",
       text: raw.slice(1),
