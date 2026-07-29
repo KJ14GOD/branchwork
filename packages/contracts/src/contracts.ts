@@ -307,6 +307,102 @@ export const RunSchema = z.object({
 
 export type Run = z.infer<typeof RunSchema>;
 
+/**
+ * Everything a fork needs to start where its parent stood.
+ *
+ * A checkpoint is not a snapshot of the working directory — copying a tree is
+ * slow, unreviewable, and says nothing about what the agent was doing. It is
+ * the smaller set of facts from which the starting state can be reconstructed
+ * in a fresh worktree: a commit to check out, the uncommitted work as a patch,
+ * and the intent the run was carrying at that moment.
+ *
+ * It is deliberately a value, not a handle. Two forks from one checkpoint must
+ * start from the same thing, and that is only guaranteed if the checkpoint
+ * cannot change under them after it was taken.
+ */
+export const CheckpointSchema = z.object({
+  id: IdSchema,
+  sessionId: IdSchema,
+  /** The run being checkpointed, and how much of its history this covers. */
+  parentRunId: IdSchema,
+  // The parent's event sequence at the moment of capture. A fork's divergence
+  // is only meaningful against a stated point in the parent's history, and
+  // "the latest event" is not a point — it moves while the fork is being made.
+  parentSequence: z.number().int().nonnegative(),
+  base: z.object({
+    // Not nullable, unlike a receipt's base. A receipt describes a run that
+    // already happened and can honestly say the revision was unknown; a fork
+    // has to check something out, so a repository with no commit cannot be
+    // forked from at all and must be refused when the checkpoint is taken.
+    revision: z.string().min(1),
+    // Uncommitted tracked work at capture time, as a patch that applies to
+    // `revision`. Null when the tree was clean. This is what makes the base
+    // immutable: the parent may commit, amend, or discard afterwards and the
+    // fork still starts from the state that was actually checkpointed.
+    patch: z.string().min(1).nullable(),
+  }),
+  /** What the agent had established so far, in its own words. */
+  agentState: z.string().min(1),
+  // Repository-relative paths that were in front of the model. Carried so a
+  // fork inherits the parent's attention rather than rediscovering it, and so
+  // a reviewer can see what each attempt was looking at when they diverged.
+  contextManifest: z.array(z.string().min(1)),
+  goal: z.string().min(1),
+  constraints: z.array(z.string().min(1)),
+  model: ModelSelectionSchema,
+  // The parent's permissions, not the host's defaults. A fork is a continuation
+  // of a run someone already authorised; re-deriving the policy from the host
+  // would let a fork be more permissive than the run it came from.
+  toolPolicy: z.object({
+    allowWrites: z.boolean(),
+    allowCommands: z.boolean(),
+  }),
+  // Null means unbounded, which is V1's actual behaviour. Zero would claim a
+  // limit that is not enforced anywhere, and a budget that lies about being
+  // exhausted is worse than one that admits it is not counting.
+  budget: z.object({
+    remainingModelCalls: z.number().int().nonnegative().nullable(),
+    remainingTokens: z.number().int().nonnegative().nullable(),
+  }),
+  createdAt: TimestampSchema,
+});
+
+export type Checkpoint = z.infer<typeof CheckpointSchema>;
+
+/**
+ * One isolated attempt started from a checkpoint.
+ *
+ * The fork is identified by its run id rather than carrying an id of its own.
+ * V1 gives every fork a unique run id, and every other event in the log is
+ * already keyed by `runId`, so a separate fork id would be a second name for
+ * the same thing — and two names for one entity is how a log stops joining up.
+ *
+ * `sessionId` is the *parent* session. A fork gets its own event stream, not
+ * its own session: the whole point is that both attempts are observable side
+ * by side under the session the human is already watching.
+ */
+export const ForkSchema = z.object({
+  runId: IdSchema,
+  sessionId: IdSchema,
+  checkpointId: IdSchema,
+  parentRunId: IdSchema,
+  /** How a human tells two attempts apart before there is any evidence. */
+  label: z.string().min(1),
+  // Absolute, and outside the selected repository. Forks never write to the
+  // same working directory, so this is the field that has to be distinct for
+  // the isolation claim to mean anything.
+  worktreePath: z.string().min(1),
+  branch: z.string().min(1),
+  /** The commit the worktree was created at — the checkpoint's base. */
+  revision: z.string().min(1),
+  // Development ports are exclusive to this fork for as long as it lives. Two
+  // attempts running the same project's dev server would otherwise collide on
+  // a port and the second one would look like a failed attempt.
+  devPorts: z.array(z.number().int().min(1).max(65_535)).min(1),
+  createdAt: TimestampSchema,
+});
+
+export type Fork = z.infer<typeof ForkSchema>;
 
 /**
  * What a finished run proves about itself.
@@ -539,6 +635,27 @@ export const ReceiptCreatedEventSchema = EventEnvelopeSchema.extend({
   }),
 });
 
+// Recorded before any fork exists, and separately from it. A checkpoint that
+// no fork was ever made from is still evidence — it is the point a human chose
+// to mark — and folding it into fork.created would lose every checkpoint that
+// was taken and not used.
+export const CheckpointCreatedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("checkpoint.created"),
+  payload: z.object({
+    checkpoint: CheckpointSchema,
+  }),
+});
+
+// The fork's own run emits run.started under its own runId immediately after
+// this. This event is the parent's record of having branched; that one is the
+// child's record of having begun.
+export const ForkCreatedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("fork.created"),
+  payload: z.object({
+    fork: ForkSchema,
+  }),
+});
+
 export const RunFailedEventSchema = EventEnvelopeSchema.extend({
   type: z.literal("run.failed"),
   payload: z.object({
@@ -561,6 +678,8 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   RunCompletedEventSchema,
   RunFailedEventSchema,
   ReceiptCreatedEventSchema,
+  CheckpointCreatedEventSchema,
+  ForkCreatedEventSchema,
 ]);
 
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
@@ -627,6 +746,16 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   ReceiptCreatedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  CheckpointCreatedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ForkCreatedEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,
