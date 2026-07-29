@@ -35,6 +35,8 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "run.completed": "■",
   "run.failed": "✗",
   "receipt.created": "▣",
+  "checkpoint.created": "◈",
+  "fork.created": "⑂",
 };
 
 export type EventRowProps = {
@@ -125,6 +127,35 @@ export const EventRow = ({
             {event.payload.reason}
           </span>
         );
+
+      case "checkpoint.created": {
+        const { checkpoint } = event.payload;
+
+        return (
+          <span className="event__text event__text--muted">
+            checkpoint at sequence {checkpoint.parentSequence}
+            <span className="event__type">
+              {" "}
+              · base {checkpoint.base.revision.slice(0, 8)}
+              {checkpoint.base.patch ? " + uncommitted" : ""}
+            </span>
+          </span>
+        );
+      }
+
+      case "fork.created": {
+        const { fork } = event.payload;
+
+        return (
+          <span className="event__text">
+            {fork.label}
+            <span className="event__type">
+              {" "}
+              · {fork.branch} · ports {fork.devPorts.join(", ")}
+            </span>
+          </span>
+        );
+      }
 
       case "receipt.created": {
         const { receipt } = event.payload;
