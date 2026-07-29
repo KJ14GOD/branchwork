@@ -1,0 +1,10 @@
+{
+  "name": "retention-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "An event log whose daily rollup double-counts. The repository-reasoning benchmark fixture.",
+  "scripts": {
+    "test": "node --test 'tests/*.test.js'"
+  }
+}

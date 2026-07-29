@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the bug-fix benchmark and print a verdict.
+# Run the evaluation benchmarks and print a verdict.
 #
 # The scoring lives in apps/worker/src/benchmark.ts, because scoring means
 # reading typed events and a run receipt back out of the harness and that is
@@ -8,9 +8,16 @@
 # wrong: putting Node 24 on PATH, and loading the provider key in the one way
 # that actually works.
 #
-#   ./scripts/benchmark.sh          deterministic, no provider call, free
-#   ./scripts/benchmark.sh --live   one real model run, costs money
-#   ./scripts/benchmark.sh --keep   leave the scratch repository on disk
+#   ./scripts/benchmark.sh                     all three, deterministic, free
+#   ./scripts/benchmark.sh bug-fix             one of them
+#   ./scripts/benchmark.sh repo-reasoning --live   one real model run, costs money
+#   ./scripts/benchmark.sh --keep              leave the scratch repositories on disk
+#
+# The three tasks are bug-fix, small-feature, and repo-reasoning; each has a
+# directory under benchmarks/ with a README explaining what it is for. Naming
+# none of them runs all three in sequence, which is what the deterministic
+# variant is for. Naming none of them with --live spends three provider calls'
+# worth of run, so say which one you meant.
 #
 # The live run reads its key from .env at the repository root, or from the file
 # NOVUS_ENV_FILE names. `--env-file` does not override a variable that is
@@ -32,8 +39,15 @@ for arg in "$@"; do
   case "$arg" in
     --live) variant="live" ;;
     -h | --help)
-      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
+      ;;
+    -*) ;;
+    bug-fix | small-feature | repo-reasoning) ;;
+    *)
+      echo "Unknown benchmark: $arg" >&2
+      echo "Known: bug-fix, small-feature, repo-reasoning." >&2
+      exit 2
       ;;
   esac
 done
