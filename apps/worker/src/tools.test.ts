@@ -130,6 +130,75 @@ test("run_command kills a command that outruns its timeout", async () => {
   assert.equal(result.output.exitCode, null);
 });
 
+test("run_command settles when a killed command leaves a descendant holding stdio", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  // The regression this guards: killing only the direct child leaves a
+  // grandchild holding the stdout pipe, so `close` never fires and the promise
+  // never settles — hanging the session queue forever rather than timing out.
+  // `pnpm test` and `npm test` are process launchers, so this is the ordinary
+  // shape of a hanging test suite, not an exotic case.
+  const result = await tool.execute(
+    runCommand(
+      "14",
+      "node",
+      [
+        "-e",
+        "require('child_process').spawn('sleep', ['30'], { stdio: 'inherit' }); setTimeout(() => {}, 30000)",
+      ],
+      1_000,
+    ),
+  );
+
+  if (result.name !== "run_command") return assert.fail("wrong result");
+
+  assert.equal(result.output.timedOut, true);
+  assert.ok(
+    result.output.durationMs < 10_000,
+    `settled in ${result.output.durationMs}ms, so the kill did not reach the group`,
+  );
+});
+
+test("run_command refuses a destructive git command behind a global flag", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  // `git -c key=value reset --hard` is the same command with a prefix, so
+  // matching only the first argument would miss it.
+  await assert.rejects(
+    () =>
+      tool.execute(
+        runCommand("15", "git", ["-c", "core.pager=cat", "reset", "--hard"]),
+      ),
+    /discards uncommitted work/,
+  );
+});
+
+test("run_command keeps SSH_AUTH_SOCK, which only looks like a secret", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  process.env.SSH_AUTH_SOCK = "/tmp/novus-test-agent.sock";
+
+  try {
+    const result = await tool.execute(
+      runCommand("16", "node", [
+        "-e",
+        "console.log(process.env.SSH_AUTH_SOCK ?? 'absent')",
+      ]),
+    );
+
+    if (result.name !== "run_command") return assert.fail("wrong result");
+
+    // Dropping it breaks every git fetch and push over SSH with an auth error
+    // that says nothing about the cause.
+    assert.equal(result.output.stdout.trim(), "/tmp/novus-test-agent.sock");
+  } finally {
+    delete process.env.SSH_AUTH_SOCK;
+  }
+});
+
 test("run_command runs inside the selected repository", async () => {
   const repository = await temporaryRepository();
   const tool = new RunCommandTool(repository);

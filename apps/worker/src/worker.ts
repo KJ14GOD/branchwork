@@ -15,6 +15,7 @@ const modelSelection = {
 
 // Writes are denied unless the operator opts in.
 const allowWrites = process.env.NOVUS_ALLOW_WRITES === "1";
+const allowCommands = process.env.NOVUS_ALLOW_COMMANDS === "1";
 const goal = process.argv.slice(2).join(" ").trim();
 
 const eventStore = new InMemorySessionEventStore();
@@ -101,6 +102,9 @@ console.log(`novus worker · ${eventServer.url}`);
 console.log(
   `writes ${allowWrites ? "approved (NOVUS_ALLOW_WRITES=1)" : "denied — set NOVUS_ALLOW_WRITES=1 to permit apply_patch"}`,
 );
+console.log(
+  `commands ${allowCommands ? "approved (NOVUS_ALLOW_COMMANDS=1)" : "denied — set NOVUS_ALLOW_COMMANDS=1 to permit run_command and run_tests"}`,
+);
 
 // A goal on the command line opens a session immediately; otherwise the worker
 // waits for a client to choose a repository.
@@ -109,7 +113,11 @@ if (goal) {
     ? resolve(process.env.NOVUS_REPO)
     : fileURLToPath(new URL("../../..", import.meta.url));
 
-  const session = await sessions.create({ repositoryPath, allowWrites });
+  const session = await sessions.create({
+    repositoryPath,
+    allowWrites,
+    allowCommands,
+  });
 
   console.log(`repository ${session.repositoryPath}`);
   console.log(`events ${eventServer.url}/events?session=${session.id}`);
