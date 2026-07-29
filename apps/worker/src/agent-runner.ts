@@ -13,6 +13,11 @@ import type {
   ModelToolExchange,
 } from "./model.ts";
 import {
+  budgetExhausted,
+  DEFAULT_RUN_BUDGET,
+  type RunBudget,
+} from "./budget.ts";
+import {
   classifyTool,
   DenyAllApprovalGate,
   type ApprovalGate,
@@ -41,27 +46,13 @@ const selectionsMatch = (
 ): boolean =>
   first.provider === second.provider && first.model === second.model;
 
-// Raised from 16 after a benchmark failure, and only after reading the
-// trajectory that caused it — the rule is that a ceiling is never lifted to
-// hide repetition.
-//
-// The small-feature benchmark spends eleven steps orienting in a repository it
-// has never seen (one list_directory, five read_file, another list_directory,
-// four more read_file) before it proposes anything. That is not a loop; it is
-// what reading an unfamiliar multi-file codebase costs. It then had five steps
-// left for a change spanning two files and ran out mid-edit, having never
-// reached run_tests — so the run failed for want of turns rather than for want
-// of an answer.
-//
-// Sixteen was sized for the single-file bug fix that was the only benchmark at
-// the time. Forty leaves room to read, change several files, run the tests, and
-// respond to what they said. The failure budget below is what actually catches
-// a stuck agent, and it is unchanged.
-const MAX_MODEL_STEPS = 40;
+// The step ceiling used to live here. It is in budget.ts now, as one bound
+// among several and the least important of them — see the reasoning there.
 
 // A tool error returns to the model as an observation, but a model that cannot
 // recover after this many consecutive failures is looping, not correcting.
-const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+// Kept as a name so the two call sites below read the same as before; the value
+// comes from the budget, which is where every bound now lives.
 
 /**
  * A run that ended by throwing, carrying the run it ended.
@@ -98,6 +89,8 @@ export class AgentRunner {
    * that no longer describes what the run began from.
    */
   private readonly readBase: () => Promise<RepositoryBase>;
+  /** Every bound on this run, and the reason it will give for stopping. */
+  private readonly budget: RunBudget;
   // One runner is one session. Finished turns stay here so a follow-up
   // question carries the earlier conversation.
   private readonly history: CompletedTurn[] = [];
@@ -114,6 +107,7 @@ export class AgentRunner {
       revision: null,
       dirty: false,
     }),
+    budget: RunBudget = DEFAULT_RUN_BUDGET,
   ) {
     this.eventStore = eventStore;
     this.router = router;
@@ -121,6 +115,7 @@ export class AgentRunner {
     this.tools = tools;
     this.approvals = approvals;
     this.readBase = readBase;
+    this.budget = budget;
   }
 
   async run(input: AgentRunInput): Promise<AgentRunResult> {
@@ -179,6 +174,7 @@ export class AgentRunner {
     });
 
     const toolExchanges: ModelToolExchange[] = [];
+    const startedAt = Date.now();
     let consecutiveFailures = 0;
     const usage: ReceiptUsage = {
       inputTokens: 0,
@@ -244,7 +240,25 @@ export class AgentRunner {
       return { runId: run.id, events: this.eventStore.list(input.sessionId) };
     };
 
-    for (let step = 0; step < MAX_MODEL_STEPS; step += 1) {
+    // Not a step loop. The run continues until the model says it is finished or
+    // a budget it can be held to runs out, which is the difference between a
+    // harness that does the work and one that stops at a number.
+    for (;;) {
+      const stopped = budgetExhausted(
+        this.budget,
+        {
+          modelCalls: usage.modelCalls,
+          totalTokens: usage.inputTokens + usage.outputTokens,
+          consecutiveFailures,
+          startedAt,
+        },
+        Date.now(),
+      );
+
+      if (stopped !== null) {
+        return failRun(`The run ${stopped}.`);
+      }
+
       const response = await adapter.complete({
         history: this.history,
         goal: input.goal,
@@ -317,7 +331,7 @@ export class AgentRunner {
         // well-formed call after several tries is looping, not correcting.
         consecutiveFailures += 1;
 
-        if (consecutiveFailures >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+        if (consecutiveFailures >= this.budget.consecutiveFailures) {
           return failRun(
             `The agent produced ${consecutiveFailures} malformed tool calls in a row. Last error: ${response.message}`,
           );
@@ -422,7 +436,7 @@ export class AgentRunner {
 
         consecutiveFailures += 1;
 
-        if (consecutiveFailures >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+        if (consecutiveFailures >= this.budget.consecutiveFailures) {
           return failRun(
             `The agent failed ${consecutiveFailures} tool calls in a row without recovering. Last error: ${message}`,
           );
@@ -449,8 +463,7 @@ export class AgentRunner {
       });
     }
 
-    return failRun(
-      `The agent exceeded the ${MAX_MODEL_STEPS}-step ceiling without finishing.`,
-    );
+    // Unreachable: the loop returns through failRun or run.completed. Kept out
+    // rather than left as a lie about how a run can end.
   }
 }
