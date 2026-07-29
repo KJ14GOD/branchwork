@@ -7,7 +7,13 @@ import { buildReceipt } from "./receipt.ts";
 
 const SESSION = "session-1";
 const RUN = "run-1";
-const USAGE = { inputTokens: 120, outputTokens: 45, modelCalls: 3 };
+const USAGE = {
+  inputTokens: 120,
+  outputTokens: 45,
+  modelCalls: 3,
+  callsMissingUsage: 0,
+};
+const BASE = { revision: null, dirty: false };
 
 const storeWithRun = (): InMemorySessionEventStore => {
   const store = new InMemorySessionEventStore();
@@ -92,17 +98,21 @@ test("a receipt reports the files, tests, and usage of a completed run", () => {
   complete(store);
 
   const receipt = buildReceipt(store.list(SESSION), RUN, {
-    startingRevision: "abc1234def",
+    base: { revision: "abc1234def", dirty: true },
     usage: USAGE,
   });
 
   assert.ok(receipt);
   assert.equal(receipt.status, "completed");
   assert.equal(receipt.goal, "Fix the failing refresh test");
-  assert.equal(receipt.startingRevision, "abc1234def");
-  assert.deepEqual(receipt.filesChanged, [
-    { path: "src/auth.ts", additions: 3, deletions: 1 },
-  ]);
+  assert.equal(receipt.base.revision, "abc1234def");
+  assert.equal(receipt.base.dirty, true);
+  assert.equal(receipt.filesChanged.length, 1);
+  assert.equal(receipt.filesChanged[0]?.path, "src/auth.ts");
+  assert.equal(receipt.filesChanged[0]?.additions, 3);
+  assert.equal(receipt.filesChanged[0]?.patches, 1);
+  // The suite ran after the change, so it speaks to this diff.
+  assert.equal(receipt.testsFollowedFinalChange, true);
   assert.equal(receipt.tests.length, 1);
   assert.equal(receipt.tests[0]?.passed, true);
   assert.deepEqual(receipt.usage, USAGE);
@@ -139,7 +149,7 @@ test("a proposed patch is not reported as a file change", () => {
   complete(store);
 
   const receipt = buildReceipt(store.list(SESSION), RUN, {
-    startingRevision: null,
+    base: BASE,
     usage: USAGE,
   });
 
@@ -165,7 +175,7 @@ test("a receipt records a denial and who made it", () => {
   complete(store);
 
   const receipt = buildReceipt(store.list(SESSION), RUN, {
-    startingRevision: null,
+    base: BASE,
     usage: USAGE,
   });
 
@@ -188,7 +198,7 @@ test("a failed run still produces a receipt, carrying the reason", () => {
   });
 
   const receipt = buildReceipt(store.list(SESSION), RUN, {
-    startingRevision: null,
+    base: BASE,
     usage: USAGE,
   });
 
@@ -228,7 +238,7 @@ test("a receipt never mixes in another run's events", () => {
   complete(store);
 
   const receipt = buildReceipt(store.list(SESSION), RUN, {
-    startingRevision: null,
+    base: BASE,
     usage: USAGE,
   });
 
@@ -239,13 +249,87 @@ test("a receipt never mixes in another run's events", () => {
   );
 });
 
+test("two patches to one file are one changed file", () => {
+  const store = storeWithRun();
+  applyPatch(store, "src/auth.ts");
+  applyPatch(store, "src/auth.ts");
+  complete(store);
+
+  const receipt = buildReceipt(store.list(SESSION), RUN, {
+    base: BASE,
+    usage: USAGE,
+  });
+
+  assert.ok(receipt);
+  // "2 files changed" would be the headline number, and it would be wrong.
+  assert.equal(receipt.filesChanged.length, 1);
+  assert.equal(receipt.filesChanged[0]?.patches, 2);
+  assert.equal(receipt.filesChanged[0]?.additions, 6);
+  assert.equal(receipt.filesChanged[0]?.deletions, 2);
+});
+
+test("tests that ran before the last change do not read as passing it", () => {
+  const store = storeWithRun();
+  runTests(store, true);
+  applyPatch(store, "src/auth.ts");
+  complete(store);
+
+  const receipt = buildReceipt(store.list(SESSION), RUN, {
+    base: BASE,
+    usage: USAGE,
+  });
+
+  assert.ok(receipt);
+  assert.equal(receipt.tests[0]?.passed, true);
+  // A green suite from before the final edit says nothing about the diff this
+  // receipt is attached to.
+  assert.equal(receipt.testsFollowedFinalChange, false);
+});
+
+test("a denial names the tool that was refused", () => {
+  const store = storeWithRun();
+
+  store.append({
+    sessionId: SESSION,
+    actorId: "agent-1",
+    type: "tool.approval_requested",
+    payload: {
+      runId: RUN,
+      call: { id: "call-9", name: "run_command", input: { command: "rm", args: [] } },
+      toolClass: "dangerous",
+    },
+  });
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "tool.denied",
+    payload: {
+      runId: RUN,
+      toolCallId: "call-9",
+      deniedBy: "host",
+      reason: "not allowed",
+    },
+  });
+  complete(store);
+
+  const receipt = buildReceipt(store.list(SESSION), RUN, {
+    base: BASE,
+    usage: USAGE,
+  });
+
+  assert.ok(receipt);
+  // "denied" alone loses the one fact a reviewer needs: denied *what*.
+  assert.equal(receipt.toolCalls[0]?.name, "run_command");
+  assert.equal(receipt.toolCalls[0]?.outcome, "denied");
+});
+
 test("a run that has not finished has no receipt", () => {
   const store = storeWithRun();
   applyPatch(store, "src/auth.ts");
 
   assert.equal(
     buildReceipt(store.list(SESSION), RUN, {
-      startingRevision: null,
+      base: BASE,
       usage: USAGE,
     }),
     null,
@@ -258,7 +342,7 @@ test("an unknown run has no receipt rather than an empty one", () => {
 
   assert.equal(
     buildReceipt(store.list(SESSION), "run-does-not-exist", {
-      startingRevision: null,
+      base: BASE,
       usage: USAGE,
     }),
     null,

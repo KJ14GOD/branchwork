@@ -8,10 +8,16 @@ export type ReceiptUsage = {
   inputTokens: number;
   outputTokens: number;
   modelCalls: number;
+  callsMissingUsage: number;
+};
+
+export type RepositoryBase = {
+  revision: string | null;
+  dirty: boolean;
 };
 
 export type ReceiptContext = {
-  startingRevision: string | null;
+  base: RepositoryBase;
   usage: ReceiptUsage;
 };
 
@@ -54,9 +60,19 @@ export const buildReceipt = (
   }
 
   const toolCalls: RunReceipt["toolCalls"] = [];
-  const filesChanged: RunReceipt["filesChanged"] = [];
+  // Keyed by path so repeated patches to one file stay one changed file.
+  const changedByPath = new Map<string, RunReceipt["filesChanged"][number]>();
   const tests: RunReceipt["tests"] = [];
   const approvals: RunReceipt["approvals"] = [];
+  // A denial names only its tool call id, but the approval request that
+  // preceded it carries the tool name, so the pair recovers what was refused.
+  const deniedToolNames = new Map<string, string>();
+
+  for (const event of forRun) {
+    if (event.type === "tool.approval_requested") {
+      deniedToolNames.set(event.payload.call.id, event.payload.call.name);
+    }
+  }
 
   for (const event of forRun) {
     if (event.type === "tool.completed") {
@@ -71,10 +87,14 @@ export const buildReceipt = (
       // Only an applied patch changed the tree. A proposal is a preview, and
       // counting it here would report edits that were never written.
       if (result.name === "apply_patch") {
-        filesChanged.push({
+        const existing = changedByPath.get(result.output.path);
+
+        changedByPath.set(result.output.path, {
           path: result.output.path,
-          additions: result.output.additions,
-          deletions: result.output.deletions,
+          additions: (existing?.additions ?? 0) + result.output.additions,
+          deletions: (existing?.deletions ?? 0) + result.output.deletions,
+          patches: (existing?.patches ?? 0) + 1,
+          sequence: event.sequence,
         });
       }
 
@@ -84,6 +104,7 @@ export const buildReceipt = (
           passed: result.output.passed,
           exitCode: result.output.exitCode,
           durationMs: result.output.durationMs,
+          sequence: event.sequence,
         });
       }
     }
@@ -99,7 +120,7 @@ export const buildReceipt = (
     if (event.type === "tool.denied") {
       toolCalls.push({
         toolCallId: event.payload.toolCallId,
-        name: "denied",
+        name: deniedToolNames.get(event.payload.toolCallId) ?? "unknown",
         outcome: "denied",
       });
       approvals.push({
@@ -121,6 +142,16 @@ export const buildReceipt = (
 
   const startedAt = started.occurredAt;
   const finishedAt = terminal.occurredAt;
+  const filesChanged = [...changedByPath.values()].sort(
+    (first, second) => first.sequence - second.sequence,
+  );
+
+  const lastChange = filesChanged.at(-1)?.sequence;
+  const lastTest = tests.at(-1)?.sequence;
+  const testsFollowedFinalChange =
+    lastChange === undefined || lastTest === undefined
+      ? null
+      : lastTest > lastChange;
 
   return RunReceiptSchema.parse({
     runId,
@@ -128,7 +159,7 @@ export const buildReceipt = (
     goal: started.payload.run.goal,
     model: started.payload.run.model,
     status: completed ? "completed" : "failed",
-    startingRevision: context.startingRevision,
+    base: context.base,
     startedAt,
     finishedAt,
     elapsedMs: Math.max(
@@ -139,6 +170,7 @@ export const buildReceipt = (
     toolCalls,
     filesChanged,
     tests,
+    testsFollowedFinalChange,
     approvals,
     ...(completed?.type === "run.completed"
       ? { summary: completed.payload.summary }

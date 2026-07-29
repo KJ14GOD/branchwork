@@ -58,6 +58,31 @@ eventStore.subscribe((event) => {
     console.log(`✗ run failed: ${event.payload.reason}`);
   }
 
+  if (event.type === "receipt.created") {
+    const { receipt } = event.payload;
+    const failing = receipt.tests.filter((test) => !test.passed).length;
+
+    console.log(
+      `▣ receipt · ${receipt.filesChanged.length} file(s) changed · ${
+        receipt.tests.length === 0
+          ? "tests not run"
+          : failing > 0
+            ? `${failing}/${receipt.tests.length} test runs failed`
+            : receipt.testsFollowedFinalChange === false
+              ? "tests passed before the last change"
+              : "tests passed"
+      } · ${receipt.usage.modelCalls} model call(s) · ${
+        receipt.usage.callsMissingUsage > 0 ? "≥" : ""
+      }${receipt.usage.inputTokens + receipt.usage.outputTokens} tokens · ${
+        Math.round(receipt.elapsedMs / 100) / 10
+      }s${
+        receipt.base.revision
+          ? ` · base ${receipt.base.revision.slice(0, 8)}${receipt.base.dirty ? " + uncommitted" : ""}`
+          : ""
+      }`,
+    );
+  }
+
   if (event.type === "run.completed") {
     console.log(`\n${event.payload.summary}`);
   }

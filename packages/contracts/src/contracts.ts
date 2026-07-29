@@ -248,9 +248,16 @@ export const RunReceiptSchema = z.object({
   goal: z.string().min(1),
   model: ModelSelectionSchema,
   status: z.enum(["completed", "failed"]),
-  // Null when the repository is not a Git checkout. Recorded at session start,
-  // so a diff in this receipt can be reproduced against a known base.
-  startingRevision: z.string().min(1).nullable(),
+  // Read at the start of *this run*, not once per session: a second turn opens
+  // on top of the first turn's writes, so a session-wide revision would name a
+  // base that no longer describes what the run started from.
+  base: z.object({
+    revision: z.string().min(1).nullable(),
+    // A revision alone claims more reproducibility than it can deliver. An
+    // uncommitted tree means the base is that commit *plus* changes nobody
+    // recorded, and a reviewer has to know which of the two they are looking at.
+    dirty: z.boolean(),
+  }),
   startedAt: TimestampSchema,
   finishedAt: TimestampSchema,
   elapsedMs: z.number().int().nonnegative(),
@@ -258,6 +265,14 @@ export const RunReceiptSchema = z.object({
     inputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
     modelCalls: z.number().int().nonnegative(),
+    // Calls whose adapter reported nothing. When this is above zero the totals
+    // are a floor, not a count, and anything displaying them has to say so
+    // rather than print a confident number that is quietly short.
+    //
+    // Provider-side retries are invisible here for the same reason: the SDK
+    // reports usage for the response it finally returned, not for the attempts
+    // it made, so a retried call under-reports against what was billed.
+    callsMissingUsage: z.number().int().nonnegative(),
   }),
   toolCalls: z.array(
     z.object({
@@ -266,11 +281,17 @@ export const RunReceiptSchema = z.object({
       outcome: z.enum(["completed", "failed", "denied"]),
     }),
   ),
+  // One entry per file, not per patch. Two patches to the same file are one
+  // changed file, and counting them twice inflates the headline number that is
+  // the first thing anyone reads.
   filesChanged: z.array(
     z.object({
       path: z.string().min(1),
       additions: z.number().int().nonnegative(),
       deletions: z.number().int().nonnegative(),
+      patches: z.number().int().positive(),
+      /** Sequence of the last patch to this file, so order stays recoverable. */
+      sequence: z.number().int().nonnegative(),
     }),
   ),
   tests: z.array(
@@ -279,8 +300,18 @@ export const RunReceiptSchema = z.object({
       passed: z.boolean(),
       exitCode: z.number().int().nullable(),
       durationMs: z.number().int().nonnegative(),
+      sequence: z.number().int().nonnegative(),
     }),
   ),
+  /**
+   * Whether the last test run happened after the last file change.
+   *
+   * A green suite that ran *before* the final edit says nothing about the diff
+   * this receipt is attached to, and the flat lists above cannot show that on
+   * their own. Null when the run has no tests or no changes, where the question
+   * does not arise.
+   */
+  testsFollowedFinalChange: z.boolean().nullable(),
   approvals: z.array(
     z.object({
       toolCallId: IdSchema,

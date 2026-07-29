@@ -25,24 +25,30 @@ import {
 const run = promisify(execFile);
 
 /**
- * The commit a session opened against.
+ * The commit a run starts from, and whether the tree already differs from it.
  *
- * Read once, at session creation, so every receipt in the session names the
- * same reproducible base. Null when the directory is not a Git checkout, which
- * is allowed — the repository still works, the receipt just cannot cite a
- * revision.
+ * Read per run rather than per session, because a second turn opens on top of
+ * the first turn's writes. Null revision when the directory is not a Git
+ * checkout, which is allowed — the repository still works, the receipt just
+ * cannot cite a base. A dirty tree is reported rather than hidden: the base is
+ * then that commit *plus* changes nobody recorded, and a reviewer has to be
+ * able to tell those apart.
  */
-const readHeadRevision = async (
+const readRepositoryBase = async (
   repositoryPath: string,
-): Promise<string | null> => {
+): Promise<{ revision: string | null; dirty: boolean }> => {
   try {
-    const { stdout } = await run("git", ["rev-parse", "HEAD"], {
-      cwd: repositoryPath,
-    });
+    const [head, status] = await Promise.all([
+      run("git", ["rev-parse", "HEAD"], { cwd: repositoryPath }),
+      run("git", ["status", "--porcelain"], { cwd: repositoryPath }),
+    ]);
 
-    return stdout.trim() || null;
+    return {
+      revision: head.stdout.trim() || null,
+      dirty: status.stdout.trim().length > 0,
+    };
   } catch {
-    return null;
+    return { revision: null, dirty: false };
   }
 };
 
@@ -62,7 +68,6 @@ export type Session = {
   repositoryPath: string;
   allowWrites: boolean;
   allowCommands: boolean;
-  startingRevision: string | null;
   runner: AgentRunner;
   createdAt: string;
   /** Serialises turns so a second submission cannot interleave with a run. */
@@ -159,7 +164,6 @@ export class SessionRegistry {
       throw new Error(`Not a directory: ${repositoryPath}`);
     }
 
-    const startingRevision = await readHeadRevision(repositoryPath);
     const allowWrites = options.allowWrites ?? this.defaults.allowWrites;
     const allowCommands = options.allowCommands ?? this.defaults.allowCommands;
     const proposePatchTool = new ProposePatchTool(repositoryPath);
@@ -168,7 +172,6 @@ export class SessionRegistry {
       repositoryPath,
       allowWrites,
       allowCommands,
-      startingRevision,
       createdAt: new Date().toISOString(),
       queue: Promise.resolve(),
       runner: new AgentRunner(
@@ -184,7 +187,7 @@ export class SessionRegistry {
           new RunTestsTool(repositoryPath),
         ],
         buildApprovalGate(allowWrites, allowCommands),
-        startingRevision,
+        () => readRepositoryBase(repositoryPath),
       ),
     };
 
