@@ -35,6 +35,11 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "run.completed": "■",
   "run.failed": "✗",
   "receipt.created": "▣",
+  "participant.joined": "◉",
+  "participant.left": "◌",
+  "control.requested": "✋",
+  "control.transferred": "⇄",
+  "direction.applied": "»",
   "checkpoint.created": "◈",
   "fork.created": "⑂",
 };
@@ -125,6 +130,59 @@ export const EventRow = ({
         return (
           <span className="event__text event__text--error">
             {event.payload.reason}
+          </span>
+        );
+
+      case "participant.joined": {
+        const { participant } = event.payload;
+
+        return (
+          <span className="event__text">
+            {participant.name} joined
+            <span className="event__type">
+              {" "}
+              · {participant.role}
+              {participant.kind === "agent" ? " · agent" : ""}
+            </span>
+          </span>
+        );
+      }
+
+      case "participant.left":
+        return (
+          <span className="event__text event__text--muted">
+            {event.payload.participantId} ·{" "}
+            {event.payload.reason === "disconnected"
+              ? "connection dropped"
+              : event.payload.reason === "removed"
+                ? "removed"
+                : "left"}
+          </span>
+        );
+
+      case "control.requested":
+        return (
+          <span className="event__text">
+            {event.payload.participantId} asked for control
+            {event.payload.reason ? ` · ${event.payload.reason}` : ""}
+          </span>
+        );
+
+      case "control.transferred":
+        return (
+          <span className="event__text event__text--approved">
+            control moved from {event.payload.fromParticipantId} to{" "}
+            {event.payload.toParticipantId}
+          </span>
+        );
+
+      case "direction.applied":
+        // Separate from direction.submitted on purpose: this is the moment the
+        // words actually reached the run, which is what the person who typed
+        // them is waiting to see.
+        return (
+          <span className="event__text event__text--approved">
+            applied · {event.payload.direction}
           </span>
         );
 

@@ -561,6 +561,74 @@ export const RunProgressEventSchema = EventEnvelopeSchema.extend({
   }),
 });
 
+/**
+ * Who is in the session, and what they may do.
+ *
+ * A role is carried on the participant rather than checked at the call site,
+ * because "only the owner may hand over control" has to be answerable from the
+ * event log after the fact. A decision nobody can reconstruct is not a decision
+ * anyone can review.
+ */
+export const ParticipantJoinedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("participant.joined"),
+  payload: z.object({
+    participant: ParticipantSchema,
+  }),
+});
+
+export const ParticipantLeftEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("participant.left"),
+  payload: z.object({
+    participantId: IdSchema,
+    // Distinguishes a tab closing from someone deliberately leaving. Presence
+    // that cannot tell those apart makes a flaky network look like a departure.
+    reason: z.enum(["disconnected", "left", "removed"]),
+  }),
+});
+
+/**
+ * Control is requested and granted, never taken.
+ *
+ * V1: only one authority controls a run at a time, and other participants
+ * submit direction rather than acting. Both halves are events so the timeline
+ * shows who asked and who agreed, which is the part a reviewer needs later.
+ */
+export const ControlRequestedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("control.requested"),
+  payload: z.object({
+    participantId: IdSchema,
+    reason: z.string().min(1).optional(),
+  }),
+});
+
+export const ControlTransferredEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("control.transferred"),
+  payload: z.object({
+    fromParticipantId: IdSchema,
+    toParticipantId: IdSchema,
+    // Accepted, because a handoff the recipient did not take is not a handoff —
+    // it is a run nobody is holding.
+    acceptedAt: TimestampSchema,
+  }),
+});
+
+/**
+ * Direction is queued, then applied at a boundary the runtime chooses.
+ *
+ * Submitted and applied are two events on purpose. A human needs to see that
+ * their words were received *before* they take effect, and the gap between the
+ * two is exactly the window V1 describes: the runtime finishes or cancels the
+ * current atomic tool action first, so direction never lands mid-call.
+ */
+export const DirectionAppliedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("direction.applied"),
+  payload: z.object({
+    runId: IdSchema,
+    directionEventId: IdSchema,
+    direction: z.string().min(1),
+  }),
+});
+
 export const DirectionSubmittedEventSchema = EventEnvelopeSchema.extend({
   type: z.literal("direction.submitted"),
   payload: z.object({
@@ -680,6 +748,11 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   RunStartedEventSchema,
   RunProgressEventSchema,
   DirectionSubmittedEventSchema,
+  DirectionAppliedEventSchema,
+  ParticipantJoinedEventSchema,
+  ParticipantLeftEventSchema,
+  ControlRequestedEventSchema,
+  ControlTransferredEventSchema,
   ToolRequestedEventSchema,
   ToolApprovalRequestedEventSchema,
   ToolApprovedEventSchema,
@@ -712,6 +785,31 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   DirectionSubmittedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  DirectionAppliedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ParticipantJoinedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ParticipantLeftEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ControlRequestedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ControlTransferredEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,
