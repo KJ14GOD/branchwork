@@ -41,6 +41,16 @@ pnpm typecheck && pnpm test && git diff --check
   escapes, no symlink escapes, and `.git` / `.env` are refused.
 - Never print, inspect, or commit provider secrets.
 
+## Where the rest of it is written down
+
+Nothing below is loaded automatically. Go read it when the task calls for it.
+
+- `README.md` — the product thesis, the multiplayer model, the roadmap. Read
+  before arguing about what Novus is for.
+- `V1_README.md` — the V1 scope contract, including what is *explicitly
+  excluded*, the security boundary, and the build order. Read before proposing
+  work that widens scope.
+
 ## Process
 
 `skills/novus-build-harness` governs how capabilities get built (one vertical slice:

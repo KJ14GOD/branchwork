@@ -1,5 +1,13 @@
 # Dependencies
 node_modules/
+.pnpm-store/
+
+# Agent configuration. The shared rules live in .claude/settings.json and are
+# committed on purpose, so a fresh worktree inherits them. Only the personal
+# file is ignored, and it is ignored here rather than only in a global gitignore
+# so the rule survives a clone onto another machine.
+.claude/settings.local.json
+.fleet-task
 
 # Build output
 dist/
