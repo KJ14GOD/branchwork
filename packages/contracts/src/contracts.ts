@@ -334,9 +334,20 @@ export const CheckpointSchema = z.object({
     // already happened and can honestly say the revision was unknown; a fork
     // has to check something out, so a repository with no commit cannot be
     // forked from at all and must be refused when the checkpoint is taken.
-    revision: z.string().min(1),
-    // Uncommitted tracked work at capture time, as a patch that applies to
-    // `revision`. Null when the tree was clean. This is what makes the base
+    // An object id, not a name. `z.string().min(1)` admitted "main", and a
+    // checkpoint naming a branch is not a checkpoint: the parent commits once
+    // and the fork checks out somewhere else entirely, while the event log
+    // records the literal word "main" as the revision it started from. The
+    // immutability this whole schema exists to provide was one string away
+    // from being a lie.
+    revision: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/, {
+      message: "A checkpoint base must be a full commit object id, not a ref name.",
+    }),
+    // Uncommitted work at capture time, as a patch that applies to `revision`,
+    // including files the agent created but never added — an agent writing a
+    // new file is the ordinary case, and a fork that silently lacked it started
+    // somewhere other than where the checkpoint said. Null when the tree was
+    // genuinely clean. This is what makes the base
     // immutable: the parent may commit, amend, or discard afterwards and the
     // fork still starts from the state that was actually checkpointed.
     patch: z.string().min(1).nullable(),

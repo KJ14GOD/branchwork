@@ -350,6 +350,20 @@ Each fork receives:
 
 Forks never write to the same working directory.
 
+**What worktree isolation does not give you.** A `git worktree` shares one
+repository, so the object database, every ref, the stash, and the hooks
+directory are common to the parent and every fork. A fork that can run commands
+can move the parent's branch with `git update-ref`, delete a live sibling with
+`git worktree remove --force`, or leave a hook that fires on the parent's next
+commit — all demonstrated in an audit on 2026-07-29. Isolation holds for the
+working tree and not for the repository.
+
+This is tolerable in V1 only because reaching any of it requires `run_command`,
+which is `dangerous`, denied by default, and opted into per session. It stops
+being tolerable the moment forks run with commands enabled by default, and the
+fix then is a separate object store per attempt — a clone rather than a
+worktree, paid for in disk and checkout time.
+
 ### Compare
 
 V1 comparison includes:

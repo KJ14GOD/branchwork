@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { SessionEventDraftSchema } from "@novus/contracts";
+import { CheckpointSchema, SessionEventDraftSchema } from "@novus/contracts";
 
 import {
   WorktreeManager,
@@ -391,4 +391,121 @@ test("both events cross the boundary as drafts the store can accept", async () =
     await manager.removeAll().catch(() => undefined);
     await rm(root, { recursive: true, force: true });
   }
+});
+
+// The three blocking findings from the post-merge audit, each pinned by the
+// reproduction that found it. All were in the isolation and fidelity claims the
+// milestone rests on, and none was visible to the tests that shipped with it.
+
+test("a file the agent created but never added crosses into the fork", async () => {
+  const root = await repository();
+  const manager = managerFor(root);
+
+  // `git diff HEAD` cannot see this, so the checkpoint reported the tree clean
+  // and the fork silently started without it. An agent writing a new file is
+  // the ordinary case, so the ordinary fork was wrong.
+  await writeFile(join(root, "created-by-the-agent.ts"), "export const x = 1;\n");
+
+  const checkpoint = await manager.createCheckpoint(checkpointInput());
+
+  assert.notEqual(
+    checkpoint.base.patch,
+    null,
+    "the checkpoint reported a clean tree while an untracked file existed",
+  );
+
+  const handle = await manager.createFork(checkpoint, {
+    runId: "untracked-fork",
+    label: "carries new files",
+  });
+
+  assert.equal(
+    await exists(join(handle.worktreePath, "created-by-the-agent.ts")),
+    true,
+    "the fork did not start where the checkpoint said it would",
+  );
+
+  await manager.removeFork(handle.fork.runId);
+});
+
+test("capturing a checkpoint does not touch the parent's index", async () => {
+  const root = await repository();
+  const manager = managerFor(root);
+
+  await writeFile(join(root, "untracked.ts"), "export const y = 2;\n");
+
+  // The reason the original refused to include untracked files was that
+  // `git add -N` would write to this index. Staging into a scratch index is
+  // what makes both things true at once, so the parent's index staying empty
+  // is as much the point as the file crossing over.
+  const before = await git(root, ["diff", "--cached", "--name-only"]);
+  await manager.createCheckpoint(checkpointInput());
+  const after = await git(root, ["diff", "--cached", "--name-only"]);
+
+  assert.equal(after.stdout, before.stdout);
+  assert.equal(after.stdout.trim(), "");
+});
+
+test("a checkpoint cannot name a branch instead of a commit", async () => {
+  const root = await repository();
+  const manager = managerFor(root);
+  const checkpoint = await manager.createCheckpoint(checkpointInput());
+
+  // "main" moves. A checkpoint that names it is not a checkpoint: the parent
+  // commits once and the fork checks out somewhere else, while the event log
+  // records the word "main" as the revision it started from.
+  assert.throws(() =>
+    CheckpointSchema.parse({
+      ...checkpoint,
+      base: { ...checkpoint.base, revision: "main" },
+    }),
+  );
+
+  assert.throws(() =>
+    CheckpointSchema.parse({
+      ...checkpoint,
+      base: { ...checkpoint.base, revision: "-f" },
+    }),
+  );
+});
+
+test("a base the repository no longer has is refused by name", async () => {
+  const root = await repository();
+  const manager = managerFor(root);
+  const checkpoint = await manager.createCheckpoint(checkpointInput());
+  const absent = "0".repeat(40);
+
+  await assert.rejects(
+    () =>
+      manager.createFork(
+        { ...checkpoint, base: { ...checkpoint.base, revision: absent } },
+        { runId: "missing-base", label: "should not exist" },
+      ),
+    /not a commit in/,
+  );
+});
+
+test("the checkpoint's base survives an aggressive prune in the parent", async () => {
+  const root = await repository();
+  const manager = managerFor(root);
+
+  await writeFile(join(root, "second.ts"), "export const z = 3;\n");
+  await git(root, ["add", "-A"]);
+  await git(root, ["commit", "-qm", "second"]);
+
+  const checkpoint = await manager.createCheckpoint(checkpointInput());
+
+  // Immutability used to rest entirely on the reflog, so this pair of commands
+  // in the parent made every outstanding checkpoint unforkable.
+  await git(root, ["reset", "--hard", "HEAD~1"]);
+  await git(root, ["reflog", "expire", "--expire=now", "--all"]);
+  await git(root, ["gc", "--prune=now", "--quiet"]);
+
+  const handle = await manager.createFork(checkpoint, {
+    runId: "survives-gc",
+    label: "base still reachable",
+  });
+
+  assert.equal(handle.fork.revision, checkpoint.base.revision);
+  await manager.removeFork(handle.fork.runId);
 });

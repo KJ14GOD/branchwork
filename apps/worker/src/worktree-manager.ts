@@ -101,8 +101,11 @@ const isPortFree = (port: number): Promise<boolean> =>
     server.once("listening", () => {
       server.close(() => settle(true));
     });
-    // Loopback only, like everything else Novus binds.
-    server.listen(port, "127.0.0.1");
+    // Bound on every interface rather than loopback, which is not what the
+    // fork will use but is the only way to learn the truth: BSD SO_REUSEADDR
+    // lets a 127.0.0.1 bind succeed over a live 0.0.0.0 listener, so probing
+    // loopback handed out ports that were already taken.
+    server.listen(port, "0.0.0.0");
   });
 
 export type CheckpointInput = {
@@ -144,6 +147,22 @@ export type ForkHandle = {
    * rather than inheriting the parent's. Anything spawned for this fork is
    * spawned with these, and nothing spawned for one fork can be handed the
    * other's repository path by accident.
+   *
+   * What is NOT separate, because `git worktree` shares one repository: the
+   * object database, every ref, the stash, and the hooks directory. A fork
+   * running `git update-ref` can move the parent's branch. A fork running
+   * `git worktree remove --force` can delete a live sibling. A stash pushed in
+   * one appears in all of them, and a hook written from one runs on the
+   * parent's next commit. An audit demonstrated each of these.
+   *
+   * So "two attempts run without interfering" is true of the working tree and
+   * not of the repository. That is acceptable only because reaching any of it
+   * requires `run_command`, which is `dangerous`, denied by default, and
+   * separately opted into — a fork whose tool policy allows commands can reach
+   * its parent, and that is the boundary as it actually stands. Real isolation
+   * needs a separate object store per attempt, which is a clone rather than a
+   * worktree, and is the change to make if forks are ever given commands by
+   * default.
    */
   environment: Record<string, string>;
 };
@@ -203,11 +222,14 @@ export class WorktreeManager {
    * and a capture that staged files or wrote a stash would change the tree the
    * parent run is still working in.
    *
-   * The patch covers tracked modifications only. A file the agent created but
-   * never added is not in `git diff HEAD` and will not exist in the fork —
-   * including it would mean running `git add -N` against the parent's index,
-   * which is exactly the mutation the paragraph above refuses. Callers that
-   * need untracked work carried across must commit it first.
+   * Untracked files are included, and getting there without breaking the rule
+   * above took a third option. `git diff HEAD` cannot see them; `git add -N`
+   * would show them by writing to the parent's index, which is the mutation
+   * this refuses. So the capture builds a *temporary* index — GIT_INDEX_FILE
+   * pointed at a scratch path — stages everything into that, and diffs it. The
+   * parent's index is never opened for writing, and a file the agent created
+   * still crosses into the fork. An agent creating a file is the ordinary case,
+   * so a checkpoint that dropped it was wrong in the ordinary case.
    */
   async createCheckpoint(input: CheckpointInput): Promise<Checkpoint> {
     const repositoryRoot = await this.resolveRepositoryRoot();
@@ -226,14 +248,46 @@ export class WorktreeManager {
       );
     }
 
-    // --binary so a checkpoint of a tree containing changed binary files still
-    // reproduces, rather than applying cleanly and quietly dropping them.
-    const patch = await this.git(repositoryRoot, ["diff", "--binary", "HEAD"]).catch(
-      () => "",
+    // Pinned before anything else reads it. Immutability rested entirely on the
+    // reflog, so `git reflog expire --expire=now --all && git gc --prune=now`
+    // in the parent made every outstanding checkpoint unforkable. A ref under
+    // refs/novus/checkpoints keeps the base reachable for as long as the
+    // checkpoint exists, and teardown removes it.
+    const id = crypto.randomUUID();
+
+    await this.git(repositoryRoot, [
+      "update-ref",
+      `refs/novus/checkpoints/${id}`,
+      revision,
+    ]).catch(() => "");
+
+    // A scratch index, so staging everything does not touch the parent's.
+    // --binary so a tree with changed binary files reproduces rather than
+    // applying cleanly and quietly dropping them.
+    const scratchIndex = join(
+      await mkdtemp(join(tmpdir(), "novus-checkpoint-")),
+      "index",
     );
 
+    let patch = "";
+
+    try {
+      await this.git(repositoryRoot, ["add", "-A", "--", "."], {
+        GIT_INDEX_FILE: scratchIndex,
+      });
+      patch = await this.git(
+        repositoryRoot,
+        ["diff", "--binary", "--cached", revision],
+        { GIT_INDEX_FILE: scratchIndex },
+      );
+    } catch {
+      patch = "";
+    } finally {
+      await rm(dirname(scratchIndex), { recursive: true, force: true });
+    }
+
     return CheckpointSchema.parse({
-      id: crypto.randomUUID(),
+      id,
       sessionId: input.sessionId,
       parentRunId: input.parentRunId,
       parentSequence: input.parentSequence,
@@ -275,6 +329,24 @@ export class WorktreeManager {
     }
 
     const repositoryRoot = await this.resolveRepositoryRoot();
+
+    // The schema now refuses a ref name, but a well-formed object id can still
+    // be one this repository has never heard of, or one a prune removed. Ask
+    // before building anything, so the failure names the checkpoint rather than
+    // arriving later in Git's words about a worktree.
+    const resolved = await this.git(repositoryRoot, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `${validated.base.revision}^{commit}`,
+    ]).catch(() => "");
+
+    if (resolved.trim() !== validated.base.revision) {
+      throw new Error(
+        `Checkpoint ${validated.id} names ${validated.base.revision}, which is not a commit in ${repositoryRoot}. The base was pruned, or the checkpoint came from another repository.`,
+      );
+    }
+
     const forkRoot = await this.resolveForkRoot(repositoryRoot);
     const worktreePath = join(forkRoot, input.runId);
     const branch = `novus/fork/${input.runId}`;
@@ -307,6 +379,12 @@ export class WorktreeManager {
       ]);
     } catch (error) {
       this.releasePorts(devPorts);
+      // Tear down before rethrowing. A `worktree add` that fails partway leaves
+      // Git holding a registration for a directory that may not exist, and
+      // nothing prunes it — so the same run id could never be forked again, the
+      // phantom stayed in `git worktree list`, and a dead branch accumulated in
+      // the user's repository. Exactly what this class claims not to do.
+      await this.destroyWorktree(repositoryRoot, worktreePath, branch);
       throw new Error(
         `Could not create a worktree for fork ${input.runId}: ${messageOf(error)}`,
       );
@@ -526,11 +604,19 @@ export class WorktreeManager {
     }
   }
 
-  private async git(cwd: string, args: readonly string[]): Promise<string> {
+  private async git(
+    cwd: string,
+    args: readonly string[],
+    // Only ever GIT_INDEX_FILE, so a capture can stage into scratch space
+    // instead of the parent's index. Merged over the inherited environment
+    // rather than replacing it, because Git still needs the rest of it.
+    environment?: Readonly<Record<string, string>>,
+  ): Promise<string> {
     const { stdout } = await run("git", [...args], {
       cwd,
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: GIT_MAX_BUFFER,
+      ...(environment ? { env: { ...process.env, ...environment } } : {}),
     });
 
     return stdout;
