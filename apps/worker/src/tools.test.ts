@@ -1,0 +1,217 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { RunCommandTool, RunTestsTool } from "./tools.ts";
+
+const temporaryRepository = async (): Promise<string> =>
+  mkdtemp(join(tmpdir(), "novus-tools-"));
+
+const runCommand = (id: string, command: string, args: string[], timeoutMs?: number) =>
+  ({
+    id,
+    name: "run_command" as const,
+    input: { command, args, ...(timeoutMs === undefined ? {} : { timeoutMs }) },
+  });
+
+test("run_command reports exit code and stdout", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  const result = await tool.execute(
+    runCommand("1", "node", ["-e", "console.log('ran')"]),
+  );
+
+  assert.equal(result.name, "run_command");
+  if (result.name !== "run_command") return;
+
+  assert.equal(result.output.exitCode, 0);
+  assert.equal(result.output.stdout.trim(), "ran");
+  assert.equal(result.output.timedOut, false);
+  assert.equal(result.output.truncated, false);
+});
+
+test("run_command reports a non-zero exit rather than throwing", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  // A failing command is an observation the model must be able to read, not an
+  // error that ends the run.
+  const result = await tool.execute(
+    runCommand("2", "node", ["-e", "console.error('boom'); process.exit(3)"]),
+  );
+
+  if (result.name !== "run_command") return assert.fail("wrong result");
+
+  assert.equal(result.output.exitCode, 3);
+  assert.match(result.output.stderr, /boom/);
+});
+
+test("run_command does not interpret shell metacharacters", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  // The security property the argv-vector contract exists to provide: this
+  // argument must arrive as text, not as a second command.
+  const result = await tool.execute(
+    runCommand("3", "echo", ["hello; echo pwned"]),
+  );
+
+  if (result.name !== "run_command") return assert.fail("wrong result");
+
+  assert.equal(result.output.stdout.trim(), "hello; echo pwned");
+  assert.doesNotMatch(result.output.stdout, /^pwned$/m);
+});
+
+test("run_command hides secrets from the child environment", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  process.env.NOVUS_TEST_API_KEY = "super-secret";
+  process.env.NOVUS_TEST_PLAIN = "visible";
+
+  try {
+    const result = await tool.execute(
+      runCommand("4", "node", [
+        "-e",
+        "console.log(process.env.NOVUS_TEST_API_KEY ?? 'absent', process.env.NOVUS_TEST_PLAIN ?? 'absent')",
+      ]),
+    );
+
+    if (result.name !== "run_command") return assert.fail("wrong result");
+
+    // The model reads this stdout, so a key reaching it is a leak.
+    assert.equal(result.output.stdout.trim(), "absent visible");
+  } finally {
+    delete process.env.NOVUS_TEST_API_KEY;
+    delete process.env.NOVUS_TEST_PLAIN;
+  }
+});
+
+test("run_command refuses git operations that discard work", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  await assert.rejects(
+    () => tool.execute(runCommand("5", "git", ["reset", "--hard", "HEAD~1"])),
+    /discards uncommitted work/,
+  );
+
+  await assert.rejects(
+    () => tool.execute(runCommand("6", "git", ["clean", "-fd"])),
+    /deletes untracked files/,
+  );
+});
+
+test("run_command refuses a path instead of a program name", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  await assert.rejects(
+    () => tool.execute(runCommand("7", "../../usr/bin/whoami", [])),
+    /program name resolved on PATH/,
+  );
+});
+
+test("run_command kills a command that outruns its timeout", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  const result = await tool.execute(
+    runCommand("8", "node", ["-e", "setTimeout(() => {}, 30000)"], 1_000),
+  );
+
+  if (result.name !== "run_command") return assert.fail("wrong result");
+
+  assert.equal(result.output.timedOut, true);
+  // A signalled process has no exit code, and reporting 0 would read as success.
+  assert.equal(result.output.exitCode, null);
+});
+
+test("run_command runs inside the selected repository", async () => {
+  const repository = await temporaryRepository();
+  const tool = new RunCommandTool(repository);
+
+  const result = await tool.execute(
+    runCommand("9", "node", ["-e", "console.log(process.cwd())"]),
+  );
+
+  if (result.name !== "run_command") return assert.fail("wrong result");
+
+  // macOS reports /private/var for /var, so compare the resolved tail.
+  assert.ok(result.output.stdout.trim().endsWith(repository.replace(/^\/private/, "")));
+});
+
+test("run_tests reports a passing suite", async () => {
+  const repository = await temporaryRepository();
+  await writeFile(
+    join(repository, "package.json"),
+    JSON.stringify({ name: "fixture", scripts: { test: "exit 0" } }),
+  );
+  await writeFile(join(repository, "package-lock.json"), "{}");
+
+  const result = await new RunTestsTool(repository).execute({
+    id: "10",
+    name: "run_tests",
+    input: { args: [] },
+  });
+
+  if (result.name !== "run_tests") return assert.fail("wrong result");
+
+  assert.equal(result.output.passed, true);
+  assert.equal(result.output.exitCode, 0);
+});
+
+test("run_tests reports a failing suite as failed rather than throwing", async () => {
+  const repository = await temporaryRepository();
+  await writeFile(
+    join(repository, "package.json"),
+    JSON.stringify({ name: "fixture", scripts: { test: "exit 1" } }),
+  );
+  await writeFile(join(repository, "package-lock.json"), "{}");
+
+  const result = await new RunTestsTool(repository).execute({
+    id: "11",
+    name: "run_tests",
+    input: { args: [] },
+  });
+
+  if (result.name !== "run_tests") return assert.fail("wrong result");
+
+  assert.equal(result.output.passed, false);
+  assert.notEqual(result.output.exitCode, 0);
+});
+
+test("run_tests explains itself when the project declares no test script", async () => {
+  const repository = await temporaryRepository();
+  await writeFile(
+    join(repository, "package.json"),
+    JSON.stringify({ name: "fixture" }),
+  );
+
+  await assert.rejects(
+    () =>
+      new RunTestsTool(repository).execute({
+        id: "12",
+        name: "run_tests",
+        input: { args: [] },
+      }),
+    /requires a "test" script/,
+  );
+});
+
+test("run_tests explains itself when there is no package.json at all", async () => {
+  const repository = await temporaryRepository();
+
+  await assert.rejects(
+    () =>
+      new RunTestsTool(repository).execute({
+        id: "13",
+        name: "run_tests",
+        input: { args: [] },
+      }),
+    /no package.json/,
+  );
+});

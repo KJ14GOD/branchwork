@@ -57,11 +57,37 @@ export const ApplyPatchToolCallSchema = z.object({
   }),
 });
 
+// Commands are described as a program plus an argument vector, never as a single
+// string. A string would have to reach a shell to be useful, and a shell turns
+// every argument the model writes into possible `;`, `&&`, `$()`, and
+// redirection — an escape from the repository boundary through the one tool
+// whose whole job is to run code.
+export const RunCommandToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("run_command"),
+  input: z.object({
+    command: z.string().min(1),
+    args: z.array(z.string()).max(64).default([]),
+    timeoutMs: z.number().int().min(1_000).max(600_000).optional(),
+  }),
+});
+
+export const RunTestsToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("run_tests"),
+  input: z.object({
+    args: z.array(z.string()).max(32).default([]),
+    timeoutMs: z.number().int().min(1_000).max(600_000).optional(),
+  }),
+});
+
 export const ToolCallSchema = z.discriminatedUnion("name", [
   ReadFileToolCallSchema,
   SearchRepositoryToolCallSchema,
   ProposePatchToolCallSchema,
   ApplyPatchToolCallSchema,
+  RunCommandToolCallSchema,
+  RunTestsToolCallSchema,
 ]);
 
 export type ToolCall = z.infer<typeof ToolCallSchema>;
@@ -118,11 +144,44 @@ export const ApplyPatchToolResultSchema = z.object({
   }),
 });
 
+// Both execution tools report the same shape, because the model needs the same
+// evidence either way: what ran, how it ended, and what it said. `exitCode` is
+// null when a signal ended the process — a timeout kill is not exit 0, and
+// collapsing the two would let a killed command read as a clean one.
+const CommandOutcomeSchema = z.object({
+  command: z.string().min(1),
+  exitCode: z.number().int().nullable(),
+  timedOut: z.boolean(),
+  durationMs: z.number().int().nonnegative(),
+  stdout: z.string(),
+  stderr: z.string(),
+  // Output is capped so one runaway command cannot exhaust the model's context.
+  truncated: z.boolean(),
+});
+
+export const RunCommandToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("run_command"),
+  output: CommandOutcomeSchema,
+});
+
+export const RunTestsToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("run_tests"),
+  output: CommandOutcomeSchema.extend({
+    // Stated explicitly rather than left for the model to infer from exitCode,
+    // because "did my change work" is the entire question this tool exists for.
+    passed: z.boolean(),
+  }),
+});
+
 export const ToolResultSchema = z.discriminatedUnion("name", [
   ReadFileToolResultSchema,
   SearchRepositoryToolResultSchema,
   ProposePatchToolResultSchema,
   ApplyPatchToolResultSchema,
+  RunCommandToolResultSchema,
+  RunTestsToolResultSchema,
 ]);
 
 export type ToolResult = z.infer<typeof ToolResultSchema>;

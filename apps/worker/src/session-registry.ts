@@ -14,6 +14,8 @@ import {
   ApplyPatchTool,
   ProposePatchTool,
   ReadFileTool,
+  RunCommandTool,
+  RunTestsTool,
   SearchRepositoryTool,
 } from "./tools.ts";
 
@@ -100,6 +102,8 @@ export class SessionRegistry {
           new ReadFileTool(repositoryPath),
           proposePatchTool,
           new ApplyPatchTool(repositoryPath, proposePatchTool),
+          new RunCommandTool(repositoryPath),
+          new RunTestsTool(repositoryPath),
         ],
         buildApprovalGate(allowWrites),
       ),
