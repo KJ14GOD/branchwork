@@ -176,6 +176,57 @@ const RUN_TESTS_TOOL = {
   },
 };
 
+const LIST_DIRECTORY_TOOL = {
+  name: "list_directory",
+  description:
+    "List the entries of a directory inside the selected repository. Use this to orient yourself before searching or reading.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      path: {
+        type: "string",
+        description:
+          "Repository-relative directory. Defaults to the repository root.",
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
+const GIT_STATUS_TOOL = {
+  name: "git_status",
+  description:
+    "Show which files in the repository have been modified, staged, or left untracked. Use this to see what your own changes touched.",
+  input_schema: {
+    type: "object" as const,
+    properties: {},
+    required: [],
+    additionalProperties: false,
+  },
+};
+
+const GIT_DIFF_TOOL = {
+  name: "git_diff",
+  description:
+    "Show the current diff of the repository. Unstaged by default. Use this to read back exactly what your patches changed before you claim they are correct.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      staged: {
+        type: "boolean",
+        description: "Diff staged changes instead of unstaged ones.",
+      },
+      path: {
+        type: "string",
+        description: "Optional repository-relative path to narrow the diff.",
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
 const appendExchanges = (
   messages: MessageParam[],
   exchanges: readonly ModelToolExchange[],
@@ -255,6 +306,9 @@ export class AnthropicModelAdapter implements ModelAdapter {
         APPLY_PATCH_TOOL,
         RUN_COMMAND_TOOL,
         RUN_TESTS_TOOL,
+        LIST_DIRECTORY_TOOL,
+        GIT_STATUS_TOOL,
+        GIT_DIFF_TOOL,
       ],
       tool_choice: {
         type: "auto",
