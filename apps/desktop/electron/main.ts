@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -10,6 +11,15 @@ const workerEntry = resolve(repositoryRoot, "apps/worker/src/worker.ts");
 const envFile = resolve(repositoryRoot, ".env");
 
 const WORKER_PORT = Number(process.env.NOVUS_PORT ?? 4319);
+/**
+ * Minted here rather than read back from the worker's output.
+ *
+ * The main process is the only party that needs to know it before the worker
+ * exists, and parsing a secret out of a child's stdout would mean it had been
+ * printed. This way it is passed in and never logged.
+ */
+const ACCESS_TOKEN =
+  process.env.NOVUS_TOKEN?.trim() || randomBytes(32).toString("base64url");
 const WORKER_URL = `http://127.0.0.1:${WORKER_PORT}`;
 const HEALTH_TIMEOUT_MS = 15_000;
 
@@ -29,7 +39,7 @@ const startWorker = (): void => {
     [`--env-file=${envFile}`, "--experimental-strip-types", workerEntry],
     {
       cwd: resolve(repositoryRoot, "apps/worker"),
-      env: process.env,
+      env: { ...process.env, NOVUS_TOKEN: ACCESS_TOKEN },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -104,6 +114,9 @@ const createWindow = (): void => {
 };
 
 ipcMain.handle("novus:worker-url", () => WORKER_URL);
+// The renderer needs it to call the worker at all. It stays out of the page URL
+// and out of the DOM; the preload bridge is the only way across.
+ipcMain.handle("novus:access-token", () => ACCESS_TOKEN);
 
 ipcMain.handle("novus:pick-directory", async () => {
   if (!window) {

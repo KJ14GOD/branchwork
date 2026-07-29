@@ -12,6 +12,7 @@ import {
 } from "@novus/contracts/protocol";
 import type { SessionEventStore } from "@novus/session-service";
 
+import { isAllowedOrigin, offeredToken, tokensMatch } from "./access.ts";
 import { createRedactor, type Redactor } from "./redaction.ts";
 import type { Session, SessionRegistry } from "./session-registry.ts";
 
@@ -24,6 +25,14 @@ export type EventServerOptions = {
   sessions?: SessionRegistry;
   /** Defaults to a redactor seeded from the worker's own environment. */
   redactor?: Redactor;
+  /**
+   * Required on every request except /health.
+   *
+   * Omitted only by tests that are not exercising access control. A worker
+   * started without one is open to every page in the user's browser, so
+   * worker.ts always supplies it.
+   */
+  token?: string;
 };
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -164,6 +173,7 @@ export const startEventServer = (
   const port = options.port ?? Number(process.env.NOVUS_PORT ?? 4319);
 
   const sessions = options.sessions;
+  const token = options.token;
   // Built once, at startup: the snapshot of secret-looking environment values
   // is taken before any run can add to the environment.
   const redactor = options.redactor ?? createRedactor();
@@ -241,13 +251,38 @@ export const startEventServer = (
   const server: Server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
 
-    response.setHeader("Access-Control-Allow-Origin", "*");
-    response.setHeader("Access-Control-Allow-Headers", "content-type");
+    const origin = request.headers.origin;
+
+    if (!isAllowedOrigin(origin)) {
+      // No CORS headers at all, so the browser refuses the response as well.
+      response.writeHead(403).end();
+      return;
+    }
+
+    // Reflected rather than `*`, which is what allows credentials and is only
+    // safe because the origin was just checked.
+    response.setHeader("Access-Control-Allow-Origin", origin ?? "*");
+    response.setHeader("Vary", "Origin");
+    response.setHeader("Access-Control-Allow-Headers", "content-type, authorization");
     response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 
     if (request.method === "OPTIONS") {
       response.writeHead(204).end();
       return;
+    }
+
+    // /health is deliberately open: it is how a client discovers the worker is
+    // up and what it permits, and it carries nothing about any session.
+    if (token && url.pathname !== "/health") {
+      const offered = offeredToken(request.headers.authorization, url);
+
+      if (!offered || !tokensMatch(token, offered)) {
+        sendJson(response, 401, {
+          error:
+            "This worker requires an access token. The desktop app supplies it; a guest needs the token from the invite link.",
+        });
+        return;
+      }
     }
 
     if (url.pathname === "/health") {

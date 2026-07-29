@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { authorization } from "./access.ts";
 import {
   HostCapabilitiesSchema,
   SessionSummarySchema,
@@ -51,6 +52,7 @@ export const useSession = (endpoint: string): SessionState => {
   useEffect(() => {
     let cancelled = false;
 
+    // /health needs no token — it is how a client learns the worker is up.
     void fetch(`${endpoint}/health`)
       .then((response) => (response.ok ? response.json() : null))
       .then((body: unknown) => {
@@ -85,7 +87,10 @@ export const useSession = (endpoint: string): SessionState => {
       try {
         const response = await fetch(`${endpoint}/sessions`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
           body: JSON.stringify({ repositoryPath, allowWrites, allowCommands }),
         });
 
@@ -117,7 +122,10 @@ export const useSession = (endpoint: string): SessionState => {
         `${endpoint}/sessions/${encodeURIComponent(session.id)}/turns`,
         {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
           body: JSON.stringify({ goal }),
         },
       );

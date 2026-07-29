@@ -36,6 +36,8 @@ export type GuestSession = {
 export const useGuestSession = (
   endpoint: string,
   sessionId: string | null,
+  /** From the invite link. The worker refuses a guest without it. */
+  token: string | null,
 ): GuestSession => {
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [connection, setConnection] = useState<GuestConnection>({
@@ -118,6 +120,13 @@ export const useGuestSession = (
       url.searchParams.set("session", sessionId);
       url.searchParams.set("since", String(resumeSequence(held.current)));
 
+      // EventSource cannot set a header, so the credential rides in the query.
+      // It is already in this page's URL — that is how the guest was invited —
+      // so nothing is exposed here that was not exposed by the link itself.
+      if (token) {
+        url.searchParams.set("token", token);
+      }
+
       setConnection({ kind: "connecting" });
       source = new EventSource(url);
 
@@ -170,7 +179,7 @@ export const useGuestSession = (
           : { kind: "locating" },
       );
 
-      const listing = await fetchSessions(address.endpoint, controller.signal);
+      const listing = await fetchSessions(address.endpoint, controller.signal, token ?? undefined);
 
       if (cancelled) {
         return;
@@ -259,6 +268,7 @@ export const useGuestSession = (
 export const useWorkerSessions = (
   endpoint: string,
   enabled: boolean,
+  token: string | null,
 ): SessionListing | null => {
   // Null until the first answer: "asking" and "hosting nothing" are different
   // screens, and showing the second one first is a lie that lasts a frame.
@@ -272,7 +282,7 @@ export const useWorkerSessions = (
     const controller = new AbortController();
 
     const poll = async () => {
-      const next = await fetchSessions(endpoint, controller.signal);
+      const next = await fetchSessions(endpoint, controller.signal, token ?? undefined);
 
       if (!controller.signal.aborted) {
         setListing(next);

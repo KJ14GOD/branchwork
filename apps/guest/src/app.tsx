@@ -70,12 +70,16 @@ export const App = () => {
   const [sessionId, setSessionId] = useState<string | null>(() =>
     readParam("session"),
   );
+  // Read once. The invite link is where a guest's credential comes from, and
+  // keeping it out of state means changing the session in the UI cannot lose it.
+  const [token] = useState<string | null>(() => readParam("token"));
 
   const { events, connection, session, retry } = useGuestSession(
     endpoint,
     sessionId,
+    token,
   );
-  const listing = useWorkerSessions(endpoint, sessionId === null);
+  const listing = useWorkerSessions(endpoint, sessionId === null, token);
 
   useEffect(() => {
     writeParams(endpoint, sessionId);
