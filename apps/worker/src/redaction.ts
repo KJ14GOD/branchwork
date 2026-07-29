@@ -187,6 +187,138 @@ const FIELD =
 const FIELD_SHAPED_NAME = /[_.-]|[a-z][A-Z]/;
 const FIELD_DELIMITERS = new Set(["", "\n", "{", ",", "[", '"', "'", "`"]);
 
+// A source reference, not a field. `keys.ts:12:5 - error TS2322: Type 'string'
+// is not assignable…` is a compiler diagnostic about a file whose name happens
+// to contain a secret word, and taking the rest of that line deleted the error
+// while protecting nothing. It bites `grep`, `node --test` locations and
+// root-level `tsc` output — anywhere a filename appears without a directory,
+// since a `/` before the name already stops the rule from matching at all.
+//
+// Both halves have to hold, and that is what keeps this from being a hole. The
+// name has to look like a file — `keys.ts`, never a bare `key` — and the value
+// has to open with a line number. `password: 12:30` is still a password, and a
+// `digits:letters` credential is still a credential, because neither of those
+// names is a filename. Anything the exemption lets past is re-examined from the
+// colon onward rather than skipped, so a real field later on the same line is
+// still redacted.
+const SOURCE_FILE_NAME = /^[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8}$/;
+const SOURCE_LOCATION_VALUE = /^\d+:/;
+
+/**
+ * The `name: value` pass, run as an explicit scan rather than a `replace`.
+ *
+ * The scan is what makes declining safe. A field takes the rest of its line, so
+ * a `replace` callback that returned the match untouched also handed back every
+ * character up to the newline — and the regex resumed *after* it. Every rule
+ * that decides "this is not a secret" therefore blinded the pass to whatever
+ * followed on that line. Resuming at the colon instead means a rule can decline
+ * a name without covering for the one behind it.
+ */
+const redactFields = (text: string): string => {
+  // A fresh instance: `lastIndex` is written below, and sharing that across
+  // calls would make the result depend on the previous string.
+  const pattern = new RegExp(FIELD.source, FIELD.flags);
+  let result = "";
+  let copiedTo = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const prefix = match[1]!;
+    const quote = match[2]!;
+    const name = match[3]!;
+    const operator = match[4]!;
+    const matched = match[5]!;
+    const offset = match.index;
+
+    // Just past the colon, before whatever spacing followed it — the spacing
+    // is a prefix the next candidate needs.
+    const afterOperator =
+      offset +
+      prefix.length +
+      quote.length * 2 +
+      name.length +
+      operator.indexOf(":") +
+      1;
+
+    const decline = (): void => {
+      result += text.slice(copiedTo, afterOperator);
+      copiedTo = afterOperator;
+      pattern.lastIndex = afterOperator;
+    };
+
+    if (!looksLikeSecretName(name)) {
+      decline();
+      continue;
+    }
+
+    // A compiler or grep line: a filename, then a source location.
+    if (
+      SOURCE_FILE_NAME.test(name) &&
+      SOURCE_LOCATION_VALUE.test(matched.trimStart())
+    ) {
+      decline();
+      continue;
+    }
+
+    const lineStart = text.lastIndexOf("\n", offset) + 1;
+    // A diff marker or a YAML sequence dash is still the start of the line
+    // as far as structure goes. Without this, `+  password: hunter2` and
+    // `- password: hunter2` were treated as prose while `api_key:` in the
+    // same position was redacted — and `password`, `secret`, `token` are
+    // exactly the bare names that appear that way.
+    const opensTheLine =
+      text.slice(lineStart, offset + prefix.length).replace(/^[+\-\s]*/, "") ===
+      "";
+
+    if (
+      !opensTheLine &&
+      quote === "" &&
+      !FIELD_DELIMITERS.has(prefix) &&
+      !FIELD_SHAPED_NAME.test(name)
+    ) {
+      decline();
+      continue;
+    }
+
+    // A narrower rule already fired here — an Authorization scheme, say.
+    // Overwriting its marker with this one would lose the reason and, since
+    // this pattern is greedier, eat the bracket that closed it.
+    if (matched.includes(MARKER_PREFIX)) {
+      decline();
+      continue;
+    }
+
+    let value = matched;
+    let tail = "";
+
+    // An unquoted value stops at the quote that opened the argument it sits
+    // in, so `-H "x-api-key: …"` keeps its closing quote.
+    if (quote === "" && (prefix === '"' || prefix === "'" || prefix === "`")) {
+      const closed = value.indexOf(prefix);
+
+      if (closed >= 0) {
+        tail = value.slice(closed);
+        value = value.slice(0, closed);
+      }
+    }
+
+    // Trailing whitespace belongs to the line, not the value.
+    const trimmed = value.trimEnd();
+    tail = `${value.slice(trimmed.length)}${tail}`;
+
+    if (trimmed === "") {
+      decline();
+      continue;
+    }
+
+    result += text.slice(copiedTo, offset);
+    result += `${prefix}${quote}${name}${quote}${operator}${redactionMarker("env-value")}${tail}`;
+    copiedTo = offset + match[0]!.length;
+  }
+
+  return result + text.slice(copiedTo);
+};
+
 // A dotenv file named anywhere in the command vector: `cat .env`, `sort .env.local`,
 // `bash -c 'source .env'`.
 const DOTENV_REFERENCE = /(?:^|[\s'"=<(/])\.env\b/;
@@ -318,80 +450,32 @@ export const createRedactor = (options: RedactorOptions = {}): Redactor => {
 
     result = result.replace(
       ASSIGNMENT,
-      (match, prefix: string, name: string, operator: string) =>
-        looksLikeSecretName(name)
-          ? `${prefix}${name}${operator}${redactionMarker("env-value")}`
-          : match,
-    );
-
-    result = result.replace(
-      FIELD,
       (
         match,
         prefix: string,
-        quote: string,
         name: string,
         operator: string,
-        matched: string,
-        offset: number,
-        whole: string,
+        value: string,
       ) => {
         if (!looksLikeSecretName(name)) {
           return match;
         }
 
-        const lineStart = whole.lastIndexOf("\n", offset) + 1;
-        // A diff marker or a YAML sequence dash is still the start of the line
-        // as far as structure goes. Without this, `+  password: hunter2` and
-        // `- password: hunter2` were treated as prose while `api_key:` in the
-        // same position was redacted — and `password`, `secret`, `token` are
-        // exactly the bare names that appear that way.
-        const opensTheLine =
-          whole
-            .slice(lineStart, offset + prefix.length)
-            .replace(/^[+\-\s]*/, "") === "";
-
-        if (
-          !opensTheLine &&
-          quote === "" &&
-          !FIELD_DELIMITERS.has(prefix) &&
-          !FIELD_SHAPED_NAME.test(name)
-        ) {
+        // The guard the field rule already carries, for the same reason. A
+        // narrower rule fired here first — the dotenv pass, most often, since
+        // it runs before any of this — and rewriting its marker loses the
+        // reason it names. It also mangles the marker: this value class stops
+        // at the closing bracket, so `API_KEY=[redacted:env-file]` came back as
+        // `API_KEY=[redacted:env-value]]`.
+        if (value.includes(MARKER_PREFIX)) {
           return match;
         }
 
-        // A narrower rule already fired here — an Authorization scheme, say.
-        // Overwriting its marker with this one would lose the reason and, since
-        // this pattern is greedier, eat the bracket that closed it.
-        if (matched.includes(MARKER_PREFIX)) {
-          return match;
-        }
-
-        let value = matched;
-        let tail = "";
-
-        // An unquoted value stops at the quote that opened the argument it sits
-        // in, so `-H "x-api-key: …"` keeps its closing quote.
-        if (quote === "" && (prefix === '"' || prefix === "'" || prefix === "`")) {
-          const closed = value.indexOf(prefix);
-
-          if (closed >= 0) {
-            tail = value.slice(closed);
-            value = value.slice(0, closed);
-          }
-        }
-
-        // Trailing whitespace belongs to the line, not the value.
-        const trimmed = value.trimEnd();
-        tail = `${value.slice(trimmed.length)}${tail}`;
-
-        if (trimmed === "") {
-          return match;
-        }
-
-        return `${prefix}${quote}${name}${quote}${operator}${redactionMarker("env-value")}${tail}`;
+        return `${prefix}${name}${operator}${redactionMarker("env-value")}`;
       },
     );
+
+    result = redactFields(result);
 
     return result;
   };
@@ -430,25 +514,33 @@ export const createRedactor = (options: RedactorOptions = {}): Redactor => {
     // generic walk that is no longer visible.
     if (event.type === "tool.completed") {
       const result = event.payload.result;
+      // The only place this module reaches for a named field instead of
+      // walking whatever it is given, and so the only place a contract change
+      // could hand it something that is not there. ToolResultSchema guarantees
+      // `command` for these two tools today, so this cannot throw yet — but the
+      // throw would land in the event store's listener loop, which has no
+      // try/catch, propagate out of append, and end the run. Redaction must
+      // never be able to do that, so it is read defensively rather than on the
+      // strength of a schema in another package.
+      if (result.name === "run_command" || result.name === "run_tests") {
+        const command = result.output?.command;
 
-      if (
-        (result.name === "run_command" || result.name === "run_tests") &&
-        DOTENV_REFERENCE.test(result.output.command)
-      ) {
-        source = {
-          ...event,
-          payload: {
-            ...event.payload,
-            result: {
-              ...result,
-              output: {
-                ...result.output,
-                stdout: redactDotenvAssignments(result.output.stdout),
-                stderr: redactDotenvAssignments(result.output.stderr),
+        if (typeof command === "string" && DOTENV_REFERENCE.test(command)) {
+          source = {
+            ...event,
+            payload: {
+              ...event.payload,
+              result: {
+                ...result,
+                output: {
+                  ...result.output,
+                  stdout: redactDotenvAssignments(result.output.stdout),
+                  stderr: redactDotenvAssignments(result.output.stderr),
+                },
               },
             },
-          },
-        } as SessionEvent;
+          } as SessionEvent;
+        }
       }
     }
 
