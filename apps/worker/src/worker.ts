@@ -12,6 +12,7 @@ import { FixedModelRouter } from "./model.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { mintAccessToken } from "./access.ts";
 import { ParticipantRegistry } from "./participants.ts";
+import { publishToRelay } from "./relay-publisher.ts";
 import { createRedactor } from "./redaction.ts";
 import { killRunningCommands } from "./tools.ts";
 
@@ -187,6 +188,31 @@ console.log(
 console.log(
   `access  token required · guest invite: http://127.0.0.1:${guestPort}/?endpoint=${encodeURIComponent(eventServer.url)}&token=${accessToken}`,
 );
+
+// Opt-in, and outbound. Nothing dials in to the worker: it decides what leaves
+// and pushes it somewhere a teammate can reach. Absent the variable, Novus is
+// exactly the single-machine harness it was.
+const relayUrl = process.env.NOVUS_RELAY_URL?.trim();
+const relayToken = process.env.NOVUS_RELAY_TOKEN?.trim();
+
+if (relayUrl && relayToken) {
+  publishToRelay(eventStore, {
+    url: relayUrl,
+    token: relayToken,
+    // Its own redaction, on its own path. Every outbound route does this rather
+    // than trusting that some earlier one did.
+    redactor: createRedactor({
+      environment: process.env,
+      knownSecrets: [accessToken, relayToken],
+    }),
+  });
+
+  console.log(`relay   publishing to ${relayUrl}`);
+} else if (relayUrl || relayToken) {
+  console.error(
+    "relay   NOVUS_RELAY_URL and NOVUS_RELAY_TOKEN must both be set; publishing is off",
+  );
+}
 
 // A goal on the command line opens a session immediately; otherwise the worker
 // waits for a client to choose a repository.

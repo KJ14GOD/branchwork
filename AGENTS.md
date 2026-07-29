@@ -41,8 +41,13 @@ pnpm typecheck && pnpm test && git diff --check
   `?session=<id>` alone gets a 401.
 - Ports: worker `4319` (`NOVUS_PORT`), desktop Vite `5273`, guest Vite `5274`. All
   loopback-only.
+- **Relay publishing is opt-in and outbound.** Set both `NOVUS_RELAY_URL` and
+  `NOVUS_RELAY_TOKEN` and the worker pushes its redacted events to the session
+  service; set neither and Novus is the single-machine harness it was. Nothing
+  ever dials in to the worker.
 - Other env: `NOVUS_REPO`, `NOVUS_SESSION`, `NOVUS_TOKEN`, `NOVUS_GUEST_PORT`,
-  `NOVUS_DB`, `NOVUS_REDACT_PATTERNS`.
+  `NOVUS_DB`, `NOVUS_REDACT_PATTERNS`, `NOVUS_RELAY_URL`, `NOVUS_RELAY_TOKEN`,
+  `NOVUS_HOST_NAME`.
 
 ## Invariants
 
