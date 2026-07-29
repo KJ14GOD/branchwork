@@ -23,6 +23,12 @@ const TOOL_CLASSES: Record<ToolCall["name"], ToolClass> = {
   // as read because it is *usually* harmless would be trusting the repository
   // to be benign — exactly the assumption the tool classes exist to avoid.
   run_tests: "dangerous",
+  // Reporting only. These read the repository and change nothing, so they are
+  // allowed automatically like the other read tools — the agent should be able
+  // to look at what it did without asking permission to look.
+  list_directory: "read",
+  git_status: "read",
+  git_diff: "read",
 };
 
 export const classifyTool = (name: ToolCall["name"]): ToolClass =>

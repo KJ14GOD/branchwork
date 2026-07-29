@@ -41,6 +41,20 @@ const summariseCall = (call: Extract<SessionEvent, { type: "tool.requested" }>["
     return call.input.args.length > 0 ? call.input.args.join(" ") : "full suite";
   }
 
+  if (call.name === "list_directory") {
+    return call.input.path ?? ".";
+  }
+
+  if (call.name === "git_status") {
+    return "working tree";
+  }
+
+  if (call.name === "git_diff") {
+    return [call.input.staged ? "staged" : "unstaged", call.input.path]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
   return call.input.patchId;
 };
 
@@ -313,7 +327,17 @@ export const EventRow = ({
                 ? result.output.passed
                   ? "tests passed"
                   : "tests failed"
-                : result.output.command;
+                : result.name === "list_directory"
+                  ? `${result.output.entries.length} entr${result.output.entries.length === 1 ? "y" : "ies"}`
+                  : result.name === "git_status"
+                    ? result.output.clean === null
+                      ? "status unavailable"
+                      : result.output.clean
+                        ? "working tree clean"
+                        : `${result.output.files.length} file${result.output.files.length === 1 ? "" : "s"} dirty`
+                    : result.name === "git_diff"
+                      ? `${result.output.filesChanged} file${result.output.filesChanged === 1 ? "" : "s"} in diff`
+                      : result.output.command;
 
         return (
           <div className="tool">

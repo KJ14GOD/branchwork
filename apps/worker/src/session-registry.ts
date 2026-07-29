@@ -15,6 +15,9 @@ import {
 } from "./policy.ts";
 import {
   ApplyPatchTool,
+  GitDiffTool,
+  GitStatusTool,
+  ListDirectoryTool,
   ProposePatchTool,
   ReadFileTool,
   RunCommandTool,
@@ -195,6 +198,9 @@ export class SessionRegistry {
           new ApplyPatchTool(repositoryPath, proposePatchTool),
           new RunCommandTool(repositoryPath),
           new RunTestsTool(repositoryPath),
+          new ListDirectoryTool(repositoryPath),
+          new GitStatusTool(repositoryPath),
+          new GitDiffTool(repositoryPath),
         ],
         buildApprovalGate(allowWrites, allowCommands),
         () => readRepositoryBase(repositoryPath),
