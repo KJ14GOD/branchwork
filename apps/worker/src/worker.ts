@@ -1,7 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
-import { InMemorySessionEventStore } from "@novus/session-service";
+import {
+  defaultDatabasePath,
+  SessionEventStore,
+} from "@novus/session-service";
 
 import { AnthropicModelAdapter } from "./anthropic-model.ts";
 import { startEventServer } from "./event-server.ts";
@@ -19,7 +22,8 @@ const allowWrites = process.env.NOVUS_ALLOW_WRITES === "1";
 const allowCommands = process.env.NOVUS_ALLOW_COMMANDS === "1";
 const goal = process.argv.slice(2).join(" ").trim();
 
-const eventStore = new InMemorySessionEventStore();
+const databasePath = defaultDatabasePath();
+const eventStore = new SessionEventStore({ databasePath });
 
 eventStore.subscribe((event) => {
   if (event.type === "run.started") {
@@ -126,6 +130,7 @@ try {
 }
 
 console.log(`novus worker · ${eventServer.url}`);
+console.log(`events ${databasePath} (override with NOVUS_DB)`);
 console.log(
   `writes ${allowWrites ? "approved (NOVUS_ALLOW_WRITES=1)" : "denied — set NOVUS_ALLOW_WRITES=1 to permit apply_patch"}`,
 );
@@ -161,7 +166,10 @@ console.log("\nready — press ctrl+c to stop");
 // leave a test suite running invisibly after the worker is gone.
 const shutdown = (code: number) => {
   killRunningCommands();
-  void eventServer.close().then(() => process.exit(code));
+  void eventServer.close().then(() => {
+    eventStore.close();
+    process.exit(code);
+  });
 };
 
 process.on("SIGINT", () => shutdown(0));

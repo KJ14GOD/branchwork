@@ -1,54 +1,32 @@
-import {
-  SessionEventDraftSchema,
-  SessionEventSchema,
-  type SessionEvent,
-  type SessionEventDraft,
-} from "@novus/contracts";
+import type { SessionEvent, SessionEventDraft } from "@novus/contracts";
 
-export type SessionEventListener = (event: SessionEvent) => void;
+import { SessionEventStore } from "./event-store.ts";
 
-export class InMemorySessionEventStore {
-  private readonly events: SessionEvent[] = [];
-  private readonly listeners = new Set<SessionEventListener>();
+export {
+  defaultDatabasePath,
+  InMemorySessionEventStore,
+  MEMORY_DATABASE,
+  SessionEventStore,
+  type SessionEventListener,
+  type SessionEventStoreOptions,
+} from "./event-store.ts";
 
-  append(draftInput: SessionEventDraft): SessionEvent {
-    const draft = SessionEventDraftSchema.parse(draftInput);
-    const sequence = this.events.filter(
-      (event) => event.sessionId === draft.sessionId,
-    ).length;
+/**
+ * Opened on first use rather than at import.
+ *
+ * Importing this package should not create a database file — the desktop, the
+ * tests and the demo all import it, and only one caller wants the durable log.
+ */
+let defaultEventStore: SessionEventStore | undefined;
 
-    const event = SessionEventSchema.parse({
-      ...draft,
-      eventId: crypto.randomUUID(),
-      sequence,
-      occurredAt: new Date().toISOString(),
-    });
+const store = (): SessionEventStore => {
+  defaultEventStore ??= new SessionEventStore();
 
-    this.events.push(event);
-    for (const listener of this.listeners) {
-      listener(event);
-    }
-
-    return event;
-  }
-
-  list(sessionId: string): SessionEvent[] {
-    return this.events.filter((event) => event.sessionId === sessionId);
-  }
-
-  subscribe(listener: SessionEventListener): () => void {
-    this.listeners.add(listener);
-
-    return () => {
-      this.listeners.delete(listener);
-    };
-  }
-}
-
-const defaultEventStore = new InMemorySessionEventStore();
+  return defaultEventStore;
+};
 
 export const appendEvent = (draft: SessionEventDraft): SessionEvent =>
-  defaultEventStore.append(draft);
+  store().append(draft);
 
 export const getSessionEvents = (sessionId: string): SessionEvent[] =>
-  defaultEventStore.list(sessionId);
+  store().list(sessionId);
