@@ -21,14 +21,20 @@ case "$path" in
   *) exit 0 ;;
 esac
 
-root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+# Ask the question from where the file lives, not from where the process happens
+# to be. A session rooted in the main checkout can be told to edit a file inside
+# a slice's worktree, and it is the worktree that owns the branch and therefore
+# the claim — deciding by process CWD would deny that write while the slice
+# legitimately holds the lock.
+target_dir="$(cd "$(dirname "$path")" 2>/dev/null && pwd)" || target_dir="$PWD"
+root="$(git -C "$target_dir" rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
-if "$root/scripts/contract-lock.sh" check; then
+if (cd "$root" && ./scripts/contract-lock.sh check); then
   exit 0
 fi
 
-holder="$("$root/scripts/contract-lock.sh" status 2>/dev/null)"
-branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+holder="$(cd "$root" && ./scripts/contract-lock.sh status 2>/dev/null)"
+branch="$(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 
 jq -n --arg h "$holder" --arg b "$branch" '{
   hookSpecificOutput: {
