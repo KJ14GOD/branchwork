@@ -46,6 +46,9 @@ export const ProposePatchToolCallSchema = z.object({
   }),
 });
 
+// Applying carries no edits of its own: it references a `patchId` returned by
+// an earlier propose_patch call. Application is a separate, permissioned step,
+// so a proposal can be reviewed (and denied) before it touches the working tree.
 export const ApplyPatchToolCallSchema = z.object({
   id: IdSchema,
   name: z.literal("apply_patch"),
