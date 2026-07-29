@@ -125,6 +125,7 @@ test("an empty timeline never reads as a quiet session", () => {
     { kind: "dropped", attempt: 1, retryAt: 0 },
     { kind: "live", blind: true },
     { kind: "live", blind: false },
+    { kind: "stopped", reason: "nonsense is not an address." },
   ];
 
   const sentences = connections.map(
@@ -142,6 +143,7 @@ test("an empty timeline never reads as a quiet session", () => {
   assert.match(sentences[2]!, /dropped/);
   assert.match(sentences[3]!, /does not list its sessions/);
   assert.match(sentences[4]!, /has not recorded an event yet/);
+  assert.match(sentences[5]!, /nonsense is not an address/);
 });
 
 test("only a healthy stream is reported as live", () => {

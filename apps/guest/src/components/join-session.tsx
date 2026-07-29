@@ -30,6 +30,17 @@ export const JoinSession = ({
       return <div className="join__note">Asking {endpoint} what it hosts…</div>;
     }
 
+    if (listing.kind === "refused") {
+      // Refused before the request, not after it: this endpoint was never
+      // contacted, and the sentence has to say which rule it broke or the
+      // reader has no way to tell a typo from a link someone built for them.
+      return (
+        <div className="join__error">
+          Not connecting to {endpoint}. {listing.reason}
+        </div>
+      );
+    }
+
     if (listing.kind === "unreachable") {
       return (
         <div className="join__error">

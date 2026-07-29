@@ -3,6 +3,8 @@ import {
   type SessionSummary,
 } from "@novus/contracts/protocol";
 
+import { resolveEndpoint } from "./endpoint.ts";
+
 /**
  * The one request a guest is allowed to make.
  *
@@ -15,16 +17,27 @@ export type SessionListing =
   | { kind: "ok"; sessions: SessionSummary[] }
   /** The worker is up but exposes no session index, so ids cannot be checked. */
   | { kind: "unlisted" }
-  | { kind: "unreachable"; detail: string };
+  | { kind: "unreachable"; detail: string }
+  /** The address was never contacted. See `resolveEndpoint`. */
+  | { kind: "refused"; reason: string };
 
 export const fetchSessions = async (
   endpoint: string,
   signal: AbortSignal,
 ): Promise<SessionListing> => {
+  // Checked here rather than at the caller because this is the only fetch the
+  // guest makes, and a rule enforced at the boundary cannot be forgotten by
+  // the next caller.
+  const address = resolveEndpoint(endpoint);
+
+  if (address.kind === "refused") {
+    return { kind: "refused", reason: address.reason };
+  }
+
   let response: Response;
 
   try {
-    response = await fetch(`${endpoint}/sessions`, { signal });
+    response = await fetch(`${address.endpoint}/sessions`, { signal });
   } catch (cause) {
     return { kind: "unreachable", detail: (cause as Error).message };
   }

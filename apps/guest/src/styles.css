@@ -531,6 +531,52 @@ button {
   white-space: pre-wrap;
 }
 
+/* Not a fourth hue: the existing red, for the one status line that would
+   otherwise be read as reassurance it has not earned. */
+.kv__value--unknown {
+  color: var(--del);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.panel__note {
+  color: var(--text-dim);
+}
+
+.panel__note--inset {
+  padding: 4px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.entries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.entries__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  gap: 10px;
+  padding: 1px 0;
+}
+
+.entries__name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entries__kind {
+  color: var(--text-dim);
+  text-align: right;
+}
+
 .matches {
   margin: 0;
   padding: 0;
