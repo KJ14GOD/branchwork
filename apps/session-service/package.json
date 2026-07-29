@@ -8,7 +8,7 @@
     ".": "./src/session-service.ts"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test src/session-service.test.ts",
+    "test": "node --experimental-strip-types --test src/event-store.test.ts src/session-service.test.ts",
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {

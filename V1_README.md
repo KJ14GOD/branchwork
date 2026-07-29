@@ -41,10 +41,12 @@ the shared-control half stays theoretical. Two concrete rules follow from it.
   `run_command` and `run_tests` exist, are `dangerous` class, and are opted into
   with `NOVUS_ALLOW_COMMANDS=1`. Milestone 2's exit condition now turns on the
   receipt alone.
-- **Events do not survive a restart.** The event log is supposed to be the source
-  of truth with current state as a projection. It is an array in memory, so
-  Milestone 1 is not actually finished and everything in Milestone 4 that
-  replays or forks from history has nothing to stand on.
+- ~~**Events do not survive a restart.**~~ Fixed 2026-07-29: the log is SQLite
+  now, at `.novus/events.db` or wherever `NOVUS_DB` points, and a fresh store
+  over the same file replays the same ordered events with the same per-session
+  sequence numbers. What still does not survive a restart is the *session* — the
+  worker does not read prior sessions back on start-up, so the history is
+  durable and nothing yet reopens it. That reader is Milestone 4's to build.
 
 Before starting anything from the roadmap in `README.md`, check it against this
 section. Work that widens the harness while multiplayer stays at 54 lines is
