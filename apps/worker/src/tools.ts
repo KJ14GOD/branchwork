@@ -1,6 +1,7 @@
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
-import { readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { rgPath } from "@vscode/ripgrep";
 
 import {
@@ -10,6 +11,8 @@ import {
 } from "@novus/contracts";
 
 import { buildUnifiedDiff } from "./diff.ts";
+
+const execFileAsync = promisify(execFile);
 
 export interface AgentTool {
   readonly name: ToolCall["name"];
@@ -814,6 +817,180 @@ export class ApplyPatchTool implements AgentTool {
         status: "applied",
         additions: proposal.additions,
         deletions: proposal.deletions,
+      },
+    });
+  }
+}
+
+// Reporting tools. These read the repository and never change it, so they are
+// classified read and run without approval — but they still reach the
+// filesystem and still spawn Git, so every path goes through the same resolver
+// as the rest and every argument vector is fixed by Novus rather than composed
+// from model input.
+const MAX_DIRECTORY_ENTRIES = 500;
+const MAX_DIFF_CHARS = 48_000;
+const GIT_TIMEOUT_MS = 15_000;
+
+const runGit = (
+  repositoryRoot: string,
+  args: readonly string[],
+): Promise<string> =>
+  execFileAsync("git", [...args], {
+    cwd: repositoryRoot,
+    timeout: GIT_TIMEOUT_MS,
+    maxBuffer: 16 * 1024 * 1024,
+  }).then(({ stdout }) => stdout);
+
+export class ListDirectoryTool implements AgentTool {
+  readonly name = "list_directory";
+  private readonly repositoryPath: string;
+
+  constructor(repositoryPath: string) {
+    this.repositoryPath = resolve(repositoryPath);
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The list_directory tool cannot execute ${call.name}.`);
+    }
+
+    const { repositoryRoot, targetPath } = await resolveInsideRepository(
+      this.repositoryPath,
+      call.input.path ?? ".",
+    );
+
+    if (!(await stat(targetPath)).isDirectory()) {
+      throw new Error("list_directory requires a directory path.");
+    }
+
+    const found = await readdir(targetPath, { withFileTypes: true });
+    const entries = found
+      .filter((entry) => !isProtectedPath(repositoryRoot, resolve(targetPath, entry.name)))
+      .slice(0, MAX_DIRECTORY_ENTRIES)
+      .map((entry) => ({
+        name: entry.name,
+        kind: entry.isDirectory()
+          ? ("directory" as const)
+          : entry.isSymbolicLink()
+            ? ("symlink" as const)
+            : entry.isFile()
+              ? ("file" as const)
+              : ("other" as const),
+      }));
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        path: relative(repositoryRoot, targetPath),
+        entries,
+        truncated: found.length > MAX_DIRECTORY_ENTRIES,
+      },
+    });
+  }
+}
+
+export class GitStatusTool implements AgentTool {
+  readonly name = "git_status";
+  private readonly repositoryPath: string;
+
+  constructor(repositoryPath: string) {
+    this.repositoryPath = resolve(repositoryPath);
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The git_status tool cannot execute ${call.name}.`);
+    }
+
+    const repositoryRoot = await realpath(this.repositoryPath);
+
+    let porcelain: string;
+
+    try {
+      porcelain = await runGit(repositoryRoot, [
+        "status",
+        "--porcelain=v1",
+        "--branch",
+      ]);
+    } catch (error) {
+      // Null clean, not false. A repository we could not read is unknown, and
+      // reporting it as clean would let the agent conclude nothing changed.
+      return ToolResultSchema.parse({
+        toolCallId: call.id,
+        name: this.name,
+        output: { branch: null, clean: null, files: [] },
+      });
+    }
+
+    const lines = porcelain.split("\n").filter(Boolean);
+    const branchLine = lines.find((line) => line.startsWith("##"));
+    const branch =
+      branchLine?.replace(/^## /, "").split(/\.\.\.|\s/)[0] ?? null;
+
+    const files = lines
+      .filter((line) => !line.startsWith("##"))
+      .map((line) => ({
+        // Porcelain v1 is a two-character status followed by a space.
+        status: line.slice(0, 2).trim() || "?",
+        path: line.slice(3),
+        staged: line[0] !== " " && line[0] !== "?",
+      }));
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        branch: branch || null,
+        clean: files.length === 0,
+        files,
+      },
+    });
+  }
+}
+
+export class GitDiffTool implements AgentTool {
+  readonly name = "git_diff";
+  private readonly repositoryPath: string;
+
+  constructor(repositoryPath: string) {
+    this.repositoryPath = resolve(repositoryPath);
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The git_diff tool cannot execute ${call.name}.`);
+    }
+
+    const repositoryRoot = await realpath(this.repositoryPath);
+    const staged = call.input.staged ?? false;
+    const args = ["diff", "--no-color"];
+
+    if (staged) {
+      args.push("--staged");
+    }
+
+    if (call.input.path) {
+      // Resolved through the same guard as every other path, then passed after
+      // `--` so a filename can never be read as an option.
+      const { targetPath } = await resolveInsideRepository(
+        this.repositoryPath,
+        call.input.path,
+      );
+      args.push("--", relative(repositoryRoot, targetPath));
+    }
+
+    const diff = await runGit(repositoryRoot, args);
+    const filesChanged = (diff.match(/^diff --git /gm) ?? []).length;
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        staged,
+        diff: diff.slice(0, MAX_DIFF_CHARS),
+        filesChanged,
+        truncated: diff.length > MAX_DIFF_CHARS,
       },
     });
   }
