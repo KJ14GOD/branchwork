@@ -81,6 +81,34 @@ export const RunTestsToolCallSchema = z.object({
   }),
 });
 
+export const ListDirectoryToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("list_directory"),
+  input: z.object({
+    path: z.string().min(1).optional(),
+  }),
+});
+
+// Both Git tools are read-only reporting. They take no revision arguments and no
+// pathspec beyond the repository itself, because every argument accepted here is
+// an argument the model can use to ask Git about somewhere else.
+export const GitStatusToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("git_status"),
+  input: z.object({}),
+});
+
+export const GitDiffToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("git_diff"),
+  input: z.object({
+    // Unstaged by default, matching what `git diff` alone shows, because that is
+    // what the agent just changed and most often wants to check.
+    staged: z.boolean().optional(),
+    path: z.string().min(1).optional(),
+  }),
+});
+
 export const ToolCallSchema = z.discriminatedUnion("name", [
   ReadFileToolCallSchema,
   SearchRepositoryToolCallSchema,
@@ -88,6 +116,9 @@ export const ToolCallSchema = z.discriminatedUnion("name", [
   ApplyPatchToolCallSchema,
   RunCommandToolCallSchema,
   RunTestsToolCallSchema,
+  ListDirectoryToolCallSchema,
+  GitStatusToolCallSchema,
+  GitDiffToolCallSchema,
 ]);
 
 export type ToolCall = z.infer<typeof ToolCallSchema>;
@@ -175,6 +206,50 @@ export const RunTestsToolResultSchema = z.object({
   }),
 });
 
+export const ListDirectoryToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("list_directory"),
+  output: z.object({
+    path: z.string(),
+    entries: z.array(
+      z.object({
+        name: z.string().min(1),
+        kind: z.enum(["file", "directory", "symlink", "other"]),
+      }),
+    ),
+    truncated: z.boolean(),
+  }),
+});
+
+export const GitStatusToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("git_status"),
+  output: z.object({
+    branch: z.string().min(1).nullable(),
+    // Null rather than false when the check could not run, so an unreadable
+    // repository never reports as a clean one.
+    clean: z.boolean().nullable(),
+    files: z.array(
+      z.object({
+        path: z.string().min(1),
+        status: z.string().min(1),
+        staged: z.boolean(),
+      }),
+    ),
+  }),
+});
+
+export const GitDiffToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("git_diff"),
+  output: z.object({
+    staged: z.boolean(),
+    diff: z.string(),
+    filesChanged: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+  }),
+});
+
 export const ToolResultSchema = z.discriminatedUnion("name", [
   ReadFileToolResultSchema,
   SearchRepositoryToolResultSchema,
@@ -182,6 +257,9 @@ export const ToolResultSchema = z.discriminatedUnion("name", [
   ApplyPatchToolResultSchema,
   RunCommandToolResultSchema,
   RunTestsToolResultSchema,
+  ListDirectoryToolResultSchema,
+  GitStatusToolResultSchema,
+  GitDiffToolResultSchema,
 ]);
 
 export type ToolResult = z.infer<typeof ToolResultSchema>;
