@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { EventRow } from "./components/event-row.tsx";
+import { EventRow } from "./components/guest-event-row.tsx";
 import { JoinSession } from "./components/join-session.tsx";
 import { describeConnection, summarise } from "./timeline.ts";
 import { useGuestSession, useWorkerSessions } from "./use-guest-session.ts";

@@ -1,0 +1,26 @@
+{
+  "name": "@novus/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The event timeline both Novus clients draw.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./diff": "./src/diff.ts",
+    "./tool-results": "./src/tool-results.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json",
+    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@novus/contracts": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "react": "^19.2.0"
+  }
+}

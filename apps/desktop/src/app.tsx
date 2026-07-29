@@ -4,7 +4,7 @@ import type { SessionEvent } from "@novus/contracts";
 
 import { bridge } from "./bridge.ts";
 import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
-import { EventRow } from "./components/event-row.tsx";
+import { EventRow } from "./components/host-event-row.tsx";
 import { OpenRepository } from "./components/open-repository.tsx";
 import { useSession } from "./use-session.ts";
 import { useSessionEvents } from "./use-session-events.ts";
