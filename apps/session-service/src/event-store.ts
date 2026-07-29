@@ -124,8 +124,17 @@ export class SessionEventStore {
          (session_id, sequence, event_id, type, actor_id, occurred_at, event)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
+    // The `sequence >= ?` predicate is what keeps a reconnect cheap. Every SSE
+    // connect asks for the tail of a log that only ever grows, and selecting
+    // the whole session to throw most of it away in JavaScript meant the cost
+    // of resuming was set by the log's total length rather than by how much of
+    // it the client was missing. The UNIQUE (session_id, sequence) index
+    // already covers this exactly, so SQLite seeks to the resume point instead
+    // of scanning to it, and rows before it are never read or parsed.
     this.listStatement = this.database.prepare(
-      "SELECT event FROM session_events WHERE session_id = ? ORDER BY sequence ASC",
+      `SELECT event FROM session_events
+         WHERE session_id = ? AND sequence >= ?
+         ORDER BY sequence ASC`,
     );
     this.sessionsStatement = this.database.prepare(
       "SELECT session_id FROM session_events GROUP BY session_id ORDER BY MIN(ordinal) ASC",
@@ -182,12 +191,21 @@ export class SessionEventStore {
     return event;
   }
 
-  list(sessionId: string): SessionEvent[] {
-    return this.listStatement.all(sessionId).map(readEventColumn);
+  /**
+   * A session's log from `since` onward, oldest first.
+   *
+   * `since` is inclusive and defaults to the beginning, so a caller that wants
+   * the whole log still asks for it by name alone. Sequences are per session
+   * and start at 0, which is why the default can be a number rather than a
+   * branch to a second statement.
+   */
+  list(sessionId: string, since = 0): SessionEvent[] {
+    return this.listStatement.all(sessionId, since).map(readEventColumn);
   }
 
   /**
-   * The readable part of a session's log, and a count of what was not.
+   * The readable part of a session's log from `since` onward, and a count of
+   * what was not readable.
    *
    * `list` is strict on purpose — a row it cannot parse is a real problem and
    * saying so is the honest answer for a store. But the log now outlives the
@@ -196,12 +214,19 @@ export class SessionEventStore {
    * cannot read. Strictness on a serving path turns that into an unhandled
    * throw inside an HTTP handler, which ends the worker process rather than the
    * request. One stale row should cost its own line, not the session.
+   *
+   * The count is of unreadable rows in the range asked for, not in the session.
+   * A damaged row the caller was never going to be sent is not a gap in what it
+   * receives, and reporting it would describe the log rather than the answer.
    */
-  readable(sessionId: string): { events: SessionEvent[]; unreadable: number } {
+  readable(
+    sessionId: string,
+    since = 0,
+  ): { events: SessionEvent[]; unreadable: number } {
     const events: SessionEvent[] = [];
     let unreadable = 0;
 
-    for (const row of this.listStatement.all(sessionId)) {
+    for (const row of this.listStatement.all(sessionId, since)) {
       try {
         events.push(readEventColumn(row));
       } catch {
@@ -212,7 +237,16 @@ export class SessionEventStore {
     return { events, unreadable };
   }
 
-  /** Every session the log has heard of, in the order each first appeared. */
+  /**
+   * Every session the log has heard of, in the order each first appeared.
+   *
+   * Kept despite having no caller in the worker today. `GET /sessions` reports
+   * the registry, which is a map that dies with the process — so after a
+   * restart the only record that a session ever existed is this table, and
+   * without this method the durable log is a thing you can only read if you
+   * already know the id to ask for. Recovering sessions after a restart, and
+   * the fork the `ordinal` column exists for, both begin here.
+   */
   sessions(): string[] {
     return this.sessionsStatement.all().map((row) => String(row["session_id"]));
   }

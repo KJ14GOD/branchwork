@@ -4,9 +4,9 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { ToolCall } from "@novus/contracts";
-import type { InMemorySessionEventStore } from "@novus/session-service";
+import type { SessionEventStore } from "@novus/session-service";
 
-import { AgentRunner } from "./agent-runner.ts";
+import { AgentRunFailure, AgentRunner } from "./agent-runner.ts";
 import type { ModelAdapter, ModelRouter } from "./model.ts";
 import {
   AllowListApprovalGate,
@@ -125,7 +125,7 @@ const buildApprovalGate = (
  */
 export class SessionRegistry {
   private readonly sessions = new Map<string, Session>();
-  private readonly eventStore: InMemorySessionEventStore;
+  private readonly eventStore: SessionEventStore;
   private readonly router: ModelRouter;
   private readonly adapters: readonly ModelAdapter[];
   /**
@@ -139,7 +139,7 @@ export class SessionRegistry {
   private readonly defaults: HostDefaults;
 
   constructor(
-    eventStore: InMemorySessionEventStore,
+    eventStore: SessionEventStore,
     router: ModelRouter,
     adapters: readonly ModelAdapter[],
     defaults: HostDefaults = { allowWrites: false, allowCommands: false },
@@ -226,9 +226,59 @@ export class SessionRegistry {
         }),
       )
       .catch((error: unknown) => {
-        console.error(`turn failed: ${(error as Error).message}`);
+        this.reportTurnFailure(session, error);
       });
 
     return session.queue as Promise<void>;
+  }
+
+  /**
+   * Tells the session about a turn that ended by throwing.
+   *
+   * The submitting client is answered the moment the turn is queued, so the
+   * event log is the only channel a later failure has. Reporting it on stderr
+   * alone left a run that had emitted `run.started` and then simply stopped —
+   * from the timeline indistinguishable from one still thinking, and the host's
+   * console is not somewhere a reviewer of the session will look.
+   *
+   * The append is attempted, not assumed. Persistence made a thrown `append`
+   * possible for reasons that are about the machine rather than the draft — a
+   * full disk, a write lock that outlasted the busy timeout — and those are
+   * exactly the conditions under which the append recording the failure fails
+   * too. When that happens there is nowhere left to say it but stderr, and it
+   * gets said as its own line rather than swallowed a second time.
+   */
+  private reportTurnFailure(session: Session, error: unknown): void {
+    const message =
+      (error instanceof Error ? error.message : String(error)) ||
+      "The turn ended without a message.";
+
+    console.error(`turn failed: ${message}`);
+
+    // Not an AgentRunFailure means the run never reached the log: no adapter
+    // was configured for the selection, or the run draft itself was refused.
+    // There is nothing in the session claiming to be in progress, so there is
+    // nothing to correct — inventing a run id to fail would be worse.
+    if (!(error instanceof AgentRunFailure)) {
+      return;
+    }
+
+    try {
+      this.eventStore.append({
+        sessionId: session.id,
+        actorId: "agent-1",
+        type: "run.failed",
+        payload: { runId: error.runId, reason: message },
+      });
+    } catch (reportError) {
+      const reason =
+        reportError instanceof Error
+          ? reportError.message
+          : String(reportError);
+
+      console.error(
+        `run ${error.runId} failed and the log could not be told: ${reason}`,
+      );
+    }
   }
 }

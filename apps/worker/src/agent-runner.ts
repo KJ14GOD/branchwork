@@ -1,9 +1,10 @@
 import {
   RunSchema,
   type ModelSelection,
+  type Run,
   type SessionEvent,
 } from "@novus/contracts";
-import { InMemorySessionEventStore } from "@novus/session-service";
+import type { SessionEventStore } from "@novus/session-service";
 
 import type {
   CompletedTurn,
@@ -46,8 +47,29 @@ const MAX_MODEL_STEPS = 16;
 // recover after this many consecutive failures is looping, not correcting.
 const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
 
+/**
+ * A run that ended by throwing, carrying the run it ended.
+ *
+ * Every failure the runner judges for itself ends through `failRun`, which
+ * appends `run.failed` and returns. What escapes as a throw is the other kind:
+ * the model call rejecting, or the store refusing an append for a reason that
+ * has nothing to do with the run — a full disk, a write lock this process
+ * waited out. `run.started` is already in the log by then, so a caller that
+ * catches the throw has to be able to say which run stopped, and the run id
+ * exists nowhere else once the stack has unwound.
+ */
+export class AgentRunFailure extends Error {
+  readonly runId: string;
+
+  constructor(runId: string, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "AgentRunFailure";
+    this.runId = runId;
+  }
+}
+
 export class AgentRunner {
-  private readonly eventStore: InMemorySessionEventStore;
+  private readonly eventStore: SessionEventStore;
   private readonly router: ModelRouter;
   private readonly adapters: readonly ModelAdapter[];
   private readonly tools: readonly AgentTool[];
@@ -65,7 +87,7 @@ export class AgentRunner {
   private readonly history: CompletedTurn[] = [];
 
   constructor(
-    eventStore: InMemorySessionEventStore,
+    eventStore: SessionEventStore,
     router: ModelRouter,
     adapters: readonly ModelAdapter[],
     tools: readonly AgentTool[],
@@ -107,6 +129,22 @@ export class AgentRunner {
       createdAt: new Date().toISOString(),
     });
 
+    // From here the run exists in the log, so anything that throws has to be
+    // attributable to it. Above this line there is no run yet — no adapter for
+    // the selection, a draft the schema refused — and nothing has claimed to
+    // the session that work began.
+    try {
+      return await this.execute(input, run, adapter);
+    } catch (error) {
+      throw new AgentRunFailure(run.id, error);
+    }
+  }
+
+  private async execute(
+    input: AgentRunInput,
+    run: Run,
+    adapter: ModelAdapter,
+  ): Promise<AgentRunResult> {
     this.eventStore.append({
       sessionId: input.sessionId,
       actorId: input.actorId,
@@ -120,7 +158,7 @@ export class AgentRunner {
       type: "run.progress",
       payload: {
         runId: run.id,
-        message: `Selected ${modelSelection.provider}/${modelSelection.model}`,
+        message: `Selected ${run.model.provider}/${run.model.model}`,
       },
     });
 

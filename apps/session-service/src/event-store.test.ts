@@ -159,6 +159,53 @@ test(
   }),
 );
 
+test(
+  "reads only from `since` onward, in SQL rather than after the fact",
+  withDatabaseFile(async (databasePath) => {
+    const store = new SessionEventStore({ databasePath });
+
+    store.append(progress("resume-session", "first"));
+    store.append(progress("resume-session", "second"));
+    store.append(progress("resume-session", "third"));
+    store.close();
+
+    // Sequence 0 is unreadable to this build. A caller resuming from 1 must
+    // never touch it — which is only true if the range is a WHERE clause and
+    // not a filter applied to rows that were already selected and parsed. If
+    // the predicate ever moves back into JavaScript, this throws.
+    const raw = new DatabaseSync(databasePath);
+
+    raw
+      .prepare("UPDATE session_events SET event = ? WHERE sequence = 0")
+      .run(JSON.stringify({ type: "an.event.this.build.does.not.know" }));
+    raw.close();
+
+    const reader = new SessionEventStore({ databasePath });
+
+    assert.deepEqual(
+      reader.list("resume-session", 1).map((event) => event.sequence),
+      [1, 2],
+    );
+
+    // Inclusive, and the no-argument form still means the whole log.
+    assert.deepEqual(
+      reader.list("resume-session", 2).map((event) => event.sequence),
+      [2],
+    );
+    assert.deepEqual(reader.list("resume-session", 3), []);
+    assert.throws(() => reader.list("resume-session"));
+
+    // The count is of what the caller was going to be sent, not of the log.
+    assert.deepEqual(reader.readable("resume-session", 1), {
+      events: reader.list("resume-session", 1),
+      unreadable: 0,
+    });
+    assert.equal(reader.readable("resume-session").unreadable, 1);
+
+    reader.close();
+  }),
+);
+
 test("takes the database location from NOVUS_DB when it is set", () => {
   const previous = process.env.NOVUS_DB;
 
