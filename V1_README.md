@@ -20,6 +20,36 @@ The release is successful only if both parts work:
 A fake agent with beautiful collaboration is not V1. A capable private agent
 with no meaningful shared control is also not V1.
 
+## Where we actually are
+
+Updated 2026-07-29. Keep this honest; it is the section that decides what gets
+built next.
+
+**We are at capable-private-agent, which is the second failure above.** The
+harness half is real: a typed agent loop with a step ceiling and a failure
+budget, four tools, a propose-then-apply patch flow where proposing writes
+nothing and applying refuses a file that drifted, path confinement that survives
+symlinks, deny-by-default permissions, and an event stream the desktop renders
+live. The multiplayer half is a 54-line in-memory event store. `apps/guest` is a
+`package.json` with nothing behind it.
+
+That asymmetry is the risk this document exists to prevent, and it grows on its
+own: harness work is legible and satisfying, so it keeps getting picked up while
+the shared-control half stays theoretical. Two concrete rules follow from it.
+
+- **The agent cannot yet verify its own work.** There is no `run_command` and no
+  `run_tests`, so it edits blind and Milestone 2's exit condition — the bug-fix
+  benchmark plus a reproducible diff and test receipt — is unreachable. This is
+  the single largest functional hole.
+- **Events do not survive a restart.** The event log is supposed to be the source
+  of truth with current state as a projection. It is an array in memory, so
+  Milestone 1 is not actually finished and everything in Milestone 4 that
+  replays or forks from history has nothing to stand on.
+
+Before starting anything from the roadmap in `README.md`, check it against this
+section. Work that widens the harness while multiplayer stays at 54 lines is
+moving away from V1, however good the work is.
+
 ## Demo
 
 1. The host opens the Novus macOS app.
@@ -369,48 +399,61 @@ without making every small task slower.
 
 ### Milestone 1 — foundation
 
-- Workspace and package structure
-- Desktop window and browser guest shell
-- Shared contracts package
-- Electron renderer/main/preload/worker boundaries
-- Local SQLite event store
-- Session and event schemas
+- [x] Workspace and package structure
+- [ ] Desktop window and browser guest shell — desktop done, guest is an empty package
+- [x] Shared contracts package
+- [x] Electron renderer/main/preload/worker boundaries
+- [ ] Local SQLite event store — still an in-memory array
+- [x] Session and event schemas
 
 Exit condition: a fake worker event appears identically in the host and guest UI.
+**Not met:** there is no guest to show it in, and nothing survives a restart.
 
 ### Milestone 2 — real single-agent harness
 
-- Repository selection
-- Model adapter and BYOK credential storage
-- Context assembly
-- Native read/search/patch/command/Git/test tools
-- State machine and permission checks
-- Streaming execution timeline
-- Final receipt
+- [x] Repository selection
+- [x] Model adapter and BYOK credential storage
+- [~] Context assembly — goal plus prior turns; no repository context yet
+- [~] Native read/search/patch/command/Git/test tools — `read_file`,
+      `search_repository`, `propose_patch`, `apply_patch` exist. `run_command`,
+      `run_tests`, `git_status`, `git_diff`, `list_directory` do not.
+- [x] State machine and permission checks
+- [x] Streaming execution timeline
+- [ ] Final receipt
 
 Exit condition: the agent completes the bug-fix benchmark locally and produces a
-reproducible diff and test receipt.
+reproducible diff and test receipt. **Not met:** without `run_tests` the agent
+cannot tell whether its own patch worked, and there is no receipt to produce.
 
 ### Milestone 3 — multiplayer control
 
-- Session service
-- Invite links
-- Presence and roles
-- Ordered event replication
-- Direction queue
-- Pause, resume, cancel, approvals, and handoff
+Nothing here is started beyond an in-memory store with the right shape. This is
+the half that decides whether Novus is Novus.
+
+- [~] Session service — 54 lines, in-process, no transport
+- [ ] Invite links
+- [ ] Presence and roles
+- [ ] Ordered event replication
+- [ ] Direction queue
+- [x] Approvals — the gate and the tool classes exist and are enforced
+- [ ] Pause, resume, cancel, and handoff
 
 Exit condition: a remote teammate joins an active run, supplies direction, and
 reviews the resulting evidence.
 
 ### Milestone 4 — fork and compare
 
-- Checkpoint creation
-- Git worktree manager
-- Isolated child runs
-- Side-by-side comparison
-- Human decision record
-- Apply selected patch
+Not started. Note that `scripts/fleet.sh` already runs several agents in
+parallel worktrees for building Novus — that is the developer workflow described
+in `FLEET.md`, not the product feature, but it is a working reference for the
+worktree manager this milestone needs.
+
+- [ ] Checkpoint creation
+- [ ] Git worktree manager
+- [ ] Isolated child runs
+- [ ] Side-by-side comparison
+- [ ] Human decision record
+- [ ] Apply selected patch
 
 Exit condition: two attempts run from the same checkpoint without interfering,
 and the selected result applies cleanly.
