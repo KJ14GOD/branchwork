@@ -575,8 +575,19 @@ export class AnthropicModelAdapter implements ModelAdapter {
   async listModels(): Promise<string[]> {
     const models: string[] = [];
 
-    for await (const model of this.client.models.list()) {
+    // Bounded twice over: a short timeout because this runs inside a tool call
+    // where the wall clock is only checked between model calls, and an id cap
+    // because the answer is for a model's context, not a catalogue. A failure
+    // here is an ordinary tool failure — the run continues.
+    for await (const model of this.client.models.list(
+      {},
+      { timeout: 15_000 },
+    )) {
       models.push(model.id);
+
+      if (models.length >= 200) {
+        break;
+      }
     }
 
     return models;

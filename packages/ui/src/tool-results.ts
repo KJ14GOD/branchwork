@@ -96,6 +96,11 @@ export const summariseCall = (call: ToolCall): string => {
       .join(" · ");
   }
 
+  // Its input is empty, so the summary has to say what the question is.
+  if (call.name === "list_provider_models") {
+    return "current provider model ids";
+  }
+
   return call.input.patchId;
 };
 

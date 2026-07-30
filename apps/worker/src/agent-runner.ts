@@ -593,7 +593,7 @@ export class AgentRunner {
       consecutiveFailures = 0;
 
       if (toolClass === "read") {
-        const key = `${response.call.name} ${JSON.stringify(response.call.input)}`;
+        const key = `${response.call.name} ${JSON.stringify(response.call.input)}`;
         const repeats = (readRepeats.get(key) ?? 0) + 1;
 
         readRepeats.set(key, repeats);
