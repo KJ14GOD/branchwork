@@ -428,6 +428,79 @@ export const buildMessages = (request: ModelRequest): MessageParam[] => {
   return messages;
 };
 
+/**
+ * What the adapter makes of a provider message.
+ *
+ * Exported for the same reason buildMessages is: the edge cases live here —
+ * a malformed tool call, a reply cut off at the output limit — and a live
+ * provider cannot be pinned to producing them on demand.
+ */
+export const responseFromMessage = (
+  message: Pick<Anthropic.Message, "content" | "stop_reason" | "usage">,
+): ModelResponse => {
+  const usage = {
+    inputTokens: message.usage.input_tokens,
+    outputTokens: message.usage.output_tokens,
+  };
+
+  const toolUse = message.content.find((block) => block.type === "tool_use");
+
+  if (toolUse?.type === "tool_use") {
+    const call = ToolCallSchema.safeParse({
+      id: toolUse.id,
+      name: toolUse.name,
+      input: toolUse.input,
+    });
+
+    if (!call.success) {
+      // Not thrown. The contract is still the boundary — this call does not
+      // become a ToolCall and no tool will run — but the model is told what
+      // it got wrong and given the turn back.
+      return {
+        type: "invalid_tool_call",
+        id: toolUse.id,
+        name: toolUse.name,
+        input: toolUse.input,
+        message: call.error.issues
+          .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
+          .join("; "),
+        usage,
+      };
+    }
+
+    return { type: "tool_call", call: call.data, usage };
+  }
+
+  const summary = message.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+
+  if (!summary) {
+    throw new Error("Anthropic returned neither a tool call nor text.");
+  }
+
+  // A reply that hit the output ceiling stops mid-sentence, and without this
+  // it would be recorded in run.completed as though it were the whole answer
+  // — a summary that is wrong by omission, presented with full confidence.
+  // The run still completes; the marker keeps the record honest about what
+  // kind of answer it holds.
+  if (message.stop_reason === "max_tokens") {
+    return {
+      type: "final",
+      summary: `${summary}\n\n[This reply hit the model's output limit and is cut off here.]`,
+      usage,
+    };
+  }
+
+  return {
+    type: "final",
+    summary,
+    usage,
+  };
+};
+
 export class AnthropicModelAdapter implements ModelAdapter {
   readonly selection: ModelSelection;
   private readonly client: Anthropic;
@@ -466,62 +539,26 @@ export class AnthropicModelAdapter implements ModelAdapter {
       throw error;
     }
 
-    const usage = {
-      inputTokens: message.usage.input_tokens,
-      outputTokens: message.usage.output_tokens,
-    };
-
-    const toolUse = message.content.find((block) => block.type === "tool_use");
-
-    if (toolUse?.type === "tool_use") {
-      const call = ToolCallSchema.safeParse({
-        id: toolUse.id,
-        name: toolUse.name,
-        input: toolUse.input,
-      });
-
-      if (!call.success) {
-        // Not thrown. The contract is still the boundary — this call does not
-        // become a ToolCall and no tool will run — but the model is told what
-        // it got wrong and given the turn back.
-        return {
-          type: "invalid_tool_call",
-          id: toolUse.id,
-          name: toolUse.name,
-          input: toolUse.input,
-          message: call.error.issues
-            .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
-            .join("; "),
-          usage,
-        };
-      }
-
-      return { type: "tool_call", call: call.data, usage };
-    }
-
-    const summary = message.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n")
-      .trim();
-
-    if (!summary) {
-      throw new Error("Anthropic returned neither a tool call nor text.");
-    }
-
-    return {
-      type: "final",
-      summary,
-      usage,
-    };
+    return responseFromMessage(message);
   }
 
   private createMessage(request: ModelRequest) {
     return this.client.messages.create({
       model: this.selection.model,
-      max_tokens: 4_096,
+      // 4k was too small for a real answer: a live summary of one cache file
+      // hit it mid-sentence, ended recorded as complete, and never reached
+      // the part that answered the question asked. Tool-call turns never get
+      // near this; it only bounds the final explanation.
+      max_tokens: 8_192,
       system:
-        "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. When a change is needed, call propose_patch to produce a reviewable diff, then call apply_patch with the patchId it returns to write it. After applying a change, call run_tests to confirm it works, and report what the tests actually said rather than asserting success. apply_patch, run_command, and run_tests require human approval and may be denied — if one is, explain what you would have done rather than trying to work around the denial.",
+        // The two citation rules exist because a live run fabricated both
+        // kinds of claim, confidently: it cited server.mjs:274 for a line
+        // that lives at 295 (read_file returns no line numbers, so every
+        // :NNN it wrote was an estimate dressed as a citation), and it
+        // declared a valid provider model id "not a real model id — would
+        // 400" from stale outside knowledge. Nothing failed visibly either
+        // time; the summary just said things the run had never verified.
+        "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. Cite line numbers only when a tool result actually showed them: search results carry line numbers, plain file reads do not, and an estimated line number presented as a citation is an invention. When a conclusion depends on knowledge from outside this repository — a provider's model names, a library's behavior, version facts — say it is unverified instead of stating it as fact. When a change is needed, call propose_patch to produce a reviewable diff, then call apply_patch with the patchId it returns to write it. After applying a change, call run_tests to confirm it works, and report what the tests actually said rather than asserting success. apply_patch, run_command, and run_tests require human approval and may be denied — if one is, explain what you would have done rather than trying to work around the denial.",
       tools: [
         SEARCH_REPOSITORY_TOOL,
         READ_FILE_TOOL,
