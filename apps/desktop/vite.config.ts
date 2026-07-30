@@ -40,6 +40,10 @@ export default defineConfig({
   },
   base: "./",
   server: {
+    // Pinned to IPv4 loopback for the same reason as the guest app: Vite's
+    // default "localhost" host can resolve to [::1] only, which refuses a
+    // browser or Electron's loadURL hitting 127.0.0.1 with no visible error.
+    host: "127.0.0.1",
     port: 5273,
     strictPort: true,
   },

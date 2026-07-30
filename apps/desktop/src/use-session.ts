@@ -87,7 +87,8 @@ export const useSession = (endpoint: string): SessionState => {
   useEffect(() => {
     let cancelled = false;
 
-    void fetch(`${endpoint}/sessions/history`, { headers: {} })
+    void authorization()
+      .then((headers) => fetch(`${endpoint}/sessions/history`, { headers }))
       .then(async (response) => {
         if (!response.ok || cancelled) {
           return;
