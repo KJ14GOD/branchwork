@@ -1,17 +1,54 @@
 :root {
+  /* Planes, deepest to highest: well < bg < surface < raised < floating.
+     Steps are deliberately small — separation is the border's job, not the
+     surface's. --bg must match backgroundColor in electron/main.ts. */
   --bg: #0a0a0b;
+  --bg-well: #060607;
   --surface: #101012;
   --surface-raised: #17171a;
-  --border: #212125;
-  --border-strong: #2e2e34;
+  --surface-raised-hover: #1c1c20;
+
+  /* Borders and ghost states are the foreground at low alpha, so they read
+     the same on every plane instead of being tuned for one background. */
+  --fg: 231 231 234;
+  --border-subtle: rgb(var(--fg) / 0.07);
+  --border: rgb(var(--fg) / 0.1);
+  --border-strong: rgb(var(--fg) / 0.16);
+  --hover: rgb(var(--fg) / 0.06);
+  --pressed: rgb(var(--fg) / 0.1);
+  --selected: rgb(var(--fg) / 0.11);
+
   --text: #e7e7ea;
   --text-muted: #8a8a93;
   --text-dim: #56565e;
+
   --add: #4ba85a;
   --add-bg: rgba(75, 168, 90, 0.09);
   --del: #d4564f;
   --del-bg: rgba(212, 86, 79, 0.09);
   --live: #4ba85a;
+  --warn: #8a6d2b;
+  --warn-text: #d3a84c;
+
+  /* Nested: a radius-l panel contains radius-m controls contain radius-s chips. */
+  --radius-s: 3px;
+  --radius-m: 5px;
+  --radius-l: 8px;
+
+  /* Shadows need a ring in front (the eye reads the 1px edge, the blur is
+     atmosphere) and a color darker than the canvas, or they vanish on it.
+     Only the two floating surfaces — palette and modal — ever cast. */
+  --shadow-popover: 0 0 0 1px #050506, 0 6px 12px -3px rgba(0, 0, 0, 0.5),
+    0 16px 32px -8px rgba(0, 0, 0, 0.55);
+  --shadow-modal: 0 0 0 1px #050506, 0 8px 16px -4px rgba(0, 0, 0, 0.5),
+    0 24px 48px -12px rgba(0, 0, 0, 0.6);
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --t-fast: 120ms;
+  --t-overlay: 160ms;
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--fg) / 0.28);
+
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 
   color-scheme: dark;
@@ -19,6 +56,10 @@
 
 * {
   box-sizing: border-box;
+}
+
+::selection {
+  background: rgb(var(--fg) / 0.18);
 }
 
 html,
@@ -44,6 +85,43 @@ button {
   border: none;
   padding: 0;
   cursor: pointer;
+}
+
+/* Interactive state changes ease rather than jump. Only paint properties —
+   never `all`, never anything that triggers layout. */
+.titlebar__repo,
+.titlebar__action,
+.open__browse,
+.open__submit,
+.open__input,
+.open__recent-row,
+.open__toggle,
+.jump,
+.tool__head,
+.palette__item,
+.palette__input {
+  transition:
+    background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+/* Keyboard focus is a double ring — the inner ring in the canvas color gaps
+   it away from the control's own border — never a border swap, which shifts
+   layout. The palette input opts out below: it is focused by construction. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ---------- shell ---------- */
@@ -79,14 +157,19 @@ button {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   font-size: 10px;
+  font-weight: 500;
   color: var(--text);
 }
 
 .titlebar__meta {
   display: flex;
+  align-items: center;
   gap: 14px;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-dim);
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .titlebar__spacer {
@@ -94,8 +177,19 @@ button {
 }
 
 .titlebar__hint {
+  flex: none;
+  white-space: nowrap;
   color: var(--text-dim);
   font-size: 11px;
+}
+
+code {
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 4px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-s);
 }
 
 kbd {
@@ -103,7 +197,7 @@ kbd {
   min-width: 16px;
   padding: 1px 4px;
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-s);
   background: var(--surface-raised);
   color: var(--text-muted);
   font-family: inherit;
@@ -112,8 +206,22 @@ kbd {
 }
 
 .titlebar__repo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Ellipsize the head of the path, not the tail — the repository name is
+     the part worth keeping. */
+  direction: rtl;
+  text-align: left;
   color: var(--text-muted);
   font-size: 11px;
+}
+
+/* A strong left-to-right mark, so the path's leading slash does not get
+   carried to the far end by the rtl ellipsis trick above. */
+.titlebar__repo::before {
+  content: "\200e";
 }
 
 .titlebar__repo:hover {
@@ -121,11 +229,40 @@ kbd {
   text-decoration: underline;
 }
 
+.titlebar__action {
+  flex: none;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: var(--radius-m);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.titlebar__action:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.titlebar__action:active {
+  background: var(--pressed);
+}
+
+.titlebar__model,
+.titlebar__phase {
+  flex: none;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
 .titlebar__writes {
+  flex: none;
+  white-space: nowrap;
   padding: 1px 5px;
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
   color: var(--add);
   font-size: 10px;
+  font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -146,11 +283,19 @@ kbd {
   width: min(520px, calc(100vw - 48px));
   padding: 22px;
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
   background: var(--surface);
+}
+
+.open__title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
 }
 
 .open__label {
   font-size: 10px;
+  font-weight: 500;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-dim);
@@ -163,26 +308,38 @@ kbd {
 
 .open__browse {
   flex: none;
-  padding: 0 12px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-raised);
+  padding: 6px 12px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background: transparent;
   color: var(--text-muted);
   white-space: nowrap;
 }
 
-.open__browse:hover {
-  border-color: var(--text-dim);
+.open__browse:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border-strong);
   color: var(--text);
+}
+
+.open__browse:active:not(:disabled) {
+  background: var(--pressed);
+}
+
+.open__browse:disabled {
+  border-color: var(--border-subtle);
+  color: var(--text-dim);
+  cursor: default;
 }
 
 .open__input {
   width: 100%;
   padding: 9px 10px;
+  border-radius: var(--radius-m);
   border: 1px solid var(--border-strong);
-  background: var(--bg);
+  background: var(--bg-well);
   color: var(--text);
   font: inherit;
-  outline: none;
 }
 
 .open__input:focus {
@@ -206,16 +363,25 @@ kbd {
 .open__submit {
   align-self: flex-start;
   padding: 7px 16px;
+  border-radius: var(--radius-m);
   border: 1px solid var(--border-strong);
   background: var(--surface-raised);
   color: var(--text);
+  font-weight: 500;
 }
 
 .open__submit:hover:not(:disabled) {
-  border-color: var(--text-dim);
+  background: var(--surface-raised-hover);
+  border-color: rgb(var(--fg) / 0.22);
+}
+
+.open__submit:active:not(:disabled) {
+  border-color: rgb(var(--fg) / 0.28);
 }
 
 .open__submit:disabled {
+  background: var(--surface);
+  border-color: var(--border-subtle);
   color: var(--text-dim);
   cursor: default;
 }
@@ -226,6 +392,7 @@ kbd {
 }
 
 .status {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -249,6 +416,10 @@ kbd {
   background: var(--del);
 }
 
+.status--idle .status__dot {
+  background: var(--text-dim);
+}
+
 @keyframes pulse {
   50% {
     opacity: 0.35;
@@ -267,19 +438,30 @@ kbd {
   border-right: 1px solid var(--border);
   background: var(--surface);
   overflow-y: auto;
-  padding: 14px 0;
+  padding: 12px 0;
 }
 
 .rail__section {
-  padding: 0 14px 16px;
+  padding: 0 12px 16px;
 }
 
 .rail__label {
   font-size: 10px;
+  font-weight: 500;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-dim);
   margin-bottom: 8px;
+}
+
+.rail__label--inset {
+  padding: 0 12px;
+}
+
+/* The direction box appears when a run starts; it fades in rather than
+   popping the sections below it into a new layout unannounced. */
+.rail__section--direction {
+  animation: overlay-in var(--t-overlay) var(--ease);
 }
 
 .rail__goal {
@@ -296,26 +478,42 @@ kbd {
 
 .stat__value {
   color: var(--text);
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+.stat__add {
+  color: var(--add);
+}
+
+.stat__del {
+  color: var(--del);
 }
 
 .jump {
   display: flex;
   gap: 8px;
-  width: 100%;
-  padding: 5px 14px;
+  width: calc(100% - 8px);
+  margin: 0 4px;
+  padding: 5px 8px;
+  border-radius: var(--radius-m);
   text-align: left;
   color: var(--text-muted);
   border-left: 2px solid transparent;
 }
 
 .jump:hover {
-  background: var(--surface-raised);
+  background: var(--hover);
   color: var(--text);
+}
+
+.jump:active {
+  background: var(--pressed);
 }
 
 .jump--active {
   border-left-color: var(--text-muted);
+  background: var(--selected);
   color: var(--text);
 }
 
@@ -334,13 +532,21 @@ kbd {
 
 .timeline {
   overflow-y: auto;
-  padding: 18px 22px 120px;
+  padding: 20px 20px 120px;
+}
+
+.timeline--compare {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .timeline__empty {
   color: var(--text-dim);
   padding: 40px 0;
   text-align: center;
+  font-size: 14px;
 }
 
 .event {
@@ -398,7 +604,9 @@ kbd {
 }
 
 .event--highlight {
-  border-left-color: var(--border-strong);
+  border-left-color: var(--text-muted);
+  background: var(--hover);
+  border-radius: 0 var(--radius-m) var(--radius-m) 0;
   margin-left: -12px;
   padding-left: 11px;
 }
@@ -406,7 +614,9 @@ kbd {
 .tool {
   margin-top: 4px;
   border: 1px solid var(--border);
+  border-radius: var(--radius-m);
   background: var(--surface);
+  overflow: hidden;
 }
 
 .tool__head {
@@ -419,11 +629,16 @@ kbd {
 }
 
 .tool__head:hover {
-  background: var(--surface-raised);
+  background: var(--hover);
+}
+
+.tool__head:active {
+  background: var(--pressed);
 }
 
 .tool__name {
   color: var(--text);
+  font-weight: 500;
 }
 
 .tool__summary {
@@ -436,7 +651,7 @@ kbd {
 
 .tool__chevron {
   color: var(--text-dim);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .tool__panel {
@@ -459,6 +674,15 @@ kbd {
   color: var(--text);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+pre.kv__value {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--bg-well);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-s);
+  overflow-x: auto;
 }
 
 .matches {
@@ -499,7 +723,9 @@ kbd {
 .patch {
   margin-top: 4px;
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
   background: var(--surface);
+  overflow: hidden;
 }
 
 .patch__head {
@@ -512,6 +738,7 @@ kbd {
 
 .patch__path {
   color: var(--text);
+  font-weight: 500;
 }
 
 .patch__count {
@@ -530,8 +757,10 @@ kbd {
   margin-left: auto;
   padding: 1px 6px;
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
   color: var(--text-muted);
   font-size: 10px;
+  font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -544,6 +773,7 @@ kbd {
 
 .diff {
   overflow-x: auto;
+  background: var(--bg-well);
 }
 
 .diff__line {
@@ -599,14 +829,41 @@ kbd {
   padding-top: 14vh;
   background: rgba(6, 6, 7, 0.7);
   backdrop-filter: blur(3px);
+  animation: overlay-in var(--t-overlay) var(--ease);
+}
+
+/* Anything on the overlay floats: it arrives from slightly behind the plane
+   it lands on, rather than being repainted into place. */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes float-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+.modal {
+  height: fit-content;
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-modal);
+  animation: float-in var(--t-overlay) var(--ease);
 }
 
 .palette {
   width: min(520px, calc(100vw - 48px));
   height: fit-content;
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
   background: var(--surface);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  transform-origin: top center;
+  box-shadow: var(--shadow-popover);
+  animation: float-in var(--t-overlay) var(--ease);
 }
 
 .palette__input {
@@ -618,6 +875,16 @@ kbd {
   color: var(--text);
   font: inherit;
   outline: none;
+}
+
+/* Autofocused on open — a ring here would outline the palette itself on
+   every keystroke. The lit bottom rule is its focus statement instead. */
+.palette__input:focus-visible {
+  box-shadow: none;
+}
+
+.palette__input:focus {
+  border-bottom-color: var(--border-strong);
 }
 
 .palette__input::placeholder {
@@ -636,14 +903,25 @@ kbd {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
-  padding: 6px 14px;
+  width: calc(100% - 8px);
+  margin: 0 4px;
+  padding: 6px 10px;
+  border-radius: var(--radius-m);
   color: var(--text-muted);
   text-align: left;
 }
 
-.palette__item--active {
-  background: var(--surface-raised);
+.palette__item:hover {
+  background: var(--hover);
+}
+
+.palette__item:active {
+  background: var(--pressed);
+}
+
+.palette__item--active,
+.palette__item--active:hover {
+  background: var(--selected);
   color: var(--text);
 }
 
@@ -665,7 +943,7 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 16px 18px;
+  padding: 16px 20px;
   overflow-y: auto;
 }
 .compare--empty {
@@ -680,7 +958,7 @@ kbd {
   padding: 9px 11px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-l);
 }
 .compare__contested-label {
   color: var(--text-muted);
@@ -700,7 +978,7 @@ kbd {
   padding: 12px 13px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-l);
 }
 .compare__head {
   display: flex;
@@ -711,6 +989,7 @@ kbd {
 .compare__label {
   color: var(--text);
   font-size: 13px;
+  font-weight: 500;
 }
 .compare__status {
   color: var(--text-dim);
@@ -724,6 +1003,12 @@ kbd {
   gap: 10px;
   font-size: 12px;
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.compare__fact {
+  color: var(--text-muted);
+}
+.compare__verdict {
   font-variant-numeric: tabular-nums;
 }
 .compare__verdict--pass {
@@ -797,18 +1082,23 @@ kbd {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 18px;
+  padding: 10px 20px;
   border-bottom: 1px solid var(--border);
 }
 .compare-screen__title {
   color: var(--text);
   font-size: 13px;
+  font-weight: 500;
+}
+/* These used to inherit the timeline's padding; now the screen owns its own. */
+.compare-screen > .open__error {
+  margin: 12px 20px 0;
 }
 .compare-screen__fork {
   display: grid;
   grid-template-columns: minmax(140px, 1fr) minmax(200px, 2fr) auto;
   gap: 8px;
-  padding: 12px 18px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--border);
 }
 .compare__chosen {
@@ -819,7 +1109,7 @@ kbd {
    loud confirmation would imply it had. */
 .compare-screen__note {
   margin: 0;
-  padding: 0 18px 16px;
+  padding: 0 20px 16px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-dim);
@@ -828,11 +1118,14 @@ kbd {
 /* Not an error — the session works, two features do not. Amber rather than red,
    and worded as a fact rather than a failure. */
 .titlebar__warn {
+  flex: none;
+  white-space: nowrap;
   padding: 2px 7px;
   border: 1px solid var(--warn, #8a6d2b);
-  border-radius: 3px;
+  border-radius: var(--radius-s);
   color: var(--warn-text, #d3a84c);
   font-size: 10px;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -855,7 +1148,7 @@ kbd {
   padding: 7px 9px;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-m);
   color: var(--text-muted);
   font: inherit;
   font-size: 12px;
@@ -863,8 +1156,13 @@ kbd {
   cursor: pointer;
 }
 .open__recent-row:hover {
+  background: var(--hover);
   border-color: var(--border-strong);
   color: var(--text);
+}
+
+.open__recent-row:active {
+  background: var(--pressed);
 }
 .open__recent-path {
   overflow: hidden;
