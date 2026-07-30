@@ -1,17 +1,54 @@
 :root {
+  /* Planes, deepest to highest: well < bg < surface < raised < floating.
+     Steps are deliberately small — separation is the border's job, not the
+     surface's. --bg must match backgroundColor in electron/main.ts. */
   --bg: #0a0a0b;
+  --bg-well: #060607;
   --surface: #101012;
   --surface-raised: #17171a;
-  --border: #212125;
-  --border-strong: #2e2e34;
+  --surface-raised-hover: #1c1c20;
+
+  /* Borders and ghost states are the foreground at low alpha, so they read
+     the same on every plane instead of being tuned for one background. */
+  --fg: 231 231 234;
+  --border-subtle: rgb(var(--fg) / 0.07);
+  --border: rgb(var(--fg) / 0.1);
+  --border-strong: rgb(var(--fg) / 0.16);
+  --hover: rgb(var(--fg) / 0.06);
+  --pressed: rgb(var(--fg) / 0.1);
+  --selected: rgb(var(--fg) / 0.11);
+
   --text: #e7e7ea;
   --text-muted: #8a8a93;
   --text-dim: #56565e;
+
   --add: #4ba85a;
   --add-bg: rgba(75, 168, 90, 0.09);
   --del: #d4564f;
   --del-bg: rgba(212, 86, 79, 0.09);
   --live: #4ba85a;
+  --warn: #8a6d2b;
+  --warn-text: #d3a84c;
+
+  /* Nested: a radius-l panel contains radius-m controls contain radius-s chips. */
+  --radius-s: 3px;
+  --radius-m: 5px;
+  --radius-l: 8px;
+
+  /* Shadows need a ring in front (the eye reads the 1px edge, the blur is
+     atmosphere) and a color darker than the canvas, or they vanish on it.
+     Only the two floating surfaces — palette and modal — ever cast. */
+  --shadow-popover: 0 0 0 1px #050506, 0 6px 12px -3px rgba(0, 0, 0, 0.5),
+    0 16px 32px -8px rgba(0, 0, 0, 0.55);
+  --shadow-modal: 0 0 0 1px #050506, 0 8px 16px -4px rgba(0, 0, 0, 0.5),
+    0 24px 48px -12px rgba(0, 0, 0, 0.6);
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --t-fast: 120ms;
+  --t-overlay: 160ms;
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--fg) / 0.28);
+
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 
   color-scheme: dark;
