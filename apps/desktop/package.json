@@ -12,7 +12,8 @@
     "start": "electron .",
     "preview": "vite preview",
     "typecheck": "tsc --project tsconfig.json",
-    "test": "node --experimental-strip-types --test 'electron/*.test.ts'"
+    "test": "node --experimental-strip-types --test 'electron/*.test.ts'",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
   },
   "dependencies": {
     "@novus/contracts": "workspace:*",
