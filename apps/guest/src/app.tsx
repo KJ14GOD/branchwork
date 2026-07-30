@@ -4,6 +4,7 @@ import { EventRow } from "./components/guest-event-row.tsx";
 import { JoinSession } from "./components/join-session.tsx";
 import { describeConnection, summarise } from "./timeline.ts";
 import { useGuestSession, useWorkerSessions } from "./use-guest-session.ts";
+import { usePresence } from "./use-presence.ts";
 
 const DEFAULT_ENDPOINT =
   import.meta.env.VITE_NOVUS_ENDPOINT ?? "http://127.0.0.1:4319";
@@ -90,6 +91,7 @@ export const App = () => {
     sessionId === null && relay === null,
     token,
   );
+  const presence = usePresence(endpoint, sessionId, token, relay);
 
   useEffect(() => {
     writeParams(endpoint, sessionId);
@@ -193,6 +195,20 @@ export const App = () => {
           {summary.model ? <span>{summary.model}</span> : null}
           <span>{summary.runStatus}</span>
         </div>
+        {presence.length > 0 ? (
+          <div className="presence" title="Who has this session open right now">
+            {presence.map((participant) => (
+              <span
+                key={participant.id}
+                className={`presence__item${participant.connected ? " presence__item--live" : ""}`}
+                title={`${participant.name} · ${participant.role}${participant.connected ? " · watching now" : " · not connected"}`}
+              >
+                <span className="presence__dot" />
+                {participant.name}
+              </span>
+            ))}
+          </div>
+        ) : null}
         <span className="titlebar__spacer" />
         <span className={`status status--${report.tone}`}>
           <span className="status__dot" />

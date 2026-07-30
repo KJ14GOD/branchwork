@@ -364,6 +364,28 @@ export class SessionRegistry {
   }
 
   /**
+   * Continues a run this session previously paused. Serialised through the
+   * same queue as `submitTurn`, for the same reason: a resume racing a fresh
+   * turn on the same session is exactly the interleaving that queue exists
+   * to prevent.
+   */
+  resumeTurn(session: Session, runId: string): Promise<void> {
+    session.queue = session.queue
+      .then(() =>
+        session.runner.resume({
+          sessionId: session.id,
+          actorId: "agent-1",
+          runId,
+        }),
+      )
+      .catch((error: unknown) => {
+        this.reportTurnFailure(session, error);
+      });
+
+    return session.queue as Promise<void>;
+  }
+
+  /**
    * Tells the session about a turn that ended by throwing.
    *
    * The submitting client is answered the moment the turn is queued, so the

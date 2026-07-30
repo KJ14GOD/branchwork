@@ -116,7 +116,7 @@ export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 export const AttemptComparisonSchema = z.object({
   runId: z.string().min(1),
   label: z.string().min(1),
-  status: z.enum(["running", "completed", "failed", "cancelled"]),
+  status: z.enum(["running", "paused", "completed", "failed", "cancelled"]),
   summary: z.string().min(1).nullable(),
   failure: z.string().min(1).nullable(),
   filesChanged: z.array(
@@ -178,6 +178,64 @@ export const CancelRunRequestSchema = z.object({
 });
 
 export type CancelRunRequest = z.infer<typeof CancelRunRequestSchema>;
+
+/** What a host submits to suspend a run in flight, for a later resume. */
+export const PauseRunRequestSchema = z.object({
+  runId: z.string().min(1),
+});
+
+export type PauseRunRequest = z.infer<typeof PauseRunRequestSchema>;
+
+/** What a host submits to continue a run it previously paused. */
+export const ResumeRunRequestSchema = z.object({
+  runId: z.string().min(1),
+});
+
+export type ResumeRunRequest = z.infer<typeof ResumeRunRequestSchema>;
+
+/** What a participant submits to ask the current controller for control. */
+export const ControlRequestSchema = z.object({
+  reason: z.string().min(1).optional(),
+});
+
+export type ControlRequest = z.infer<typeof ControlRequestSchema>;
+
+/**
+ * What an owner submits to move execution authority to someone else.
+ *
+ * V1_README describes acceptance as a separate step; this contract keeps it
+ * atomic, the same way an invite mints a role without a confirmation
+ * round-trip — the recipient sees the transfer in the timeline the moment it
+ * happens rather than being asked to confirm one first.
+ */
+export const HandoffRequestSchema = z.object({
+  toParticipantId: z.string().min(1),
+});
+
+export type HandoffRequest = z.infer<typeof HandoffRequestSchema>;
+
+/**
+ * Who has this session open right now, distinct from who was ever invited.
+ *
+ * Crosses the HTTP boundary like everything else here, closing the gap
+ * `apps/desktop/src/use-presence.ts` and `apps/guest/src/use-presence.ts`
+ * both flagged with a TODO when `/presence` was first built: the response was
+ * read as a plain shape rather than validated.
+ */
+export const PresenceEntrySchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  role: z.enum(["owner", "editor", "reviewer", "viewer"]),
+  connected: z.boolean(),
+});
+
+export type PresenceEntry = z.infer<typeof PresenceEntrySchema>;
+
+export const PresenceResponseSchema = z.object({
+  participants: z.array(PresenceEntrySchema),
+});
+
+export type PresenceResponse = z.infer<typeof PresenceResponseSchema>;
 
 /**
  * A session the log remembers, for the Open screen to offer.

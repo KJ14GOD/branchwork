@@ -263,6 +263,37 @@ button {
   background: var(--del);
 }
 
+.presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 12px;
+}
+
+.presence__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.presence__item--live {
+  color: var(--text-muted);
+}
+
+.presence__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.presence__item--live .presence__dot {
+  background: var(--live);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
 @keyframes pulse {
   50% {
     opacity: 0.35;

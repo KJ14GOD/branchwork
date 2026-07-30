@@ -233,6 +233,61 @@ kbd {
   color: var(--text-muted);
 }
 
+.presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 12px;
+}
+
+.presence__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.presence__item--live {
+  color: var(--text-muted);
+}
+
+.presence__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.presence__item--live .presence__dot {
+  background: var(--live);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.presence__handoff {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+
+.presence__handoff:hover {
+  color: var(--text);
+}
+
+.rail__buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.rail__buttons .open__browse {
+  flex: 1;
+}
+
 .status__dot {
   width: 5px;
   height: 5px;

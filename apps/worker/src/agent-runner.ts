@@ -3,6 +3,7 @@ import {
   type ModelSelection,
   type Run,
   type SessionEvent,
+  type ToolCall,
 } from "@novus/contracts";
 import type { SessionEventStore } from "@novus/session-service";
 
@@ -45,6 +46,76 @@ const selectionsMatch = (
   second: ModelSelection,
 ): boolean =>
   first.provider === second.provider && first.model === second.model;
+
+/**
+ * Rebuilds a run's tool exchanges from its own events, for resuming a paused
+ * run. The same read-the-log-not-memory principle `cancelRequested` and
+ * `drainDirection` already use: the accumulated exchanges of a paused turn
+ * live nowhere but the events those exchanges themselves produced.
+ *
+ * An exchange whose `tool.requested` is missing a matching outcome is not
+ * possible to reconstruct and is silently dropped — the loop that produced
+ * these events always pairs a request with exactly one of
+ * completed/failed/denied before moving on, so this only happens for a call
+ * still in flight, which by construction cannot be true of a paused run: the
+ * pause boundary is the same one cancel uses, and it only fires once the
+ * in-flight call has finished.
+ */
+const rebuildToolExchanges = (
+  events: readonly SessionEvent[],
+  runId: string,
+): ModelToolExchange[] => {
+  const forRun = [...events]
+    .filter((event) => "runId" in event.payload && event.payload.runId === runId)
+    .sort((first, second) => first.sequence - second.sequence);
+
+  const calls = new Map<string, ToolCall>();
+  const exchanges: ModelToolExchange[] = [];
+
+  for (const event of forRun) {
+    if (event.type === "tool.requested") {
+      calls.set(event.payload.call.id, event.payload.call);
+    } else if (event.type === "tool.completed") {
+      const call = calls.get(event.payload.result.toolCallId);
+
+      if (call) {
+        exchanges.push({ status: "ok", call, result: event.payload.result });
+      }
+    } else if (event.type === "tool.failed") {
+      const call = calls.get(event.payload.toolCallId);
+
+      if (call) {
+        exchanges.push({ status: "error", call, message: event.payload.message });
+      } else {
+        // No matching tool.requested means this was an invalid_tool_call,
+        // which never became a real ToolCall to begin with — see model.ts.
+        // The raw (invalid) input the model sent is not itself recorded, only
+        // the message explaining what was wrong with it; that message is what
+        // the model needs back to correct itself, so nothing is lost that
+        // the original run would have used either.
+        exchanges.push({
+          status: "invalid",
+          id: event.payload.toolCallId,
+          name: event.payload.name,
+          input: null,
+          message: event.payload.message,
+        });
+      }
+    } else if (event.type === "tool.denied") {
+      const call = calls.get(event.payload.toolCallId);
+
+      if (call) {
+        exchanges.push({
+          status: "error",
+          call,
+          message: `Denied: ${event.payload.reason}`,
+        });
+      }
+    }
+  }
+
+  return exchanges;
+};
 
 // The step ceiling used to live here. It is in budget.ts now, as one bound
 // among several and the least important of them — see the reasoning there.
@@ -184,6 +255,31 @@ export class AgentRunner {
   }
 
   /**
+   * Whether a pause is currently outstanding for this run.
+   *
+   * Unlike cancellation, pause is not one-shot: a run can be paused and
+   * resumed more than once, so "some event exists" is not enough — what
+   * matters is only the *most recent* of the three pause-related events. If
+   * that is a request, a pause is pending; if it is `run.paused` or
+   * `run.resumed`, it has already been acted on and nothing is outstanding.
+   */
+  private pauseRequested(sessionId: string, runId: string): boolean {
+    const latest = this.eventStore
+      .list(sessionId)
+      .filter(
+        (event) =>
+          (event.type === "run.pause_requested" ||
+            event.type === "run.paused" ||
+            event.type === "run.resumed") &&
+          event.payload.runId === runId,
+      )
+      .sort((first, second) => first.sequence - second.sequence)
+      .at(-1);
+
+    return latest?.type === "run.pause_requested";
+  }
+
+  /**
    * Which model this runner would use, for a checkpoint to record.
    *
    * A checkpoint carries the model configuration so a fork runs the same way its
@@ -227,10 +323,103 @@ export class AgentRunner {
     }
   }
 
+  /**
+   * Continues a run that was previously paused, under the same run id.
+   *
+   * `run.started` is not appended again — this is the same run picking back
+   * up, not a new one, which is why the receipt and projection key off
+   * `run.id` rather than a fresh one. Two things are deliberately not carried
+   * forward across the resume: token usage, because it is only ever reported
+   * per model call and never logged, so there is nothing to rebuild it from;
+   * and the run's start time for budget purposes, which resets so neither a
+   * long pause nor the turns before it count against the continuation's own
+   * budget. Both are read straight from the log otherwise — the tool
+   * exchanges the model had already built up are rebuilt from the events
+   * they produced, same as direction and cancellation already are.
+   */
+  async resume(input: {
+    sessionId: string;
+    actorId: string;
+    runId: string;
+  }): Promise<AgentRunResult> {
+    const events = this.eventStore.list(input.sessionId);
+    const started = events.find(
+      (event) =>
+        event.type === "run.started" && event.payload.run.id === input.runId,
+    );
+
+    if (started?.type !== "run.started") {
+      throw new Error(`No run ${input.runId} exists to resume.`);
+    }
+
+    const terminated = events.some(
+      (event) =>
+        (event.type === "run.completed" ||
+          event.type === "run.failed" ||
+          event.type === "run.cancelled") &&
+        event.payload.runId === input.runId,
+    );
+
+    if (terminated) {
+      throw new Error(`Run ${input.runId} already ended and cannot be resumed.`);
+    }
+
+    const pauseState = events
+      .filter(
+        (event) =>
+          (event.type === "run.pause_requested" ||
+            event.type === "run.paused" ||
+            event.type === "run.resumed") &&
+          event.payload.runId === input.runId,
+      )
+      .sort((first, second) => first.sequence - second.sequence)
+      .at(-1);
+
+    if (pauseState?.type !== "run.paused") {
+      throw new Error(`Run ${input.runId} is not paused.`);
+    }
+
+    // Not the caller's to supply: the goal a resumed run continues with is
+    // the one it already started with, on the log, not whatever a caller
+    // happens to pass. Only `run()` mints a fresh one.
+    const run = started.payload.run;
+    const adapter = this.adapters.find((candidate) =>
+      selectionsMatch(candidate.selection, run.model),
+    );
+
+    if (!adapter) {
+      throw new Error(
+        `No model adapter is configured for ${run.model.provider}/${run.model.model}.`,
+      );
+    }
+
+    this.eventStore.append({
+      sessionId: input.sessionId,
+      actorId: input.actorId,
+      type: "run.resumed",
+      payload: { runId: run.id },
+    });
+
+    try {
+      return await this.execute(
+        { sessionId: input.sessionId, actorId: input.actorId, goal: run.goal },
+        run,
+        adapter,
+        rebuildToolExchanges(events, run.id),
+      );
+    } catch (error) {
+      throw new AgentRunFailure(run.id, error);
+    }
+  }
+
   private async execute(
     input: AgentRunInput,
     run: Run,
     adapter: ModelAdapter,
+    // Non-empty only when this is a resumed run: the exchanges a paused turn
+    // had already accumulated, rebuilt from the log so the model does not
+    // lose the context it built up before the pause.
+    initialToolExchanges: readonly ModelToolExchange[] = [],
   ): Promise<AgentRunResult> {
     this.eventStore.append({
       sessionId: input.sessionId,
@@ -249,7 +438,7 @@ export class AgentRunner {
       },
     });
 
-    const toolExchanges: ModelToolExchange[] = [];
+    const toolExchanges: ModelToolExchange[] = [...initialToolExchanges];
     const startedAt = Date.now();
     let consecutiveFailures = 0;
     const usage: ReceiptUsage = {
@@ -332,6 +521,20 @@ export class AgentRunner {
       return { runId: run.id, events: this.eventStore.list(input.sessionId) };
     };
 
+    // Distinct from both: a paused run is not done and gets no receipt —
+    // there is nothing terminal yet for one to describe, and `resume` is what
+    // picks this same run back up.
+    const pauseRun = (): AgentRunResult => {
+      this.eventStore.append({
+        sessionId: input.sessionId,
+        actorId: input.actorId,
+        type: "run.paused",
+        payload: { runId: run.id },
+      });
+
+      return { runId: run.id, events: this.eventStore.list(input.sessionId) };
+    };
+
     // Not a step loop. The run continues until the model says it is finished or
     // a budget it can be held to runs out, which is the difference between a
     // harness that does the work and one that stops at a number.
@@ -345,6 +548,16 @@ export class AgentRunner {
       // only the *next* model call is refused.
       if (this.cancelRequested(input.sessionId, run.id)) {
         return cancelRun();
+      }
+
+      // Checked right after cancel, at the same boundary: a pause that is
+      // still outstanding stops the run here rather than spending another
+      // model call first. A pause never overrides a cancel — cancel already
+      // returned above if both were requested — but the reverse can happen
+      // legitimately (a paused run gets cancelled instead of resumed), which
+      // is handled the ordinary way the next time this run's loop runs.
+      if (this.pauseRequested(input.sessionId, run.id)) {
+        return pauseRun();
       }
 
       const stopped = budgetExhausted(

@@ -8,8 +8,12 @@ import {
 import type { SessionEvent } from "@novus/contracts";
 import {
   CancelRunRequestSchema,
+  ControlRequestSchema,
   CreateSessionRequestSchema,
   DecisionRequestSchema,
+  HandoffRequestSchema,
+  PauseRunRequestSchema,
+  ResumeRunRequestSchema,
   SubmitTurnRequestSchema,
 } from "@novus/contracts/protocol";
 import type { SessionEventStore } from "@novus/session-service";
@@ -200,6 +204,11 @@ export const startEventServer = (
   // Built once, at startup: the snapshot of secret-looking environment values
   // is taken before any run can add to the environment.
   const redactor = options.redactor ?? createRedactor();
+  // How many open SSE streams each participant currently holds, keyed by
+  // participant id. In memory only, like the tokens in `participants.ts` — a
+  // presence claim that outlived this process would be a lie the moment the
+  // worker restarted with nobody connected.
+  const liveConnections = new Map<string, number>();
 
   const describe = (session: Session) => ({
     id: session.id,
@@ -393,6 +402,257 @@ export const startEventServer = (
       });
 
       sendJson(response, 202, { accepted: true, eventId: event.eventId });
+      return true;
+    }
+
+    // Where a run's pause state currently stands, from the log — the same
+    // "most recent of the three wins" rule `AgentRunner.pauseRequested` uses,
+    // duplicated here because the route has to refuse a redundant pause or an
+    // unwarranted resume before it ever reaches the run loop.
+    const latestPauseState = (
+      history: SessionEvent[],
+      runId: string,
+    ): "requested" | "paused" | "resumed" | "none" => {
+      const latest = history
+        .filter(
+          (event) =>
+            (event.type === "run.pause_requested" ||
+              event.type === "run.paused" ||
+              event.type === "run.resumed") &&
+            event.payload.runId === runId,
+        )
+        .sort((first, second) => first.sequence - second.sequence)
+        .at(-1);
+
+      return latest?.type === "run.pause_requested"
+        ? "requested"
+        : latest?.type === "run.paused"
+          ? "paused"
+          : latest?.type === "run.resumed"
+            ? "resumed"
+            : "none";
+    };
+
+    const pauseMatch = /^\/sessions\/([^/]+)\/pause$/.exec(pathname);
+
+    if (pauseMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(pauseMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = PauseRunRequestSchema.safeParse(await readJsonBody(request));
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "A runId is required." });
+        return true;
+      }
+
+      const history = store.list(session.id);
+      const started = history.find(
+        (event) =>
+          event.type === "run.started" && event.payload.run.id === parsed.data.runId,
+      );
+      const terminator = history.find(
+        (event) =>
+          (event.type === "run.completed" ||
+            event.type === "run.failed" ||
+            event.type === "run.cancelled") &&
+          event.payload.runId === parsed.data.runId,
+      );
+
+      if (!started || terminator) {
+        sendJson(response, 409, {
+          error: "There is no run in progress with that id.",
+        });
+        return true;
+      }
+
+      const state = latestPauseState(history, parsed.data.runId);
+
+      if (state === "requested" || state === "paused") {
+        sendJson(response, 409, {
+          error: "This run is already paused, or a pause is already pending.",
+        });
+        return true;
+      }
+
+      // Recorded, not applied — same as cancel: the run loop itself notices
+      // this on its next turn boundary and is what actually stops.
+      const event = store.append({
+        sessionId: session.id,
+        actorId: caller?.participant.id ?? "host",
+        type: "run.pause_requested",
+        payload: { runId: parsed.data.runId },
+      });
+
+      sendJson(response, 202, { accepted: true, eventId: event.eventId });
+      return true;
+    }
+
+    const resumeMatch = /^\/sessions\/([^/]+)\/resume$/.exec(pathname);
+
+    if (resumeMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(resumeMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = ResumeRunRequestSchema.safeParse(await readJsonBody(request));
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "A runId is required." });
+        return true;
+      }
+
+      const history = store.list(session.id);
+
+      if (latestPauseState(history, parsed.data.runId) !== "paused") {
+        sendJson(response, 409, { error: "That run is not paused." });
+        return true;
+      }
+
+      // Unlike pause, resume has to actively restart the run loop — pausing
+      // is a request the live loop notices on its own; resuming picks a loop
+      // back up that already exited.
+      void sessions.resumeTurn(session, parsed.data.runId);
+      sendJson(response, 202, { accepted: true });
+      return true;
+    }
+
+    const controlRequestMatch = /^\/sessions\/([^/]+)\/control\/request$/.exec(
+      pathname,
+    );
+
+    if (controlRequestMatch && request.method === "POST") {
+      const session = sessions.get(
+        decodeURIComponent(controlRequestMatch[1]!),
+      );
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = ControlRequestSchema.safeParse(await readJsonBody(request));
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "Invalid request body." });
+        return true;
+      }
+
+      const event = store.append({
+        sessionId: session.id,
+        actorId: caller?.participant.id ?? "host",
+        type: "control.requested",
+        payload: {
+          participantId: caller?.participant.id ?? "host",
+          ...(parsed.data.reason ? { reason: parsed.data.reason } : {}),
+        },
+      });
+
+      sendJson(response, 202, { accepted: true, eventId: event.eventId });
+      return true;
+    }
+
+    const handoffMatch = /^\/sessions\/([^/]+)\/handoff$/.exec(pathname);
+
+    if (handoffMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(handoffMatch[1]!));
+
+      if (!session || !participants) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = HandoffRequestSchema.safeParse(await readJsonBody(request));
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "A toParticipantId is required." });
+        return true;
+      }
+
+      // Unlike `actorId` elsewhere, this cannot fall back to a bare "host"
+      // label: `transferOwnership` looks the id up in the registry, and
+      // HOST_SESSION names a sentinel *session*, not a participant. A caller
+      // who did not resolve to a real membership has nothing to hand off
+      // from, full stop — the host's own participant is always resolvable
+      // here because it is registered under its own token like anyone else's.
+      if (!caller) {
+        sendJson(response, 401, {
+          error: "The caller could not be identified for a handoff.",
+        });
+        return true;
+      }
+
+      const fromId = caller.participant.id;
+      const target = participants.byId(parsed.data.toParticipantId);
+
+      if (!target || target.participant.sessionId !== session.id) {
+        sendJson(response, 404, {
+          error: "That participant is not in this session.",
+        });
+        return true;
+      }
+
+      const transferred = participants.transferOwnership(
+        fromId,
+        parsed.data.toParticipantId,
+      );
+
+      if (!transferred) {
+        sendJson(response, 409, {
+          error: "Only the current owner can hand off control.",
+        });
+        return true;
+      }
+
+      const acceptedAt = new Date().toISOString();
+
+      const event = store.append({
+        sessionId: session.id,
+        actorId: fromId,
+        type: "control.transferred",
+        payload: {
+          fromParticipantId: fromId,
+          toParticipantId: parsed.data.toParticipantId,
+          acceptedAt,
+        },
+      });
+
+      sendJson(response, 200, { transferred: true, eventId: event.eventId });
+      return true;
+    }
+
+    const presenceMatch = /^\/sessions\/([^/]+)\/presence$/.exec(pathname);
+
+    if (presenceMatch && request.method === "GET") {
+      const session = sessions.get(decodeURIComponent(presenceMatch[1]!));
+
+      if (!session || !participants) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      // The host's own membership is registered under HOST_SESSION, not this
+      // session's id — the worker outlives any one session, so the host is
+      // never "for" one the way an invited participant is. Presence has to
+      // include them anyway: the host is always in the room.
+      const roster = [
+        ...participants.forSession(HOST_SESSION),
+        ...participants.forSession(session.id),
+      ].map((membership) => ({
+        id: membership.participant.id,
+        name: membership.participant.name,
+        role: membership.participant.role,
+        connected: membership.connected,
+      }));
+
+      sendJson(response, 200, { participants: roster });
       return true;
     }
 
@@ -713,12 +973,24 @@ export const startEventServer = (
           : /^\/sessions\/[^/]+\/invite$/.test(url.pathname)
             ? "invite"
             : // Named explicitly rather than left to the trailing default:
-              // stopping a run in flight is exactly the kind of action
-              // participants.ts warns about a reviewer inheriting by accident
-              // when a route is not listed here.
-              /^\/sessions\/[^/]+\/cancel$/.test(url.pathname)
+              // stopping, pausing, or resuming a run in flight is exactly the
+              // kind of action participants.ts warns about a reviewer
+              // inheriting by accident when a route is not listed here.
+              /^\/sessions\/[^/]+\/(cancel|pause|resume)$/.test(url.pathname)
               ? "steer"
-              : "steer";
+              : // Asking for control is not taking it — anyone who can watch
+                // a session may say they want it, the same way anyone can
+                // speak up in a room without being handed the microphone.
+                /^\/sessions\/[^/]+\/control\/request$/.test(url.pathname)
+                ? "watch"
+                : // Handing off is what actually moves execution authority,
+                  // so it needs the same capability `transferOwnership`
+                  // itself is gated on — checked twice on purpose, once here
+                  // and once in participants.ts, the same defense in depth
+                  // the rest of this table already relies on.
+                  /^\/sessions\/[^/]+\/handoff$/.test(url.pathname)
+                  ? "transfer"
+                  : "steer";
 
     if (refusedFor(required)) {
       return;
@@ -773,6 +1045,17 @@ export const startEventServer = (
     // flushes the response, which is indistinguishable from a dead worker.
     response.flushHeaders();
 
+    // Live presence, distinct from `participant.joined` in the log: that event
+    // says who was ever invited, this says who has an open stream right now. A
+    // second tab or a reconnect must not read as a departure, so this counts
+    // open connections per participant rather than tracking one boolean per
+    // stream — `connected` only flips to false when the last of them closes.
+    if (caller && participants) {
+      const id = caller.participant.id;
+      liveConnections.set(id, (liveConnections.get(id) ?? 0) + 1);
+      participants.setConnected(id, true);
+    }
+
     const unsubscribe = streamSession(
       store,
       sessionId,
@@ -790,6 +1073,17 @@ export const startEventServer = (
     request.on("close", () => {
       clearInterval(heartbeat);
       unsubscribe();
+
+      if (caller && participants) {
+        const id = caller.participant.id;
+        const remaining = Math.max(0, (liveConnections.get(id) ?? 1) - 1);
+
+        liveConnections.set(id, remaining);
+
+        if (remaining === 0) {
+          participants.setConnected(id, false);
+        }
+      }
     });
   });
 
