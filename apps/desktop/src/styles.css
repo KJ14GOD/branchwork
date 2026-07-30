@@ -293,7 +293,7 @@ kbd {
   padding: 9px 10px;
   border-radius: var(--radius-m);
   border: 1px solid var(--border-strong);
-  background: var(--bg);
+  background: var(--bg-well);
   color: var(--text);
   font: inherit;
 }
@@ -600,6 +600,15 @@ kbd {
   white-space: pre-wrap;
 }
 
+pre.kv__value {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--bg-well);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-s);
+  overflow-x: auto;
+}
+
 .matches {
   margin: 0;
   padding: 0;
@@ -688,6 +697,7 @@ kbd {
 
 .diff {
   overflow-x: auto;
+  background: var(--bg-well);
 }
 
 .diff__line {
