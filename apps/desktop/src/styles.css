@@ -169,7 +169,7 @@ kbd {
   min-width: 16px;
   padding: 1px 4px;
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-s);
   background: var(--surface-raised);
   color: var(--text-muted);
   font-family: inherit;
@@ -190,6 +190,7 @@ kbd {
 .titlebar__writes {
   padding: 1px 5px;
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
   color: var(--add);
   font-size: 10px;
   letter-spacing: 0.06em;
@@ -212,6 +213,7 @@ kbd {
   width: min(520px, calc(100vw - 48px));
   padding: 22px;
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
   background: var(--surface);
 }
 
@@ -230,6 +232,7 @@ kbd {
 .open__browse {
   flex: none;
   padding: 0 12px;
+  border-radius: var(--radius-m);
   border: 1px solid var(--border-strong);
   background: var(--surface-raised);
   color: var(--text-muted);
@@ -244,6 +247,7 @@ kbd {
 .open__input {
   width: 100%;
   padding: 9px 10px;
+  border-radius: var(--radius-m);
   border: 1px solid var(--border-strong);
   background: var(--bg);
   color: var(--text);
@@ -272,6 +276,7 @@ kbd {
 .open__submit {
   align-self: flex-start;
   padding: 7px 16px;
+  border-radius: var(--radius-m);
   border: 1px solid var(--border-strong);
   background: var(--surface-raised);
   color: var(--text);
@@ -368,8 +373,10 @@ kbd {
 .jump {
   display: flex;
   gap: 8px;
-  width: 100%;
-  padding: 5px 14px;
+  width: calc(100% - 8px);
+  margin: 0 4px;
+  padding: 5px 8px;
+  border-radius: var(--radius-m);
   text-align: left;
   color: var(--text-muted);
   border-left: 2px solid transparent;
@@ -472,7 +479,9 @@ kbd {
 .tool {
   margin-top: 4px;
   border: 1px solid var(--border);
+  border-radius: var(--radius-m);
   background: var(--surface);
+  overflow: hidden;
 }
 
 .tool__head {
@@ -565,7 +574,9 @@ kbd {
 .patch {
   margin-top: 4px;
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
   background: var(--surface);
+  overflow: hidden;
 }
 
 .patch__head {
@@ -596,6 +607,7 @@ kbd {
   margin-left: auto;
   padding: 1px 6px;
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
   color: var(--text-muted);
   font-size: 10px;
   letter-spacing: 0.08em;
@@ -671,7 +683,9 @@ kbd {
   width: min(520px, calc(100vw - 48px));
   height: fit-content;
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
   background: var(--surface);
+  overflow: hidden;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
 }
 
@@ -702,8 +716,10 @@ kbd {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
-  padding: 6px 14px;
+  width: calc(100% - 8px);
+  margin: 0 4px;
+  padding: 6px 10px;
+  border-radius: var(--radius-m);
   color: var(--text-muted);
   text-align: left;
 }
@@ -746,7 +762,7 @@ kbd {
   padding: 9px 11px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-l);
 }
 .compare__contested-label {
   color: var(--text-muted);
@@ -766,7 +782,7 @@ kbd {
   padding: 12px 13px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-l);
 }
 .compare__head {
   display: flex;
@@ -896,7 +912,7 @@ kbd {
 .titlebar__warn {
   padding: 2px 7px;
   border: 1px solid var(--warn, #8a6d2b);
-  border-radius: 3px;
+  border-radius: var(--radius-s);
   color: var(--warn-text, #d3a84c);
   font-size: 10px;
   text-transform: uppercase;
@@ -921,7 +937,7 @@ kbd {
   padding: 7px 9px;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-m);
   color: var(--text-muted);
   font: inherit;
   font-size: 12px;
