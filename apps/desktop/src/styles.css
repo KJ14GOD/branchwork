@@ -103,6 +103,14 @@ button {
     box-shadow var(--t-fast) var(--ease);
 }
 
+/* Keyboard focus is a double ring — the inner ring in the canvas color gaps
+   it away from the control's own border — never a border swap, which shifts
+   layout. The palette input opts out below: it is focused by construction. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -252,7 +260,6 @@ kbd {
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  outline: none;
 }
 
 .open__input:focus {
@@ -723,6 +730,16 @@ kbd {
   color: var(--text);
   font: inherit;
   outline: none;
+}
+
+/* Autofocused on open — a ring here would outline the palette itself on
+   every keystroke. The lit bottom rule is its focus statement instead. */
+.palette__input:focus-visible {
+  box-shadow: none;
+}
+
+.palette__input:focus {
+  border-bottom-color: var(--border-strong);
 }
 
 .palette__input::placeholder {
