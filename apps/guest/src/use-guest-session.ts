@@ -70,22 +70,12 @@ export const useGuestSession = (
   }, []);
 
   useEffect(() => {
-    if (!sessionId) {
-      streamed.current = null;
-      held.current = [];
-      setEvents([]);
-      setSession(null);
-      setConnection({ kind: "idle" });
-
-      return;
-    }
-
     if (relay !== null && token !== null) {
-      // The relay path is deliberately simpler than the worker path: there is
-      // no session list to pre-check, because the relay only ever serves the
-      // session its token is good for. A token that names nothing is refused
-      // during the handshake rather than after a lookup.
-      streamed.current = sessionId;
+      // Checked before the session id, and that ordering is the whole point: a
+      // relay serves whichever session its token authorises, so an invite does
+      // not carry one and never could. Sitting below the `!sessionId` guard meant
+      // every relay link bailed to the join screen without dialling anything.
+      streamed.current = relay;
       setConnection({ kind: "connecting" });
 
       const connection = watchRelay(
@@ -109,6 +99,17 @@ export const useGuestSession = (
 
       return () => connection.close();
     }
+
+    if (!sessionId) {
+      streamed.current = null;
+      held.current = [];
+      setEvents([]);
+      setSession(null);
+      setConnection({ kind: "idle" });
+
+      return;
+    }
+
 
     // Before anything else, because everything below assumes the address is
     // one a URL can be built from and one the guest is willing to talk to.

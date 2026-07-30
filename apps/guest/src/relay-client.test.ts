@@ -177,3 +177,29 @@ test("closing stops reporting", () => {
   assert.equal(sink.events.length, 0);
   assert.equal(sink.closures.length, 0);
 });
+
+test("a relay invite carries no session id, and must not need one", () => {
+  // The URL a relay prints has ?relay= and ?token= and nothing else, because a
+  // relay serves whichever session its token authorises. The guest used to
+  // check for a session id first and bail to the join screen without dialling,
+  // which made every relay link look like a dead worker.
+  let dialled = "";
+  const fake = fakeSocket();
+
+  watchRelay(
+    {
+      relay: "wss://relay.example.com",
+      token: "watch-token",
+      since: 0,
+      connect: (url) => {
+        dialled = url;
+
+        return fake.socket;
+      },
+    },
+    collect().handlers,
+  );
+
+  assert.match(dialled, /intent=watch/);
+  assert.doesNotMatch(dialled, /session=/);
+});

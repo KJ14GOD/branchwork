@@ -83,7 +83,13 @@ export const App = () => {
     token,
     relay,
   );
-  const listing = useWorkerSessions(endpoint, sessionId === null, token);
+  // Not asked when a relay is in play: the join screen exists to pick a session
+  // from a worker, and a relay serves the one its token authorises.
+  const listing = useWorkerSessions(
+    endpoint,
+    sessionId === null && relay === null,
+    token,
+  );
 
   useEffect(() => {
     writeParams(endpoint, sessionId);
