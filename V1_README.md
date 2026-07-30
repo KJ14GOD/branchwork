@@ -37,14 +37,11 @@ that mints a role-scoped token the worker never re-issues, a direction endpoint
 a running turn folds in at its next boundary, and both now reachable from the
 desktop UI rather than curl only. Fork and compare exist too: checkpoints cut
 real Git worktrees, isolated attempts run without touching each other or the
-parent's index, and the compare screen shows them side by side.
+parent's index, the compare screen shows them side by side, and choosing one
+now records the decision and applies it.
 
 What is still missing, plainly:
 
-- **Choosing an attempt does nothing yet.** The compare screen's "Choose"
-  button sets local UI state only — no decision is recorded to the log, and no
-  patch is applied anywhere. Milestone 4's exit condition needs a chosen
-  attempt to actually land; right now it just highlights a row.
 - **Pause, resume, cancel, and handoff do not exist.** A session runs to
   completion or it errors; nobody can stop one in flight, and ownership cannot
   move from one participant to another.
@@ -60,8 +57,13 @@ What is still missing, plainly:
   repeatedly on a clean machine" — Milestone 5's exit condition — has not been
   attempted on a machine that isn't a developer's.
 
-Three earlier failure modes, closed:
+Four earlier failure modes, closed:
 
+- ~~**Choosing an attempt does nothing.**~~ Fixed 2026-07-30: `POST
+  /sessions/:id/decision` records `decision.recorded` and, when the session
+  has writes enabled, applies the chosen attempt's changes to the parent's
+  working tree — reusing `propose_patch`/`apply_patch` per file rather than a
+  new write path. See Milestone 4.
 - ~~**The agent cannot yet verify its own work.**~~ Fixed 2026-07-29:
   `run_command` and `run_tests` exist, are `dangerous` class, and are opted into
   with `NOVUS_ALLOW_COMMANDS=1`.
@@ -78,8 +80,9 @@ Three earlier failure modes, closed:
 Before starting anything from the roadmap in `README.md`, check it against this
 section. Multiplayer is no longer the thin half, so the risk this document used
 to guard against has moved: what is thin now is *closing the loop* a shared
-session opens — apply, handoff, presence — not standing the transport up in the
-first place.
+session opens — handoff, presence — not standing the transport up in the first
+place. Apply closed on 2026-07-30; pause/resume/cancel/handoff and live
+presence have not.
 
 ## Benchmark results
 
@@ -608,11 +611,13 @@ pause/cancel/handoff, which is the next honest gap in this milestone.
 
 ### Milestone 4 — fork and compare
 
-The isolation half is built and tested hard — worktree lifecycle, checkpoint
-correctness, and cross-attempt isolation each have their own adversarial tests
-(uncommitted work surviving a fork, an aggressive prune not breaking a
-checkpoint's base, teardown removing the worktree *and* the branch *and* Git's
-record of both). The decision half is not built at all.
+Both halves are built now. The isolation half was already tested hard —
+worktree lifecycle, checkpoint correctness, and cross-attempt isolation each
+have their own adversarial tests (uncommitted work surviving a fork, an
+aggressive prune not breaking a checkpoint's base, teardown removing the
+worktree *and* the branch *and* Git's record of both). The decision half is
+new as of 2026-07-30 and holds to the same bar: real conflicting edits, not
+just the happy path.
 
 - [x] Checkpoint creation
 - [x] Git worktree manager
@@ -620,16 +625,33 @@ record of both). The decision half is not built at all.
       other and in the parent
 - [x] Side-by-side comparison — `compare.ts` plus a real compare screen in the
       desktop UI, with a working "Fork an attempt" flow
-- [ ] Human decision record — **not built.** The compare screen's "Choose"
-      button is local UI state (`useComparison`'s `choose()` calls `setChosen`
-      and nothing else); no event is appended when a host picks a winner.
-- [ ] Apply selected patch — **not built.** Nothing takes a chosen attempt's
-      diff and applies it to the parent's working tree. Choosing today changes
-      what is highlighted on screen and nothing in any repository.
+- [x] Human decision record — `POST /sessions/:id/decision` appends
+      `decision.recorded` naming the chosen attempt, unconditionally: a host
+      choosing an attempt whose patch no longer applies is still a decision
+      worth keeping, so this is not gated on the apply below succeeding. The
+      compare screen reads it back from `/compare` on refresh rather than
+      holding it as throwaway local state, so a second window or a reload
+      agrees with what was actually chosen.
+- [x] Apply selected patch — `apply-decision.ts` writes the chosen attempt's
+      changes into the parent's working tree, gated on the session having
+      writes enabled. It reuses `propose_patch`/`apply_patch` verbatim per
+      file — a whole-file edit checked against live content before anything
+      is written, the same tool classes and the same drift check the agent
+      loop already uses, not a second way to touch a file. New and deleted
+      files (which those two tools cannot express — `propose_patch` refuses a
+      path that is not already a file) get the same base-content check by
+      hand. Every file is checked before any file is written, so one
+      conflicting file refuses the whole apply rather than half-writing the
+      rest. Verified against a real fork with a real conflicting parent edit,
+      in the test suite and by hand against a running worker: the apply is
+      refused, the conflict names the file and why, and the host's own edit is
+      left exactly as it was.
 
 Exit condition: two attempts run from the same checkpoint without interfering,
-and the selected result applies cleanly. **Half met** — the non-interference
-half is proven by tests; the apply half does not exist yet.
+and the selected result applies cleanly. **Met.** The non-interference half
+was already proven; the apply half now has its own tests covering the same
+kind of adversarial case — a parent that diverged after the fork was cut —
+rather than only the case where nothing else changed.
 
 ### Milestone 5 — hardening
 
