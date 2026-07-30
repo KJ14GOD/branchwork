@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import * as pty from "node-pty";
 
 import { serveRenderer, type RendererHost } from "./renderer-host.ts";
 
@@ -161,6 +162,72 @@ ipcMain.handle("novus:pick-directory", async () => {
 });
 
 /**
+ * Real shells, for the host only.
+ *
+ * This is a deliberate widening of the boundary the preload comment above
+ * used to state as absolute ("no filesystem, no Node, no shell") — but it
+ * widens it for the human operating this window, not for the model. The
+ * approval gate in apps/worker exists to constrain what the *agent* can run
+ * on its own; a person typing into their own terminal inside their own app
+ * is not a new capability for the agent, the same way Terminal.app already
+ * open on this Mac is not. A guest never gets this: the bridge that exposes
+ * it is loaded only in the host window, and nothing here is reachable over
+ * the worker's HTTP API a remote guest could ever touch.
+ */
+const terminals = new Map<string, pty.IPty>();
+
+ipcMain.handle(
+  "novus:terminal-create",
+  (event, options: { cwd?: string; cols: number; rows: number }) => {
+    const id = randomBytes(8).toString("hex");
+    const shellPath = process.env.SHELL || "/bin/zsh";
+
+    const term = pty.spawn(shellPath, [], {
+      name: "xterm-256color",
+      cols: options.cols,
+      rows: options.rows,
+      cwd: options.cwd || app.getPath("home"),
+      env: process.env as Record<string, string>,
+    });
+
+    terminals.set(id, term);
+
+    term.onData((data) => {
+      event.sender.send("novus:terminal-data", id, data);
+    });
+
+    term.onExit(({ exitCode }) => {
+      event.sender.send("novus:terminal-exit", id, exitCode);
+      terminals.delete(id);
+    });
+
+    return id;
+  },
+);
+
+ipcMain.on("novus:terminal-write", (_event, id: string, data: string) => {
+  terminals.get(id)?.write(data);
+});
+
+ipcMain.on(
+  "novus:terminal-resize",
+  (_event, id: string, cols: number, rows: number) => {
+    // A pty that has already exited throws on resize rather than no-op —
+    // the renderer's own resize observer can fire after the shell closed.
+    try {
+      terminals.get(id)?.resize(cols, rows);
+    } catch {
+      // Already gone; the exit event already told the renderer.
+    }
+  },
+);
+
+ipcMain.on("novus:terminal-dispose", (_event, id: string) => {
+  terminals.get(id)?.kill();
+  terminals.delete(id);
+});
+
+/**
  * Decides where the window loads from, before there is a window.
  *
  * In development Vite is already serving the renderer and the dev server URL is
@@ -243,6 +310,11 @@ void app.whenReady().then(async () => {
 const shutdown = (): void => {
   worker?.kill();
   worker = null;
+
+  for (const term of terminals.values()) {
+    term.kill();
+  }
+  terminals.clear();
 
   void rendererHost?.close();
   rendererHost = null;

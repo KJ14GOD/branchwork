@@ -128,7 +128,7 @@ button {
 
 .shell {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto;
   height: 100%;
 }
 
@@ -595,6 +595,37 @@ kbd {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* ---------- terminal ---------- */
+
+.terminal-dock {
+  height: 260px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-well);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.terminal-dock__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.terminal-panel {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 8px;
+}
+
+/* xterm.js sizes its own canvas via FitAddon; it just needs a sized parent. */
+.terminal-panel .xterm {
+  height: 100%;
 }
 
 .timeline__empty {

@@ -8,6 +8,7 @@ import { EventRow } from "./components/host-event-row.tsx";
 import { CompareScreen } from "./components/compare-screen.tsx";
 import { InvitePanel } from "./components/invite-panel.tsx";
 import { OpenRepository } from "./components/open-repository.tsx";
+import { TerminalPanel } from "./components/terminal-panel.tsx";
 import { useComparison } from "./use-comparison.ts";
 import { usePresence } from "./use-presence.ts";
 import { useSession } from "./use-session.ts";
@@ -73,6 +74,7 @@ export const App = () => {
   // from following, and forcing them into one view makes both worse.
   const [comparing, setComparing] = useState(false);
   const [inviting, setInviting] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const [directionText, setDirectionText] = useState("");
   const comparison = useComparison(endpoint, session?.id ?? null);
   const presence = usePresence(endpoint, session?.id ?? null);
@@ -364,6 +366,14 @@ export const App = () => {
         >
           {comparing ? "timeline" : "attempts"}
         </button>
+        <button
+          className="titlebar__action"
+          type="button"
+          onClick={() => setTerminalOpen((value) => !value)}
+          title="A real shell, opened in this repository — yours, not the agent's"
+        >
+          {terminalOpen ? "close terminal" : "terminal"}
+        </button>
         <span className={`status status--${status === "live" ? "live" : status === "error" ? "error" : "idle"}`}>
           <span className="status__dot" />
           {status}
@@ -532,6 +542,23 @@ export const App = () => {
           </main>
         )}
       </div>
+
+      {terminalOpen ? (
+        <div className="terminal-dock">
+          <div className="terminal-dock__head">
+            <span className="rail__label">Terminal · {session.repositoryPath}</span>
+            <button
+              className="titlebar__action"
+              type="button"
+              onClick={() => setTerminalOpen(false)}
+              title="Close this shell"
+            >
+              close
+            </button>
+          </div>
+          <TerminalPanel cwd={session.repositoryPath} />
+        </div>
+      ) : null}
 
       {paletteOpen ? (
         <CommandOverlay
