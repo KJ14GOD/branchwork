@@ -235,13 +235,22 @@ const GIT_DIFF_TOOL = {
  * run's length, and a fifteen-call feature spent 605k tokens mostly on files it
  * had already finished with.
  *
- * The recent ones stay whole because that is what the model is currently
- * reasoning about. Older ones shrink to a line naming what they were, which
- * keeps the fact of having read something while dropping the bulk. The model
- * still knows it read `public/app.js` and can read it again if it needs the
- * text; what it loses is a copy it had already acted on.
+ * A fixed count of recent exchanges was the first version of this, and it
+ * livelocked on anything broader than a handful of files. "Explain this repo"
+ * needs to hold ten-plus reads in view at once to write one coherent answer;
+ * a cutoff of the last four elided everything else within a few calls, and
+ * every elision explicitly invites the model to call the tool again — which it
+ * did, correctly, because whatever it re-read scrolled back out of the window
+ * before it had gathered enough to answer. A live run burned 79 tool calls this
+ * way and never produced a summary.
+ *
+ * The budget is a size now, not a count: walk backward from the newest
+ * exchange and keep results whole until their combined size would cross this
+ * many characters, then elide older ones. A broad, shallow run — many small
+ * reads — mostly fits inside the budget and stays whole; a narrow run that
+ * keeps re-reading one huge file is still capped.
  */
-const VERBATIM_TAIL = 4;
+const VERBATIM_BUDGET_CHARS = 100_000;
 const ELIDE_OVER_CHARS = 2_000;
 
 const describeElided = (name: string, payload: string): string =>
@@ -273,12 +282,44 @@ const resultContent = (
     : payload;
 };
 
+/**
+ * Which exchanges stay verbatim, walking backward from the newest until the
+ * size budget runs out. Errors and invalid calls are excluded from the walk —
+ * `resultContent` never elides them regardless — so they neither cost budget
+ * nor block older successful results from spending it.
+ */
+const verbatimExchanges = (
+  exchanges: readonly ModelToolExchange[],
+): boolean[] => {
+  const verbatim = new Array<boolean>(exchanges.length).fill(false);
+  let remaining = VERBATIM_BUDGET_CHARS;
+
+  for (let index = exchanges.length - 1; index >= 0; index -= 1) {
+    const exchange = exchanges[index]!;
+
+    if (exchange.status !== "ok") {
+      continue;
+    }
+
+    const size = JSON.stringify(exchange.result.output).length;
+
+    if (size > remaining) {
+      continue;
+    }
+
+    verbatim[index] = true;
+    remaining -= size;
+  }
+
+  return verbatim;
+};
+
 const appendExchanges = (
   messages: MessageParam[],
   exchanges: readonly ModelToolExchange[],
 ): void => {
-  // Counted from the end, so the newest exchanges are the ones kept whole.
-  const firstVerbatim = Math.max(0, exchanges.length - VERBATIM_TAIL);
+  const verbatim = verbatimExchanges(exchanges);
+
   for (const [index, exchange] of exchanges.entries()) {
     messages.push({
       role: "assistant",
@@ -305,7 +346,7 @@ const appendExchanges = (
           ? {
               type: "tool_result",
               tool_use_id: exchange.call.id,
-              content: resultContent(exchange, index < firstVerbatim),
+              content: resultContent(exchange, !verbatim[index]),
             }
           : {
               type: "tool_result",

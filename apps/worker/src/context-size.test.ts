@@ -146,6 +146,47 @@ test("older tool results are not resent in full", () => {
   assert.match(elided, /Call the tool again/);
 });
 
+test("many small results from a broad task all stay whole", () => {
+  // The failure this reproduces: "explain this repo" read fifteen-plus small
+  // files and every one of them scrolled out of a fixed four-exchange window
+  // within a handful of calls. Each elision told the model to call the tool
+  // again, which it did — correctly, forever, because whatever it re-read was
+  // elided again before it had gathered enough to answer. A live run spent 79
+  // tool calls this way and never produced a summary. A count-based cutoff
+  // cannot fit a task that legitimately needs to hold this many results at
+  // once; a size budget can, as long as the total stays reasonable.
+  const exchange = (index: number) => ({
+    status: "ok" as const,
+    call: {
+      id: `c${index}`,
+      name: "read_file" as const,
+      input: { path: `file-${index}.js` },
+    },
+    result: {
+      toolCallId: `c${index}`,
+      name: "read_file" as const,
+      output: { path: `file-${index}.js`, content: "x".repeat(3_000) },
+    },
+  });
+
+  const messages = JSON.stringify(
+    buildMessages({
+      history: [],
+      goal: "Explain this repo",
+      // Fifteen reads at 3,000 characters is 45,000 total — comfortably under
+      // the verbatim budget, the way a real repo tour reads many small-to-
+      // medium files rather than one huge one.
+      toolExchanges: Array.from({ length: 15 }, (_, index) => exchange(index)),
+    }),
+  );
+
+  assert.doesNotMatch(
+    messages,
+    /elided to save context/,
+    "a broad task within the size budget should never see any of its own reads elided",
+  );
+});
+
 test("an error is never elided, however old", () => {
   const messages = buildMessages({
     history: [],
