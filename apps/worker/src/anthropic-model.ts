@@ -6,11 +6,12 @@ import {
   type ModelSelection,
 } from "@novus/contracts";
 
-import type {
-  ModelAdapter,
-  ModelRequest,
-  ModelResponse,
-  ModelToolExchange,
+import {
+  TransientModelError,
+  type ModelAdapter,
+  type ModelRequest,
+  type ModelResponse,
+  type ModelToolExchange,
 } from "./model.ts";
 
 const READ_FILE_TOOL = {
@@ -253,8 +254,31 @@ const GIT_DIFF_TOOL = {
 const VERBATIM_BUDGET_CHARS = 100_000;
 const ELIDE_OVER_CHARS = 2_000;
 
+/**
+ * How much of a result too large for the whole budget is still shown.
+ *
+ * A result bigger than VERBATIM_BUDGET_CHARS can never be kept whole, and the
+ * ordinary elision stub would be a trap for it: the stub advises calling the
+ * tool again for the verbatim text, but no re-read of this result can ever
+ * come back under the budget, so the model re-reads forever — the same
+ * livelock as the fixed-count window, produced by one huge file instead of
+ * many small ones. Real repositories have such files: lessong's
+ * .cache/all.json is 567k characters, and any lockfile or bundle qualifies.
+ *
+ * Showing the head with an honest note lets the model act on what it can see
+ * or narrow in with search_repository, instead of retrying a read that cannot
+ * work.
+ */
+const OVERSIZE_HEAD_CHARS = 20_000;
+
 const describeElided = (name: string, payload: string): string =>
   `[${name} result elided to save context: ${payload.length} characters. Call the tool again if you need it verbatim.]`;
+
+const describeElidedOversize = (name: string, payload: string): string =>
+  `[${name} result elided to save context: ${payload.length} characters, too large to ever show whole. Calling the tool again returns only its first ${OVERSIZE_HEAD_CHARS} characters.]`;
+
+const oversizeHead = (name: string, payload: string): string =>
+  `[${name} result is ${payload.length} characters, too large to show whole. This is its beginning; re-reading returns this same head, so to reach the rest use search_repository with this file as the path.]\n${payload.slice(0, OVERSIZE_HEAD_CHARS)}`;
 
 /**
  * The result text for one exchange, full or shortened.
@@ -276,6 +300,12 @@ const resultContent = (
   }
 
   const payload = JSON.stringify(exchange.result.output);
+
+  if (payload.length > VERBATIM_BUDGET_CHARS) {
+    return elide
+      ? describeElidedOversize(exchange.result.name, payload)
+      : oversizeHead(exchange.result.name, payload);
+  }
 
   return elide && payload.length > ELIDE_OVER_CHARS
     ? describeElided(exchange.result.name, payload)
@@ -301,7 +331,13 @@ const verbatimExchanges = (
       continue;
     }
 
-    const size = JSON.stringify(exchange.result.output).length;
+    const payloadSize = JSON.stringify(exchange.result.output).length;
+    // An oversized result is shown as its head, so its head is what it costs.
+    // Charging the full size would mark it non-verbatim forever — which is the
+    // livelock again, since the newest exchange is the one the model just
+    // asked for and must be able to see.
+    const size =
+      payloadSize > VERBATIM_BUDGET_CHARS ? OVERSIZE_HEAD_CHARS : payloadSize;
 
     if (size > remaining) {
       continue;
@@ -317,8 +353,15 @@ const verbatimExchanges = (
 const appendExchanges = (
   messages: MessageParam[],
   exchanges: readonly ModelToolExchange[],
+  options: { finished?: boolean } = {},
 ): void => {
-  const verbatim = verbatimExchanges(exchanges);
+  // A finished turn keeps nothing verbatim. The budget walk runs per call, so
+  // history turns each spent their own 100k — eight finished turns resent
+  // ~770k characters of results the model had already turned into a summary,
+  // on every call of turn nine. The summary is what a finished turn
+  // contributes; its reads stay readable again, which is what the stub says.
+  // Errors are still never elided, exactly as within the live turn.
+  const verbatim = options.finished ? [] : verbatimExchanges(exchanges);
 
   for (const [index, exchange] of exchanges.entries()) {
     messages.push({
@@ -375,7 +418,7 @@ export const buildMessages = (request: ModelRequest): MessageParam[] => {
   // Replay finished turns so a follow-up question keeps the earlier context.
   for (const turn of request.history) {
     messages.push({ role: "user", content: turn.goal });
-    appendExchanges(messages, turn.exchanges);
+    appendExchanges(messages, turn.exchanges, { finished: true });
     messages.push({ role: "assistant", content: turn.summary });
   }
 
@@ -400,28 +443,28 @@ export class AnthropicModelAdapter implements ModelAdapter {
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    const message = await this.client.messages.create({
-      model: this.selection.model,
-      max_tokens: 4_096,
-      system:
-        "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. When a change is needed, call propose_patch to produce a reviewable diff, then call apply_patch with the patchId it returns to write it. After applying a change, call run_tests to confirm it works, and report what the tests actually said rather than asserting success. apply_patch, run_command, and run_tests require human approval and may be denied — if one is, explain what you would have done rather than trying to work around the denial.",
-      tools: [
-        SEARCH_REPOSITORY_TOOL,
-        READ_FILE_TOOL,
-        PROPOSE_PATCH_TOOL,
-        APPLY_PATCH_TOOL,
-        RUN_COMMAND_TOOL,
-        RUN_TESTS_TOOL,
-        LIST_DIRECTORY_TOOL,
-        GIT_STATUS_TOOL,
-        GIT_DIFF_TOOL,
-      ],
-      tool_choice: {
-        type: "auto",
-        disable_parallel_tool_use: true,
-      },
-      messages: buildMessages(request),
-    });
+    let message;
+
+    try {
+      message = await this.createMessage(request);
+    } catch (error) {
+      // Rate limits, overload, server errors, and connection failures are the
+      // provider's weather, not the run's fault. The SDK has already retried
+      // these twice by the time they surface here; marking them lets the
+      // runner wait longer and continue with everything it has gathered,
+      // instead of losing the run. A 4xx that is not a rate limit stays fatal
+      // — retrying a malformed request would loop on it.
+      if (
+        error instanceof Anthropic.APIConnectionError ||
+        (error instanceof Anthropic.APIError &&
+          typeof error.status === "number" &&
+          (error.status === 429 || error.status >= 500))
+      ) {
+        throw new TransientModelError((error as Error).message, error);
+      }
+
+      throw error;
+    }
 
     const usage = {
       inputTokens: message.usage.input_tokens,
@@ -471,5 +514,30 @@ export class AnthropicModelAdapter implements ModelAdapter {
       summary,
       usage,
     };
+  }
+
+  private createMessage(request: ModelRequest) {
+    return this.client.messages.create({
+      model: this.selection.model,
+      max_tokens: 4_096,
+      system:
+        "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. When a change is needed, call propose_patch to produce a reviewable diff, then call apply_patch with the patchId it returns to write it. After applying a change, call run_tests to confirm it works, and report what the tests actually said rather than asserting success. apply_patch, run_command, and run_tests require human approval and may be denied — if one is, explain what you would have done rather than trying to work around the denial.",
+      tools: [
+        SEARCH_REPOSITORY_TOOL,
+        READ_FILE_TOOL,
+        PROPOSE_PATCH_TOOL,
+        APPLY_PATCH_TOOL,
+        RUN_COMMAND_TOOL,
+        RUN_TESTS_TOOL,
+        LIST_DIRECTORY_TOOL,
+        GIT_STATUS_TOOL,
+        GIT_DIFF_TOOL,
+      ],
+      tool_choice: {
+        type: "auto",
+        disable_parallel_tool_use: true,
+      },
+      messages: buildMessages(request),
+    });
   }
 }
