@@ -128,14 +128,48 @@ carry them.
 
 ## Type
 
-Mono is the identity — no second face. Hierarchy comes from exactly one extra
-weight and one extra size:
+**"Mono is the identity — no second face" is superseded.** That was this
+document's original rule and it did not survive research prompted by direct
+feedback that the pure-mono choice read as "too sleek." Checked what
+comparable tools actually ship, not just their marketing: Zed keeps
+`buffer_font_family` and `ui_font_family` separate and independently
+configurable; Linear uses Inter for all UI/body text and reserves Berkeley
+Mono for "code and technical labels" only; Warp uses a geometric sans for
+virtually all UI text specifically so the app reads as approachable rather
+than "for greybeards," keeping mono for terminal content only; Cursor uses a
+system-ui sans for chrome and mono for code. None of them ship one monospace
+face for their own chrome as a considered choice — the "monospace as brand
+signal" wave (Linear, Vercel, Raycast) consistently means mono *accents*
+inside an otherwise proportional UI, not literal 100% mono. That is a real,
+sourced answer, not a hedge: mono-everywhere was the one typography choice
+this research found no genuine precedent for.
+
+Two faces now, both tokens in `:root`:
+
+- **`--font-ui`** (`-apple-system, "SF Pro Text", "Inter", sans-serif`) is
+  the new default on `body`. It carries anything a person reads as prose or
+  acts on as a control: buttons, labels, panel titles, empty states, the ask
+  bar, and — the one that matters most — the model's own explanatory text in
+  the timeline (`.event__prose`), which needs to read as a message from
+  something that can write English, not as another technical field.
+- **`--mono`** (unchanged token, unchanged value) stays explicit on a
+  consolidated selector list near the top of `styles.css`, right after the
+  `body` rule: paths, diffs, tool names and their arguments, timestamps and
+  durations, tabular counts, terminal content, file-tree names, and file
+  content in the browser viewer. Every one of these is identifier-shaped or
+  needs column alignment — the two things mono is actually for. New
+  technical-content classes join that list; new chrome/prose classes do not
+  need to do anything, since `--font-ui` is body's default.
+
+Hierarchy still comes from exactly one extra weight and one extra size, on
+top of the font split:
 
 - **500 is the app-wide maximum weight** (mono bolds optically fast).
   It marks eyebrows (the 10px uppercase tracked labels), panel titles, and
   primary data (`.stat__value`, `.tool__name`, `.patch__path`).
-- 14px exists for two hero moments only: the open panel title and the empty
-  timeline. Everything else is the 10/11/12/13 scale that was already here.
+- 14px exists for a small set of hero moments: the open panel title, the
+  timeline empty state's title line, and the file viewer's empty hint.
+  Everything else is the 10/11/12/13 scale that was already here.
 - Wide tracking (0.06–0.16em) is for uppercase eyebrows only. Never track
   sentence-case text.
 - Floor is 10px, and only for uppercase eyebrows; body stays 12px.
@@ -182,10 +216,11 @@ were:
 - **`use-session-events.ts`, `use-comparison.ts`, `use-presence.ts`,
   `use-file-changes.ts`** were already shaped to take a `sessionId` parameter
   and needed no changes at all — that shape is why the split above was small.
-- **`session-tab.tsx`** (new) is almost everything `app.tsx` used to render
-  when a session was open: the session bar, rail, timeline, files panel,
-  terminal dock, palette, invite panel. It calls all four per-tab hooks above.
-  `app.tsx` renders one `<SessionTab>` per open tab.
+- **`session-tab.tsx`** is almost everything `app.tsx` used to render when a
+  session was open: the session bar, rail, timeline (now with a docked ask
+  bar and grouped tool activity — see *Ask flow* and *Timeline*), files
+  panel, file browser, terminal dock, palette, invite panel. It calls all
+  four per-tab hooks above. `app.tsx` renders one `<SessionTab>` per open tab.
 
 **Every open tab stays mounted.** `App` renders all of them, always; only the
 active one gets `style={{ display: "grid" }}`, the rest `display: "none"`
@@ -227,6 +262,217 @@ screen uses, given an `embedded` prop that skips the full-page `.open`
 wrapper and renders just `.open__panel modal`, which the caller (`App`) wraps
 in `.overlay`. One component, two contexts — do not fork it into a second
 "new tab" form.
+
+## Ask flow
+
+**"`/` overlay, not a chat bar" is superseded.** That was this app's earlier
+position on how a person asks the agent something, and direct feedback
+rejected it specifically: asking a question was reachable only by already
+knowing a hidden keyboard shortcut, which read as exactly the "blackbox, not
+a platform" complaint the rest of this pass answers. Do not revert to
+`/`-only on the theory that the palette is more "restrained" — restraint
+governs decoration, not discoverability, and a control nobody can find is not
+restrained, it is hidden.
+
+`ask-bar.tsx` is a persistent, always-visible control docked at the bottom of
+the timeline column (`.ask-bar`, inside `.timeline-column` alongside the
+scrollable `.timeline` above it), not a modal and not conditional on any
+mode. This is the shape every tool researched for this that serves both a
+chat-style and a command-driven audience converges on — Zed's agent panel
+keeps a permanently docked, bottom-pinned message editor *and* a separate
+`Cmd+Shift+P` command palette, and the two do not compete because they answer
+different questions ("what do I want to say" vs. "what do I want to run").
+Novus now does the same split:
+
+- The ask bar is one control for two jobs, decided by `busy`: idle, it calls
+  `ask()` and starts a turn; mid-run, it calls `direct()` and steers the one
+  already running, folded in at the run's next safe boundary the same way
+  the rail's old direction box used to. The placeholder text says which job
+  it is about to do.
+- `/` still opens `CommandOverlay` — filters, jump-to-patch, copy-diff,
+  reconnect, and its own quick-ask input — kept as a power-user accelerant,
+  not removed. Its `onAsk` is busy-aware the same way the bar is (`direct()`
+  mid-run, `ask()` otherwise), so the two entry points never disagree about
+  which action a typed goal means.
+- The session-bar's `<kbd>/</kbd>` hint now reads "commands," not "ask" —
+  it is honest about what the shortcut is for now that asking has its own
+  visible control.
+
+## Timeline: prose and grouped tool activity
+
+Two changes, one dependency between them. Neither is meaningful without the
+other, which is why they landed in the same pass.
+
+**The harness was throwing away the model's own words.** Both provider
+adapters (`anthropic-model.ts`, `openai-model.ts`) found a tool call in the
+provider's response and built a `ToolCall` from it — and discarded any text
+block sent alongside it in the same response, which is exactly where a model
+narrates ("I'll check the config file first") before acting. `ModelResponse`'s
+`tool_call` variant now carries that text optionally, `agent-runner.ts`
+threads it onto `tool.requested`'s payload (`text?: string`, additive and
+optional in `packages/contracts`, so every event already on disk still
+parses), and the shared `EventRow` in `packages/ui` renders it as
+`.event__prose` — full prominence, `--font-ui`, never muted — above the
+mechanical call summary. Without this, "make the timeline read like an agent
+explaining itself" has nothing to work with beyond the final `run.completed`
+summary.
+
+**Mechanical tool events collapse into one header per run of them; narrative
+events never do.** `timeline-view.tsx` walks the event list and groups
+consecutive `tool.requested` / `tool.approval_requested` / `tool.approved` /
+`tool.denied` / `tool.completed` / `tool.failed` events into a
+`ToolGroupRow` — a disclosure with a count badge and a terse mono summary
+(`list_directory, read_file ×2, propose_patch, apply_patch, run_tests`).
+Everything else — `run.started`, `run.progress`, `direction.*`,
+`run.completed`, `receipt.created`, `checkpoint.created`, `decision.recorded`,
+and so on — passes through ungrouped, at full weight. This is the same split
+Zed's agent panel uses: the model's own words are the one thing that never
+collapses; tool activity is what collapses, and it collapses by kind rather
+than flattening into an undifferentiated list.
+
+A group defaults **open** only while it is both the *last* group and the run
+is `busy` — a turn's tool activity stays visible live, the way Zed's
+in-flight turn does, and collapses the moment the turn ends or another group
+starts after it. Any group a person has manually toggled stays exactly how
+they left it: `session-tab.tsx` owns `groupOverrides: Map<groupKey,
+open>` rather than each group owning its own local state, specifically so
+`jumpTo` (the rail's "Tool calls" list) can force a group open — via
+`groupKeyFor(events, sequence)` — before scrolling to a call buried inside a
+closed one. A group's key is its first event's sequence number.
+
+When a group is collapsed, any `text` its `tool.requested` events carry
+still renders — as `.event__prose`, above the collapsed header — because
+hiding the model's own explanation inside a disclosure nobody has opened yet
+would recreate the exact problem this exists to fix. Expanded, that same
+text renders exactly once, inline, as part of that event's own row; the
+group header does not duplicate it.
+
+Grouping applies only when the timeline filter is `"all"`. The `"tools"` and
+`"patches"` filters already do their own flattening on purpose — someone who
+asked to see only tool activity is asking for a flat, scannable list, and
+regrouping what is already a filtered view would fight the filter.
+
+## Empty states
+
+A session's log is **never** actually empty — `session.created` lands the
+instant a session opens — so `visible.length === 0` was true in practice for
+almost nobody, and what a fresh tab actually showed was one real row: a
+sequence-0 `session.created` card rendering as a bare "0 ◇" with nothing
+after it, since a fresh session's `goal` is null until a run gives it one.
+That row, alone, was the "still feels very MVP" complaint made literal.
+
+`session-tab.tsx`'s `trulyEmpty` treats "exactly one event and it is
+`session.created`" (under the `"all"` filter) the same as "no events," and
+swaps in `.timeline__empty` — a real title-plus-hint pair, not bare centered
+text — instead of rendering that one row. The instant a run starts,
+`session.created` goes back to rendering normally as part of real history;
+nothing is ever hidden once there is anything else to show. The rail's Goal
+section and the changed-files panel got the same treatment in miniature —
+"No goal yet — ask the agent something below to begin" and "No files changed
+yet" — worded to point at the ask bar now that it exists, rather than at a
+keyboard shortcut.
+
+**Known rough edge, not introduced by this pass:** resuming a session (`POST
+/sessions` with `resume: <id>`) re-runs `SessionRegistry.create()`, which
+appends a fresh `session.created` unconditionally — including on a resume,
+where the id already has one. A resumed session with real history therefore
+carries a second, usually-goal-less `session.created` at the *end* of its
+log, rendering as one more bare "◇" row after everything else. `trulyEmpty`
+does not (and should not) special-case this away, since by then the log has
+real content and hiding an event that genuinely happened would be dishonest
+about what the log holds. Worth a real fix in `session-registry.ts` — append
+`session.created` only when `options.resume` is absent — but that is a
+worker-correctness bug outside this pass's UI scope, not something to fix
+as a drive-by.
+
+## File browser ("caveman mode")
+
+Read-only: browse the open repository, open a file, look at it. This was
+explicitly deferred in the previous pass and is now real, confined host-side
+the same way `apps/worker`'s own tools confine repository access — a second,
+independent implementation in `electron/fs-browser.ts`
+(`resolveInTree`/`isProtectedPath`, mirroring `resolveInsideRepository` in
+`apps/worker/src/tools.ts`) rather than a shared import, because the two apps
+share no package for it today and a human browsing files through Electron's
+main process is genuinely new IPC surface — unlike the terminal (see the
+comment beside `terminals` in `electron/main.ts`), which widens what the
+*human* can do but nothing the *agent* could not already do via a shell on
+this Mac. Repository-relative paths only, resolved through `realpath` so a
+symlink cannot point out, `.git`/`.env*` refused outright. Wired through
+`preload.ts`/`bridge.ts` as `novus:fs-list`/`novus:fs-read`, a fourth IPC
+surface beside the worker URL, the access token, the directory picker, and
+the terminal.
+
+**A toggled mode of the body grid (`mode: "browse"`, alongside `"timeline"`
+and `"compare"`), not a permanent fourth column.** Research into VS Code's
+Explorer and Zed's project panel both argue for a persistent, always-visible
+tree; Novus deliberately does not copy that here. The window has a real
+900px minimum width already carrying a 244px rail, and browsing files in
+Novus is closer to an occasional reference lookup — matching what the person
+who asked for this actually called it, "caveman mode," a mode you enter, not
+a rail you always have open — than to the constant target of every keystroke
+a real editor's tree is, where you are the one writing every file. Toggled
+from the session bar exactly like "attempts," which keeps the body grid's
+three views ("timeline", "compare", "browse") conceptually uniform instead
+of introducing a fourth, differently-shaped permanent-panel paradigm beside
+three toggle-based ones. `.body--browse` is `244px 220px 1fr` — rail (Goal
+and Run stats are still useful context while looking at a file), tree,
+viewer.
+
+**Icon-less**, deliberately, not merely for lack of an icon set: VS Code's
+own Explorer ships with no file-type icons by default, and the team has said
+they like the plain look. A chevron for directories (`▸`/`▾`) plus a
+monospace filename (`.tree__name`) is the whole visual vocabulary — nothing
+here earns a second glyph, on a palette that adds no hue for it to have
+anyway. Directories sort before files, then alphabetically within each
+(`fs-browser.ts`'s `listDirectory`), the same convention VS Code and Zed both
+use and the one thing a bare `readdir()` order gets visibly wrong. A
+directory's children are fetched once, on first expand, and kept — collapsing
+does not drop the cache (`use-file-tree.ts`), so re-expanding is instant.
+
+Selecting a file opens its content in the adjacent pane (`FileViewer`,
+`.viewer`) — never an overlay, never replacing the tree — read-only, capped
+at 2MB with a `truncated` marker past it (a viewer, not the agent's own
+`read_file`, so this cap exists purely so a stray large fixture cannot freeze
+the renderer painting it) and sniffed for a NUL byte in the first 8KB to
+report "binary file — not shown" instead of garbling one.
+
+## Terminal chrome
+
+Fixed at last pass for correctness (light/dark colors match tokens); this
+pass is about it looking considered. `.terminal-dock` now:
+
+- **Resizes.** `.terminal-dock__resize` is a thin, absolutely-positioned
+  strip straddling the dock's top edge (`cursor: row-resize`); dragging it
+  adjusts `terminalHeight` state in `session-tab.tsx`, clamped
+  `140–640px`, applied as the dock's inline `height`. xterm's own
+  `FitAddon` re-fits on every resize via the `ResizeObserver` `TerminalPanel`
+  already had — no new wiring needed there.
+- **Has a real header**, not just a label and a close button: a small
+  monospace prompt glyph (`›_`, `.terminal-dock__prompt`) ahead of the
+  repository path, which still ellipsizes from the head via the same
+  `direction: rtl` + LRM-`::before` trick `.titlebar__repo` uses.
+- **Reads as sunken**, not just colored like the well plane: an inset top
+  shadow (`box-shadow: inset 0 6px 8px -8px …`) makes the "output sinks"
+  rule from *Planes* literal at the one edge that used to be a flat 1px
+  line.
+
+## Tab strip
+
+Singled out in feedback as reading unconsidered specifically. Two additions,
+both restrained (no new color, no decoration without function):
+
+- **The active tab gets a bottom accent** — `.tab--active::after`, a 2px
+  `--text`-colored bar — so it visually attaches to the session below it,
+  the way a browser or editor tab does. This is a pseudo-element, not a
+  `box-shadow` on `.tab--active` itself, deliberately: `:focus-visible`
+  already owns `box-shadow` for the double focus ring, and a second
+  `box-shadow` here would silently replace it on a tab that is both active
+  and keyboard-focused.
+- **`.tabstrip` carries a permanent, subtle edge `mask-image` fade** (10px
+  both sides) rather than one that only appears once tabs overflow. Cheap,
+  and it answers the more specific complaint underneath "unconsidered":
+  everything about the strip was static except the busy-dot pulse.
 
 ## Changed files
 
@@ -274,7 +520,12 @@ to `CompareView`'s own per-attempt columns, not this session's panel.
   the theme toggle — the guest is single-session and read-only by design, so
   only the token block and the shared-component styles (`event`, `tool`,
   `patch`, `diff`, `kv`, `matches`, `compare`) are the actual follow-up.
-  Mirror those in one deliberate pass, not by drift.
+  Mirror those in one deliberate pass, not by drift. This pass adds one more
+  concrete instance: `packages/ui/src/event-row.tsx` now emits
+  `.event__prose` for a `tool.requested` event that carries model text, since
+  that markup is shared — the guest will render the paragraph with no styling
+  at all until its stylesheet catches up, same category of gap as the rest of
+  this bullet, not a new one.
 - **Long repository paths.** The titlebar path ellipsizes at the head via
   `direction: rtl` plus an LRM `::before` that pins the leading slash. If you
   touch `.titlebar__repo`, re-test with a path longer than half the window —
