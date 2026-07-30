@@ -4,6 +4,26 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
 import { bridge } from "../bridge.ts";
+import type { Theme } from "../use-theme.ts";
+
+// xterm.js paints to its own canvas, outside the DOM/CSS the rest of the app
+// themes through custom properties — a var() reference means nothing here,
+// so the well plane's two colors are mirrored as literals. Keep these equal
+// to --bg-well/--text in both :root blocks of styles.css; nothing enforces
+// that equality, the way nothing enforces most of this file's hand mirroring
+// of design tokens into a canvas API.
+const TERMINAL_THEME: Record<Theme, { background: string; foreground: string; selection: string }> = {
+  dark: {
+    background: "#060607",
+    foreground: "#e7e7ea",
+    selection: "rgba(231, 231, 234, 0.18)",
+  },
+  light: {
+    background: "#eef0f2",
+    foreground: "#17171a",
+    selection: "rgba(23, 23, 26, 0.12)",
+  },
+};
 
 /**
  * A real shell, bound to the open repository's directory.
@@ -13,8 +33,37 @@ import { bridge } from "../bridge.ts";
  * and is not a capability for. Unmounting disposes both ends; nothing here
  * outlives the panel that opened it.
  */
-export const TerminalPanel = ({ cwd }: { cwd: string | null }) => {
+export const TerminalPanel = ({
+  cwd,
+  theme,
+}: {
+  cwd: string | null;
+  theme: Theme;
+}) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+
+  // Applied on every theme change, not just at mount — a background tab
+  // stays mounted (see the plane-of-tabs note in novus-ui/SKILL.md), so a
+  // toggle needs to reach a terminal that already exists, not just the next
+  // one created.
+  useEffect(() => {
+    if (!termRef.current) {
+      // Not yet created (this mount's first pass — the create-terminal
+      // effect below already applies the current theme), or already
+      // disposed. Either way, nothing to update live.
+      return;
+    }
+
+    const colors = TERMINAL_THEME[theme];
+
+    termRef.current.options.theme = {
+      background: colors.background,
+      foreground: colors.foreground,
+      cursor: colors.foreground,
+      selectionBackground: colors.selection,
+    };
+  }, [theme]);
 
   useEffect(() => {
     const host = bridge();
@@ -24,22 +73,26 @@ export const TerminalPanel = ({ cwd }: { cwd: string | null }) => {
       return;
     }
 
+    const colors = TERMINAL_THEME[theme];
+
     const term = new Terminal({
       // Matches the app's own well plane and mono stack — a terminal is
       // exactly the "raw output" the plane system already sinks below the
       // canvas, so it should look like it belongs there, not like a widget
       // dropped on top of it.
       theme: {
-        background: "#060607",
-        foreground: "#e7e7ea",
-        cursor: "#e7e7ea",
-        selectionBackground: "rgba(231, 231, 234, 0.18)",
+        background: colors.background,
+        foreground: colors.foreground,
+        cursor: colors.foreground,
+        selectionBackground: colors.selection,
       },
       fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace',
       fontSize: 12,
       cursorBlink: true,
       scrollback: 5_000,
     });
+
+    termRef.current = term;
 
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -96,12 +149,14 @@ export const TerminalPanel = ({ cwd }: { cwd: string | null }) => {
         host.terminal.dispose(id);
       }
 
+      termRef.current = null;
       term.dispose();
     };
-    // cwd intentionally not in the dependency list: switching repositories
-    // does not tear down and respawn an open shell out from under whatever
-    // command is running in it. A fresh terminal for a fresh repository is
-    // a new panel, not a side effect of this one re-running.
+    // cwd and theme intentionally not in the dependency list: switching
+    // repositories does not tear down and respawn an open shell out from
+    // under whatever command is running in it, and a theme change is
+    // handled live by the effect above rather than by recreating the whole
+    // terminal (which would lose scrollback and the running shell).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

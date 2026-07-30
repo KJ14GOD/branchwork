@@ -1,46 +1,85 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { SessionEvent } from "@novus/contracts";
+import { SessionSummarySchema, type SessionSummary } from "@novus/contracts/protocol";
 
 import { bridge } from "./bridge.ts";
-import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
-import { EventRow } from "./components/host-event-row.tsx";
-import { CompareScreen } from "./components/compare-screen.tsx";
-import { InvitePanel } from "./components/invite-panel.tsx";
 import { OpenRepository } from "./components/open-repository.tsx";
-import { TerminalPanel } from "./components/terminal-panel.tsx";
-import { useComparison } from "./use-comparison.ts";
-import { usePresence } from "./use-presence.ts";
+import { SessionTab, type TabStatus } from "./session-tab.tsx";
 import { useSession } from "./use-session.ts";
-import { useSessionEvents } from "./use-session-events.ts";
+import { useTheme } from "./use-theme.ts";
 
 const FALLBACK_ENDPOINT =
   import.meta.env.VITE_NOVUS_ENDPOINT ?? "http://127.0.0.1:4319";
 
-type Filter = "all" | "tools" | "patches";
+const TABS_STORAGE_KEY = "novus.tabs";
 
-const isPatchEvent = (
-  event: SessionEvent,
-): event is Extract<SessionEvent, { type: "tool.completed" }> =>
-  event.type === "tool.completed" &&
-  event.payload.result.name === "propose_patch";
+type StoredTabs = { tabs: SessionSummary[]; activeId: string | null };
 
-const formatElapsed = (events: SessionEvent[]): string => {
-  const first = events.at(0);
-  const last = events.at(-1);
+/**
+ * The tabs this window had open last, so relaunching does not lose the
+ * thread the way closing a browser tab does not lose your history.
+ *
+ * Each entry is only the `SessionSummary` this app fetched or created last
+ * time — it names which session and repository to resume, not a session
+ * still alive anywhere. The worker's in-memory registry does not survive a
+ * relaunch even though its durable log does, so every stored entry is
+ * re-opened with `resume` against whatever worker is running now; see the
+ * hydration effect below. Read defensively here too: a stored shape from an
+ * older build should be dropped, not thrown, so a schema change here never
+ * blanks the window on
+ * launch.
+ */
+const loadStoredTabs = (): StoredTabs => {
+  try {
+    const raw = localStorage.getItem(TABS_STORAGE_KEY);
 
-  if (!first || !last) {
-    return "—";
+    if (!raw) {
+      return { tabs: [], activeId: null };
+    }
+
+    const parsed: unknown = JSON.parse(raw);
+
+    if (typeof parsed !== "object" || parsed === null) {
+      return { tabs: [], activeId: null };
+    }
+
+    const record = parsed as { tabs?: unknown; activeId?: unknown };
+    const tabs = Array.isArray(record.tabs)
+      ? record.tabs.flatMap((entry) => {
+          const result = SessionSummarySchema.safeParse(entry);
+
+          return result.success ? [result.data] : [];
+        })
+      : [];
+    const storedActiveId =
+      typeof record.activeId === "string" ? record.activeId : null;
+    const activeId = tabs.some((tab) => tab.id === storedActiveId)
+      ? storedActiveId
+      : (tabs.at(-1)?.id ?? null);
+
+    return { tabs, activeId };
+  } catch {
+    return { tabs: [], activeId: null };
+  }
+};
+
+const basename = (path: string): string =>
+  path.split("/").filter(Boolean).at(-1) ?? path;
+
+const dotClass = (status: string | undefined): string => {
+  if (status === "working" || status === "running" || status === "cancelling") {
+    return "busy";
   }
 
-  const ms =
-    new Date(last.occurredAt).getTime() - new Date(first.occurredAt).getTime();
-
-  if (ms < 1000) {
-    return `${ms}ms`;
+  if (status === "paused" || status === "pausing") {
+    return "paused";
   }
 
-  return `${(ms / 1000).toFixed(1)}s`;
+  if (status === "failed") {
+    return "failed";
+  }
+
+  return "idle";
 };
 
 export const App = () => {
@@ -54,234 +93,218 @@ export const App = () => {
       .then(setEndpoint);
   }, []);
 
-  const {
-    session,
-    capabilities,
-    remembered,
-    opening,
-    error: sessionError,
-    open,
-    ask,
-    invite,
-    direct,
-    cancel,
-    pause,
-    resume,
-    handoff,
-    close,
-  } = useSession(endpoint);
-  // A separate screen rather than a panel: comparing is a different question
-  // from following, and forcing them into one view makes both worse.
-  const [comparing, setComparing] = useState(false);
-  const [inviting, setInviting] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [directionText, setDirectionText] = useState("");
-  const comparison = useComparison(endpoint, session?.id ?? null);
-  const presence = usePresence(endpoint, session?.id ?? null);
-  const { events, status, reconnect } = useSessionEvents(
-    endpoint,
-    session?.id ?? null,
-  );
-  const [filter, setFilter] = useState<Filter>("all");
-  const [raw, setRaw] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [highlighted, setHighlighted] = useState<number | null>(null);
+  const { capabilities, remembered, opening, error, open } = useSession(endpoint);
+  const { theme, toggleTheme } = useTheme();
 
-  const run = events.find((event) => event.type === "run.started");
-  const completed = events.findLast((event) => event.type === "run.completed");
-  const failed = events.findLast((event) => event.type === "run.failed");
-  const cancelled = events.findLast((event) => event.type === "run.cancelled");
-  const pauseState = events.findLast(
-    (event) => event.type === "run.paused" || event.type === "run.resumed",
-  );
+  const [tabs, setTabs] = useState<SessionSummary[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [tabStatuses, setTabStatuses] = useState<Record<string, TabStatus>>({});
+  const [newTabOpen, setNewTabOpen] = useState(false);
+  const hydrated = useRef(false);
 
-  const toolCalls = useMemo(
-    () => events.filter((event) => event.type === "tool.requested"),
-    [events],
-  );
-  const patches = useMemo(() => events.filter(isPatchEvent), [events]);
-
-  const totals = useMemo(
-    () =>
-      patches.reduce(
-        (accumulator, event) => {
-          const { output } = event.payload.result as Extract<
-            SessionEvent,
-            { type: "tool.completed" }
-          >["payload"]["result"] & { name: "propose_patch" };
-
-          return {
-            additions: accumulator.additions + output.additions,
-            deletions: accumulator.deletions + output.deletions,
-          };
-        },
-        { additions: 0, deletions: 0 },
-      ),
-    [patches],
-  );
-
-  const visible = useMemo(() => {
-    if (filter === "tools") {
-      return events.filter(
-        (event) =>
-          event.type === "tool.requested" || event.type === "tool.completed",
-      );
-    }
-
-    if (filter === "patches") {
-      return events.filter(isPatchEvent);
-    }
-
-    return events;
-  }, [events, filter]);
-
-  const jumpTo = (sequence: number) => {
-    setHighlighted(sequence);
-    document
-      .getElementById(`event-${sequence}`)
-      ?.scrollIntoView({ behavior: "smooth", block: "center" });
-  };
-
-  const commands: Command[] = [
-    {
-      id: "filter-all",
-      label: "Show all events",
-      hint: `${events.length}`,
-      run: () => setFilter("all"),
-    },
-    {
-      id: "filter-tools",
-      label: "Show tool activity only",
-      hint: `${toolCalls.length}`,
-      run: () => setFilter("tools"),
-    },
-    {
-      id: "filter-patches",
-      label: "Show proposed patches only",
-      hint: `${patches.length}`,
-      run: () => setFilter("patches"),
-    },
-    {
-      id: "raw",
-      label: raw ? "Hide raw event payloads" : "Show raw event payloads",
-      run: () => setRaw((value) => !value),
-    },
-    {
-      id: "reconnect",
-      label: "Reconnect event stream",
-      hint: status,
-      run: reconnect,
-    },
-  ];
-
-  const latestPatch = patches.at(-1);
-
-  if (latestPatch) {
-    const { output } = latestPatch.payload.result as Extract<
-      SessionEvent,
-      { type: "tool.completed" }
-    >["payload"]["result"] & { name: "propose_patch" };
-
-    commands.push(
-      {
-        id: "jump-patch",
-        label: `Jump to latest patch · ${output.path}`,
-        run: () => jumpTo(latestPatch.sequence),
-      },
-      {
-        id: "copy-patch",
-        label: "Copy latest patch diff",
-        run: () => {
-          void navigator.clipboard.writeText(output.diff);
-        },
-      },
-    );
-  }
-
+  // Hydrated once, from what this window had open last — but a relaunch
+  // starts a fresh worker with an empty in-memory session registry, even
+  // though the durable event log survives it. A stored SessionSummary
+  // trusted directly looked alive (its SSE stream reads straight from the
+  // store, registry or not) while every other route — turns, files, compare
+  // — 404'd against a session the fresh worker had never heard of. Each
+  // stored tab is resumed for real instead, the same way the Open screen's
+  // "Carry on with" list already resumes a single session; a tab that fails
+  // to resume (the repository moved, a different NOVUS_DB) is dropped
+  // rather than kept around looking live while being dead.
+  //
+  // hydrated.current is set only when an *uncancelled* attempt actually
+  // finishes — not synchronously at the top of the effect. Setting it early
+  // was tried and is wrong: StrictMode double-invokes this effect (mount,
+  // cleanup, mount again), the cleanup cancels the first attempt before its
+  // awaits resolve, and if the guard is already permanently true by then, the
+  // second invocation never starts a fresh attempt either — the cancelled
+  // first one is all that ever ran, its result is discarded, and the
+  // persistence effect below then commits that discarded empty result to
+  // localStorage, deleting every stored tab on the very first launch. This
+  // effect is also keyed on `open`, which is bound to `endpoint` and changes
+  // identity once `bridge().workerUrl()` resolves — hydration's first run is
+  // always against `FALLBACK_ENDPOINT` before that happens, so a permanent
+  // guard set before completion would also strand hydration on the wrong
+  // endpoint forever whenever the real one differs. Leaving the guard
+  // unset until a real completion means both the StrictMode-cancelled pass
+  // and the fallback-endpoint pass simply get superseded by the next
+  // invocation, the way a cancelled fetch normally would.
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const typing =
-        target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
+    if (hydrated.current) {
+      return;
+    }
 
-      if (event.key === "/" && !typing) {
-        event.preventDefault();
-        setPaletteOpen(true);
+    const stored = loadStoredTabs();
+
+    if (stored.tabs.length === 0) {
+      hydrated.current = true;
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      const resumed: SessionSummary[] = [];
+
+      for (const tab of stored.tabs) {
+        const summary = await open(
+          tab.repositoryPath,
+          tab.allowWrites,
+          tab.allowCommands,
+          tab.id,
+        );
+
+        if (summary) {
+          resumed.push(summary);
+        }
       }
-    };
 
-    window.addEventListener("keydown", onKeyDown);
+      if (cancelled) {
+        // A StrictMode-synthetic unmount, or endpoint changed mid-flight —
+        // either way this attempt's result is stale, and hydrated.current
+        // stays false so whichever invocation actually survives tries again.
+        return;
+      }
+
+      setTabs(resumed);
+      setActiveId(
+        resumed.some((tab) => tab.id === stored.activeId)
+          ? stored.activeId
+          : (resumed.at(-1)?.id ?? null),
+      );
+      hydrated.current = true;
+    })();
 
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      cancelled = true;
     };
+  }, [open]);
+
+  // Persisted after every change, once hydration has actually run — guarded,
+  // or the empty initial state this component renders with for one tick
+  // would immediately overwrite what hydration was about to restore.
+  useEffect(() => {
+    if (!hydrated.current) {
+      return;
+    }
+
+    try {
+      localStorage.setItem(
+        TABS_STORAGE_KEY,
+        JSON.stringify({ tabs, activeId } satisfies StoredTabs),
+      );
+    } catch {
+      // Non-fatal — tabs just will not survive the next launch.
+    }
+  }, [tabs, activeId]);
+
+  const openTab = useCallback(
+    async (
+      repositoryPath: string,
+      allowWrites: boolean,
+      allowCommands: boolean,
+      resume?: string,
+    ) => {
+      const summary = await open(repositoryPath, allowWrites, allowCommands, resume);
+
+      if (!summary) {
+        return;
+      }
+
+      setTabs((current) => {
+        if (current.some((tab) => tab.id === summary.id)) {
+          return current.map((tab) => (tab.id === summary.id ? summary : tab));
+        }
+
+        return [...current, summary];
+      });
+      setActiveId(summary.id);
+      setNewTabOpen(false);
+    },
+    [open],
+  );
+
+  // Reads tabs/activeId from the closure rather than setTabs's own updater
+  // form, deliberately: calling setActiveId from inside setTabs's updater
+  // typechecked and worked, but updaters are supposed to be pure, and
+  // StrictMode double-invokes them specifically to catch this — harmless
+  // here only because the computed value happened to be identical both
+  // times. Reading closure state means closeTab is recreated whenever tabs
+  // or activeId change, same cost openTab already pays for depending on
+  // open.
+  const closeTab = useCallback(
+    (id: string) => {
+      const index = tabs.findIndex((tab) => tab.id === id);
+
+      if (index === -1) {
+        return;
+      }
+
+      const next = tabs.filter((tab) => tab.id !== id);
+
+      setTabs(next);
+
+      if (activeId === id) {
+        // The tab to its left, falling back to the one that took its place —
+        // closing the active tab should land on a neighbour, not jump to
+        // whichever tab happens to be first.
+        setActiveId(next[index - 1]?.id ?? next[0]?.id ?? null);
+      }
+
+      setTabStatuses((current) => {
+        if (!(id in current)) {
+          return current;
+        }
+
+        const nextStatuses = { ...current };
+        delete nextStatuses[id];
+        return nextStatuses;
+      });
+    },
+    [tabs, activeId],
+  );
+
+  const reportStatus = useCallback((id: string, status: TabStatus) => {
+    setTabStatuses((current) => {
+      const existing = current[id];
+
+      if (
+        existing &&
+        existing.runStatus === status.runStatus &&
+        existing.additions === status.additions &&
+        existing.deletions === status.deletions
+      ) {
+        return current;
+      }
+
+      return { ...current, [id]: status };
+    });
   }, []);
 
-  // A run is in flight when the newest run.started has no matching terminator.
-  const lastStarted = events.findLast((event) => event.type === "run.started");
-  const lastEnded = events.findLast(
-    (event) =>
-      event.type === "run.completed" ||
-      event.type === "run.failed" ||
-      event.type === "run.cancelled",
+  const themeToggle = (
+    <button
+      className="titlebar__action"
+      type="button"
+      onClick={toggleTheme}
+      title="Switch the display theme — stays on this machine"
+    >
+      {theme === "dark" ? "light" : "dark"}
+    </button>
   );
-  const busy = Boolean(
-    lastStarted && (!lastEnded || lastEnded.sequence < lastStarted.sequence),
-  );
-  // A cancel that was requested but has not yet stopped the run still reads
-  // as busy — the host asked, the run has not reached its next turn boundary
-  // to honour it yet.
-  const cancelling =
-    busy &&
-    events
-      .filter((event) => event.type === "run.cancel_requested")
-      .some(
-        (event) =>
-          lastStarted && event.sequence > lastStarted.sequence,
-      );
-  // Only the most recent of the three pause-related events for this run
-  // decides — a run can be paused and resumed more than once, so "some event
-  // exists" is not enough, the same rule AgentRunner.pauseRequested applies.
-  const latestPauseEvent = events
-    .filter(
-      (event) =>
-        (event.type === "run.pause_requested" ||
-          event.type === "run.paused" ||
-          event.type === "run.resumed") &&
-        lastStarted &&
-        event.sequence > lastStarted.sequence,
-    )
-    .at(-1);
-  const pausing = busy && latestPauseEvent?.type === "run.pause_requested";
-  const paused = busy && latestPauseEvent?.type === "run.paused";
-  const runStatus = cancelling
-    ? "cancelling"
-    : pausing
-      ? "pausing"
-      : paused
-        ? "paused"
-        : busy
-          ? "working"
-          : cancelled
-            ? "cancelled"
-            : failed
-              ? "failed"
-              : completed
-                ? "idle"
-                : run
-                  ? "running"
-                  : "idle";
 
-  if (!session) {
+  if (tabs.length === 0) {
     return (
       <div className="shell">
         <header className="titlebar">
           <span className="titlebar__mark">Novus</span>
+          <span className="titlebar__spacer" />
+          {themeToggle}
         </header>
         <OpenRepository
-          onOpen={open}
+          onOpen={openTab}
           opening={opening}
-          error={sessionError}
+          error={error}
           capabilities={capabilities}
           remembered={remembered}
         />
@@ -293,285 +316,93 @@ export const App = () => {
     <div className="shell">
       <header className="titlebar">
         <span className="titlebar__mark">Novus</span>
-        <div className="titlebar__meta">
-          <button
-            className="titlebar__repo"
-            type="button"
-            onClick={close}
-            title="Close this repository"
-          >
-            {session.repositoryPath}
-          </button>
-          {session.allowWrites ? (
-            <span className="titlebar__writes">writes on</span>
-          ) : null}
-          {session.repositoryState !== "ready" ? (
-            // Said at the top of the window, while there is still time to act on
-            // it. This used to surface as a failure when you pressed Fork, which
-            // is after the work rather than before it.
-            <span className="titlebar__warn" title="Forking and diffs need a commit to work from">
-              {session.repositoryState === "absent"
-                ? "not a git repo"
-                : "no commits yet"}
-            </span>
-          ) : null}
-          {session.allowCommands ? (
-            <span className="titlebar__writes">commands on</span>
-          ) : null}
-          {run?.type === "run.started" ? (
-            <span className="titlebar__model">
-              {run.payload.run.model.provider}/{run.payload.run.model.model}
-            </span>
-          ) : null}
-          <span className="titlebar__phase">{runStatus}</span>
-        </div>
-        {presence.participants.length > 0 ? (
-          <div className="presence" title="Who has this session open right now">
-            {presence.participants.map((participant) => (
-              <span
-                key={participant.id}
-                className={`presence__item${participant.connected ? " presence__item--live" : ""}`}
-                title={`${participant.name} · ${participant.role}${participant.connected ? " · watching now" : " · not connected"}`}
-              >
-                <span className="presence__dot" />
-                {participant.name}
-                {participant.role !== "owner" ? (
-                  <button
-                    className="presence__handoff"
-                    type="button"
-                    onClick={() => void handoff(participant.id)}
-                    title={`Hand off control to ${participant.name} — only the current owner can do this`}
-                  >
-                    hand off
-                  </button>
-                ) : null}
-              </span>
-            ))}
-          </div>
-        ) : null}
-        <span className="titlebar__spacer" />
-        <button
-          className="titlebar__action"
-          type="button"
-          onClick={() => setInviting(true)}
-          title="Invite a teammate into this session"
-        >
-          invite
-        </button>
-        <button
-          className="titlebar__action"
-          type="button"
-          onClick={() => setComparing((value) => !value)}
-          title="Fork this run and compare attempts"
-        >
-          {comparing ? "timeline" : "attempts"}
-        </button>
-        <button
-          className="titlebar__action"
-          type="button"
-          onClick={() => setTerminalOpen((value) => !value)}
-          title="A real shell, opened in this repository — yours, not the agent's"
-        >
-          {terminalOpen ? "close terminal" : "terminal"}
-        </button>
-        <span className={`status status--${status === "live" ? "live" : status === "error" ? "error" : "idle"}`}>
-          <span className="status__dot" />
-          {status}
-        </span>
-        <span className="titlebar__hint">
-          <kbd>/</kbd> ask
-        </span>
-      </header>
+        <div className="tabstrip">
+          {tabs.map((tab) => {
+            const tabStatus = tabStatuses[tab.id];
+            const hasDiff =
+              tabStatus !== undefined &&
+              (tabStatus.additions > 0 || tabStatus.deletions > 0);
 
-      <div className="body">
-        <aside className="rail">
-          <div className="rail__section">
-            <div className="rail__label">Goal</div>
-            <div className="rail__goal">
-              {run?.type === "run.started"
-                ? run.payload.run.goal
-                : "Waiting for a run"}
-            </div>
-          </div>
-
-          {busy ? (
-            <div className="rail__section rail__section--direction">
-              <div className="rail__label">Direction</div>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-
-                  if (directionText.trim()) {
-                    void direct(directionText.trim());
-                    setDirectionText("");
+            return (
+              <div
+                key={tab.id}
+                role="button"
+                tabIndex={0}
+                className={`tab${tab.id === activeId ? " tab--active" : ""}`}
+                onClick={() => setActiveId(tab.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setActiveId(tab.id);
                   }
                 }}
+                title={tab.repositoryPath}
               >
-                <input
-                  className="open__input"
-                  value={directionText}
-                  onChange={(event) => setDirectionText(event.target.value)}
-                  placeholder="Steer the running turn"
-                  spellCheck={false}
-                />
-              </form>
-              {lastStarted?.type === "run.started" ? (
-                <div className="rail__buttons">
-                  <button
-                    className="open__browse"
-                    type="button"
-                    disabled={pausing}
-                    onClick={() => {
-                      if (lastStarted.type === "run.started") {
-                        if (paused) {
-                          void resume(lastStarted.payload.run.id);
-                        } else {
-                          void pause(lastStarted.payload.run.id);
-                        }
-                      }
-                    }}
-                    title={
-                      paused
-                        ? "Continue this run where it left off"
-                        : "Suspend this run at its next safe boundary, to resume later"
-                    }
-                  >
-                    {pausing
-                      ? "Pausing…"
-                      : paused
-                        ? "Resume run"
-                        : "Pause run"}
-                  </button>
-                  <button
-                    className="open__browse"
-                    type="button"
-                    disabled={cancelling}
-                    onClick={() => {
-                      if (lastStarted.type === "run.started") {
-                        void cancel(lastStarted.payload.run.id);
-                      }
-                    }}
-                    title="Stop this run at its next safe boundary"
-                  >
-                    {cancelling ? "Stopping…" : "Cancel run"}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          <div className="rail__section">
-            <div className="rail__label">Run</div>
-            <div className="stat">
-              <span>events</span>
-              <span className="stat__value">{events.length}</span>
-            </div>
-            <div className="stat">
-              <span>tool calls</span>
-              <span className="stat__value">{toolCalls.length}</span>
-            </div>
-            <div className="stat">
-              <span>patches</span>
-              <span className="stat__value">{patches.length}</span>
-            </div>
-            <div className="stat">
-              <span>lines</span>
-              <span className="stat__value">
-                <span className="stat__add">+{totals.additions}</span>{" "}
-                <span className="stat__del">−{totals.deletions}</span>
-              </span>
-            </div>
-            <div className="stat">
-              <span>elapsed</span>
-              <span className="stat__value">{formatElapsed(events)}</span>
-            </div>
-          </div>
-
-          {toolCalls.length > 0 ? (
-            <div>
-              <div className="rail__label rail__label--inset">Tool calls</div>
-              {toolCalls.map((event) => (
-                <button
-                  key={event.eventId}
-                  type="button"
-                  className={`jump${highlighted === event.sequence ? " jump--active" : ""}`}
-                  onClick={() => jumpTo(event.sequence)}
-                >
-                  <span className="jump__seq">{event.sequence}</span>
-                  <span className="jump__name">
-                    {event.type === "tool.requested"
-                      ? event.payload.call.name
-                      : ""}
+                <span className={`tab__dot tab__dot--${dotClass(tabStatus?.runStatus)}`} />
+                <span className="tab__label">{basename(tab.repositoryPath)}</span>
+                {hasDiff ? (
+                  <span className="tab__diffstat">
+                    <span className="stat__add">+{tabStatus.additions}</span>
+                    <span className="stat__del">−{tabStatus.deletions}</span>
                   </span>
+                ) : null}
+                <button
+                  className="tab__close"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeTab(tab.id);
+                  }}
+                  title="Close this tab"
+                >
+                  ×
                 </button>
-              ))}
-            </div>
-          ) : null}
-        </aside>
-
-        {comparing ? (
-          <main className="timeline timeline--compare">
-            <CompareScreen
-              state={comparison}
-              repositoryState={session.repositoryState}
-              onClose={() => setComparing(false)}
-            />
-          </main>
-        ) : (
-          <main className="timeline">
-            {visible.length === 0 ? (
-              <div className="timeline__empty">
-                {status === "error" ? (
-                  `No connection to ${endpoint}.`
-                ) : (
-                  <>
-                    Press <kbd>/</kbd> and type a question to start.
-                  </>
-                )}
               </div>
-            ) : (
-              visible.map((event) => (
-                <EventRow
-                  key={event.eventId}
-                  event={event}
-                  raw={raw}
-                  highlighted={highlighted === event.sequence}
-                />
-              ))
-            )}
-          </main>
-        )}
-      </div>
-
-      {terminalOpen ? (
-        <div className="terminal-dock">
-          <div className="terminal-dock__head">
-            <span className="rail__label">Terminal · {session.repositoryPath}</span>
-            <button
-              className="titlebar__action"
-              type="button"
-              onClick={() => setTerminalOpen(false)}
-              title="Close this shell"
-            >
-              close
-            </button>
-          </div>
-          <TerminalPanel cwd={session.repositoryPath} />
+            );
+          })}
+          <button
+            className="tab tab--new"
+            type="button"
+            onClick={() => setNewTabOpen(true)}
+            title="Open another repository in a new tab"
+          >
+            +
+          </button>
         </div>
-      ) : null}
+        <span className="titlebar__spacer" />
+        {themeToggle}
+      </header>
 
-      {paletteOpen ? (
-        <CommandOverlay
-          commands={commands}
-          onAsk={(goal) => {
-            void ask(goal);
-          }}
-          onClose={() => setPaletteOpen(false)}
+      {tabs.map((tab) => (
+        <SessionTab
+          key={tab.id}
+          session={tab}
+          endpoint={endpoint}
+          active={tab.id === activeId}
+          theme={theme}
+          onStatus={(status) => reportStatus(tab.id, status)}
+          onCloseTab={() => closeTab(tab.id)}
         />
-      ) : null}
+      ))}
 
-      {inviting ? (
-        <InvitePanel onInvite={invite} onClose={() => setInviting(false)} />
+      {newTabOpen ? (
+        <div
+          className="overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setNewTabOpen(false);
+            }
+          }}
+        >
+          <OpenRepository
+            embedded
+            onOpen={openTab}
+            opening={opening}
+            error={error}
+            capabilities={capabilities}
+            remembered={remembered}
+          />
+        </div>
       ) : null}
     </div>
   );

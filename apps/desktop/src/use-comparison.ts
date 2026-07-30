@@ -7,6 +7,7 @@ import {
 } from "@novus/contracts/protocol";
 
 import { authorization } from "./access.ts";
+import { readError } from "./http.ts";
 
 /**
  * The attempts, and the two things a host does with them.
@@ -37,16 +38,6 @@ export type ComparisonState = {
   decision: DecisionSummary | null;
   choosing: boolean;
   choose: (runId: string) => Promise<void>;
-};
-
-const readError = async (response: Response): Promise<string> => {
-  try {
-    const body = (await response.json()) as { error?: string };
-
-    return body.error ?? `Request failed (${response.status})`;
-  } catch {
-    return `Request failed (${response.status})`;
-  }
 };
 
 export const useComparison = (

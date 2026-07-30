@@ -1,81 +1,54 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { authorization } from "./access.ts";
+import { readError } from "./http.ts";
 import {
   HostCapabilitiesSchema,
-  InviteResponseSchema,
   SessionHistorySchema,
-  type InviteResponse,
   type RememberedSession,
   SessionSummarySchema,
   type HostCapabilities,
   type SessionSummary,
 } from "@novus/contracts/protocol";
 
-export type InviteRole = "editor" | "reviewer" | "viewer";
-
-export type SessionState = {
-  session: SessionSummary | null;
+export type OpenSessionState = {
+  /** What the host permits, or null until the worker has answered. */
+  capabilities: HostCapabilities | null;
+  /** Sessions the log remembers, newest activity first — for the Open screen
+   * and for the tab bar's "new tab" flow to offer the same list. */
+  remembered: RememberedSession[];
   opening: boolean;
   error: string | null;
+  /**
+   * Opens or resumes a session and returns its summary. Returns null on
+   * failure — `error` says why. Deliberately does not hold the result as
+   * this hook's own state: the app can have several open at once now, one per
+   * tab, and this hook only ever creates or finds one.
+   */
   open: (
     repositoryPath: string,
     allowWrites: boolean,
     allowCommands: boolean,
     /** A session id from the log, to bring its timeline back with it. */
     resume?: string,
-  ) => Promise<void>;
-  /** Sessions the log remembers, for the Open screen. */
-  remembered: RememberedSession[];
-  /** What the host permits, or null until the worker has answered. */
-  capabilities: HostCapabilities | null;
-  ask: (goal: string) => Promise<void>;
-  /** Mints a token for a new participant. Null on failure — `error` says why. */
-  invite: (name: string, role: InviteRole) => Promise<InviteResponse | null>;
-  /** Recorded for the running turn to fold in, not applied immediately. */
-  direct: (goal: string) => Promise<void>;
-  /**
-   * Requests that a run stop. Recorded immediately; the run itself appends
-   * `run.cancelled` once it actually stops, at its next turn boundary.
-   */
-  cancel: (runId: string) => Promise<void>;
-  /**
-   * Requests that a run suspend. Recorded immediately, same as cancel; the
-   * run itself appends `run.paused` once it actually stops, at the same turn
-   * boundary. Unlike cancel, this run can be picked back up with `resume`.
-   */
-  pause: (runId: string) => Promise<void>;
-  /** Continues a run this session previously paused. */
-  resume: (runId: string) => Promise<void>;
-  /** Moves execution authority to another participant in this session. */
-  handoff: (toParticipantId: string) => Promise<void>;
-  close: () => void;
-};
-
-const readError = async (response: Response): Promise<string> => {
-  try {
-    const body = (await response.json()) as { error?: string };
-
-    return body.error ?? `Request failed (${response.status})`;
-  } catch {
-    return `Request failed (${response.status})`;
-  }
+  ) => Promise<SessionSummary | null>;
 };
 
 /**
- * Owns the worker session: choosing a repository and submitting turns.
- *
- * Progress is never returned here — it arrives on the event stream, so the
- * timeline stays the single source of truth for what happened.
+ * The worker's session catalog: what the host permits, and what the log
+ * remembers. One instance for the whole app — capabilities and history are
+ * not per-tab, they are what a tab is opened *from*.
  */
-export const useSession = (endpoint: string): SessionState => {
-  const [session, setSession] = useState<SessionSummary | null>(null);
+export const useSession = (endpoint: string): OpenSessionState => {
   const [capabilities, setCapabilities] = useState<HostCapabilities | null>(
     null,
   );
   const [remembered, setRemembered] = useState<RememberedSession[]>([]);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped after every successful open, so a freshly created session shows up
+  // in "carry on with" without waiting for anything else to change.
+  const [historyTick, setHistoryTick] = useState(0);
 
   // Asked once, on the way in. A worker that is not up yet simply leaves this
   // null, and the controls stay off — the safe direction to fail.
@@ -105,8 +78,9 @@ export const useSession = (endpoint: string): SessionState => {
     };
   }, [endpoint]);
 
-  // Asked once, alongside /health. A list of previous sessions is the only way
-  // back to work done before the last restart.
+  // Asked on the way in, and again after every session this app opens. A list
+  // of previous sessions is the only way back to work done before the last
+  // restart, or in a tab this window has not opened yet.
   useEffect(() => {
     let cancelled = false;
 
@@ -130,7 +104,7 @@ export const useSession = (endpoint: string): SessionState => {
     return () => {
       cancelled = true;
     };
-  }, [endpoint, session]);
+  }, [endpoint, historyTick]);
 
   const open = useCallback(
     async (
@@ -138,7 +112,7 @@ export const useSession = (endpoint: string): SessionState => {
       allowWrites: boolean,
       allowCommands: boolean,
       resume?: string,
-    ) => {
+    ): Promise<SessionSummary | null> => {
       setOpening(true);
       setError(null);
 
@@ -159,15 +133,18 @@ export const useSession = (endpoint: string): SessionState => {
 
         if (!response.ok) {
           setError(await readError(response));
-          return;
+          return null;
         }
 
-        setSession(SessionSummarySchema.parse(await response.json()));
+        const summary = SessionSummarySchema.parse(await response.json());
+        setHistoryTick((value) => value + 1);
+        return summary;
       } catch (cause) {
         setError(
           `Cannot reach the worker at ${endpoint}. Start it with pnpm --filter @novus/worker start.`,
         );
         console.error(cause);
+        return null;
       } finally {
         setOpening(false);
       }
@@ -175,203 +152,5 @@ export const useSession = (endpoint: string): SessionState => {
     [endpoint],
   );
 
-  const ask = useCallback(
-    async (goal: string) => {
-      if (!session) {
-        return;
-      }
-
-      const response = await fetch(
-        `${endpoint}/sessions/${encodeURIComponent(session.id)}/turns`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(await authorization()),
-          },
-          body: JSON.stringify({ goal }),
-        },
-      );
-
-      if (!response.ok) {
-        setError(await readError(response));
-      }
-    },
-    [endpoint, session],
-  );
-
-  const invite = useCallback(
-    async (name: string, role: InviteRole): Promise<InviteResponse | null> => {
-      if (!session) {
-        return null;
-      }
-
-      const response = await fetch(
-        `${endpoint}/sessions/${encodeURIComponent(session.id)}/invite`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(await authorization()),
-          },
-          body: JSON.stringify({ name, role }),
-        },
-      );
-
-      if (!response.ok) {
-        setError(await readError(response));
-        return null;
-      }
-
-      return InviteResponseSchema.parse(await response.json());
-    },
-    [endpoint, session],
-  );
-
-  const direct = useCallback(
-    async (goal: string) => {
-      if (!session) {
-        return;
-      }
-
-      const response = await fetch(
-        `${endpoint}/sessions/${encodeURIComponent(session.id)}/direction`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(await authorization()),
-          },
-          body: JSON.stringify({ goal }),
-        },
-      );
-
-      if (!response.ok) {
-        setError(await readError(response));
-      }
-    },
-    [endpoint, session],
-  );
-
-  const cancel = useCallback(
-    async (runId: string) => {
-      if (!session) {
-        return;
-      }
-
-      const response = await fetch(
-        `${endpoint}/sessions/${encodeURIComponent(session.id)}/cancel`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(await authorization()),
-          },
-          body: JSON.stringify({ runId }),
-        },
-      );
-
-      if (!response.ok) {
-        setError(await readError(response));
-      }
-    },
-    [endpoint, session],
-  );
-
-  const pause = useCallback(
-    async (runId: string) => {
-      if (!session) {
-        return;
-      }
-
-      const response = await fetch(
-        `${endpoint}/sessions/${encodeURIComponent(session.id)}/pause`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(await authorization()),
-          },
-          body: JSON.stringify({ runId }),
-        },
-      );
-
-      if (!response.ok) {
-        setError(await readError(response));
-      }
-    },
-    [endpoint, session],
-  );
-
-  const resume = useCallback(
-    async (runId: string) => {
-      if (!session) {
-        return;
-      }
-
-      const response = await fetch(
-        `${endpoint}/sessions/${encodeURIComponent(session.id)}/resume`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(await authorization()),
-          },
-          body: JSON.stringify({ runId }),
-        },
-      );
-
-      if (!response.ok) {
-        setError(await readError(response));
-      }
-    },
-    [endpoint, session],
-  );
-
-  const handoff = useCallback(
-    async (toParticipantId: string) => {
-      if (!session) {
-        return;
-      }
-
-      const response = await fetch(
-        `${endpoint}/sessions/${encodeURIComponent(session.id)}/handoff`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(await authorization()),
-          },
-          body: JSON.stringify({ toParticipantId }),
-        },
-      );
-
-      if (!response.ok) {
-        setError(await readError(response));
-      }
-    },
-    [endpoint, session],
-  );
-
-  const close = useCallback(() => {
-    setSession(null);
-    setError(null);
-  }, []);
-
-  return {
-    session,
-    capabilities,
-    remembered,
-    opening,
-    error,
-    open,
-    ask,
-    invite,
-    direct,
-    cancel,
-    pause,
-    resume,
-    handoff,
-    close,
-  };
+  return { capabilities, remembered, opening, error, open };
 };

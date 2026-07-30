@@ -259,3 +259,29 @@ export const SessionHistorySchema = z.object({
 });
 
 export type SessionHistory = z.infer<typeof SessionHistorySchema>;
+
+/**
+ * What changed in the session's own working tree — not a fork's.
+ *
+ * Deliberately the same shape `AttemptComparisonSchema.filesChanged` above
+ * already uses, because it is the same computation: both are
+ * `RunProjection.filesChanged`, folded by `projectSession`. This is that
+ * projection's numbers for the session's own (non-fork) runs, summed across
+ * every turn so far — the honest source for a changed-files panel, not a
+ * second way of tracking what an agent touched. See the same caveat
+ * `filesChanged` carries elsewhere: it covers `apply_patch` only, not writes
+ * made through `run_command`.
+ */
+export const SessionFilesResponseSchema = z.object({
+  files: z.array(
+    z.object({
+      path: z.string().min(1),
+      additions: z.number().int().nonnegative(),
+      deletions: z.number().int().nonnegative(),
+    }),
+  ),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+});
+
+export type SessionFilesResponse = z.infer<typeof SessionFilesResponseSchema>;

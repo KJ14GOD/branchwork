@@ -28,6 +28,7 @@ import {
 } from "./participants.ts";
 import { applyDecision } from "./apply-decision.ts";
 import { compareAttempts } from "./compare.ts";
+import { projectSession } from "./projection.ts";
 import { createRedactor, type Redactor } from "./redaction.ts";
 import type { Session, SessionRegistry } from "./session-registry.ts";
 
@@ -672,6 +673,67 @@ export const startEventServer = (
       }));
 
       sendJson(response, 200, compareAttempts(session.id, store.list(session.id), attempts));
+      return true;
+    }
+
+    const filesMatch = /^\/sessions\/([^/]+)\/files$/.exec(pathname);
+
+    if (filesMatch && request.method === "GET") {
+      const session = sessions.get(decodeURIComponent(filesMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      // The same projection /compare folds attempts from — filtered to this
+      // session's own runs, because a fork's filesChanged describes its own
+      // worktree, not the one this panel is showing.
+      const events = store.list(session.id);
+      const projected = projectSession(session.id, events);
+      // Derived from the log, not session.forks: that map is in-memory only
+      // and empty after any worker restart, even though fork.created (the
+      // parent's durable record of having branched) survives in the store
+      // that projectSession just read. Reading it from session.forks meant
+      // every fork's files silently folded back into this panel — the exact
+      // thing the comment above says this filter exists to prevent — the
+      // moment a session outlived the process that forked it.
+      const forkRunIds = new Set(
+        events.flatMap((event) =>
+          event.type === "fork.created" ? [event.payload.fork.runId] : [],
+        ),
+      );
+      const byPath = new Map<
+        string,
+        { path: string; additions: number; deletions: number }
+      >();
+
+      for (const run of projected.runs) {
+        if (forkRunIds.has(run.runId)) {
+          continue;
+        }
+
+        for (const file of run.filesChanged) {
+          const existing = byPath.get(file.path);
+
+          if (existing) {
+            existing.additions += file.additions;
+            existing.deletions += file.deletions;
+          } else {
+            byPath.set(file.path, { ...file });
+          }
+        }
+      }
+
+      const files = [...byPath.values()].sort((first, second) =>
+        first.path.localeCompare(second.path),
+      );
+
+      sendJson(response, 200, {
+        files,
+        additions: files.reduce((total, file) => total + file.additions, 0),
+        deletions: files.reduce((total, file) => total + file.deletions, 0),
+      });
       return true;
     }
 
