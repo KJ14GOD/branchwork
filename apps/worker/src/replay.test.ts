@@ -213,6 +213,56 @@ test("only applied patches count as files changed", () => {
   assert.deepEqual(projectSession(SESSION, store.list(SESSION)).runs[0]?.filesChanged, []);
 });
 
+test("a chosen attempt survives into the projection, not only the live event stream", () => {
+  // decision.recorded already drew a real row in the shared event timeline —
+  // this was never a rendering gap. The gap was everywhere else that reasons
+  // about session state from a rebuilt projection rather than a live stream:
+  // a restart, a replay, or a guest that reconnects after missing the event
+  // had no way to learn a decision was ever made. See
+  // skills/novus-extend-event-contract for why this class of gap is easy to
+  // introduce and hard to notice.
+  const store = new InMemorySessionEventStore();
+
+  store.append({
+    sessionId: SESSION,
+    actorId: "agent-1",
+    type: "run.started",
+    payload: {
+      run: {
+        id: "run-1",
+        sessionId: SESSION,
+        goal: "Fix the locking behavior",
+        status: "running",
+        startedBy: "agent-1",
+        model: { provider: "anthropic", model: "test" },
+        createdAt: new Date().toISOString(),
+      },
+    },
+  });
+
+  const withoutDecision = projectSession(SESSION, store.list(SESSION));
+  assert.equal(withoutDecision.decision, null);
+
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "decision.recorded",
+    payload: {
+      runId: "run-1",
+      checkpointId: "checkpoint-1",
+      outcome: { applied: true, files: ["src/lock.ts"] },
+    },
+  });
+
+  const withDecision = projectSession(SESSION, store.list(SESSION));
+
+  assert.deepEqual(withDecision.decision, {
+    runId: "run-1",
+    checkpointId: "checkpoint-1",
+    outcome: { applied: true, files: ["src/lock.ts"] },
+  });
+});
+
 test("pending direction survives into the projection, applied direction does not", () => {
   const store = new InMemorySessionEventStore();
 

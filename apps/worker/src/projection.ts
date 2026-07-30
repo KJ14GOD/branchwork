@@ -1,4 +1,4 @@
-import type { Participant, SessionEvent } from "@novus/contracts";
+import type { DecisionOutcome, Participant, SessionEvent } from "@novus/contracts";
 
 /**
  * Session state, rebuilt from the log and nowhere else.
@@ -42,6 +42,15 @@ export type SessionProjection = {
   runs: RunProjection[];
   /** Submitted but not yet applied, oldest first. */
   pendingDirection: { eventId: string; direction: string }[];
+  /**
+   * The most recent attempt a host chose on the compare screen, if any.
+   *
+   * Was reachable only through the live event stream before this — a
+   * decision landed in the log and drew a row, but a projection rebuilt from
+   * the log (a restart, a replay, a guest that missed the live event) had no
+   * way to know one had ever been made.
+   */
+  decision: { runId: string; checkpointId: string; outcome: DecisionOutcome } | null;
 };
 
 const emptyRun = (
@@ -81,6 +90,7 @@ export const projectSession = (
   const submitted = new Map<string, string>();
   const applied = new Set<string>();
   let controlHeldBy: string | null = null;
+  let decision: SessionProjection["decision"] = null;
   let sequence = -1;
 
   const runFor = (runId: string): RunProjection | undefined => runs.get(runId);
@@ -249,6 +259,18 @@ export const projectSession = (
         break;
       }
 
+      case "decision.recorded": {
+        // Latest wins, mirroring how the pause/resume events above are
+        // read: a decision can in principle be revisited, and only the log
+        // order says which one is current.
+        decision = {
+          runId: event.payload.runId,
+          checkpointId: event.payload.checkpointId,
+          outcome: event.payload.outcome,
+        };
+        break;
+      }
+
       default:
         break;
     }
@@ -260,6 +282,7 @@ export const projectSession = (
     participants: [...participants.values()],
     controlHeldBy,
     runs: [...runs.values()],
+    decision,
     pendingDirection: [...submitted.entries()]
       .filter(([eventId]) => !applied.has(eventId))
       .map(([eventId, direction]) => ({ eventId, direction })),
