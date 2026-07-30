@@ -159,9 +159,13 @@ button {
 
 .titlebar__meta {
   display: flex;
+  align-items: center;
   gap: 14px;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-dim);
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .titlebar__spacer {
@@ -169,6 +173,8 @@ button {
 }
 
 .titlebar__hint {
+  flex: none;
+  white-space: nowrap;
   color: var(--text-dim);
   font-size: 11px;
 }
@@ -196,8 +202,22 @@ kbd {
 }
 
 .titlebar__repo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Ellipsize the head of the path, not the tail — the repository name is
+     the part worth keeping. */
+  direction: rtl;
+  text-align: left;
   color: var(--text-muted);
   font-size: 11px;
+}
+
+/* A strong left-to-right mark, so the path's leading slash does not get
+   carried to the far end by the rtl ellipsis trick above. */
+.titlebar__repo::before {
+  content: "\200e";
 }
 
 .titlebar__repo:hover {
@@ -206,6 +226,8 @@ kbd {
 }
 
 .titlebar__action {
+  flex: none;
+  white-space: nowrap;
   padding: 3px 8px;
   border-radius: var(--radius-m);
   color: var(--text-muted);
@@ -223,10 +245,14 @@ kbd {
 
 .titlebar__model,
 .titlebar__phase {
+  flex: none;
+  white-space: nowrap;
   color: var(--text-dim);
 }
 
 .titlebar__writes {
+  flex: none;
+  white-space: nowrap;
   padding: 1px 5px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-s);
@@ -362,6 +388,7 @@ kbd {
 }
 
 .status {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -573,7 +600,9 @@ kbd {
 }
 
 .event--highlight {
-  border-left-color: var(--border-strong);
+  border-left-color: var(--text-muted);
+  background: var(--hover);
+  border-radius: 0 var(--radius-m) var(--radius-m) 0;
   margin-left: -12px;
   padding-left: 11px;
 }
@@ -1085,6 +1114,8 @@ pre.kv__value {
 /* Not an error — the session works, two features do not. Amber rather than red,
    and worded as a fact rather than a failure. */
 .titlebar__warn {
+  flex: none;
+  white-space: nowrap;
   padding: 2px 7px;
   border: 1px solid var(--warn, #8a6d2b);
   border-radius: var(--radius-s);
