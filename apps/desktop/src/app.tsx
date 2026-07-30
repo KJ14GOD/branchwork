@@ -9,6 +9,7 @@ import { CompareScreen } from "./components/compare-screen.tsx";
 import { InvitePanel } from "./components/invite-panel.tsx";
 import { OpenRepository } from "./components/open-repository.tsx";
 import { useComparison } from "./use-comparison.ts";
+import { usePresence } from "./use-presence.ts";
 import { useSession } from "./use-session.ts";
 import { useSessionEvents } from "./use-session-events.ts";
 
@@ -63,6 +64,9 @@ export const App = () => {
     invite,
     direct,
     cancel,
+    pause,
+    resume,
+    handoff,
     close,
   } = useSession(endpoint);
   // A separate screen rather than a panel: comparing is a different question
@@ -71,6 +75,7 @@ export const App = () => {
   const [inviting, setInviting] = useState(false);
   const [directionText, setDirectionText] = useState("");
   const comparison = useComparison(endpoint, session?.id ?? null);
+  const presence = usePresence(endpoint, session?.id ?? null);
   const { events, status, reconnect } = useSessionEvents(
     endpoint,
     session?.id ?? null,
@@ -84,6 +89,9 @@ export const App = () => {
   const completed = events.findLast((event) => event.type === "run.completed");
   const failed = events.findLast((event) => event.type === "run.failed");
   const cancelled = events.findLast((event) => event.type === "run.cancelled");
+  const pauseState = events.findLast(
+    (event) => event.type === "run.paused" || event.type === "run.resumed",
+  );
 
   const toolCalls = useMemo(
     () => events.filter((event) => event.type === "tool.requested"),
@@ -229,19 +237,38 @@ export const App = () => {
         (event) =>
           lastStarted && event.sequence > lastStarted.sequence,
       );
+  // Only the most recent of the three pause-related events for this run
+  // decides — a run can be paused and resumed more than once, so "some event
+  // exists" is not enough, the same rule AgentRunner.pauseRequested applies.
+  const latestPauseEvent = events
+    .filter(
+      (event) =>
+        (event.type === "run.pause_requested" ||
+          event.type === "run.paused" ||
+          event.type === "run.resumed") &&
+        lastStarted &&
+        event.sequence > lastStarted.sequence,
+    )
+    .at(-1);
+  const pausing = busy && latestPauseEvent?.type === "run.pause_requested";
+  const paused = busy && latestPauseEvent?.type === "run.paused";
   const runStatus = cancelling
     ? "cancelling"
-    : busy
-      ? "working"
-      : cancelled
-        ? "cancelled"
-        : failed
-          ? "failed"
-          : completed
-            ? "idle"
-            : run
-              ? "running"
-              : "idle";
+    : pausing
+      ? "pausing"
+      : paused
+        ? "paused"
+        : busy
+          ? "working"
+          : cancelled
+            ? "cancelled"
+            : failed
+              ? "failed"
+              : completed
+                ? "idle"
+                : run
+                  ? "running"
+                  : "idle";
 
   if (!session) {
     return (
@@ -296,6 +323,30 @@ export const App = () => {
           ) : null}
           <span className="titlebar__phase">{runStatus}</span>
         </div>
+        {presence.participants.length > 0 ? (
+          <div className="presence" title="Who has this session open right now">
+            {presence.participants.map((participant) => (
+              <span
+                key={participant.id}
+                className={`presence__item${participant.connected ? " presence__item--live" : ""}`}
+                title={`${participant.name} · ${participant.role}${participant.connected ? " · watching now" : " · not connected"}`}
+              >
+                <span className="presence__dot" />
+                {participant.name}
+                {participant.role !== "owner" ? (
+                  <button
+                    className="presence__handoff"
+                    type="button"
+                    onClick={() => void handoff(participant.id)}
+                    title={`Hand off control to ${participant.name} — only the current owner can do this`}
+                  >
+                    hand off
+                  </button>
+                ) : null}
+              </span>
+            ))}
+          </div>
+        ) : null}
         <span className="titlebar__spacer" />
         <button
           className="titlebar__action"
@@ -355,19 +406,46 @@ export const App = () => {
                 />
               </form>
               {lastStarted?.type === "run.started" ? (
-                <button
-                  className="open__browse"
-                  type="button"
-                  disabled={cancelling}
-                  onClick={() => {
-                    if (lastStarted.type === "run.started") {
-                      void cancel(lastStarted.payload.run.id);
+                <div className="rail__buttons">
+                  <button
+                    className="open__browse"
+                    type="button"
+                    disabled={pausing}
+                    onClick={() => {
+                      if (lastStarted.type === "run.started") {
+                        if (paused) {
+                          void resume(lastStarted.payload.run.id);
+                        } else {
+                          void pause(lastStarted.payload.run.id);
+                        }
+                      }
+                    }}
+                    title={
+                      paused
+                        ? "Continue this run where it left off"
+                        : "Suspend this run at its next safe boundary, to resume later"
                     }
-                  }}
-                  title="Stop this run at its next safe boundary"
-                >
-                  {cancelling ? "Stopping…" : "Cancel run"}
-                </button>
+                  >
+                    {pausing
+                      ? "Pausing…"
+                      : paused
+                        ? "Resume run"
+                        : "Pause run"}
+                  </button>
+                  <button
+                    className="open__browse"
+                    type="button"
+                    disabled={cancelling}
+                    onClick={() => {
+                      if (lastStarted.type === "run.started") {
+                        void cancel(lastStarted.payload.run.id);
+                      }
+                    }}
+                    title="Stop this run at its next safe boundary"
+                  >
+                    {cancelling ? "Stopping…" : "Cancel run"}
+                  </button>
+                </div>
               ) : null}
             </div>
           ) : null}

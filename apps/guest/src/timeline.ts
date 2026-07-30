@@ -183,7 +183,7 @@ export type TimelineSummary = {
   goal: string | null;
   model: string | null;
   /** What the run is doing, derived only from events the guest has seen. */
-  runStatus: "waiting" | "working" | "completed" | "failed" | "cancelled";
+  runStatus: "waiting" | "working" | "paused" | "completed" | "failed" | "cancelled";
   events: number;
   toolCalls: SessionEvent[];
   patches: PatchEvent[];
@@ -222,10 +222,24 @@ export const summarise = (events: SessionEvent[]): TimelineSummary => {
   );
   const patches = events.filter(isPatchEvent);
 
+  // Neither `run.paused` nor `run.resumed` is a terminator — a paused run has
+  // not ended, so it falls through the `!ended` branch above unless this is
+  // checked separately. Mirrors `AgentRunner.pauseRequested`'s own rule: only
+  // the *most recent* of the two decides, since a run can be paused and
+  // resumed more than once.
+  const pauseState = events.findLast(
+    (event) => event.type === "run.paused" || event.type === "run.resumed",
+  );
+  const isPaused =
+    pauseState?.type === "run.paused" &&
+    (!started || pauseState.sequence > started.sequence);
+
   const runStatus = !started
     ? "waiting"
     : !ended || ended.sequence < started.sequence
-      ? "working"
+      ? isPaused
+        ? "paused"
+        : "working"
       : ended.type === "run.failed"
         ? "failed"
         : ended.type === "run.cancelled"

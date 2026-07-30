@@ -45,6 +45,9 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "decision.recorded": "☑",
   "run.cancel_requested": "◐",
   "run.cancelled": "◻",
+  "run.pause_requested": "◑",
+  "run.paused": "‖",
+  "run.resumed": "▹",
 };
 
 export type EventRowProps = {
@@ -146,6 +149,23 @@ export const EventRow = ({
       case "run.cancelled":
         return (
           <span className="event__text event__text--muted">stopped</span>
+        );
+
+      case "run.pause_requested":
+        return (
+          <span className="event__text event__text--muted">
+            pause requested
+          </span>
+        );
+
+      case "run.paused":
+        return (
+          <span className="event__text event__text--muted">paused</span>
+        );
+
+      case "run.resumed":
+        return (
+          <span className="event__text event__text--approved">resumed</span>
         );
 
       case "participant.joined": {

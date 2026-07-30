@@ -25,17 +25,19 @@ with no meaningful shared control is also not V1.
 Updated 2026-07-30. Keep this honest; it is the section that decides what gets
 built next.
 
-**Both halves are now real, and the gap between them has closed a lot — but
-not all the way.** The harness half: a typed agent loop with a budget in place
-of a step ceiling, nine tools including command execution and Git, a
-propose-then-apply patch flow, path confinement that survives symlinks,
-deny-by-default permissions, and an event stream three surfaces render live
-(desktop, guest, and a relay in between). The multiplayer half: a real
-SQLite-backed event store behind an HTTP+SSE worker, a separate WebSocket relay
-process a teammate off the host machine can watch through, an invite endpoint
-that mints a role-scoped token the worker never re-issues, a direction endpoint
-a running turn folds in at its next boundary, a cancel endpoint the same run
-loop honours at that same boundary, and all three now reachable from the
+**Both halves are now real, and the gap between them has closed almost all the
+way.** The harness half: a typed agent loop with a budget in place of a step
+ceiling, nine tools including command execution and Git, a propose-then-apply
+patch flow, path confinement that survives symlinks, deny-by-default
+permissions, and an event stream three surfaces render live (desktop, guest,
+and a relay in between). The multiplayer half: a real SQLite-backed event
+store behind an HTTP+SSE worker, a separate WebSocket relay process a teammate
+off the host machine can watch through, an invite endpoint that mints a
+role-scoped token the worker never re-issues, a direction endpoint a running
+turn folds in at its next boundary, cancel/pause/resume endpoints the same run
+loop honours at that same boundary, a handoff endpoint that actually moves
+execution authority rather than just recording that it happened, live presence
+distinct from who was ever invited, and all of it now reachable from the
 desktop UI rather than curl only. Fork and compare exist too: checkpoints cut
 real Git worktrees, isolated attempts run without touching each other or the
 parent's index, the compare screen shows them side by side, and choosing one
@@ -43,13 +45,6 @@ now records the decision and applies it.
 
 What is still missing, plainly:
 
-- **Pause, resume, and handoff do not exist.** Ownership cannot move from one
-  participant to another, and a run cannot be suspended and picked back up —
-  cancel is now built (see Milestone 3), which at least means a run in flight
-  is no longer unstoppable, but pausing is not the same thing as stopping.
-- **Presence is historical, not live.** `participant.joined` lands in the
-  timeline, but nothing shows who is watching right now versus who joined once
-  and left.
 - **The renderer has no test coverage.** Every hook in `apps/desktop/src` and
   `apps/guest/src` is unverified by anything but hand-testing — worker logic is
   extensively tested, the React layer that calls it is not. That gap is exactly
@@ -58,15 +53,61 @@ What is still missing, plainly:
 - **No packaging.** There is no signed macOS build, so "the complete demo works
   repeatedly on a clean machine" — Milestone 5's exit condition — has not been
   attempted on a machine that isn't a developer's.
+- **Requesting control has no UI trigger.** `control.requested` is a real
+  event with a real route (`POST /sessions/:id/control/request`) any
+  participant can call, and it renders in the timeline like anything else, but
+  no button calls it. The natural place would be the guest — the lower-privilege
+  participant asking the owner for control — and the guest client is
+  structurally read-only in this codebase (it has never issued a POST, per
+  `apps/guest`'s own description in AGENTS.md); wiring one in was judged out of
+  scope for this slice rather than something to bolt on quietly. Handoff itself
+  does not depend on it: the owner can hand off to anyone in the presence list
+  from the desktop UI without a request ever being made.
+- **A handoff is atomic, not a two-step accept.** The protocol document below
+  describes the recipient explicitly accepting a handoff; what is built
+  transfers ownership the moment the owner clicks, the same way an invite
+  mints a role without a confirmation round-trip. `acceptedAt` on
+  `control.transferred` is stamped at that moment rather than won by a
+  separate acceptance event.
+- **A resumed run's token usage undercounts.** Usage is reported by the model
+  adapter per call and was never logged, so pausing and resuming has nothing to
+  rebuild it from — a resumed run's usage counters restart at zero, and its
+  eventual receipt reports only the tokens spent after the most recent resume,
+  not the full run. The same is true of the run's budget clock: it also resets
+  on resume, so neither a long pause nor the turns before it count against the
+  continuation's own budget. Neither is surfaced to whoever is watching — it
+  is written down here and in `agent-runner.ts`'s own comments, not in the
+  timeline. What *is* carried forward correctly is the harder part: the
+  model's tool-exchange context from before the pause, rebuilt from the event
+  log rather than lost, so a resumed run does not have amnesia about what it
+  already tried.
 
-Five earlier failure modes, closed:
+Seven earlier failure modes, closed:
 
+- ~~**Pause, resume, and handoff do not exist.**~~ Fixed 2026-07-30: `POST
+  /sessions/:id/pause` records `run.pause_requested`; the run loop honours it
+  at the same turn boundary cancel and direction already use and appends
+  `run.paused` — not terminal, so it gets no receipt. `POST
+  /sessions/:id/resume` restarts the same run under the same id, rebuilding
+  the paused turn's tool exchanges from the log so the model does not lose
+  what it had already tried. `POST /sessions/:id/handoff` transfers ownership
+  via `participants.ts`'s `transferOwnership` — already written, never wired
+  to a route — and records `control.transferred`; only the current owner can
+  call it, checked twice, once by the route's capability table and once by
+  the registry itself. See Milestone 3.
+- ~~**Presence is historical, not live.**~~ Fixed 2026-07-30: `GET
+  /sessions/:id/presence` reports who currently holds an open event stream,
+  counting connections per participant so a second tab or a reconnect does not
+  read as a departure — distinct from `participant.joined`, which only ever
+  said who was invited. Both the desktop and guest UIs poll it and show a live
+  dot next to whoever is actually watching. Proven over a real socket in
+  `presence.test.ts`: opening and closing a real SSE connection flips presence
+  live and back, and an invited participant appears separately from the host.
 - ~~**Nothing can stop a run in flight.**~~ Fixed 2026-07-30: `POST
   /sessions/:id/cancel` records `run.cancel_requested`; the run loop honours
   it at the same turn boundary direction is folded in at and appends
   `run.cancelled`, distinct from a failure throughout the receipt, the
-  projection, and the guest's status. See Milestone 3. Pause, resume, and
-  handoff are the three of the original four still unbuilt.
+  projection, and the guest's status. See Milestone 3.
 - ~~**Choosing an attempt does nothing.**~~ Fixed 2026-07-30: `POST
   /sessions/:id/decision` records `decision.recorded` and, when the session
   has writes enabled, applies the chosen attempt's changes to the parent's
@@ -103,12 +144,13 @@ proven: a full live round-trip against a real OpenAI model, because no valid
 run by hand the moment one is.
 
 Before starting anything else from the roadmap in `README.md`, check it
-against this section. Multiplayer is no longer the thin half, so the risk this
-document used to guard against has moved: what is thin now is *closing the
-loop* a shared session opens — pause, resume, handoff, live presence — not
-standing the
-transport up in the first place. Apply and cancel both closed on 2026-07-30;
-the rest have not.
+against this section. Multiplayer is no longer the thin half — apply, cancel,
+pause, resume, handoff, and live presence all closed on 2026-07-30, which was
+the risk this document used to guard against. What is thin now is narrower:
+the renderer's own test coverage, and packaging. Everything under *V1
+architecture* and *Multiplayer protocol* below is built; what remains is
+proving it on a machine nobody developed it on, and proving the UI layer the
+way the worker's own logic already is.
 
 ## Benchmark results
 
@@ -623,9 +665,12 @@ now.
       teammate off the host machine
 - [x] Invite links — `POST /sessions/:id/invite` mints a one-time,
       role-scoped token; reachable from the desktop UI, not curl only
-- [~] Presence and roles — roles are real (owner/editor/reviewer/viewer,
-      enforced per-route by capability); presence is a `participant.joined`
-      event in the timeline, not a live "who's here now" indicator
+- [x] Presence and roles — roles are real (owner/editor/reviewer/viewer,
+      enforced per-route by capability); presence is now live too: `GET
+      /sessions/:id/presence` reports who has an open event stream right now,
+      separate from `participant.joined`'s "who was ever invited". Both the
+      desktop and guest UIs poll it and show a live dot next to whoever is
+      actually watching.
 - [x] Ordered event replication — the relay and the worker both replay by
       sequence; a client that drops and returns holds the same log as one that
       never left
@@ -633,21 +678,46 @@ now.
       `direction.submitted` for the runtime to fold in at its next turn
       boundary; has a UI box now, not curl only
 - [x] Approvals — the gate and the tool classes exist and are enforced
-- [~] Pause, resume, cancel, and handoff — **cancel** is built: `POST
-      /sessions/:id/cancel` records `run.cancel_requested`, and the run loop
-      checks for it at the same turn boundary direction is folded in at — a
-      tool call already in flight finishes, only the next model call is
-      refused — then appends `run.cancelled`. Distinct from a failure
-      throughout: the receipt, the projection, and the guest's own status all
-      report "cancelled" rather than folding it into "failed". **Pause,
-      resume, and handoff remain unbuilt.** Ownership still cannot move, and
-      a run cannot be suspended and picked back up — only stopped outright.
+- [x] Pause, resume, cancel, and handoff — all four now exist. **Cancel**:
+      `POST /sessions/:id/cancel` records `run.cancel_requested`, and the run
+      loop checks for it at the same turn boundary direction is folded in at
+      — a tool call already in flight finishes, only the next model call is
+      refused — then appends `run.cancelled`. **Pause** works the identical
+      way through `POST /sessions/:id/pause` and `run.pause_requested` /
+      `run.paused`, except it is not terminal: no receipt is produced,
+      because the run has not ended. **Resume**, through `POST
+      /sessions/:id/resume`, restarts the same run under the same id rather
+      than starting a new one — it rebuilds the paused turn's tool exchanges
+      from the event log the same way `direction` and `cancel` already read
+      state from the log instead of memory, so the model does not lose
+      context it had already built up. What resume does *not* carry forward:
+      token usage, never logged per call so there is nothing to rebuild it
+      from, and the run's budget clock, which also resets — both are
+      disclosed in `agent-runner.ts`'s own comments and in *Where we actually
+      are* above, not surfaced in the timeline. **Handoff**, through `POST
+      /sessions/:id/handoff`, actually moves execution authority rather than
+      only recording that it happened — it drives `participants.ts`'s
+      `transferOwnership`, which existed before this but was never wired to a
+      route. Only the current owner can call it, checked twice: once by the
+      route's own capability table, once by the registry. It is atomic rather
+      than a two-step accept — see *Where we actually are* for that gap
+      against this document's own description of handoff below.
+      `control.requested` also has a real route now
+      (`POST /sessions/:id/control/request`), open to any participant, but no
+      UI calls it yet — see *Where we actually are*.
 
 Exit condition: a remote teammate joins an active run, supplies direction, and
-reviews the resulting evidence. **Met** for that path specifically — join,
-direct, review, and now cancel all work end to end. Not met for anything that
-requires pause, resume, or handoff, which is the next honest gap in this
-milestone.
+reviews the resulting evidence. **Met**, and now for the whole milestone
+rather than one path through it — join, direct, review, cancel, pause,
+resume, and handoff all work end to end, proven in
+`pause-resume.test.ts` (the run-loop level, including that a resumed run
+actually replays its prior tool exchange to the model), `pause-resume-route.test.ts`
+and `handoff-route.test.ts` (the HTTP level, including that a handoff which
+demotes the caller is refused a second time), and `presence.test.ts` (a real
+SSE connection flipping presence live and back). What is not covered by any
+of that: the desktop and guest UI code that calls these routes, which is the
+renderer test-coverage gap named above and applies here as much as anywhere
+else in this milestone.
 
 ### Milestone 4 — fork and compare
 

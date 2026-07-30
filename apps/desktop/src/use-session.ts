@@ -39,6 +39,16 @@ export type SessionState = {
    * `run.cancelled` once it actually stops, at its next turn boundary.
    */
   cancel: (runId: string) => Promise<void>;
+  /**
+   * Requests that a run suspend. Recorded immediately, same as cancel; the
+   * run itself appends `run.paused` once it actually stops, at the same turn
+   * boundary. Unlike cancel, this run can be picked back up with `resume`.
+   */
+  pause: (runId: string) => Promise<void>;
+  /** Continues a run this session previously paused. */
+  resume: (runId: string) => Promise<void>;
+  /** Moves execution authority to another participant in this session. */
+  handoff: (toParticipantId: string) => Promise<void>;
   close: () => void;
 };
 
@@ -268,6 +278,81 @@ export const useSession = (endpoint: string): SessionState => {
     [endpoint, session],
   );
 
+  const pause = useCallback(
+    async (runId: string) => {
+      if (!session) {
+        return;
+      }
+
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(session.id)}/pause`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
+          body: JSON.stringify({ runId }),
+        },
+      );
+
+      if (!response.ok) {
+        setError(await readError(response));
+      }
+    },
+    [endpoint, session],
+  );
+
+  const resume = useCallback(
+    async (runId: string) => {
+      if (!session) {
+        return;
+      }
+
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(session.id)}/resume`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
+          body: JSON.stringify({ runId }),
+        },
+      );
+
+      if (!response.ok) {
+        setError(await readError(response));
+      }
+    },
+    [endpoint, session],
+  );
+
+  const handoff = useCallback(
+    async (toParticipantId: string) => {
+      if (!session) {
+        return;
+      }
+
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(session.id)}/handoff`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
+          body: JSON.stringify({ toParticipantId }),
+        },
+      );
+
+      if (!response.ok) {
+        setError(await readError(response));
+      }
+    },
+    [endpoint, session],
+  );
+
   const close = useCallback(() => {
     setSession(null);
     setError(null);
@@ -284,6 +369,9 @@ export const useSession = (endpoint: string): SessionState => {
     invite,
     direct,
     cancel,
+    pause,
+    resume,
+    handoff,
     close,
   };
 };

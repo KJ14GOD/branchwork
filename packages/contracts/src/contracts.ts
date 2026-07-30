@@ -329,6 +329,7 @@ export const RunSchema = z.object({
     "queued",
     "running",
     "waiting_for_human",
+    "paused",
     "completed",
     "failed",
     "cancelled",
@@ -804,6 +805,39 @@ export const RunCancelledEventSchema = EventEnvelopeSchema.extend({
 });
 
 /**
+ * A request to pause a run, entered on the log the same way a cancellation
+ * is — see `RunCancelRequestedEventSchema`. Distinct from cancel: the run
+ * this stops is not over, only suspended, so there is no receipt yet and
+ * nothing here says the work is done.
+ */
+export const RunPauseRequestedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("run.pause_requested"),
+  payload: z.object({
+    runId: IdSchema,
+  }),
+});
+
+// Appended by the run loop at the same turn boundary a cancellation would be
+// honoured at. Not terminal: the run can still be resumed, so this carries no
+// receipt and `RunReceiptSchema.status` deliberately does not include it.
+export const RunPausedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("run.paused"),
+  payload: z.object({
+    runId: IdSchema,
+  }),
+});
+
+// Appended once, when a paused run is asked to continue — before the run
+// loop has necessarily produced anything new. `run.started` is not repeated:
+// this is the same run picking back up, not a new one.
+export const RunResumedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("run.resumed"),
+  payload: z.object({
+    runId: IdSchema,
+  }),
+});
+
+/**
  * What happened when a chosen attempt's changes were written to the parent.
  *
  * `applied: true` lists the paths that were actually written or removed — not
@@ -873,6 +907,9 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   DecisionRecordedEventSchema,
   RunCancelRequestedEventSchema,
   RunCancelledEventSchema,
+  RunPauseRequestedEventSchema,
+  RunPausedEventSchema,
+  RunResumedEventSchema,
 ]);
 
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
@@ -989,6 +1026,21 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   RunCancelledEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunPauseRequestedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunPausedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunResumedEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,

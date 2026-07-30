@@ -22,7 +22,7 @@ import type { Participant, SessionEvent } from "@novus/contracts";
 export type RunProjection = {
   runId: string;
   goal: string;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: "running" | "paused" | "completed" | "failed" | "cancelled";
   model: { provider: string; model: string };
   summary: string | null;
   failure: string | null;
@@ -120,6 +120,24 @@ export const projectSession = (
 
         if (run) {
           run.status = "cancelled";
+        }
+        break;
+      }
+
+      case "run.paused": {
+        const run = runFor(event.payload.runId);
+
+        if (run) {
+          run.status = "paused";
+        }
+        break;
+      }
+
+      case "run.resumed": {
+        const run = runFor(event.payload.runId);
+
+        if (run) {
+          run.status = "running";
         }
         break;
       }
