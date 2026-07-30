@@ -243,8 +243,11 @@ export class WorktreeManager {
       // A fork has to check something out, and there is nothing here to check
       // out — saying so now is better than a worktree add that fails later
       // with Git's own wording.
+      // Actionable, because the fix is two commands and the failure otherwise
+      // reads like the feature is broken. A fork is a Git worktree cut from a
+      // commit, so there has to be a commit.
       throw new Error(
-        `Cannot checkpoint ${repositoryRoot}: it is not a Git repository with a commit to fork from.`,
+        `Cannot fork ${repositoryRoot}: a fork is a Git worktree cut from a commit, and this directory has none yet. Run \`git init && git add -A && git commit -m "initial"\` in it, then try again.`,
       );
     }
 

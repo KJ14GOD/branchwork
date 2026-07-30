@@ -211,6 +211,26 @@ void app.whenReady().then(async () => {
     return;
   }
 
+  // Printed here rather than forwarded from the worker. The worker prints its
+  // own invite line, and main strips the token out of what it re-emits so the
+  // credential does not land in the launching shell's scrollback — which left
+  // the printed link carrying "[redacted]" where the token should be, and no
+  // way to invite anybody. Main holds the token, so main is the right place to
+  // compose the one usable line.
+  const guestPort = Number(process.env.NOVUS_GUEST_PORT ?? 5274);
+
+  console.log("");
+  console.log("Open a second, read-only viewer with:");
+  console.log("");
+  console.log(`  pnpm --filter @novus/guest dev`);
+  console.log("");
+  console.log("then open this, once you have opened a repository:");
+  console.log("");
+  console.log(
+    `  http://127.0.0.1:${guestPort}/?endpoint=${encodeURIComponent(WORKER_URL)}&token=${ACCESS_TOKEN}`,
+  );
+  console.log("");
+
   createWindow();
 
   app.on("activate", () => {

@@ -341,7 +341,10 @@ test("a repository with no commit cannot be checkpointed", async () => {
 
     await assert.rejects(
       () => managerFor(root).createCheckpoint(checkpointInput()),
-      /no commit to fork from|not a Git repository with a commit/,
+      // The message has to stay actionable: a directory with no commit is the
+      // ordinary first encounter with forking, and "cannot fork" alone reads as
+      // the feature being broken rather than as two commands away.
+      /a fork is a Git worktree cut from a commit.*git init/s,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
