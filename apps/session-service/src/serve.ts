@@ -25,8 +25,22 @@ const host = process.env.NOVUS_RELAY_HOST ?? "127.0.0.1";
 const mint = (): string => randomBytes(32).toString("base64url");
 
 const sessionKey = process.env.NOVUS_RELAY_SESSION?.trim() || "novus-session";
-const publishToken = process.env.NOVUS_RELAY_PUBLISH_TOKEN?.trim() || mint();
+
+// NOVUS_RELAY_TOKEN is accepted as the publish token so one variable in .env
+// serves both sides of the same connection: the worker sends it, the relay
+// expects it. Three names that all had to agree — and silently failed a
+// handshake when they did not — was a worse thing to ask of anybody than a
+// slightly overloaded one.
+const publishToken =
+  process.env.NOVUS_RELAY_PUBLISH_TOKEN?.trim() ||
+  process.env.NOVUS_RELAY_TOKEN?.trim() ||
+  mint();
 const watchToken = process.env.NOVUS_RELAY_WATCH_TOKEN?.trim() || mint();
+
+const pinned = Boolean(
+  process.env.NOVUS_RELAY_PUBLISH_TOKEN?.trim() ||
+    process.env.NOVUS_RELAY_TOKEN?.trim(),
+);
 
 let relay;
 
@@ -55,9 +69,20 @@ console.log(`session ${sessionKey}`);
 console.log("");
 console.log("Point the worker at it:");
 console.log("");
-console.log(`  NOVUS_RELAY_URL=${relayUrl} \\`);
-console.log(`  NOVUS_RELAY_TOKEN=${publishToken} \\`);
-console.log("  pnpm --filter @novus/desktop dev");
+
+if (pinned) {
+  // The token is already in the environment the worker will read, so repeating
+  // it on the command line would only be a way to get it wrong.
+  console.log(`  NOVUS_RELAY_URL=${relayUrl} pnpm --filter @novus/desktop dev`);
+  console.log("");
+  console.log("  (NOVUS_RELAY_TOKEN comes from .env — both sides already agree)");
+} else {
+  console.log(`  NOVUS_RELAY_URL=${relayUrl} \\`);
+  console.log(`  NOVUS_RELAY_TOKEN=${publishToken} \\`);
+  console.log("  pnpm --filter @novus/desktop dev");
+  console.log("");
+  console.log("  Put NOVUS_RELAY_TOKEN in .env to stop it changing every start.");
+}
 console.log("");
 console.log("Send a teammate this, once the guest is running:");
 console.log("");
