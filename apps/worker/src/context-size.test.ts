@@ -120,14 +120,16 @@ test("older tool results are not resent in full", () => {
       }),
     ).length;
 
-  const two = sizeOf(2);
-  const twenty = sizeOf(20);
+  // Twelve reads already overfill the verbatim budget; forty is over three
+  // times that. Everything past the budget must arrive as a stub of a hundred
+  // or so characters, so the marginal cost of a read the budget cannot hold is
+  // the stub, not the payload — that flatness is what elision is.
+  const twelve = sizeOf(12);
+  const forty = sizeOf(40);
 
-  // Ten times the reads. Without elision that is ten times the payload; with it,
-  // only the verbatim tail counts, so the growth is a fraction of that.
   assert.ok(
-    twenty < two * 3,
-    `twenty reads sent ${twenty} characters against ${two} for two — history is still growing with the run`,
+    forty - twelve < 20_000,
+    `forty reads sent ${forty} characters against ${twelve} for twelve — history is still growing with the run`,
   );
 
   const elided = JSON.stringify(
@@ -185,6 +187,107 @@ test("many small results from a broad task all stay whole", () => {
     /elided to save context/,
     "a broad task within the size budget should never see any of its own reads elided",
   );
+});
+
+test("a result too large for the whole budget still shows the model its head", () => {
+  // The size budget closed the broad-task livelock and quietly opened another:
+  // a single result bigger than the entire 100k budget could never be kept
+  // verbatim — not even on the turn the model asked for it — and the elision
+  // stub told the model to "call the tool again if you need it verbatim",
+  // advice that cannot ever work for such a file. Reading lessong's 567k
+  // .cache/all.json produced exactly that trap: read, elided, re-read,
+  // elided, forever. Any repository with a lockfile or a bundle can do this.
+  // The fix is honesty: show the head, say the file cannot be shown whole,
+  // and point at search_repository for the rest.
+  const oversize = (id: string) => ({
+    status: "ok" as const,
+    call: { id, name: "read_file" as const, input: { path: ".cache/all.json" } },
+    result: {
+      toolCallId: id,
+      name: "read_file" as const,
+      output: { path: ".cache/all.json", content: "x".repeat(250_000) },
+    },
+  });
+
+  const first = JSON.stringify(
+    buildMessages({
+      history: [],
+      goal: "Summarize .cache/all.json",
+      toolExchanges: [oversize("c1")],
+    }),
+  );
+
+  // The model must be able to see actual content, not only a stub. The head
+  // is 20k characters of the JSON payload, whose envelope eats a few dozen of
+  // them, so assert on slightly less than the whole head.
+  assert.ok(
+    first.includes("x".repeat(19_000)),
+    "the newest oversized result should show its head",
+  );
+  // ...but never the whole thing, which is what the budget exists to prevent.
+  assert.ok(
+    !first.includes("x".repeat(21_000)),
+    "an oversized result must not be sent whole",
+  );
+  // And never the promise that re-reading will produce the verbatim text.
+  assert.doesNotMatch(first, /Call the tool again if you need it verbatim/);
+
+  // The model obeys the note and re-reads anyway: the second read must see the
+  // same head, not less — converging where the stub looped.
+  const retried = JSON.stringify(
+    buildMessages({
+      history: [],
+      goal: "Summarize .cache/all.json",
+      toolExchanges: [oversize("c1"), oversize("c2")],
+    }),
+  );
+
+  assert.ok(
+    retried.includes("x".repeat(19_000)),
+    "a re-read of an oversized file should still show its head",
+  );
+});
+
+test("finished turns do not resend their tool results whole", () => {
+  // The verbatim budget is spent per walk, and history turns each took a walk
+  // of their own: every finished turn kept up to 100k characters of results
+  // the model had already digested into a summary, so an eight-turn session
+  // resent ~770k characters on every model call of turn nine. A finished
+  // turn's contribution is its summary; its reads elide like anything old,
+  // and stay available to read again.
+  const exchange = (id: string) => ({
+    status: "ok" as const,
+    call: { id, name: "read_file" as const, input: { path: "src/app.ts" } },
+    result: {
+      toolCallId: id,
+      name: "read_file" as const,
+      output: { path: "src/app.ts", content: "y".repeat(19_000) },
+    },
+  });
+  const turn = (index: number) => ({
+    goal: `question ${index}`,
+    summary: `answer ${index}`,
+    exchanges: Array.from({ length: 5 }, (_, i) => exchange(`t${index}-${i}`)),
+  });
+
+  const messages = JSON.stringify(
+    buildMessages({
+      history: [turn(0), turn(1)],
+      goal: "a third question",
+      toolExchanges: [],
+    }),
+  );
+
+  // 190k characters of finished-with reads: none may arrive whole, and the
+  // stubs must still say what they were so the model can re-read on demand.
+  assert.ok(
+    !messages.includes("y".repeat(19_000)),
+    "a finished turn's results should be elided, not resent",
+  );
+  assert.match(messages, /elided to save context/);
+  // The summaries are the part a follow-up question actually needs.
+  assert.match(messages, /answer 0/);
+  assert.match(messages, /answer 1/);
 });
 
 test("an error is never elided, however old", () => {

@@ -237,9 +237,11 @@ export const EventRow = ({
           `${receipt.filesChanged.length} file${receipt.filesChanged.length === 1 ? "" : "s"} changed`,
           verdict,
           `${receipt.usage.modelCalls} model call${receipt.usage.modelCalls === 1 ? "" : "s"}`,
+          // "Effective" because cached tokens are counted at what they bill —
+          // a tenth for a cache read — so this is spend, not a raw count.
           receipt.usage.callsMissingUsage > 0
-            ? `≥${tokens} tokens`
-            : `${tokens} tokens`,
+            ? `≥${tokens} effective tokens`
+            : `${tokens} effective tokens`,
           `${Math.round(receipt.elapsedMs / 100) / 10}s`,
         ];
 

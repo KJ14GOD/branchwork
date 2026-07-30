@@ -29,6 +29,14 @@ const TOOL_CLASSES: Record<ToolCall["name"], ToolClass> = {
   list_directory: "read",
   git_status: "read",
   git_diff: "read",
+  // Network, but read anyway, and the reasoning has to be explicit because
+  // "network is dangerous" is the rule everywhere else. Dangerous means the
+  // model could reach somewhere new or carry something out: this call takes no
+  // arguments, asks one fixed question of the one endpoint the harness already
+  // trusts with the entire conversation on every model call, and returns a
+  // list of ids. There is no argument vector to abuse and nothing leaves that
+  // was not already leaving.
+  list_provider_models: "read",
 };
 
 export const classifyTool = (name: ToolCall["name"]): ToolClass =>

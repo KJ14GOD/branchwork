@@ -11,6 +11,7 @@ const fresh = (): BudgetUsage => ({
   modelCalls: 0,
   totalTokens: 0,
   consecutiveFailures: 0,
+  identicalReads: 0,
   startedAt: 1_000_000,
 });
 
@@ -58,6 +59,34 @@ test("each limit names itself, because a receipt has to say which one", () => {
   // And it says what reaching it means, rather than reporting a number as if
   // the number were the problem.
   assert.match(emergency ?? "", /backstop|looped/);
+});
+
+test("re-reading the same thing stops a run while it is still cheap", () => {
+  // The elision livelock spent 79 model calls re-reading files it had already
+  // read, and nothing tripped: every call succeeded, so the failure counter
+  // stayed at zero, and the token and wall-clock ceilings are sized for a
+  // hard afternoon of real work, not for noticing a loop. Identical reads are
+  // the behavioural signature of that loop — a read is a pure function of the
+  // repository, so the eighth identical answer proves the model is not
+  // absorbing what it already has.
+  const usage = { ...fresh(), identicalReads: 8, totalTokens: 40_000 };
+  const reason = budgetExhausted(DEFAULT_RUN_BUDGET, usage, usage.startedAt);
+
+  assert.match(reason ?? "", /re-reading/);
+});
+
+test("a healthy run's elision-driven re-reads never trip the read ceiling", () => {
+  // A broad trace of this repository legitimately read one file four times:
+  // its working set overflowed the verbatim window, so files kept scrolling
+  // out and the elision stub kept inviting the re-read. The ceiling has to
+  // sit well above what elision can explain, or it becomes a step ceiling
+  // that punishes exactly the recovery it suggested.
+  const usage = { ...fresh(), identicalReads: 4 };
+
+  assert.equal(
+    budgetExhausted(DEFAULT_RUN_BUDGET, usage, usage.startedAt),
+    null,
+  );
 });
 
 test("a null limit means unbounded, not zero", () => {

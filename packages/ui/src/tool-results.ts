@@ -96,7 +96,20 @@ export const summariseCall = (call: ToolCall): string => {
       .join(" · ");
   }
 
-  return call.input.patchId;
+  // Its input is empty, so the summary has to say what the question is.
+  if (call.name === "list_provider_models") {
+    return "current provider model ids";
+  }
+
+  if (call.name === "apply_patch") {
+    return call.input.patchId;
+  }
+
+  // Not a fallthrough: a property read off the last remaining member compiles
+  // for any future tool whose input is an empty object, which is exactly how
+  // list_provider_models shipped with a blank request row. This line only
+  // compiles while every tool has a branch above.
+  return call satisfies never;
 };
 
 /**
@@ -129,4 +142,6 @@ export const summariseToolResult = (result: SummarisableToolResult): string =>
                 : `${result.output.files.length} file${result.output.files.length === 1 ? "" : "s"} dirty`
             : result.name === "git_diff"
               ? `${result.output.filesChanged} file${result.output.filesChanged === 1 ? "" : "s"} in diff`
-              : result.output.command;
+              : result.name === "list_provider_models"
+                ? `${result.output.models.length} model id${result.output.models.length === 1 ? "" : "s"} from ${result.output.provider}`
+                : result.output.command;

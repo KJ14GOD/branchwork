@@ -109,6 +109,19 @@ export const GitDiffToolCallSchema = z.object({
   }),
 });
 
+// The one tool that answers a question about the world outside the repository,
+// and deliberately the narrowest possible one. A live run read a valid provider
+// model id out of a repository and confidently called it a typo that "would
+// 400" — a claim nothing in its tool set could check, because its training
+// data predated the model. It takes no arguments at all: every argument
+// accepted here would be an argument for asking the provider about something
+// else.
+export const ListProviderModelsToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("list_provider_models"),
+  input: z.object({}),
+});
+
 export const ToolCallSchema = z.discriminatedUnion("name", [
   ReadFileToolCallSchema,
   SearchRepositoryToolCallSchema,
@@ -119,6 +132,7 @@ export const ToolCallSchema = z.discriminatedUnion("name", [
   ListDirectoryToolCallSchema,
   GitStatusToolCallSchema,
   GitDiffToolCallSchema,
+  ListProviderModelsToolCallSchema,
 ]);
 
 export type ToolCall = z.infer<typeof ToolCallSchema>;
@@ -250,6 +264,15 @@ export const GitDiffToolResultSchema = z.object({
   }),
 });
 
+export const ListProviderModelsToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("list_provider_models"),
+  output: z.object({
+    provider: z.string().min(1),
+    models: z.array(z.string().min(1)),
+  }),
+});
+
 export const ToolResultSchema = z.discriminatedUnion("name", [
   ReadFileToolResultSchema,
   SearchRepositoryToolResultSchema,
@@ -260,6 +283,7 @@ export const ToolResultSchema = z.discriminatedUnion("name", [
   ListDirectoryToolResultSchema,
   GitStatusToolResultSchema,
   GitDiffToolResultSchema,
+  ListProviderModelsToolResultSchema,
 ]);
 
 export type ToolResult = z.infer<typeof ToolResultSchema>;

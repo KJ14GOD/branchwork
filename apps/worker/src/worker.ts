@@ -110,7 +110,7 @@ eventStore.subscribe((event) => {
               : "tests passed"
       } · ${receipt.usage.modelCalls} model call(s) · ${
         receipt.usage.callsMissingUsage > 0 ? "≥" : ""
-      }${receipt.usage.inputTokens + receipt.usage.outputTokens} tokens · ${
+      }${receipt.usage.inputTokens + receipt.usage.outputTokens} effective tokens · ${
         Math.round(receipt.elapsedMs / 100) / 10
       }s${
         receipt.base.revision

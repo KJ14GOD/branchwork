@@ -856,6 +856,45 @@ export class ApplyPatchTool implements AgentTool {
   }
 }
 
+/**
+ * Asks the configured provider which model ids it currently serves.
+ *
+ * This exists because of a correctness failure, not a capability wish: a live
+ * run read `claude-opus-4-8` out of a repository and confidently reported it
+ * as a typo that would fail every request, because the id postdated the
+ * model's training data and nothing in its tool set could check. The provider
+ * itself is the only authority on this fact.
+ *
+ * The fetcher is injected by whoever owns the provider client, so the tool
+ * layer stays provider-neutral. The call takes no model-controlled arguments
+ * at all — the one question it can ask is fixed at construction.
+ */
+export class ListProviderModelsTool implements AgentTool {
+  readonly name = "list_provider_models";
+  private readonly provider: string;
+  private readonly listModels: () => Promise<string[]>;
+
+  constructor(provider: string, listModels: () => Promise<string[]>) {
+    this.provider = provider;
+    this.listModels = listModels;
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The list_provider_models tool cannot execute ${call.name}.`);
+    }
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        provider: this.provider,
+        models: await this.listModels(),
+      },
+    });
+  }
+}
+
 // Reporting tools. These read the repository and never change it, so they are
 // classified read and run without approval — but they still reach the
 // filesystem and still spawn Git, so every path goes through the same resolver

@@ -57,6 +57,11 @@ export type ModelRoutingRequest = {
  * Reported by the adapter rather than estimated by the runner, because only the
  * provider knows what it actually billed — a locally counted approximation in a
  * receipt would be a guess wearing the costume of evidence.
+ *
+ * inputTokens is a full-price-equivalent count: an adapter that uses prompt
+ * caching weighs cache reads and writes by what they bill relative to a
+ * full-price token, so a token budget keeps meaning the same spend whether or
+ * not the cache was warm.
  */
 export type ModelUsage = {
   inputTokens: number;
@@ -92,9 +97,35 @@ export type ModelResponse =
       usage?: ModelUsage;
     };
 
+/**
+ * A model call that failed for reasons that belong to the provider, not the run.
+ *
+ * A live trace lost twenty-one tool calls of gathered context to one 529 that
+ * outlasted the SDK's own retries: the throw escaped the loop, the run failed,
+ * and everything the run knew was discarded — even though every exchange it
+ * needed to continue was still in memory. An overloaded provider is weather,
+ * not a verdict on the run, so the adapter marks these and the runner waits
+ * them out instead of dying. Anything else the adapter throws is still fatal.
+ */
+export class TransientModelError extends Error {
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "TransientModelError";
+  }
+}
+
 export interface ModelAdapter {
   readonly selection: ModelSelection;
   complete(request: ModelRequest): Promise<ModelResponse>;
+  /**
+   * Which model ids this adapter's provider currently serves, if it can say.
+   *
+   * Optional because a scripted adapter has no provider to ask. When present,
+   * the session gains the list_provider_models tool, which exists so the agent
+   * can check a model id against the provider instead of judging it from
+   * training data that may predate it.
+   */
+  listModels?(): Promise<string[]>;
 }
 
 export interface ModelRouter {
