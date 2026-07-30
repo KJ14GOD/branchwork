@@ -52,6 +52,33 @@ test("a reply cut off at the output limit says so in its summary", () => {
   }
 });
 
+test("cached tokens count at what they bill, not at face value", () => {
+  // The budget treats tokens as what a run costs. A deep trace of this
+  // repository ingested two million tokens across 34 calls and died on the
+  // token ceiling — but with caching, most of those tokens would have been
+  // cache reads billing at a tenth of full price. Counting them at face
+  // value would end a cheap cached run at the price of an uncached one;
+  // counting them at their billed weight keeps the ceiling meaning spend.
+  const response = responseFromMessage(
+    message({
+      content: [{ type: "text", text: "Done." }],
+      stop_reason: "end_turn",
+      usage: {
+        input_tokens: 100,
+        output_tokens: 200,
+        cache_read_input_tokens: 10_000,
+        cache_creation_input_tokens: 1_000,
+      },
+    }),
+  );
+
+  assert.equal(response.type, "final");
+  if (response.type === "final") {
+    // 100 fresh + 10k reads at 0.1x + 1k writes at 1.25x.
+    assert.deepEqual(response.usage, { inputTokens: 2_350, outputTokens: 200 });
+  }
+});
+
 test("a well-formed tool call is unaffected by the stop reason", () => {
   const response = responseFromMessage(
     message({

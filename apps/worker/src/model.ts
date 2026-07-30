@@ -57,6 +57,11 @@ export type ModelRoutingRequest = {
  * Reported by the adapter rather than estimated by the runner, because only the
  * provider knows what it actually billed — a locally counted approximation in a
  * receipt would be a guess wearing the costume of evidence.
+ *
+ * inputTokens is a full-price-equivalent count: an adapter that uses prompt
+ * caching weighs cache reads and writes by what they bill relative to a
+ * full-price token, so a token budget keeps meaning the same spend whether or
+ * not the cache was warm.
  */
 export type ModelUsage = {
   inputTokens: number;

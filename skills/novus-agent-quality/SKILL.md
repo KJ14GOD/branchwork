@@ -39,19 +39,31 @@ pnpm --filter @novus/worker start "<goal>"
 Read the tool lines, not just the receipt. Healthy shapes observed live:
 "explain this repo" on a small repo — 14 model calls, 276k tokens, 97s, zero
 repeated calls. Summarizing a 206k file post-fix — 7 calls, one read of the
-big file, then `search_repository` into it. The worst *legitimate* shape: a
-convergent trace of this repo whose working set overflowed the 100k verbatim
-window ran ~45 calls and re-read one file four times, each re-read invited
-by elision. That thrash is bounded and real, and it is why the read ceiling
-sits at eight, not three.
+big file, then `search_repository` into it.
+
+The deep-trace goal on this repo is the calibration story, run three times
+in one night, and it still ends at the boundary. At a 100k verbatim budget
+its ~150k working set rotated — every re-read evicted a file still in use —
+and the run thrashed to 44 calls, 1.7M tokens, four legitimate re-reads of
+one file, no answer. At 200k the rotation vanished (worst repeat: two) but
+every call resent ~50k tokens at full price and the run died on the 2M
+ceiling. Prompt caching cut the per-call cost by about a third but could
+not close it, because elision fights the cache: each verbatim-to-stub flip
+rewrites a message mid-prompt and cold-starts everything after it — which
+is exactly the expensive tail. A run whose cumulative reads stay under the
+verbatim budget caches almost everything; a run that overflows it re-bills
+its tail every call and will still hit the token ceiling around 40–50
+calls. That is the harness's current honest limit, and moving it means
+making elision cache-stable, not raising the ceiling.
 
 Suspect a loop when the same tool runs with the same arguments repeatedly
-with no write in between. The runner fails the run at eight — if a run dies
-with "re-reading what it already had", believe it, then find why the model
-could not converge. Fix convergence, never the ceiling: raising a ceiling to
-keep a stuck run alive is explicitly forbidden (novus-build-harness), and
-both livelocks so far were convergence bugs in elision, not undersized
-limits.
+with no write in between. The runner fails the run at eight identical reads
+— if a run dies with "re-reading what it already had", believe it, then
+find why the model could not converge. Fix convergence, never the ceiling:
+raising a ceiling to keep a stuck run alive is explicitly forbidden
+(novus-build-harness), and every failure so far was a convergence bug —
+elision that trapped, a window that rotated, a prefix paid for twice — not
+an undersized limit.
 
 ## Audit correctness
 
@@ -118,6 +130,15 @@ The failure modes found live, in order of danger:
 - `search_repository` silently skips files over ripgrep's 1M cap, so the
   oversize note's "search this file" advice is dead advice for very large
   files.
+- Elision and caching pull against each other: when a result does elide,
+  that message's bytes change and the cache is cold from that point on. A
+  run whose working set stays under the verbatim budget caches nearly
+  everything; one that overflows it pays for the tail repeatedly. This is
+  the next real convergence fix — an elision scheme whose past messages
+  never change — and it is an architecture change, not a tuning knob.
+- The citation rules make the model run extra structural searches to earn
+  line numbers it used to invent. That is honesty costing calls; if broad
+  runs look search-heavy, this is why, and it is working as intended.
 - Fabrication is mitigated by prompt, not solved; only live runs measure it.
   If it recurs, the next lever is numbering lines in search output the model
   is told to prefer, not numbering `read_file` (models copy line numbers into

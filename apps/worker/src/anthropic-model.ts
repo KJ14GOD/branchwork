@@ -446,8 +446,18 @@ export const buildMessages = (request: ModelRequest): MessageParam[] => {
 export const responseFromMessage = (
   message: Pick<Anthropic.Message, "content" | "stop_reason" | "usage">,
 ): ModelResponse => {
+  // The budget and the receipt treat tokens as what a run costs, and with
+  // caching not every token costs the same: a cache read bills at a tenth of
+  // a full-price token, a cache write at 1.25x. inputTokens is therefore a
+  // full-price-equivalent count — the number that keeps a token ceiling
+  // meaning the same spend whether or not the cache was warm, instead of
+  // ending a cheap cached run at the price of an uncached one.
+  const cacheRead = message.usage.cache_read_input_tokens ?? 0;
+  const cacheWrite = message.usage.cache_creation_input_tokens ?? 0;
   const usage = {
-    inputTokens: message.usage.input_tokens,
+    inputTokens:
+      message.usage.input_tokens +
+      Math.round(cacheRead / 10 + cacheWrite * 1.25),
     outputTokens: message.usage.output_tokens,
   };
 
@@ -552,6 +562,15 @@ export class AnthropicModelAdapter implements ModelAdapter {
 
   private createMessage(request: ModelRequest) {
     return this.client.messages.create({
+      // Each call's prompt is very nearly the previous call's prompt with one
+      // exchange appended, so the provider can serve the shared prefix from
+      // cache at a tenth of the price instead of re-reading it at full price
+      // every turn. Without this, a deep trace of this repository ingested two
+      // million full-price tokens in 34 calls and died on the token ceiling —
+      // not stuck, just paying for the same context over and over. Elision
+      // still bounds what a single call can carry; caching bounds what a run
+      // pays to keep carrying it.
+      cache_control: { type: "ephemeral" },
       model: this.selection.model,
       // 4k was too small for a real answer: a live summary of one cache file
       // hit it mid-sentence, ended recorded as complete, and never reached
