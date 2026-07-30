@@ -3,7 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
+    <!-- Both, not just "dark": the actual choice is `useTheme`'s, applied via
+         `data-theme` and the matching `color-scheme` in styles.css. Listing
+         only "dark" here would tell the UA this page never supports light,
+         which stopped being true once the toggle shipped. -->
+    <meta name="color-scheme" content="dark light" />
     <title>Novus</title>
   </head>
   <body>

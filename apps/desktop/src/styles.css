@@ -1,4 +1,23 @@
 :root {
+  /* Structural tokens: identical in both themes. Color tokens live in the
+     dark/light blocks below — see novus-ui/SKILL.md's "Theme" section for
+     why the two color blocks are not the same values inverted. */
+  --radius-s: 3px;
+  --radius-m: 5px;
+  --radius-l: 8px;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --t-fast: 120ms;
+  --t-overlay: 160ms;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+/* Dark is the default (`:root` alone matches it) so a stylesheet that loads
+   before `main.tsx` stamps `data-theme` — or a build that never calls
+   `useTheme` at all, like a stray test harness — still renders correctly. */
+:root,
+:root[data-theme="dark"] {
   /* Planes, deepest to highest: well < bg < surface < raised < floating.
      Steps are deliberately small — separation is the border's job, not the
      surface's. --bg must match backgroundColor in electron/main.ts. */
@@ -30,28 +49,78 @@
   --warn: #8a6d2b;
   --warn-text: #d3a84c;
 
-  /* Nested: a radius-l panel contains radius-m controls contain radius-s chips. */
-  --radius-s: 3px;
-  --radius-m: 5px;
-  --radius-l: 8px;
-
   /* Shadows need a ring in front (the eye reads the 1px edge, the blur is
      atmosphere) and a color darker than the canvas, or they vanish on it.
-     Only the two floating surfaces — palette and modal — ever cast. */
+     Only the two floating surfaces — palette and modal — ever cast. Pure
+     black cast nothing on a near-black canvas, which is why this ring is a
+     literal near-black rather than an alpha-black — see the light block for
+     why that reasoning reverses on a white canvas. */
   --shadow-popover: 0 0 0 1px #050506, 0 6px 12px -3px rgba(0, 0, 0, 0.5),
     0 16px 32px -8px rgba(0, 0, 0, 0.55);
   --shadow-modal: 0 0 0 1px #050506, 0 8px 16px -4px rgba(0, 0, 0, 0.5),
     0 24px 48px -12px rgba(0, 0, 0, 0.6);
 
-  --ease: cubic-bezier(0.2, 0, 0, 1);
-  --t-fast: 120ms;
-  --t-overlay: 160ms;
-
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--fg) / 0.28);
 
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-
   color-scheme: dark;
+}
+
+/*
+ * Light theme. Deliberately not the dark block with lightness inverted —
+ * "well < canvas < surface < raised < floating" in dark mode is a single
+ * monotonic lightness ramp because there is nowhere to go but lighter. On a
+ * light canvas there is nowhere to go but *darker* than white, so a real
+ * light IDE (VS Code's Light+, Zed's light theme) splits the same five planes
+ * into two moves instead of one ramp:
+ *
+ *   - content planes (canvas, raised, floating) go toward paper white —
+ *     these are what you read and act on, so they get the most contrast.
+ *   - chrome/recessed planes (well, surface) sit a shade grayer than the
+ *     paper — the frame around the content, and the sunken output within it,
+ *     read as a single "not paper" register.
+ *
+ * Borders still do the separating, at the same alpha formula as dark mode —
+ * only --fg flips from a light triple to a dark one, so `rgb(var(--fg) /
+ * 0.1)` keeps meaning "a border, not a fill" on either background.
+ */
+:root[data-theme="light"] {
+  --bg-well: #eef0f2;
+  --bg: #fbfbfc;
+  --surface: #f3f4f6;
+  --surface-raised: #ffffff;
+  --surface-raised-hover: #f6f7f8;
+
+  --fg: 23 23 26;
+  --border-subtle: rgb(var(--fg) / 0.08);
+  --border: rgb(var(--fg) / 0.13);
+  --border-strong: rgb(var(--fg) / 0.22);
+  --hover: rgb(var(--fg) / 0.05);
+  --pressed: rgb(var(--fg) / 0.09);
+  --selected: rgb(var(--fg) / 0.09);
+
+  --text: #17171a;
+  --text-muted: #5b5b64;
+  --text-dim: #85858e;
+
+  --add: #1f7a3d;
+  --add-bg: rgba(31, 122, 61, 0.1);
+  --del: #b3382f;
+  --del-bg: rgba(179, 56, 47, 0.09);
+  --live: #1f7a3d;
+  --warn: #a9832f;
+  --warn-text: #7a5b16;
+
+  /* A black ring at low alpha reads perfectly well on white — light UIs do
+     this everywhere — so unlike the dark block this does not need a literal
+     near-black to be visible. */
+  --shadow-popover: 0 0 0 1px rgba(20, 20, 22, 0.1), 0 6px 12px -3px rgba(20, 20, 22, 0.1),
+    0 16px 32px -8px rgba(20, 20, 22, 0.12);
+  --shadow-modal: 0 0 0 1px rgba(20, 20, 22, 0.1), 0 8px 16px -4px rgba(20, 20, 22, 0.12),
+    0 24px 48px -12px rgba(20, 20, 22, 0.14);
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--fg) / 0.32);
+
+  color-scheme: light;
 }
 
 * {
@@ -99,7 +168,10 @@ button {
 .jump,
 .tool__head,
 .palette__item,
-.palette__input {
+.palette__input,
+.tab,
+.tab__close,
+.tab--new {
   transition:
     background-color var(--t-fast) var(--ease),
     border-color var(--t-fast) var(--ease),
@@ -128,8 +200,22 @@ button {
 
 .shell {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  /* Titlebar, then whichever tab is active — a tab owns its own three rows
+     (session bar, body, optional terminal dock) below, in .tab-content. */
+  grid-template-rows: auto 1fr;
   height: 100%;
+}
+
+/* One per open tab, all mounted at once so a background tab's event stream,
+   presence poll, and terminal keep running rather than being torn down and
+   rebuilt on every switch. Only the active one is display: grid — see
+   session-tab.tsx's inline style — and an element that is display: none does
+   not participate in .shell's grid at all, so exactly one of these ever
+   actually occupies the 1fr row above. */
+.tab-content {
+  grid-template-rows: auto 1fr auto;
+  min-height: 0;
+  min-width: 0;
 }
 
 .titlebar {
@@ -140,6 +226,7 @@ button {
   height: 38px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  min-width: 0;
 }
 
 /* Inside the shell the window's traffic lights overlay the titlebar. */
@@ -149,8 +236,165 @@ button {
 }
 
 :root[data-shell="electron"] .titlebar button,
-:root[data-shell="electron"] .titlebar kbd {
+:root[data-shell="electron"] .titlebar kbd,
+:root[data-shell="electron"] .titlebar .tab {
   -webkit-app-region: no-drag;
+}
+
+/* A tab's own bar — everything that used to live in .titlebar when Novus
+   only ever held one session. Visually identical to .titlebar's base rule
+   (same height, padding, border, plane) but deliberately its own class: it
+   must never pick up the electron drag region above, which belongs to the
+   one titlebar the window chrome actually is. */
+.session-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  height: 38px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  /* A flex container that is also a lone grid item (.tab-content's single
+     implicit column) contributes its content's min size to that column's
+     auto track unless told otherwise — without this, a long repository path
+     widened the whole app instead of letting .titlebar__repo ellipsize, and
+     pushed the terminal/invite buttons off the right edge. */
+  min-width: 0;
+}
+
+.session-bar__error {
+  grid-column: 1 / -1;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--del);
+  font-size: 12px;
+}
+
+/* ---------- tab strip ---------- */
+
+.tabstrip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  /* Claims the titlebar's remaining space and scrolls internally once tabs
+     exceed it — without flex-grow this sized itself to its content instead,
+     which pushed the "+" button and the theme toggle off the right edge. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabstrip::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  max-width: 200px;
+  height: 26px;
+  padding: 0 6px 0 9px;
+  border-radius: var(--radius-m);
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tab:hover {
+  background: var(--hover);
+}
+
+.tab:active {
+  background: var(--pressed);
+}
+
+.tab--active,
+.tab--active:hover {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.tab__dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.tab__dot--busy {
+  background: var(--live);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.tab__dot--paused {
+  background: var(--warn-text);
+}
+
+.tab__dot--failed {
+  background: var(--del);
+}
+
+.tab__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab__diffstat {
+  flex: none;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tab__close {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-s);
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0;
+}
+
+.tab:hover .tab__close,
+.tab--active .tab__close {
+  opacity: 1;
+}
+
+.tab__close:hover {
+  background: var(--pressed);
+  color: var(--text);
+}
+
+.tab--new {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  justify-content: center;
+  border-radius: var(--radius-m);
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.tab--new:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.tab--new:active {
+  background: var(--pressed);
 }
 
 .titlebar__mark {
@@ -483,8 +727,16 @@ kbd {
 
 .body {
   display: grid;
-  grid-template-columns: 244px 1fr;
+  grid-template-columns: 244px 1fr 220px;
   min-height: 0;
+  min-width: 0;
+}
+
+/* Attempts replaces the timeline and the files panel both — a fork's changed
+   files belong to CompareView's own per-attempt columns, not this session's
+   panel, so the third column drops rather than sitting empty beside it. */
+.body--compare {
+  grid-template-columns: 244px 1fr;
 }
 
 /* ---------- rail ---------- */
@@ -595,6 +847,83 @@ kbd {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* ---------- changed files ---------- */
+
+/* The honest Novus equivalent of Conductor's right-hand file list — sourced
+   from GET /sessions/:id/files, i.e. RunProjection.filesChanged, the same
+   numbers the compare screen already draws. Lives on the surface plane, like
+   the rail on the opposite edge, so the timeline in the middle reads as the
+   one recessed-relative-to-chrome content column. */
+.files {
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.files__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 12px 8px;
+}
+
+.files__totals {
+  flex: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.files__empty {
+  padding: 0 12px 12px;
+  color: var(--text-dim);
+}
+
+.files__empty--error {
+  color: var(--del);
+}
+
+.files__list {
+  margin: 0;
+  padding: 0 0 12px;
+  list-style: none;
+}
+
+.files__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px;
+}
+
+.files__row:hover {
+  background: var(--hover);
+}
+
+.files__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  /* Ellipsize the head, like the titlebar's repo path — the filename at the
+     tail is the part worth keeping when a path is too long for the column. */
+  direction: rtl;
+  text-align: left;
+}
+
+.files__path::before {
+  content: "\200e";
+}
+
+.files__counts {
+  flex: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- terminal ---------- */

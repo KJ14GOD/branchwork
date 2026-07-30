@@ -13,6 +13,7 @@ export const OpenRepository = ({
   error,
   capabilities,
   remembered,
+  embedded = false,
 }: {
   onOpen: (
     repositoryPath: string,
@@ -26,6 +27,13 @@ export const OpenRepository = ({
   error: string | null;
   /** What the host permits, or null until the worker has answered. */
   capabilities: HostCapabilities | null;
+  /**
+   * True when this renders inside the "new tab" overlay rather than as the
+   * full-window empty state. Skips the full-page centering wrapper — the
+   * overlay already supplies its own — and titles itself for a second tab
+   * rather than the app's first screen.
+   */
+  embedded?: boolean;
 }) => {
   const [path, setPath] = useState("");
   const [allowWrites, setAllowWrites] = useState(false);
@@ -58,10 +66,14 @@ export const OpenRepository = ({
     }
   };
 
-  return (
-    <div className="open">
-      <form className="open__panel" onSubmit={submit}>
-        <div className="open__title">Open a repository</div>
+  const panel = (
+      <form
+        className={embedded ? "open__panel modal" : "open__panel"}
+        onSubmit={submit}
+      >
+        <div className="open__title">
+          {embedded ? "Open another repository" : "Open a repository"}
+        </div>
         <div className="open__row">
           <input
             className="open__input"
@@ -132,6 +144,7 @@ export const OpenRepository = ({
           </div>
         ) : null}
       </form>
-    </div>
   );
+
+  return embedded ? panel : <div className="open">{panel}</div>;
 };

@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import type { InviteResponse } from "@novus/contracts/protocol";
 
-import type { InviteRole } from "../use-session.ts";
+import type { InviteRole } from "../use-session-actions.ts";
 
 // Same default the relay and the guest itself use, overridable the same way
 // the worker endpoint is: a build-time env var, not a runtime lookup, since
