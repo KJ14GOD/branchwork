@@ -300,6 +300,12 @@ Start with three classes:
 - **Write:** patches inside the selected repository; session-owner configurable.
 - **Dangerous:** arbitrary commands, network access, destructive Git operations,
   paths outside the repository, and secrets; explicit approval required or denied.
+  One narrow exception: `list_provider_models` is network but classed Read — it
+  takes no arguments, asks one fixed question of the provider endpoint every
+  model call already trusts with the full conversation, and returns a list of
+  ids. Nothing about it is model-controlled, so there is no argument vector the
+  Dangerous class exists to gate. See the comment beside `TOOL_CLASSES` in
+  `apps/worker/src/policy.ts` for the same reasoning in place.
 
 V1 must reject path traversal and commands outside declared policy. It must never
 use `git reset --hard`, overwrite uncommitted user work, or silently modify the

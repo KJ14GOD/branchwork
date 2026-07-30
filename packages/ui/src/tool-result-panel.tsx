@@ -112,5 +112,22 @@ export const ToolResultPanel = ({
     );
   }
 
+  if (result.name === "list_provider_models") {
+    return (
+      <div className="kv">
+        <span className="kv__key">provider</span>
+        <span className="kv__value">{result.output.provider}</span>
+        <span className="kv__key">models</span>
+        <span className="kv__value">{result.output.models.length}</span>
+        {result.output.models.length > 0 && (
+          <>
+            <span className="kv__key">ids</span>
+            <pre className="kv__value">{result.output.models.join("\n")}</pre>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return panels ? panels(result) : null;
 };
