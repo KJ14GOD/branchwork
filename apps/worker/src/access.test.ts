@@ -4,7 +4,7 @@ import test from "node:test";
 import { InMemorySessionEventStore } from "@novus/session-service";
 
 import { FixedModelRouter } from "./model.ts";
-import { ParticipantRegistry } from "./participants.ts";
+import { HOST_SESSION, ParticipantRegistry } from "./participants.ts";
 import { SessionRegistry } from "./session-registry.ts";
 
 import { isAllowedOrigin, mintAccessToken, offeredToken, tokensMatch } from "./access.ts";
@@ -271,7 +271,10 @@ const withParticipants = async (
   run: (context: {
     url: string;
     ownerToken: string;
-    add: (role: "editor" | "reviewer" | "viewer") => string;
+    add: (
+      role: "editor" | "reviewer" | "viewer",
+      sessionId?: string,
+    ) => string;
   }) => Promise<void>,
 ): Promise<void> => {
   const store = new InMemorySessionEventStore();
@@ -299,9 +302,9 @@ const withParticipants = async (
     await run({
       url: server.url,
       ownerToken,
-      add: (role) =>
+      add: (role, sessionId = HOST_SESSION) =>
         participants.add({
-          sessionId: "host",
+          sessionId,
           name: role,
           kind: "human",
           role,
@@ -335,31 +338,65 @@ test("a viewer may watch and may not steer", async () => {
   });
 });
 
-test("a reviewer may direct but may not steer", async () => {
+test("a reviewer approves and evaluates, and cannot direct or steer", async () => {
   await withParticipants(async ({ url, add }) => {
     const reviewer = add("reviewer");
 
-    const steering = await fetch(`${url}/sessions/any/turns`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${reviewer}`,
-      },
-      body: JSON.stringify({ goal: "take over the run" }),
-    });
-    assert.equal(steering.status, 403);
+    for (const route of ["turns", "direction"]) {
+      const response = await fetch(`${url}/sessions/host/${route}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${reviewer}`,
+        },
+        body: JSON.stringify({ goal: "do it differently" }),
+      });
 
-    // V1's reviewer comments, evaluates and approves without executing. The
-    // 404 is the session id, not the permission — the capability check passed.
-    const directing = await fetch(`${url}/sessions/any/direction`, {
+      // README: a reviewer "comments, evaluates, and approves without directly
+      // executing", and direction is free text appended to the goal — so
+      // granting it would hand this role the power the definition withholds,
+      // through a text field.
+      assert.equal(response.status, 403, `reviewer reached /${route}`);
+    }
+  });
+});
+
+test("an editor may direct, which is the role that owns it", async () => {
+  await withParticipants(async ({ url, add }) => {
+    const editor = add("editor");
+
+    const response = await fetch(`${url}/sessions/host/direction`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${reviewer}`,
+        authorization: `Bearer ${editor}`,
       },
       body: JSON.stringify({ goal: "do not change the token schema" }),
     });
-    assert.notEqual(directing.status, 403);
+
+    // 404 would be the session id; what matters is that it is not a refusal.
+    assert.notEqual(response.status, 403);
+  });
+});
+
+test("an invite for one session cannot act on another", async () => {
+  await withParticipants(async ({ url, add }) => {
+    // Bound to a real session, the way an invited participant is. The host's own
+    // participant is deliberately exempt — the worker outlives any one session
+    // and its owner is the person running it, not a guest of a session — so an
+    // editor scoped to "host" would prove nothing here.
+    const editor = add("editor", "the-session-they-were-invited-to");
+
+    const elsewhere = await fetch(`${url}/sessions/a-different-session/direction`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${editor}`,
+      },
+      body: JSON.stringify({ goal: "steer a session I was not invited to" }),
+    });
+
+    assert.equal(elsewhere.status, 403);
   });
 });
 

@@ -14,6 +14,7 @@ import type { SessionEventStore } from "@novus/session-service";
 
 import { isAllowedOrigin, offeredToken, tokensMatch } from "./access.ts";
 import {
+  HOST_SESSION,
   roleCan,
   type Capability,
   type Membership,
@@ -420,6 +421,26 @@ export const startEventServer = (
     const refusedFor = (capability: Capability): boolean => {
       if (caller === null) {
         return false;
+      }
+
+      // An invite is for one session. Nothing checked that, so a viewer invited
+      // to watch one repository could act on another simply by knowing its id —
+      // the capability check passed because it only ever looked at the role. The
+      // host's own participant is exempt: the worker outlives any one session
+      // and its owner is the person running it, not a guest of a session.
+      const scoped = /^\/sessions\/([^/]+)(?:\/|$)/.exec(url.pathname);
+      const target = scoped?.[1] ? decodeURIComponent(scoped[1]) : null;
+
+      if (
+        target !== null &&
+        caller.participant.sessionId !== HOST_SESSION &&
+        caller.participant.sessionId !== target
+      ) {
+        sendJson(response, 403, {
+          error: "That invite is for a different session.",
+        });
+
+        return true;
       }
 
       if (roleCan(caller.participant.role, capability)) {

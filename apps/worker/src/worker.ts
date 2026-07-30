@@ -11,7 +11,7 @@ import { startEventServer } from "./event-server.ts";
 import { FixedModelRouter } from "./model.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { mintAccessToken } from "./access.ts";
-import { ParticipantRegistry } from "./participants.ts";
+import { HOST_SESSION, ParticipantRegistry } from "./participants.ts";
 import { publishToRelay } from "./relay-publisher.ts";
 import { createRedactor } from "./redaction.ts";
 import { killRunningCommands } from "./tools.ts";
@@ -45,7 +45,7 @@ const accessToken = pinnedToken || mintAccessToken();
 const participants = new ParticipantRegistry();
 const host = participants.add(
   {
-    sessionId: "host",
+    sessionId: HOST_SESSION,
     name: process.env.NOVUS_HOST_NAME?.trim() || "Host",
     kind: "human",
     role: "owner",

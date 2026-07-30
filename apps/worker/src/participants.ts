@@ -23,11 +23,36 @@ import { mintAccessToken } from "./access.ts";
 
 export type Role = Participant["role"];
 
-/** What each role may do. Read down: every role can do everything below it. */
+/**
+ * The session id the host's own participant carries.
+ *
+ * The owner is the person running the worker, and the worker outlives any one
+ * session — it can open a repository, close it, and open another. So the host's
+ * participant is not bound to a session the way an invited one is, and this
+ * sentinel says so out loud rather than leaving a bare string to be guessed at.
+ */
+export const HOST_SESSION = "host";
+
+/**
+ * What each role may do, taken from README's four definitions rather than from
+ * a guess at what sounds reasonable.
+ *
+ * "Editor: adds direction and can operate within granted permissions."
+ * "Reviewer: comments, evaluates, and approves without directly executing."
+ *
+ * Direction belongs to the editor. A reviewer had it here, which read as
+ * harmless — direction only reaches the model at a turn boundary and cannot
+ * interrupt a tool call — and was not: direction is free text appended to the
+ * goal, so anybody who can submit it can tell the agent to do something else.
+ * Granting it to the role defined as approving *without executing* handed that
+ * role the power the definition withholds, through a text field.
+ *
+ * Read down: every role can do everything the one below it can.
+ */
 const CAPABILITIES = {
   owner: ["watch", "direct", "approve", "steer", "invite", "transfer"],
   editor: ["watch", "direct", "approve", "steer"],
-  reviewer: ["watch", "direct", "approve"],
+  reviewer: ["watch", "approve"],
   viewer: ["watch"],
 } as const satisfies Record<Role, readonly string[]>;
 
