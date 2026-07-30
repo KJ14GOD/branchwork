@@ -10,6 +10,7 @@ import {
 const fresh = (): BudgetUsage => ({
   modelCalls: 0,
   totalTokens: 0,
+  costUsd: 0,
   consecutiveFailures: 0,
   identicalReads: 0,
   startedAt: 1_000_000,
@@ -91,10 +92,43 @@ test("a healthy run's elision-driven re-reads never trip the read ceiling", () =
 
 test("a null limit means unbounded, not zero", () => {
   const unbounded = { ...DEFAULT_RUN_BUDGET, totalTokens: null, wallClockMs: null };
-  const usage = { ...fresh(), totalTokens: 50_000_000 };
+  const usage = { ...fresh(), totalTokens: 50_000_000, costUsd: 400 };
 
   assert.equal(
     budgetExhausted(unbounded, usage, usage.startedAt + 86_400_000),
+    null,
+  );
+});
+
+test("a cost ceiling stops a run in dollars, and says so in dollars", () => {
+  // The reason this bound exists: $40 of API credit went in one overnight
+  // session, and the token ceiling could not have promised otherwise —
+  // 2M tokens costs a different amount on every model. A dollar ceiling
+  // means the same thing on all of them.
+  const capped = { ...DEFAULT_RUN_BUDGET, costUsd: 5 };
+
+  assert.equal(budgetExhausted(capped, { ...fresh(), costUsd: 4.99 }, 1_000_000), null);
+
+  const reason = budgetExhausted(capped, { ...fresh(), costUsd: 5.01 }, 1_000_000);
+
+  assert.match(reason ?? "", /\$5\.01/);
+  assert.match(reason ?? "", /cost limit/);
+});
+
+test("a cost ceiling over an unpriced model refuses to pretend it is counting", () => {
+  // The checkpoint schema's own rule: a budget that lies about being
+  // enforced is worse than one that admits it is not counting. costUsd null
+  // means "not counted", and a ceiling that can never trip must refuse the
+  // run before it spends unmetered money — not silently watch it.
+  const capped = { ...DEFAULT_RUN_BUDGET, costUsd: 5 };
+  const reason = budgetExhausted(capped, { ...fresh(), costUsd: null }, 1_000_000);
+
+  assert.match(reason ?? "", /no configured pricing/);
+  assert.match(reason ?? "", /NOVUS_MODEL_PRICING|NOVUS_COST_BUDGET_USD/);
+
+  // Without a ceiling, an unpriced model runs exactly as before.
+  assert.equal(
+    budgetExhausted(DEFAULT_RUN_BUDGET, { ...fresh(), costUsd: null }, 1_000_000),
     null,
   );
 });

@@ -16,6 +16,7 @@
     "@novus/contracts": "workspace:*",
     "@novus/session-service": "workspace:*",
     "@vscode/ripgrep": "^1.18.0",
-    "openai": "^7.1.0"
+    "openai": "^7.1.0",
+    "zod": "^4.4.3"
   }
 }

@@ -1,4 +1,5 @@
 import {
+  ModelSelectionSchema,
   RunSchema,
   type ModelSelection,
   type Run,
@@ -13,7 +14,14 @@ import {
   type ModelAdapter,
   type ModelRouter,
   type ModelToolExchange,
+  type RoutedSelection,
 } from "./model.ts";
+import {
+  callCostUsd,
+  DEFAULT_MODEL_PRICING,
+  ratesFor,
+  type PricingTable,
+} from "./pricing.ts";
 import {
   budgetExhausted,
   DEFAULT_RUN_BUDGET,
@@ -35,11 +43,30 @@ export type AgentRunInput = {
   sessionId: string;
   actorId: string;
   goal: string;
+  /**
+   * An explicit human model choice for this turn — the composer's picker, as
+   * opposed to its "Auto". When present the router is not consulted at all:
+   * precedence is enforced here structurally, not by convention inside each
+   * router implementation, so no future router can break it. Absent means
+   * route.
+   */
+  model?: ModelSelection;
 };
 
 export type AgentRunResult = {
   runId: string;
   events: SessionEvent[];
+};
+
+/**
+ * How this run's model came to be chosen. The same shape a router returns,
+ * widened with the one source no router may produce: an explicit human
+ * choice, which the runner constructs itself before any router is asked.
+ */
+type ModelChoice = {
+  selection: ModelSelection;
+  source: "human" | RoutedSelection["source"];
+  reason: string;
 };
 
 const selectionsMatch = (
@@ -181,6 +208,14 @@ export class AgentRunner {
   private readonly budget: RunBudget;
   /** Overridable so a test of the retry path does not actually wait a minute. */
   private readonly transientRetryDelaysMs: readonly number[];
+  /** What each model bills, for the per-call cost the receipt and budget use. */
+  private readonly pricing: PricingTable;
+  /**
+   * The runner's clock. Injectable so latency and wall-clock tests are
+   * deterministic instead of sleeping and hoping; everything time-shaped in
+   * the loop reads this one clock.
+   */
+  private readonly now: () => number;
   // One runner is one session. Finished turns stay here so a follow-up
   // question carries the earlier conversation.
   private readonly history: CompletedTurn[] = [];
@@ -199,6 +234,8 @@ export class AgentRunner {
     }),
     budget: RunBudget = DEFAULT_RUN_BUDGET,
     transientRetryDelaysMs: readonly number[] = TRANSIENT_RETRY_DELAYS_MS,
+    pricing: PricingTable = DEFAULT_MODEL_PRICING,
+    now: () => number = Date.now,
   ) {
     this.eventStore = eventStore;
     this.router = router;
@@ -208,6 +245,8 @@ export class AgentRunner {
     this.readBase = readBase;
     this.budget = budget;
     this.transientRetryDelaysMs = transientRetryDelaysMs;
+    this.pricing = pricing;
+    this.now = now;
   }
 
   /**
@@ -301,25 +340,82 @@ export class AgentRunner {
   }
 
   /**
-   * Which model this runner would use, for a checkpoint to record.
+   * Which model this runner would use for an unsignaled turn, for a
+   * checkpoint to record.
    *
    * A checkpoint carries the model configuration so a fork runs the same way its
    * parent did — comparing two attempts made by different models would be
-   * comparing the models, not the attempts.
+   * comparing the models, not the attempts. Under a routing router this is
+   * the empty-goal default (no signals, no override), which is deterministic
+   * — the property forks actually need.
    */
   modelSelection(): ModelSelection {
-    return this.router.select({ goal: "" });
+    return this.router.select({ goal: "" }).selection;
+  }
+
+  /**
+   * Roughly how many characters of prior conversation the next turn carries:
+   * earlier goals and summaries plus the new goal. Deliberately not the tool
+   * exchanges — finished turns' results are elided to stubs by the adapter,
+   * so counting their full payloads would overstate what a call resends. An
+   * estimate feeding an estimate; see ModelRoutingRequest.
+   */
+  private contextChars(goal: string): number {
+    return (
+      this.history.reduce(
+        (total, turn) => total + turn.goal.length + turn.summary.length,
+        0,
+      ) + goal.length
+    );
+  }
+
+  /**
+   * Whether this session's most recent finished run failed, from the log —
+   * the same read-the-log-not-memory rule direction and cancellation follow.
+   * Cancelled is not failed: a human stopping a run says nothing about
+   * whether the model was up to it.
+   */
+  private lastRunFailed(sessionId: string): boolean {
+    const events = this.eventStore.list(sessionId);
+
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index]!;
+
+      if (event.type === "run.failed") {
+        return true;
+      }
+
+      if (event.type === "run.completed" || event.type === "run.cancelled") {
+        return false;
+      }
+    }
+
+    return false;
   }
 
   async run(input: AgentRunInput): Promise<AgentRunResult> {
-    const modelSelection = this.router.select({ goal: input.goal });
+    // A human's explicit choice always wins over the router — enforced here,
+    // structurally: when the turn names a model, no router runs at all. The
+    // router is Auto, not a veto.
+    const choice: ModelChoice = input.model
+      ? {
+          selection: ModelSelectionSchema.parse(input.model),
+          source: "human",
+          reason: "chosen explicitly for this turn",
+        }
+      : this.router.select({
+          goal: input.goal,
+          contextChars: this.contextChars(input.goal),
+          lastRunFailed: this.lastRunFailed(input.sessionId),
+          costBudgetUsd: this.budget.costUsd,
+        });
     const adapter = this.adapters.find((candidate) =>
-      selectionsMatch(candidate.selection, modelSelection),
+      selectionsMatch(candidate.selection, choice.selection),
     );
 
     if (!adapter) {
       throw new Error(
-        `No model adapter is configured for ${modelSelection.provider}/${modelSelection.model}.`,
+        `No model adapter is configured for ${choice.selection.provider}/${choice.selection.model}. This worker can run: ${this.adapters.map((candidate) => `${candidate.selection.provider}/${candidate.selection.model}`).join(", ")}.`,
       );
     }
 
@@ -329,7 +425,7 @@ export class AgentRunner {
       goal: input.goal,
       status: "running",
       startedBy: input.actorId,
-      model: modelSelection,
+      model: choice.selection,
       createdAt: new Date().toISOString(),
     });
 
@@ -338,7 +434,7 @@ export class AgentRunner {
     // the selection, a draft the schema refused — and nothing has claimed to
     // the session that work began.
     try {
-      return await this.execute(input, run, adapter);
+      return await this.execute(input, run, adapter, [], false, choice);
     } catch (error) {
       throw new AgentRunFailure(run.id, error);
     }
@@ -452,6 +548,9 @@ export class AgentRunner {
     // being non-empty: a run can genuinely pause before its first tool call,
     // and inferring from an empty array would misclassify that resume as new.
     continuing = false,
+    // Who picked this run's model and why. Absent on a resume, where the
+    // model is the one the log already recorded, not a fresh decision.
+    choice?: ModelChoice,
   ): Promise<AgentRunResult> {
     if (!continuing) {
       this.eventStore.append({
@@ -461,19 +560,30 @@ export class AgentRunner {
         payload: { run },
       });
 
+      // The reason is part of the record, not decoration: a run whose model
+      // choice cannot be explained from the log is the black box this
+      // product exists to open. Every timeline renders run.progress already,
+      // so the explanation is visible everywhere today.
       this.eventStore.append({
         sessionId: input.sessionId,
         actorId: input.actorId,
         type: "run.progress",
         payload: {
           runId: run.id,
-          message: `Selected ${run.model.provider}/${run.model.model}`,
+          message: `Selected ${run.model.provider}/${run.model.model}${
+            choice ? ` (${choice.source}: ${choice.reason})` : ""
+          }`,
         },
       });
     }
 
     const toolExchanges: ModelToolExchange[] = [...initialToolExchanges];
-    const startedAt = Date.now();
+    const startedAt = this.now();
+    // Priced once for the whole run — the model is fixed at run start, so
+    // these rates are the run's rates. Null means the model has no configured
+    // price, and every cost figure downstream honestly says "unknown" rather
+    // than zero.
+    const rates = ratesFor(this.pricing, run.model);
     let consecutiveFailures = 0;
     // How many times each read-class call has run with byte-identical input
     // since the repository could last have changed. A read is a pure function
@@ -488,6 +598,9 @@ export class AgentRunner {
       outputTokens: 0,
       modelCalls: 0,
       callsMissingUsage: 0,
+      modelTimeMs: 0,
+      costUsd: rates === null ? null : 0,
+      rates,
     };
     // Reading the base is reporting, not execution: a run that has already
     // emitted run.started must not die because git was unavailable.
@@ -607,11 +720,12 @@ export class AgentRunner {
         {
           modelCalls: usage.modelCalls,
           totalTokens: usage.inputTokens + usage.outputTokens,
+          costUsd: usage.costUsd,
           consecutiveFailures,
           identicalReads,
           startedAt,
         },
-        Date.now(),
+        this.now(),
       );
 
       if (stopped !== null) {
@@ -638,14 +752,23 @@ export class AgentRunner {
       // only this many times: a provider that stays down through every wait
       // ends the run through the ordinary throw path, with the cause intact.
       let response;
+      // The successful attempt's own duration. Failed transient attempts and
+      // the waits between them are excluded on purpose: they are already in
+      // the log as run.progress lines, and the run's elapsedMs carries the
+      // whole wall clock — this number answers "how long does the model
+      // itself take", which is the latency a future router would weigh.
+      let modelCallMs = 0;
 
       for (let attempt = 0; ; attempt += 1) {
+        const attemptStartedAt = this.now();
+
         try {
           response = await adapter.complete({
             history: this.history,
             goal: steered,
             toolExchanges,
           });
+          modelCallMs = this.now() - attemptStartedAt;
           break;
         } catch (error) {
           const delay = this.transientRetryDelaysMs[attempt];
@@ -671,10 +794,25 @@ export class AgentRunner {
       }
 
       usage.modelCalls += 1;
+      // Latency is the runner's own measurement, unlike tokens. Tokens are
+      // reported by the adapter because only the provider knows what it
+      // billed; latency is knowable from the caller's seat with the caller's
+      // clock, and measuring it here means no adapter can silently forget to.
+      usage.modelTimeMs += modelCallMs;
 
       if (response.usage) {
         usage.inputTokens += response.usage.inputTokens;
         usage.outputTokens += response.usage.outputTokens;
+
+        if (rates !== null) {
+          // Cost accrues per call, not once at the end, so the budget check
+          // at the top of the loop sees money already spent — a $5 ceiling
+          // stops the run at the first call that crosses it, not at the
+          // receipt. When some calls report no usage this is a floor, and
+          // callsMissingUsage says so.
+          usage.costUsd =
+            (usage.costUsd ?? 0) + callCostUsd(rates, response.usage);
+        }
       } else {
         // Counted, not ignored: the totals become a floor and anything showing
         // them has to say so rather than print a number that is quietly short.

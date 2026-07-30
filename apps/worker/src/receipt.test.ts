@@ -12,6 +12,9 @@ const USAGE = {
   outputTokens: 45,
   modelCalls: 3,
   callsMissingUsage: 0,
+  modelTimeMs: 0,
+  costUsd: null,
+  rates: null,
 };
 const BASE: { revision: string | null; dirty: boolean | null } = {
   revision: null,
@@ -118,7 +121,15 @@ test("a receipt reports the files, tests, and usage of a completed run", () => {
   assert.equal(receipt.testsFollowedFinalChange, true);
   assert.equal(receipt.tests.length, 1);
   assert.equal(receipt.tests[0]?.passed, true);
-  assert.deepEqual(receipt.usage, USAGE);
+  // The contract schema does not carry modelTimeMs/cost yet — that lands
+  // with the contracts change this slice makes under the lock — so the
+  // receipt records the token fields and strips the rest for now.
+  assert.deepEqual(receipt.usage, {
+    inputTokens: USAGE.inputTokens,
+    outputTokens: USAGE.outputTokens,
+    modelCalls: USAGE.modelCalls,
+    callsMissingUsage: USAGE.callsMissingUsage,
+  });
   assert.equal(receipt.summary, "Fixed the locking behaviour.");
   assert.equal(receipt.failure, undefined);
 });

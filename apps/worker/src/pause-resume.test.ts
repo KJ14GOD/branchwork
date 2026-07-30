@@ -121,7 +121,15 @@ test("a paused run produces no receipt — it has not ended", () => {
 
   const receipt = buildReceipt(eventStore.list("receipt-session"), "run-1", {
     base: { revision: null, dirty: null },
-    usage: { inputTokens: 0, outputTokens: 0, modelCalls: 1, callsMissingUsage: 0 },
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      modelCalls: 1,
+      callsMissingUsage: 0,
+      modelTimeMs: 0,
+      costUsd: null,
+      rates: null,
+    },
   });
 
   assert.equal(receipt, null);

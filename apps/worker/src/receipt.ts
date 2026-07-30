@@ -4,11 +4,35 @@ import {
   type SessionEvent,
 } from "@novus/contracts";
 
+import type { ModelRates } from "./pricing.ts";
+
 export type ReceiptUsage = {
   inputTokens: number;
   outputTokens: number;
   modelCalls: number;
   callsMissingUsage: number;
+  /**
+   * Wall-clock milliseconds spent inside model calls, summed — measured by
+   * the runner's own clock around each successful call. Divided by
+   * modelCalls it is the run's mean per-call latency. Retry waits are not in
+   * it; the run's elapsedMs carries those.
+   *
+   * A true per-call breakdown in the log needs the model.requested /
+   * model.responded event family V1_README's protocol already names — a
+   * cross-surface change (projection, receipt, compare, guest) this slice
+   * deliberately did not make. Totals here; per-call events are the marked
+   * next step. Like tokens, this restarts at zero on resume — per-call
+   * figures are never logged, so a resumed run has nothing to rebuild from.
+   */
+  modelTimeMs: number;
+  /**
+   * USD spent, from per-call token usage times the configured rates. Null
+   * when the run's model has no configured pricing — unknown, never zero.
+   * A floor when callsMissingUsage is above zero.
+   */
+  costUsd: number | null;
+  /** The rates that priced it, carried so the figure can be re-derived. */
+  rates: ModelRates | null;
 };
 
 export type RepositoryBase = {
