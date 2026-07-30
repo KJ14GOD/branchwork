@@ -270,11 +270,11 @@ export const App = () => {
             <span className="titlebar__writes">commands on</span>
           ) : null}
           {run?.type === "run.started" ? (
-            <span>
+            <span className="titlebar__model">
               {run.payload.run.model.provider}/{run.payload.run.model.model}
             </span>
           ) : null}
-          <span>{runStatus}</span>
+          <span className="titlebar__phase">{runStatus}</span>
         </div>
         <span className="titlebar__spacer" />
         <button
@@ -314,7 +314,7 @@ export const App = () => {
           </div>
 
           {busy ? (
-            <div className="rail__section">
+            <div className="rail__section rail__section--direction">
               <div className="rail__label">Direction</div>
               <form
                 onSubmit={(event) => {
@@ -354,8 +354,8 @@ export const App = () => {
             <div className="stat">
               <span>lines</span>
               <span className="stat__value">
-                <span style={{ color: "var(--add)" }}>+{totals.additions}</span>{" "}
-                <span style={{ color: "var(--del)" }}>−{totals.deletions}</span>
+                <span className="stat__add">+{totals.additions}</span>{" "}
+                <span className="stat__del">−{totals.deletions}</span>
               </span>
             </div>
             <div className="stat">
@@ -366,9 +366,7 @@ export const App = () => {
 
           {toolCalls.length > 0 ? (
             <div>
-              <div className="rail__label" style={{ padding: "0 14px 8px" }}>
-                Tool calls
-              </div>
+              <div className="rail__label rail__label--inset">Tool calls</div>
               {toolCalls.map((event) => (
                 <button
                   key={event.eventId}
