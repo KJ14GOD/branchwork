@@ -12,7 +12,17 @@ export default defineConfig({
         entry: "electron/main.ts",
         vite: {
           build: {
-            rollupOptions: { output: { entryFileNames: "[name].mjs" } },
+            rollupOptions: {
+              output: { entryFileNames: "[name].mjs" },
+              // node-pty resolves its own native binary at runtime by walking
+              // relative paths from its own file on disk. Bundled inline by
+              // Rollup, that walk starts from dist-electron instead of
+              // node_modules/node-pty and the binary is never found — the
+              // exact error this fixes. External keeps it a plain runtime
+              // require, resolved by Node's own module resolution, the way
+              // node-pty already expects to be loaded.
+              external: ["node-pty"],
+            },
           },
         },
       },
