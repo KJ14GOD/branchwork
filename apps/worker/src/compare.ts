@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@novus/contracts";
+import type { DecisionOutcome, SessionEvent } from "@novus/contracts";
 
 import { projectSession, type RunProjection } from "./projection.ts";
 
@@ -45,6 +45,8 @@ export type Comparison = {
   contestedPaths: string[];
   /** Paths only one attempt changed, by run id. */
   uniquePaths: Record<string, string[]>;
+  /** The most recent choice recorded for this session, or null if none yet. */
+  decision: { runId: string; outcome: DecisionOutcome } | null;
 };
 
 const compareAttempt = (
@@ -113,5 +115,19 @@ export const compareAttempts = (
       .sort();
   }
 
-  return { attempts: compared, contestedPaths, uniquePaths };
+  // Latest by sequence, not first found: a host can decide more than once,
+  // and the most recent choice is the one the screen should agree with.
+  const decided = events
+    .filter(
+      (event): event is Extract<SessionEvent, { type: "decision.recorded" }> =>
+        event.sessionId === sessionId && event.type === "decision.recorded",
+    )
+    .sort((first, second) => first.sequence - second.sequence)
+    .at(-1);
+
+  const decision = decided
+    ? { runId: decided.payload.runId, outcome: decided.payload.outcome }
+    : null;
+
+  return { attempts: compared, contestedPaths, uniquePaths, decision };
 };

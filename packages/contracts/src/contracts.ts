@@ -752,6 +752,52 @@ export const RunFailedEventSchema = EventEnvelopeSchema.extend({
   }),
 });
 
+/**
+ * What happened when a chosen attempt's changes were written to the parent.
+ *
+ * `applied: true` lists the paths that were actually written or removed — not
+ * a line count, because the point of this record is "did it land," not a
+ * second diffstat next to the one the compare screen already shows.
+ *
+ * `applied: false` is not a failure of the decision — a host can choose an
+ * attempt whose patch no longer applies and still want that choice on the
+ * record. `conflicts` names the files it refused and why, mirroring
+ * `apply_patch`'s own refusal when a file drifted after a proposal was made.
+ */
+export const DecisionOutcomeSchema = z.discriminatedUnion("applied", [
+  z.object({
+    applied: z.literal(true),
+    files: z.array(z.string().min(1)),
+  }),
+  z.object({
+    applied: z.literal(false),
+    reason: z.string().min(1),
+    conflicts: z.array(
+      z.object({
+        path: z.string().min(1),
+        reason: z.string().min(1),
+      }),
+    ),
+  }),
+]);
+
+export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
+
+// A human choosing between attempts, recorded whether or not the patch that
+// followed actually landed. V1 says the merge is always a human decision —
+// this is that decision's evidence, separate from the mechanics of applying
+// it, the same way direction.submitted is recorded separately from whether
+// the runtime could fold it in.
+export const DecisionRecordedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("decision.recorded"),
+  payload: z.object({
+    /** The attempt's run id — the fork that was chosen. */
+    runId: IdSchema,
+    checkpointId: IdSchema,
+    outcome: DecisionOutcomeSchema,
+  }),
+});
+
 export const SessionEventSchema = z.discriminatedUnion("type", [
   SessionCreatedEventSchema,
   RunStartedEventSchema,
@@ -773,6 +819,7 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   ReceiptCreatedEventSchema,
   CheckpointCreatedEventSchema,
   ForkCreatedEventSchema,
+  DecisionRecordedEventSchema,
 ]);
 
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
@@ -874,6 +921,11 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   ForkCreatedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  DecisionRecordedEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,
