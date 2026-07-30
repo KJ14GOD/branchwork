@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node --env-file=../../.env --experimental-strip-types src/worker.ts",
     "demo": "node --experimental-strip-types src/demo.ts",
+    "smoke:openai": "node --env-file=../../.env --experimental-strip-types src/openai-smoke.ts",
     "test": "node --experimental-strip-types --test 'src/*.test.ts'",
     "typecheck": "tsc --project tsconfig.json"
   },
@@ -14,6 +15,7 @@
     "@anthropic-ai/sdk": "^0.114.0",
     "@novus/contracts": "workspace:*",
     "@novus/session-service": "workspace:*",
-    "@vscode/ripgrep": "^1.18.0"
+    "@vscode/ripgrep": "^1.18.0",
+    "openai": "^7.1.0"
   }
 }
