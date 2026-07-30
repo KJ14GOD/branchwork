@@ -8,6 +8,7 @@ import {
 import type { SessionEvent } from "@novus/contracts";
 import {
   CreateSessionRequestSchema,
+  DecisionRequestSchema,
   SubmitTurnRequestSchema,
 } from "@novus/contracts/protocol";
 import type { SessionEventStore } from "@novus/session-service";
@@ -20,6 +21,7 @@ import {
   type Membership,
   type ParticipantRegistry,
 } from "./participants.ts";
+import { applyDecision } from "./apply-decision.ts";
 import { compareAttempts } from "./compare.ts";
 import { createRedactor, type Redactor } from "./redaction.ts";
 import type { Session, SessionRegistry } from "./session-registry.ts";
@@ -357,6 +359,66 @@ export const startEventServer = (
       }));
 
       sendJson(response, 200, compareAttempts(session.id, store.list(session.id), attempts));
+      return true;
+    }
+
+    const decisionMatch = /^\/sessions\/([^/]+)\/decision$/.exec(pathname);
+
+    if (decisionMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(decisionMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = DecisionRequestSchema.safeParse(await readJsonBody(request));
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "A runId is required." });
+        return true;
+      }
+
+      const handle = session.forks.get(parsed.data.runId);
+
+      if (!handle) {
+        sendJson(response, 404, {
+          error: "That attempt is not a fork of this session, or it was already removed.",
+        });
+        return true;
+      }
+
+      // Recorded regardless of whether the apply below succeeds. V1 says the
+      // merge is always a human decision — a host choosing an attempt whose
+      // patch no longer applies cleanly still made that choice, and the log
+      // should say so rather than staying silent because the mechanics failed.
+      const outcome = !session.allowWrites
+        ? {
+            applied: false as const,
+            reason:
+              "Writes are not enabled for this session, so the chosen attempt was recorded but not applied.",
+            conflicts: [],
+          }
+        : await applyDecision(session.repositoryPath, session.worktrees, parsed.data.runId).catch(
+            (error: unknown) => ({
+              applied: false as const,
+              reason: (error as Error).message,
+              conflicts: [],
+            }),
+          );
+
+      const event = store.append({
+        sessionId: session.id,
+        actorId: caller?.participant.id ?? "host",
+        type: "decision.recorded",
+        payload: {
+          runId: handle.fork.runId,
+          checkpointId: handle.fork.checkpointId,
+          outcome,
+        },
+      });
+
+      sendJson(response, 201, { decision: event.payload, eventId: event.eventId });
       return true;
     }
 

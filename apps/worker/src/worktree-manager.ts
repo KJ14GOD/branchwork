@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -474,6 +474,100 @@ export class WorktreeManager {
 
     if (failures.length > 0) {
       throw new Error(`Some forks could not be removed — ${failures.join("; ")}`);
+    }
+  }
+
+  /**
+   * What a fork changed relative to the base it started from.
+   *
+   * The same temporary-index technique `createCheckpoint` uses to see the
+   * parent's own uncommitted work, run here against the fork's worktree
+   * instead — so a file the agent created but never `git add`ed is reported
+   * exactly like one it edited, rather than silently missing because nothing
+   * ever staged it.
+   */
+  async diffFork(
+    runId: string,
+  ): Promise<Array<{ path: string; status: "added" | "modified" | "deleted" }>> {
+    const handle = this.forks.get(runId);
+
+    if (!handle) {
+      throw new Error(`No such fork: ${runId}`);
+    }
+
+    const scratchIndex = join(
+      await mkdtemp(join(tmpdir(), "novus-fork-diff-")),
+      "index",
+    );
+
+    try {
+      await this.git(handle.worktreePath, ["add", "-A", "--", "."], {
+        GIT_INDEX_FILE: scratchIndex,
+      });
+
+      const nameStatus = await this.git(
+        handle.worktreePath,
+        ["diff", "--name-status", "--cached", handle.fork.revision],
+        { GIT_INDEX_FILE: scratchIndex },
+      );
+
+      return nameStatus
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const [code, ...rest] = line.split("\t");
+          // A rename ("R100") carries two paths; the second is where the file
+          // lives now, which is what every other caller here means by "path".
+          const path = rest.at(-1) ?? "";
+          const status =
+            code === "A"
+              ? ("added" as const)
+              : code === "D"
+                ? ("deleted" as const)
+                : ("modified" as const);
+
+          return { path, status };
+        })
+        .filter((entry) => entry.path !== "");
+    } finally {
+      await rm(dirname(scratchIndex), { recursive: true, force: true });
+    }
+  }
+
+  /** A path's content in the fork's worktree at the revision it started from. */
+  async readForkBaseFile(runId: string, path: string): Promise<string | null> {
+    const handle = this.forks.get(runId);
+
+    if (!handle) {
+      throw new Error(`No such fork: ${runId}`);
+    }
+
+    try {
+      return await this.git(handle.worktreePath, [
+        "show",
+        `${handle.fork.revision}:${path}`,
+      ]);
+    } catch {
+      // Git's own reason ("path does not exist in <rev>", a bad revision, a
+      // transient failure) is not distinguished here — every case means there
+      // is nothing to compare against, which is what null already says to the
+      // caller for "this file did not exist yet".
+      return null;
+    }
+  }
+
+  /** A path's current content in the fork's live working tree. */
+  async readForkFile(runId: string, path: string): Promise<string | null> {
+    const handle = this.forks.get(runId);
+
+    if (!handle) {
+      throw new Error(`No such fork: ${runId}`);
+    }
+
+    try {
+      return await readFile(join(handle.worktreePath, path), "utf8");
+    } catch {
+      return null;
     }
   }
 

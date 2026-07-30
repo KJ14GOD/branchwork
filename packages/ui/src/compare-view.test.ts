@@ -31,6 +31,7 @@ test("a comparison carries no score, rank, or recommendation", () => {
     attempts: [attempt(), attempt({ runId: "fork-b", label: "retries" })],
     contestedPaths: [],
     uniquePaths: { "fork-a": [], "fork-b": [] },
+    decision: null,
   });
 
   // V1 puts the choice with a human on the evidence. A shape carrying a verdict
@@ -49,6 +50,7 @@ test("green is nullable, because running no tests is not passing them", () => {
     attempts: [attempt({ testsRun: 0, testsPassed: 0, green: null })],
     contestedPaths: [],
     uniquePaths: { "fork-a": [] },
+    decision: null,
   });
 
   assert.equal(untested.attempts[0]?.green, null);
@@ -81,6 +83,7 @@ test("a failure is part of the comparison rather than an absence", () => {
     ],
     contestedPaths: [],
     uniquePaths: { "fork-a": [] },
+    decision: null,
   });
 
   // A reviewer who asked for two attempts and sees one blank column learns
@@ -94,7 +97,36 @@ test("an empty comparison is valid, because a session starts with no attempts", 
     attempts: [],
     contestedPaths: [],
     uniquePaths: {},
+    decision: null,
   });
 
   assert.deepEqual(empty.attempts, []);
+});
+
+test("a recorded decision carries the chosen run and what happened when it applied", () => {
+  const applied = ComparisonSchema.parse({
+    attempts: [attempt()],
+    contestedPaths: [],
+    uniquePaths: { "fork-a": [] },
+    decision: { runId: "fork-a", outcome: { applied: true, files: ["src/lock.ts"] } },
+  });
+
+  assert.equal(applied.decision?.runId, "fork-a");
+  assert.equal(applied.decision?.outcome.applied, true);
+
+  const conflicted = ComparisonSchema.parse({
+    attempts: [attempt()],
+    contestedPaths: [],
+    uniquePaths: { "fork-a": [] },
+    decision: {
+      runId: "fork-a",
+      outcome: {
+        applied: false,
+        reason: "1 of 1 changed file no longer applies cleanly.",
+        conflicts: [{ path: "src/lock.ts", reason: "changed in the parent since forking" }],
+      },
+    },
+  });
+
+  assert.equal(conflicted.decision?.outcome.applied, false);
 });

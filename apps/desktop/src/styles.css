@@ -815,14 +815,24 @@ kbd {
   color: var(--add);
   font-size: 12px;
 }
-/* Deliberately quiet. Choosing records a preference; it does not merge, and a
-   loud confirmation would imply it had. */
+/* Deliberately quiet. Choosing and applying are the same permissioned action
+   here, and this states exactly what happened rather than implying more. */
 .compare-screen__note {
   margin: 0;
   padding: 0 18px 16px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-dim);
+}
+.compare-screen__note--error {
+  color: var(--del);
+}
+.compare-screen__conflicts {
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
+.compare-screen__conflicts code {
+  color: var(--text);
 }
 
 /* Not an error — the session works, two features do not. Amber rather than red,

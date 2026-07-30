@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { ComparisonSchema, type Comparison } from "@novus/contracts/protocol";
+import {
+  ComparisonSchema,
+  type Comparison,
+  type DecisionSummary,
+} from "@novus/contracts/protocol";
 
 import { authorization } from "./access.ts";
 
@@ -24,9 +28,15 @@ export type ComparisonState = {
   error: string | null;
   refresh: () => void;
   fork: (label: string, goal: string) => Promise<void>;
-  /** Which attempt the host settled on, for this window's benefit. */
-  chosen: string | null;
-  choose: (runId: string) => void;
+  /**
+   * The most recent choice, whether from this window or read back from the
+   * log. Not local UI state: choosing appends `decision.recorded`, and a
+   * refresh (or a second window) has to agree with what actually happened,
+   * not with whichever tab last clicked the button.
+   */
+  decision: DecisionSummary | null;
+  choosing: boolean;
+  choose: (runId: string) => Promise<void>;
 };
 
 const readError = async (response: Response): Promise<string> => {
@@ -47,11 +57,23 @@ export const useComparison = (
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const [chosen, setChosen] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState(false);
+  // What this window's own POST answered, kept only until the next fetch of
+  // /compare confirms it — an overlay on the server's own account, not a
+  // replacement for it, so a decision recorded elsewhere still wins on reload.
+  const [justChose, setJustChose] = useState<DecisionSummary | null>(null);
 
   const refresh = useCallback(() => {
     setAttempt((value) => value + 1);
   }, []);
+
+  // Keyed on sessionId alone, deliberately not on every refresh: choosing
+  // triggers its own refresh, and clearing the overlay there would erase the
+  // immediate feedback in the same tick it was set, before the fetch below
+  // has a chance to confirm it from the log.
+  useEffect(() => {
+    setJustChose(null);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -145,13 +167,58 @@ export const useComparison = (
     [endpoint, sessionId, refresh],
   );
 
-  const choose = useCallback((runId: string) => {
-    // Local to this window, deliberately. V1 says the merge is always a human
-    // decision and applying a patch is a separate, permissioned step — so
-    // choosing here records what the host settled on and does not reach into
-    // anybody's repository on its own.
-    setChosen(runId);
-  }, []);
+  const choose = useCallback(
+    async (runId: string) => {
+      if (!sessionId) {
+        return;
+      }
 
-  return { comparison, loading, error, refresh, fork, chosen, choose };
+      setError(null);
+      setChoosing(true);
+
+      try {
+        const response = await fetch(
+          `${endpoint}/sessions/${encodeURIComponent(sessionId)}/decision`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              ...(await authorization()),
+            },
+            body: JSON.stringify({ runId }),
+          },
+        );
+
+        if (!response.ok) {
+          setError(await readError(response));
+
+          return;
+        }
+
+        const body = (await response.json()) as {
+          decision: DecisionSummary;
+        };
+
+        setJustChose(body.decision);
+        refresh();
+      } catch (cause) {
+        setError(`Cannot reach the worker at ${endpoint}.`);
+        console.error(cause);
+      } finally {
+        setChoosing(false);
+      }
+    },
+    [endpoint, sessionId, refresh],
+  );
+
+  return {
+    comparison,
+    loading,
+    error,
+    refresh,
+    fork,
+    decision: justChose ?? comparison?.decision ?? null,
+    choosing,
+    choose,
+  };
 };
