@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { authorization } from "./access.ts";
 import {
   HostCapabilitiesSchema,
+  SessionHistorySchema,
+  type RememberedSession,
   SessionSummarySchema,
   type HostCapabilities,
   type SessionSummary,
@@ -16,7 +18,11 @@ export type SessionState = {
     repositoryPath: string,
     allowWrites: boolean,
     allowCommands: boolean,
+    /** A session id from the log, to bring its timeline back with it. */
+    resume?: string,
   ) => Promise<void>;
+  /** Sessions the log remembers, for the Open screen. */
+  remembered: RememberedSession[];
   /** What the host permits, or null until the worker has answered. */
   capabilities: HostCapabilities | null;
   ask: (goal: string) => Promise<void>;
@@ -44,6 +50,7 @@ export const useSession = (endpoint: string): SessionState => {
   const [capabilities, setCapabilities] = useState<HostCapabilities | null>(
     null,
   );
+  const [remembered, setRemembered] = useState<RememberedSession[]>([]);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,11 +82,38 @@ export const useSession = (endpoint: string): SessionState => {
     };
   }, [endpoint]);
 
+  // Asked once, alongside /health. A list of previous sessions is the only way
+  // back to work done before the last restart.
+  useEffect(() => {
+    let cancelled = false;
+
+    void fetch(`${endpoint}/sessions/history`, { headers: {} })
+      .then(async (response) => {
+        if (!response.ok || cancelled) {
+          return;
+        }
+
+        const parsed = SessionHistorySchema.safeParse(await response.json());
+
+        if (parsed.success) {
+          setRemembered(parsed.data.sessions);
+        }
+      })
+      .catch(() => {
+        // The open screen already reports an unreachable worker.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [endpoint, session]);
+
   const open = useCallback(
     async (
       repositoryPath: string,
       allowWrites: boolean,
       allowCommands: boolean,
+      resume?: string,
     ) => {
       setOpening(true);
       setError(null);
@@ -91,7 +125,12 @@ export const useSession = (endpoint: string): SessionState => {
             "content-type": "application/json",
             ...(await authorization()),
           },
-          body: JSON.stringify({ repositoryPath, allowWrites, allowCommands }),
+          body: JSON.stringify({
+            repositoryPath,
+            allowWrites,
+            allowCommands,
+            ...(resume === undefined ? {} : { resume }),
+          }),
         });
 
         if (!response.ok) {
@@ -142,5 +181,5 @@ export const useSession = (endpoint: string): SessionState => {
     setError(null);
   }, []);
 
-  return { session, capabilities, opening, error, open, ask, close };
+  return { session, capabilities, remembered, opening, error, open, ask, close };
 };

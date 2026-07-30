@@ -268,7 +268,16 @@ export type ToolResult = z.infer<typeof ToolResultSchema>;
 export const SessionSchema = z.object({
   id: IdSchema,
   repositoryPath: z.string().min(1),
-  goal: z.string().min(1),
+  /**
+   * Null until a run gives it one.
+   *
+   * This was a required string, which quietly asserted that a session is
+   * created *for* a goal. It is not: a session is a repository somebody opened,
+   * and goals arrive per run — several of them, over a session that outlives
+   * each. Requiring one here is why `session.created` was never emitted at all,
+   * and why nothing could be restored from the log afterwards.
+   */
+  goal: z.string().min(1).nullable(),
   status: z.enum(["active", "paused", "completed"]),
   createdAt: TimestampSchema,
 });

@@ -836,3 +836,43 @@ kbd {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
+/* Previous sessions. Quiet, because opening a repository is the primary action
+   and this is the shortcut for coming back to one. */
+.open__recent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.open__recent-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.open__recent-row:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.open__recent-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.open__recent-meta {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}

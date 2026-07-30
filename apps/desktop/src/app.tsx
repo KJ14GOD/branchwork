@@ -54,6 +54,7 @@ export const App = () => {
   const {
     session,
     capabilities,
+    remembered,
     opening,
     error: sessionError,
     open,
@@ -224,11 +225,12 @@ export const App = () => {
           <span className="titlebar__mark">Novus</span>
         </header>
         <OpenRepository
-            onOpen={open}
-            opening={opening}
-            error={sessionError}
-            capabilities={capabilities}
-          />
+          onOpen={open}
+          opening={opening}
+          error={sessionError}
+          capabilities={capabilities}
+          remembered={remembered}
+        />
       </div>
     );
   }

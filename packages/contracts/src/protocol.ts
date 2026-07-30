@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const IdSchema = z.string().min(1);
+
 /**
  * The HTTP contract between a Novus client and the local worker.
  *
@@ -21,6 +23,16 @@ export type HostCapabilities = z.infer<typeof HostCapabilitiesSchema>;
 
 export const CreateSessionRequestSchema = z.object({
   repositoryPath: z.string().min(1),
+  /**
+   * Continue a session the log already knows about.
+   *
+   * Reusing its id is what makes the old timeline reappear — a new id would
+   * start an empty stream beside a history nobody can reach. Permissions are
+   * deliberately *not* restored: a session recorded with writes allowed should
+   * not silently regain them, so a resumed session takes the host's current
+   * defaults and the checkboxes still decide.
+   */
+  resume: IdSchema.optional(),
   // Omitted means "use the host's default". Present wins: the operator opening
   // the repository is the host, on a loopback-only API, so the control they are
   // looking at is the authority for that session. If session creation is ever
@@ -115,3 +127,26 @@ export const ComparisonSchema = z.object({
 });
 
 export type Comparison = z.infer<typeof ComparisonSchema>;
+
+/**
+ * A session the log remembers, for the Open screen to offer.
+ *
+ * Durable history that nothing can reach is not really durable — the event log
+ * held every session ever opened and there was no way to get back to one.
+ */
+export const RememberedSessionSchema = z.object({
+  id: z.string().min(1),
+  repositoryPath: z.string().min(1),
+  createdAt: z.string().datetime(),
+  /** How much happened, so an abandoned session is distinguishable from real work. */
+  events: z.number().int().nonnegative(),
+  lastActivityAt: z.string().datetime(),
+});
+
+export type RememberedSession = z.infer<typeof RememberedSessionSchema>;
+
+export const SessionHistorySchema = z.object({
+  sessions: z.array(RememberedSessionSchema),
+});
+
+export type SessionHistory = z.infer<typeof SessionHistorySchema>;

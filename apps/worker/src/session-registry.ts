@@ -105,6 +105,14 @@ export type SessionOptions = {
   repositoryPath: string;
   allowWrites?: boolean | undefined;
   allowCommands?: boolean | undefined;
+  /**
+   * Reuse an id the log already knows, so its timeline comes back.
+   *
+   * Permissions are not taken from the old session — a resumed one gets the
+   * host's current defaults, because a session recorded with writes allowed
+   * should not silently regain them a week later.
+   */
+  resume?: string | undefined;
 };
 
 export type Session = {
@@ -197,6 +205,47 @@ export class SessionRegistry {
     return this.defaults;
   }
 
+  /**
+   * Every session the log remembers, newest activity first.
+   *
+   * Read from the durable log rather than from this registry, which only holds
+   * what the current process opened. The point is to reach a session from
+   * *before* the restart.
+   */
+  remembered(): {
+    id: string;
+    repositoryPath: string;
+    createdAt: string;
+    events: number;
+    lastActivityAt: string;
+  }[] {
+    const remembered = [];
+
+    for (const sessionId of this.eventStore.sessions()) {
+      const events = this.eventStore.readable(sessionId).events;
+      const created = events.find((event) => event.type === "session.created");
+
+      if (created?.type !== "session.created") {
+        // A session with no creation event predates this being recorded. Its
+        // runs are still in the log; there is no repository path to reopen it
+        // with, so it is not offered rather than offered broken.
+        continue;
+      }
+
+      remembered.push({
+        id: sessionId,
+        repositoryPath: created.payload.session.repositoryPath,
+        createdAt: created.payload.session.createdAt,
+        events: events.length,
+        lastActivityAt: events.at(-1)?.occurredAt ?? created.occurredAt,
+      });
+    }
+
+    return remembered.sort((first, second) =>
+      second.lastActivityAt.localeCompare(first.lastActivityAt),
+    );
+  }
+
   /** Called with each new session, so a publisher can attach to one it could not name. */
   onCreated(listener: (session: Session) => void): () => void {
     this.created.add(listener);
@@ -234,7 +283,7 @@ export class SessionRegistry {
     const proposePatchTool = new ProposePatchTool(repositoryPath);
     const repositoryState = await readRepositoryState(repositoryPath);
     const session: Session = {
-      id: crypto.randomUUID(),
+      id: options.resume ?? crypto.randomUUID(),
       repositoryPath,
       repositoryState,
       worktrees: new WorktreeManager(repositoryPath),
@@ -262,6 +311,25 @@ export class SessionRegistry {
         () => readRepositoryBase(repositoryPath),
       ),
     };
+
+    // Recorded, because until now nothing ever wrote this event: the contract
+    // defined it, the renderers drew it, and no code appended one — so the log
+    // held runs belonging to sessions it had no record of, and there was nothing
+    // to restore a session *from*.
+    this.eventStore.append({
+      sessionId: session.id,
+      actorId: "host",
+      type: "session.created",
+      payload: {
+        session: {
+          id: session.id,
+          repositoryPath: session.repositoryPath,
+          goal: null,
+          status: "active",
+          createdAt: session.createdAt,
+        },
+      },
+    });
 
     this.sessions.set(session.id, session);
 

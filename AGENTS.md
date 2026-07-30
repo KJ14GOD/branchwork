@@ -59,6 +59,15 @@ pnpm typecheck && pnpm test && git diff --check
   `NOVUS_RELAY_SESSION`, `NOVUS_RELAY_PUBLISH_TOKEN`, `NOVUS_RELAY_WATCH_TOKEN`.
 - Ports: relay `4400` (`NOVUS_RELAY_PORT`).
 
+## Sessions come back
+
+Opening a session appends `session.created`, which is what makes it findable
+later — the Open screen lists what the log remembers and clicking one resumes
+its id, so the old timeline reappears rather than starting an empty stream
+beside it. Permissions are deliberately not restored: a session recorded with
+writes allowed does not silently regain them, so a resumed session takes the
+host's current defaults and the checkboxes still decide.
+
 ## Invariants
 
 - Every tool call and result crosses the boundary as a schema in `packages/contracts`.

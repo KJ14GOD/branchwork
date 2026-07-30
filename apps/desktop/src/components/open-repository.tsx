@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 
-import type { HostCapabilities } from "@novus/contracts/protocol";
+import type {
+  HostCapabilities,
+  RememberedSession,
+} from "@novus/contracts/protocol";
 
 import { bridge } from "../bridge.ts";
 
@@ -9,12 +12,16 @@ export const OpenRepository = ({
   opening,
   error,
   capabilities,
+  remembered,
 }: {
   onOpen: (
     repositoryPath: string,
     allowWrites: boolean,
     allowCommands: boolean,
+    resume?: string,
   ) => void;
+  /** Sessions the log remembers, newest activity first. */
+  remembered: RememberedSession[];
   opening: boolean;
   error: string | null;
   /** What the host permits, or null until the worker has answered. */
@@ -98,6 +105,32 @@ export const OpenRepository = ({
           {opening ? "Opening…" : "Open"}
         </button>
         {error ? <div className="open__error">{error}</div> : null}
+
+        {remembered.length > 0 ? (
+          <div className="open__recent">
+            <div className="open__label">Carry on with</div>
+            {remembered.slice(0, 6).map((entry) => (
+              <button
+                className="open__recent-row"
+                key={entry.id}
+                type="button"
+                // Resumes the id, which is what brings the old timeline back —
+                // a new one would start an empty stream beside a history nobody
+                // could reach. Permissions come from the checkboxes above, not
+                // from whatever the session had before.
+                onClick={() =>
+                  onOpen(entry.repositoryPath, allowWrites, allowCommands, entry.id)
+                }
+                title={`${entry.events} events · last active ${entry.lastActivityAt}`}
+              >
+                <span className="open__recent-path">{entry.repositoryPath}</span>
+                <span className="open__recent-meta">
+                  {entry.events} event{entry.events === 1 ? "" : "s"}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </form>
     </div>
   );

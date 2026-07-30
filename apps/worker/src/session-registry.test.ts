@@ -32,9 +32,28 @@ class RejectingModelAdapter implements ModelAdapter {
   }
 }
 
-/** A log that refuses every append, the way a full disk does. */
+/**
+ * A log that works once and then refuses, the way a filling disk does.
+ *
+ * Refusing *every* append would fail at `create`, which now records
+ * session.created — and that is correct behaviour rather than a problem: a
+ * session whose creation could not be logged does not exist as far as history is
+ * concerned, and failing at the boundary beats failing midway. But the case
+ * under test here is a log that breaks partway through a session, which is both
+ * what a full disk actually looks like and the harder thing to handle.
+ */
 class UnwritableEventStore extends InMemorySessionEventStore {
-  override append(): never {
+  private allowed = 1;
+
+  override append(
+    ...args: Parameters<InMemorySessionEventStore["append"]>
+  ): ReturnType<InMemorySessionEventStore["append"]> {
+    if (this.allowed > 0) {
+      this.allowed -= 1;
+
+      return super.append(...args);
+    }
+
     throw new Error("SQLITE_FULL: database or disk is full");
   }
 }
@@ -79,11 +98,15 @@ test("tells the session when a turn throws instead of only the host", async () =
 
   assert.deepEqual(
     events.map((event) => event.type),
-    ["run.started", "run.progress", "run.failed"],
+    // session.created leads now: opening a session is recorded, which is what
+    // makes it findable again after a restart.
+    ["session.created", "run.started", "run.progress", "run.failed"],
   );
 
   const failure = events.at(-1);
-  const started = events.at(0);
+  // Found by type rather than by position. The first event is session.created
+  // now, and an index was always the wrong way to ask for "the run that started".
+  const started = events.find((event) => event.type === "run.started");
 
   assert.ok(failure && failure.type === "run.failed");
   assert.ok(started && started.type === "run.started");
@@ -144,7 +167,13 @@ test("does not invent a run to fail when none was ever started", async () => {
     errors.restore();
   }
 
-  assert.deepEqual(eventStore.list(session.id), []);
+  // session.created is there, and nothing else. The point of this test is that
+  // no run.failed was invented for a run that never started — not that the log
+  // is empty, which it no longer is now that opening a session is recorded.
+  assert.deepEqual(
+    eventStore.list(session.id).map((event) => event.type),
+    ["session.created"],
+  );
   assert.match(errors.lines[0] ?? "", /No model adapter is configured/);
   assert.equal(errors.lines.length, 1);
 
@@ -193,4 +222,88 @@ test("a repository with a commit is ready", async () => {
   const session = await registryFor().create({ repositoryPath: directory });
 
   assert.equal(session.repositoryState, "ready");
+});
+
+test("opening a session is recorded, so it can be found again later", async () => {
+  const repositoryPath = await mkdtemp(join(tmpdir(), "novus-remember-"));
+  const eventStore = new InMemorySessionEventStore();
+  const registry = new SessionRegistry(
+    eventStore,
+    new FixedModelRouter(selection),
+    [new RejectingModelAdapter()],
+  );
+
+  const session = await registry.create({ repositoryPath });
+
+  // The contract defined session.created and the renderers drew it, and nothing
+  // ever appended one — so the log held runs belonging to sessions it had no
+  // record of, and there was nothing to restore a session from.
+  const created = eventStore
+    .list(session.id)
+    .find((event) => event.type === "session.created");
+
+  assert.ok(created, "opening a session recorded nothing");
+
+  if (created?.type === "session.created") {
+    assert.equal(created.payload.session.repositoryPath, session.repositoryPath);
+    // Null rather than a placeholder: a session is a repository somebody
+    // opened, and goals belong to the runs inside it.
+    assert.equal(created.payload.session.goal, null);
+  }
+});
+
+test("a remembered session can be resumed onto its own timeline", async () => {
+  const repositoryPath = await mkdtemp(join(tmpdir(), "novus-resume-"));
+  const eventStore = new InMemorySessionEventStore();
+  const registry = new SessionRegistry(
+    eventStore,
+    new FixedModelRouter(selection),
+    [new RejectingModelAdapter()],
+  );
+
+  const first = await registry.create({ repositoryPath });
+  const remembered = registry.remembered();
+
+  assert.equal(remembered.length, 1);
+  // Compared against the session's own path, not the one mkdtemp handed back:
+  // macOS symlinks /var to /private/var and the registry resolves it, so the
+  // two differ by a prefix that has nothing to do with what is being tested.
+  assert.equal(remembered[0]?.repositoryPath, first.repositoryPath);
+
+  // A fresh id would start an empty stream beside a history nobody could reach,
+  // which is the whole failure this fixes.
+  const resumed = await registry.create({ repositoryPath, resume: first.id });
+
+  assert.equal(resumed.id, first.id);
+  assert.equal(
+    eventStore.list(first.id).filter((event) => event.type === "session.created")
+      .length,
+    2,
+    "resuming should append its own creation event, not overwrite the first",
+  );
+});
+
+test("permissions are not restored with a resumed session", async () => {
+  const repositoryPath = await mkdtemp(join(tmpdir(), "novus-perms-"));
+  const registry = new SessionRegistry(
+    new InMemorySessionEventStore(),
+    new FixedModelRouter(selection),
+    [new RejectingModelAdapter()],
+    { allowWrites: false, allowCommands: false },
+  );
+
+  const permissive = await registry.create({
+    repositoryPath,
+    allowWrites: true,
+    allowCommands: true,
+  });
+  const resumed = await registry.create({
+    repositoryPath,
+    resume: permissive.id,
+  });
+
+  // A session recorded with writes allowed must not silently regain them a week
+  // later. Resuming brings the timeline back, never the authority.
+  assert.equal(resumed.allowWrites, false);
+  assert.equal(resumed.allowCommands, false);
 });

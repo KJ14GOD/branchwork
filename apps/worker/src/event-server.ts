@@ -217,6 +217,14 @@ export const startEventServer = (
       return false;
     }
 
+    if (pathname === "/sessions/history" && request.method === "GET") {
+      // Everything the log remembers, including sessions this process never
+      // opened. Durable history nothing can reach is not really durable.
+      sendJson(response, 200, { sessions: sessions.remembered() });
+
+      return true;
+    }
+
     if (pathname === "/sessions" && request.method === "GET") {
       sendJson(response, 200, { sessions: sessions.list().map(describe) });
       return true;
