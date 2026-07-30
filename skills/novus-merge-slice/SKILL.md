@@ -10,17 +10,29 @@ down. Stopping after the merge leaves worktrees that quietly rot.
 
 ## Before anything, know who owns the contract
 
-`packages/contracts/src/contracts.ts` is the bottleneck: every capability
-touches it, and two slices editing it will conflict in a way the type checker
-cannot warn about ahead of time.
+`packages/contracts` is the bottleneck: every capability touches it, and two
+slices editing it will conflict in a way the type checker cannot warn about
+ahead of time. A `PreToolUse` hook (`scripts/contract-guard.sh`) already
+refuses an edit under `packages/contracts` when another worktree holds the
+lock, so a blocked edit here is not a bug to work around — it means a slice is
+still using it.
 
 ```bash
-git diff main...fleet/<slice> --name-only | grep packages/contracts
+./scripts/contract-lock.sh status
 ```
 
-If more than one open slice touches it, **merge the contract-owning slice
-first**, then rebase the others onto the new main before continuing. Do not
-merge two contract-editing slices back to back and hope.
+If it is held, **merge the contract-owning slice first**, then rebase the
+others onto the new main before continuing. Do not merge two contract-editing
+slices back to back and hope. Once the merge lands, release it from the slice
+that held it (or `force-release` only if that slice is actually gone):
+
+```bash
+./scripts/contract-lock.sh release
+```
+
+A slice that never touched `packages/contracts` never needs the lock at all —
+check with `git diff main...fleet/<slice> --name-only | grep packages/contracts`
+first if it is unclear whether this section even applies.
 
 ## Verify in the worktree, not in main
 

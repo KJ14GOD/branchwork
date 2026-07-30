@@ -22,49 +22,64 @@ with no meaningful shared control is also not V1.
 
 ## Where we actually are
 
-Updated 2026-07-29. Keep this honest; it is the section that decides what gets
+Updated 2026-07-30. Keep this honest; it is the section that decides what gets
 built next.
 
-**We are at capable-private-agent, which is the second failure above.** The
-harness half is real: a typed agent loop with a step ceiling and a failure
-budget, four tools, a propose-then-apply patch flow where proposing writes
-nothing and applying refuses a file that drifted, path confinement that survives
-symlinks, deny-by-default permissions, and an event stream the desktop renders
-live. The multiplayer half is a 54-line in-memory event store.
+**Both halves are now real, and the gap between them has closed a lot — but
+not all the way.** The harness half: a typed agent loop with a budget in place
+of a step ceiling, nine tools including command execution and Git, a
+propose-then-apply patch flow, path confinement that survives symlinks,
+deny-by-default permissions, and an event stream three surfaces render live
+(desktop, guest, and a relay in between). The multiplayer half: a real
+SQLite-backed event store behind an HTTP+SSE worker, a separate WebSocket relay
+process a teammate off the host machine can watch through, an invite endpoint
+that mints a role-scoped token the worker never re-issues, a direction endpoint
+a running turn folds in at its next boundary, and both now reachable from the
+desktop UI rather than curl only. Fork and compare exist too: checkpoints cut
+real Git worktrees, isolated attempts run without touching each other or the
+parent's index, and the compare screen shows them side by side.
 
-`apps/guest` is no longer empty: a browser client reads the same ordered log the
-desktop reads, resumes by sequence after a drop, and names which failure it is
-looking at instead of showing a blank timeline. It is one viewer, though, not
-multiplayer — it talks straight to the worker over loopback because the session
-service in the architecture below does not exist. No invite, no authentication,
-no presence, no roles, and nothing a guest can do but watch.
+What is still missing, plainly:
 
-That asymmetry is the risk this document exists to prevent, and it grows on its
-own: harness work is legible and satisfying, so it keeps getting picked up while
-the shared-control half stays theoretical. Three concrete rules follow from it.
+- **Choosing an attempt does nothing yet.** The compare screen's "Choose"
+  button sets local UI state only — no decision is recorded to the log, and no
+  patch is applied anywhere. Milestone 4's exit condition needs a chosen
+  attempt to actually land; right now it just highlights a row.
+- **Pause, resume, cancel, and handoff do not exist.** A session runs to
+  completion or it errors; nobody can stop one in flight, and ownership cannot
+  move from one participant to another.
+- **Presence is historical, not live.** `participant.joined` lands in the
+  timeline, but nothing shows who is watching right now versus who joined once
+  and left.
+- **The renderer has no test coverage.** Every hook in `apps/desktop/src` and
+  `apps/guest/src` is unverified by anything but hand-testing — worker logic is
+  extensively tested, the React layer that calls it is not. That gap is exactly
+  how a real bug (the Open screen's session history silently failing because
+  its fetch carried no auth token) shipped and sat unnoticed.
+- **No packaging.** There is no signed macOS build, so "the complete demo works
+  repeatedly on a clean machine" — Milestone 5's exit condition — has not been
+  attempted on a machine that isn't a developer's.
+
+Three earlier failure modes, closed:
 
 - ~~**The agent cannot yet verify its own work.**~~ Fixed 2026-07-29:
   `run_command` and `run_tests` exist, are `dangerous` class, and are opted into
-  with `NOVUS_ALLOW_COMMANDS=1`. Milestone 2's exit condition now turns on the
-  receipt alone.
-- ~~**Events do not survive a restart.**~~ Fixed 2026-07-29: the log is SQLite
-  now, at `.novus/events.db` or wherever `NOVUS_DB` points, and a fresh store
-  over the same file replays the same ordered events with the same per-session
-  sequence numbers. What still does not survive a restart is the *session* — the
-  worker does not read prior sessions back on start-up, so the history is
-  durable and nothing yet reopens it. That reader is Milestone 4's to build.
-- ~~**Nothing has ever been benchmarked.**~~ Fixed 2026-07-29: the bug-fix task
-  under *Evaluation* now exists as a fixture, a runner, and a scorer, and it has
-  been run against the real model once. It passed. That is the harness half
-  moving from asserted to measured, and it does not move the multiplayer half at
-  all — the other two evaluation tasks are unwritten, and the shared and forked
-  run configurations the same section asks for cannot be run until Milestones 3
-  and 4 exist. See Milestone 2's exit condition for exactly what the one run
-  does and does not establish.
+  with `NOVUS_ALLOW_COMMANDS=1`.
+- ~~**Events do not survive a restart.**~~ Fixed 2026-07-29 for the log, and
+  2026-07-30 for the *session*: the worker reads prior sessions back from SQLite
+  on every request to `/sessions/history`, and the desktop's Open screen now
+  sends the token that route requires, so "Carry on with" actually shows what
+  the log remembers instead of coming back empty.
+- ~~**Nothing has ever been benchmarked.**~~ Fixed 2026-07-29: all three
+  Evaluation tasks — bug fix, small feature, repository reasoning — exist as
+  fixtures and have each passed against the real model once. See *Benchmark
+  results*.
 
 Before starting anything from the roadmap in `README.md`, check it against this
-section. Work that widens the harness while multiplayer stays at 54 lines is
-moving away from V1, however good the work is.
+section. Multiplayer is no longer the thin half, so the risk this document used
+to guard against has moved: what is thin now is *closing the loop* a shared
+session opens — apply, handoff, presence — not standing the transport up in the
+first place.
 
 ## Benchmark results
 
@@ -483,14 +498,17 @@ at the top of this document.
 ### Milestone 1 — foundation
 
 - [x] Workspace and package structure
-- [ ] Desktop window and browser guest shell — desktop done, guest is an empty package
+- [x] Desktop window and browser guest shell — both real; the guest resumes by
+      sequence after a drop and names the failure it hit instead of a blank screen
 - [x] Shared contracts package
 - [x] Electron renderer/main/preload/worker boundaries
-- [ ] Local SQLite event store — still an in-memory array
+- [x] Local SQLite event store — `node:sqlite`, WAL, at `.novus/events.db`
 - [x] Session and event schemas
 
 Exit condition: a fake worker event appears identically in the host and guest UI.
-**Not met:** there is no guest to show it in, and nothing survives a restart.
+**Met.** `reconnect.test.ts` drives this over a real SSE socket rather than
+asserting a handler was called. What Milestone 1 did not include — a session
+surviving a restart, not just its events — is now also true, fixed 2026-07-30.
 
 ### Milestone 2 — real single-agent harness
 
@@ -536,13 +554,16 @@ the hidden test.
 What this does not establish. One run is an existence proof, not a rate: nothing
 here says how often the agent succeeds, and the fixture is one small
 single-file bug rather than a repository anyone works in. The other two tasks
-under *Evaluation* — small feature, repository reasoning — do not exist. Nor do
-two of the three run configurations that section asks for; a shared run with a
-human intervention and two forked attempts compared are Milestone 3 and 4 work,
-so what has been measured is the private leg alone. The deterministic variant
-runs in the gate and keeps the *harness* path proven without a provider call,
-but it proves the harness carries a fix, not that a model finds one, and no
-count of green gates substitutes for the live run above.
+under *Evaluation* — small feature, repository reasoning — now exist and have
+each passed against the real model once too; see *Benchmark results* below for
+what they actually tested. Two of the three run configurations that section
+asks for still have not run, though: a shared run with a human intervention and
+two forked attempts compared need Milestone 3's and 4's transport and worktree
+work respectively, both of which now exist but have not yet been pointed at the
+Evaluation grid. What has been measured is the private leg, three times. The
+deterministic variant runs in the gate and keeps the *harness* path proven
+without a provider call, but it proves the harness carries a fix, not that a
+model finds one, and no count of green gates substitutes for a live run.
 
 The receipt reports files it *patched*. A run that writes through `run_command` —
 codegen, a formatter — changes files the receipt does not list, and the
@@ -559,49 +580,77 @@ with.
 
 ### Milestone 3 — multiplayer control
 
-Nothing here is started beyond an in-memory store with the right shape. This is
-the half that decides whether Novus is Novus.
+This is the half that decides whether Novus is Novus, and most of it is real
+now.
 
-- [~] Session service — 54 lines, in-process, no transport
-- [ ] Invite links
-- [ ] Presence and roles
-- [ ] Ordered event replication
-- [ ] Direction queue
+- [x] Session service — SQLite-backed event store behind the worker's HTTP+SSE
+      routes, plus a standalone WebSocket relay (`apps/session-service`) for a
+      teammate off the host machine
+- [x] Invite links — `POST /sessions/:id/invite` mints a one-time,
+      role-scoped token; reachable from the desktop UI, not curl only
+- [~] Presence and roles — roles are real (owner/editor/reviewer/viewer,
+      enforced per-route by capability); presence is a `participant.joined`
+      event in the timeline, not a live "who's here now" indicator
+- [x] Ordered event replication — the relay and the worker both replay by
+      sequence; a client that drops and returns holds the same log as one that
+      never left
+- [x] Direction queue — `POST /sessions/:id/direction` records
+      `direction.submitted` for the runtime to fold in at its next turn
+      boundary; has a UI box now, not curl only
 - [x] Approvals — the gate and the tool classes exist and are enforced
-- [ ] Pause, resume, cancel, and handoff
+- [ ] Pause, resume, cancel, and handoff — genuinely unbuilt. Ownership cannot
+      move, and nothing can stop a run in flight.
 
 Exit condition: a remote teammate joins an active run, supplies direction, and
-reviews the resulting evidence.
+reviews the resulting evidence. **Met** for that path specifically — join,
+direct, review all work end to end. Not met for anything that requires
+pause/cancel/handoff, which is the next honest gap in this milestone.
 
 ### Milestone 4 — fork and compare
 
-Not started. Note that `scripts/fleet.sh` already runs several agents in
-parallel worktrees for building Novus — that is the developer workflow described
-in `FLEET.md`, not the product feature, but it is a working reference for the
-worktree manager this milestone needs.
+The isolation half is built and tested hard — worktree lifecycle, checkpoint
+correctness, and cross-attempt isolation each have their own adversarial tests
+(uncommitted work surviving a fork, an aggressive prune not breaking a
+checkpoint's base, teardown removing the worktree *and* the branch *and* Git's
+record of both). The decision half is not built at all.
 
-- [ ] Checkpoint creation
-- [ ] Git worktree manager
-- [ ] Isolated child runs
-- [ ] Side-by-side comparison
-- [ ] Human decision record
-- [ ] Apply selected patch
+- [x] Checkpoint creation
+- [x] Git worktree manager
+- [x] Isolated child runs — proven: writes in one fork are invisible in the
+      other and in the parent
+- [x] Side-by-side comparison — `compare.ts` plus a real compare screen in the
+      desktop UI, with a working "Fork an attempt" flow
+- [ ] Human decision record — **not built.** The compare screen's "Choose"
+      button is local UI state (`useComparison`'s `choose()` calls `setChosen`
+      and nothing else); no event is appended when a host picks a winner.
+- [ ] Apply selected patch — **not built.** Nothing takes a chosen attempt's
+      diff and applies it to the parent's working tree. Choosing today changes
+      what is highlighted on screen and nothing in any repository.
 
 Exit condition: two attempts run from the same checkpoint without interfering,
-and the selected result applies cleanly.
+and the selected result applies cleanly. **Half met** — the non-interference
+half is proven by tests; the apply half does not exist yet.
 
 ### Milestone 5 — hardening
 
-- Reconnect and resume
-- Crash recovery
-- Secret redaction
-- Authorization tests
-- Event replay tests
-- Multi-client end-to-end tests
-- Packaging and signed macOS build
+- [x] Reconnect and resume — `reconnect.test.ts`, over a real socket
+- [x] Crash recovery — `replay.test.ts` and `session-registry.test.ts` simulate
+      a store that fails mid-write, the way a full disk actually does
+- [x] Secret redaction — `redaction.test.ts`
+- [x] Authorization tests — `access.test.ts`
+- [x] Event replay tests — `replay.test.ts`
+- [x] Multi-client end-to-end tests — also `reconnect.test.ts`; it drives two
+      clients against one real store over one real socket
+- [ ] Packaging and signed macOS build — not started. No `electron-builder` or
+      `electron-forge` config exists yet, no entitlements, no notarization.
 
 Exit condition: the complete demo works repeatedly on a clean machine and survives
-a host UI restart without losing session history.
+a host UI restart without losing session history. **Not met** — every item
+above is unit- and integration-tested on a developer machine, but until
+2026-07-30 the actual restart-and-resume path was silently broken in the
+desktop UI (see *Where we actually are*), so the exit condition as stated —
+tested on a clean machine, repeatedly — has not been attempted even now that
+the bug is fixed. Packaging alone blocks "a clean machine" outright.
 
 ## Fast implementation timeline
 
