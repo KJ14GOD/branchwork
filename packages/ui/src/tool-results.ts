@@ -129,4 +129,6 @@ export const summariseToolResult = (result: SummarisableToolResult): string =>
                 : `${result.output.files.length} file${result.output.files.length === 1 ? "" : "s"} dirty`
             : result.name === "git_diff"
               ? `${result.output.filesChanged} file${result.output.filesChanged === 1 ? "" : "s"} in diff`
-              : result.output.command;
+              : result.name === "list_provider_models"
+                ? `${result.output.models.length} model id${result.output.models.length === 1 ? "" : "s"} from ${result.output.provider}`
+                : result.output.command;

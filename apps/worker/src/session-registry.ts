@@ -22,11 +22,13 @@ import {
   GitDiffTool,
   GitStatusTool,
   ListDirectoryTool,
+  ListProviderModelsTool,
   ProposePatchTool,
   ReadFileTool,
   RunCommandTool,
   RunTestsTool,
   SearchRepositoryTool,
+  type AgentTool,
 } from "./tools.ts";
 
 const run = promisify(execFile);
@@ -282,6 +284,25 @@ export class SessionRegistry {
     const allowCommands = options.allowCommands ?? this.defaults.allowCommands;
     const proposePatchTool = new ProposePatchTool(repositoryPath);
     const repositoryState = await readRepositoryState(repositoryPath);
+
+    // Only an adapter with a provider behind it can answer which model ids
+    // exist, so the tool appears exactly when the session's adapter can. A
+    // scripted session simply does not have it, rather than having a tool
+    // that fails.
+    const selection = this.router.select({ goal: "" });
+    const adapter = this.adapters.find(
+      (candidate) =>
+        candidate.selection.provider === selection.provider &&
+        candidate.selection.model === selection.model,
+    );
+    const providerTools: AgentTool[] =
+      adapter?.listModels !== undefined
+        ? [
+            new ListProviderModelsTool(selection.provider, () =>
+              adapter.listModels!(),
+            ),
+          ]
+        : [];
     const session: Session = {
       id: options.resume ?? crypto.randomUUID(),
       repositoryPath,
@@ -306,6 +327,7 @@ export class SessionRegistry {
           new ListDirectoryTool(repositoryPath),
           new GitStatusTool(repositoryPath),
           new GitDiffTool(repositoryPath),
+          ...providerTools,
         ],
         buildApprovalGate(allowWrites, allowCommands),
         () => readRepositoryBase(repositoryPath),

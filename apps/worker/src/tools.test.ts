@@ -4,7 +4,11 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { RunCommandTool, RunTestsTool } from "./tools.ts";
+import {
+  ListProviderModelsTool,
+  RunCommandTool,
+  RunTestsTool,
+} from "./tools.ts";
 
 const temporaryRepository = async (): Promise<string> =>
   mkdtemp(join(tmpdir(), "novus-tools-"));
@@ -283,4 +287,28 @@ test("run_tests explains itself when there is no package.json at all", async () 
       }),
     /no package.json/,
   );
+});
+
+test("list_provider_models reports what the provider says, as a contract result", async () => {
+  // The tool exists because a run judged a model id it found in a repository
+  // against its own training data and got it wrong — the provider is the only
+  // authority on which ids it serves, and until this tool nothing in the tool
+  // set could ask. The fetcher is injected so the tool layer never learns
+  // which provider it is talking to.
+  const tool = new ListProviderModelsTool("anthropic", async () => [
+    "claude-opus-5",
+    "claude-opus-4-8",
+  ]);
+
+  const result = await tool.execute({
+    id: "14",
+    name: "list_provider_models",
+    input: {},
+  });
+
+  assert.equal(result.name, "list_provider_models");
+  if (result.name !== "list_provider_models") return;
+
+  assert.equal(result.output.provider, "anthropic");
+  assert.deepEqual(result.output.models, ["claude-opus-5", "claude-opus-4-8"]);
 });

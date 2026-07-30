@@ -117,6 +117,15 @@ export class TransientModelError extends Error {
 export interface ModelAdapter {
   readonly selection: ModelSelection;
   complete(request: ModelRequest): Promise<ModelResponse>;
+  /**
+   * Which model ids this adapter's provider currently serves, if it can say.
+   *
+   * Optional because a scripted adapter has no provider to ask. When present,
+   * the session gains the list_provider_models tool, which exists so the agent
+   * can check a model id against the provider instead of judging it from
+   * training data that may predate it.
+   */
+  listModels?(): Promise<string[]>;
 }
 
 export interface ModelRouter {

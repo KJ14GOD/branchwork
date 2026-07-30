@@ -207,6 +207,18 @@ const GIT_STATUS_TOOL = {
   },
 };
 
+const LIST_PROVIDER_MODELS_TOOL = {
+  name: "list_provider_models",
+  description:
+    "List the model ids the configured provider currently serves. Use this before claiming that a model id found in the repository is invalid, outdated, or a typo — ids newer than your training data are real.",
+  input_schema: {
+    type: "object" as const,
+    properties: {},
+    required: [],
+    additionalProperties: false,
+  },
+};
+
 const GIT_DIFF_TOOL = {
   name: "git_diff",
   description:
@@ -560,6 +572,16 @@ export class AnthropicModelAdapter implements ModelAdapter {
     return responseFromMessage(message);
   }
 
+  async listModels(): Promise<string[]> {
+    const models: string[] = [];
+
+    for await (const model of this.client.models.list()) {
+      models.push(model.id);
+    }
+
+    return models;
+  }
+
   private createMessage(request: ModelRequest) {
     return this.client.messages.create({
       // Each call's prompt is very nearly the previous call's prompt with one
@@ -596,6 +618,7 @@ export class AnthropicModelAdapter implements ModelAdapter {
         LIST_DIRECTORY_TOOL,
         GIT_STATUS_TOOL,
         GIT_DIFF_TOOL,
+        LIST_PROVIDER_MODELS_TOOL,
       ],
       tool_choice: {
         type: "auto",
