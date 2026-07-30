@@ -120,14 +120,16 @@ test("older tool results are not resent in full", () => {
       }),
     ).length;
 
-  const two = sizeOf(2);
-  const twenty = sizeOf(20);
+  // Twelve reads already overfill the verbatim budget; forty is over three
+  // times that. Everything past the budget must arrive as a stub of a hundred
+  // or so characters, so the marginal cost of a read the budget cannot hold is
+  // the stub, not the payload — that flatness is what elision is.
+  const twelve = sizeOf(12);
+  const forty = sizeOf(40);
 
-  // Ten times the reads. Without elision that is ten times the payload; with it,
-  // only the verbatim tail counts, so the growth is a fraction of that.
   assert.ok(
-    twenty < two * 3,
-    `twenty reads sent ${twenty} characters against ${two} for two — history is still growing with the run`,
+    forty - twelve < 20_000,
+    `forty reads sent ${forty} characters against ${twelve} for twelve — history is still growing with the run`,
   );
 
   const elided = JSON.stringify(
@@ -203,7 +205,7 @@ test("a result too large for the whole budget still shows the model its head", (
     result: {
       toolCallId: id,
       name: "read_file" as const,
-      output: { path: ".cache/all.json", content: "x".repeat(150_000) },
+      output: { path: ".cache/all.json", content: "x".repeat(250_000) },
     },
   });
 

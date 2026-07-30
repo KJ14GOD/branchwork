@@ -250,8 +250,16 @@ const GIT_DIFF_TOOL = {
  * many characters, then elide older ones. A broad, shallow run — many small
  * reads — mostly fits inside the budget and stays whole; a narrow run that
  * keeps re-reading one huge file is still capped.
+ *
+ * The number has to fit a real task's working set, or the window rotates: at
+ * 100k, tracing this repository's own tool-call flow needed ~150k characters
+ * of sources held at once, so every re-read of an elided file evicted a file
+ * still in use, which invited the next re-read — 44 calls and 1.7M tokens of
+ * bounded thrash without reaching an answer. 200k holds that working set
+ * whole with headroom, and costs input tokens only when a run has actually
+ * read that much.
  */
-const VERBATIM_BUDGET_CHARS = 100_000;
+const VERBATIM_BUDGET_CHARS = 200_000;
 const ELIDE_OVER_CHARS = 2_000;
 
 /**

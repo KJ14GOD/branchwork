@@ -1,0 +1,1 @@
+../../../skills/novus-agent-quality/SKILL.md

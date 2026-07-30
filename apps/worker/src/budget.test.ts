@@ -67,20 +67,21 @@ test("re-reading the same thing stops a run while it is still cheap", () => {
   // stayed at zero, and the token and wall-clock ceilings are sized for a
   // hard afternoon of real work, not for noticing a loop. Identical reads are
   // the behavioural signature of that loop — a read is a pure function of the
-  // repository, so the fifth identical answer proves the model is not
+  // repository, so the eighth identical answer proves the model is not
   // absorbing what it already has.
-  const usage = { ...fresh(), identicalReads: 5, totalTokens: 40_000 };
+  const usage = { ...fresh(), identicalReads: 8, totalTokens: 40_000 };
   const reason = budgetExhausted(DEFAULT_RUN_BUDGET, usage, usage.startedAt);
 
   assert.match(reason ?? "", /re-reading/);
 });
 
 test("a healthy run's elision-driven re-reads never trip the read ceiling", () => {
-  // A broad trace of this repository legitimately read two files twice: they
-  // scrolled out of the verbatim window and the elision stub invited the
-  // re-read. The ceiling has to sit far above what elision can explain, or it
-  // becomes a step ceiling that punishes exactly the recovery it suggested.
-  const usage = { ...fresh(), identicalReads: 2 };
+  // A broad trace of this repository legitimately read one file four times:
+  // its working set overflowed the verbatim window, so files kept scrolling
+  // out and the elision stub kept inviting the re-read. The ceiling has to
+  // sit well above what elision can explain, or it becomes a step ceiling
+  // that punishes exactly the recovery it suggested.
+  const usage = { ...fresh(), identicalReads: 4 };
 
   assert.equal(
     budgetExhausted(DEFAULT_RUN_BUDGET, usage, usage.startedAt),

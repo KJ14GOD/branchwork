@@ -916,8 +916,8 @@ test("a run re-reading the same file forever is stopped while it is cheap", asyn
       assert.match(failed.payload.reason, /re-reading/);
     }
 
-    // Five identical reads, not five hundred model calls.
-    assert.equal(asked, 5, "the loop was not stopped at the read ceiling");
+    // Eight identical reads, not five hundred model calls.
+    assert.equal(asked, 8, "the loop was not stopped at the read ceiling");
     // The receipt still exists, because a stopped run is still a run someone
     // has to be able to account for.
     assert.ok(result.events.some((event) => event.type === "receipt.created"));

@@ -54,9 +54,11 @@ export type RunBudget = {
    *
    * Not set to catch the first re-read, because a legitimate one exists:
    * elision invites the model to re-read a file that scrolled out of the
-   * verbatim window, and a healthy broad run has been observed re-reading a
-   * file twice for exactly that reason. Five is far past what elision can
-   * explain and far below what a livelock produces.
+   * verbatim window, and when a task's working set overflows that window the
+   * invitations repeat — a healthy, convergent trace of this repository was
+   * observed re-reading one file four times that way. Eight is twice the
+   * worst legitimate count observed and far below what a livelock produces,
+   * which is dozens.
    */
   identicalReads: number;
 };
@@ -66,7 +68,7 @@ export const DEFAULT_RUN_BUDGET: RunBudget = {
   wallClockMs: 30 * 60 * 1000,
   consecutiveFailures: 3,
   maxModelCalls: 500,
-  identicalReads: 5,
+  identicalReads: 8,
 };
 
 export type BudgetUsage = {

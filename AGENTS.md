@@ -101,3 +101,5 @@ into `.claude/skills/` so both harnesses load the same file.
 - `novus-run-app` — launching the app or the worker, and proving it came up.
 - `novus-merge-slice` — landing a finished parallel slice back into main.
 - `novus-finish-run` — commit and push.
+- `novus-agent-quality` — stress-testing the loop for livelocks and for
+  confidently wrong conclusions, and what to re-test when it changes.
