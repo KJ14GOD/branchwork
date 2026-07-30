@@ -195,29 +195,46 @@ console.log(
 const relayUrl = process.env.NOVUS_RELAY_URL?.trim();
 const relayToken = process.env.NOVUS_RELAY_TOKEN?.trim();
 
-const relaySession = process.env.NOVUS_RELAY_SESSION?.trim();
+if (relayUrl && relayToken) {
+  // Attached when a session appears rather than configured with one. A session
+  // id is a runtime UUID, so nobody can put it in the environment before the
+  // session it names exists — asking them to was the reason this could not be
+  // run at all.
+  //
+  // The first session gets the relay, because one token authorises one session.
+  // A second one stays local and says so, rather than being published under a
+  // token that does not describe it.
+  let publisher: ReturnType<typeof publishToRelay> | null = null;
 
-if (relayUrl && relayToken && relaySession) {
-  const publisher = publishToRelay(eventStore, {
-    url: relayUrl,
-    token: relayToken,
-    // One session per publisher, because one token authorises one session. A
-    // worker hosting several would otherwise send all of them under the same
-    // token and the relay would file them under whichever one it names.
-    sessionId: relaySession,
+  sessions.onCreated((session) => {
+    if (publisher !== null) {
+      console.error(
+        `relay   session ${session.id} is not being shared: this relay token is already carrying another. Start a second relay for it.`,
+      );
+
+      return;
+    }
+
+    publisher = publishToRelay(eventStore, {
+      url: relayUrl,
+      token: relayToken,
+      sessionId: session.id,
     // Its own redaction, on its own path. Every outbound route does this rather
     // than trusting that some earlier one did.
-    redactor: createRedactor({
-      environment: process.env,
-      knownSecrets: [accessToken, relayToken],
-    }),
+      redactor: createRedactor({
+        environment: process.env,
+        knownSecrets: [accessToken, relayToken],
+      }),
+    });
+
+    console.log(`relay   sharing session ${session.id} to ${relayUrl}`);
   });
 
-  console.log(`relay   publishing session ${relaySession} to ${relayUrl}`);
+  console.log(`relay   ready to share the first session with ${relayUrl}`);
 
   // The drop count is only useful if something can read it.
   process.on("exit", () => {
-    if (publisher.dropped() > 0) {
+    if (publisher !== null && publisher.dropped() > 0) {
       console.error(
         `relay   ${publisher.dropped()} event(s) never reached the relay; the shared copy is short by that many`,
       );
@@ -228,9 +245,9 @@ if (relayUrl && relayToken && relaySession) {
   console.log(
     `invite  http://127.0.0.1:${guestPort}/?relay=${encodeURIComponent(relayUrl)}&token=<their token from POST /sessions/:id/invite>`,
   );
-} else if (relayUrl || relayToken || relaySession) {
+} else if (relayUrl || relayToken) {
   console.error(
-    "relay   NOVUS_RELAY_URL, NOVUS_RELAY_TOKEN and NOVUS_RELAY_SESSION must all be set; publishing is off",
+    "relay   NOVUS_RELAY_URL and NOVUS_RELAY_TOKEN must both be set; sharing is off",
   );
 }
 

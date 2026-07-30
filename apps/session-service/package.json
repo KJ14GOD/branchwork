@@ -8,6 +8,7 @@
     ".": "./src/session-service.ts"
   },
   "scripts": {
+    "start": "node --experimental-strip-types src/serve.ts",
     "test": "node --experimental-strip-types --test 'src/*.test.ts'",
     "typecheck": "tsc --project tsconfig.json"
   },

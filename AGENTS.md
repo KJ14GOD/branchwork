@@ -42,13 +42,22 @@ pnpm typecheck && pnpm test && git diff --check
   gets a 401. A relay off this machine must be `wss://`.
 - Ports: worker `4319` (`NOVUS_PORT`), desktop Vite `5273`, guest Vite `5274`. All
   loopback-only.
-- **Relay publishing is opt-in and outbound.** Set both `NOVUS_RELAY_URL` and
-  `NOVUS_RELAY_TOKEN` and the worker pushes its redacted events to the session
-  service; set neither and Novus is the single-machine harness it was. Nothing
-  ever dials in to the worker.
+- **Relay publishing is opt-in and outbound.** `pnpm --filter
+  @novus/session-service start` runs the relay and prints the two commands you
+  need — it mints a publish token and a watch token and shows the guest URL. Set
+  `NOVUS_RELAY_URL` and `NOVUS_RELAY_TOKEN` on the worker and it shares the
+  *first* session it opens; a second session stays local and says so, because one
+  token authorises one session. Set neither and Novus is the single-machine
+  harness it was. Nothing ever dials in to the worker.
+- **Do not set `NOVUS_RELAY_SESSION` on the worker.** A session id is a runtime
+  UUID, so it cannot be known before the session exists; the publisher attaches
+  when one is created instead. The variable on the *relay* side names its own
+  key and is unrelated.
 - Other env: `NOVUS_REPO`, `NOVUS_SESSION`, `NOVUS_TOKEN`, `NOVUS_GUEST_PORT`,
   `NOVUS_DB`, `NOVUS_REDACT_PATTERNS`, `NOVUS_RELAY_URL`, `NOVUS_RELAY_TOKEN`,
-  `NOVUS_HOST_NAME`.
+  `NOVUS_HOST_NAME`. Relay side: `NOVUS_RELAY_PORT`, `NOVUS_RELAY_HOST`,
+  `NOVUS_RELAY_SESSION`, `NOVUS_RELAY_PUBLISH_TOKEN`, `NOVUS_RELAY_WATCH_TOKEN`.
+- Ports: relay `4400` (`NOVUS_RELAY_PORT`).
 
 ## Invariants
 

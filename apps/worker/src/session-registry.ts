@@ -138,6 +138,7 @@ const buildApprovalGate = (
  */
 export class SessionRegistry {
   private readonly sessions = new Map<string, Session>();
+  private readonly created = new Set<(session: Session) => void>();
   private readonly eventStore: SessionEventStore;
   private readonly router: ModelRouter;
   private readonly adapters: readonly ModelAdapter[];
@@ -165,6 +166,15 @@ export class SessionRegistry {
 
   hostDefaults(): HostDefaults {
     return this.defaults;
+  }
+
+  /** Called with each new session, so a publisher can attach to one it could not name. */
+  onCreated(listener: (session: Session) => void): () => void {
+    this.created.add(listener);
+
+    return () => {
+      this.created.delete(listener);
+    };
   }
 
   list(): Session[] {
@@ -223,6 +233,13 @@ export class SessionRegistry {
     };
 
     this.sessions.set(session.id, session);
+
+    // Announced rather than returned only, because a session's id is a runtime
+    // UUID: anything that has to be told which session exists — the relay
+    // publisher, most obviously — cannot be configured with it in advance.
+    for (const listener of this.created) {
+      listener(session);
+    }
 
     return session;
   }
