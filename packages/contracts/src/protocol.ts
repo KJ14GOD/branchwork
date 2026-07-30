@@ -53,3 +53,49 @@ export const ErrorResponseSchema = z.object({
 });
 
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
+
+/**
+ * Two or more attempts, lined up for a person to choose between.
+ *
+ * Crosses the HTTP boundary, so it is a schema like everything else — the
+ * compare screen is the one place a decision gets made from what it is shown,
+ * and a field that arrived unvalidated would be a decision made on a guess.
+ *
+ * Note what is absent: no score, no ranking, no recommended attempt. V1 puts the
+ * choice with a human on the evidence, and a shape that carried a verdict would
+ * invite the UI to lead with it.
+ */
+export const AttemptComparisonSchema = z.object({
+  runId: z.string().min(1),
+  label: z.string().min(1),
+  status: z.enum(["running", "completed", "failed"]),
+  summary: z.string().min(1).nullable(),
+  failure: z.string().min(1).nullable(),
+  filesChanged: z.array(
+    z.object({
+      path: z.string().min(1),
+      additions: z.number().int().nonnegative(),
+      deletions: z.number().int().nonnegative(),
+    }),
+  ),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  toolCalls: z.number().int().nonnegative(),
+  testsRun: z.number().int().nonnegative(),
+  testsPassed: z.number().int().nonnegative(),
+  // Null when the attempt ran no tests, which is not the same as failing them
+  // and very much not the same as passing them.
+  green: z.boolean().nullable(),
+});
+
+export type AttemptComparison = z.infer<typeof AttemptComparisonSchema>;
+
+export const ComparisonSchema = z.object({
+  attempts: z.array(AttemptComparisonSchema),
+  /** Paths more than one attempt changed: where they genuinely disagree. */
+  contestedPaths: z.array(z.string().min(1)),
+  /** Paths only one attempt changed, by run id. */
+  uniquePaths: z.record(z.string(), z.array(z.string().min(1))),
+});
+
+export type Comparison = z.infer<typeof ComparisonSchema>;

@@ -1,3 +1,5 @@
+export { CompareView } from "./compare-view.tsx";
+
 export { parseUnifiedDiff } from "./diff.ts";
 export type { DiffLine, DiffLineKind } from "./diff.ts";
 

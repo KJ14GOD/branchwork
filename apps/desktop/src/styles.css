@@ -657,3 +657,170 @@ kbd {
   padding: 12px 14px;
   color: var(--text-dim);
 }
+
+/* Compare: two attempts at equal weight.
+   No column is styled as the winner. The moment one looks recommended the
+   screen has started making a decision that V1 leaves to a person. */
+.compare {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  overflow-y: auto;
+}
+.compare--empty {
+  align-items: center;
+  padding-top: 48px;
+}
+.compare__contested {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 11px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+.compare__contested-label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.compare__columns {
+  display: grid;
+  /* Equal fractions, never auto: a wider column reads as the more important one. */
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.compare__attempt {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 13px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.compare__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.compare__label {
+  color: var(--text);
+  font-size: 13px;
+}
+.compare__status {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.compare__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.compare__verdict--pass {
+  color: var(--add);
+}
+.compare__verdict--fail {
+  color: var(--del);
+}
+/* Neither green nor red. An attempt that ran no tests is unknown, and colouring
+   it either way would answer a question nobody asked. */
+.compare__verdict--unknown {
+  color: var(--text-dim);
+}
+.compare__summary,
+.compare__failure {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.compare__failure {
+  color: var(--del);
+}
+.compare__files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.compare__file {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+/* Marked because it is the decision: both attempts rewrote this file. */
+.compare__file--contested {
+  color: var(--text);
+}
+.compare__file--contested .compare__path::before {
+  content: "◆ ";
+  color: var(--text-dim);
+}
+.compare__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compare__empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.compare__foot {
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+/* The compare screen's own chrome. The columns themselves are shared with the
+   guest; only what acts is here. */
+.compare-screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.compare-screen__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.compare-screen__title {
+  color: var(--text);
+  font-size: 13px;
+}
+.compare-screen__fork {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(200px, 2fr) auto;
+  gap: 8px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.compare__chosen {
+  color: var(--add);
+  font-size: 12px;
+}
+/* Deliberately quiet. Choosing records a preference; it does not merge, and a
+   loud confirmation would imply it had. */
+.compare-screen__note {
+  margin: 0;
+  padding: 0 18px 16px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}

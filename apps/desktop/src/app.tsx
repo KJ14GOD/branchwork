@@ -5,7 +5,9 @@ import type { SessionEvent } from "@novus/contracts";
 import { bridge } from "./bridge.ts";
 import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
 import { EventRow } from "./components/host-event-row.tsx";
+import { CompareScreen } from "./components/compare-screen.tsx";
 import { OpenRepository } from "./components/open-repository.tsx";
+import { useComparison } from "./use-comparison.ts";
 import { useSession } from "./use-session.ts";
 import { useSessionEvents } from "./use-session-events.ts";
 
@@ -58,6 +60,10 @@ export const App = () => {
     ask,
     close,
   } = useSession(endpoint);
+  // A separate screen rather than a panel: comparing is a different question
+  // from following, and forcing them into one view makes both worse.
+  const [comparing, setComparing] = useState(false);
+  const comparison = useComparison(endpoint, session?.id ?? null);
   const { events, status, reconnect } = useSessionEvents(
     endpoint,
     session?.id ?? null,
@@ -254,6 +260,14 @@ export const App = () => {
           <span>{runStatus}</span>
         </div>
         <span className="titlebar__spacer" />
+        <button
+          className="titlebar__repo"
+          type="button"
+          onClick={() => setComparing((value) => !value)}
+          title="Fork this run and compare attempts"
+        >
+          {comparing ? "timeline" : "attempts"}
+        </button>
         <span className={`status status--${status === "live" ? "live" : status === "error" ? "error" : "idle"}`}>
           <span className="status__dot" />
           {status}
@@ -325,28 +339,37 @@ export const App = () => {
           ) : null}
         </aside>
 
-        <main className="timeline">
-          {visible.length === 0 ? (
-            <div className="timeline__empty">
-              {status === "error" ? (
-                `No connection to ${endpoint}.`
-              ) : (
-                <>
-                  Press <kbd>/</kbd> and type a question to start.
-                </>
-              )}
-            </div>
-          ) : (
-            visible.map((event) => (
-              <EventRow
-                key={event.eventId}
-                event={event}
-                raw={raw}
-                highlighted={highlighted === event.sequence}
-              />
-            ))
-          )}
-        </main>
+        {comparing ? (
+          <main className="timeline">
+            <CompareScreen
+              state={comparison}
+              onClose={() => setComparing(false)}
+            />
+          </main>
+        ) : (
+          <main className="timeline">
+            {visible.length === 0 ? (
+              <div className="timeline__empty">
+                {status === "error" ? (
+                  `No connection to ${endpoint}.`
+                ) : (
+                  <>
+                    Press <kbd>/</kbd> and type a question to start.
+                  </>
+                )}
+              </div>
+            ) : (
+              visible.map((event) => (
+                <EventRow
+                  key={event.eventId}
+                  event={event}
+                  raw={raw}
+                  highlighted={highlighted === event.sequence}
+                />
+              ))
+            )}
+          </main>
+        )}
       </div>
 
       {paletteOpen ? (
