@@ -441,7 +441,7 @@ export const RunReceiptSchema = z.object({
   sessionId: IdSchema,
   goal: z.string().min(1),
   model: ModelSelectionSchema,
-  status: z.enum(["completed", "failed"]),
+  status: z.enum(["completed", "failed", "cancelled"]),
   // Read at the start of *this run*, not once per session: a second turn opens
   // on top of the first turn's writes, so a session-wide revision would name a
   // base that no longer describes what the run started from.
@@ -753,6 +753,33 @@ export const RunFailedEventSchema = EventEnvelopeSchema.extend({
 });
 
 /**
+ * A request to stop a run, entered on the log the same way direction is.
+ *
+ * Two events, not one, for the reason `direction.submitted` /
+ * `direction.applied` already is: a human needs to see the request was
+ * received before it takes effect, and only the run loop itself can say when
+ * it actually stopped. `run.cancelled` below is that acknowledgement — there
+ * is no third "confirmed" concept needed on top of it.
+ */
+export const RunCancelRequestedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("run.cancel_requested"),
+  payload: z.object({
+    runId: IdSchema,
+  }),
+});
+
+// Appended by the run loop itself, at the next turn boundary after a
+// cancellation was requested — the same boundary direction is folded in at.
+// A tool call already in flight when the request arrives is allowed to
+// finish; only the *next* model call is refused.
+export const RunCancelledEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("run.cancelled"),
+  payload: z.object({
+    runId: IdSchema,
+  }),
+});
+
+/**
  * What happened when a chosen attempt's changes were written to the parent.
  *
  * `applied: true` lists the paths that were actually written or removed — not
@@ -820,6 +847,8 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   CheckpointCreatedEventSchema,
   ForkCreatedEventSchema,
   DecisionRecordedEventSchema,
+  RunCancelRequestedEventSchema,
+  RunCancelledEventSchema,
 ]);
 
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
@@ -926,6 +955,16 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   DecisionRecordedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunCancelRequestedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunCancelledEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,

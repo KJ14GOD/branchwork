@@ -43,6 +43,8 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "checkpoint.created": "◈",
   "fork.created": "⑂",
   "decision.recorded": "☑",
+  "run.cancel_requested": "◐",
+  "run.cancelled": "◻",
 };
 
 export type EventRowProps = {
@@ -132,6 +134,18 @@ export const EventRow = ({
           <span className="event__text event__text--error">
             {event.payload.reason}
           </span>
+        );
+
+      case "run.cancel_requested":
+        return (
+          <span className="event__text event__text--muted">
+            cancel requested
+          </span>
+        );
+
+      case "run.cancelled":
+        return (
+          <span className="event__text event__text--muted">stopped</span>
         );
 
       case "participant.joined": {

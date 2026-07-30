@@ -62,6 +62,7 @@ export const App = () => {
     ask,
     invite,
     direct,
+    cancel,
     close,
   } = useSession(endpoint);
   // A separate screen rather than a panel: comparing is a different question
@@ -82,6 +83,7 @@ export const App = () => {
   const run = events.find((event) => event.type === "run.started");
   const completed = events.findLast((event) => event.type === "run.completed");
   const failed = events.findLast((event) => event.type === "run.failed");
+  const cancelled = events.findLast((event) => event.type === "run.cancelled");
 
   const toolCalls = useMemo(
     () => events.filter((event) => event.type === "tool.requested"),
@@ -208,20 +210,38 @@ export const App = () => {
   // A run is in flight when the newest run.started has no matching terminator.
   const lastStarted = events.findLast((event) => event.type === "run.started");
   const lastEnded = events.findLast(
-    (event) => event.type === "run.completed" || event.type === "run.failed",
+    (event) =>
+      event.type === "run.completed" ||
+      event.type === "run.failed" ||
+      event.type === "run.cancelled",
   );
   const busy = Boolean(
     lastStarted && (!lastEnded || lastEnded.sequence < lastStarted.sequence),
   );
-  const runStatus = busy
-    ? "working"
-    : failed
-      ? "failed"
-      : completed
-        ? "idle"
-        : run
-          ? "running"
-          : "idle";
+  // A cancel that was requested but has not yet stopped the run still reads
+  // as busy — the host asked, the run has not reached its next turn boundary
+  // to honour it yet.
+  const cancelling =
+    busy &&
+    events
+      .filter((event) => event.type === "run.cancel_requested")
+      .some(
+        (event) =>
+          lastStarted && event.sequence > lastStarted.sequence,
+      );
+  const runStatus = cancelling
+    ? "cancelling"
+    : busy
+      ? "working"
+      : cancelled
+        ? "cancelled"
+        : failed
+          ? "failed"
+          : completed
+            ? "idle"
+            : run
+              ? "running"
+              : "idle";
 
   if (!session) {
     return (
@@ -334,6 +354,21 @@ export const App = () => {
                   spellCheck={false}
                 />
               </form>
+              {lastStarted?.type === "run.started" ? (
+                <button
+                  className="open__browse"
+                  type="button"
+                  disabled={cancelling}
+                  onClick={() => {
+                    if (lastStarted.type === "run.started") {
+                      void cancel(lastStarted.payload.run.id);
+                    }
+                  }}
+                  title="Stop this run at its next safe boundary"
+                >
+                  {cancelling ? "Stopping…" : "Cancel run"}
+                </button>
+              ) : null}
             </div>
           ) : null}
 

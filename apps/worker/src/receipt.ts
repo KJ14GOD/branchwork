@@ -53,7 +53,8 @@ export const buildReceipt = (
 
   const completed = forRun.find((event) => event.type === "run.completed");
   const failed = forRun.find((event) => event.type === "run.failed");
-  const terminal = completed ?? failed;
+  const cancelled = forRun.find((event) => event.type === "run.cancelled");
+  const terminal = completed ?? failed ?? cancelled;
 
   if (!terminal) {
     return null;
@@ -158,7 +159,7 @@ export const buildReceipt = (
     sessionId: started.sessionId,
     goal: started.payload.run.goal,
     model: started.payload.run.model,
-    status: completed ? "completed" : "failed",
+    status: completed ? "completed" : failed ? "failed" : "cancelled",
     base: context.base,
     startedAt,
     finishedAt,

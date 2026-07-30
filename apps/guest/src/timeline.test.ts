@@ -56,6 +56,13 @@ const failed = (sequence: number): SessionEvent =>
     payload: { runId: RUN, reason: "step ceiling reached" },
   });
 
+const cancelled = (sequence: number): SessionEvent =>
+  SessionEventSchema.parse({
+    ...envelope(sequence),
+    type: "run.cancelled",
+    payload: { runId: RUN },
+  });
+
 const patched = (
   sequence: number,
   additions: number,
@@ -183,4 +190,12 @@ test("a run is only over when a terminator follows its start", () => {
   assert.equal(summarise([started(0), failed(1)]).runStatus, "failed");
   // A second run after a failure is running again, not still failed.
   assert.equal(summarise([started(0), failed(1), started(2)]).runStatus, "working");
+});
+
+test("a cancelled run reads as cancelled, not as still working or as a failure", () => {
+  assert.equal(summarise([started(0)]).runStatus, "working");
+  assert.equal(summarise([started(0), cancelled(1)]).runStatus, "cancelled");
+  // A remote teammate has to see this without a verbal recap — the whole
+  // reason the guest carries its own runStatus at all.
+  assert.notEqual(summarise([started(0), cancelled(1)]).runStatus, "failed");
 });

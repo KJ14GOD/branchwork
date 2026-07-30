@@ -116,7 +116,7 @@ export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 export const AttemptComparisonSchema = z.object({
   runId: z.string().min(1),
   label: z.string().min(1),
-  status: z.enum(["running", "completed", "failed"]),
+  status: z.enum(["running", "completed", "failed", "cancelled"]),
   summary: z.string().min(1).nullable(),
   failure: z.string().min(1).nullable(),
   filesChanged: z.array(
@@ -171,6 +171,13 @@ export const DecisionRequestSchema = z.object({
 });
 
 export type DecisionRequest = z.infer<typeof DecisionRequestSchema>;
+
+/** What a host submits to stop a run in flight. */
+export const CancelRunRequestSchema = z.object({
+  runId: z.string().min(1),
+});
+
+export type CancelRunRequest = z.infer<typeof CancelRunRequestSchema>;
 
 /**
  * A session the log remembers, for the Open screen to offer.

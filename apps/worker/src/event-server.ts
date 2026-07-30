@@ -7,6 +7,7 @@ import {
 
 import type { SessionEvent } from "@novus/contracts";
 import {
+  CancelRunRequestSchema,
   CreateSessionRequestSchema,
   DecisionRequestSchema,
   SubmitTurnRequestSchema,
@@ -343,6 +344,58 @@ export const startEventServer = (
       return true;
     }
 
+    const cancelMatch = /^\/sessions\/([^/]+)\/cancel$/.exec(pathname);
+
+    if (cancelMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(cancelMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = CancelRunRequestSchema.safeParse(await readJsonBody(request));
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "A runId is required." });
+        return true;
+      }
+
+      const history = store.list(session.id);
+      const started = history.find(
+        (event) =>
+          event.type === "run.started" && event.payload.run.id === parsed.data.runId,
+      );
+      const terminator = history.find(
+        (event) =>
+          (event.type === "run.completed" ||
+            event.type === "run.failed" ||
+            event.type === "run.cancelled") &&
+          event.payload.runId === parsed.data.runId,
+      );
+
+      if (!started || terminator) {
+        sendJson(response, 409, {
+          error: "There is no run in progress with that id.",
+        });
+        return true;
+      }
+
+      // Recorded, not applied. Same as direction: a human needs to see the
+      // request was received before it takes effect, and only the run loop
+      // itself — reading this same event back — can say when it actually
+      // stopped.
+      const event = store.append({
+        sessionId: session.id,
+        actorId: caller?.participant.id ?? "host",
+        type: "run.cancel_requested",
+        payload: { runId: parsed.data.runId },
+      });
+
+      sendJson(response, 202, { accepted: true, eventId: event.eventId });
+      return true;
+    }
+
     const compareMatch = /^\/sessions\/([^/]+)\/compare$/.exec(pathname);
 
     if (compareMatch && request.method === "GET") {
@@ -659,7 +712,13 @@ export const startEventServer = (
           ? "direct"
           : /^\/sessions\/[^/]+\/invite$/.test(url.pathname)
             ? "invite"
-            : "steer";
+            : // Named explicitly rather than left to the trailing default:
+              // stopping a run in flight is exactly the kind of action
+              // participants.ts warns about a reviewer inheriting by accident
+              // when a route is not listed here.
+              /^\/sessions\/[^/]+\/cancel$/.test(url.pathname)
+              ? "steer"
+              : "steer";
 
     if (refusedFor(required)) {
       return;
