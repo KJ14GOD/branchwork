@@ -101,7 +101,15 @@ export const summariseCall = (call: ToolCall): string => {
     return "current provider model ids";
   }
 
-  return call.input.patchId;
+  if (call.name === "apply_patch") {
+    return call.input.patchId;
+  }
+
+  // Not a fallthrough: a property read off the last remaining member compiles
+  // for any future tool whose input is an empty object, which is exactly how
+  // list_provider_models shipped with a blank request row. This line only
+  // compiles while every tool has a branch above.
+  return call satisfies never;
 };
 
 /**

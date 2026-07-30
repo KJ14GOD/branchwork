@@ -579,8 +579,11 @@ export class AnthropicModelAdapter implements ModelAdapter {
     // where the wall clock is only checked between model calls, and an id cap
     // because the answer is for a model's context, not a catalogue. A failure
     // here is an ordinary tool failure — the run continues.
+    // The page size matters as much as the timeout: the endpoint defaults to
+    // twenty per page and the timeout is per request, so small pages could
+    // stall a tool call through ten sequential fetches. Two pages at most.
     for await (const model of this.client.models.list(
-      {},
+      { limit: 100 },
       { timeout: 15_000 },
     )) {
       models.push(model.id);
