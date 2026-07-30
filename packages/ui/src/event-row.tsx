@@ -142,30 +142,30 @@ export const EventRow = ({
       case "run.cancel_requested":
         return (
           <span className="event__text event__text--muted">
-            cancel requested
+            Cancel requested
           </span>
         );
 
       case "run.cancelled":
         return (
-          <span className="event__text event__text--muted">stopped</span>
+          <span className="event__text event__text--muted">Stopped</span>
         );
 
       case "run.pause_requested":
         return (
           <span className="event__text event__text--muted">
-            pause requested
+            Pause requested
           </span>
         );
 
       case "run.paused":
         return (
-          <span className="event__text event__text--muted">paused</span>
+          <span className="event__text event__text--muted">Paused</span>
         );
 
       case "run.resumed":
         return (
-          <span className="event__text event__text--approved">resumed</span>
+          <span className="event__text event__text--approved">Resumed</span>
         );
 
       case "participant.joined": {
@@ -177,7 +177,7 @@ export const EventRow = ({
             <span className="event__type">
               {" "}
               · {participant.role}
-              {participant.kind === "agent" ? " · agent" : ""}
+              {participant.kind === "agent" ? " · Agent" : ""}
             </span>
           </span>
         );
@@ -188,10 +188,10 @@ export const EventRow = ({
           <span className="event__text event__text--muted">
             {event.payload.participantId} ·{" "}
             {event.payload.reason === "disconnected"
-              ? "connection dropped"
+              ? "Connection dropped"
               : event.payload.reason === "removed"
-                ? "removed"
-                : "left"}
+                ? "Removed"
+                : "Left"}
           </span>
         );
 
@@ -206,7 +206,7 @@ export const EventRow = ({
       case "control.transferred":
         return (
           <span className="event__text event__text--approved">
-            control moved from {event.payload.fromParticipantId} to{" "}
+            Control moved from {event.payload.fromParticipantId} to{" "}
             {event.payload.toParticipantId}
           </span>
         );
@@ -217,7 +217,7 @@ export const EventRow = ({
         // them is waiting to see.
         return (
           <span className="event__text event__text--approved">
-            applied · {event.payload.direction}
+            Applied · {event.payload.direction}
           </span>
         );
 
@@ -226,7 +226,7 @@ export const EventRow = ({
 
         return (
           <span className="event__text event__text--muted">
-            checkpoint at sequence {checkpoint.parentSequence}
+            Checkpoint at sequence {checkpoint.parentSequence}
             <span className="event__type">
               {" "}
               · base {checkpoint.base.revision.slice(0, 8)}
@@ -256,7 +256,7 @@ export const EventRow = ({
         if (outcome.applied) {
           return (
             <span className="event__text event__text--approved">
-              chose {event.payload.runId}
+              Chose {event.payload.runId}
               <span className="event__type">
                 {" "}
                 · applied {outcome.files.length} file
@@ -268,7 +268,7 @@ export const EventRow = ({
 
         return (
           <span className="event__text event__text--error">
-            chose {event.payload.runId}
+            Chose {event.payload.runId}
             <span className="event__type"> · not applied — {outcome.reason}</span>
           </span>
         );
@@ -283,7 +283,7 @@ export const EventRow = ({
         // plain pass.
         const verdict =
           receipt.tests.length === 0
-            ? "tests not run"
+            ? "Tests not run"
             : failing > 0
               ? `${failing} of ${receipt.tests.length} test runs failed`
               : receipt.testsFollowedFinalChange === false

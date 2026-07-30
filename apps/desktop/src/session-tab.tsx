@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { SessionEvent } from "@novus/contracts";
-import type { SessionSummary } from "@novus/contracts/protocol";
+import type { AttemptComparison, SessionSummary } from "@novus/contracts/protocol";
 
 import { bridge } from "./bridge.ts";
-import { AskBar } from "./components/ask-bar.tsx";
 import { FileTree, FileViewer } from "./components/browse-panel.tsx";
 import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
 import { CompareScreen } from "./components/compare-screen.tsx";
+import { Composer } from "./components/composer.tsx";
 import { FileChangesPanel } from "./components/file-changes-panel.tsx";
 import { InvitePanel } from "./components/invite-panel.tsx";
 import { TerminalPanel } from "./components/terminal-panel.tsx";
@@ -19,6 +19,7 @@ import { usePresence } from "./use-presence.ts";
 import { useSessionActions } from "./use-session-actions.ts";
 import { useSessionEvents } from "./use-session-events.ts";
 import type { Theme } from "./use-theme.ts";
+import { useTurnModel } from "./use-turn-model.ts";
 
 type Filter = "all" | "tools" | "patches";
 /** Which of the body's three mutually exclusive views is showing. */
@@ -26,7 +27,7 @@ type ViewMode = "timeline" | "compare" | "browse";
 
 const MIN_TERMINAL_HEIGHT = 140;
 const MAX_TERMINAL_HEIGHT = 640;
-const DEFAULT_TERMINAL_HEIGHT = 260;
+const DEFAULT_TERMINAL_HEIGHT = 280;
 
 /** What the tab strip in `App` needs to know about a tab it is not rendering. */
 export type TabStatus = {
@@ -63,16 +64,104 @@ const formatElapsed = (events: SessionEvent[]): string => {
 };
 
 /**
+ * Sentence case for a machine-shaped word.
+ *
+ * Every status, phase and stream state this app shows arrives lowercase
+ * because that is how it is spelled in the contract. Rendering the contract's
+ * spelling verbatim is what made the chrome read as affected — see the "tone"
+ * section of novus-ui/SKILL.md. The contract keeps its spelling; the screen
+ * gets a capital letter.
+ */
+const sentenceCase = (value: string): string =>
+  value.length === 0 ? value : value[0]!.toUpperCase() + value.slice(1);
+
+/** The last path segment, which is the part a person calls the repository. */
+const basename = (path: string): string =>
+  path.split("/").filter(Boolean).at(-1) ?? path;
+
+/** Everything before that, shown quieter and dropped first when space is tight. */
+const dirname = (path: string): string => {
+  const cut = path.lastIndexOf("/");
+
+  return cut <= 0 ? "" : path.slice(0, cut);
+};
+
+const initials = (name: string): string =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0] ?? "")
+    .join("") || "?";
+
+/**
+ * One attempt, in the rail.
+ *
+ * Deliberately not a link to anything new: it opens the compare screen, which
+ * is where a decision is actually made from. This exists so a session with
+ * live forks *reads as one at a glance*, which was the gap — the evidence
+ * still lives in one place.
+ */
+const AttemptRow = ({
+  attempt,
+  chosen,
+  onOpen,
+}: {
+  attempt: AttemptComparison;
+  chosen: boolean;
+  onOpen: () => void;
+}) => {
+  const dot = chosen
+    ? "attempt__dot attempt__dot--chosen"
+    : attempt.status === "running"
+      ? "attempt__dot attempt__dot--running"
+      : attempt.status === "failed"
+        ? "attempt__dot attempt__dot--failed"
+        : "attempt__dot";
+
+  return (
+    <button
+      className="attempt"
+      type="button"
+      onClick={onOpen}
+      title={`${attempt.label} — ${attempt.status}`}
+    >
+      <span className="attempt__head">
+        <span className={dot} />
+        <span className="attempt__label">{attempt.label}</span>
+      </span>
+      <span className="attempt__stats">
+        <span>
+          <span className="stat__add">+{attempt.additions}</span>{" "}
+          <span className="stat__del">−{attempt.deletions}</span>
+        </span>
+        <span>
+          {attempt.filesChanged.length} file
+          {attempt.filesChanged.length === 1 ? "" : "s"}
+        </span>
+        {attempt.testsRun === 0 ? (
+          <span>No tests</span>
+        ) : attempt.green === true ? (
+          <span className="attempt__stat--pass">Tests pass</span>
+        ) : (
+          <span className="attempt__stat--fail">
+            {attempt.testsPassed}/{attempt.testsRun} pass
+          </span>
+        )}
+      </span>
+    </button>
+  );
+};
+
+/**
  * One open session, rendered in full.
  *
- * This is almost all of what used to be `App` when Novus only ever held one
- * session at a time. It is now instantiated once per open tab — every tab
- * mounts one of these and keeps it mounted (hidden with `display: none`,
- * never unmounted) while another tab is active, so a background tab's event
- * stream, presence poll, and terminal keep running rather than being torn
- * down and rebuilt on every switch. `session` is fixed for the component's
- * whole life: it is the summary the tab was opened with, not state this
- * component manages.
+ * Instantiated once per open tab — every tab mounts one of these and keeps it
+ * mounted (hidden with `display: none`, never unmounted) while another tab is
+ * active, so a background tab's event stream, presence poll, and terminal keep
+ * running rather than being torn down and rebuilt on every switch. `session`
+ * is fixed for the component's whole life: it is the summary the tab was
+ * opened with, not state this component manages.
  */
 export const SessionTab = ({
   session,
@@ -101,6 +190,7 @@ export const SessionTab = ({
   const presence = usePresence(endpoint, session.id);
   const { events, status, reconnect } = useSessionEvents(endpoint, session.id);
   const fileTree = useFileTree(mode === "browse" ? session.repositoryPath : null);
+  const turnModel = useTurnModel();
   const [filter, setFilter] = useState<Filter>("all");
   const [raw, setRaw] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -147,7 +237,7 @@ export const SessionTab = ({
   // session's log is never literally empty (session.created is appended the
   // instant it opens), so "no events at all" would never fire and the
   // timeline would show that one row forever: a lone sequence-0 session.created
-  // card, which is exactly the "lone 0 ◇ glyph" this replaces with an actual
+  // card, which is exactly the bare "0 ◇" glyph this replaces with an actual
   // empty state. Once a run starts, session.created renders normally as part
   // of the real history.
   const trulyEmpty =
@@ -155,6 +245,8 @@ export const SessionTab = ({
       ? events.length === 0 ||
         (events.length === 1 && events[0]?.type === "session.created")
       : visible.length === 0;
+
+  const attempts = comparison.comparison?.attempts ?? [];
 
   const jumpTo = (sequence: number) => {
     setHighlighted(sequence);
@@ -205,6 +297,12 @@ export const SessionTab = ({
       run: () => setFilter("patches"),
     },
     {
+      id: "attempts",
+      label: "Compare attempts",
+      hint: `${attempts.length}`,
+      run: () => setMode("compare"),
+    },
+    {
       id: "raw",
       label: raw ? "Hide raw event payloads" : "Show raw event payloads",
       run: () => setRaw((value) => !value),
@@ -212,7 +310,7 @@ export const SessionTab = ({
     {
       id: "reconnect",
       label: "Reconnect event stream",
-      hint: status,
+      hint: sentenceCase(status),
       run: reconnect,
     },
   ];
@@ -359,107 +457,118 @@ export const SessionTab = ({
     window.addEventListener("mouseup", onUp);
   };
 
+  const viewOption = (target: ViewMode, label: string, count?: number) => (
+    <button
+      className={`viewswitch__option${mode === target ? " viewswitch__option--active" : ""}`}
+      type="button"
+      aria-pressed={mode === target}
+      onClick={() => setMode(target)}
+    >
+      {label}
+      {count !== undefined && count > 0 ? (
+        <span className="viewswitch__count">{count}</span>
+      ) : null}
+    </button>
+  );
+
   return (
     <div className="tab-content" style={{ display: active ? "grid" : "none" }}>
       <div className="session-bar">
-        <div className="titlebar__meta">
+        <div className="session-bar__identity">
           <button
-            className="titlebar__repo"
+            className="session-bar__repo"
             type="button"
             onClick={onCloseTab}
-            title="Close this tab"
+            title={`${session.repositoryPath} — click to close this tab`}
           >
-            {session.repositoryPath}
+            <span className="session-bar__repo-name">
+              {basename(session.repositoryPath)}
+            </span>
+            <span className="session-bar__repo-dir">
+              {dirname(session.repositoryPath)}
+            </span>
           </button>
           {session.allowWrites ? (
-            <span className="titlebar__writes">writes on</span>
-          ) : null}
-          {session.repositoryState !== "ready" ? (
-            // Said at the top of the window, while there is still time to act on
-            // it. This used to surface as a failure when you pressed Fork, which
-            // is after the work rather than before it.
-            <span className="titlebar__warn" title="Forking and diffs need a commit to work from">
-              {session.repositoryState === "absent"
-                ? "not a git repo"
-                : "no commits yet"}
+            <span className="chip chip--allow" title="The agent may apply patches">
+              Writes
             </span>
           ) : null}
           {session.allowCommands ? (
-            <span className="titlebar__writes">commands on</span>
-          ) : null}
-          {run?.type === "run.started" ? (
-            <span className="titlebar__model">
-              {run.payload.run.model.provider}/{run.payload.run.model.model}
+            <span className="chip chip--allow" title="The agent may run programs">
+              Commands
             </span>
           ) : null}
-          <span className="titlebar__phase">{runStatus}</span>
+          {session.repositoryState !== "ready" ? (
+            // Said at the top of the window, while there is still time to act
+            // on it. This used to surface as a failure when you pressed Fork,
+            // which is after the work rather than before it.
+            <span
+              className="chip chip--warn"
+              title="Forking and diffs need a commit to work from"
+            >
+              {session.repositoryState === "absent"
+                ? "Not a Git repo"
+                : "No commits yet"}
+            </span>
+          ) : null}
         </div>
-        {presence.participants.length > 0 ? (
-          <div className="presence" title="Who has this session open right now">
-            {presence.participants.map((participant) => (
-              <span
-                key={participant.id}
-                className={`presence__item${participant.connected ? " presence__item--live" : ""}`}
-                title={`${participant.name} · ${participant.role}${participant.connected ? " · watching now" : " · not connected"}`}
-              >
-                <span className="presence__dot" />
-                {participant.name}
-                {participant.role !== "owner" ? (
-                  <button
-                    className="presence__handoff"
-                    type="button"
-                    onClick={() => void handoff(participant.id)}
-                    title={`Hand off control to ${participant.name} — only the current owner can do this`}
-                  >
-                    hand off
-                  </button>
-                ) : null}
-              </span>
-            ))}
-          </div>
-        ) : null}
+
         <span className="titlebar__spacer" />
-        <button
-          className="titlebar__action"
-          type="button"
-          onClick={() => setInviting(true)}
-          title="Invite a teammate into this session"
-        >
-          invite
-        </button>
-        <button
-          className="titlebar__action"
-          type="button"
-          onClick={() => setMode((current) => (current === "compare" ? "timeline" : "compare"))}
-          title="Fork this run and compare attempts"
-        >
-          {mode === "compare" ? "timeline" : "attempts"}
-        </button>
-        {host ? (
-          <button
-            className="titlebar__action"
-            type="button"
-            onClick={() => setMode((current) => (current === "browse" ? "timeline" : "browse"))}
-            title="Browse this repository's files, read-only"
+
+        <div className="session-bar__state">
+          <span
+            className={`status status--${status === "live" ? "live" : status === "error" ? "error" : "idle"}`}
+            title={`Event stream: ${status}`}
           >
-            {mode === "browse" ? "timeline" : "browse"}
+            <span className="status__dot" />
+            {sentenceCase(runStatus)}
+          </span>
+          {run?.type === "run.started" ? (
+            <span className="session-bar__model">
+              {run.payload.run.model.model}
+            </span>
+          ) : null}
+          {presence.participants.length > 0 ? (
+            <div className="presence" title="Who has this session open right now">
+              {presence.participants.slice(0, 4).map((participant) => (
+                <span
+                  key={participant.id}
+                  className={`presence__avatar${participant.connected ? " presence__avatar--live" : ""}`}
+                  title={`${participant.name} · ${participant.role}${participant.connected ? " · watching now" : " · not connected"}`}
+                >
+                  {initials(participant.name)}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="session-bar__actions">
+          <div className="viewswitch" role="group" aria-label="View">
+            {viewOption("timeline", "Timeline")}
+            {viewOption("compare", "Attempts", attempts.length)}
+            {host ? viewOption("browse", "Files") : null}
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => setTerminalOpen((value) => !value)}
+            title="A real shell, opened in this repository — yours, not the agent's"
+          >
+            {terminalOpen ? "Hide terminal" : "Terminal"}
           </button>
-        ) : null}
-        <button
-          className="titlebar__action"
-          type="button"
-          onClick={() => setTerminalOpen((value) => !value)}
-          title="A real shell, opened in this repository — yours, not the agent's"
-        >
-          {terminalOpen ? "close terminal" : "terminal"}
-        </button>
-        <span className={`status status--${status === "live" ? "live" : status === "error" ? "error" : "idle"}`}>
-          <span className="status__dot" />
-          {status}
-        </span>
-        <span className="titlebar__hint">
-          <kbd>/</kbd> commands
-        </span>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => setInviting(true)}
+            title="Invite a teammate into this session"
+          >
+            Invite
+          </button>
+          <span className="kbd-hint">
+            <kbd>/</kbd> Commands
+          </span>
+        </div>
       </div>
 
       <div
@@ -473,92 +582,176 @@ export const SessionTab = ({
       >
         <aside className="rail">
           <div className="rail__section">
-            <div className="rail__label">Goal</div>
-            <div className="rail__goal">
+            <div className="eyebrow">Goal</div>
+            <div
+              className={
+                run?.type === "run.started" ? "rail__goal" : "rail__goal rail__goal--empty"
+              }
+            >
               {run?.type === "run.started"
                 ? run.payload.run.goal
-                : "No goal yet — ask the agent something below to begin."}
+                : "Nothing asked yet. Use the composer below the timeline to begin."}
             </div>
           </div>
 
-          {busy ? (
-            <div className="rail__section rail__section--direction">
-              <div className="rail__label">Run control</div>
-              {lastStarted?.type === "run.started" ? (
+          {busy && lastStarted?.type === "run.started" ? (
+            <div className="rail__section rail__section--live">
+              <div className="eyebrow">Run control</div>
                 <div className="rail__buttons">
-                  <button
-                    className="open__browse"
-                    type="button"
-                    disabled={pausing}
-                    onClick={() => {
-                      if (lastStarted.type === "run.started") {
-                        if (paused) {
-                          void resume(lastStarted.payload.run.id);
-                        } else {
-                          void pause(lastStarted.payload.run.id);
-                        }
+                <button
+                  className="button"
+                  type="button"
+                  disabled={pausing}
+                  onClick={() => {
+                    if (lastStarted.type === "run.started") {
+                      if (paused) {
+                        void resume(lastStarted.payload.run.id);
+                      } else {
+                        void pause(lastStarted.payload.run.id);
                       }
-                    }}
-                    title={
-                      paused
-                        ? "Continue this run where it left off"
-                        : "Suspend this run at its next safe boundary, to resume later"
                     }
-                  >
-                    {pausing
-                      ? "Pausing…"
-                      : paused
-                        ? "Resume run"
-                        : "Pause run"}
-                  </button>
-                  <button
-                    className="open__browse"
-                    type="button"
-                    disabled={cancelling}
-                    onClick={() => {
-                      if (lastStarted.type === "run.started") {
-                        void cancel(lastStarted.payload.run.id);
-                      }
-                    }}
-                    title="Stop this run at its next safe boundary"
-                  >
-                    {cancelling ? "Stopping…" : "Cancel run"}
-                  </button>
-                </div>
-              ) : null}
+                  }}
+                  title={
+                    paused
+                      ? "Continue this run where it left off"
+                      : "Suspend this run at its next safe boundary, to resume later"
+                  }
+                >
+                  {pausing ? "Pausing…" : paused ? "Resume" : "Pause"}
+                </button>
+                <button
+                  className="button"
+                  type="button"
+                  disabled={cancelling}
+                  onClick={() => {
+                    if (lastStarted.type === "run.started") {
+                      void cancel(lastStarted.payload.run.id);
+                    }
+                  }}
+                  title="Stop this run at its next safe boundary"
+                >
+                  {cancelling ? "Stopping…" : "Cancel"}
+                </button>
+              </div>
             </div>
           ) : null}
 
+          {/*
+            Attempts, permanently. Branching a session, running competing
+            attempts and choosing between them on evidence is the product
+            thesis, and it used to be one word in the corner of this bar.
+            Drawn from the /compare data useComparison already fetches for
+            every tab, so this costs no extra request.
+          */}
+          <div className="rail__section rail__section--flush">
+            <div className="eyebrow">Attempts</div>
+            {attempts.length === 0 ? (
+              <>
+                <div className="rail__empty rail__empty--inset">
+                  No forks yet. Fork this session to run a competing approach in
+                  its own worktree, then choose between them on the evidence.
+                </div>
+                <button
+                  className="button attempt__cta"
+                  type="button"
+                  onClick={() => setMode("compare")}
+                >
+                  Fork an attempt
+                </button>
+              </>
+            ) : (
+              <>
+                {attempts.map((attempt) => (
+                  <AttemptRow
+                    key={attempt.runId}
+                    attempt={attempt}
+                    chosen={comparison.decision?.runId === attempt.runId}
+                    onOpen={() => setMode("compare")}
+                  />
+                ))}
+                <button
+                  className="button attempt__cta"
+                  type="button"
+                  onClick={() => setMode("compare")}
+                >
+                  Compare attempts
+                </button>
+              </>
+            )}
+          </div>
+
+          {/*
+            Who is here, what they may do, and who holds control. Was a row of
+            5px dots in the session bar; roles and handoff are multiplayer
+            state and belong somewhere legible.
+          */}
           <div className="rail__section">
-            <div className="rail__label">Run</div>
+            <div className="eyebrow">Participants</div>
+            {presence.participants.length === 0 ? (
+              <div className="rail__empty">
+                Just you. Invite a teammate to watch this run live.
+              </div>
+            ) : (
+              <div className="party">
+                {presence.participants.map((participant) => (
+                  <div
+                    key={participant.id}
+                    className={`party__row${participant.connected ? " party__row--live" : ""}`}
+                  >
+                    <span className="party__dot" />
+                    <span className="party__who">
+                      <span className="party__name">{participant.name}</span>
+                      <span className="party__role">
+                        {sentenceCase(participant.role)}
+                        {participant.connected ? "" : " · Not connected"}
+                      </span>
+                    </span>
+                    {participant.role !== "owner" ? (
+                      <button
+                        className="party__handoff"
+                        type="button"
+                        onClick={() => void handoff(participant.id)}
+                        title={`Hand control to ${participant.name} — only the current owner can do this`}
+                      >
+                        Hand off
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rail__section">
+            <div className="eyebrow">Run</div>
             <div className="stat">
-              <span>events</span>
+              <span>Events</span>
               <span className="stat__value">{events.length}</span>
             </div>
             <div className="stat">
-              <span>tool calls</span>
+              <span>Tool calls</span>
               <span className="stat__value">{toolCalls.length}</span>
             </div>
             <div className="stat">
-              <span>patches</span>
+              <span>Patches</span>
               <span className="stat__value">{patches.length}</span>
             </div>
             <div className="stat">
-              <span>lines</span>
+              <span>Lines</span>
               <span className="stat__value">
                 <span className="stat__add">+{fileChanges.additions}</span>{" "}
                 <span className="stat__del">−{fileChanges.deletions}</span>
               </span>
             </div>
             <div className="stat">
-              <span>elapsed</span>
+              <span>Elapsed</span>
               <span className="stat__value">{formatElapsed(events)}</span>
             </div>
           </div>
 
           {toolCalls.length > 0 ? (
-            <div>
-              <div className="rail__label rail__label--inset">Tool calls</div>
+            <div className="rail__section rail__section--flush">
+              <div className="eyebrow">Tool calls</div>
               {toolCalls.map((event) => (
                 <button
                   key={event.eventId}
@@ -598,15 +791,44 @@ export const SessionTab = ({
                 {trulyEmpty ? (
                   <div className="timeline__empty">
                     {status === "error" ? (
-                      <p className="timeline__empty-title">
-                        No connection to {endpoint}.
-                      </p>
+                      <>
+                        <p className="timeline__empty-title">No connection</p>
+                        <p className="timeline__empty-hint">
+                          The worker at {endpoint} is not answering. Reconnect
+                          from the command palette, or check that it is running.
+                        </p>
+                      </>
                     ) : (
                       <>
-                        <p className="timeline__empty-title">Nothing has run yet.</p>
+                        <p className="timeline__empty-title">Nothing has run yet</p>
                         <p className="timeline__empty-hint">
-                          Ask the agent something below to begin.
+                          Ask the agent to do something and every command,
+                          patch and test it runs will appear here as it
+                          happens.
                         </p>
+                        <div className="timeline__empty-facts">
+                          <span className="chip">
+                            {basename(session.repositoryPath)}
+                          </span>
+                          <span
+                            className={
+                              session.allowWrites ? "chip chip--allow" : "chip"
+                            }
+                          >
+                            {session.allowWrites
+                              ? "Writes allowed"
+                              : "Read-only"}
+                          </span>
+                          <span
+                            className={
+                              session.allowCommands ? "chip chip--allow" : "chip"
+                            }
+                          >
+                            {session.allowCommands
+                              ? "Commands allowed"
+                              : "No commands"}
+                          </span>
+                        </div>
                       </>
                     )}
                   </div>
@@ -622,7 +844,12 @@ export const SessionTab = ({
                   />
                 )}
               </div>
-              <AskBar busy={busy} onAsk={(goal) => void ask(goal)} onDirect={(goal) => void direct(goal)} />
+              <Composer
+                busy={busy}
+                model={turnModel}
+                onAsk={(goal) => void ask(goal)}
+                onDirect={(goal) => void direct(goal)}
+              />
             </main>
             <FileChangesPanel state={fileChanges} />
           </>
@@ -639,15 +866,18 @@ export const SessionTab = ({
             title="Drag to resize"
           />
           <div className="terminal-dock__head">
-            <span className="terminal-dock__prompt">›_</span>
-            <span className="terminal-dock__label">{session.repositoryPath}</span>
+            <span className="terminal-dock__prompt" aria-hidden="true">
+              ❯
+            </span>
+            <span className="terminal-dock__title">Terminal</span>
+            <span className="terminal-dock__path">{session.repositoryPath}</span>
             <button
-              className="titlebar__action"
+              className="icon-button"
               type="button"
               onClick={() => setTerminalOpen(false)}
               title="Close this shell"
             >
-              close
+              Close
             </button>
           </div>
           <TerminalPanel cwd={session.repositoryPath} theme={theme} />
