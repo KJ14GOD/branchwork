@@ -3,12 +3,16 @@ import { useCallback, useEffect, useState } from "react";
 import { authorization } from "./access.ts";
 import {
   HostCapabilitiesSchema,
+  InviteResponseSchema,
   SessionHistorySchema,
+  type InviteResponse,
   type RememberedSession,
   SessionSummarySchema,
   type HostCapabilities,
   type SessionSummary,
 } from "@novus/contracts/protocol";
+
+export type InviteRole = "editor" | "reviewer" | "viewer";
 
 export type SessionState = {
   session: SessionSummary | null;
@@ -26,6 +30,10 @@ export type SessionState = {
   /** What the host permits, or null until the worker has answered. */
   capabilities: HostCapabilities | null;
   ask: (goal: string) => Promise<void>;
+  /** Mints a token for a new participant. Null on failure — `error` says why. */
+  invite: (name: string, role: InviteRole) => Promise<InviteResponse | null>;
+  /** Recorded for the running turn to fold in, not applied immediately. */
+  direct: (goal: string) => Promise<void>;
   close: () => void;
 };
 
@@ -177,10 +185,74 @@ export const useSession = (endpoint: string): SessionState => {
     [endpoint, session],
   );
 
+  const invite = useCallback(
+    async (name: string, role: InviteRole): Promise<InviteResponse | null> => {
+      if (!session) {
+        return null;
+      }
+
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(session.id)}/invite`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
+          body: JSON.stringify({ name, role }),
+        },
+      );
+
+      if (!response.ok) {
+        setError(await readError(response));
+        return null;
+      }
+
+      return InviteResponseSchema.parse(await response.json());
+    },
+    [endpoint, session],
+  );
+
+  const direct = useCallback(
+    async (goal: string) => {
+      if (!session) {
+        return;
+      }
+
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(session.id)}/direction`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
+          body: JSON.stringify({ goal }),
+        },
+      );
+
+      if (!response.ok) {
+        setError(await readError(response));
+      }
+    },
+    [endpoint, session],
+  );
+
   const close = useCallback(() => {
     setSession(null);
     setError(null);
   }, []);
 
-  return { session, capabilities, remembered, opening, error, open, ask, close };
+  return {
+    session,
+    capabilities,
+    remembered,
+    opening,
+    error,
+    open,
+    ask,
+    invite,
+    direct,
+    close,
+  };
 };

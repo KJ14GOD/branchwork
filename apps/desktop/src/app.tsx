@@ -6,6 +6,7 @@ import { bridge } from "./bridge.ts";
 import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
 import { EventRow } from "./components/host-event-row.tsx";
 import { CompareScreen } from "./components/compare-screen.tsx";
+import { InvitePanel } from "./components/invite-panel.tsx";
 import { OpenRepository } from "./components/open-repository.tsx";
 import { useComparison } from "./use-comparison.ts";
 import { useSession } from "./use-session.ts";
@@ -59,11 +60,15 @@ export const App = () => {
     error: sessionError,
     open,
     ask,
+    invite,
+    direct,
     close,
   } = useSession(endpoint);
   // A separate screen rather than a panel: comparing is a different question
   // from following, and forcing them into one view makes both worse.
   const [comparing, setComparing] = useState(false);
+  const [inviting, setInviting] = useState(false);
+  const [directionText, setDirectionText] = useState("");
   const comparison = useComparison(endpoint, session?.id ?? null);
   const { events, status, reconnect } = useSessionEvents(
     endpoint,
@@ -275,6 +280,14 @@ export const App = () => {
         <button
           className="titlebar__repo"
           type="button"
+          onClick={() => setInviting(true)}
+          title="Invite a teammate into this session"
+        >
+          invite
+        </button>
+        <button
+          className="titlebar__repo"
+          type="button"
           onClick={() => setComparing((value) => !value)}
           title="Fork this run and compare attempts"
         >
@@ -299,6 +312,30 @@ export const App = () => {
                 : "Waiting for a run"}
             </div>
           </div>
+
+          {busy ? (
+            <div className="rail__section">
+              <div className="rail__label">Direction</div>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+
+                  if (directionText.trim()) {
+                    void direct(directionText.trim());
+                    setDirectionText("");
+                  }
+                }}
+              >
+                <input
+                  className="open__input"
+                  value={directionText}
+                  onChange={(event) => setDirectionText(event.target.value)}
+                  placeholder="Steer the running turn"
+                  spellCheck={false}
+                />
+              </form>
+            </div>
+          ) : null}
 
           <div className="rail__section">
             <div className="rail__label">Run</div>
@@ -393,6 +430,10 @@ export const App = () => {
           }}
           onClose={() => setPaletteOpen(false)}
         />
+      ) : null}
+
+      {inviting ? (
+        <InvitePanel onInvite={invite} onClose={() => setInviting(false)} />
       ) : null}
     </div>
   );

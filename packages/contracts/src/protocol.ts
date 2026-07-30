@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { ParticipantSchema } from "./contracts.ts";
+
 const IdSchema = z.string().min(1);
 
 /**
@@ -75,6 +77,24 @@ export const SubmitTurnRequestSchema = z.object({
 });
 
 export type SubmitTurnRequest = z.infer<typeof SubmitTurnRequestSchema>;
+
+// An owner cannot mint a second owner — ownership moves by handoff, which both
+// parties see, so the roles offered here are deliberately the ones below it.
+export const InviteRequestSchema = z.object({
+  name: z.string().min(1),
+  role: z.enum(["editor", "reviewer", "viewer"]),
+});
+
+export type InviteRequest = z.infer<typeof InviteRequestSchema>;
+
+// The token is returned exactly once, in this response. Nothing stores it
+// anywhere it can be read back afterward.
+export const InviteResponseSchema = z.object({
+  participant: ParticipantSchema,
+  token: z.string().min(1),
+});
+
+export type InviteResponse = z.infer<typeof InviteResponseSchema>;
 
 export const ErrorResponseSchema = z.object({
   error: z.string().min(1),
