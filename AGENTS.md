@@ -101,3 +101,6 @@ into `.claude/skills/` so both harnesses load the same file.
 - `novus-run-app` — launching the app or the worker, and proving it came up.
 - `novus-merge-slice` — landing a finished parallel slice back into main.
 - `novus-finish-run` — commit and push.
+- `novus-extend-event-contract` — adding a `SessionEvent` type or a new run
+  status without leaving the projection, receipt, compare screen, or guest
+  timeline silently out of sync; only one of those places is compiler-enforced.

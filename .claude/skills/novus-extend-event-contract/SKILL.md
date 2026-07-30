@@ -1,0 +1,1 @@
+../../../skills/novus-extend-event-contract/SKILL.md
