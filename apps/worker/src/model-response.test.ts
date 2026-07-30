@@ -100,3 +100,53 @@ test("a well-formed tool call is unaffected by the stop reason", () => {
     assert.deepEqual(response.usage, { inputTokens: 100, outputTokens: 200 });
   }
 });
+
+test("text sent beside a tool_use is kept, not thrown away", () => {
+  // Anthropic commonly sends a text block narrating the call in the same
+  // message as the tool_use itself — "I'll check the config first" before
+  // read_file. Before this, only the tool_use half of that message ever
+  // reached a ModelResponse; the narration was read and discarded.
+  const response = responseFromMessage(
+    message({
+      content: [
+        { type: "text", text: "I'll check the config file first." },
+        {
+          type: "tool_use",
+          id: "call-1",
+          name: "read_file",
+          input: { path: "config.json" },
+        },
+      ],
+      stop_reason: "tool_use",
+    }),
+  );
+
+  assert.equal(response.type, "tool_call");
+  if (response.type === "tool_call") {
+    assert.equal(response.text, "I'll check the config file first.");
+  }
+});
+
+test("a tool_use with no accompanying text carries no text field", () => {
+  // exactOptionalPropertyTypes makes this a real distinction: `text:
+  // undefined` is not the same shape as the key being absent, and every
+  // stored event from before this field existed relies on it being absent.
+  const response = responseFromMessage(
+    message({
+      content: [
+        {
+          type: "tool_use",
+          id: "call-1",
+          name: "read_file",
+          input: { path: "config.json" },
+        },
+      ],
+      stop_reason: "tool_use",
+    }),
+  );
+
+  assert.equal(response.type, "tool_call");
+  if (response.type === "tool_call") {
+    assert.equal("text" in response, false);
+  }
+});

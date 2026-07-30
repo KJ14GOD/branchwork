@@ -329,11 +329,20 @@ export const EventRow = ({
       }
 
       case "tool.requested":
+        // The model's own words, when the provider sent any alongside this
+        // call, lead at full prominence — it is the one place in a tool
+        // exchange the model actually explains itself, so it does not get
+        // the muted treatment the mechanical call summary below it does.
         return (
-          <span className="event__text event__text--muted">
-            <span className="tool__name">{event.payload.call.name}</span>{" "}
-            {summariseCall(event.payload.call)}
-          </span>
+          <>
+            {event.payload.text ? (
+              <p className="event__prose">{event.payload.text}</p>
+            ) : null}
+            <span className="event__text event__text--muted">
+              <span className="tool__name">{event.payload.call.name}</span>{" "}
+              {summariseCall(event.payload.call)}
+            </span>
+          </>
         );
 
       case "tool.completed": {

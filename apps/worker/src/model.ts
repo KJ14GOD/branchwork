@@ -73,6 +73,13 @@ export type ModelResponse =
       type: "tool_call";
       call: ToolCall;
       usage?: ModelUsage;
+      /**
+       * Text the provider sent alongside this tool call, if any — the
+       * model narrating why before acting. Optional: most calls arrive with
+       * no accompanying text, and an adapter that never populates it (the
+       * scripted test adapter, say) is still a complete ModelResponse.
+       */
+      text?: string;
     }
   /**
    * The model asked for a tool in a shape the contract refuses.

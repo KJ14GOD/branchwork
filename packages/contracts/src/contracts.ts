@@ -684,6 +684,13 @@ export const ToolRequestedEventSchema = EventEnvelopeSchema.extend({
   payload: z.object({
     runId: IdSchema,
     call: ToolCallSchema,
+    // The model's own words leading up to this call, when the provider sent
+    // any — Anthropic and OpenAI both allow a text block alongside a tool
+    // call in the same response, and until this field existed the harness
+    // read only the call out of it and threw the rest away. Optional and
+    // absent on most calls: a model frequently acts without narrating, and
+    // every event recorded before this field existed has none.
+    text: z.string().min(1).optional(),
   }),
 });
 

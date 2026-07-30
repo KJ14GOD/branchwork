@@ -263,6 +263,16 @@ export const responseFromMessage = (
 
   const toolUse = message.content.find((block) => block.type === "tool_use");
 
+  // Computed once, ahead of the branch — a text block can sit alongside a
+  // tool_use in the same message (the model narrating before acting) just as
+  // easily as it can be the whole message (the final answer below), and both
+  // branches read it the same way.
+  const text = message.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+
   if (toolUse?.type === "tool_use") {
     const call = ToolCallSchema.safeParse({
       id: toolUse.id,
@@ -286,14 +296,13 @@ export const responseFromMessage = (
       };
     }
 
-    return { type: "tool_call", call: call.data, usage };
+    // Spread rather than assigned: ModelResponse's text is optional under
+    // exactOptionalPropertyTypes, so `text: undefined` on a silent call is
+    // not the same thing as the key being absent.
+    return { type: "tool_call", call: call.data, usage, ...(text ? { text } : {}) };
   }
 
-  const summary = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
+  const summary = text;
 
   if (!summary) {
     throw new Error("Anthropic returned neither a tool call nor text.");

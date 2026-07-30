@@ -161,6 +161,12 @@ export const buildMessages = (request: ModelRequest): ChatCompletionMessageParam
 export const interpretToolCall = (
   toolCall: ChatCompletionMessageToolCall,
   usage: { usage: { inputTokens: number; outputTokens: number } } | Record<string, never>,
+  // The message's own content, when OpenAI sent a tool call and text
+  // together — the same thing Anthropic calls a text block beside a
+  // tool_use. Trimmed and dropped if empty by the caller, not here, so this
+  // function's every return path stays the single object literal the rest
+  // of the file already relies on to match ModelResponse's exact shape.
+  text?: string,
 ): ModelResponse => {
   if (toolCall.type !== "function") {
     return {
@@ -213,7 +219,12 @@ export const interpretToolCall = (
     };
   }
 
-  return { type: "tool_call", call: call.data, ...usage };
+  return {
+    type: "tool_call",
+    call: call.data,
+    ...usage,
+    ...(text ? { text } : {}),
+  };
 };
 
 export class OpenAIModelAdapter implements ModelAdapter {
@@ -267,7 +278,7 @@ export class OpenAIModelAdapter implements ModelAdapter {
     const toolCall = message.tool_calls?.[0];
 
     if (toolCall) {
-      return interpretToolCall(toolCall, usage);
+      return interpretToolCall(toolCall, usage, (message.content ?? "").trim());
     }
 
     const summary = (message.content ?? "").trim();
