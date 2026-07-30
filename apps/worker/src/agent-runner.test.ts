@@ -16,6 +16,7 @@ import {
 import { AllowListApprovalGate } from "./policy.ts";
 import {
   ApplyPatchTool,
+  ProposeNewFileTool,
   ProposePatchTool,
   ReadFileTool,
   SearchRepositoryTool,
@@ -1122,4 +1123,115 @@ test("a provider that stays down ends the run with the cause intact", async () =
 
   // One first attempt plus one per configured wait, then no more.
   assert.equal(asked, 3);
+});
+
+test("creating a file crosses the same approval boundary as editing one, end to end", async () => {
+  const repositoryPath = await mkdtemp(join(tmpdir(), "novus-create-run-"));
+  const eventStore = new InMemorySessionEventStore();
+  const creationSelection = { provider: "scripted", model: "file-creator" };
+
+  // Proposes a new file, then applies whatever patchId came back — the same
+  // two-step shape the model is instructed to use for edits.
+  const creatingAdapter = {
+    selection: creationSelection,
+    async complete(request: {
+      toolExchanges: readonly {
+        status: string;
+        result?: { name: string; output: Record<string, unknown> };
+      }[];
+    }) {
+      const proposal = request.toolExchanges.find(
+        (exchange) =>
+          exchange.status === "ok" &&
+          exchange.result?.name === "propose_new_file",
+      );
+
+      if (!proposal) {
+        return {
+          type: "tool_call" as const,
+          call: {
+            id: "propose-create",
+            name: "propose_new_file" as const,
+            input: {
+              path: "docs/notes/decision.md",
+              intent: "Record the decision.",
+              content: "# Decision\n\nWe chose the boring option.\n",
+            },
+          },
+        };
+      }
+
+      if (request.toolExchanges.length > 1) {
+        return { type: "final" as const, summary: "Created the note." };
+      }
+
+      return {
+        type: "tool_call" as const,
+        call: {
+          id: "apply-create",
+          name: "apply_patch" as const,
+          input: { patchId: proposal.result!.output.patchId as string },
+        },
+      };
+    },
+  };
+
+  const proposeTool = new ProposePatchTool(repositoryPath);
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(creationSelection),
+    [creatingAdapter],
+    [
+      proposeTool,
+      new ProposeNewFileTool(repositoryPath, proposeTool),
+      new ApplyPatchTool(repositoryPath, proposeTool),
+    ],
+    new AllowListApprovalGate(["apply_patch"], "host"),
+  );
+
+  try {
+    const result = await runner.run({
+      sessionId: "create-session",
+      actorId: "agent-1",
+      goal: "Write the decision down.",
+    });
+
+    // The write crossed the approval boundary as a write — creation did not
+    // sneak in under a milder class than an edit would have.
+    const requested = result.events.find(
+      (event) => event.type === "tool.approval_requested",
+    );
+
+    assert.equal(requested?.type, "tool.approval_requested");
+
+    if (requested?.type === "tool.approval_requested") {
+      assert.equal(requested.payload.toolClass, "write");
+      assert.equal(requested.payload.call.name, "apply_patch");
+    }
+
+    // The file is real, parents included — an agent creating the first file
+    // of a new directory is the ordinary case.
+    assert.equal(
+      await readFile(join(repositoryPath, "docs/notes/decision.md"), "utf8"),
+      "# Decision\n\nWe chose the boring option.\n",
+    );
+
+    // The receipt counts the creation among the run's changed files: the
+    // evidence pipeline (events -> receipt) treats a new file as a change,
+    // not as something that happened outside the record.
+    const receipt = result.events.find(
+      (event) => event.type === "receipt.created",
+    );
+
+    assert.equal(receipt?.type, "receipt.created");
+
+    if (receipt?.type === "receipt.created") {
+      assert.deepEqual(
+        receipt.payload.receipt.filesChanged.map((file) => file.path),
+        ["docs/notes/decision.md"],
+      );
+    }
+  } finally {
+    await rm(repositoryPath, { recursive: true, force: true });
+  }
 });
