@@ -14,6 +14,7 @@ import { useFileChanges } from "./use-file-changes.ts";
 import { usePresence } from "./use-presence.ts";
 import { useSessionActions } from "./use-session-actions.ts";
 import { useSessionEvents } from "./use-session-events.ts";
+import type { Theme } from "./use-theme.ts";
 
 type Filter = "all" | "tools" | "patches";
 
@@ -67,12 +68,14 @@ export const SessionTab = ({
   session,
   endpoint,
   active,
+  theme,
   onStatus,
   onCloseTab,
 }: {
   session: SessionSummary;
   endpoint: string;
   active: boolean;
+  theme: Theme;
   /** Reports this tab's live status upward, for the tab strip's own chip. */
   onStatus: (status: TabStatus) => void;
   onCloseTab: () => void;
@@ -552,7 +555,7 @@ export const SessionTab = ({
               close
             </button>
           </div>
-          <TerminalPanel cwd={session.repositoryPath} />
+          <TerminalPanel cwd={session.repositoryPath} theme={theme} />
         </div>
       ) : null}
 

@@ -208,13 +208,19 @@ every tab's effect on every keystroke anywhere in the app and could loop.
 by the tab strip's own chip (status dot, diff-stat badge).
 
 **Open tabs persist to `localStorage`** (`novus.tabs`: `{ tabs: SessionSummary[],
-activeId }`), read once on mount and written after every change. This is not
-"resume a session" (that already existed, server-side, via `/sessions/history`
-and the Open screen's "carry on with") — it is "this window had these tabs
-open," so relaunching the app does not lose the arrangement. Restoring a tab
-does not call `open()` again; the stored `SessionSummary` already has
-everything `<SessionTab>` needs; it just reconnects, the same as any
-reconnect.
+activeId }`), read once on mount and written after every change. This *is*
+"resume a session," for every stored tab — a relaunch starts a fresh worker
+with an empty in-memory session registry, even though the durable event log
+survives it, so a stored `SessionSummary` trusted directly looked alive (its
+SSE stream reads straight from the store, registry or not) while every other
+route on it 404'd. The hydration effect calls `open(repositoryPath,
+allowWrites, allowCommands, tab.id)` for each stored tab — the same call the
+Open screen's "carry on with" list already makes for a single session — and
+drops any tab that fails to resume rather than keeping it around looking live
+while being dead. `hydrated.current` is set synchronously before that async
+work starts; `open` is keyed on `endpoint`, which changes once
+`bridge().workerUrl()` resolves, and that identity change would otherwise
+give the effect a second chance to hydrate the same tabs twice.
 
 **New tab is `<OpenRepository embedded>`.** The same component the empty-state
 screen uses, given an `embedded` prop that skips the full-page `.open`

@@ -19,11 +19,14 @@ type StoredTabs = { tabs: SessionSummary[]; activeId: string | null };
  * The tabs this window had open last, so relaunching does not lose the
  * thread the way closing a browser tab does not lose your history.
  *
- * Each entry is a `SessionSummary` this app already fetched or created —
- * restoring it does not re-open anything server-side, it just lets
- * `<SessionTab>` reconnect its event stream the same way a reconnect already
- * does. Read defensively: a stored shape from an older build should be
- * dropped, not thrown, so a schema change here never blanks the window on
+ * Each entry is only the `SessionSummary` this app fetched or created last
+ * time — it names which session and repository to resume, not a session
+ * still alive anywhere. The worker's in-memory registry does not survive a
+ * relaunch even though its durable log does, so every stored entry is
+ * re-opened with `resume` against whatever worker is running now; see the
+ * hydration effect below. Read defensively here too: a stored shape from an
+ * older build should be dropped, not thrown, so a schema change here never
+ * blanks the window on
  * launch.
  */
 const loadStoredTabs = (): StoredTabs => {
@@ -99,20 +102,68 @@ export const App = () => {
   const [newTabOpen, setNewTabOpen] = useState(false);
   const hydrated = useRef(false);
 
-  // Hydrated once, from what this window had open last. Not in useState's
-  // initializer because that would also run under StrictMode's double-invoke
-  // and because persistence below needs the same "have we hydrated yet"
-  // guard for when it is safe to start writing.
+  // Hydrated once, from what this window had open last — but a relaunch
+  // starts a fresh worker with an empty in-memory session registry, even
+  // though the durable event log survives it. A stored SessionSummary
+  // trusted directly looked alive (its SSE stream reads straight from the
+  // store, registry or not) while every other route — turns, files, compare
+  // — 404'd against a session the fresh worker had never heard of. Each
+  // stored tab is resumed for real instead, the same way the Open screen's
+  // "Carry on with" list already resumes a single session; a tab that fails
+  // to resume (the repository moved, a different NOVUS_DB) is dropped
+  // rather than kept around looking live while being dead.
+  //
+  // hydrated.current is set synchronously, before the async resume work
+  // starts, not after — open() is keyed on endpoint, and endpoint changes
+  // once bridge().workerUrl() resolves, which would otherwise give this
+  // effect a second identity to re-run on and hydrate the same tabs twice.
   useEffect(() => {
-    const stored = loadStoredTabs();
-
-    if (stored.tabs.length > 0) {
-      setTabs(stored.tabs);
-      setActiveId(stored.activeId);
+    if (hydrated.current) {
+      return;
     }
 
     hydrated.current = true;
-  }, []);
+
+    const stored = loadStoredTabs();
+
+    if (stored.tabs.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      const resumed: SessionSummary[] = [];
+
+      for (const tab of stored.tabs) {
+        const summary = await open(
+          tab.repositoryPath,
+          tab.allowWrites,
+          tab.allowCommands,
+          tab.id,
+        );
+
+        if (summary) {
+          resumed.push(summary);
+        }
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      setTabs(resumed);
+      setActiveId(
+        resumed.some((tab) => tab.id === stored.activeId)
+          ? stored.activeId
+          : (resumed.at(-1)?.id ?? null),
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   // Persisted after every change, once hydration has actually run — guarded,
   // or the empty initial state this component renders with for one tick
@@ -158,39 +209,45 @@ export const App = () => {
     [open],
   );
 
-  const closeTab = useCallback((id: string) => {
-    setTabs((current) => {
-      const index = current.findIndex((tab) => tab.id === id);
+  // Reads tabs/activeId from the closure rather than setTabs's own updater
+  // form, deliberately: calling setActiveId from inside setTabs's updater
+  // typechecked and worked, but updaters are supposed to be pure, and
+  // StrictMode double-invokes them specifically to catch this — harmless
+  // here only because the computed value happened to be identical both
+  // times. Reading closure state means closeTab is recreated whenever tabs
+  // or activeId change, same cost openTab already pays for depending on
+  // open.
+  const closeTab = useCallback(
+    (id: string) => {
+      const index = tabs.findIndex((tab) => tab.id === id);
 
       if (index === -1) {
-        return current;
+        return;
       }
 
-      const next = current.filter((tab) => tab.id !== id);
+      const next = tabs.filter((tab) => tab.id !== id);
 
-      setActiveId((currentActive) => {
-        if (currentActive !== id) {
-          return currentActive;
-        }
+      setTabs(next);
 
+      if (activeId === id) {
         // The tab to its left, falling back to the one that took its place —
         // closing the active tab should land on a neighbour, not jump to
         // whichever tab happens to be first.
-        return next[index - 1]?.id ?? next[0]?.id ?? null;
-      });
-
-      return next;
-    });
-    setTabStatuses((current) => {
-      if (!(id in current)) {
-        return current;
+        setActiveId(next[index - 1]?.id ?? next[0]?.id ?? null);
       }
 
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
-  }, []);
+      setTabStatuses((current) => {
+        if (!(id in current)) {
+          return current;
+        }
+
+        const nextStatuses = { ...current };
+        delete nextStatuses[id];
+        return nextStatuses;
+      });
+    },
+    [tabs, activeId],
+  );
 
   const reportStatus = useCallback((id: string, status: TabStatus) => {
     setTabStatuses((current) => {
@@ -306,6 +363,7 @@ export const App = () => {
           session={tab}
           endpoint={endpoint}
           active={tab.id === activeId}
+          theme={theme}
           onStatus={(status) => reportStatus(tab.id, status)}
           onCloseTab={() => closeTab(tab.id)}
         />

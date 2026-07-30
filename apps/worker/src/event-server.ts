@@ -689,8 +689,20 @@ export const startEventServer = (
       // The same projection /compare folds attempts from — filtered to this
       // session's own runs, because a fork's filesChanged describes its own
       // worktree, not the one this panel is showing.
-      const projected = projectSession(session.id, store.list(session.id));
-      const forkRunIds = new Set(session.forks.keys());
+      const events = store.list(session.id);
+      const projected = projectSession(session.id, events);
+      // Derived from the log, not session.forks: that map is in-memory only
+      // and empty after any worker restart, even though fork.created (the
+      // parent's durable record of having branched) survives in the store
+      // that projectSession just read. Reading it from session.forks meant
+      // every fork's files silently folded back into this panel — the exact
+      // thing the comment above says this filter exists to prevent — the
+      // moment a session outlived the process that forked it.
+      const forkRunIds = new Set(
+        events.flatMap((event) =>
+          event.type === "fork.created" ? [event.payload.fork.runId] : [],
+        ),
+      );
       const byPath = new Map<
         string,
         { path: string; additions: number; deletions: number }
