@@ -389,7 +389,7 @@ export const App = () => {
         </aside>
 
         {comparing ? (
-          <main className="timeline">
+          <main className="timeline timeline--compare">
             <CompareScreen
               state={comparison}
               repositoryState={session.repositoryState}
