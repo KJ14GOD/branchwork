@@ -406,6 +406,12 @@ export class AgentRunner {
         run,
         adapter,
         rebuildToolExchanges(events, run.id),
+        // continuing = true. The docstring above already said run.started is
+        // not appended again; execute() did it anyway, unconditionally, for
+        // every caller. projection.ts resets a run's entire state on
+        // run.started, so a second one silently wiped every tool call and
+        // file change a paused run had made before resume ever ran.
+        true,
       );
     } catch (error) {
       throw new AgentRunFailure(run.id, error);
@@ -420,23 +426,30 @@ export class AgentRunner {
     // had already accumulated, rebuilt from the log so the model does not
     // lose the context it built up before the pause.
     initialToolExchanges: readonly ModelToolExchange[] = [],
+    // A resume, continuing an id the log already knows, not a fresh start.
+    // Kept as its own flag rather than inferred from initialToolExchanges
+    // being non-empty: a run can genuinely pause before its first tool call,
+    // and inferring from an empty array would misclassify that resume as new.
+    continuing = false,
   ): Promise<AgentRunResult> {
-    this.eventStore.append({
-      sessionId: input.sessionId,
-      actorId: input.actorId,
-      type: "run.started",
-      payload: { run },
-    });
+    if (!continuing) {
+      this.eventStore.append({
+        sessionId: input.sessionId,
+        actorId: input.actorId,
+        type: "run.started",
+        payload: { run },
+      });
 
-    this.eventStore.append({
-      sessionId: input.sessionId,
-      actorId: input.actorId,
-      type: "run.progress",
-      payload: {
-        runId: run.id,
-        message: `Selected ${run.model.provider}/${run.model.model}`,
-      },
-    });
+      this.eventStore.append({
+        sessionId: input.sessionId,
+        actorId: input.actorId,
+        type: "run.progress",
+        payload: {
+          runId: run.id,
+          message: `Selected ${run.model.provider}/${run.model.model}`,
+        },
+      });
+    }
 
     const toolExchanges: ModelToolExchange[] = [...initialToolExchanges];
     const startedAt = Date.now();

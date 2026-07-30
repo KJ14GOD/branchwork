@@ -6,6 +6,7 @@ import type { SessionEventStore } from "@novus/session-service";
 
 import { AgentRunner } from "./agent-runner.ts";
 import { FixedModelRouter, type ModelAdapter, type ModelRequest } from "./model.ts";
+import { AllowListApprovalGate } from "./policy.ts";
 import type { AgentTool } from "./tools.ts";
 import { buildReceipt } from "./receipt.ts";
 import { projectSession } from "./projection.ts";
@@ -234,6 +235,114 @@ test("resuming replays the paused turn's tool exchange back to the model, and th
   const resumedTypes = resumed.events.map((event) => event.type);
   assert.ok(resumedTypes.includes("run.resumed"));
   assert.ok(resumedTypes.includes("run.completed"));
+});
+
+test("resuming does not re-emit run.started, and what the run did before the pause survives in the projection", async () => {
+  // Reproduces the bug merge-guard found: execute() appended run.started
+  // unconditionally, including on resume, and projection.ts resets a run's
+  // entire state — filesChanged included — whenever it sees that event. A
+  // run that had applied a patch before pausing showed zero files changed
+  // after resuming, silently. The prior test's .find() masked this: it
+  // returns the first match and never counts how many there were.
+  const eventStore = new InMemorySessionEventStore();
+  let asked = 0;
+
+  const adapter: ModelAdapter = {
+    selection: { provider: "anthropic", model: "test" },
+    async complete() {
+      asked += 1;
+
+      return asked === 1
+        ? {
+            type: "tool_call",
+            call: { id: "c1", name: "apply_patch", input: { patchId: "p1" } },
+          }
+        : { type: "final", summary: "Done after resuming." };
+    },
+  };
+
+  class ApplyingPausingTool implements AgentTool {
+    readonly name = "apply_patch" as const;
+
+    async execute(call: Parameters<AgentTool["execute"]>[0]) {
+      const started = eventStore
+        .list("resume-projection-session")
+        .find((event) => event.type === "run.started");
+
+      if (started?.type === "run.started") {
+        eventStore.append({
+          sessionId: "resume-projection-session",
+          actorId: "teammate-1",
+          type: "run.pause_requested",
+          payload: { runId: started.payload.run.id },
+        });
+      }
+
+      return {
+        toolCallId: call.id,
+        name: "apply_patch" as const,
+        output: {
+          patchId: "p1",
+          path: "src/a.ts",
+          status: "applied" as const,
+          additions: 10,
+          deletions: 2,
+        },
+      };
+    }
+  }
+
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(adapter.selection),
+    [adapter],
+    [new ApplyingPausingTool()],
+    new AllowListApprovalGate(["apply_patch"], "host"),
+  );
+
+  const paused = await runner.run({
+    sessionId: "resume-projection-session",
+    actorId: "agent-1",
+    goal: "Apply a fix",
+  });
+
+  const beforeResume = projectSession(
+    "resume-projection-session",
+    eventStore.list("resume-projection-session"),
+  );
+
+  assert.deepEqual(beforeResume.runs[0]?.filesChanged, [
+    { path: "src/a.ts", additions: 10, deletions: 2 },
+  ]);
+
+  const started = paused.events.find((event) => event.type === "run.started");
+  assert.equal(started?.type, "run.started");
+  const runId = started?.type === "run.started" ? started.payload.run.id : "";
+
+  await runner.resume({
+    sessionId: "resume-projection-session",
+    actorId: "agent-1",
+    runId,
+  });
+
+  const allEvents = eventStore.list("resume-projection-session");
+
+  assert.equal(
+    allEvents.filter((event) => event.type === "run.started").length,
+    1,
+    "run.started must appear exactly once per run id, resumed or not",
+  );
+
+  const afterResume = projectSession(
+    "resume-projection-session",
+    allEvents,
+  );
+
+  assert.deepEqual(
+    afterResume.runs[0]?.filesChanged,
+    [{ path: "src/a.ts", additions: 10, deletions: 2 }],
+    "the file changed before the pause must still be reflected after resuming",
+  );
 });
 
 test("resuming a run that was never paused is refused", async () => {
