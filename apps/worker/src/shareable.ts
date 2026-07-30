@@ -121,13 +121,100 @@ export const shareableEvent = (event: SessionEvent): SessionEvent => {
         };
       }
 
+      // A build's transcript is command output like any other. The verdict —
+      // `succeeded`, the exit code, the duration — crosses.
+      if (result.name === "run_build") {
+        return {
+          ...event,
+          payload: {
+            ...event.payload,
+            result: {
+              ...result,
+              output: {
+                ...result.output,
+                stdout: result.output.stdout === "" ? "" : WITHHELD,
+                stderr: result.output.stderr === "" ? "" : WITHHELD,
+              },
+            },
+          },
+        };
+      }
+
+      // Diagnostics are the evidence V1's compare screen names explicitly, so
+      // the structured list crosses: paths, lines, severities, messages. The
+      // raw checker transcript is command output and stays, same as stdout
+      // everywhere else — a checker echoing source into its output is exactly
+      // the case `raw` exists to preserve on the host and must not publish.
+      if (result.name === "run_diagnostics") {
+        return {
+          ...event,
+          payload: {
+            ...event.payload,
+            result: {
+              ...result,
+              output: {
+                ...result.output,
+                raw: result.output.raw === "" ? "" : WITHHELD,
+              },
+            },
+          },
+        };
+      }
+
+      // A dev server's logs are raw process output; its lifecycle — which
+      // server, what state, which port — is what a teammate follows.
+      if (result.name === "dev_server") {
+        const { output } = result;
+
+        if (output.action === "start" || output.action === "logs") {
+          return {
+            ...event,
+            payload: {
+              ...event.payload,
+              result: {
+                ...result,
+                output: {
+                  ...output,
+                  logs: output.logs === "" ? "" : WITHHELD,
+                },
+              },
+            },
+          };
+        }
+
+        return event;
+      }
+
       if (result.name === "git_status") {
         return event;
       }
 
-      // propose_patch, apply_patch and git_diff carry diffs, and a diff is what
-      // V1's compare screen is built on — a reviewer choosing between two
-      // attempts is choosing between their patches. These cross deliberately.
+      // Branch names cross like git_status's branch does; worktree paths are
+      // absolute and name the host's filesystem, which is the same fact
+      // fork.created's worktreePath already withholds.
+      if (result.name === "git_branches") {
+        return {
+          ...event,
+          payload: {
+            ...event.payload,
+            result: {
+              ...result,
+              output: {
+                ...result.output,
+                worktrees: result.output.worktrees.map((worktree) => ({
+                  ...worktree,
+                  path: WITHHELD,
+                })),
+              },
+            },
+          },
+        };
+      }
+
+      // propose_patch, propose_new_file, propose_deletion, apply_patch and
+      // git_diff carry diffs, and a diff is what V1's compare screen is built
+      // on — a reviewer choosing between two attempts is choosing between
+      // their patches. These cross deliberately.
       return event;
     }
 

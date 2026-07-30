@@ -1,5 +1,13 @@
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { rgPath } from "@vscode/ripgrep";
@@ -279,7 +287,7 @@ export class SearchRepositoryTool implements AgentTool {
   }
 }
 
-type CommandOutcome = {
+export type CommandOutcome = {
   command: string;
   exitCode: number | null;
   timedOut: boolean;
@@ -313,7 +321,7 @@ const SECRET_PATTERN = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH/i;
 // error that says nothing about the cause.
 const ENVIRONMENT_EXCEPTIONS = new Set(["SSH_AUTH_SOCK"]);
 
-const scrubbedEnvironment = (): NodeJS.ProcessEnv => {
+export const scrubbedEnvironment = (): NodeJS.ProcessEnv => {
   const environment: NodeJS.ProcessEnv = {};
 
   for (const [name, value] of Object.entries(process.env)) {
@@ -401,7 +409,7 @@ export const killRunningCommands = (): void => {
   runningGroups.clear();
 };
 
-const runProcess = (
+export const runProcess = (
   repositoryRoot: string,
   command: string,
   args: readonly string[],
@@ -581,37 +589,59 @@ const LOCKFILE_PACKAGE_MANAGERS: ReadonlyArray<[string, string]> = [
   ["bun.lockb", "bun"],
 ];
 
-const detectTestCommand = async (
+export const readPackageManifest = async (
   repositoryRoot: string,
-): Promise<PackageManager> => {
-  let manifest: { scripts?: Record<string, string> };
-
+  toolName: string,
+): Promise<{ scripts?: Record<string, string> }> => {
   try {
-    manifest = JSON.parse(
+    return JSON.parse(
       await readFile(resolve(repositoryRoot, "package.json"), "utf8"),
     );
   } catch {
     throw new Error(
-      "run_tests found no package.json in the repository root, so it cannot tell how this project runs its tests.",
+      `${toolName} found no package.json in the repository root, so it cannot tell how this project declares that.`,
     );
   }
+};
 
-  if (!manifest.scripts?.test) {
-    throw new Error(
-      'run_tests requires a "test" script in package.json. Add one, or use run_command to invoke the test runner directly.',
-    );
-  }
-
+/** The package manager the lockfile says this project uses, npm when none says. */
+export const detectPackageManager = async (
+  repositoryRoot: string,
+): Promise<string> => {
   for (const [lockfile, manager] of LOCKFILE_PACKAGE_MANAGERS) {
     try {
       await stat(resolve(repositoryRoot, lockfile));
-      return { command: manager, args: ["test"] };
+      return manager;
     } catch {
       continue;
     }
   }
 
-  return { command: "npm", args: ["test"] };
+  return "npm";
+};
+
+const detectScriptCommand = async (
+  repositoryRoot: string,
+  toolName: string,
+  script: string,
+): Promise<PackageManager> => {
+  const manifest = await readPackageManifest(repositoryRoot, toolName);
+
+  if (!manifest.scripts?.[script]) {
+    throw new Error(
+      `${toolName} requires a "${script}" script in package.json. Add one, or use run_command to invoke it directly.`,
+    );
+  }
+
+  const manager = await detectPackageManager(repositoryRoot);
+
+  // `run` spelled out for every manager. Bare `npm build` is not `npm run
+  // build` — npm silently treats unknown bare subcommands as nothing — and
+  // while `pnpm build` happens to work, relying on each manager's shorthand
+  // is how the same tool runs different code under different lockfiles. The
+  // one exception is `test`, which every manager treats as a first-class
+  // subcommand; `run test` is equivalent, so uniformity wins there too.
+  return { command: manager, args: ["run", script] };
 };
 
 /**
@@ -636,7 +666,7 @@ export class RunTestsTool implements AgentTool {
     }
 
     const repositoryRoot = await realpath(this.repositoryPath);
-    const runner = await detectTestCommand(repositoryRoot);
+    const runner = await detectScriptCommand(repositoryRoot, this.name, "test");
     const outcome = await runProcess(
       repositoryRoot,
       runner.command,
@@ -655,10 +685,60 @@ export class RunTestsTool implements AgentTool {
   }
 }
 
+/**
+ * Runs the repository's own build script, the way run_tests runs its tests.
+ *
+ * The same deliberate narrowness: the project declares how it builds, and the
+ * model gets a structured verdict rather than choosing a compiler invocation
+ * for itself. "Does it still build" is the question a change to a compiled
+ * project has to answer before "do the tests pass" even means anything.
+ */
+export class RunBuildTool implements AgentTool {
+  readonly name = "run_build";
+  private readonly repositoryPath: string;
+
+  constructor(repositoryPath: string) {
+    this.repositoryPath = resolve(repositoryPath);
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The run_build tool cannot execute ${call.name}.`);
+    }
+
+    const repositoryRoot = await realpath(this.repositoryPath);
+    const runner = await detectScriptCommand(repositoryRoot, this.name, "build");
+    const outcome = await runProcess(
+      repositoryRoot,
+      runner.command,
+      [...runner.args, ...call.input.args],
+      call.input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    );
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        ...outcome,
+        succeeded: outcome.exitCode === 0 && !outcome.timedOut,
+      },
+    });
+  }
+}
+
 export type PatchProposal = {
   patchId: string;
   path: string;
   intent: string;
+  /**
+   * What applying this proposal will do to the path. An edit rewrites an
+   * existing file, a create writes a file that must not exist yet, a delete
+   * removes one that must still match `baseContent`. One field rather than
+   * three proposal types, because apply_patch is one tool and the write
+   * class has exactly one member — the kind changes what the apply checks,
+   * never which gate it crosses.
+   */
+  kind: "edit" | "create" | "delete";
   baseContent: string;
   proposedContent: string;
   additions: number;
@@ -704,6 +784,18 @@ export class ProposePatchTool implements AgentTool {
     if (proposal) {
       proposal.appliedAt = new Date().toISOString();
     }
+  }
+
+  /**
+   * Accepts a proposal made by another propose-class tool.
+   *
+   * propose_new_file and propose_deletion register here rather than keeping
+   * stores of their own, because apply_patch reads exactly one source — a
+   * patchId that resolves differently depending on which tool minted it would
+   * make "was this applied" unanswerable from one place.
+   */
+  register(proposal: PatchProposal): void {
+    this.proposals.set(proposal.patchId, proposal);
   }
 
   async execute(call: ToolCall): Promise<ToolResult> {
@@ -761,6 +853,7 @@ export class ProposePatchTool implements AgentTool {
       patchId,
       path,
       intent: call.input.intent,
+      kind: "edit",
       baseContent,
       proposedContent,
       additions,
@@ -787,6 +880,160 @@ export class ProposePatchTool implements AgentTool {
 export interface PatchProposalSource {
   getProposal(patchId: string): PatchProposal | undefined;
   markApplied(patchId: string): void;
+}
+
+/** A source that also accepts proposals minted by the other propose tools. */
+export interface PatchProposalStore extends PatchProposalSource {
+  register(proposal: PatchProposal): void;
+}
+
+/**
+ * Proposes creating a file that does not exist yet.
+ *
+ * This closes a real hole rather than adding a convenience: propose_patch
+ * requires an existing file, so before this the only way an agent could
+ * create one was run_command — a dangerous-class tool whose write is not
+ * reviewable before it happens. Creation belongs in the same
+ * propose-then-apply flow as every other change, with the whole file as the
+ * reviewable diff and apply_patch as the single permissioned writer.
+ */
+export class ProposeNewFileTool implements AgentTool {
+  readonly name = "propose_new_file";
+  private readonly repositoryPath: string;
+  private readonly proposals: PatchProposalStore;
+
+  constructor(repositoryPath: string, proposals: PatchProposalStore) {
+    this.repositoryPath = resolve(repositoryPath);
+    this.proposals = proposals;
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The propose_new_file tool cannot execute ${call.name}.`);
+    }
+
+    // allowMissing because the file not existing is the entire point — but
+    // the resolution is otherwise the same guard as everywhere else, so an
+    // absolute path, a `..` escape, a symlinked parent, a .env and anything
+    // under .git are all still refused before existence is even considered.
+    const { repositoryRoot, targetPath } = await resolveInsideRepository(
+      this.repositoryPath,
+      call.input.path,
+      { allowMissing: true },
+    );
+
+    const existing = await stat(targetPath).catch(() => null);
+
+    if (existing !== null) {
+      throw new Error(
+        existing.isFile()
+          ? `${call.input.path} already exists. Use propose_patch to edit an existing file.`
+          : `${call.input.path} already exists and is not a file.`,
+      );
+    }
+
+    const path = relative(repositoryRoot, targetPath);
+    const { diff, additions, deletions } = buildUnifiedDiff(
+      path,
+      "",
+      call.input.content,
+    );
+    const patchId = crypto.randomUUID();
+
+    this.proposals.register({
+      patchId,
+      path,
+      intent: call.input.intent,
+      kind: "create",
+      baseContent: "",
+      proposedContent: call.input.content,
+      additions,
+      deletions,
+      appliedAt: null,
+    });
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        patchId,
+        path,
+        intent: call.input.intent,
+        status: "proposed",
+        diff,
+        additions,
+        deletions,
+      },
+    });
+  }
+}
+
+/**
+ * Proposes deleting an existing file.
+ *
+ * The proposal captures the file's content so the apply step can refuse a
+ * file that changed after the deletion was reviewed — deleting what someone
+ * saw is not the same decision as deleting what is there now. The diff shown
+ * for review is the entire file removed, which is exactly what approving it
+ * means.
+ */
+export class ProposeDeletionTool implements AgentTool {
+  readonly name = "propose_deletion";
+  private readonly repositoryPath: string;
+  private readonly proposals: PatchProposalStore;
+
+  constructor(repositoryPath: string, proposals: PatchProposalStore) {
+    this.repositoryPath = resolve(repositoryPath);
+    this.proposals = proposals;
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The propose_deletion tool cannot execute ${call.name}.`);
+    }
+
+    const { repositoryRoot, targetPath } = await resolveInsideRepository(
+      this.repositoryPath,
+      call.input.path,
+    );
+
+    if (!(await stat(targetPath)).isFile()) {
+      throw new Error(
+        "propose_deletion removes one file. Directories are refused: delete their files individually, so each removal is reviewed.",
+      );
+    }
+
+    const baseContent = await readFile(targetPath, "utf8");
+    const path = relative(repositoryRoot, targetPath);
+    const { diff, additions, deletions } = buildUnifiedDiff(path, baseContent, "");
+    const patchId = crypto.randomUUID();
+
+    this.proposals.register({
+      patchId,
+      path,
+      intent: call.input.intent,
+      kind: "delete",
+      baseContent,
+      proposedContent: "",
+      additions,
+      deletions,
+      appliedAt: null,
+    });
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        patchId,
+        path,
+        intent: call.input.intent,
+        status: "proposed",
+        diff,
+        additions,
+        deletions,
+      },
+    });
+  }
 }
 
 /**
@@ -827,19 +1074,63 @@ export class ApplyPatchTool implements AgentTool {
       );
     }
 
+    // allowMissing serves both non-edit kinds — a creation's file does not
+    // exist yet, and a deletion has to be able to *report* one that is
+    // already gone — while the confinement itself is identical for all
+    // three: the missing tail is re-attached to the resolved ancestor, so
+    // nothing outside the repository and nothing protected is reachable.
     const { targetPath } = await resolveInsideRepository(
       this.repositoryPath,
       proposal.path,
+      { allowMissing: proposal.kind !== "edit" },
     );
-    const currentContent = await readFile(targetPath, "utf8");
 
-    if (currentContent !== proposal.baseContent) {
-      throw new Error(
-        `${proposal.path} changed after this patch was proposed, so the diff no longer applies. Re-read the file and propose the change again.`,
+    if (proposal.kind === "create") {
+      // The drift check, restated for a file that should not exist: what was
+      // reviewed was "this path is new". A file that appeared since — the
+      // human's own editor, another run — makes the proposal stale the same
+      // way an edited base does.
+      if ((await stat(targetPath).catch(() => null)) !== null) {
+        throw new Error(
+          `${proposal.path} was created after this proposal was made, so applying it would overwrite a file nobody reviewed. Read the file and propose an edit instead.`,
+        );
+      }
+
+      // Parents are created inside the already-confined target path only.
+      // dirname of a confined path is confined: the resolver refused any
+      // escape before the tail was re-attached.
+      await mkdir(dirname(targetPath), { recursive: true });
+      await writeFile(targetPath, proposal.proposedContent, "utf8");
+    } else if (proposal.kind === "delete") {
+      const currentContent = await readFile(targetPath, "utf8").catch(
+        (error: NodeJS.ErrnoException) => {
+          throw error.code === "ENOENT"
+            ? new Error(
+                `${proposal.path} is already gone, so there is nothing to delete. The proposal was not applied.`,
+              )
+            : error;
+        },
       );
+
+      if (currentContent !== proposal.baseContent) {
+        throw new Error(
+          `${proposal.path} changed after its deletion was proposed. Deleting what was reviewed is not deleting what is there now — re-read the file and propose again.`,
+        );
+      }
+
+      await unlink(targetPath);
+    } else {
+      const currentContent = await readFile(targetPath, "utf8");
+
+      if (currentContent !== proposal.baseContent) {
+        throw new Error(
+          `${proposal.path} changed after this patch was proposed, so the diff no longer applies. Re-read the file and propose the change again.`,
+        );
+      }
+
+      await writeFile(targetPath, proposal.proposedContent, "utf8");
     }
 
-    await writeFile(targetPath, proposal.proposedContent, "utf8");
     this.proposals.markApplied(proposal.patchId);
 
     return ToolResultSchema.parse({
@@ -1185,6 +1476,139 @@ export class GitDiffTool implements AgentTool {
         diff: diff.slice(0, MAX_DIFF_CHARS),
         filesChanged,
         truncated: diff.length > MAX_DIFF_CHARS,
+      },
+    });
+  }
+}
+
+const MAX_BRANCHES = 200;
+
+/**
+ * Reports the repository's branches and worktrees. Strictly read-side:
+ * creating, switching, or deleting a branch changes the checkout under the
+ * human who selected it, and that is run_command-with-approval territory, not
+ * something a read-class tool does quietly.
+ *
+ * The same hardening as the other git reporters — config overrides, scrubbed
+ * environment, fixed argument vectors, and the repository-root assertion —
+ * because "read-only" is only true when the repository cannot make Git run
+ * code on the way to answering.
+ */
+export class GitBranchesTool implements AgentTool {
+  readonly name = "git_branches";
+  private readonly repositoryPath: string;
+
+  constructor(repositoryPath: string) {
+    this.repositoryPath = resolve(repositoryPath);
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.name !== this.name) {
+      throw new Error(`The git_branches tool cannot execute ${call.name}.`);
+    }
+
+    const repositoryRoot = await realpath(this.repositoryPath);
+
+    await assertRepositoryRoot(repositoryRoot);
+
+    // %(HEAD) marks the branch this worktree has checked out, which is also
+    // how a detached HEAD shows itself: no branch carries the mark. Fields
+    // are NUL-separated because a subject line can contain anything printable
+    // — a subject with a tab in it must not become two fields.
+    const refs = await runGit(repositoryRoot, [
+      "for-each-ref",
+      "refs/heads",
+      "--format=%(HEAD)%00%(refname:short)%00%(objectname:short)%00%(upstream:short)%00%(subject)",
+    ]);
+
+    const parsed = refs
+      .split("\n")
+      .filter(Boolean)
+      .flatMap((line) => {
+        const [head, name, revision, upstream, subject] = line.split("\0");
+
+        if (!name || !revision) {
+          return [];
+        }
+
+        return [
+          {
+            name,
+            isCurrent: head === "*",
+            revision,
+            subject: subject ?? "",
+            upstream: upstream ? upstream : null,
+          },
+        ];
+      });
+
+    const branches = parsed.slice(0, MAX_BRANCHES);
+    const current = branches.find((branch) => branch.isCurrent)?.name ?? null;
+
+    // --porcelain -z: records are NUL-terminated attribute lines, a blank
+    // record between worktrees. Parsed rather than displayed because the
+    // model needs "which checkout is mine" as a fact, not a listing.
+    const worktreeRecords = await runGit(repositoryRoot, [
+      "worktree",
+      "list",
+      "--porcelain",
+      "-z",
+    ]);
+
+    const worktrees: Array<{
+      path: string;
+      branch: string | null;
+      revision: string;
+      isCurrent: boolean;
+    }> = [];
+    let entry: { path?: string; branch?: string | null; revision?: string } = {};
+
+    const flush = async (): Promise<void> => {
+      if (entry.path && entry.revision) {
+        // realpath so the comparison with the (already-resolved) repository
+        // root is between two resolved paths — /var vs /private/var on macOS
+        // otherwise reports the selected checkout as somebody else's.
+        const resolvedPath = await realpath(entry.path).catch(() => entry.path!);
+
+        worktrees.push({
+          path: resolvedPath,
+          branch: entry.branch ?? null,
+          revision: entry.revision,
+          isCurrent: resolvedPath === repositoryRoot,
+        });
+      }
+      entry = {};
+    };
+
+    for (const record of worktreeRecords.split("\0")) {
+      if (record === "") {
+        await flush();
+        continue;
+      }
+
+      if (record.startsWith("worktree ")) {
+        entry.path = record.slice("worktree ".length);
+      } else if (record.startsWith("HEAD ")) {
+        entry.revision = record.slice("HEAD ".length);
+      } else if (record.startsWith("branch ")) {
+        entry.branch = record
+          .slice("branch ".length)
+          .replace(/^refs\/heads\//, "");
+      } else if (record === "detached") {
+        entry.branch = null;
+      }
+    }
+
+    await flush();
+
+    return ToolResultSchema.parse({
+      toolCallId: call.id,
+      name: this.name,
+      output: {
+        current,
+        branches,
+        worktrees,
+        truncated: parsed.length > MAX_BRANCHES,
       },
     });
   }

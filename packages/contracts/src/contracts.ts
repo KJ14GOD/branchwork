@@ -57,6 +57,38 @@ export const ApplyPatchToolCallSchema = z.object({
   }),
 });
 
+// Creating a file goes through the same propose-then-apply flow as editing one,
+// not through a separate unreviewed write path. Until this existed the agent
+// literally could not create a file: propose_patch requires a path that is
+// already a file, so "write a new module" was only reachable by contorting
+// run_command — a dangerous-class tool producing an unreviewable write. The
+// content arrives whole rather than as edits because there is nothing to edit
+// yet; the reviewable diff is the entire file.
+export const ProposeNewFileToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("propose_new_file"),
+  input: z.object({
+    path: z.string().min(1),
+    intent: z.string().min(1),
+    // Empty allowed: an empty marker file is a legitimate thing to create, and
+    // refusing it would push exactly that case back out to run_command.
+    content: z.string(),
+  }),
+});
+
+// Deletion is proposed, not performed — the same two-step flow as every other
+// write, because removing a file is as much a change to review as editing one.
+// The proposal captures the file's content at proposal time so the apply step
+// can refuse if the file changed in between, exactly like an edit's drift check.
+export const ProposeDeletionToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("propose_deletion"),
+  input: z.object({
+    path: z.string().min(1),
+    intent: z.string().min(1),
+  }),
+});
+
 // Commands are described as a program plus an argument vector, never as a single
 // string. A string would have to reach a shell to be useful, and a shell turns
 // every argument the model writes into possible `;`, `&&`, `$()`, and
@@ -79,6 +111,70 @@ export const RunTestsToolCallSchema = z.object({
     args: z.array(z.string()).max(32).default([]),
     timeoutMs: z.number().int().min(1_000).max(600_000).optional(),
   }),
+});
+
+// Builds run the way tests do: the project's own script, selected by the
+// project rather than composed by the model. run_command could reach the same
+// script, but "did the project still build" deserves a structured yes/no the
+// same way "did the tests pass" does.
+export const RunBuildToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("run_build"),
+  input: z.object({
+    args: z.array(z.string()).max(32).default([]),
+    timeoutMs: z.number().int().min(1_000).max(600_000).optional(),
+  }),
+});
+
+// Diagnostics take a kind, not a command. The project declares how its types
+// and lint are checked; the model choosing the checker for itself could report
+// a clean run it selected for being clean — the same reasoning run_tests
+// already wrote down. No args at all: a diagnostic pass is over the whole
+// project by definition, and every accepted argument would be an argument for
+// steering the checker somewhere narrower than the claim being made.
+export const RunDiagnosticsToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("run_diagnostics"),
+  input: z.object({
+    kind: z.enum(["typecheck", "lint"]),
+    timeoutMs: z.number().int().min(1_000).max(600_000).optional(),
+  }),
+});
+
+// A development server is the one process that is *supposed* to outlive the
+// tool call — run_command's contract (start, watch, kill on timeout) is exactly
+// wrong for it. The input is a discriminated union because the four actions
+// share almost nothing: starting takes a program vector, the rest take at most
+// a server id minted by a previous start.
+export const DevServerToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("dev_server"),
+  input: z.discriminatedUnion("action", [
+    z.object({
+      action: z.literal("start"),
+      // A program plus argv, never a shell line — same rule and same reasoning
+      // as run_command.
+      command: z.string().min(1),
+      args: z.array(z.string()).max(64).default([]),
+      // Optional: unset, Novus allocates a free port and hands it to the child
+      // as PORT. Set, the tool refuses rather than fights if it is taken.
+      port: z.number().int().min(1_024).max(65_535).optional(),
+      // How long to wait for the port to answer before reporting the server as
+      // still starting. Short by default: this holds up the agent loop.
+      readyTimeoutMs: z.number().int().min(500).max(60_000).optional(),
+    }),
+    z.object({
+      action: z.literal("stop"),
+      serverId: IdSchema,
+    }),
+    z.object({
+      action: z.literal("status"),
+    }),
+    z.object({
+      action: z.literal("logs"),
+      serverId: IdSchema,
+    }),
+  ]),
 });
 
 export const ListDirectoryToolCallSchema = z.object({
@@ -109,6 +205,17 @@ export const GitDiffToolCallSchema = z.object({
   }),
 });
 
+// Read-only like git_status and git_diff, and zero-argument for the same
+// written-down reason those are: every revision or pathspec accepted here is a
+// way to ask Git about somewhere other than the selected repository. It
+// reports branches and worktrees — which exist, which is checked out — and
+// changes nothing.
+export const GitBranchesToolCallSchema = z.object({
+  id: IdSchema,
+  name: z.literal("git_branches"),
+  input: z.object({}),
+});
+
 // The one tool that answers a question about the world outside the repository,
 // and deliberately the narrowest possible one. A live run read a valid provider
 // model id out of a repository and confidently called it a typo that "would
@@ -126,12 +233,18 @@ export const ToolCallSchema = z.discriminatedUnion("name", [
   ReadFileToolCallSchema,
   SearchRepositoryToolCallSchema,
   ProposePatchToolCallSchema,
+  ProposeNewFileToolCallSchema,
+  ProposeDeletionToolCallSchema,
   ApplyPatchToolCallSchema,
   RunCommandToolCallSchema,
   RunTestsToolCallSchema,
+  RunBuildToolCallSchema,
+  RunDiagnosticsToolCallSchema,
+  DevServerToolCallSchema,
   ListDirectoryToolCallSchema,
   GitStatusToolCallSchema,
   GitDiffToolCallSchema,
+  GitBranchesToolCallSchema,
   ListProviderModelsToolCallSchema,
 ]);
 
@@ -172,6 +285,40 @@ export const ProposePatchToolResultSchema = z.object({
     intent: z.string().min(1),
     status: z.literal("proposed"),
     diff: z.string().min(1),
+    additions: z.number().int().nonnegative(),
+    deletions: z.number().int().nonnegative(),
+  }),
+});
+
+// The same result shape as propose_patch on purpose: to a reviewer, "create
+// this file" is a proposal with a diff whose every line is an addition, and
+// the apply step that follows is the same apply_patch either way. The kind is
+// not repeated in the payload because the result's own name already states it.
+export const ProposeNewFileToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("propose_new_file"),
+  output: z.object({
+    patchId: IdSchema,
+    path: z.string().min(1),
+    intent: z.string().min(1),
+    status: z.literal("proposed"),
+    // May be empty: creating an empty file is a change with no diff lines.
+    diff: z.string(),
+    additions: z.number().int().nonnegative(),
+    deletions: z.number().int().nonnegative(),
+  }),
+});
+
+export const ProposeDeletionToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("propose_deletion"),
+  output: z.object({
+    patchId: IdSchema,
+    path: z.string().min(1),
+    intent: z.string().min(1),
+    status: z.literal("proposed"),
+    // May be empty: deleting an already-empty file is a change with no lines.
+    diff: z.string(),
     additions: z.number().int().nonnegative(),
     deletions: z.number().int().nonnegative(),
   }),
@@ -220,6 +367,119 @@ export const RunTestsToolResultSchema = z.object({
   }),
 });
 
+export const RunBuildToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("run_build"),
+  output: CommandOutcomeSchema.extend({
+    // run_tests's `passed`, under the name a build earns. Same reason it is
+    // explicit: "does it still build" is the entire question.
+    succeeded: z.boolean(),
+  }),
+});
+
+/**
+ * One problem a checker reported, as data the model can act on.
+ *
+ * The alternative — handing back the checker's stdout — makes the model parse
+ * a wall of text that every checker formats differently, and gives the UI
+ * nothing to render but the wall. Path, line, and column are each nullable
+ * because not every reported problem has a location (a tsconfig error names
+ * no file at all), and inventing one would be a fabricated citation — the
+ * exact failure the system prompt already forbids in the model's own words.
+ */
+const DiagnosticSchema = z.object({
+  path: z.string().min(1).nullable(),
+  line: z.number().int().positive().nullable(),
+  column: z.number().int().positive().nullable(),
+  severity: z.enum(["error", "warning"]),
+  message: z.string().min(1),
+  // "TS2322", an eslint rule id, or null when the checker named none.
+  code: z.string().min(1).nullable(),
+});
+
+export const RunDiagnosticsToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("run_diagnostics"),
+  output: z.object({
+    kind: z.enum(["typecheck", "lint"]),
+    command: z.string().min(1),
+    exitCode: z.number().int().nullable(),
+    timedOut: z.boolean(),
+    durationMs: z.number().int().nonnegative(),
+    // Exit 0 and not killed. Reported beside the diagnostics rather than
+    // inferred from them, because a checker can fail with output the parser
+    // did not recognise — zero parsed diagnostics must never read as clean.
+    ok: z.boolean(),
+    diagnostics: z.array(DiagnosticSchema),
+    // Capped so one broken refactor cannot fill the model's context with ten
+    // thousand identical errors.
+    diagnosticsTruncated: z.boolean(),
+    // The checker's own words, tail-capped. Kept because the parser is
+    // best-effort over formats nobody standardised: when it recognises
+    // nothing, this is the only evidence there is.
+    raw: z.string(),
+    rawTruncated: z.boolean(),
+  }),
+});
+
+export const DevServerToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("dev_server"),
+  output: z.discriminatedUnion("action", [
+    z.object({
+      action: z.literal("start"),
+      serverId: IdSchema,
+      command: z.string().min(1),
+      // Always present: allocated by Novus (and handed to the child as PORT)
+      // or requested by the caller. `state` says whether anything answers on
+      // it — a server is free to ignore PORT, and claiming it listened there
+      // without checking would be an invented fact.
+      port: z.number().int().min(1).max(65_535),
+      pid: z.number().int().positive().nullable(),
+      // listening: the port accepted a connection. starting: the process is
+      // alive but the port has not answered yet — reported honestly rather
+      // than waited on forever, because this holds up the agent loop.
+      // exited: the process died before the wait ran out; a failed start.
+      state: z.enum(["listening", "starting", "exited"]),
+      exitCode: z.number().int().nullable(),
+      // What the server printed while starting, tail-capped — the evidence
+      // for *why* when state is "exited".
+      logs: z.string(),
+    }),
+    z.object({
+      action: z.literal("stop"),
+      serverId: IdSchema,
+      // False when the process was already gone: stopping a dead server is
+      // not an error, but reporting it as a kill would claim an action that
+      // never happened.
+      stopped: z.boolean(),
+    }),
+    z.object({
+      action: z.literal("status"),
+      servers: z.array(
+        z.object({
+          serverId: IdSchema,
+          command: z.string().min(1),
+          port: z.number().int().min(1).max(65_535),
+          pid: z.number().int().positive().nullable(),
+          state: z.enum(["listening", "starting", "exited"]),
+          uptimeMs: z.number().int().nonnegative(),
+        }),
+      ),
+    }),
+    z.object({
+      action: z.literal("logs"),
+      serverId: IdSchema,
+      // Repeated here, not only on start, so anything deciding what these
+      // logs are — redaction's dotenv rule, most concretely — can see the
+      // command that produced them without holding state across events.
+      command: z.string().min(1),
+      logs: z.string(),
+      truncated: z.boolean(),
+    }),
+  ]),
+});
+
 export const ListDirectoryToolResultSchema = z.object({
   toolCallId: IdSchema,
   name: z.literal("list_directory"),
@@ -264,6 +524,42 @@ export const GitDiffToolResultSchema = z.object({
   }),
 });
 
+export const GitBranchesToolResultSchema = z.object({
+  toolCallId: IdSchema,
+  name: z.literal("git_branches"),
+  output: z.object({
+    // Null on a detached HEAD, which is a real state the agent needs to see —
+    // inventing a branch name for it would misreport where commits will land.
+    current: z.string().min(1).nullable(),
+    branches: z.array(
+      z.object({
+        name: z.string().min(1),
+        isCurrent: z.boolean(),
+        revision: z.string().min(1),
+        // The tip commit's subject line, so two similarly named branches can
+        // be told apart without another tool call. May be empty: an empty
+        // commit message is unusual but not invalid.
+        subject: z.string(),
+        // "origin/main" when the branch tracks one, null when it tracks
+        // nothing — most local work branches do not.
+        upstream: z.string().min(1).nullable(),
+      }),
+    ),
+    worktrees: z.array(
+      z.object({
+        path: z.string().min(1),
+        // Null for a detached worktree.
+        branch: z.string().min(1).nullable(),
+        revision: z.string().min(1),
+        // Whether this entry is the selected repository itself, so the model
+        // can tell "the checkout I am in" from a sibling attempt.
+        isCurrent: z.boolean(),
+      }),
+    ),
+    truncated: z.boolean(),
+  }),
+});
+
 export const ListProviderModelsToolResultSchema = z.object({
   toolCallId: IdSchema,
   name: z.literal("list_provider_models"),
@@ -277,12 +573,18 @@ export const ToolResultSchema = z.discriminatedUnion("name", [
   ReadFileToolResultSchema,
   SearchRepositoryToolResultSchema,
   ProposePatchToolResultSchema,
+  ProposeNewFileToolResultSchema,
+  ProposeDeletionToolResultSchema,
   ApplyPatchToolResultSchema,
   RunCommandToolResultSchema,
   RunTestsToolResultSchema,
+  RunBuildToolResultSchema,
+  RunDiagnosticsToolResultSchema,
+  DevServerToolResultSchema,
   ListDirectoryToolResultSchema,
   GitStatusToolResultSchema,
   GitDiffToolResultSchema,
+  GitBranchesToolResultSchema,
   ListProviderModelsToolResultSchema,
 ]);
 

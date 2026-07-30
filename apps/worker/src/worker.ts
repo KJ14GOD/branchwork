@@ -17,6 +17,7 @@ import { HOST_SESSION, ParticipantRegistry } from "./participants.ts";
 import { publishToRelay } from "./relay-publisher.ts";
 import { createRedactor } from "./redaction.ts";
 import { killRunningCommands } from "./tools.ts";
+import { stopAllDevServers } from "./dev-server.ts";
 
 // Configurable rather than hardcoded, so "one model provider initially"
 // (V1's scope) does not mean "the only provider this harness could ever
@@ -324,6 +325,10 @@ console.log("\nready — press ctrl+c to stop");
 // leave a test suite running invisibly after the worker is gone.
 const shutdown = (code: number) => {
   killRunningCommands();
+  // Dev servers are detached for the same reason commands are, so a quit
+  // would otherwise leave one listening invisibly on its port — the exact
+  // leak the dev_server tool exists to prevent.
+  stopAllDevServers();
   void eventServer.close().then(() => {
     eventStore.close();
     process.exit(code);

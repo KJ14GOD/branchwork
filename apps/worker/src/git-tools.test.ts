@@ -6,7 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { GitDiffTool, GitStatusTool, ListDirectoryTool } from "./tools.ts";
+import {
+  GitBranchesTool,
+  GitDiffTool,
+  GitStatusTool,
+  ListDirectoryTool,
+} from "./tools.ts";
 
 const run = promisify(execFile);
 
@@ -401,4 +406,122 @@ test("list_directory does not claim truncation for entries it filtered", async (
   assert.equal(result.output.entries.length, 500);
   assert.ok(!result.output.entries.some((entry) => entry.name === ".env"));
   assert.equal(result.output.truncated, false);
+});
+
+test("git_branches reports branches, the checked-out one, and worktrees", async () => {
+  const root = await mkdtemp(join(tmpdir(), "novus-branches-"));
+
+  // -b main because the default branch name is host configuration, and a test
+  // that inherits host configuration is asserting someone's dotfiles.
+  await run("git", ["init", "-q", "-b", "main"], { cwd: root });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  await run("git", ["config", "user.name", "Test"], { cwd: root });
+  await writeFile(join(root, "a.txt"), "one\n");
+  await run("git", ["add", "."], { cwd: root });
+  await run("git", ["commit", "-qm", "initial subject"], { cwd: root });
+  await run("git", ["branch", "feature"], { cwd: root });
+
+  const result = await new GitBranchesTool(root).execute({
+    id: "35",
+    name: "git_branches",
+    input: {},
+  });
+
+  if (result.name !== "git_branches") return assert.fail("wrong result");
+
+  // The current branch is a fact the model reasons from — "where do commits
+  // land" — so it has to be the checked-out branch, not merely the first.
+  assert.equal(result.output.current, "main");
+
+  const names = result.output.branches.map((branch) => branch.name).sort();
+
+  assert.deepEqual(names, ["feature", "main"]);
+
+  const main = result.output.branches.find((branch) => branch.name === "main");
+
+  assert.equal(main?.isCurrent, true);
+  assert.equal(main?.subject, "initial subject");
+  // A local branch tracking nothing reports null, not "" — absence must not
+  // be spellable as an odd-looking name.
+  assert.equal(main?.upstream, null);
+
+  // The main checkout itself is a worktree in Git's model, and marking it
+  // current is what lets the model tell "my checkout" from a sibling fork's.
+  assert.equal(result.output.worktrees.length, 1);
+  assert.equal(result.output.worktrees[0]?.isCurrent, true);
+  assert.equal(result.output.worktrees[0]?.branch, "main");
+});
+
+test("git_branches sees a linked worktree and a detached HEAD honestly", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "novus-branches-wt-"));
+  const root = join(parent, "repo");
+
+  await mkdir(root);
+  await run("git", ["init", "-q", "-b", "main"], { cwd: root });
+  await run("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  await run("git", ["config", "user.name", "Test"], { cwd: root });
+  await writeFile(join(root, "a.txt"), "one\n");
+  await run("git", ["add", "."], { cwd: root });
+  await run("git", ["commit", "-qm", "initial"], { cwd: root });
+  await run("git", ["branch", "attempt"], { cwd: root });
+  await run("git", ["worktree", "add", join(parent, "attempt-wt"), "attempt"], {
+    cwd: root,
+  });
+
+  const tool = new GitBranchesTool(root);
+  const withWorktree = await tool.execute({
+    id: "36",
+    name: "git_branches",
+    input: {},
+  });
+
+  if (withWorktree.name !== "git_branches") return assert.fail("wrong result");
+
+  // Both checkouts are visible, and exactly one is this repository — the
+  // sibling fork must never be mistaken for the checkout the agent is in.
+  assert.equal(withWorktree.output.worktrees.length, 2);
+  assert.equal(
+    withWorktree.output.worktrees.filter((worktree) => worktree.isCurrent).length,
+    1,
+  );
+  assert.ok(
+    withWorktree.output.worktrees.some(
+      (worktree) => worktree.branch === "attempt" && !worktree.isCurrent,
+    ),
+  );
+
+  // Detached HEAD: no branch is current, and saying so is the honest report —
+  // inventing a name would misstate where commits will land.
+  await run("git", ["checkout", "-q", "--detach", "HEAD"], { cwd: root });
+
+  const detached = await tool.execute({
+    id: "37",
+    name: "git_branches",
+    input: {},
+  });
+
+  if (detached.name !== "git_branches") return assert.fail("wrong result");
+
+  assert.equal(detached.output.current, null);
+  assert.ok(detached.output.branches.every((branch) => !branch.isCurrent));
+});
+
+test("git_branches refuses a directory inside a larger repository", async () => {
+  // Same boundary as git_status and git_diff: Git walks up to find its top
+  // level, so pointing the tool at a subdirectory would report on — and name
+  // branches of — a repository nobody selected.
+  const root = await gitRepository();
+  const inner = join(root, "inner");
+
+  await mkdir(inner);
+
+  await assert.rejects(
+    () =>
+      new GitBranchesTool(inner).execute({
+        id: "38",
+        name: "git_branches",
+        input: {},
+      }),
+    /selected repository only/,
+  );
 });

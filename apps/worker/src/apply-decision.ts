@@ -20,12 +20,13 @@ import type { WorktreeManager } from "./worktree-manager.ts";
  * so the edit degenerates to a full replacement — which is fine, because
  * `oldText` matching the entire file guarantees it is found exactly once.
  *
- * Two things those tools cannot do at all: create a file that does not yet
- * exist, and delete one. `propose_patch` refuses a path that is not already a
- * file, by design — nothing in this harness creates files outside
- * `run_command`. Those two cases get the same discipline by hand: read what
- * is actually there, compare it with what the fork started from, and only
- * write or remove on a clean match.
+ * Creation and deletion are handled by hand here: read what is actually
+ * there, compare it with what the fork started from, and only write or
+ * remove on a clean match. This path predates `propose_new_file` and
+ * `propose_deletion`, which now express both through the same proposal store
+ * `apply_patch` reads — folding this onto those tools is a cleanup this
+ * comment leaves on the table deliberately rather than doing quietly; the
+ * hand-rolled checks below are the same checks those tools now perform.
  *
  * Preflight, then apply. Every file is checked against its expected base
  * before anything is written, and one conflicting file refuses the *whole*
