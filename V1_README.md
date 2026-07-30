@@ -85,10 +85,28 @@ Five earlier failure modes, closed:
   fixtures and have each passed against the real model once. See *Benchmark
   results*.
 
-Before starting anything from the roadmap in `README.md`, check it against this
-section. Multiplayer is no longer the thin half, so the risk this document used
-to guard against has moved: what is thin now is *closing the loop* a shared
-session opens — pause, resume, handoff, live presence — not standing the
+One piece of `README.md`'s own roadmap is also real now, ahead of the rest of
+this milestone rather than after it: **multiple model providers.** `apps/worker/src/openai-model.ts`
+is a second `ModelAdapter` beside Anthropic's, selected at boot with
+`NOVUS_MODEL_PROVIDER`/`NOVUS_MODEL` (unset, behaviour is unchanged). Reviewed
+by scope-warden before it was built, which flagged — correctly — that this is
+roadmap work landing ahead of Milestone 3's own remaining items; recorded
+here rather than treated as a reason not to, since reaching into the roadmap
+was explicitly in scope for this slice. Proven deterministically (message
+building, context elision, and the required trust-boundary case: malformed
+tool-call arguments become an observation, not a thrown error) and proven live
+at the process level — a real worker still boots on the Anthropic default
+unchanged, an unrecognised provider name refuses at boot with a stated reason,
+and a real request reaches OpenAI's API and is validated by it. What is *not*
+proven: a full live round-trip against a real OpenAI model, because no valid
+`OPENAI_API_KEY` was available to run one with. `openai-smoke.ts` is there to
+run by hand the moment one is.
+
+Before starting anything else from the roadmap in `README.md`, check it
+against this section. Multiplayer is no longer the thin half, so the risk this
+document used to guard against has moved: what is thin now is *closing the
+loop* a shared session opens — pause, resume, handoff, live presence — not
+standing the
 transport up in the first place. Apply and cancel both closed on 2026-07-30;
 the rest have not.
 
