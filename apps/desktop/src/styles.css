@@ -83,6 +83,35 @@ button {
   cursor: pointer;
 }
 
+/* Interactive state changes ease rather than jump. Only paint properties —
+   never `all`, never anything that triggers layout. */
+.titlebar__repo,
+.titlebar__action,
+.open__browse,
+.open__submit,
+.open__input,
+.open__recent-row,
+.open__toggle,
+.jump,
+.tool__head,
+.palette__item,
+.palette__input {
+  transition:
+    background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ---------- shell ---------- */
 
 .shell {
