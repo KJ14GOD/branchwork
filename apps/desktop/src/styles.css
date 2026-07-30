@@ -58,6 +58,10 @@
   box-sizing: border-box;
 }
 
+::selection {
+  background: rgb(var(--fg) / 0.18);
+}
+
 html,
 body,
 #root {
