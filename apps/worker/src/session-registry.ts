@@ -7,6 +7,10 @@ import type { ToolCall } from "@novus/contracts";
 import type { SessionEventStore } from "@novus/session-service";
 
 import { AgentRunFailure, AgentRunner } from "./agent-runner.ts";
+import {
+  WorktreeManager,
+  type ForkHandle,
+} from "./worktree-manager.ts";
 import type { ModelAdapter, ModelRouter } from "./model.ts";
 import {
   AllowListApprovalGate,
@@ -79,6 +83,15 @@ export type SessionOptions = {
 export type Session = {
   id: string;
   repositoryPath: string;
+  /**
+   * Cuts checkpoints and forks for this session's repository.
+   *
+   * One per session rather than one per worker, because a fork's isolation is
+   * defined against the repository it came from and each session has its own.
+   */
+  worktrees: WorktreeManager;
+  /** Forks made from this session, by their run id. */
+  forks: Map<string, ForkHandle>;
   allowWrites: boolean;
   allowCommands: boolean;
   runner: AgentRunner;
@@ -183,6 +196,8 @@ export class SessionRegistry {
     const session: Session = {
       id: crypto.randomUUID(),
       repositoryPath,
+      worktrees: new WorktreeManager(repositoryPath),
+      forks: new Map(),
       allowWrites,
       allowCommands,
       createdAt: new Date().toISOString(),

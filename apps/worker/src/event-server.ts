@@ -20,6 +20,7 @@ import {
   type Membership,
   type ParticipantRegistry,
 } from "./participants.ts";
+import { compareAttempts } from "./compare.ts";
 import { createRedactor, type Redactor } from "./redaction.ts";
 import type { Session, SessionRegistry } from "./session-registry.ts";
 
@@ -237,6 +238,116 @@ export const startEventServer = (
         sendJson(response, 400, { error: (error as Error).message });
       }
 
+      return true;
+    }
+
+    const forkMatch = /^\/sessions\/([^/]+)\/fork$/.exec(pathname);
+
+    if (forkMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(forkMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const body = (await readJsonBody(request)) as {
+        label?: unknown;
+        goal?: unknown;
+        parentRunId?: unknown;
+      };
+      const label = typeof body.label === "string" ? body.label.trim() : "";
+      const goal = typeof body.goal === "string" ? body.goal.trim() : "";
+
+      if (label === "" || goal === "") {
+        sendJson(response, 400, {
+          error: "A fork needs a label to tell it apart and a goal to pursue.",
+        });
+        return true;
+      }
+
+      const history = store.list(session.id);
+      const parentRunId =
+        typeof body.parentRunId === "string"
+          ? body.parentRunId
+          : history.findLast((event) => event.type === "run.started")?.type ===
+              "run.started"
+            ? (history.findLast((event) => event.type === "run.started") as
+                { payload: { run: { id: string } } }).payload.run.id
+            : null;
+
+      if (parentRunId === null) {
+        sendJson(response, 409, {
+          error: "There is no run to fork from yet. Ask the agent something first.",
+        });
+        return true;
+      }
+
+      try {
+        // Checkpoint first, and record it, because a fork is only meaningful
+        // against a stated point in the parent's history — and that point has to
+        // be in the log before anything is built from it.
+        const checkpoint = await session.worktrees.createCheckpoint({
+          sessionId: session.id,
+          parentRunId,
+          parentSequence: history.length - 1,
+          agentState: `Forked at sequence ${history.length - 1}`,
+          goal,
+          model: session.runner.modelSelection(),
+          toolPolicy: {
+            allowWrites: session.allowWrites,
+            allowCommands: session.allowCommands,
+          },
+        });
+
+        store.append({
+          sessionId: session.id,
+          actorId: caller?.participant.id ?? "host",
+          type: "checkpoint.created",
+          payload: { checkpoint },
+        });
+
+        const handle = await session.worktrees.createFork(checkpoint, {
+          runId: crypto.randomUUID(),
+          label,
+        });
+
+        session.forks.set(handle.fork.runId, handle);
+
+        store.append({
+          sessionId: session.id,
+          actorId: caller?.participant.id ?? "host",
+          type: "fork.created",
+          payload: { fork: handle.fork },
+        });
+
+        sendJson(response, 201, { fork: handle.fork });
+      } catch (error) {
+        // A fork that could not be built is a 409 rather than a 500: the usual
+        // causes are a repository with nothing to check out or a name already
+        // taken, and both are the caller's to resolve.
+        sendJson(response, 409, { error: (error as Error).message });
+      }
+
+      return true;
+    }
+
+    const compareMatch = /^\/sessions\/([^/]+)\/compare$/.exec(pathname);
+
+    if (compareMatch && request.method === "GET") {
+      const session = sessions.get(decodeURIComponent(compareMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const attempts = [...session.forks.values()].map((handle) => ({
+        runId: handle.fork.runId,
+        label: handle.fork.label,
+      }));
+
+      sendJson(response, 200, compareAttempts(session.id, store.list(session.id), attempts));
       return true;
     }
 

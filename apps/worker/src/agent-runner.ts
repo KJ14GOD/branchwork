@@ -166,6 +166,17 @@ export class AgentRunner {
     );
   }
 
+  /**
+   * Which model this runner would use, for a checkpoint to record.
+   *
+   * A checkpoint carries the model configuration so a fork runs the same way its
+   * parent did — comparing two attempts made by different models would be
+   * comparing the models, not the attempts.
+   */
+  modelSelection(): ModelSelection {
+    return this.router.select({ goal: "" });
+  }
+
   async run(input: AgentRunInput): Promise<AgentRunResult> {
     const modelSelection = this.router.select({ goal: input.goal });
     const adapter = this.adapters.find((candidate) =>
