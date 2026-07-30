@@ -227,11 +227,59 @@ const GIT_DIFF_TOOL = {
   },
 };
 
+/**
+ * How much tool output the most recent exchanges may carry in full.
+ *
+ * Every turn resends every earlier tool result, so a run that reads six files
+ * pays for all six on every subsequent call — cost grows with the square of the
+ * run's length, and a fifteen-call feature spent 605k tokens mostly on files it
+ * had already finished with.
+ *
+ * The recent ones stay whole because that is what the model is currently
+ * reasoning about. Older ones shrink to a line naming what they were, which
+ * keeps the fact of having read something while dropping the bulk. The model
+ * still knows it read `public/app.js` and can read it again if it needs the
+ * text; what it loses is a copy it had already acted on.
+ */
+const VERBATIM_TAIL = 4;
+const ELIDE_OVER_CHARS = 2_000;
+
+const describeElided = (name: string, payload: string): string =>
+  `[${name} result elided to save context: ${payload.length} characters. Call the tool again if you need it verbatim.]`;
+
+/**
+ * The result text for one exchange, full or shortened.
+ *
+ * Errors are never elided regardless of age. They are short, and they are the
+ * thing a model most needs to keep in view — a truncated explanation of what it
+ * did wrong is how a model repeats the mistake.
+ */
+const resultContent = (
+  exchange: ModelToolExchange,
+  elide: boolean,
+): string => {
+  if (exchange.status === "invalid") {
+    return exchange.message;
+  }
+
+  if (exchange.status === "error") {
+    return exchange.message;
+  }
+
+  const payload = JSON.stringify(exchange.result.output);
+
+  return elide && payload.length > ELIDE_OVER_CHARS
+    ? describeElided(exchange.result.name, payload)
+    : payload;
+};
+
 const appendExchanges = (
   messages: MessageParam[],
   exchanges: readonly ModelToolExchange[],
 ): void => {
-  for (const exchange of exchanges) {
+  // Counted from the end, so the newest exchanges are the ones kept whole.
+  const firstVerbatim = Math.max(0, exchanges.length - VERBATIM_TAIL);
+  for (const [index, exchange] of exchanges.entries()) {
     messages.push({
       role: "assistant",
       content: [
@@ -257,7 +305,7 @@ const appendExchanges = (
           ? {
               type: "tool_result",
               tool_use_id: exchange.call.id,
-              content: JSON.stringify(exchange.result.output),
+              content: resultContent(exchange, index < firstVerbatim),
             }
           : {
               type: "tool_result",
@@ -273,7 +321,14 @@ const appendExchanges = (
   }
 };
 
-const buildMessages = (request: ModelRequest): MessageParam[] => {
+/**
+ * Exported so the size of what gets sent can be asserted directly.
+ *
+ * The alternative was measuring the runner's own exchange list, which grows
+ * whether or not elision works — a test that would have passed with the feature
+ * removed.
+ */
+export const buildMessages = (request: ModelRequest): MessageParam[] => {
   const messages: MessageParam[] = [];
 
   // Replay finished turns so a follow-up question keeps the earlier context.

@@ -256,10 +256,11 @@ export class SearchRepositoryTool implements AgentTool {
       call.input.path ?? ".",
     );
 
-    if (!(await stat(targetPath)).isDirectory()) {
-      throw new Error("search_repository path must be a directory.");
-    }
-
+    // No directory check. A file is a perfectly reasonable thing to search, and
+    // refusing one cost a wasted round trip every time the agent narrowed to a
+    // file it had already located — ripgrep takes either, and only this caller
+    // was fussy. The path still goes through resolveInsideRepository, so
+    // confinement is unchanged.
     const matches = await runRepositorySearch(
       repositoryRoot,
       targetPath,
