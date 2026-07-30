@@ -24,6 +24,15 @@ export type FileContent =
 export type FsBridge = {
   list: (repositoryPath: string, relativePath: string) => Promise<TreeEntry[]>;
   read: (repositoryPath: string, relativePath: string) => Promise<FileContent>;
+  /**
+   * Tells the main process a repository is legitimately open, before any
+   * list/read call naming it will be honored. Called once per successful
+   * session open/resume — main refuses fs-list/fs-read for any path that was
+   * never registered this way, so the renderer naming an arbitrary
+   * repositoryPath is not enough on its own to read outside a session that
+   * was actually opened.
+   */
+  registerRepository: (repositoryPath: string) => void;
 };
 
 export type NovusBridge = {

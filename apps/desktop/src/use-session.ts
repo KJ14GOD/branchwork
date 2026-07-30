@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { authorization } from "./access.ts";
+import { bridge } from "./bridge.ts";
 import { readError } from "./http.ts";
 import {
   HostCapabilitiesSchema,
@@ -138,6 +139,10 @@ export const useSession = (endpoint: string): OpenSessionState => {
 
         const summary = SessionSummarySchema.parse(await response.json());
         setHistoryTick((value) => value + 1);
+        // The one call site that can honestly say a repository was actually
+        // selected — the file browser's fs-list/fs-read refuse anything not
+        // registered this way, regardless of what path a call names.
+        bridge()?.fs.registerRepository(summary.repositoryPath);
         return summary;
       } catch (cause) {
         setError(

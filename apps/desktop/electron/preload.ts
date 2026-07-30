@@ -62,5 +62,7 @@ contextBridge.exposeInMainWorld("novus", {
       ipcRenderer.invoke("novus:fs-list", repositoryPath, relativePath),
     read: (repositoryPath: string, relativePath: string): Promise<FileContent> =>
       ipcRenderer.invoke("novus:fs-read", repositoryPath, relativePath),
+    registerRepository: (repositoryPath: string): void =>
+      ipcRenderer.send("novus:fs-register-repository", repositoryPath),
   },
 });

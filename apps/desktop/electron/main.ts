@@ -245,20 +245,48 @@ ipcMain.on("novus:terminal-dispose", (_event, id: string) => {
  * themselves is not a new capability for the agent, but this IPC surface
  * genuinely is new, so it gets the same repository-relative-only,
  * symlink-resolved, .git/.env-refusing rules apps/worker's own tools use.
- * Both handlers take the repository root the renderer already knows —
- * the session's own repositoryPath — rather than trusting anything cached
- * in main, so a stale root can never serve a different repository's files.
+ *
+ * That confinement is only as good as what it confines *to*. The first
+ * version took repositoryPath as a per-call renderer-supplied argument and
+ * trusted it outright — which is not a widening of the terminal's own reach
+ * (a shell already has an arbitrary cwd), but it did mean the fs-list/fs-read
+ * handlers did not actually satisfy CLAUDE.md's own stated invariant,
+ * "repository access is confined to the selected repo": nothing here checked
+ * that the named repository was a *selected* one. registeredRepositories is
+ * populated only by a real, successful session open/resume (see
+ * registerRepository in use-session.ts) — a path never opened as a session
+ * is refused before listDirectory/readFileForViewer ever run, regardless of
+ * what string the renderer sends.
  */
+const registeredRepositories = new Set<string>();
+
+ipcMain.on(
+  "novus:fs-register-repository",
+  (_event, repositoryPath: string) => {
+    registeredRepositories.add(repositoryPath);
+  },
+);
+
 ipcMain.handle(
   "novus:fs-list",
-  (_event, repositoryPath: string, relativePath: string) =>
-    listDirectory(repositoryPath, relativePath),
+  (_event, repositoryPath: string, relativePath: string) => {
+    if (!registeredRepositories.has(repositoryPath)) {
+      throw new Error(`${repositoryPath} was never opened as a session.`);
+    }
+
+    return listDirectory(repositoryPath, relativePath);
+  },
 );
 
 ipcMain.handle(
   "novus:fs-read",
-  (_event, repositoryPath: string, relativePath: string) =>
-    readFileForViewer(repositoryPath, relativePath),
+  (_event, repositoryPath: string, relativePath: string) => {
+    if (!registeredRepositories.has(repositoryPath)) {
+      throw new Error(`${repositoryPath} was never opened as a session.`);
+    }
+
+    return readFileForViewer(repositoryPath, relativePath);
+  },
 );
 
 /**

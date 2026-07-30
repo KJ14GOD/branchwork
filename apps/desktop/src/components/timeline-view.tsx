@@ -174,6 +174,7 @@ export const TimelineView = ({
   highlighted,
   groupOverrides,
   onToggleGroup,
+  group = true,
 }: {
   events: readonly SessionEvent[];
   /** Whether the run is currently in flight — decides which group defaults open. */
@@ -183,8 +184,21 @@ export const TimelineView = ({
   /** Explicit open/closed state per group key, once a person has touched it. */
   groupOverrides: Map<number, boolean>;
   onToggleGroup: (key: number, currentlyOpen: boolean) => void;
+  /**
+   * Off for a filtered view (tools-only, patches-only). Every event in
+   * either of those filters is itself "mechanical" by this file's own
+   * definition, so grouping them would collapse the whole filtered list into
+   * one disclosure with nothing showing — exactly the failure mode the
+   * filter exists to avoid. Grouping is what makes the *unfiltered* timeline
+   * read as a narrated turn instead of a flat log; a filter has already done
+   * the reading-aid job a different way; the two don't compose.
+   */
+  group?: boolean;
 }) => {
-  const items = useMemo(() => buildTimelineItems(events), [events]);
+  const items = useMemo(
+    () => (group ? buildTimelineItems(events) : events.map((event) => ({ kind: "event" as const, event }))),
+    [events, group],
+  );
 
   return (
     <>

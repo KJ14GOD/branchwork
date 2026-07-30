@@ -159,7 +159,12 @@ export const SessionTab = ({
   const jumpTo = (sequence: number) => {
     setHighlighted(sequence);
 
-    const key = groupKeyFor(events, sequence);
+    // Grouping is only ever rendered for the unfiltered timeline (see the
+    // TimelineView call below), and only ever over `visible`, not the raw
+    // event list — a key computed from `events` would be a key from a
+    // grouping that was never actually rendered, and the override below
+    // would set state for a group with no matching DOM node to expand.
+    const key = filter === "all" ? groupKeyFor(visible, sequence) : null;
 
     if (key !== null) {
       setGroupOverrides((current) =>
@@ -613,6 +618,7 @@ export const SessionTab = ({
                     highlighted={highlighted}
                     groupOverrides={groupOverrides}
                     onToggleGroup={toggleGroup}
+                    group={filter === "all"}
                   />
                 )}
               </div>

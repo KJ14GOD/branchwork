@@ -148,6 +148,17 @@ export const App = () => {
       const resumed: SessionSummary[] = [];
 
       for (const tab of stored.tabs) {
+        // Checked before each resume, not only after the loop finishes: a
+        // StrictMode-cancelled pass still has an event loop that keeps
+        // running until it awaits something, and without this it issued a
+        // real POST /sessions with resume for every stored tab before
+        // finally discarding the result — a stale attempt that resumed
+        // nothing productive still cost every tab a spurious extra
+        // session.created on every launch that double-invokes this effect.
+        if (cancelled) {
+          break;
+        }
+
         const summary = await open(
           tab.repositoryPath,
           tab.allowWrites,
