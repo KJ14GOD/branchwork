@@ -103,3 +103,9 @@ into `.claude/skills/` so both harnesses load the same file.
 - `novus-finish-run` — commit and push.
 - `novus-agent-quality` — stress-testing the loop for livelocks and for
   confidently wrong conclusions, and what to re-test when it changes.
+- `novus-extend-event-contract` — adding a `SessionEvent` type or a new run
+  status without leaving the projection, receipt, compare screen, or guest
+  timeline silently out of sync; only one of those places is compiler-enforced.
+- `novus-ui` — the desktop UI's visual language: planes, alpha borders, radii,
+  type, motion, and interaction states, and how to change styling without
+  breaking it.

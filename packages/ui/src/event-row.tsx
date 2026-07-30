@@ -42,6 +42,9 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "direction.applied": "»",
   "checkpoint.created": "◈",
   "fork.created": "⑂",
+  "decision.recorded": "☑",
+  "run.cancel_requested": "◐",
+  "run.cancelled": "◻",
 };
 
 export type EventRowProps = {
@@ -133,6 +136,18 @@ export const EventRow = ({
           </span>
         );
 
+      case "run.cancel_requested":
+        return (
+          <span className="event__text event__text--muted">
+            cancel requested
+          </span>
+        );
+
+      case "run.cancelled":
+        return (
+          <span className="event__text event__text--muted">stopped</span>
+        );
+
       case "participant.joined": {
         const { participant } = event.payload;
 
@@ -211,6 +226,30 @@ export const EventRow = ({
               {" "}
               · {fork.branch} · ports {fork.devPorts.join(", ")}
             </span>
+          </span>
+        );
+      }
+
+      case "decision.recorded": {
+        const { outcome } = event.payload;
+
+        if (outcome.applied) {
+          return (
+            <span className="event__text event__text--approved">
+              chose {event.payload.runId}
+              <span className="event__type">
+                {" "}
+                · applied {outcome.files.length} file
+                {outcome.files.length === 1 ? "" : "s"}
+              </span>
+            </span>
+          );
+        }
+
+        return (
+          <span className="event__text event__text--error">
+            chose {event.payload.runId}
+            <span className="event__type"> · not applied — {outcome.reason}</span>
           </span>
         );
       }

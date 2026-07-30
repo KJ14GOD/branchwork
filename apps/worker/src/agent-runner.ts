@@ -188,6 +188,23 @@ export class AgentRunner {
   }
 
   /**
+   * Whether a cancellation has been requested for this run.
+   *
+   * Read from the log rather than an in-memory flag, for the same reason
+   * direction is: the log already has to be the record of what happened, and
+   * a second place tracking the same fact is how a request gets missed or
+   * acted on twice.
+   */
+  private cancelRequested(sessionId: string, runId: string): boolean {
+    return this.eventStore
+      .list(sessionId)
+      .some(
+        (event) =>
+          event.type === "run.cancel_requested" && event.payload.runId === runId,
+      );
+  }
+
+  /**
    * Which model this runner would use, for a checkpoint to record.
    *
    * A checkpoint carries the model configuration so a fork runs the same way its
@@ -328,10 +345,37 @@ export class AgentRunner {
       return { runId: run.id, events: this.eventStore.list(input.sessionId) };
     };
 
+    // Distinct from failRun: a cancelled run is not a failure, and reporting
+    // it as one would tell a reviewer the agent broke when a human simply
+    // asked it to stop.
+    const cancelRun = (): AgentRunResult => {
+      this.eventStore.append({
+        sessionId: input.sessionId,
+        actorId: input.actorId,
+        type: "run.cancelled",
+        payload: { runId: run.id },
+      });
+
+      emitReceipt();
+
+      return { runId: run.id, events: this.eventStore.list(input.sessionId) };
+    };
+
     // Not a step loop. The run continues until the model says it is finished or
     // a budget it can be held to runs out, which is the difference between a
     // harness that does the work and one that stops at a number.
     for (;;) {
+      // Checked first, ahead of the budget and ahead of direction: a run
+      // being stopped should not spend one more model call finding that out,
+      // and a direction still pending when the cancel arrives is left
+      // unapplied rather than folded into a call that will never happen.
+      // This is the same turn boundary direction is folded in at — a tool
+      // call already in flight when the request lands is allowed to finish;
+      // only the *next* model call is refused.
+      if (this.cancelRequested(input.sessionId, run.id)) {
+        return cancelRun();
+      }
+
       const stopped = budgetExhausted(
         this.budget,
         {

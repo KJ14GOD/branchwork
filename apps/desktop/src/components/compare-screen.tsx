@@ -106,15 +106,18 @@ export const CompareScreen = ({
           footers={Object.fromEntries(
             state.comparison.attempts.map((attempt) => [
               attempt.runId,
-              state.chosen === attempt.runId ? (
-                <span className="compare__chosen">Chosen</span>
+              state.decision?.runId === attempt.runId ? (
+                <span className="compare__chosen">
+                  {state.decision.outcome.applied ? "Chosen · applied" : "Chosen"}
+                </span>
               ) : (
                 <button
                   className="open__browse"
                   type="button"
+                  disabled={state.choosing}
                   onClick={() => state.choose(attempt.runId)}
                 >
-                  Choose this attempt
+                  {state.choosing ? "Choosing…" : "Choose this attempt"}
                 </button>
               ),
             ]),
@@ -122,13 +125,36 @@ export const CompareScreen = ({
         />
       ) : null}
 
-      {state.chosen ? (
-        // Says what choosing did and did not do. V1 makes applying a patch a
-        // separate permissioned step, so a screen that implied the merge had
-        // happened would be claiming an authority it does not have.
-        <p className="compare-screen__note">
-          Recorded for this window. Nothing has been merged — applying a
-          selected attempt is a separate step, and it needs approval.
+      {state.decision ? (
+        // Says exactly what the apply step did, since choosing and applying
+        // are the same permissioned action here and a screen that implied one
+        // without the other would be claiming an authority it does not have.
+        <p
+          className={
+            state.decision.outcome.applied
+              ? "compare-screen__note"
+              : "compare-screen__note compare-screen__note--error"
+          }
+        >
+          {state.decision.outcome.applied ? (
+            <>
+              Applied to the working tree:{" "}
+              {state.decision.outcome.files.join(", ") || "no files"}.
+            </>
+          ) : (
+            <>
+              Recorded, but not applied — {state.decision.outcome.reason}
+              {state.decision.outcome.conflicts.length > 0 ? (
+                <ul className="compare-screen__conflicts">
+                  {state.decision.outcome.conflicts.map((conflict) => (
+                    <li key={conflict.path}>
+                      <code>{conflict.path}</code>: {conflict.reason}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </>
+          )}
         </p>
       ) : null}
     </div>

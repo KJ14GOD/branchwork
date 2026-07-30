@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { ParticipantSchema } from "./contracts.ts";
+import { DecisionOutcomeSchema, ParticipantSchema } from "./contracts.ts";
 
 const IdSchema = z.string().min(1);
 
@@ -116,7 +116,7 @@ export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 export const AttemptComparisonSchema = z.object({
   runId: z.string().min(1),
   label: z.string().min(1),
-  status: z.enum(["running", "completed", "failed"]),
+  status: z.enum(["running", "completed", "failed", "cancelled"]),
   summary: z.string().min(1).nullable(),
   failure: z.string().min(1).nullable(),
   filesChanged: z.array(
@@ -138,15 +138,46 @@ export const AttemptComparisonSchema = z.object({
 
 export type AttemptComparison = z.infer<typeof AttemptComparisonSchema>;
 
+/**
+ * The most recent choice recorded for this session, if a host has made one.
+ *
+ * Carried on the comparison rather than left to the caller's own memory of
+ * having clicked a button: a decision that only lived in one browser tab's
+ * state was not really recorded, and this is what lets a reload or a second
+ * window agree on what was already decided.
+ */
+export const DecisionSummarySchema = z.object({
+  runId: z.string().min(1),
+  outcome: DecisionOutcomeSchema,
+});
+
+export type DecisionSummary = z.infer<typeof DecisionSummarySchema>;
+
 export const ComparisonSchema = z.object({
   attempts: z.array(AttemptComparisonSchema),
   /** Paths more than one attempt changed: where they genuinely disagree. */
   contestedPaths: z.array(z.string().min(1)),
   /** Paths only one attempt changed, by run id. */
   uniquePaths: z.record(z.string(), z.array(z.string().min(1))),
+  /** Null until a host has chosen an attempt. */
+  decision: DecisionSummarySchema.nullable(),
 });
 
 export type Comparison = z.infer<typeof ComparisonSchema>;
+
+/** What a host submits to choose between attempts. */
+export const DecisionRequestSchema = z.object({
+  runId: z.string().min(1),
+});
+
+export type DecisionRequest = z.infer<typeof DecisionRequestSchema>;
+
+/** What a host submits to stop a run in flight. */
+export const CancelRunRequestSchema = z.object({
+  runId: z.string().min(1),
+});
+
+export type CancelRunRequest = z.infer<typeof CancelRunRequestSchema>;
 
 /**
  * A session the log remembers, for the Open screen to offer.

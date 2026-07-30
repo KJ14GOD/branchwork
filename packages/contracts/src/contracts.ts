@@ -465,7 +465,7 @@ export const RunReceiptSchema = z.object({
   sessionId: IdSchema,
   goal: z.string().min(1),
   model: ModelSelectionSchema,
-  status: z.enum(["completed", "failed"]),
+  status: z.enum(["completed", "failed", "cancelled"]),
   // Read at the start of *this run*, not once per session: a second turn opens
   // on top of the first turn's writes, so a session-wide revision would name a
   // base that no longer describes what the run started from.
@@ -776,6 +776,79 @@ export const RunFailedEventSchema = EventEnvelopeSchema.extend({
   }),
 });
 
+/**
+ * A request to stop a run, entered on the log the same way direction is.
+ *
+ * Two events, not one, for the reason `direction.submitted` /
+ * `direction.applied` already is: a human needs to see the request was
+ * received before it takes effect, and only the run loop itself can say when
+ * it actually stopped. `run.cancelled` below is that acknowledgement — there
+ * is no third "confirmed" concept needed on top of it.
+ */
+export const RunCancelRequestedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("run.cancel_requested"),
+  payload: z.object({
+    runId: IdSchema,
+  }),
+});
+
+// Appended by the run loop itself, at the next turn boundary after a
+// cancellation was requested — the same boundary direction is folded in at.
+// A tool call already in flight when the request arrives is allowed to
+// finish; only the *next* model call is refused.
+export const RunCancelledEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("run.cancelled"),
+  payload: z.object({
+    runId: IdSchema,
+  }),
+});
+
+/**
+ * What happened when a chosen attempt's changes were written to the parent.
+ *
+ * `applied: true` lists the paths that were actually written or removed — not
+ * a line count, because the point of this record is "did it land," not a
+ * second diffstat next to the one the compare screen already shows.
+ *
+ * `applied: false` is not a failure of the decision — a host can choose an
+ * attempt whose patch no longer applies and still want that choice on the
+ * record. `conflicts` names the files it refused and why, mirroring
+ * `apply_patch`'s own refusal when a file drifted after a proposal was made.
+ */
+export const DecisionOutcomeSchema = z.discriminatedUnion("applied", [
+  z.object({
+    applied: z.literal(true),
+    files: z.array(z.string().min(1)),
+  }),
+  z.object({
+    applied: z.literal(false),
+    reason: z.string().min(1),
+    conflicts: z.array(
+      z.object({
+        path: z.string().min(1),
+        reason: z.string().min(1),
+      }),
+    ),
+  }),
+]);
+
+export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
+
+// A human choosing between attempts, recorded whether or not the patch that
+// followed actually landed. V1 says the merge is always a human decision —
+// this is that decision's evidence, separate from the mechanics of applying
+// it, the same way direction.submitted is recorded separately from whether
+// the runtime could fold it in.
+export const DecisionRecordedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("decision.recorded"),
+  payload: z.object({
+    /** The attempt's run id — the fork that was chosen. */
+    runId: IdSchema,
+    checkpointId: IdSchema,
+    outcome: DecisionOutcomeSchema,
+  }),
+});
+
 export const SessionEventSchema = z.discriminatedUnion("type", [
   SessionCreatedEventSchema,
   RunStartedEventSchema,
@@ -797,6 +870,9 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   ReceiptCreatedEventSchema,
   CheckpointCreatedEventSchema,
   ForkCreatedEventSchema,
+  DecisionRecordedEventSchema,
+  RunCancelRequestedEventSchema,
+  RunCancelledEventSchema,
 ]);
 
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
@@ -898,6 +974,21 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   ForkCreatedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  DecisionRecordedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunCancelRequestedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  RunCancelledEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,

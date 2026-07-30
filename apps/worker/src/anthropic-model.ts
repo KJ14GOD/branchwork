@@ -13,232 +13,20 @@ import {
   type ModelResponse,
   type ModelToolExchange,
 } from "./model.ts";
+import { SYSTEM_PROMPT, TOOL_DESCRIPTIONS } from "./tool-descriptions.ts";
 
-const READ_FILE_TOOL = {
-  name: "read_file",
-  description:
-    "Read a UTF-8 text file inside the selected repository using a repository-relative path.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      path: {
-        type: "string",
-        description: "Repository-relative path to the file.",
-      },
-    },
-    required: ["path"],
-    additionalProperties: false,
+// Anthropic's own envelope around the shared, provider-neutral descriptions —
+// same name and description every provider gets, wrapped in the one field
+// name this API expects instead of a second copy of the schema itself.
+const ANTHROPIC_TOOLS = TOOL_DESCRIPTIONS.map((tool) => ({
+  name: tool.name,
+  description: tool.description,
+  input_schema: tool.parameters as {
+    type: "object";
+    properties?: Record<string, unknown>;
+    required?: string[];
   },
-};
-
-const SEARCH_REPOSITORY_TOOL = {
-  name: "search_repository",
-  description:
-    "Search text across files in the selected repository. Returns repository-relative paths, line numbers, and matching lines. Use this to discover relevant files before reading them.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      query: {
-        type: "string",
-        description: "Text or regular expression to search for.",
-      },
-      path: {
-        type: "string",
-        description:
-          "Optional repository-relative directory to search. Defaults to the entire repository.",
-      },
-      limit: {
-        type: "integer",
-        minimum: 1,
-        maximum: 100,
-        description: "Maximum number of matching lines. Defaults to 30.",
-      },
-    },
-    required: ["query"],
-    additionalProperties: false,
-  },
-};
-
-const PROPOSE_PATCH_TOOL = {
-  name: "propose_patch",
-  description:
-    "Propose an edit to one file in the selected repository. Novus computes and returns a unified diff preview. This does not modify the working tree — the change is only a proposal awaiting human review. Read the file first so every oldText is exact.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      path: {
-        type: "string",
-        description: "Repository-relative path to the file to edit.",
-      },
-      intent: {
-        type: "string",
-        description: "One sentence describing what this change accomplishes.",
-      },
-      edits: {
-        type: "array",
-        minItems: 1,
-        maxItems: 20,
-        description: "Exact-match replacements, applied in order.",
-        items: {
-          type: "object",
-          properties: {
-            oldText: {
-              type: "string",
-              description:
-                "Exact existing text to replace. It must appear exactly once in the file; include surrounding lines when needed to make it unique.",
-            },
-            newText: {
-              type: "string",
-              description:
-                "Replacement text. Use an empty string to delete the matched text.",
-            },
-          },
-          required: ["oldText", "newText"],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ["path", "intent", "edits"],
-    additionalProperties: false,
-  },
-};
-
-const APPLY_PATCH_TOOL = {
-  name: "apply_patch",
-  description:
-    "Apply a patch you previously proposed, writing it to the working tree. Takes the patchId returned by propose_patch. This requires human approval and may be denied. It fails if the file changed since the patch was proposed.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      patchId: {
-        type: "string",
-        description: "The patchId returned by a previous propose_patch call.",
-      },
-    },
-    required: ["patchId"],
-    additionalProperties: false,
-  },
-};
-
-const RUN_COMMAND_TOOL = {
-  name: "run_command",
-  description:
-    "Run a program inside the selected repository and return its exit code, stdout, and stderr. The command runs without a shell, so pipes, redirection, globs, and operators like && are not interpreted — pass the program name and each argument separately. Requires human approval and may be denied.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      command: {
-        type: "string",
-        description:
-          "Program name resolved on PATH, such as 'node' or 'git'. Not a path and not a shell line.",
-      },
-      args: {
-        type: "array",
-        maxItems: 64,
-        items: { type: "string" },
-        description:
-          "Arguments, one array element each. For example ['status', '--short'].",
-      },
-      timeoutMs: {
-        type: "integer",
-        minimum: 1000,
-        maximum: 600000,
-        description: "Kill the command after this long. Defaults to 120000.",
-      },
-    },
-    required: ["command"],
-    additionalProperties: false,
-  },
-};
-
-const RUN_TESTS_TOOL = {
-  name: "run_tests",
-  description:
-    "Run the repository's own test suite and report whether it passed. Use this to verify a change you applied actually works, before claiming it does. Requires human approval and may be denied.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      args: {
-        type: "array",
-        maxItems: 32,
-        items: { type: "string" },
-        description:
-          "Optional extra arguments passed to the test script, such as a filename to narrow the run.",
-      },
-      timeoutMs: {
-        type: "integer",
-        minimum: 1000,
-        maximum: 600000,
-        description: "Kill the run after this long. Defaults to 120000.",
-      },
-    },
-    required: [],
-    additionalProperties: false,
-  },
-};
-
-const LIST_DIRECTORY_TOOL = {
-  name: "list_directory",
-  description:
-    "List the entries of a directory inside the selected repository. Use this to orient yourself before searching or reading.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      path: {
-        type: "string",
-        description:
-          "Repository-relative directory. Defaults to the repository root.",
-      },
-    },
-    required: [],
-    additionalProperties: false,
-  },
-};
-
-const GIT_STATUS_TOOL = {
-  name: "git_status",
-  description:
-    "Show which files in the repository have been modified, staged, or left untracked. Use this to see what your own changes touched.",
-  input_schema: {
-    type: "object" as const,
-    properties: {},
-    required: [],
-    additionalProperties: false,
-  },
-};
-
-const LIST_PROVIDER_MODELS_TOOL = {
-  name: "list_provider_models",
-  description:
-    "List the model ids the configured provider currently serves. Use this before claiming that a model id found in the repository is invalid, outdated, or a typo — ids newer than your training data are real.",
-  input_schema: {
-    type: "object" as const,
-    properties: {},
-    required: [],
-    additionalProperties: false,
-  },
-};
-
-const GIT_DIFF_TOOL = {
-  name: "git_diff",
-  description:
-    "Show the current diff of the repository. Unstaged by default. Use this to read back exactly what your patches changed before you claim they are correct.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      staged: {
-        type: "boolean",
-        description: "Diff staged changes instead of unstaged ones.",
-      },
-      path: {
-        type: "string",
-        description: "Optional repository-relative path to narrow the diff.",
-      },
-    },
-    required: [],
-    additionalProperties: false,
-  },
-};
+}));
 
 /**
  * How much tool output the most recent exchanges may carry in full.
@@ -613,27 +401,10 @@ export class AnthropicModelAdapter implements ModelAdapter {
       // the part that answered the question asked. Tool-call turns never get
       // near this; it only bounds the final explanation.
       max_tokens: 8_192,
-      system:
-        // The two citation rules exist because a live run fabricated both
-        // kinds of claim, confidently: it cited server.mjs:274 for a line
-        // that lives at 295 (read_file returns no line numbers, so every
-        // :NNN it wrote was an estimate dressed as a citation), and it
-        // declared a valid provider model id "not a real model id — would
-        // 400" from stale outside knowledge. Nothing failed visibly either
-        // time; the summary just said things the run had never verified.
-        "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. Cite line numbers only when a tool result actually showed them: search results carry line numbers, plain file reads do not, and an estimated line number presented as a citation is an invention. When a conclusion depends on knowledge from outside this repository — a provider's model names, a library's behavior, version facts — say it is unverified instead of stating it as fact. When a change is needed, call propose_patch to produce a reviewable diff, then call apply_patch with the patchId it returns to write it. After applying a change, call run_tests to confirm it works, and report what the tests actually said rather than asserting success. apply_patch, run_command, and run_tests require human approval and may be denied — if one is, explain what you would have done rather than trying to work around the denial.",
-      tools: [
-        SEARCH_REPOSITORY_TOOL,
-        READ_FILE_TOOL,
-        PROPOSE_PATCH_TOOL,
-        APPLY_PATCH_TOOL,
-        RUN_COMMAND_TOOL,
-        RUN_TESTS_TOOL,
-        LIST_DIRECTORY_TOOL,
-        GIT_STATUS_TOOL,
-        GIT_DIFF_TOOL,
-        LIST_PROVIDER_MODELS_TOOL,
-      ],
+      // Shared with every other provider adapter — see tool-descriptions.ts
+      // for why, and for the citation rules this text carries.
+      system: SYSTEM_PROMPT,
+      tools: ANTHROPIC_TOOLS,
       tool_choice: {
         type: "auto",
         disable_parallel_tool_use: true,

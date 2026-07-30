@@ -7,7 +7,9 @@ import {
 
 import type { SessionEvent } from "@novus/contracts";
 import {
+  CancelRunRequestSchema,
   CreateSessionRequestSchema,
+  DecisionRequestSchema,
   SubmitTurnRequestSchema,
 } from "@novus/contracts/protocol";
 import type { SessionEventStore } from "@novus/session-service";
@@ -20,6 +22,7 @@ import {
   type Membership,
   type ParticipantRegistry,
 } from "./participants.ts";
+import { applyDecision } from "./apply-decision.ts";
 import { compareAttempts } from "./compare.ts";
 import { createRedactor, type Redactor } from "./redaction.ts";
 import type { Session, SessionRegistry } from "./session-registry.ts";
@@ -341,6 +344,58 @@ export const startEventServer = (
       return true;
     }
 
+    const cancelMatch = /^\/sessions\/([^/]+)\/cancel$/.exec(pathname);
+
+    if (cancelMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(cancelMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = CancelRunRequestSchema.safeParse(await readJsonBody(request));
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "A runId is required." });
+        return true;
+      }
+
+      const history = store.list(session.id);
+      const started = history.find(
+        (event) =>
+          event.type === "run.started" && event.payload.run.id === parsed.data.runId,
+      );
+      const terminator = history.find(
+        (event) =>
+          (event.type === "run.completed" ||
+            event.type === "run.failed" ||
+            event.type === "run.cancelled") &&
+          event.payload.runId === parsed.data.runId,
+      );
+
+      if (!started || terminator) {
+        sendJson(response, 409, {
+          error: "There is no run in progress with that id.",
+        });
+        return true;
+      }
+
+      // Recorded, not applied. Same as direction: a human needs to see the
+      // request was received before it takes effect, and only the run loop
+      // itself — reading this same event back — can say when it actually
+      // stopped.
+      const event = store.append({
+        sessionId: session.id,
+        actorId: caller?.participant.id ?? "host",
+        type: "run.cancel_requested",
+        payload: { runId: parsed.data.runId },
+      });
+
+      sendJson(response, 202, { accepted: true, eventId: event.eventId });
+      return true;
+    }
+
     const compareMatch = /^\/sessions\/([^/]+)\/compare$/.exec(pathname);
 
     if (compareMatch && request.method === "GET") {
@@ -357,6 +412,66 @@ export const startEventServer = (
       }));
 
       sendJson(response, 200, compareAttempts(session.id, store.list(session.id), attempts));
+      return true;
+    }
+
+    const decisionMatch = /^\/sessions\/([^/]+)\/decision$/.exec(pathname);
+
+    if (decisionMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(decisionMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = DecisionRequestSchema.safeParse(await readJsonBody(request));
+
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "A runId is required." });
+        return true;
+      }
+
+      const handle = session.forks.get(parsed.data.runId);
+
+      if (!handle) {
+        sendJson(response, 404, {
+          error: "That attempt is not a fork of this session, or it was already removed.",
+        });
+        return true;
+      }
+
+      // Recorded regardless of whether the apply below succeeds. V1 says the
+      // merge is always a human decision — a host choosing an attempt whose
+      // patch no longer applies cleanly still made that choice, and the log
+      // should say so rather than staying silent because the mechanics failed.
+      const outcome = !session.allowWrites
+        ? {
+            applied: false as const,
+            reason:
+              "Writes are not enabled for this session, so the chosen attempt was recorded but not applied.",
+            conflicts: [],
+          }
+        : await applyDecision(session.repositoryPath, session.worktrees, parsed.data.runId).catch(
+            (error: unknown) => ({
+              applied: false as const,
+              reason: (error as Error).message,
+              conflicts: [],
+            }),
+          );
+
+      const event = store.append({
+        sessionId: session.id,
+        actorId: caller?.participant.id ?? "host",
+        type: "decision.recorded",
+        payload: {
+          runId: handle.fork.runId,
+          checkpointId: handle.fork.checkpointId,
+          outcome,
+        },
+      });
+
+      sendJson(response, 201, { decision: event.payload, eventId: event.eventId });
       return true;
     }
 
@@ -597,7 +712,13 @@ export const startEventServer = (
           ? "direct"
           : /^\/sessions\/[^/]+\/invite$/.test(url.pathname)
             ? "invite"
-            : "steer";
+            : // Named explicitly rather than left to the trailing default:
+              // stopping a run in flight is exactly the kind of action
+              // participants.ts warns about a reviewer inheriting by accident
+              // when a route is not listed here.
+              /^\/sessions\/[^/]+\/cancel$/.test(url.pathname)
+              ? "steer"
+              : "steer";
 
     if (refusedFor(required)) {
       return;

@@ -64,7 +64,7 @@ const realpathAllowingMissing = async (targetPath: string): Promise<string> => {
   }
 };
 
-const resolveInsideRepository = async (
+export const resolveInsideRepository = async (
   repositoryPath: string,
   requestedPath: string,
   // git_diff reports on what changed, and a deletion is a change. Every other

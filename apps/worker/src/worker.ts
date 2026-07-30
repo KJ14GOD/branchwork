@@ -6,7 +6,9 @@ import {
   SessionEventStore,
 } from "@novus/session-service";
 
+import type { ModelAdapter } from "./model.ts";
 import { AnthropicModelAdapter } from "./anthropic-model.ts";
+import { OpenAIModelAdapter } from "./openai-model.ts";
 import { startEventServer } from "./event-server.ts";
 import { FixedModelRouter } from "./model.ts";
 import { SessionRegistry } from "./session-registry.ts";
@@ -16,10 +18,48 @@ import { publishToRelay } from "./relay-publisher.ts";
 import { createRedactor } from "./redaction.ts";
 import { killRunningCommands } from "./tools.ts";
 
+// Configurable rather than hardcoded, so "one model provider initially"
+// (V1's scope) does not mean "the only provider this harness could ever
+// speak to" (README: "Novus must never make a single model provider its
+// architectural foundation"). Unset, this is exactly today's behaviour.
+//
+// Anthropic keeps a default model name because that was already the
+// hardcoded value; a second provider gets no guessed default; naming one
+// that no longer exists would fail in a way that looks like a bad key
+// rather than a stale model id.
+const modelProvider = process.env.NOVUS_MODEL_PROVIDER?.trim() || "anthropic";
+const KNOWN_MODEL_PROVIDERS = ["anthropic", "openai"] as const;
+
+if (!(KNOWN_MODEL_PROVIDERS as readonly string[]).includes(modelProvider)) {
+  console.error(
+    `NOVUS_MODEL_PROVIDER must be one of ${KNOWN_MODEL_PROVIDERS.join(", ")} — got "${modelProvider}". An unrecognised provider has no adapter, and a run started against one dies with nothing in the session log explaining why.`,
+  );
+  process.exit(1);
+}
+
+const defaultModel = modelProvider === "anthropic" ? "claude-opus-5" : undefined;
+const modelName = process.env.NOVUS_MODEL?.trim() || defaultModel;
+
+if (!modelName) {
+  console.error(
+    `NOVUS_MODEL is required when NOVUS_MODEL_PROVIDER=${modelProvider} — Novus does not guess a default model for this provider.`,
+  );
+  process.exit(1);
+}
+
 const modelSelection = {
-  provider: "anthropic",
-  model: "claude-opus-5",
+  provider: modelProvider,
+  model: modelName,
 };
+
+// Constructed for the selected provider only. Both SDKs throw at
+// construction when they cannot resolve an API key — constructing an
+// adapter nobody asked for would fail startup for an Anthropic session on a
+// host that has never set OPENAI_API_KEY, and the reverse.
+const modelAdapters: ModelAdapter[] =
+  modelSelection.provider === "openai"
+    ? [new OpenAIModelAdapter(modelSelection)]
+    : [new AnthropicModelAdapter(modelSelection)];
 
 // Writes are denied unless the operator opts in.
 const allowWrites = process.env.NOVUS_ALLOW_WRITES === "1";
@@ -149,7 +189,7 @@ eventStore.subscribe((event) => {
 const sessions = new SessionRegistry(
   eventStore,
   new FixedModelRouter(modelSelection),
-  [new AnthropicModelAdapter(modelSelection)],
+  modelAdapters,
   { allowWrites, allowCommands },
 );
 
@@ -175,6 +215,9 @@ try {
 }
 
 console.log(`novus worker · ${eventServer.url}`);
+console.log(
+  `model   ${modelSelection.provider}/${modelSelection.model} (override with NOVUS_MODEL_PROVIDER and NOVUS_MODEL)`,
+);
 console.log(`events ${databasePath} (override with NOVUS_DB)`);
 console.log(
   `writes ${allowWrites ? "approved (NOVUS_ALLOW_WRITES=1)" : "denied — set NOVUS_ALLOW_WRITES=1 to permit apply_patch"}`,

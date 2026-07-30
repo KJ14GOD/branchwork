@@ -69,6 +69,28 @@ test("a known key in command output never reaches the outbound event", () => {
   assert.match(serialised, /redacted/);
 });
 
+test("an OpenAI key is redacted the same way, both by name and by the wider sk- shape", () => {
+  // Not a real key: the prefix is real, the body is keyboard noise. OpenAI
+  // keys need no adapter-specific redaction rule — tools.ts's environment
+  // scrub already matches on the OPENAI_API_KEY *name*
+  // (/KEY|TOKEN|SECRET|.../i), and redaction.ts's sk- pattern already covers
+  // "the wider sk- family," not only Anthropic's sk-ant- prefix.
+  const openaiKey = "sk-proj-Zx9QwErTyUiOpAsDfGhJkLzXcVbNm1234567890abcdefGHIJKL";
+  const redactor = createRedactor({
+    environment: { OPENAI_API_KEY: openaiKey },
+  });
+
+  const shared = redactor.redactEvent(
+    commandEvent("bash -c env", `OPENAI_API_KEY=${openaiKey}\n`),
+  );
+
+  const serialised = JSON.stringify(shared);
+
+  assert.equal(serialised.includes(openaiKey), false);
+  assert.equal(serialised.includes("sk-proj-"), false);
+  assert.match(serialised, /redacted/);
+});
+
 test("a key is redacted by shape even when the worker never held it", () => {
   // The environment is empty: nothing here is a *known* secret. A key printed
   // by a command that read it from somewhere else must still not get out.

@@ -183,7 +183,7 @@ export type TimelineSummary = {
   goal: string | null;
   model: string | null;
   /** What the run is doing, derived only from events the guest has seen. */
-  runStatus: "waiting" | "working" | "completed" | "failed";
+  runStatus: "waiting" | "working" | "completed" | "failed" | "cancelled";
   events: number;
   toolCalls: SessionEvent[];
   patches: PatchEvent[];
@@ -215,7 +215,10 @@ const formatElapsed = (events: SessionEvent[]): string => {
 export const summarise = (events: SessionEvent[]): TimelineSummary => {
   const started = events.findLast((event) => event.type === "run.started");
   const ended = events.findLast(
-    (event) => event.type === "run.completed" || event.type === "run.failed",
+    (event) =>
+      event.type === "run.completed" ||
+      event.type === "run.failed" ||
+      event.type === "run.cancelled",
   );
   const patches = events.filter(isPatchEvent);
 
@@ -225,7 +228,9 @@ export const summarise = (events: SessionEvent[]): TimelineSummary => {
       ? "working"
       : ended.type === "run.failed"
         ? "failed"
-        : "completed";
+        : ended.type === "run.cancelled"
+          ? "cancelled"
+          : "completed";
 
   return {
     goal: started?.type === "run.started" ? started.payload.run.goal : null,

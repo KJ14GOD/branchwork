@@ -34,6 +34,11 @@ export type SessionState = {
   invite: (name: string, role: InviteRole) => Promise<InviteResponse | null>;
   /** Recorded for the running turn to fold in, not applied immediately. */
   direct: (goal: string) => Promise<void>;
+  /**
+   * Requests that a run stop. Recorded immediately; the run itself appends
+   * `run.cancelled` once it actually stops, at its next turn boundary.
+   */
+  cancel: (runId: string) => Promise<void>;
   close: () => void;
 };
 
@@ -238,6 +243,31 @@ export const useSession = (endpoint: string): SessionState => {
     [endpoint, session],
   );
 
+  const cancel = useCallback(
+    async (runId: string) => {
+      if (!session) {
+        return;
+      }
+
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(session.id)}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
+          body: JSON.stringify({ runId }),
+        },
+      );
+
+      if (!response.ok) {
+        setError(await readError(response));
+      }
+    },
+    [endpoint, session],
+  );
+
   const close = useCallback(() => {
     setSession(null);
     setError(null);
@@ -253,6 +283,7 @@ export const useSession = (endpoint: string): SessionState => {
     ask,
     invite,
     direct,
+    cancel,
     close,
   };
 };

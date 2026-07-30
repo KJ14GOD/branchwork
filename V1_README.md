@@ -34,20 +34,19 @@ deny-by-default permissions, and an event stream three surfaces render live
 SQLite-backed event store behind an HTTP+SSE worker, a separate WebSocket relay
 process a teammate off the host machine can watch through, an invite endpoint
 that mints a role-scoped token the worker never re-issues, a direction endpoint
-a running turn folds in at its next boundary, and both now reachable from the
+a running turn folds in at its next boundary, a cancel endpoint the same run
+loop honours at that same boundary, and all three now reachable from the
 desktop UI rather than curl only. Fork and compare exist too: checkpoints cut
 real Git worktrees, isolated attempts run without touching each other or the
-parent's index, and the compare screen shows them side by side.
+parent's index, the compare screen shows them side by side, and choosing one
+now records the decision and applies it.
 
 What is still missing, plainly:
 
-- **Choosing an attempt does nothing yet.** The compare screen's "Choose"
-  button sets local UI state only — no decision is recorded to the log, and no
-  patch is applied anywhere. Milestone 4's exit condition needs a chosen
-  attempt to actually land; right now it just highlights a row.
-- **Pause, resume, cancel, and handoff do not exist.** A session runs to
-  completion or it errors; nobody can stop one in flight, and ownership cannot
-  move from one participant to another.
+- **Pause, resume, and handoff do not exist.** Ownership cannot move from one
+  participant to another, and a run cannot be suspended and picked back up —
+  cancel is now built (see Milestone 3), which at least means a run in flight
+  is no longer unstoppable, but pausing is not the same thing as stopping.
 - **Presence is historical, not live.** `participant.joined` lands in the
   timeline, but nothing shows who is watching right now versus who joined once
   and left.
@@ -60,8 +59,19 @@ What is still missing, plainly:
   repeatedly on a clean machine" — Milestone 5's exit condition — has not been
   attempted on a machine that isn't a developer's.
 
-Three earlier failure modes, closed:
+Five earlier failure modes, closed:
 
+- ~~**Nothing can stop a run in flight.**~~ Fixed 2026-07-30: `POST
+  /sessions/:id/cancel` records `run.cancel_requested`; the run loop honours
+  it at the same turn boundary direction is folded in at and appends
+  `run.cancelled`, distinct from a failure throughout the receipt, the
+  projection, and the guest's status. See Milestone 3. Pause, resume, and
+  handoff are the three of the original four still unbuilt.
+- ~~**Choosing an attempt does nothing.**~~ Fixed 2026-07-30: `POST
+  /sessions/:id/decision` records `decision.recorded` and, when the session
+  has writes enabled, applies the chosen attempt's changes to the parent's
+  working tree — reusing `propose_patch`/`apply_patch` per file rather than a
+  new write path. See Milestone 4.
 - ~~**The agent cannot yet verify its own work.**~~ Fixed 2026-07-29:
   `run_command` and `run_tests` exist, are `dangerous` class, and are opted into
   with `NOVUS_ALLOW_COMMANDS=1`.
@@ -75,11 +85,30 @@ Three earlier failure modes, closed:
   fixtures and have each passed against the real model once. See *Benchmark
   results*.
 
-Before starting anything from the roadmap in `README.md`, check it against this
-section. Multiplayer is no longer the thin half, so the risk this document used
-to guard against has moved: what is thin now is *closing the loop* a shared
-session opens — apply, handoff, presence — not standing the transport up in the
-first place.
+One piece of `README.md`'s own roadmap is also real now, ahead of the rest of
+this milestone rather than after it: **multiple model providers.** `apps/worker/src/openai-model.ts`
+is a second `ModelAdapter` beside Anthropic's, selected at boot with
+`NOVUS_MODEL_PROVIDER`/`NOVUS_MODEL` (unset, behaviour is unchanged). Reviewed
+by scope-warden before it was built, which flagged — correctly — that this is
+roadmap work landing ahead of Milestone 3's own remaining items; recorded
+here rather than treated as a reason not to, since reaching into the roadmap
+was explicitly in scope for this slice. Proven deterministically (message
+building, context elision, and the required trust-boundary case: malformed
+tool-call arguments become an observation, not a thrown error) and proven live
+at the process level — a real worker still boots on the Anthropic default
+unchanged, an unrecognised provider name refuses at boot with a stated reason,
+and a real request reaches OpenAI's API and is validated by it. What is *not*
+proven: a full live round-trip against a real OpenAI model, because no valid
+`OPENAI_API_KEY` was available to run one with. `openai-smoke.ts` is there to
+run by hand the moment one is.
+
+Before starting anything else from the roadmap in `README.md`, check it
+against this section. Multiplayer is no longer the thin half, so the risk this
+document used to guard against has moved: what is thin now is *closing the
+loop* a shared session opens — pause, resume, handoff, live presence — not
+standing the
+transport up in the first place. Apply and cancel both closed on 2026-07-30;
+the rest have not.
 
 ## Benchmark results
 
@@ -604,21 +633,31 @@ now.
       `direction.submitted` for the runtime to fold in at its next turn
       boundary; has a UI box now, not curl only
 - [x] Approvals — the gate and the tool classes exist and are enforced
-- [ ] Pause, resume, cancel, and handoff — genuinely unbuilt. Ownership cannot
-      move, and nothing can stop a run in flight.
+- [~] Pause, resume, cancel, and handoff — **cancel** is built: `POST
+      /sessions/:id/cancel` records `run.cancel_requested`, and the run loop
+      checks for it at the same turn boundary direction is folded in at — a
+      tool call already in flight finishes, only the next model call is
+      refused — then appends `run.cancelled`. Distinct from a failure
+      throughout: the receipt, the projection, and the guest's own status all
+      report "cancelled" rather than folding it into "failed". **Pause,
+      resume, and handoff remain unbuilt.** Ownership still cannot move, and
+      a run cannot be suspended and picked back up — only stopped outright.
 
 Exit condition: a remote teammate joins an active run, supplies direction, and
 reviews the resulting evidence. **Met** for that path specifically — join,
-direct, review all work end to end. Not met for anything that requires
-pause/cancel/handoff, which is the next honest gap in this milestone.
+direct, review, and now cancel all work end to end. Not met for anything that
+requires pause, resume, or handoff, which is the next honest gap in this
+milestone.
 
 ### Milestone 4 — fork and compare
 
-The isolation half is built and tested hard — worktree lifecycle, checkpoint
-correctness, and cross-attempt isolation each have their own adversarial tests
-(uncommitted work surviving a fork, an aggressive prune not breaking a
-checkpoint's base, teardown removing the worktree *and* the branch *and* Git's
-record of both). The decision half is not built at all.
+Both halves are built now. The isolation half was already tested hard —
+worktree lifecycle, checkpoint correctness, and cross-attempt isolation each
+have their own adversarial tests (uncommitted work surviving a fork, an
+aggressive prune not breaking a checkpoint's base, teardown removing the
+worktree *and* the branch *and* Git's record of both). The decision half is
+new as of 2026-07-30 and holds to the same bar: real conflicting edits, not
+just the happy path.
 
 - [x] Checkpoint creation
 - [x] Git worktree manager
@@ -626,16 +665,33 @@ record of both). The decision half is not built at all.
       other and in the parent
 - [x] Side-by-side comparison — `compare.ts` plus a real compare screen in the
       desktop UI, with a working "Fork an attempt" flow
-- [ ] Human decision record — **not built.** The compare screen's "Choose"
-      button is local UI state (`useComparison`'s `choose()` calls `setChosen`
-      and nothing else); no event is appended when a host picks a winner.
-- [ ] Apply selected patch — **not built.** Nothing takes a chosen attempt's
-      diff and applies it to the parent's working tree. Choosing today changes
-      what is highlighted on screen and nothing in any repository.
+- [x] Human decision record — `POST /sessions/:id/decision` appends
+      `decision.recorded` naming the chosen attempt, unconditionally: a host
+      choosing an attempt whose patch no longer applies is still a decision
+      worth keeping, so this is not gated on the apply below succeeding. The
+      compare screen reads it back from `/compare` on refresh rather than
+      holding it as throwaway local state, so a second window or a reload
+      agrees with what was actually chosen.
+- [x] Apply selected patch — `apply-decision.ts` writes the chosen attempt's
+      changes into the parent's working tree, gated on the session having
+      writes enabled. It reuses `propose_patch`/`apply_patch` verbatim per
+      file — a whole-file edit checked against live content before anything
+      is written, the same tool classes and the same drift check the agent
+      loop already uses, not a second way to touch a file. New and deleted
+      files (which those two tools cannot express — `propose_patch` refuses a
+      path that is not already a file) get the same base-content check by
+      hand. Every file is checked before any file is written, so one
+      conflicting file refuses the whole apply rather than half-writing the
+      rest. Verified against a real fork with a real conflicting parent edit,
+      in the test suite and by hand against a running worker: the apply is
+      refused, the conflict names the file and why, and the host's own edit is
+      left exactly as it was.
 
 Exit condition: two attempts run from the same checkpoint without interfering,
-and the selected result applies cleanly. **Half met** — the non-interference
-half is proven by tests; the apply half does not exist yet.
+and the selected result applies cleanly. **Met.** The non-interference half
+was already proven; the apply half now has its own tests covering the same
+kind of adversarial case — a parent that diverged after the fork was cut —
+rather than only the case where nothing else changed.
 
 ### Milestone 5 — hardening
 
