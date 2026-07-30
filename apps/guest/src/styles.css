@@ -498,6 +498,16 @@ button {
   color: var(--add);
 }
 
+/* Mirrors apps/desktop/src/styles.css's rule of the same name — the shared
+   EventRow (packages/ui) emits this class for a model's own narration beside
+   a tool call, and without a matching rule here it rendered with the
+   browser's default <p> margin in mono instead of matching the host's read. */
+.event__prose {
+  margin: 0 0 4px;
+  color: var(--text);
+  line-height: 1.6;
+}
+
 .event--highlight {
   border-left-color: var(--border-strong);
   margin-left: -12px;

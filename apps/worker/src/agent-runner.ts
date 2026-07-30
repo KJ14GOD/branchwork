@@ -752,6 +752,9 @@ export class AgentRunner {
         payload: {
           runId: run.id,
           call: response.call,
+          // Carried straight through from the adapter — see ModelResponse's
+          // own doc comment for why this is optional and usually absent.
+          ...(response.text ? { text: response.text } : {}),
         },
       });
 

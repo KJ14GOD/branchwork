@@ -11,11 +11,36 @@ export type TerminalBridge = {
   onExit: (id: string, handler: (exitCode: number) => void) => () => void;
 };
 
+export type TreeEntry = {
+  name: string;
+  path: string;
+  kind: "directory" | "file" | "symlink" | "other";
+};
+
+export type FileContent =
+  | { kind: "text"; content: string; truncated: boolean }
+  | { kind: "binary" };
+
+export type FsBridge = {
+  list: (repositoryPath: string, relativePath: string) => Promise<TreeEntry[]>;
+  read: (repositoryPath: string, relativePath: string) => Promise<FileContent>;
+  /**
+   * Tells the main process a repository is legitimately open, before any
+   * list/read call naming it will be honored. Called once per successful
+   * session open/resume — main refuses fs-list/fs-read for any path that was
+   * never registered this way, so the renderer naming an arbitrary
+   * repositoryPath is not enough on its own to read outside a session that
+   * was actually opened.
+   */
+  registerRepository: (repositoryPath: string) => void;
+};
+
 export type NovusBridge = {
   workerUrl: () => Promise<string>;
   accessToken: () => Promise<string>;
   pickDirectory: () => Promise<string | null>;
   terminal: TerminalBridge;
+  fs: FsBridge;
 };
 
 declare global {

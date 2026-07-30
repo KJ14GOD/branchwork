@@ -66,6 +66,36 @@ test("valid arguments become a real tool call, carrying usage through untouched"
   }
 });
 
+test("text sent beside a tool call is kept, not thrown away", () => {
+  const toolCall = {
+    id: "call-4",
+    type: "function" as const,
+    function: { name: "read_file", arguments: JSON.stringify({ path: "package.json" }) },
+  };
+
+  const response = interpretToolCall(toolCall, {}, "I'll check package.json first.");
+
+  assert.equal(response.type, "tool_call");
+  if (response.type === "tool_call") {
+    assert.equal(response.text, "I'll check package.json first.");
+  }
+});
+
+test("an empty string alongside a tool call carries no text field", () => {
+  const toolCall = {
+    id: "call-5",
+    type: "function" as const,
+    function: { name: "read_file", arguments: JSON.stringify({ path: "package.json" }) },
+  };
+
+  const response = interpretToolCall(toolCall, {}, "");
+
+  assert.equal(response.type, "tool_call");
+  if (response.type === "tool_call") {
+    assert.equal("text" in response, false);
+  }
+});
+
 test("the adapter refuses a selection naming a different provider", () => {
   assert.throws(
     () => new OpenAIModelAdapter({ provider: "anthropic", model: "claude-opus-5" }),

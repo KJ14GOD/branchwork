@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import * as pty from "node-pty";
 
+import { listDirectory, readFileForViewer } from "./fs-browser.ts";
 import { serveRenderer, type RendererHost } from "./renderer-host.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,6 +26,15 @@ const ACCESS_TOKEN =
   process.env.NOVUS_TOKEN?.trim() || randomBytes(32).toString("base64url");
 const WORKER_URL = `http://127.0.0.1:${WORKER_PORT}`;
 const HEALTH_TIMEOUT_MS = 15_000;
+
+// Opt-in only, and never touched by a normal launch: lets this exact app be
+// driven by a real CDP client (screenshots, DOM queries) during development
+// instead of trusting "it typechecks" as proof a change looks right. Must be
+// set before the app is ready, which is true of every module-level statement
+// here since app.whenReady() is only ever called below.
+if (process.env.NOVUS_CDP_PORT) {
+  app.commandLine.appendSwitch("remote-debugging-port", process.env.NOVUS_CDP_PORT);
+}
 
 let worker: ChildProcess | null = null;
 let window: BrowserWindow | null = null;
@@ -226,6 +236,71 @@ ipcMain.on("novus:terminal-dispose", (_event, id: string) => {
   terminals.get(id)?.kill();
   terminals.delete(id);
 });
+
+/**
+ * The file browser's own filesystem access — "caveman mode": browse the
+ * open repository, open a file, look at it, read-only. See fs-browser.ts
+ * for why this is a second, independent confinement rather than a widening
+ * of what the terminal above already grants: a shell the host typed into
+ * themselves is not a new capability for the agent, but this IPC surface
+ * genuinely is new, so it gets the same repository-relative-only,
+ * symlink-resolved, .git/.env-refusing rules apps/worker's own tools use.
+ *
+ * That confinement is only as good as what it confines *to*. The first
+ * version took repositoryPath as a per-call renderer-supplied argument and
+ * trusted it outright — which is not a widening of the terminal's own reach
+ * (a shell already has an arbitrary cwd), but it did mean the fs-list/fs-read
+ * handlers did not actually satisfy CLAUDE.md's own stated invariant,
+ * "repository access is confined to the selected repo": nothing here checked
+ * that the named repository was a *selected* one. registeredRepositories,
+ * populated by a real session open/resume (see registerRepository in
+ * use-session.ts), fixes that for an honest caller — a typo, a stale path, a
+ * bug elsewhere in the renderer naming the wrong root.
+ *
+ * Say plainly what it does not fix: registerRepository is exposed on the
+ * same unauthenticated contextBridge surface as list/read themselves, so a
+ * genuinely compromised renderer can call `fs.registerRepository("/")` and
+ * then read anything the OS user running Novus can read — the gate does not
+ * distinguish a real session's registration from a forged one. That is the
+ * same actual exposure the terminal already carries (an arbitrary shell with
+ * an arbitrary cwd), just reached a different way, so this is not a new hole
+ * relative to what already existed — but do not describe this Set as
+ * confinement against a hostile renderer. It only confines an honest one.
+ * Closing the real gap would mean main deciding which repositories are
+ * legitimately open from a source the renderer cannot write to at all — e.g.
+ * asking the worker's own /sessions with main's own token — not a Set the
+ * renderer can populate.
+ */
+const registeredRepositories = new Set<string>();
+
+ipcMain.on(
+  "novus:fs-register-repository",
+  (_event, repositoryPath: string) => {
+    registeredRepositories.add(repositoryPath);
+  },
+);
+
+ipcMain.handle(
+  "novus:fs-list",
+  (_event, repositoryPath: string, relativePath: string) => {
+    if (!registeredRepositories.has(repositoryPath)) {
+      throw new Error(`${repositoryPath} was never opened as a session.`);
+    }
+
+    return listDirectory(repositoryPath, relativePath);
+  },
+);
+
+ipcMain.handle(
+  "novus:fs-read",
+  (_event, repositoryPath: string, relativePath: string) => {
+    if (!registeredRepositories.has(repositoryPath)) {
+      throw new Error(`${repositoryPath} was never opened as a session.`);
+    }
+
+    return readFileForViewer(repositoryPath, relativePath);
+  },
+);
 
 /**
  * Decides where the window loads from, before there is a window.
