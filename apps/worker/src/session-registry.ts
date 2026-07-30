@@ -69,6 +69,33 @@ const readRepositoryBase = async (
   return { revision, dirty };
 };
 
+/**
+ * Which of Novus's features this directory supports.
+ *
+ * Asked once when a session opens. Distinguishing "not a repository" from
+ * "a repository with nothing committed" matters because the remedies differ and
+ * neither is something Novus should quietly do on somebody's behalf.
+ */
+const readRepositoryState = async (
+  repositoryPath: string,
+): Promise<"ready" | "no-commits" | "absent"> => {
+  const git = (args: string[]) =>
+    run("git", args, { cwd: repositoryPath, timeout: 5_000 });
+
+  const inside = await git(["rev-parse", "--is-inside-work-tree"])
+    .then(({ stdout }) => stdout.trim() === "true")
+    .catch(() => false);
+
+  if (!inside) {
+    return "absent";
+  }
+
+  // A repository with no HEAD has nothing to check out, so a fork has no base.
+  return git(["rev-parse", "--verify", "--quiet", "HEAD"])
+    .then(({ stdout }) => (stdout.trim() === "" ? "no-commits" : "ready"))
+    .catch(() => "no-commits");
+};
+
 export type HostDefaults = {
   allowWrites: boolean;
   allowCommands: boolean;
@@ -83,6 +110,8 @@ export type SessionOptions = {
 export type Session = {
   id: string;
   repositoryPath: string;
+  /** Read when the session opened, so the client can say what will not work. */
+  repositoryState: "ready" | "no-commits" | "absent";
   /**
    * Cuts checkpoints and forks for this session's repository.
    *
@@ -203,9 +232,11 @@ export class SessionRegistry {
     const allowWrites = options.allowWrites ?? this.defaults.allowWrites;
     const allowCommands = options.allowCommands ?? this.defaults.allowCommands;
     const proposePatchTool = new ProposePatchTool(repositoryPath);
+    const repositoryState = await readRepositoryState(repositoryPath);
     const session: Session = {
       id: crypto.randomUUID(),
       repositoryPath,
+      repositoryState,
       worktrees: new WorktreeManager(repositoryPath),
       forks: new Map(),
       allowWrites,

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import type { ModelSelection } from "@novus/contracts";
 import { InMemorySessionEventStore } from "@novus/session-service";
@@ -13,6 +15,8 @@ import {
   type ModelResponse,
 } from "./model.ts";
 import { SessionRegistry } from "./session-registry.ts";
+
+const run = promisify(execFile);
 
 const selection: ModelSelection = {
   provider: "scripted",
@@ -145,4 +149,48 @@ test("does not invent a run to fail when none was ever started", async () => {
   assert.equal(errors.lines.length, 1);
 
   eventStore.close();
+});
+
+/** The registry, with a model nothing in these three tests will reach. */
+const registryFor = () =>
+  new SessionRegistry(
+    new InMemorySessionEventStore(),
+    new FixedModelRouter(selection),
+    [new RejectingModelAdapter()],
+  );
+
+test("a session on a plain directory reports the repository as absent", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "novus-plain-"));
+
+  const session = await registryFor().create({ repositoryPath: directory });
+
+  // Reported when the session opens, not discovered when Fork fails. The session
+  // is perfectly usable — reading, searching and patching all work — and two
+  // features do not, which is a thing to say up front.
+  assert.equal(session.repositoryState, "absent");
+});
+
+test("a repository with no commits is distinguished from no repository", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "novus-empty-git-"));
+  await run("git", ["init", "-q"], { cwd: directory });
+
+  const session = await registryFor().create({ repositoryPath: directory });
+
+  // The remedies differ — one needs `git init`, the other only a commit — so
+  // collapsing them into one message would send somebody to the wrong fix.
+  assert.equal(session.repositoryState, "no-commits");
+});
+
+test("a repository with a commit is ready", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "novus-ready-"));
+  await run("git", ["init", "-q"], { cwd: directory });
+  await run("git", ["config", "user.email", "t@e.com"], { cwd: directory });
+  await run("git", ["config", "user.name", "T"], { cwd: directory });
+  await writeFile(join(directory, "a.txt"), "one\n");
+  await run("git", ["add", "-A"], { cwd: directory });
+  await run("git", ["commit", "-qm", "initial"], { cwd: directory });
+
+  const session = await registryFor().create({ repositoryPath: directory });
+
+  assert.equal(session.repositoryState, "ready");
 });

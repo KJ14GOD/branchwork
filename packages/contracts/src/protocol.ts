@@ -32,9 +32,25 @@ export const CreateSessionRequestSchema = z.object({
 
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 
+/**
+ * Whether this repository can do everything Novus offers.
+ *
+ * Reported when a session opens rather than discovered when a feature fails. A
+ * directory with no commits is a perfectly good place to write code and a
+ * useless one to fork from, and finding that out only when you press Fork means
+ * finding out after you have done the work.
+ *
+ * `absent` — not a Git repository at all. `no-commits` — initialised, nothing
+ * committed, so there is no base for a checkpoint. `ready` — everything works.
+ */
+export const RepositoryStateSchema = z.enum(["ready", "no-commits", "absent"]);
+
+export type RepositoryState = z.infer<typeof RepositoryStateSchema>;
+
 export const SessionSummarySchema = z.object({
   id: z.string().min(1),
   repositoryPath: z.string().min(1),
+  repositoryState: RepositoryStateSchema,
   allowWrites: z.boolean(),
   allowCommands: z.boolean(),
   createdAt: z.string().datetime(),

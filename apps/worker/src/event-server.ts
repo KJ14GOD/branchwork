@@ -201,6 +201,7 @@ export const startEventServer = (
   const describe = (session: Session) => ({
     id: session.id,
     repositoryPath: session.repositoryPath,
+    repositoryState: session.repositoryState,
     allowWrites: session.allowWrites,
     allowCommands: session.allowCommands,
     createdAt: session.createdAt,

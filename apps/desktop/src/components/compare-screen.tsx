@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import type { RepositoryState } from "@novus/contracts/protocol";
 import { CompareView } from "@novus/ui";
 
 import type { ComparisonState } from "../use-comparison.ts";
@@ -15,9 +16,11 @@ import type { ComparisonState } from "../use-comparison.ts";
  */
 export const CompareScreen = ({
   state,
+  repositoryState,
   onClose,
 }: {
   state: ComparisonState;
+  repositoryState: RepositoryState;
   onClose: () => void;
 }) => {
   const [label, setLabel] = useState("");
@@ -78,6 +81,22 @@ export const CompareScreen = ({
           {forking ? "Forking…" : "Fork an attempt"}
         </button>
       </form>
+
+      {repositoryState !== "ready" ? (
+        // Concrete, because the remedy is two commands and Novus deliberately
+        // does not run them for you: `git add -A` in a repository without a
+        // .gitignore commits whatever is lying around, and a tool that refuses
+        // to read .env has no business committing one.
+        <div className="open__error">
+          {repositoryState === "absent"
+            ? "This directory is not a Git repository. A fork is a Git worktree cut from a commit, so forking needs one."
+            : "This repository has no commits yet, so there is no base to fork from."}
+          {" "}
+          Run <code>git init &amp;&amp; git add -A &amp;&amp; git commit -m "initial"</code> in it
+          — check what <code>git add -A</code> would stage first, since Novus will
+          not commit on your behalf.
+        </div>
+      ) : null}
 
       {state.error ? <div className="open__error">{state.error}</div> : null}
 

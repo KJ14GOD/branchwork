@@ -824,3 +824,15 @@ kbd {
   line-height: 1.5;
   color: var(--text-dim);
 }
+
+/* Not an error — the session works, two features do not. Amber rather than red,
+   and worded as a fact rather than a failure. */
+.titlebar__warn {
+  padding: 2px 7px;
+  border: 1px solid var(--warn, #8a6d2b);
+  border-radius: 3px;
+  color: var(--warn-text, #d3a84c);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}

@@ -249,6 +249,16 @@ export const App = () => {
           {session.allowWrites ? (
             <span className="titlebar__writes">writes on</span>
           ) : null}
+          {session.repositoryState !== "ready" ? (
+            // Said at the top of the window, while there is still time to act on
+            // it. This used to surface as a failure when you pressed Fork, which
+            // is after the work rather than before it.
+            <span className="titlebar__warn" title="Forking and diffs need a commit to work from">
+              {session.repositoryState === "absent"
+                ? "not a git repo"
+                : "no commits yet"}
+            </span>
+          ) : null}
           {session.allowCommands ? (
             <span className="titlebar__writes">commands on</span>
           ) : null}
@@ -343,6 +353,7 @@ export const App = () => {
           <main className="timeline">
             <CompareScreen
               state={comparison}
+              repositoryState={session.repositoryState}
               onClose={() => setComparing(false)}
             />
           </main>
