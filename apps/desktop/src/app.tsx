@@ -278,7 +278,7 @@ export const App = () => {
         </div>
         <span className="titlebar__spacer" />
         <button
-          className="titlebar__repo"
+          className="titlebar__action"
           type="button"
           onClick={() => setInviting(true)}
           title="Invite a teammate into this session"
@@ -286,7 +286,7 @@ export const App = () => {
           invite
         </button>
         <button
-          className="titlebar__repo"
+          className="titlebar__action"
           type="button"
           onClick={() => setComparing((value) => !value)}
           title="Fork this run and compare attempts"

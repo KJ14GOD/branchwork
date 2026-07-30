@@ -195,6 +195,22 @@ kbd {
   text-decoration: underline;
 }
 
+.titlebar__action {
+  padding: 3px 8px;
+  border-radius: var(--radius-m);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.titlebar__action:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.titlebar__action:active {
+  background: var(--pressed);
+}
+
 .titlebar__writes {
   padding: 1px 5px;
   border: 1px solid var(--border-strong);
@@ -239,17 +255,28 @@ kbd {
 
 .open__browse {
   flex: none;
-  padding: 0 12px;
+  padding: 6px 12px;
   border-radius: var(--radius-m);
-  border: 1px solid var(--border-strong);
-  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  background: transparent;
   color: var(--text-muted);
   white-space: nowrap;
 }
 
-.open__browse:hover {
-  border-color: var(--text-dim);
+.open__browse:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border-strong);
   color: var(--text);
+}
+
+.open__browse:active:not(:disabled) {
+  background: var(--pressed);
+}
+
+.open__browse:disabled {
+  border-color: var(--border-subtle);
+  color: var(--text-dim);
+  cursor: default;
 }
 
 .open__input {
@@ -287,13 +314,21 @@ kbd {
   border: 1px solid var(--border-strong);
   background: var(--surface-raised);
   color: var(--text);
+  font-weight: 500;
 }
 
 .open__submit:hover:not(:disabled) {
-  border-color: var(--text-dim);
+  background: var(--surface-raised-hover);
+  border-color: rgb(var(--fg) / 0.22);
+}
+
+.open__submit:active:not(:disabled) {
+  border-color: rgb(var(--fg) / 0.28);
 }
 
 .open__submit:disabled {
+  background: var(--surface);
+  border-color: var(--border-subtle);
   color: var(--text-dim);
   cursor: default;
 }
@@ -390,12 +425,17 @@ kbd {
 }
 
 .jump:hover {
-  background: var(--surface-raised);
+  background: var(--hover);
   color: var(--text);
+}
+
+.jump:active {
+  background: var(--pressed);
 }
 
 .jump--active {
   border-left-color: var(--text-muted);
+  background: var(--selected);
   color: var(--text);
 }
 
@@ -501,7 +541,11 @@ kbd {
 }
 
 .tool__head:hover {
-  background: var(--surface-raised);
+  background: var(--hover);
+}
+
+.tool__head:active {
+  background: var(--pressed);
 }
 
 .tool__name {
@@ -766,8 +810,17 @@ kbd {
   text-align: left;
 }
 
-.palette__item--active {
-  background: var(--surface-raised);
+.palette__item:hover {
+  background: var(--hover);
+}
+
+.palette__item:active {
+  background: var(--pressed);
+}
+
+.palette__item--active,
+.palette__item--active:hover {
+  background: var(--selected);
   color: var(--text);
 }
 
@@ -987,8 +1040,13 @@ kbd {
   cursor: pointer;
 }
 .open__recent-row:hover {
+  background: var(--hover);
   border-color: var(--border-strong);
   color: var(--text);
+}
+
+.open__recent-row:active {
+  background: var(--pressed);
 }
 .open__recent-path {
   overflow: hidden;
