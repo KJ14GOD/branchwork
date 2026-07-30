@@ -10,6 +10,7 @@ import { AgentRunner } from "./agent-runner.ts";
 import {
   FixedModelRouter,
   ScriptedModelAdapter,
+  TransientModelError,
   type ModelAdapter,
 } from "./model.ts";
 import { AllowListApprovalGate } from "./policy.ts";
@@ -865,4 +866,260 @@ test("direction already applied is not applied again", async () => {
     goals.filter((goal) => goal.includes("Keep the public API stable")).length,
     1,
   );
+});
+
+test("a run re-reading the same file forever is stopped while it is cheap", async () => {
+  // The livelock signature: 79 model calls, every one a successful read of
+  // something already read, and nothing tripped — the failure counter needs
+  // failures, and the token and wall-clock ceilings are sized for a hard
+  // afternoon, so the run burned for half an hour before a resource ran out.
+  // Identical reads with no write between them are zero information, and the
+  // run should stop at a handful of them, not at two million tokens.
+  const repositoryPath = await mkdtemp(join(tmpdir(), "novus-reread-"));
+  await writeFile(join(repositoryPath, "package.json"), '{"name":"loop"}\n', "utf8");
+
+  let asked = 0;
+  const adapter: ModelAdapter = {
+    selection: { provider: "anthropic", model: "test" },
+    async complete() {
+      asked += 1;
+
+      return {
+        type: "tool_call",
+        call: { id: `c${asked}`, name: "read_file", input: { path: "package.json" } },
+      };
+    },
+  };
+
+  const eventStore = new InMemorySessionEventStore();
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(adapter.selection),
+    [adapter],
+    [new ReadFileTool(repositoryPath)],
+  );
+
+  try {
+    const result = await runner.run({
+      sessionId: "reread-session",
+      actorId: "agent-1",
+      goal: "Explain this repo",
+    });
+
+    const failed = result.events.findLast((event) => event.type === "run.failed");
+    assert.equal(failed?.type, "run.failed");
+
+    if (failed?.type === "run.failed") {
+      // The reason names the exact call, because "the run stopped" is not
+      // something a person can debug a loop from.
+      assert.match(failed.payload.reason, /read_file/);
+      assert.match(failed.payload.reason, /re-reading/);
+    }
+
+    // Five identical reads, not five hundred model calls.
+    assert.equal(asked, 5, "the loop was not stopped at the read ceiling");
+    // The receipt still exists, because a stopped run is still a run someone
+    // has to be able to account for.
+    assert.ok(result.events.some((event) => event.type === "receipt.created"));
+  } finally {
+    await rm(repositoryPath, { recursive: true, force: true });
+  }
+});
+
+test("re-reading after a write is recovery, not a loop", async () => {
+  // The counter must reset when the repository can have changed, or the
+  // detector punishes the exact behaviour the harness wants: read, patch,
+  // read back what the patch did.
+  const repositoryPath = await mkdtemp(join(tmpdir(), "novus-reread-reset-"));
+  const filePath = join(repositoryPath, "greet.ts");
+  await writeFile(filePath, `${originalSource}\n`, "utf8");
+
+  // Four identical reads, a propose+apply, four more identical reads: eight
+  // reads of one path in one run, legal because a write sits between the
+  // stretches and neither stretch reaches the ceiling on its own.
+  let asked = 0;
+  const adapter: ModelAdapter = {
+    selection: { provider: "anthropic", model: "test" },
+    async complete(request) {
+      asked += 1;
+      const step = request.toolExchanges.length;
+
+      if (step < 4 || (step >= 6 && step < 10)) {
+        return {
+          type: "tool_call",
+          call: { id: `read-${asked}`, name: "read_file", input: { path: "greet.ts" } },
+        };
+      }
+
+      if (step === 4) {
+        return {
+          type: "tool_call",
+          call: {
+            id: "propose",
+            name: "propose_patch",
+            input: {
+              path: "greet.ts",
+              intent: "Greet with an exclamation mark.",
+              edits: [
+                { oldText: "return `hello ${name}`;", newText: "return `hello ${name}!`;" },
+              ],
+            },
+          },
+        };
+      }
+
+      if (step === 5) {
+        const proposal = request.toolExchanges.find(
+          (exchange) =>
+            exchange.status === "ok" && exchange.result.name === "propose_patch",
+        );
+
+        if (proposal?.status === "ok" && proposal.result.name === "propose_patch") {
+          return {
+            type: "tool_call",
+            call: {
+              id: "apply",
+              name: "apply_patch",
+              input: { patchId: proposal.result.output.patchId },
+            },
+          };
+        }
+      }
+
+      return { type: "final", summary: "Read, patched, and read back." };
+    },
+  };
+
+  const eventStore = new InMemorySessionEventStore();
+  const proposeTool = new ProposePatchTool(repositoryPath);
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(adapter.selection),
+    [adapter],
+    [
+      new ReadFileTool(repositoryPath),
+      proposeTool,
+      new ApplyPatchTool(repositoryPath, proposeTool),
+    ],
+    new AllowListApprovalGate(["apply_patch"], "host"),
+  );
+
+  try {
+    const result = await runner.run({
+      sessionId: "reread-reset-session",
+      actorId: "agent-1",
+      goal: "Improve the greeting and verify it.",
+    });
+
+    assert.ok(
+      result.events.some((event) => event.type === "run.completed"),
+      "eight reads split by a write should complete, not trip the loop detector",
+    );
+    assert.ok(!result.events.some((event) => event.type === "run.failed"));
+  } finally {
+    await rm(repositoryPath, { recursive: true, force: true });
+  }
+});
+
+test("a transient provider error is waited out instead of ending the run", async () => {
+  // A live trace lost twenty-one tool calls of gathered context to one 529
+  // that outlasted the SDK's own retries. Everything the run needed to
+  // continue was still in memory; dying discarded it all. The overload is the
+  // provider's weather — the run waits it out and finishes.
+  const repositoryPath = await mkdtemp(join(tmpdir(), "novus-overload-"));
+  await writeFile(join(repositoryPath, "package.json"), '{"name":"ok"}\n', "utf8");
+
+  let asked = 0;
+  const adapter: ModelAdapter = {
+    selection: { provider: "anthropic", model: "test" },
+    async complete(request) {
+      asked += 1;
+
+      // Two overloads mid-run, after work has already accumulated.
+      if (asked === 2 || asked === 3) {
+        throw new TransientModelError("529 Overloaded", new Error("overloaded"));
+      }
+
+      if (request.toolExchanges.length === 0) {
+        return {
+          type: "tool_call",
+          call: { id: "c1", name: "read_file", input: { path: "package.json" } },
+        };
+      }
+
+      return { type: "final", summary: "Finished despite the overload." };
+    },
+  };
+
+  const eventStore = new InMemorySessionEventStore();
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(adapter.selection),
+    [adapter],
+    [new ReadFileTool(repositoryPath)],
+    undefined,
+    undefined,
+    undefined,
+    // Instant retries: the schedule is what is under test, not the clock.
+    [0, 0, 0],
+  );
+
+  try {
+    const result = await runner.run({
+      sessionId: "overload-session",
+      actorId: "agent-1",
+      goal: "Survive an overloaded provider",
+    });
+
+    assert.ok(result.events.some((event) => event.type === "run.completed"));
+    assert.ok(!result.events.some((event) => event.type === "run.failed"));
+
+    // The waits are in the log, because a silent wait is indistinguishable
+    // from a hung run to anyone watching the timeline.
+    const retries = result.events.filter(
+      (event) =>
+        event.type === "run.progress" &&
+        /retrying/.test(event.payload.message),
+    );
+    assert.equal(retries.length, 2);
+  } finally {
+    await rm(repositoryPath, { recursive: true, force: true });
+  }
+});
+
+test("a provider that stays down ends the run with the cause intact", async () => {
+  // Retry is a bounded wait, not a promise to hold on forever: when every
+  // wait is used up the original error escapes, so the caller can still say
+  // exactly why the run died.
+  let asked = 0;
+  const adapter: ModelAdapter = {
+    selection: { provider: "anthropic", model: "test" },
+    async complete() {
+      asked += 1;
+      throw new TransientModelError("529 Overloaded", new Error("overloaded"));
+    },
+  };
+
+  const runner = new AgentRunner(
+    new InMemorySessionEventStore(),
+    new FixedModelRouter(adapter.selection),
+    [adapter],
+    [],
+    undefined,
+    undefined,
+    undefined,
+    [0, 0],
+  );
+
+  await assert.rejects(
+    runner.run({
+      sessionId: "dead-provider-session",
+      actorId: "agent-1",
+      goal: "Meet a dead provider",
+    }),
+    /529 Overloaded/,
+  );
+
+  // One first attempt plus one per configured wait, then no more.
+  assert.equal(asked, 3);
 });

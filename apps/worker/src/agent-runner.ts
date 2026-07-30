@@ -6,11 +6,12 @@ import {
 } from "@novus/contracts";
 import type { SessionEventStore } from "@novus/session-service";
 
-import type {
-  CompletedTurn,
-  ModelAdapter,
-  ModelRouter,
-  ModelToolExchange,
+import {
+  TransientModelError,
+  type CompletedTurn,
+  type ModelAdapter,
+  type ModelRouter,
+  type ModelToolExchange,
 } from "./model.ts";
 import {
   budgetExhausted,
@@ -45,6 +46,22 @@ const selectionsMatch = (
   second: ModelSelection,
 ): boolean =>
   first.provider === second.provider && first.model === second.model;
+
+/**
+ * How long to wait out a provider that is refusing everyone, not just us.
+ *
+ * The SDK retries twice on its own before a transient error ever reaches the
+ * runner, so these begin where sub-ten-second blips end. A live trace lost
+ * twenty-one tool calls of gathered context to a 529 that lasted a little
+ * longer than that; every exchange it needed to continue was still in memory.
+ * Three waits totalling about a minute cover an overload burst without holding
+ * a genuinely dead provider all the way to the wall clock — after the last
+ * wait, the error is allowed to end the run and the log says why.
+ */
+const TRANSIENT_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 45_000];
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 // The step ceiling used to live here. It is in budget.ts now, as one bound
 // among several and the least important of them — see the reasoning there.
@@ -91,6 +108,8 @@ export class AgentRunner {
   private readonly readBase: () => Promise<RepositoryBase>;
   /** Every bound on this run, and the reason it will give for stopping. */
   private readonly budget: RunBudget;
+  /** Overridable so a test of the retry path does not actually wait a minute. */
+  private readonly transientRetryDelaysMs: readonly number[];
   // One runner is one session. Finished turns stay here so a follow-up
   // question carries the earlier conversation.
   private readonly history: CompletedTurn[] = [];
@@ -108,6 +127,7 @@ export class AgentRunner {
       dirty: false,
     }),
     budget: RunBudget = DEFAULT_RUN_BUDGET,
+    transientRetryDelaysMs: readonly number[] = TRANSIENT_RETRY_DELAYS_MS,
   ) {
     this.eventStore = eventStore;
     this.router = router;
@@ -116,6 +136,7 @@ export class AgentRunner {
     this.approvals = approvals;
     this.readBase = readBase;
     this.budget = budget;
+    this.transientRetryDelaysMs = transientRetryDelaysMs;
   }
 
   /**
@@ -235,6 +256,14 @@ export class AgentRunner {
     const toolExchanges: ModelToolExchange[] = [];
     const startedAt = Date.now();
     let consecutiveFailures = 0;
+    // How many times each read-class call has run with byte-identical input
+    // since the repository could last have changed. A read is a pure function
+    // of the repository, so until a write or a command runs, an identical read
+    // returns identical bytes and the repeat gains nothing. The map is cleared
+    // whenever a non-read tool executes, because after that the same read is a
+    // genuine question again.
+    const readRepeats = new Map<string, number>();
+    let identicalReads = 0;
     const usage: ReceiptUsage = {
       inputTokens: 0,
       outputTokens: 0,
@@ -309,6 +338,7 @@ export class AgentRunner {
           modelCalls: usage.modelCalls,
           totalTokens: usage.inputTokens + usage.outputTokens,
           consecutiveFailures,
+          identicalReads,
           startedAt,
         },
         Date.now(),
@@ -331,11 +361,44 @@ export class AgentRunner {
         ? input.goal
         : `${input.goal}\n\nDirection from the session, applied at this turn:\n${pending.map((line) => `- ${line}`).join("\n")}`;
 
-      const response = await adapter.complete({
-        history: this.history,
-        goal: steered,
-        toolExchanges,
-      });
+      // A transient provider error — overload, a rate limit, a dropped
+      // connection — is waited out rather than allowed to end the run, because
+      // everything the run has gathered is right here in toolExchanges and
+      // dying discards it all. Only marked-transient errors are retried, and
+      // only this many times: a provider that stays down through every wait
+      // ends the run through the ordinary throw path, with the cause intact.
+      let response;
+
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          response = await adapter.complete({
+            history: this.history,
+            goal: steered,
+            toolExchanges,
+          });
+          break;
+        } catch (error) {
+          const delay = this.transientRetryDelaysMs[attempt];
+
+          if (!(error instanceof TransientModelError) || delay === undefined) {
+            throw error;
+          }
+
+          // Said in the log, because from the timeline a silent wait is
+          // indistinguishable from a run that hung.
+          this.eventStore.append({
+            sessionId: input.sessionId,
+            actorId: input.actorId,
+            type: "run.progress",
+            payload: {
+              runId: run.id,
+              message: `The model provider is unavailable (${error.message}); retrying in ${Math.round(delay / 1000)}s (${attempt + 1} of ${this.transientRetryDelaysMs.length}).`,
+            },
+          });
+
+          await sleep(delay);
+        }
+      }
 
       usage.modelCalls += 1;
 
@@ -481,6 +544,16 @@ export class AgentRunner {
         });
       }
 
+      if (toolClass !== "read") {
+        // The repository may be about to change, so every identical-read count
+        // starts over: re-reading a file after a patch or a command is the
+        // correct thing to do, not a loop. Cleared on the execution attempt
+        // rather than on success — a command that failed may still have
+        // written — but not on a denial, which runs nothing and must not keep
+        // resetting the very counter that would catch a deny-and-retry cycle.
+        readRepeats.clear();
+      }
+
       let result;
 
       try {
@@ -518,6 +591,33 @@ export class AgentRunner {
       }
 
       consecutiveFailures = 0;
+
+      if (toolClass === "read") {
+        const key = `${response.call.name} ${JSON.stringify(response.call.input)}`;
+        const repeats = (readRepeats.get(key) ?? 0) + 1;
+
+        readRepeats.set(key, repeats);
+        identicalReads = Math.max(identicalReads, repeats);
+
+        if (repeats >= this.budget.identicalReads) {
+          // Checked here as well as at the loop top so the reason can name the
+          // call that looped — same shape as the failure counter above. The
+          // result still enters the log first: the evidence of the loop is the
+          // repetition itself, and hiding the final read would make the log
+          // disagree with the reason.
+          this.eventStore.append({
+            sessionId: input.sessionId,
+            actorId: input.actorId,
+            type: "tool.completed",
+            payload: { runId: run.id, result },
+          });
+
+          return failRun(
+            `The agent called ${response.call.name} with ${JSON.stringify(response.call.input)} ${repeats} times without anything changing in between — it was re-reading what it already had rather than finishing.`,
+          );
+        }
+      }
+
       toolExchanges.push({
         status: "ok",
         call: response.call,

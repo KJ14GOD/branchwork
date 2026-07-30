@@ -92,6 +92,23 @@ export type ModelResponse =
       usage?: ModelUsage;
     };
 
+/**
+ * A model call that failed for reasons that belong to the provider, not the run.
+ *
+ * A live trace lost twenty-one tool calls of gathered context to one 529 that
+ * outlasted the SDK's own retries: the throw escaped the loop, the run failed,
+ * and everything the run knew was discarded — even though every exchange it
+ * needed to continue was still in memory. An overloaded provider is weather,
+ * not a verdict on the run, so the adapter marks these and the runner waits
+ * them out instead of dying. Anything else the adapter throws is still fatal.
+ */
+export class TransientModelError extends Error {
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "TransientModelError";
+  }
+}
+
 export interface ModelAdapter {
   readonly selection: ModelSelection;
   complete(request: ModelRequest): Promise<ModelResponse>;

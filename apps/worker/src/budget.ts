@@ -40,6 +40,25 @@ export type RunBudget = {
    * much work a run may do.
    */
   maxModelCalls: number;
+  /**
+   * The same read repeated with identical arguments, nothing changing between.
+   *
+   * The second behavioural bound, alongside consecutive failures. A read is a
+   * pure function of the repository, and the repository only changes when a
+   * write or a command runs — so the Nth identical read since the last one
+   * gains nothing the previous N-1 didn't already deliver. An agent doing
+   * that is stuck, and unlike the token or wall-clock ceilings this notices
+   * within a handful of calls instead of after thirty minutes of billing:
+   * the 79-call elision livelock would have tripped here inside its first
+   * dozen calls.
+   *
+   * Not set to catch the first re-read, because a legitimate one exists:
+   * elision invites the model to re-read a file that scrolled out of the
+   * verbatim window, and a healthy broad run has been observed re-reading a
+   * file twice for exactly that reason. Five is far past what elision can
+   * explain and far below what a livelock produces.
+   */
+  identicalReads: number;
 };
 
 export const DEFAULT_RUN_BUDGET: RunBudget = {
@@ -47,12 +66,15 @@ export const DEFAULT_RUN_BUDGET: RunBudget = {
   wallClockMs: 30 * 60 * 1000,
   consecutiveFailures: 3,
   maxModelCalls: 500,
+  identicalReads: 5,
 };
 
 export type BudgetUsage = {
   modelCalls: number;
   totalTokens: number;
   consecutiveFailures: number;
+  /** The highest count of one read-class call repeated with identical input. */
+  identicalReads: number;
   startedAt: number;
 };
 
@@ -71,6 +93,13 @@ export const budgetExhausted = (
 ): string | null => {
   if (usage.consecutiveFailures >= budget.consecutiveFailures) {
     return `stopped after ${usage.consecutiveFailures} consecutive tool failures — the agent was repeating itself rather than recovering`;
+  }
+
+  // Behavioural, so checked before the resource ceilings for the same reason
+  // the failure counter is: every further turn of a loop costs money to learn
+  // nothing, and this is the loop that succeeds on every call.
+  if (usage.identicalReads >= budget.identicalReads) {
+    return `stopped after the same read was made ${usage.identicalReads} times with identical arguments and no write in between — the agent was re-reading what it already had rather than finishing`;
   }
 
   if (budget.totalTokens !== null && usage.totalTokens >= budget.totalTokens) {
