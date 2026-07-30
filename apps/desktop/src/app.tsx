@@ -113,20 +113,32 @@ export const App = () => {
   // to resume (the repository moved, a different NOVUS_DB) is dropped
   // rather than kept around looking live while being dead.
   //
-  // hydrated.current is set synchronously, before the async resume work
-  // starts, not after — open() is keyed on endpoint, and endpoint changes
-  // once bridge().workerUrl() resolves, which would otherwise give this
-  // effect a second identity to re-run on and hydrate the same tabs twice.
+  // hydrated.current is set only when an *uncancelled* attempt actually
+  // finishes — not synchronously at the top of the effect. Setting it early
+  // was tried and is wrong: StrictMode double-invokes this effect (mount,
+  // cleanup, mount again), the cleanup cancels the first attempt before its
+  // awaits resolve, and if the guard is already permanently true by then, the
+  // second invocation never starts a fresh attempt either — the cancelled
+  // first one is all that ever ran, its result is discarded, and the
+  // persistence effect below then commits that discarded empty result to
+  // localStorage, deleting every stored tab on the very first launch. This
+  // effect is also keyed on `open`, which is bound to `endpoint` and changes
+  // identity once `bridge().workerUrl()` resolves — hydration's first run is
+  // always against `FALLBACK_ENDPOINT` before that happens, so a permanent
+  // guard set before completion would also strand hydration on the wrong
+  // endpoint forever whenever the real one differs. Leaving the guard
+  // unset until a real completion means both the StrictMode-cancelled pass
+  // and the fallback-endpoint pass simply get superseded by the next
+  // invocation, the way a cancelled fetch normally would.
   useEffect(() => {
     if (hydrated.current) {
       return;
     }
 
-    hydrated.current = true;
-
     const stored = loadStoredTabs();
 
     if (stored.tabs.length === 0) {
+      hydrated.current = true;
       return;
     }
 
@@ -149,6 +161,9 @@ export const App = () => {
       }
 
       if (cancelled) {
+        // A StrictMode-synthetic unmount, or endpoint changed mid-flight —
+        // either way this attempt's result is stale, and hydrated.current
+        // stays false so whichever invocation actually survives tries again.
         return;
       }
 
@@ -158,6 +173,7 @@ export const App = () => {
           ? stored.activeId
           : (resumed.at(-1)?.id ?? null),
       );
+      hydrated.current = true;
     })();
 
     return () => {
