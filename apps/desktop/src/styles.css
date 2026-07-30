@@ -153,6 +153,7 @@ button {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   font-size: 10px;
+  font-weight: 500;
   color: var(--text);
 }
 
@@ -217,6 +218,7 @@ kbd {
   border-radius: var(--radius-s);
   color: var(--add);
   font-size: 10px;
+  font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -241,8 +243,15 @@ kbd {
   background: var(--surface);
 }
 
+.open__title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+
 .open__label {
   font-size: 10px;
+  font-weight: 500;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-dim);
@@ -389,6 +398,7 @@ kbd {
 
 .rail__label {
   font-size: 10px;
+  font-weight: 500;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-dim);
@@ -409,6 +419,7 @@ kbd {
 
 .stat__value {
   color: var(--text);
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -461,6 +472,7 @@ kbd {
   color: var(--text-dim);
   padding: 40px 0;
   text-align: center;
+  font-size: 14px;
 }
 
 .event {
@@ -550,6 +562,7 @@ kbd {
 
 .tool__name {
   color: var(--text);
+  font-weight: 500;
 }
 
 .tool__summary {
@@ -562,7 +575,7 @@ kbd {
 
 .tool__chevron {
   color: var(--text-dim);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .tool__panel {
@@ -640,6 +653,7 @@ kbd {
 
 .patch__path {
   color: var(--text);
+  font-weight: 500;
 }
 
 .patch__count {
@@ -661,6 +675,7 @@ kbd {
   border-radius: var(--radius-s);
   color: var(--text-muted);
   font-size: 10px;
+  font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -888,6 +903,7 @@ kbd {
 .compare__label {
   color: var(--text);
   font-size: 13px;
+  font-weight: 500;
 }
 .compare__status {
   color: var(--text-dim);
@@ -980,6 +996,7 @@ kbd {
 .compare-screen__title {
   color: var(--text);
   font-size: 13px;
+  font-weight: 500;
 }
 .compare-screen__fork {
   display: grid;
@@ -1010,6 +1027,7 @@ kbd {
   border-radius: var(--radius-s);
   color: var(--warn-text, #d3a84c);
   font-size: 10px;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }

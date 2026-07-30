@@ -61,7 +61,7 @@ export const OpenRepository = ({
   return (
     <div className="open">
       <form className="open__panel" onSubmit={submit}>
-        <div className="open__label">Open a repository</div>
+        <div className="open__title">Open a repository</div>
         <div className="open__row">
           <input
             className="open__input"
