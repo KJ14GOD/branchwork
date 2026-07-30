@@ -240,10 +240,12 @@ if (relayUrl && relayToken) {
       );
     }
   });
-  // The invite a teammate elsewhere can actually use. The loopback one below
-  // only works for somebody sitting at this machine.
+  // Deliberately not an invite link. The worker does not know the relay's watch
+  // token — only the relay mints that — so printing a URL with a placeholder
+  // where the credential goes gave people something that looked usable and was
+  // not. The relay prints the real one; this says so.
   console.log(
-    `invite  http://127.0.0.1:${guestPort}/?relay=${encodeURIComponent(relayUrl)}&token=<their token from POST /sessions/:id/invite>`,
+    "relay   the invite link is printed by the relay, which owns the watch token",
   );
 } else if (relayUrl || relayToken) {
   console.error(

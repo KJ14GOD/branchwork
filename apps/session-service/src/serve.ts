@@ -37,10 +37,11 @@ const publishToken =
   mint();
 const watchToken = process.env.NOVUS_RELAY_WATCH_TOKEN?.trim() || mint();
 
-const pinned = Boolean(
+const publishPinned = Boolean(
   process.env.NOVUS_RELAY_PUBLISH_TOKEN?.trim() ||
     process.env.NOVUS_RELAY_TOKEN?.trim(),
 );
+const watchPinned = Boolean(process.env.NOVUS_RELAY_WATCH_TOKEN?.trim());
 
 let relay;
 
@@ -70,7 +71,7 @@ console.log("");
 console.log("Point the worker at it:");
 console.log("");
 
-if (pinned) {
+if (publishPinned) {
   // The token is already in the environment the worker will read, so repeating
   // it on the command line would only be a way to get it wrong.
   console.log(`  NOVUS_RELAY_URL=${relayUrl} pnpm --filter @novus/desktop dev`);
@@ -89,6 +90,25 @@ console.log("");
 console.log(
   `  http://127.0.0.1:${guestPort}/?relay=${encodeURIComponent(relayUrl)}&token=${watchToken}`,
 );
+console.log("");
+
+// Said plainly, because three tokens with two of them in .env is confusing on
+// its own, and a link that silently stopped working after a restart is worse.
+console.log("Tokens in use:");
+console.log(
+  `  publish  ${publishPinned ? "from .env (NOVUS_RELAY_TOKEN)" : "minted for this run"}`,
+);
+console.log(
+  `  watch    ${watchPinned ? "from .env (NOVUS_RELAY_WATCH_TOKEN)" : "minted for this run — every restart invalidates the link above"}`,
+);
+
+if (!watchPinned) {
+  console.log("");
+  console.log(
+    "  Set NOVUS_RELAY_WATCH_TOKEN in .env to keep one invite link working.",
+  );
+}
+
 console.log("");
 
 if (guestScheme === "ws") {
