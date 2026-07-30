@@ -252,11 +252,24 @@ ipcMain.on("novus:terminal-dispose", (_event, id: string) => {
  * (a shell already has an arbitrary cwd), but it did mean the fs-list/fs-read
  * handlers did not actually satisfy CLAUDE.md's own stated invariant,
  * "repository access is confined to the selected repo": nothing here checked
- * that the named repository was a *selected* one. registeredRepositories is
- * populated only by a real, successful session open/resume (see
- * registerRepository in use-session.ts) — a path never opened as a session
- * is refused before listDirectory/readFileForViewer ever run, regardless of
- * what string the renderer sends.
+ * that the named repository was a *selected* one. registeredRepositories,
+ * populated by a real session open/resume (see registerRepository in
+ * use-session.ts), fixes that for an honest caller — a typo, a stale path, a
+ * bug elsewhere in the renderer naming the wrong root.
+ *
+ * Say plainly what it does not fix: registerRepository is exposed on the
+ * same unauthenticated contextBridge surface as list/read themselves, so a
+ * genuinely compromised renderer can call `fs.registerRepository("/")` and
+ * then read anything the OS user running Novus can read — the gate does not
+ * distinguish a real session's registration from a forged one. That is the
+ * same actual exposure the terminal already carries (an arbitrary shell with
+ * an arbitrary cwd), just reached a different way, so this is not a new hole
+ * relative to what already existed — but do not describe this Set as
+ * confinement against a hostile renderer. It only confines an honest one.
+ * Closing the real gap would mean main deciding which repositories are
+ * legitimately open from a source the renderer cannot write to at all — e.g.
+ * asking the worker's own /sessions with main's own token — not a Set the
+ * renderer can populate.
  */
 const registeredRepositories = new Set<string>();
 
