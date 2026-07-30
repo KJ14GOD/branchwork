@@ -73,7 +73,7 @@ export const InvitePanel = ({
         }
       }}
     >
-      <form className="open__panel" onSubmit={(event) => void submit(event)}>
+      <form className="open__panel modal" onSubmit={(event) => void submit(event)}>
         <div className="open__label">Invite a teammate</div>
 
         {minted && link ? (

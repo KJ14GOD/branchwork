@@ -677,6 +677,29 @@ kbd {
   padding-top: 14vh;
   background: rgba(6, 6, 7, 0.7);
   backdrop-filter: blur(3px);
+  animation: overlay-in var(--t-overlay) var(--ease);
+}
+
+/* Anything on the overlay floats: it arrives from slightly behind the plane
+   it lands on, rather than being repainted into place. */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes float-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+.modal {
+  height: fit-content;
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-modal);
+  animation: float-in var(--t-overlay) var(--ease);
 }
 
 .palette {
@@ -686,7 +709,9 @@ kbd {
   border-radius: var(--radius-l);
   background: var(--surface);
   overflow: hidden;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  transform-origin: top center;
+  box-shadow: var(--shadow-popover);
+  animation: float-in var(--t-overlay) var(--ease);
 }
 
 .palette__input {
