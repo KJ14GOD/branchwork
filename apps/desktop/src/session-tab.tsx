@@ -1,22 +1,32 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { SessionEvent } from "@novus/contracts";
 import type { SessionSummary } from "@novus/contracts/protocol";
 
+import { bridge } from "./bridge.ts";
+import { AskBar } from "./components/ask-bar.tsx";
+import { FileTree, FileViewer } from "./components/browse-panel.tsx";
 import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
 import { CompareScreen } from "./components/compare-screen.tsx";
 import { FileChangesPanel } from "./components/file-changes-panel.tsx";
-import { EventRow } from "./components/host-event-row.tsx";
 import { InvitePanel } from "./components/invite-panel.tsx";
 import { TerminalPanel } from "./components/terminal-panel.tsx";
+import { groupKeyFor, TimelineView } from "./components/timeline-view.tsx";
 import { useComparison } from "./use-comparison.ts";
 import { useFileChanges } from "./use-file-changes.ts";
+import { useFileTree } from "./use-file-tree.ts";
 import { usePresence } from "./use-presence.ts";
 import { useSessionActions } from "./use-session-actions.ts";
 import { useSessionEvents } from "./use-session-events.ts";
 import type { Theme } from "./use-theme.ts";
 
 type Filter = "all" | "tools" | "patches";
+/** Which of the body's three mutually exclusive views is showing. */
+type ViewMode = "timeline" | "compare" | "browse";
+
+const MIN_TERMINAL_HEIGHT = 140;
+const MAX_TERMINAL_HEIGHT = 640;
+const DEFAULT_TERMINAL_HEIGHT = 260;
 
 /** What the tab strip in `App` needs to know about a tab it is not rendering. */
 export type TabStatus = {
@@ -82,17 +92,23 @@ export const SessionTab = ({
 }) => {
   const { error: actionError, ask, invite, direct, cancel, pause, resume, handoff } =
     useSessionActions(endpoint, session);
-  const [comparing, setComparing] = useState(false);
+  const host = bridge();
+  const [mode, setMode] = useState<ViewMode>("timeline");
   const [inviting, setInviting] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const [directionText, setDirectionText] = useState("");
+  const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const comparison = useComparison(endpoint, session.id);
   const presence = usePresence(endpoint, session.id);
   const { events, status, reconnect } = useSessionEvents(endpoint, session.id);
+  const fileTree = useFileTree(mode === "browse" ? session.repositoryPath : null);
   const [filter, setFilter] = useState<Filter>("all");
   const [raw, setRaw] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [highlighted, setHighlighted] = useState<number | null>(null);
+  // Which tool groups a person has explicitly opened or closed, keyed by the
+  // group's first event's sequence — see timeline-view.tsx for why a group
+  // needs this rather than owning its own open/closed state locally.
+  const [groupOverrides, setGroupOverrides] = useState<Map<number, boolean>>(new Map());
 
   // Refetched only when another patch actually applied — not polled blind.
   const appliedPatchCount = useMemo(
@@ -127,11 +143,41 @@ export const SessionTab = ({
     return events;
   }, [events, filter]);
 
+  // True only for the moment nothing has actually happened yet — a fresh
+  // session's log is never literally empty (session.created is appended the
+  // instant it opens), so "no events at all" would never fire and the
+  // timeline would show that one row forever: a lone sequence-0 session.created
+  // card, which is exactly the "lone 0 ◇ glyph" this replaces with an actual
+  // empty state. Once a run starts, session.created renders normally as part
+  // of the real history.
+  const trulyEmpty =
+    filter === "all"
+      ? events.length === 0 ||
+        (events.length === 1 && events[0]?.type === "session.created")
+      : visible.length === 0;
+
   const jumpTo = (sequence: number) => {
     setHighlighted(sequence);
-    document
-      .getElementById(`event-${sequence}`)
-      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    const key = groupKeyFor(events, sequence);
+
+    if (key !== null) {
+      setGroupOverrides((current) =>
+        current.get(key) === true ? current : new Map(current).set(key, true),
+      );
+    }
+
+    // Deferred one frame: if the target was inside a group that just opened
+    // above, its row does not exist in the DOM until that render lands.
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`event-${sequence}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
+
+  const toggleGroup = (key: number, currentlyOpen: boolean) => {
+    setGroupOverrides((current) => new Map(current).set(key, !currentlyOpen));
   };
 
   const commands: Command[] = [
@@ -201,7 +247,8 @@ export const SessionTab = ({
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing =
-        target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA";
 
       if (event.key === "/" && !typing) {
         event.preventDefault();
@@ -284,6 +331,29 @@ export const SessionTab = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runStatus, fileChanges.additions, fileChanges.deletions]);
 
+  const startTerminalResize = (event: React.MouseEvent) => {
+    event.preventDefault();
+
+    const startY = event.clientY;
+    const startHeight = terminalHeight;
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const delta = startY - moveEvent.clientY;
+
+      setTerminalHeight(
+        Math.min(MAX_TERMINAL_HEIGHT, Math.max(MIN_TERMINAL_HEIGHT, startHeight + delta)),
+      );
+    };
+
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   return (
     <div className="tab-content" style={{ display: active ? "grid" : "none" }}>
       <div className="session-bar">
@@ -355,11 +425,21 @@ export const SessionTab = ({
         <button
           className="titlebar__action"
           type="button"
-          onClick={() => setComparing((value) => !value)}
+          onClick={() => setMode((current) => (current === "compare" ? "timeline" : "compare"))}
           title="Fork this run and compare attempts"
         >
-          {comparing ? "timeline" : "attempts"}
+          {mode === "compare" ? "timeline" : "attempts"}
         </button>
+        {host ? (
+          <button
+            className="titlebar__action"
+            type="button"
+            onClick={() => setMode((current) => (current === "browse" ? "timeline" : "browse"))}
+            title="Browse this repository's files, read-only"
+          >
+            {mode === "browse" ? "timeline" : "browse"}
+          </button>
+        ) : null}
         <button
           className="titlebar__action"
           type="button"
@@ -373,42 +453,32 @@ export const SessionTab = ({
           {status}
         </span>
         <span className="titlebar__hint">
-          <kbd>/</kbd> ask
+          <kbd>/</kbd> commands
         </span>
       </div>
 
-      <div className={comparing ? "body body--compare" : "body"}>
+      <div
+        className={
+          mode === "compare"
+            ? "body body--compare"
+            : mode === "browse"
+              ? "body body--browse"
+              : "body"
+        }
+      >
         <aside className="rail">
           <div className="rail__section">
             <div className="rail__label">Goal</div>
             <div className="rail__goal">
               {run?.type === "run.started"
                 ? run.payload.run.goal
-                : "Waiting for a run"}
+                : "No goal yet — ask the agent something below to begin."}
             </div>
           </div>
 
           {busy ? (
             <div className="rail__section rail__section--direction">
-              <div className="rail__label">Direction</div>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-
-                  if (directionText.trim()) {
-                    void direct(directionText.trim());
-                    setDirectionText("");
-                  }
-                }}
-              >
-                <input
-                  className="open__input"
-                  value={directionText}
-                  onChange={(event) => setDirectionText(event.target.value)}
-                  placeholder="Steer the running turn"
-                  spellCheck={false}
-                />
-              </form>
+              <div className="rail__label">Run control</div>
               {lastStarted?.type === "run.started" ? (
                 <div className="rail__buttons">
                   <button
@@ -503,37 +573,50 @@ export const SessionTab = ({
           ) : null}
         </aside>
 
-        {comparing ? (
+        {mode === "compare" ? (
           <main className="timeline timeline--compare">
             <CompareScreen
               state={comparison}
               repositoryState={session.repositoryState}
-              onClose={() => setComparing(false)}
+              onClose={() => setMode("timeline")}
             />
           </main>
+        ) : mode === "browse" ? (
+          <>
+            <FileTree state={fileTree} />
+            <FileViewer state={fileTree} />
+          </>
         ) : (
           <>
-            <main className="timeline">
-              {visible.length === 0 ? (
-                <div className="timeline__empty">
-                  {status === "error" ? (
-                    `No connection to ${endpoint}.`
-                  ) : (
-                    <>
-                      Press <kbd>/</kbd> and type a question to start.
-                    </>
-                  )}
-                </div>
-              ) : (
-                visible.map((event) => (
-                  <EventRow
-                    key={event.eventId}
-                    event={event}
+            <main className="timeline-column">
+              <div className="timeline">
+                {trulyEmpty ? (
+                  <div className="timeline__empty">
+                    {status === "error" ? (
+                      <p className="timeline__empty-title">
+                        No connection to {endpoint}.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="timeline__empty-title">Nothing has run yet.</p>
+                        <p className="timeline__empty-hint">
+                          Ask the agent something below to begin.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <TimelineView
+                    events={visible}
+                    busy={busy}
                     raw={raw}
-                    highlighted={highlighted === event.sequence}
+                    highlighted={highlighted}
+                    groupOverrides={groupOverrides}
+                    onToggleGroup={toggleGroup}
                   />
-                ))
-              )}
+                )}
+              </div>
+              <AskBar busy={busy} onAsk={(goal) => void ask(goal)} onDirect={(goal) => void direct(goal)} />
             </main>
             <FileChangesPanel state={fileChanges} />
           </>
@@ -543,9 +626,15 @@ export const SessionTab = ({
       {actionError ? <div className="session-bar__error">{actionError}</div> : null}
 
       {terminalOpen ? (
-        <div className="terminal-dock">
+        <div className="terminal-dock" style={{ height: terminalHeight }}>
+          <div
+            className="terminal-dock__resize"
+            onMouseDown={startTerminalResize}
+            title="Drag to resize"
+          />
           <div className="terminal-dock__head">
-            <span className="rail__label">Terminal · {session.repositoryPath}</span>
+            <span className="terminal-dock__prompt">›_</span>
+            <span className="terminal-dock__label">{session.repositoryPath}</span>
             <button
               className="titlebar__action"
               type="button"
@@ -563,7 +652,11 @@ export const SessionTab = ({
         <CommandOverlay
           commands={commands}
           onAsk={(goal) => {
-            void ask(goal);
+            if (busy) {
+              void direct(goal);
+            } else {
+              void ask(goal);
+            }
           }}
           onClose={() => setPaletteOpen(false)}
         />

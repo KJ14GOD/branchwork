@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import * as pty from "node-pty";
 
+import { listDirectory, readFileForViewer } from "./fs-browser.ts";
 import { serveRenderer, type RendererHost } from "./renderer-host.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,6 +26,15 @@ const ACCESS_TOKEN =
   process.env.NOVUS_TOKEN?.trim() || randomBytes(32).toString("base64url");
 const WORKER_URL = `http://127.0.0.1:${WORKER_PORT}`;
 const HEALTH_TIMEOUT_MS = 15_000;
+
+// Opt-in only, and never touched by a normal launch: lets this exact app be
+// driven by a real CDP client (screenshots, DOM queries) during development
+// instead of trusting "it typechecks" as proof a change looks right. Must be
+// set before the app is ready, which is true of every module-level statement
+// here since app.whenReady() is only ever called below.
+if (process.env.NOVUS_CDP_PORT) {
+  app.commandLine.appendSwitch("remote-debugging-port", process.env.NOVUS_CDP_PORT);
+}
 
 let worker: ChildProcess | null = null;
 let window: BrowserWindow | null = null;
@@ -226,6 +236,30 @@ ipcMain.on("novus:terminal-dispose", (_event, id: string) => {
   terminals.get(id)?.kill();
   terminals.delete(id);
 });
+
+/**
+ * The file browser's own filesystem access — "caveman mode": browse the
+ * open repository, open a file, look at it, read-only. See fs-browser.ts
+ * for why this is a second, independent confinement rather than a widening
+ * of what the terminal above already grants: a shell the host typed into
+ * themselves is not a new capability for the agent, but this IPC surface
+ * genuinely is new, so it gets the same repository-relative-only,
+ * symlink-resolved, .git/.env-refusing rules apps/worker's own tools use.
+ * Both handlers take the repository root the renderer already knows —
+ * the session's own repositoryPath — rather than trusting anything cached
+ * in main, so a stale root can never serve a different repository's files.
+ */
+ipcMain.handle(
+  "novus:fs-list",
+  (_event, repositoryPath: string, relativePath: string) =>
+    listDirectory(repositoryPath, relativePath),
+);
+
+ipcMain.handle(
+  "novus:fs-read",
+  (_event, repositoryPath: string, relativePath: string) =>
+    readFileForViewer(repositoryPath, relativePath),
+);
 
 /**
  * Decides where the window loads from, before there is a window.

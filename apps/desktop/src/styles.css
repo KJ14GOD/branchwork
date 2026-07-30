@@ -11,6 +11,11 @@
   --t-overlay: 160ms;
 
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  /* UI chrome and prose, added this pass — see the "Typography" rule below
+     for why mono-everywhere did not survive research into what comparable
+     tools (Zed, Linear, Warp, Cursor) actually ship. */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
+    "Helvetica Neue", sans-serif;
 }
 
 /* Dark is the default (`:root` alone matches it) so a stylesheet that loads
@@ -141,10 +146,81 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: var(--mono);
+  font-family: var(--font-ui);
   font-size: 12px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- typography ---------- */
+
+/*
+ * Split, not mono-everywhere. Researched this pass specifically because the
+ * person using the app called the pure-mono choice out as maybe "too sleek."
+ * Checked Zed (separate buffer_font_family / ui_font_family, independently
+ * configurable), Linear (Inter for all UI/body text, Berkeley Mono reserved
+ * for "code and technical labels" only), Warp (a geometric sans for
+ * virtually all UI text, mono kept for terminal content only, chosen
+ * specifically so the app reads as approachable rather than "for
+ * greybeards"), and Cursor (system-ui sans for chrome, mono for code). None
+ * of them ship one monospace face for their own chrome as a considered
+ * choice — the "monospace as brand signal" wave (Linear, Vercel, Raycast)
+ * consistently means mono *accents* inside an otherwise proportional UI, not
+ * literal 100% mono. VS Code's own Explorer ships with no file-type icons at
+ * all by default, which is the source for this file's icon-less tree, below.
+ *
+ * --font-ui (body's new default) is for anything a person reads as prose or
+ * acts on as a control: buttons, labels, panel titles, empty states, the ask
+ * bar, and — the one that matters most — the model's own explanatory text in
+ * the timeline, which needs to read as a message from something that can
+ * write English, not as another technical field.
+ *
+ * --mono stays, explicitly, on everything below: paths, diffs, tool names
+ * and their arguments, timestamps and durations, tabular counts, terminal
+ * content, and file contents in the browser. Every one of these is
+ * identifier-shaped or needs column alignment — the two things mono is
+ * actually for — not a matter of "already was mono."
+ */
+code,
+kbd,
+pre,
+.event__seq,
+.event__type,
+.tool__name,
+.tool__summary,
+.patch__path,
+.patch__count,
+.files__path,
+.files__counts,
+.titlebar__repo,
+.titlebar__model,
+.titlebar__writes,
+.tab__label,
+.tab__diffstat,
+.jump__seq,
+.jump__name,
+.matches__path,
+.matches__line,
+.matches__text,
+.kv__key,
+.kv__value,
+.diff__num,
+.diff__text,
+.stat__value,
+.compare__fact,
+.compare__verdict,
+.compare__path,
+.open__input,
+.tree__name,
+.viewer__path,
+.viewer__dir,
+.viewer__content,
+.terminal-dock__label,
+.terminal-dock__prompt,
+.tool-group__count,
+.tool-group__summary,
+.palette__hint {
+  font-family: var(--mono);
 }
 
 button {
@@ -167,11 +243,16 @@ button {
 .open__toggle,
 .jump,
 .tool__head,
+.tool-group__head,
 .palette__item,
 .palette__input,
 .tab,
 .tab__close,
-.tab--new {
+.tab--new,
+.ask-bar__input,
+.ask-bar__submit,
+.tree__row,
+.terminal-dock__resize {
   transition:
     background-color var(--t-fast) var(--ease),
     border-color var(--t-fast) var(--ease),
@@ -285,6 +366,17 @@ button {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /* A permanent, subtle fade at both edges — cheap, and it reads as "there
+     is a strip here with an edge" even when nothing currently overflows,
+     which was the flatness the tab strip was singled out for: everything
+     about it was static except the busy-dot pulse. */
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 10px,
+    black calc(100% - 10px),
+    transparent 100%
+  );
 }
 
 .tabstrip::-webkit-scrollbar {
@@ -292,6 +384,7 @@ button {
 }
 
 .tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -317,6 +410,24 @@ button {
 .tab--active:hover {
   background: var(--selected);
   color: var(--text);
+}
+
+/* A pseudo-element rather than a box-shadow, deliberately: :focus-visible
+   already owns box-shadow for the double focus ring, and a second box-shadow
+   here would silently replace it on a tab that is both active and
+   keyboard-focused. The one thing an active tab was missing was continuity
+   with the content below it — a flat background swap does not say "this tab
+   is attached to what you're looking at" the way an editor or browser tab's
+   underline does. */
+.tab--active::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px 1px 0 0;
+  background: var(--text);
 }
 
 .tab__dot {
@@ -739,6 +850,14 @@ kbd {
   grid-template-columns: 244px 1fr;
 }
 
+/* Rail | tree | viewer. The rail stays — Goal and Run stats are still useful
+   context while looking at a file — so this is the same 244px first column
+   as the timeline and compare bodies, with the timeline+files columns
+   replaced by a narrower tree and a wide read-only viewer. */
+.body--browse {
+  grid-template-columns: 244px 220px 1fr;
+}
+
 /* ---------- rail ---------- */
 
 .rail {
@@ -837,9 +956,24 @@ kbd {
 
 /* ---------- timeline ---------- */
 
+/* The grid's middle column in timeline mode: a scrollable event list plus a
+   pinned ask bar below it, never both scrolling together. This is the
+   docked-panel-with-a-bottom-pinned-editor shape every tool researched for
+   the ask flow uses (Zed's agent panel most literally) — the input is part
+   of the column's own layout, not an overlay floating on top of it. */
+.timeline-column {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .timeline {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 20px 20px 120px;
+  padding: 20px 20px 16px;
 }
 
 .timeline--compare {
@@ -847,6 +981,142 @@ kbd {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* ---------- ask bar ---------- */
+
+.ask-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex: none;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.ask-bar__input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  max-height: 96px;
+  padding: 8px 10px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-well);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.ask-bar__input:focus {
+  border-color: var(--text-dim);
+}
+
+.ask-bar__input::placeholder {
+  color: var(--text-dim);
+}
+
+.ask-bar__submit {
+  flex: none;
+  padding: 8px 14px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.ask-bar__submit:hover:not(:disabled) {
+  background: var(--surface-raised-hover);
+  border-color: rgb(var(--fg) / 0.22);
+}
+
+.ask-bar__submit:active:not(:disabled) {
+  border-color: rgb(var(--fg) / 0.28);
+}
+
+.ask-bar__submit:disabled {
+  background: var(--surface);
+  border-color: var(--border-subtle);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+/* ---------- tool groups ---------- */
+
+/* Mechanical tool activity, collapsed into one scannable header — see
+   timeline-view.tsx for the grouping rule. The model's own words never live
+   inside this collapsible body; they render above it, at full prominence,
+   whenever the group is collapsed. */
+.tool-group {
+  margin: 2px 0;
+}
+
+.tool-group__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: var(--radius-m);
+  color: var(--text-dim);
+  text-align: left;
+}
+
+.tool-group__head:hover {
+  background: var(--hover);
+  color: var(--text-muted);
+}
+
+.tool-group__head:active {
+  background: var(--pressed);
+}
+
+.tool-group__head--warn {
+  color: var(--del);
+}
+
+.tool-group__chevron {
+  flex: none;
+  width: 10px;
+  font-size: 10px;
+  text-align: center;
+}
+
+.tool-group__count {
+  flex: none;
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: var(--radius-s);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 10px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-group__summary {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.tool-group__body {
+  margin-left: 9px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+/* The model's own explanation, at full prominence — the one place in a tool
+   exchange it actually says something, so it does not get the muted
+   treatment the mechanical call summary beside it does. */
+.event__prose {
+  margin: 0 0 4px;
+  color: var(--text);
+  line-height: 1.6;
 }
 
 /* ---------- changed files ---------- */
@@ -926,24 +1196,203 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- file browser ("caveman mode") ---------- */
+
+/* A persistent left rail while it is showing (not a togglable dock like the
+   terminal) but the whole thing is itself a togglable *mode* of the body
+   grid, the same way "attempts" is — deliberately, not a permanent fourth
+   column beside the rail/timeline/files-changed three. Research into VS
+   Code's and Zed's own trees said keep a tree permanently visible; Novus's
+   window has real width constraints (900px minimum) that those editors do
+   not, and browsing files here is closer to an occasional reference lookup
+   than the constant target of every keystroke a real editor's tree is, so
+   it stays a mode toggled from the session bar, consistent with the other
+   two exclusive views the body already has.
+   No file-type icons — see the "Typography" block above for the same
+   reasoning applied to trees: VS Code's own Explorer ships icon-less by
+   default. A chevron for directories and a monospace name is enough. */
+.tree {
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+  min-height: 0;
+  padding: 8px 0;
+}
+
+.tree__head {
+  padding: 4px 12px 8px;
+}
+
+.tree__body {
+  display: flex;
+  flex-direction: column;
+}
+
+.tree__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 10px 3px 0;
+  color: var(--text-muted);
+  text-align: left;
+  border-radius: var(--radius-s);
+}
+
+.tree__row:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.tree__row:active {
+  background: var(--pressed);
+}
+
+.tree__row--selected,
+.tree__row--selected:hover {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.tree__chevron {
+  flex: none;
+  width: 10px;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-align: center;
+}
+
+.tree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.tree__loading {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.viewer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-well);
+}
+
+.viewer--empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer__hint {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.viewer__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: none;
+  min-width: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface);
+}
+
+.viewer__path {
+  flex: none;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.viewer__dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 11px;
+  direction: rtl;
+  text-align: left;
+}
+
+.viewer__dir::before {
+  content: "\200e";
+}
+
+.viewer__content {
+  margin: 0;
+  padding: 12px 16px;
+  overflow: auto;
+  white-space: pre;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 /* ---------- terminal ---------- */
 
+/* Height is inline-styled from session-tab.tsx's terminalHeight state now,
+   driven by .terminal-dock__resize below — a fixed 260px read as correct
+   but not considered; every real terminal dock resizes. The inset shadow
+   is the well plane's own "output sinks" rule made literal at its one edge
+   that used to be a flat 1px line: a sunken well should look sunken. */
 .terminal-dock {
-  height: 260px;
+  position: relative;
   border-top: 1px solid var(--border);
   background: var(--bg-well);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  box-shadow: inset 0 6px 8px -8px rgba(0, 0, 0, 0.35);
+}
+
+.terminal-dock__resize {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  z-index: 1;
+  cursor: row-resize;
+}
+
+.terminal-dock__resize:hover {
+  background: var(--hover);
 }
 
 .terminal-dock__head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+}
+
+.terminal-dock__prompt {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.terminal-dock__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+  direction: rtl;
+  text-align: left;
+}
+
+.terminal-dock__label::before {
+  content: "\200e";
 }
 
 .terminal-panel {
@@ -957,11 +1406,33 @@ kbd {
   height: 100%;
 }
 
+/* A real empty state, not bare centered text: a session's log is never
+   literally empty (session.created lands the instant it opens), so without
+   this the very first thing anyone saw was a lone sequence-0 "◇" card —
+   the exact moment called out as looking unfinished. session-tab.tsx swaps
+   this in for that one-row state and nothing else, so real history still
+   renders as real history the moment there is any. */
 .timeline__empty {
-  color: var(--text-dim);
-  padding: 40px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  min-height: 220px;
   text-align: center;
+}
+
+.timeline__empty-title {
+  margin: 0;
   font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.timeline__empty-hint {
+  margin: 0;
+  color: var(--text-dim);
 }
 
 .event {

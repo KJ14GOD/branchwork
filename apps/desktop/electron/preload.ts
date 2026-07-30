@@ -1,14 +1,19 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+import type { FileContent, TreeEntry } from "./fs-browser.ts";
+
 /**
  * The only surface the renderer has onto the host.
  *
- * Four things, all mediated by the main process: where the worker is
- * listening, the token that lets the renderer talk to it, a native directory
- * chooser, and a real shell. The shell is deliberate — see the comment beside
- * `terminals` in main.ts for why it does not widen what the *agent* can do.
- * Everything else stays out: no raw filesystem access, no Node globals in
- * the renderer.
+ * All mediated by the main process: where the worker is listening, the token
+ * that lets the renderer talk to it, a native directory chooser, a real
+ * shell, and read-only file browsing. The shell and the file browser are
+ * both deliberate widenings for the *human* operating this window — see the
+ * comment beside `terminals` in main.ts for the shell, and beside the
+ * `novus:fs-*` handlers for the browser — neither is a new capability for
+ * the agent, and neither is reachable over the worker's HTTP API a remote
+ * guest could ever touch. Everything else stays out: no raw filesystem
+ * access, no Node globals in the renderer.
  */
 contextBridge.exposeInMainWorld("novus", {
   workerUrl: (): Promise<string> => ipcRenderer.invoke("novus:worker-url"),
@@ -50,5 +55,12 @@ contextBridge.exposeInMainWorld("novus", {
 
       return () => ipcRenderer.off("novus:terminal-exit", listener);
     },
+  },
+
+  fs: {
+    list: (repositoryPath: string, relativePath: string): Promise<TreeEntry[]> =>
+      ipcRenderer.invoke("novus:fs-list", repositoryPath, relativePath),
+    read: (repositoryPath: string, relativePath: string): Promise<FileContent> =>
+      ipcRenderer.invoke("novus:fs-read", repositoryPath, relativePath),
   },
 });

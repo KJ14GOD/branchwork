@@ -11,11 +11,27 @@ export type TerminalBridge = {
   onExit: (id: string, handler: (exitCode: number) => void) => () => void;
 };
 
+export type TreeEntry = {
+  name: string;
+  path: string;
+  kind: "directory" | "file" | "symlink" | "other";
+};
+
+export type FileContent =
+  | { kind: "text"; content: string; truncated: boolean }
+  | { kind: "binary" };
+
+export type FsBridge = {
+  list: (repositoryPath: string, relativePath: string) => Promise<TreeEntry[]>;
+  read: (repositoryPath: string, relativePath: string) => Promise<FileContent>;
+};
+
 export type NovusBridge = {
   workerUrl: () => Promise<string>;
   accessToken: () => Promise<string>;
   pickDirectory: () => Promise<string | null>;
   terminal: TerminalBridge;
+  fs: FsBridge;
 };
 
 declare global {
