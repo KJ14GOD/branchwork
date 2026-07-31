@@ -8,6 +8,11 @@ import { FileTree, FileViewer } from "./components/browse-panel.tsx";
 import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
 import { CompareScreen } from "./components/compare-screen.tsx";
 import { Composer } from "./components/composer.tsx";
+import {
+  ControlBaton,
+  ControlPanel,
+  PendingDirection,
+} from "./components/control-panel.tsx";
 import { FileChangesPanel } from "./components/file-changes-panel.tsx";
 import { appliedDiffsByPath } from "./applied-diffs.ts";
 import { InvitePanel } from "./components/invite-panel.tsx";
@@ -15,6 +20,7 @@ import { TerminalPanel } from "./components/terminal-panel.tsx";
 import { groupKeyFor, TimelineView } from "./components/timeline-view.tsx";
 import { useComparison } from "./use-comparison.ts";
 import { useFileChanges } from "./use-file-changes.ts";
+import { useAuthority } from "./use-authority.ts";
 import { useFileTree } from "./use-file-tree.ts";
 import { usePresence } from "./use-presence.ts";
 import { useSessionActions } from "./use-session-actions.ts";
@@ -187,8 +193,18 @@ export const SessionTab = ({
   onStatus: (status: TabStatus) => void;
   onCloseTab: () => void;
 }) => {
-  const { error: actionError, ask, invite, direct, cancel, pause, resume, handoff } =
-    useSessionActions(endpoint, session);
+  const {
+    error: actionError,
+    ask,
+    invite,
+    direct,
+    cancel,
+    pause,
+    resume,
+    handoff,
+    requestControl,
+    answerHandoff,
+  } = useSessionActions(endpoint, session);
   const host = bridge();
   const [mode, setMode] = useState<ViewMode>("timeline");
   const [inviting, setInviting] = useState(false);
@@ -196,6 +212,7 @@ export const SessionTab = ({
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const comparison = useComparison(endpoint, session.id);
   const presence = usePresence(endpoint, session.id);
+  const authority = useAuthority(endpoint, session.id);
   const { events, status, reconnect } = useSessionEvents(endpoint, session.id);
   const fileTree = useFileTree(mode === "browse" ? session.repositoryPath : null);
   const turnModel = useTurnModel();
@@ -545,6 +562,10 @@ export const SessionTab = ({
               {run.payload.run.model.model}
             </span>
           ) : null}
+          <ControlBaton
+            authority={authority}
+            participants={presence.participants}
+          />
           {presence.participants.length > 0 ? (
             <div className="presence" title="Who has this session open right now">
               {presence.participants.slice(0, 4).map((participant) => (
@@ -698,9 +719,35 @@ export const SessionTab = ({
           </div>
 
           {/*
-            Who is here, what they may do, and who holds control. Was a row of
-            5px dots in the session bar; roles and handoff are multiplayer
-            state and belong somewhere legible.
+            Authority, above the roster, because "who may act" is the thing a
+            person needs before "who is here". Every affordance in it is
+            rendered only for the participant who may take it — see the note in
+            control-panel.tsx on why that is not the same as disabling one.
+          */}
+          <ControlPanel
+            authority={authority}
+            participants={presence.participants}
+            onOffer={(participantId) => {
+              void handoff(participantId).then(authority.refresh);
+            }}
+            onRequest={(reason) => {
+              void requestControl(reason).then(authority.refresh);
+            }}
+            onAnswer={(offerEventId, answer) => {
+              void answerHandoff(offerEventId, answer).then(authority.refresh);
+            }}
+          />
+
+          <PendingDirection pending={authority.pendingDirection} />
+
+          {/*
+            Who is here and what they may do. Was a row of 5px dots in the
+            session bar; roles are multiplayer state and belong somewhere
+            legible. The handoff action used to live on these rows and has
+            moved up into Control — a roster answers "who is here", and mixing
+            the one irreversible action in the rail into it put "Hand off"
+            beside every name whether or not the person reading held anything
+            to hand.
           */}
           <div className="rail__section">
             <div className="eyebrow">Participants</div>
@@ -723,15 +770,13 @@ export const SessionTab = ({
                         {participant.connected ? "" : " · Not connected"}
                       </span>
                     </span>
-                    {participant.role !== "owner" ? (
-                      <button
-                        className="party__handoff"
-                        type="button"
-                        onClick={() => void handoff(participant.id)}
-                        title={`Hand control to ${participant.name} — only the current owner can do this`}
+                    {authority.controlHeldBy === participant.id ? (
+                      <span
+                        className="party__baton"
+                        title="Holds execution authority for this session"
                       >
-                        Hand off
-                      </button>
+                        Control
+                      </span>
                     ) : null}
                   </div>
                 ))}

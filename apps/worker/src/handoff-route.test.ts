@@ -70,6 +70,41 @@ const withSession = async (
   }
 };
 
+/**
+ * Offer and accept, which is what "hand off" now means end to end.
+ *
+ * A handoff stopped being one request when it stopped being an assignment.
+ * These tests care that control *arrived*, not about the shape of the
+ * lifecycle — control-lifecycle.test.ts pins the steps individually — so the
+ * two calls live here rather than being spelled out at every call site.
+ */
+const handOff = async (
+  url: string,
+  sessionId: string,
+  fromToken: string,
+  to: { token: string; id: string },
+): Promise<{ offerStatus: number; acceptStatus: number }> => {
+  const offer = await fetch(`${url}/sessions/${sessionId}/handoff`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${fromToken}` },
+    body: JSON.stringify({ toParticipantId: to.id }),
+  });
+
+  if (!offer.ok) {
+    return { offerStatus: offer.status, acceptStatus: 0 };
+  }
+
+  const { offerEventId } = (await offer.json()) as { offerEventId: string };
+
+  const accepted = await fetch(`${url}/sessions/${sessionId}/handoff/accept`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${to.token}` },
+    body: JSON.stringify({ offerEventId }),
+  });
+
+  return { offerStatus: offer.status, acceptStatus: accepted.status };
+};
+
 test("requesting control requires the token", async () => {
   await withSession(async ({ url, sessionId }) => {
     const response = await fetch(`${url}/sessions/${sessionId}/control/request`, {
@@ -131,19 +166,19 @@ test("handing off to someone outside the session is refused", async () => {
   });
 });
 
-test("the owner can hand off control, which records control.transferred and actually moves the role", async () => {
+test("an accepted handoff records control.transferred and actually moves the role", async () => {
   await withSession(async ({ url, sessionId, invite }) => {
     const editor = await invite("editor");
 
-    const response = await fetch(`${url}/sessions/${sessionId}/handoff`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
-      body: JSON.stringify({ toParticipantId: editor.id }),
-    });
+    const { offerStatus, acceptStatus } = await handOff(
+      url,
+      sessionId,
+      TOKEN,
+      editor,
+    );
 
-    assert.equal(response.status, 200);
-    const body = (await response.json()) as { transferred: boolean };
-    assert.equal(body.transferred, true);
+    assert.equal(offerStatus, 202);
+    assert.equal(acceptStatus, 202);
 
     // The transfer is not just an event — it actually moved the capability.
     // The new owner can now invite; the old owner (now an editor) cannot.
@@ -173,24 +208,11 @@ test("handing off twice moves control on again, not back", async () => {
     const first = await invite("editor");
     const second = await invite("editor");
 
-    const firstHandoff = await fetch(`${url}/sessions/${sessionId}/handoff`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
-      body: JSON.stringify({ toParticipantId: first.id }),
-    });
-
-    assert.equal(firstHandoff.status, 200);
-
-    const secondHandoff = await fetch(`${url}/sessions/${sessionId}/handoff`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${first.token}`,
-      },
-      body: JSON.stringify({ toParticipantId: second.id }),
-    });
-
-    assert.equal(secondHandoff.status, 200);
+    assert.equal((await handOff(url, sessionId, TOKEN, first)).acceptStatus, 202);
+    assert.equal(
+      (await handOff(url, sessionId, first.token, second)).acceptStatus,
+      202,
+    );
 
     // The very first host token, having already handed off, is now an editor
     // and lacks the "transfer" capability outright — refused by the same

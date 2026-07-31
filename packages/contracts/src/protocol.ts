@@ -280,6 +280,74 @@ export const PresenceResponseSchema = z.object({
 export type PresenceResponse = z.infer<typeof PresenceResponseSchema>;
 
 /**
+ * Who holds control, who is asking for it, and what direction is waiting.
+ *
+ * The authority slice of the worker's own projection, served rather than
+ * re-folded per renderer. Every client already receives the whole event log
+ * and could fold this itself — but the worker folds the same log to decide who
+ * may act, and two folds of one lifecycle is how a timeline and a baton come
+ * to disagree. When they disagree it is the baton that is wrong and the person
+ * acting on it who pays, so there is one fold and it is the server's.
+ *
+ * A response rather than an event stream for the same reason presence is:
+ * a client that just opened needs the standing facts immediately — that
+ * somebody requested control an hour ago, that an offer is waiting on it —
+ * without replaying anything.
+ */
+export const ControlOfferSchema = z.object({
+  /** The offer's own event id. Every later step in the handoff points at it. */
+  offerEventId: z.string().min(1),
+  fromParticipantId: z.string().min(1),
+  toParticipantId: z.string().min(1),
+  /** Waiting on the recipient, or accepted and waiting on a safe boundary. */
+  state: z.enum(["offered", "accepted"]),
+  offeredAt: z.string().datetime(),
+  acceptedAt: z.string().datetime().nullable(),
+});
+
+export type ControlOfferView = z.infer<typeof ControlOfferSchema>;
+
+export const AuthorityResponseSchema = z.object({
+  /**
+   * Which participant the calling token is.
+   *
+   * "Maya in control" and "You are in control" are the same fact and
+   * completely different screens, so a renderer cannot draw authority without
+   * this. Null on a worker with no participant registry — the single-user
+   * path, where there is nobody to be.
+   */
+  you: z.string().min(1).nullable(),
+  controlHeldBy: z.string().min(1).nullable(),
+  controlOffer: ControlOfferSchema.nullable(),
+  controlRequests: z.array(
+    z.object({
+      eventId: z.string().min(1),
+      participantId: z.string().min(1),
+      reason: z.string().nullable(),
+      requestedAt: z.string().datetime(),
+    }),
+  ),
+  pendingDirection: z.array(
+    z.object({
+      eventId: z.string().min(1),
+      direction: z.string().min(1),
+      submittedAt: z.string().datetime(),
+      /**
+       * Non-null means a live run has committed to folding it in at its next
+       * turn boundary. Null means it is recorded and waits for whatever runs
+       * next, which may be never — two different promises to whoever typed it.
+       */
+      queuedForRunId: z.string().min(1).nullable(),
+      queuedAt: z.string().datetime().nullable(),
+    }),
+  ),
+  /** What a transfer waiting on a safe boundary is waiting on. */
+  executingRunIds: z.array(z.string().min(1)),
+});
+
+export type Authority = z.infer<typeof AuthorityResponseSchema>;
+
+/**
  * A session the log remembers, for the Open screen to offer.
  *
  * Durable history that nothing can reach is not really durable — the event log

@@ -435,7 +435,7 @@ button {
 .viewswitch__option,
 .tree__row,
 .attempt,
-.party__handoff,
+.control__reason,
 .terminal-dock__resize {
   transition:
     background-color var(--t-fast) var(--ease),
@@ -1382,17 +1382,197 @@ kbd {
   line-height: var(--leading-normal);
 }
 
-.party__handoff {
+/* Who holds the baton, stated on the roster row rather than only in Control,
+   because a reader scanning names should not have to correlate two lists. */
+.party__baton {
   flex: none;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-s);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+}
+
+/* ---------- control ---------- */
+
+/* The session bar's glance version. A chip, not a button: authority is moved
+   from the rail, where the lifecycle is legible, never from a one-line
+   summary that cannot show what state a handoff is in. */
+.baton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  height: var(--control-s);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.baton--yours {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.baton__mark {
+  flex: none;
+  width: 6px; /* geometry: matches .party__dot */
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.baton--yours .baton__mark {
+  background: var(--live);
+}
+
+.baton__count {
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--border);
+  color: var(--alert);
+}
+
+.control__held {
+  color: var(--text);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+}
+
+/* A well, not a bordered card: the rail is already a bordered region, and the
+   nesting rule says the next separation is a plane change. */
+.control__offer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-m);
+  background: var(--inset);
+}
+
+.control__offer-state {
+  color: var(--text);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+}
+
+.control__actions,
+.control__hand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.control__hand {
+  margin-top: var(--space-3);
+}
+
+.control__requests {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.control__request {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.control__request-who {
+  color: var(--text);
+  font-size: var(--text-small);
+}
+
+.control__request-why {
   color: var(--text-dim);
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
+}
+
+.control__ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.control__reason {
+  width: 100%;
+  height: var(--control-m);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--bg-well);
+  color: var(--text);
+  font-family: inherit;
   font-size: var(--text-micro);
 }
 
-.party__handoff:hover {
-  background: var(--hover);
+.control__reason::placeholder {
+  color: var(--text-dim);
+}
+
+/* ---------- pending direction ---------- */
+
+.pending {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.pending__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* Queued and waiting are two different promises, so they are two different
+   states on screen — not one label with a timestamp beside it. */
+.pending__state {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+}
+
+.pending__state--queued {
+  border-color: var(--border-strong);
   color: var(--text);
+}
+
+.pending__what {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+
+.pending__text {
+  color: var(--text);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+}
+
+.pending__when {
+  color: var(--text-dim);
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
 }
 
 /* ---------- jump list ---------- */
