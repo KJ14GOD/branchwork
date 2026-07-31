@@ -149,13 +149,46 @@
   --text-muted: #8a8a93;
   --text-dim: #56565e;
 
-  --add: #4ba85a;
-  --add-bg: rgba(75, 168, 90, 0.09);
-  --del: #d4564f;
-  --del-bg: rgba(212, 86, 79, 0.09);
-  --live: #4ba85a;
-  --warn: #8a6d2b;
-  --warn-text: #d3a84c;
+  /* ---------- the three hues ----------
+     See "colour" in skills/novus-ui/SKILL.md. Each of these means exactly one
+     thing and appears nowhere else. Green used to mean six things at once
+     (permission granted, lines added, tests passed, choice made, run in
+     progress, person online) and --add and --live were the same hex, which is
+     what read as sprayed on. */
+
+  /* ADDED LINES. Not "good", not "on", not "running". */
+  --add: #5fa26c;
+  --add-bg: rgba(95, 162, 108, 0.13);
+  /* REMOVED LINES. Not "failed" and not "error" — those are --alert. */
+  --del: #c96a63;
+  --del-bg: rgba(201, 106, 99, 0.13);
+  /* SOMETHING NEEDS A PERSON: a failed run, a failing check, a denied tool, a
+     repository that cannot be forked, an error worth reading. Amber rather
+     than red because red is already spoken for by every diff on screen, and a
+     failed run must not share a colour with a routine deletion. */
+  --alert: #cfa055;
+  --alert-line: #8a6d2b;
+  --alert-bg: rgba(207, 160, 85, 0.1);
+
+  /* LIVENESS IS NOT A HUE. A pulsing dot in the foreground colour says "now"
+     more clearly on a monochrome screen than a green one does, and it stops
+     "running" from sharing a colour with "added". Kept as a token rather than
+     inlined: apps/guest declares its own copy of this name. */
+  --live: var(--text);
+
+  /* ---------- code palette ----------
+     A SEPARATE SYSTEM FROM THE THREE HUES ABOVE, and the boundary is strict:
+     these appear only inside code surfaces (the file viewer, a diff) and never
+     in chrome; --add / --del / --alert never appear inside code. They answer
+     different questions — "this token is a string" versus "this needs you" —
+     and sharing a ramp between them is how a diff ends up looking like an
+     alert. Cool-leaning and low-chroma on purpose so nothing here can be
+     mistaken for the semantic three. Comments and punctuation take no hue at
+     all; they use --text-dim and --text-muted. */
+  --code-keyword: #9e8fd0;
+  --code-entity: #7aa2d0;
+  --code-string: #c2a175;
+  --code-number: #6fada8;
 
   /* Shadows need a ring in front (the eye reads the 1px edge, the blur is
      atmosphere) and a color darker than the canvas, or they vanish on it.
@@ -218,13 +251,22 @@
   --text-muted: #5b5b64;
   --text-dim: #85858e;
 
-  --add: #1f7a3d;
-  --add-bg: rgba(31, 122, 61, 0.1);
-  --del: #b3382f;
-  --del-bg: rgba(179, 56, 47, 0.09);
-  --live: #1f7a3d;
-  --warn: #a9832f;
-  --warn-text: #7a5b16;
+  --add: #28703f;
+  --add-bg: rgba(40, 112, 63, 0.11);
+  --del: #a8443c;
+  --del-bg: rgba(168, 68, 60, 0.1);
+  --alert: #7a5b16;
+  --alert-line: #a9832f;
+  --alert-bg: rgba(169, 131, 47, 0.12);
+
+  --live: var(--text);
+
+  /* Darker and a little more saturated than the dark set: the same hue at the
+     same chroma reads fainter as dark-on-light than as light-on-dark. */
+  --code-keyword: #6b4fa8;
+  --code-entity: #2f5f9e;
+  --code-string: #8a5a1f;
+  --code-number: #1f6f6a;
 
   /* A black ring at low alpha reads perfectly well on white — light UIs do
      this everywhere — so unlike the dark block this does not need a literal
@@ -543,16 +585,23 @@ button {
   white-space: nowrap;
 }
 
+/* A permission that is ON.
+   This used to be green, which made "the agent may overwrite your files" read
+   as good news. A granted permission is a stated fact with consequences, not a
+   success — so it is marked by *presence* (a filled plane, a stronger border,
+   full-strength text) rather than by hue, and the same chip with the
+   permission off stays quiet. Shape says more here than colour did. */
 .chip--allow {
-  border-color: rgb(var(--fg) / 0.14);
-  color: var(--add);
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text);
 }
 
 /* Not an error — the session works, two features do not. Amber rather than
    red, and worded as a fact rather than a failure. */
 .chip--warn {
-  border-color: var(--warn);
-  color: var(--warn-text);
+  border-color: var(--alert-line);
+  color: var(--alert);
 }
 
 code {
@@ -726,11 +775,11 @@ kbd {
 }
 
 .tab__dot--paused {
-  background: var(--warn-text);
+  background: var(--alert-line);
 }
 
 .tab__dot--failed {
-  background: var(--del);
+  background: var(--alert);
 }
 
 .tab__label {
@@ -900,7 +949,7 @@ kbd {
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  color: var(--del);
+  color: var(--alert);
   font-size: var(--text-small);
 }
 
@@ -984,7 +1033,7 @@ kbd {
 }
 
 .status--error .status__dot {
-  background: var(--del);
+  background: var(--alert);
 }
 
 .status--idle .status__dot {
@@ -1029,7 +1078,7 @@ kbd {
 }
 
 .presence__avatar--live {
-  border-color: var(--live);
+  border-color: var(--border-strong);
   color: var(--text);
 }
 
@@ -1212,11 +1261,12 @@ kbd {
 }
 
 .attempt__dot--failed {
-  background: var(--del);
+  background: var(--alert);
 }
 
+/* The chosen attempt is marked, not congratulated. */
 .attempt__dot--chosen {
-  background: var(--add);
+  background: var(--text);
 }
 
 .attempt__label {
@@ -1240,12 +1290,14 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+/* Passing is the expected outcome and takes no colour; failing is the one that
+   needs a person, and gets the app's only attention hue. */
 .attempt__stat--pass {
-  color: var(--add);
+  color: var(--text-muted);
 }
 
 .attempt__stat--fail {
-  color: var(--del);
+  color: var(--alert);
 }
 
 .attempt__cta {
@@ -1661,8 +1713,11 @@ kbd {
   background: var(--pressed);
 }
 
+/* A collapsed group holding a failure. It was named --warn and painted red,
+   which is the kind of drift this pass exists to stop: the name is right and
+   the colour now agrees with it. */
 .tool-group__head--warn {
-  color: var(--del);
+  color: var(--alert);
 }
 
 .tool-group__chevron {
@@ -1748,7 +1803,7 @@ kbd {
 }
 
 .files__empty--error {
-  color: var(--del);
+  color: var(--alert);
 }
 
 .files__list {
@@ -1918,6 +1973,73 @@ kbd {
   line-height: var(--leading-prose);
 }
 
+/* The highlighted variant lays out per line so it can carry a number gutter;
+   the plain variant stays one text node, which is what lets a file past the
+   highlighting limit render at any size. */
+.viewer__content--code {
+  padding: var(--space-5) 0;
+}
+
+.viewer__note {
+  padding: var(--space-3) var(--space-6);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: var(--text-micro);
+  white-space: normal;
+}
+
+/* ---------- code ----------
+ *
+ * The one place the code palette is allowed. See the token block at the top of
+ * this file: --code-* never appears in chrome and --add / --del / --alert
+ * never appear here.
+ */
+
+.code__line {
+  display: grid;
+  /* geometry: a gutter wide enough for five digits, then the code */
+  grid-template-columns: 52px 1fr;
+}
+
+.code__num {
+  padding-right: var(--space-4);
+  text-align: right;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  /* So selecting the file's text does not drag the line numbers with it. */
+  user-select: none;
+}
+
+.code__text {
+  padding-right: var(--space-6);
+  min-width: 0;
+}
+
+.hl-comment {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.hl-punct {
+  color: var(--text-muted);
+}
+
+.hl-keyword {
+  color: var(--code-keyword);
+}
+
+.hl-entity {
+  color: var(--code-entity);
+}
+
+.hl-string {
+  color: var(--code-string);
+}
+
+.hl-number {
+  color: var(--code-number);
+}
+
 /* ---------- terminal ----------
  *
  * "Looks generic — I want a stylish terminal." Three things make a terminal
@@ -1975,9 +2097,11 @@ kbd {
   background: var(--surface);
 }
 
+/* Ornament, and it signals nothing — so it takes no hue. It was green purely
+   because the terminal-chrome pass reached for the accent that existed. */
 .terminal-dock__prompt {
   flex: none;
-  color: var(--live);
+  color: var(--text-dim);
   font-size: var(--text-small);
   font-weight: var(--weight-medium);
 }
@@ -2029,42 +2153,69 @@ kbd {
  * real headline, a hint, and — the part that makes it a product rather than a
  * placeholder — the session's own facts, which are true and already loaded.
  */
-.timeline__empty {
+/*
+ * ONE PRIMITIVE, EVERY PANEL. `.empty` is the shape; `--page` is the size
+ * modifier for a whole column, and the unmodified version is what a narrow
+ * side panel uses. Before this there was `.timeline__empty` and a handful of
+ * one-line `.rail__empty` / `.files__empty` strings, which is why most panels
+ * with nothing in them read as broken rather than as ready.
+ *
+ * Every empty state in this app says three things in the same order: what is
+ * not here, why you would want it, and — where one exists — the action that
+ * produces it. A panel that only says "nothing yet" is not finished.
+ */
+.empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: var(--space-3);
-  height: 100%;
-  min-height: 260px; /* geometry: keeps it centred in a short window */
-  padding: var(--space-8) var(--space-6);
+  padding: var(--space-7) var(--space-5);
   text-align: center;
 }
 
-.timeline__empty-title {
+.empty--page {
+  height: 100%;
+  min-height: 260px; /* geometry: keeps it centred in a short window */
+  padding: var(--space-8) var(--space-6);
+}
+
+.empty__title {
   margin: 0;
-  font-size: var(--text-hero);
+  font-size: var(--text-title);
   font-weight: var(--weight-strong);
   line-height: var(--leading-tight);
-  letter-spacing: -0.01em;
   color: var(--text);
 }
 
-.timeline__empty-hint {
+.empty--page .empty__title {
+  font-size: var(--text-hero);
+  letter-spacing: -0.01em;
+}
+
+.empty__hint {
   margin: 0;
   max-width: 46ch; /* geometry: a comfortable measure */
   color: var(--text-muted);
-  font-size: var(--text-body);
+  font-size: var(--text-small);
   line-height: var(--leading-prose);
 }
 
-.timeline__empty-facts {
+.empty--page .empty__hint {
+  font-size: var(--text-body);
+}
+
+.empty__facts {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
   margin-top: var(--space-3);
+}
+
+.empty__action {
+  margin-top: var(--space-2);
 }
 
 /* ---------- events ---------- */
@@ -2122,11 +2273,14 @@ kbd {
 }
 
 .event__text--error {
-  color: var(--del);
+  color: var(--alert);
 }
 
+/* Approved / resumed / applied / transferred. These were green, which made
+   every routine approval read as a celebration and put six unrelated meanings
+   on one hue. They are ordinary history and take the ordinary colour. */
 .event__text--approved {
-  color: var(--add);
+  color: var(--text);
 }
 
 .event--highlight {
@@ -2350,11 +2504,26 @@ pre.kv__value {
   padding: 0 var(--space-4) 0 var(--space-2);
 }
 
+/*
+ * POLARITY MOVED OFF THE TEXT.
+ *
+ * A diff row used to be tinted *and* have every character of its code painted
+ * --add or --del. That is two channels saying one thing, and it left no
+ * channel at all for what the code actually is — so a diff was the one place
+ * in the app showing source with no syntax colour, because polarity had
+ * already taken it.
+ *
+ * Now the row's wash and its line-number gutter carry added-versus-removed
+ * (the wash is a little stronger than it was, to carry it alone), and the code
+ * inside is highlighted like code — which is what GitHub, Zed and every review
+ * tool worth reading do. The +/- marker stays a real character in the text, so
+ * a copied diff is still a diff.
+ */
 .diff__line--add {
   background: var(--add-bg);
 }
 
-.diff__line--add .diff__text {
+.diff__line--add .diff__num {
   color: var(--add);
 }
 
@@ -2362,7 +2531,7 @@ pre.kv__value {
   background: var(--del-bg);
 }
 
-.diff__line--del .diff__text {
+.diff__line--del .diff__num {
   color: var(--del);
 }
 
@@ -2569,7 +2738,7 @@ pre.kv__value {
 }
 
 .compare-screen__note--error {
-  color: var(--del);
+  color: var(--alert);
 }
 
 .compare-screen__conflicts {
@@ -2669,15 +2838,15 @@ pre.kv__value {
 }
 
 .compare__verdict--pass {
-  color: var(--add);
+  color: var(--text);
 }
 
 .compare__verdict--fail {
-  color: var(--del);
+  color: var(--alert);
 }
 
-/* Neither green nor red. An attempt that ran no tests is unknown, and
-   colouring it either way would answer a question nobody asked. */
+/* Dimmer than "passed", not a third colour. An attempt that ran no tests is
+   unknown, and marking it either way would answer a question nobody asked. */
 .compare__verdict--unknown {
   color: var(--text-dim);
 }
@@ -2691,7 +2860,7 @@ pre.kv__value {
 }
 
 .compare__failure {
-  color: var(--del);
+  color: var(--alert);
 }
 
 .compare__files {
@@ -2744,7 +2913,7 @@ pre.kv__value {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  color: var(--add);
+  color: var(--text);
   font-size: var(--text-small);
   font-weight: var(--weight-medium);
 }
@@ -2854,7 +3023,7 @@ select.open__input {
 }
 
 .open__error {
-  color: var(--del);
+  color: var(--alert);
   font-size: var(--text-small);
   line-height: var(--leading-prose);
 }

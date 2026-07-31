@@ -22,6 +22,15 @@
  * first hunk opens before any line the two implementations disagreed about.
  */
 
+import {
+  highlightLine,
+  INITIAL_STATE,
+  languageForPath,
+  type HighlightState,
+  type LanguageId,
+  type Token,
+} from "./highlight.ts";
+
 export type DiffLineKind = "meta" | "hunk" | "context" | "add" | "del";
 
 export type DiffLine = {
@@ -114,4 +123,92 @@ export const parseUnifiedDiff = (diff: string): DiffLine[] => {
   }
 
   return lines;
+};
+
+export type HighlightedDiffLine = DiffLine & { tokens: readonly Token[] };
+
+/** `+++ b/src/greet.js` and `diff --git a/x b/y` both name the file below. */
+const PLUS_HEADER = /^\+\+\+ (?:b\/)?(.+?)(?:\t.*)?$/;
+const GIT_HEADER = /^diff --git a\/.+? b\/(.+)$/;
+
+const pathFromHeader = (text: string): string | null => {
+  const plus = PLUS_HEADER.exec(text);
+
+  if (plus && plus[1] !== "/dev/null") {
+    return plus[1] ?? null;
+  }
+
+  return GIT_HEADER.exec(text)?.[1] ?? null;
+};
+
+/**
+ * Tokenize a parsed diff for display.
+ *
+ * TWO STATES, NOT ONE. A hunk interleaves two versions of the same region:
+ * `-` and context lines are the file *before*, `+` and context lines are the
+ * file *after*. Tokenizing them as a single stream lets a block comment opened
+ * on a removed line "close" on an added one, which then miscolours the rest of
+ * the hunk. Each side therefore carries its own `HighlightState`, and context
+ * lines — which belong to both — advance both.
+ *
+ * `fallbackPath` is the single-file case (a patch card knows its own path).
+ * A `git diff` covering several files names each one in its headers, so the
+ * language is re-read as those go past; a hunk header resets both states,
+ * because a hunk is a fresh window into the file with no guarantee that
+ * whatever was open at the end of the last hunk is still open here.
+ */
+export const highlightDiffLines = (
+  lines: readonly DiffLine[],
+  fallbackPath: string | null,
+): HighlightedDiffLine[] => {
+  let language: LanguageId | null = fallbackPath
+    ? languageForPath(fallbackPath)
+    : null;
+  let before: HighlightState = INITIAL_STATE;
+  let after: HighlightState = INITIAL_STATE;
+
+  return lines.map((line) => {
+    if (line.kind === "meta") {
+      const path = pathFromHeader(line.text);
+
+      if (path !== null) {
+        language = languageForPath(path);
+      }
+
+      return { ...line, tokens: [] };
+    }
+
+    if (line.kind === "hunk") {
+      before = INITIAL_STATE;
+      after = INITIAL_STATE;
+
+      return { ...line, tokens: [] };
+    }
+
+    if (language === null) {
+      return { ...line, tokens: [] };
+    }
+
+    if (line.kind === "del") {
+      const result = highlightLine(line.text, language, before);
+      before = result.state;
+
+      return { ...line, tokens: result.tokens };
+    }
+
+    if (line.kind === "add") {
+      const result = highlightLine(line.text, language, after);
+      after = result.state;
+
+      return { ...line, tokens: result.tokens };
+    }
+
+    // Context: belongs to both sides, so it advances both. Tokenized once —
+    // the two states are equal here in every case that is not already broken.
+    const result = highlightLine(line.text, language, after);
+    before = highlightLine(line.text, language, before).state;
+    after = result.state;
+
+    return { ...line, tokens: result.tokens };
+  });
 };

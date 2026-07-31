@@ -1,3 +1,14 @@
+import { useMemo } from "react";
+
+import {
+  CodeLine,
+  HIGHLIGHT_LINE_LIMIT,
+  highlightLines,
+  languageForPath,
+  shouldHighlight,
+  type Token,
+} from "@novus/ui";
+
 import type { TreeEntry } from "../bridge.ts";
 import type { FileTreeState } from "../use-file-tree.ts";
 
@@ -73,11 +84,94 @@ export const FileTree = ({ state }: { state: FileTreeState }) => (
   </aside>
 );
 
+type ViewerBody =
+  | { mode: "plain"; text: string; reason: string | null }
+  | { mode: "code"; lines: string[]; tokens: Token[][] };
+
+/**
+ * The file's content, tokenized once per file.
+ *
+ * Synchronous rather than scheduled, and that is a measurement rather than a
+ * shrug: `HIGHLIGHT_LINE_LIMIT` in `packages/ui/src/code-view.tsx` carries the
+ * numbers this repository's own files produce — about 1-2ms per thousand lines,
+ * so the cap costs ~8ms worst case, well inside one frame. Past the cap, or
+ * for a format with no grammar, the file renders as a single `<pre>` text node
+ * exactly as it did before highlighting existed, and the viewer says which of
+ * the two it did rather than silently showing grey text.
+ */
+const useViewerBody = (path: string | null, content: string): ViewerBody =>
+  useMemo(() => {
+    const language = path === null ? null : languageForPath(path);
+
+    if (language === null) {
+      return { mode: "plain", text: content, reason: null };
+    }
+
+    const lines = content.split("\n");
+
+    if (!shouldHighlight(content, lines.length)) {
+      return {
+        mode: "plain",
+        text: content,
+        reason: `Shown without highlighting — ${lines.length.toLocaleString()} lines is past the ${HIGHLIGHT_LINE_LIMIT.toLocaleString()}-line limit this viewer paints.`,
+      };
+    }
+
+    return { mode: "code", lines, tokens: highlightLines(lines, language) };
+  }, [path, content]);
+
+const FileBody = ({
+  path,
+  content,
+  truncated,
+}: {
+  path: string;
+  content: string;
+  truncated: boolean;
+}) => {
+  const body = useViewerBody(path, content);
+  const tail = truncated
+    ? "\n… truncated, file is larger than this viewer shows"
+    : "";
+
+  if (body.mode === "plain") {
+    return (
+      <>
+        {body.reason ? <div className="viewer__note">{body.reason}</div> : null}
+        <pre className="viewer__content">
+          {body.text}
+          {tail}
+        </pre>
+      </>
+    );
+  }
+
+  return (
+    <pre className="viewer__content viewer__content--code">
+      {body.lines.map((line, index) => (
+        <span className="code__line" key={index}>
+          <span className="code__num">{index + 1}</span>
+          <span className="code__text">
+            <CodeLine text={line} tokens={body.tokens[index] ?? []} />
+          </span>
+        </span>
+      ))}
+      {truncated ? <span className="viewer__note">{tail.trim()}</span> : null}
+    </pre>
+  );
+};
+
 export const FileViewer = ({ state }: { state: FileTreeState }) => {
   if (!state.selectedPath) {
     return (
       <div className="viewer viewer--empty">
-        <p className="rail__empty">Select a file on the left to read it.</p>
+        <div className="empty">
+          <p className="empty__title">Nothing open</p>
+          <p className="empty__hint">
+            Pick a file on the left to read it. This is a viewer — nothing here
+            edits the repository.
+          </p>
+        </div>
       </div>
     );
   }
@@ -97,10 +191,11 @@ export const FileViewer = ({ state }: { state: FileTreeState }) => {
       ) : state.fileContent?.kind === "binary" ? (
         <div className="files__empty">Binary file — not shown.</div>
       ) : state.fileContent?.kind === "text" ? (
-        <pre className="viewer__content">
-          {state.fileContent.content}
-          {state.fileContent.truncated ? "\n… truncated, file is larger than this viewer shows" : ""}
-        </pre>
+        <FileBody
+          path={state.selectedPath}
+          content={state.fileContent.content}
+          truncated={state.fileContent.truncated}
+        />
       ) : null}
     </div>
   );
