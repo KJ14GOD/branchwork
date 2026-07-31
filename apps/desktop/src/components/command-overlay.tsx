@@ -43,7 +43,7 @@ export const CommandOverlay = ({
         {
           id: "ask",
           label: `Ask — ${query.trim()}`,
-          hint: "enter",
+          hint: "Enter",
           run: () => onAsk(query.trim()),
         },
         ...filtered,
@@ -101,7 +101,7 @@ export const CommandOverlay = ({
           spellCheck={false}
         />
         {matches.length === 0 ? (
-          <div className="palette__empty">No matching command</div>
+          <div className="palette__empty">No matching command.</div>
         ) : (
           <ul className="palette__list">
             {matches.map((command, index) => (

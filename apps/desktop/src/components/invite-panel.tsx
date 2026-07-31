@@ -78,46 +78,69 @@ export const InvitePanel = ({
 
         {minted && link ? (
           <>
-            <div className="open__row">
-              <input
-                className="open__input"
-                value={link}
-                readOnly
-                onFocus={(event) => event.currentTarget.select()}
-              />
-              <button className="open__browse" type="button" onClick={copy}>
-                {copied ? "Copied" : "Copy"}
-              </button>
+            <p className="open__subtitle">
+              {minted.participant.name} can watch this session live as{" "}
+              {minted.participant.role}. This token is shown once and is not
+              stored anywhere — copy it now.
+            </p>
+            <div className="open__field">
+              <span className="eyebrow">Their link</span>
+              <div className="invite__link">
+                <input
+                  className="open__input"
+                  value={link}
+                  readOnly
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+                <button
+                  className="button button--large"
+                  type="button"
+                  onClick={copy}
+                >
+                  {copied ? "Copied" : "Copy"}
+                </button>
+              </div>
             </div>
-            <div className="open__label">
-              {minted.participant.name} · {minted.participant.role} — this
-              token will not be shown again
-            </div>
-            <button className="open__submit" type="button" onClick={onClose}>
+            <button
+              className="button button--primary button--large"
+              type="button"
+              onClick={onClose}
+            >
               Done
             </button>
           </>
         ) : (
           <>
-            <input
-              className="open__input"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Teammate's name"
-              spellCheck={false}
-              autoFocus
-            />
-            <select
-              className="open__input"
-              value={role}
-              onChange={(event) => setRole(event.target.value as InviteRole)}
-            >
-              <option value="editor">editor — can approve and steer</option>
-              <option value="reviewer">reviewer — can approve only</option>
-              <option value="viewer">viewer — read-only</option>
-            </select>
+            <p className="open__subtitle">
+              They join this session's live event log over loopback, with the
+              role you pick below — an Editor can steer and approve, not only
+              watch. Nothing about your machine is shared beyond the log.
+            </p>
+            <div className="open__field">
+              <span className="eyebrow">Name</span>
+              <input
+                className="open__input"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Teammate's name"
+                spellCheck={false}
+                autoFocus
+              />
+            </div>
+            <div className="open__field">
+              <span className="eyebrow">Role</span>
+              <select
+                className="open__input"
+                value={role}
+                onChange={(event) => setRole(event.target.value as InviteRole)}
+              >
+                <option value="editor">Editor — can approve and steer</option>
+                <option value="reviewer">Reviewer — can approve only</option>
+                <option value="viewer">Viewer — read-only</option>
+              </select>
+            </div>
             <button
-              className="open__submit"
+              className="button button--primary button--large"
               type="submit"
               disabled={sending || !name.trim()}
             >

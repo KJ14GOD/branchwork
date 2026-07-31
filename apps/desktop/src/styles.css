@@ -1,19 +1,116 @@
+/*
+ * Novus desktop — one stylesheet, one system.
+ *
+ * READ THIS BEFORE ADDING A LITERAL.
+ *
+ * Every padding, gap, margin, font-size, line-height, weight, radius and
+ * control height in this file comes from a named scale below. That was not
+ * true before this pass, and its absence *was* the "vibecoded and generic"
+ * complaint made mechanical: ~1600 lines of individually hand-picked values,
+ * every type size inside a 10-13px band, so nothing could read as more
+ * important than anything else. Values that do not come from a system cannot
+ * produce rhythm.
+ *
+ * The literals that are still allowed, because they are geometry rather than
+ * rhythm, and each is commented where it appears:
+ *   - 1px / 2px hairlines and accent bars (a border is not a spacing step)
+ *   - dot and glyph diameters (6px, 12px — a dot is sized to be a dot)
+ *   - grid track widths, min-widths and max-widths (component geometry)
+ *   - percentages, viewport units, `ch`, and `999px` for a pill
+ * Anything else that is not a var() is a bug. See skills/novus-ui/SKILL.md.
+ */
+
 :root {
-  /* Structural tokens: identical in both themes. Color tokens live in the
-     dark/light blocks below — see novus-ui/SKILL.md's "Theme" section for
-     why the two color blocks are not the same values inverted. */
-  --radius-s: 3px;
-  --radius-m: 5px;
-  --radius-l: 8px;
+  /* ---------- spacing scale ----------
+     Base 4, with real jumps at the top. Named by intent so the right step is
+     obvious at the call site and adjacent steps do not get picked by feel:
+       1 hairline    — icon-to-label inside a chip
+       2 tight       — chip padding, dense row gaps
+       3 compact     — control padding, list gaps
+       4 default     — row padding, gaps between controls
+       5 comfortable — panel padding, gaps between fields
+       6 roomy       — separation between sections inside a panel
+       7 section     — separation between regions
+       8 page        — empty-state and hero breathing room */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+
+  /* ---------- type scale ----------
+     Body is 14px. It was 12px, and "everything feels very small/tiny in the
+     grand scheme of things" was the direct feedback: this is a desktop
+     application, not a terminal status line. 14px is what GitHub, Zed and
+     Linear use for body text.
+
+     The bottom three steps sit close together on purpose — 11/12/13 is the
+     range where dense technical data has to live (a diff gutter cannot be
+     16px) — but hierarchy does not come from that end. It comes from the top:
+     14 -> 16 -> 19 -> 24 are real jumps, and they are what makes a title read
+     as a title. The old scale had no steps above 14 at all, which is why
+     nothing had a top. */
+  --text-eyebrow: 11px;  /* uppercase tracked labels ONLY */
+  --text-micro: 12px;    /* dense tabular metadata: sequence, counts, kbd */
+  --text-small: 13px;    /* secondary text, diffs, terminal, file content */
+  --text-body: 14px;     /* default — set on `body` */
+  --text-title: 16px;    /* panel and section titles */
+  --text-screen: 19px;   /* screen titles */
+  --text-hero: 24px;     /* empty-state headline */
+
+  /* ---------- line height ---------- */
+  --leading-flat: 1.15;   /* single-line chrome where the box sets the height */
+  --leading-tight: 1.35;  /* headings */
+  --leading-normal: 1.5;  /* default */
+  --leading-prose: 1.65;  /* paragraphs the model or a person wrote */
+
+  /* ---------- weight ----------
+     500 used to be the app-wide maximum because mono bolds optically fast.
+     Chrome is `--font-ui` (a proportional face) since the type split, so 600
+     is now available and correct for headings. 500 remains the maximum on
+     anything set in `--mono` — see the mono selector list below. */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-strong: 600;
+
+  /* ---------- tracking ---------- */
+  --track-eyebrow: 0.09em; /* uppercase eyebrows only; never sentence case */
+
+  /* ---------- radii ----------
+     Raised across the board (was 3/5/8). "Very rectangular" was direct
+     feedback; a larger radius on the containers that survived the
+     border-removal pass is half the answer, space is the other half.
+     Outer must always be >= inner. */
+  --radius-s: 4px;
+  --radius-m: 7px;
+  --radius-l: 12px;
+  --radius-pill: 999px;
+
+  /* ---------- control heights ----------
+     A design system sizes its controls; picking a height per button is how
+     you get five buttons that are all almost the same height. */
+  --control-s: 24px;  /* chips, tab close, avatars */
+  --control-m: 30px;  /* chrome buttons, tabs, segmented options */
+  --control-l: 36px;  /* primary buttons, inputs */
+
+  /* ---------- layout constants ---------- */
+  --bar-h: 40px;          /* titlebar — see the traffic-light note in SKILL.md */
+  --session-bar-h: 46px;  /* a tab's own bar */
+  --rail-w: 264px;
+  --files-w: 240px;
+  --tree-w: 236px;
 
   --ease: cubic-bezier(0.2, 0, 0, 1);
   --t-fast: 120ms;
   --t-overlay: 160ms;
 
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-  /* UI chrome and prose, added this pass — see the "Typography" rule below
-     for why mono-everywhere did not survive research into what comparable
-     tools (Zed, Linear, Warp, Cursor) actually ship. */
+  /* UI chrome and prose — see the "typography" rule below for why
+     mono-everywhere did not survive research into what Zed, Linear, Warp and
+     Cursor actually ship. */
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
     "Helvetica Neue", sans-serif;
 }
@@ -31,6 +128,12 @@
   --surface: #101012;
   --surface-raised: #17171a;
   --surface-raised-hover: #1c1c20;
+
+  /* One step deeper than whatever it sits on, expressed as a *black* alpha so
+     it darkens on every plane rather than being tuned for one. This is what a
+     nested well (a raw payload inside a tool card, a diff inside a patch card)
+     uses instead of a border — see "the nesting rule" below. */
+  --inset: rgb(0 0 0 / 0.28);
 
   /* Borders and ghost states are the foreground at low alpha, so they read
      the same on every plane instead of being tuned for one background. */
@@ -56,16 +159,20 @@
 
   /* Shadows need a ring in front (the eye reads the 1px edge, the blur is
      atmosphere) and a color darker than the canvas, or they vanish on it.
-     Only the two floating surfaces — palette and modal — ever cast. Pure
-     black cast nothing on a near-black canvas, which is why this ring is a
-     literal near-black rather than an alpha-black — see the light block for
-     why that reasoning reverses on a white canvas. */
+     Only floating surfaces — palette, modal, the composer's model menu — ever
+     cast. Pure black cast nothing on a near-black canvas, which is why this
+     ring is a literal near-black rather than an alpha-black; see the light
+     block for why that reasoning reverses on a white canvas. */
   --shadow-popover: 0 0 0 1px #050506, 0 6px 12px -3px rgba(0, 0, 0, 0.5),
     0 16px 32px -8px rgba(0, 0, 0, 0.55);
   --shadow-modal: 0 0 0 1px #050506, 0 8px 16px -4px rgba(0, 0, 0, 0.5),
     0 24px 48px -12px rgba(0, 0, 0, 0.6);
 
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--fg) / 0.28);
+  /* A large already-bordered field (the composer, the open-screen inputs)
+     shows focus as a soft halo instead of the double ring, which on a 12px
+     radius reads as a second control drawn around the first. */
+  --focus-halo: 0 0 0 3px rgb(var(--fg) / 0.07);
 
   color-scheme: dark;
 }
@@ -94,6 +201,10 @@
   --surface: #f3f4f6;
   --surface-raised: #ffffff;
   --surface-raised-hover: #f6f7f8;
+
+  /* Much weaker than dark mode's: the same 28% black that reads as one gentle
+     step down on a near-black canvas reads as a hole punched in paper. */
+  --inset: rgb(20 20 22 / 0.05);
 
   --fg: 23 23 26;
   --border-subtle: rgb(var(--fg) / 0.08);
@@ -124,6 +235,7 @@
     0 24px 48px -12px rgba(20, 20, 22, 0.14);
 
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--fg) / 0.32);
+  --focus-halo: 0 0 0 3px rgb(var(--fg) / 0.08);
 
   color-scheme: light;
 }
@@ -147,39 +259,30 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
   -webkit-font-smoothing: antialiased;
 }
 
 /* ---------- typography ---------- */
 
 /*
- * Split, not mono-everywhere. Researched this pass specifically because the
- * person using the app called the pure-mono choice out as maybe "too sleek."
- * Checked Zed (separate buffer_font_family / ui_font_family, independently
- * configurable), Linear (Inter for all UI/body text, Berkeley Mono reserved
- * for "code and technical labels" only), Warp (a geometric sans for
- * virtually all UI text, mono kept for terminal content only, chosen
- * specifically so the app reads as approachable rather than "for
- * greybeards"), and Cursor (system-ui sans for chrome, mono for code). None
- * of them ship one monospace face for their own chrome as a considered
- * choice — the "monospace as brand signal" wave (Linear, Vercel, Raycast)
- * consistently means mono *accents* inside an otherwise proportional UI, not
- * literal 100% mono. VS Code's own Explorer ships with no file-type icons at
- * all by default, which is the source for this file's icon-less tree, below.
+ * Split, not mono-everywhere. Researched because the person using the app
+ * called the pure-mono choice out as maybe "too sleek". Zed keeps
+ * buffer_font_family and ui_font_family separate and independently
+ * configurable; Linear uses Inter for all UI/body text and reserves Berkeley
+ * Mono for "code and technical labels" only; Warp uses a geometric sans for
+ * virtually all UI text specifically so the app reads as approachable rather
+ * than "for greybeards", keeping mono for terminal content; Cursor uses
+ * system-ui for chrome and mono for code. None of them ship one monospace
+ * face for their own chrome as a considered choice.
  *
- * --font-ui (body's new default) is for anything a person reads as prose or
- * acts on as a control: buttons, labels, panel titles, empty states, the ask
- * bar, and — the one that matters most — the model's own explanatory text in
- * the timeline, which needs to read as a message from something that can
- * write English, not as another technical field.
- *
- * --mono stays, explicitly, on everything below: paths, diffs, tool names
- * and their arguments, timestamps and durations, tabular counts, terminal
- * content, and file contents in the browser. Every one of these is
- * identifier-shaped or needs column alignment — the two things mono is
- * actually for — not a matter of "already was mono."
+ * --font-ui (body's default) carries anything a person reads as prose or acts
+ * on as a control. --mono stays explicit on the list below: paths, diffs,
+ * tool names and arguments, tabular counts, terminal content, file-tree
+ * names, file content. Every one is identifier-shaped or needs column
+ * alignment — the two things mono is actually for. New technical-content
+ * classes join this list; new chrome classes do not need to do anything.
  */
 code,
 kbd,
@@ -192,9 +295,9 @@ pre,
 .patch__count,
 .files__path,
 .files__counts,
-.titlebar__repo,
-.titlebar__model,
-.titlebar__writes,
+.session-bar__repo-name,
+.session-bar__repo-dir,
+.session-bar__model,
 .tab__label,
 .tab__diffstat,
 .jump__seq,
@@ -211,15 +314,18 @@ pre,
 .compare__verdict,
 .compare__path,
 .open__input,
+.open__recent-path,
 .tree__name,
 .viewer__path,
 .viewer__dir,
 .viewer__content,
-.terminal-dock__label,
+.terminal-dock__path,
 .terminal-dock__prompt,
 .tool-group__count,
 .tool-group__summary,
-.palette__hint {
+.palette__hint,
+.attempt__stats,
+.composer__model-note {
   font-family: var(--mono);
 }
 
@@ -232,12 +338,43 @@ button {
   cursor: pointer;
 }
 
+/* The eyebrow: the one place uppercase and wide tracking are allowed. Every
+   section title across the rail, the panels and the open screen uses it, so
+   they are one thing rather than five hand-tuned near-matches. */
+.eyebrow {
+  display: block;
+  margin-bottom: var(--space-3);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--track-eyebrow);
+  line-height: var(--leading-flat);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* Inside a flex head the sibling's baseline does the spacing. */
+.files__head > .eyebrow,
+.tree__head > .eyebrow {
+  margin-bottom: 0;
+}
+
+/* A keyboard hint. Two places use it — the session bar's "/" and the
+   composer's send/newline pair — so it is one primitive, not two. */
+.kbd-hint {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-micro);
+  white-space: nowrap;
+}
+
 /* Interactive state changes ease rather than jump. Only paint properties —
    never `all`, never anything that triggers layout. */
-.titlebar__repo,
-.titlebar__action,
-.open__browse,
-.open__submit,
+.session-bar__repo,
+.icon-button,
+.button,
 .open__input,
 .open__recent-row,
 .open__toggle,
@@ -249,9 +386,14 @@ button {
 .tab,
 .tab__close,
 .tab--new,
-.ask-bar__input,
-.ask-bar__submit,
+.composer__field,
+.composer__send,
+.composer__model,
+.composer__model-option,
+.viewswitch__option,
 .tree__row,
+.attempt,
+.party__handoff,
 .terminal-dock__resize {
   transition:
     background-color var(--t-fast) var(--ease),
@@ -262,7 +404,8 @@ button {
 
 /* Keyboard focus is a double ring — the inner ring in the canvas color gaps
    it away from the control's own border — never a border swap, which shifts
-   layout. The palette input opts out below: it is focused by construction. */
+   layout. The palette input and the composer textarea opt out below; both are
+   focused by construction or wrapped by a field that shows focus itself. */
 :focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -275,6 +418,164 @@ button {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ---------- buttons ----------
+ *
+ * Three variants, one geometry. Every variant has :hover, :active and
+ * :disabled — a new variant needs all three or it will be the one control
+ * that snaps.
+ *
+ * .button           quiet: transparent until hover. The default.
+ * .button--primary  raised fill, strong border, weight 600.
+ * .icon-button      ghost chrome: no border at all, hover fill only.
+ */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  flex: none;
+  height: var(--control-m);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-flat);
+  white-space: nowrap;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.button:active:not(:disabled) {
+  background: var(--pressed);
+}
+
+.button:disabled {
+  border-color: var(--border-subtle);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.button--large {
+  height: var(--control-l);
+  padding: 0 var(--space-5);
+  font-size: var(--text-body);
+}
+
+.button--primary {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-weight: var(--weight-strong);
+}
+
+.button--primary:hover:not(:disabled) {
+  background: var(--surface-raised-hover);
+  border-color: rgb(var(--fg) / 0.24);
+  color: var(--text);
+}
+
+.button--primary:active:not(:disabled) {
+  border-color: rgb(var(--fg) / 0.3);
+}
+
+.button--primary:disabled {
+  background: var(--surface);
+  border-color: var(--border-subtle);
+  color: var(--text-dim);
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  flex: none;
+  height: var(--control-m);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-m);
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  line-height: var(--leading-flat);
+  white-space: nowrap;
+}
+
+.icon-button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.icon-button:active:not(:disabled) {
+  background: var(--pressed);
+}
+
+.icon-button:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+/* ---------- chip ----------
+   One primitive for every small stated fact: permissions, repository state,
+   session facts in the empty state. These used to be four near-identical
+   hand-tuned badges. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  height: var(--control-s);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+  line-height: var(--leading-flat);
+  white-space: nowrap;
+}
+
+.chip--allow {
+  border-color: rgb(var(--fg) / 0.14);
+  color: var(--add);
+}
+
+/* Not an error — the session works, two features do not. Amber rather than
+   red, and worded as a fact rather than a failure. */
+.chip--warn {
+  border-color: var(--warn);
+  color: var(--warn-text);
+}
+
+code {
+  font: inherit;
+  font-size: var(--text-micro);
+  padding: 0 var(--space-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-s);
+}
+
+kbd {
+  display: inline-block;
+  min-width: 18px; /* geometry: fits a single wide glyph without jitter */
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--text-eyebrow);
+  line-height: 1.6;
+  text-align: center;
 }
 
 /* ---------- shell ---------- */
@@ -302,9 +603,9 @@ button {
 .titlebar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 16px;
-  height: 38px;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  height: var(--bar-h);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   min-width: 0;
@@ -312,7 +613,7 @@ button {
 
 /* Inside the shell the window's traffic lights overlay the titlebar. */
 :root[data-shell="electron"] .titlebar {
-  padding-left: 84px;
+  padding-left: 84px; /* geometry: macOS hiddenInset traffic-light inset */
   -webkit-app-region: drag;
 }
 
@@ -322,34 +623,18 @@ button {
   -webkit-app-region: no-drag;
 }
 
-/* A tab's own bar — everything that used to live in .titlebar when Novus
-   only ever held one session. Visually identical to .titlebar's base rule
-   (same height, padding, border, plane) but deliberately its own class: it
-   must never pick up the electron drag region above, which belongs to the
-   one titlebar the window chrome actually is. */
-.session-bar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 16px;
-  height: 38px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  /* A flex container that is also a lone grid item (.tab-content's single
-     implicit column) contributes its content's min size to that column's
-     auto track unless told otherwise — without this, a long repository path
-     widened the whole app instead of letting .titlebar__repo ellipsize, and
-     pushed the terminal/invite buttons off the right edge. */
-  min-width: 0;
+.titlebar__mark {
+  flex: none;
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-strong);
+  letter-spacing: 0.16em;
+  line-height: var(--leading-flat);
+  text-transform: uppercase;
+  color: var(--text);
 }
 
-.session-bar__error {
-  grid-column: 1 / -1;
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--del);
-  font-size: 12px;
+.titlebar__spacer {
+  flex: 1;
 }
 
 /* ---------- tab strip ---------- */
@@ -357,7 +642,7 @@ button {
 .tabstrip {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 100%;
   /* Claims the titlebar's remaining space and scrolls internally once tabs
      exceed it — without flex-grow this sized itself to its content instead,
@@ -367,14 +652,12 @@ button {
   overflow-x: auto;
   scrollbar-width: none;
   /* A permanent, subtle fade at both edges — cheap, and it reads as "there
-     is a strip here with an edge" even when nothing currently overflows,
-     which was the flatness the tab strip was singled out for: everything
-     about it was static except the busy-dot pulse. */
+     is a strip here with an edge" even when nothing currently overflows. */
   mask-image: linear-gradient(
     to right,
     transparent 0,
-    black 10px,
-    black calc(100% - 10px),
+    black var(--space-4),
+    black calc(100% - var(--space-4)),
     transparent 100%
   );
 }
@@ -387,13 +670,14 @@ button {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-2);
   flex: none;
-  max-width: 200px;
-  height: 26px;
-  padding: 0 6px 0 9px;
+  max-width: 220px; /* geometry: the widest a tab may grow before ellipsis */
+  height: var(--control-m);
+  padding: 0 var(--space-2) 0 var(--space-3);
   border-radius: var(--radius-m);
   color: var(--text-muted);
+  font-size: var(--text-small);
   cursor: pointer;
   user-select: none;
 }
@@ -416,24 +700,22 @@ button {
    already owns box-shadow for the double focus ring, and a second box-shadow
    here would silently replace it on a tab that is both active and
    keyboard-focused. The one thing an active tab was missing was continuity
-   with the content below it — a flat background swap does not say "this tab
-   is attached to what you're looking at" the way an editor or browser tab's
-   underline does. */
+   with the content below it. */
 .tab--active::after {
   content: "";
   position: absolute;
-  left: 4px;
-  right: 4px;
+  left: var(--space-2);
+  right: var(--space-2);
   bottom: 0;
-  height: 2px;
+  height: 2px; /* geometry: an accent bar, not a spacing step */
   border-radius: 1px 1px 0 0;
   background: var(--text);
 }
 
 .tab__dot {
   flex: none;
-  width: 5px;
-  height: 5px;
+  width: 6px; /* geometry: a dot is sized to be a dot */
+  height: 6px;
   border-radius: 50%;
   background: var(--text-dim);
 }
@@ -459,7 +741,7 @@ button {
 
 .tab__diffstat {
   flex: none;
-  font-size: 10px;
+  font-size: var(--text-eyebrow);
   font-variant-numeric: tabular-nums;
 }
 
@@ -468,11 +750,11 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 20px; /* geometry: a square hit target inside the tab */
+  height: 20px;
   border-radius: var(--radius-s);
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: var(--text-title);
   line-height: 1;
   opacity: 0;
 }
@@ -489,13 +771,13 @@ button {
 
 .tab--new {
   flex: none;
-  width: 26px;
-  height: 26px;
+  width: var(--control-m);
+  height: var(--control-m);
   padding: 0;
   justify-content: center;
   border-radius: var(--radius-m);
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: var(--text-title);
   cursor: pointer;
 }
 
@@ -508,311 +790,190 @@ button {
   background: var(--pressed);
 }
 
-.titlebar__mark {
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--text);
-}
-
-.titlebar__meta {
+/* ---------- session bar ----------
+ *
+ * A tab's own bar. Visually a sibling of .titlebar (same plane, same border)
+ * but deliberately its own class: it must never pick up the electron drag
+ * region above, which belongs to the one titlebar the window chrome actually
+ * is.
+ *
+ * Three zones, left to right: identity (repository + permissions), state
+ * (status + model + who is here), then the view switcher and actions. It used
+ * to be a flat run of fourteen 11px items with no grouping, which is most of
+ * why it read as cramped.
+ */
+.session-bar {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  height: var(--session-bar-h);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  /* A flex container that is also a lone grid item (.tab-content's single
+     implicit column) contributes its content's min size to that column's
+     auto track unless told otherwise — without this, a long repository path
+     widened the whole app instead of letting .session-bar__repo-dir
+     ellipsize, and pushed the actions off the right edge. */
   min-width: 0;
-  overflow: hidden;
-  color: var(--text-dim);
-  font-size: 11px;
-  white-space: nowrap;
 }
 
-.titlebar__spacer {
-  flex: 1;
+.session-bar__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
-.titlebar__hint {
+.session-bar__repo {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  margin-left: calc(var(--space-2) * -1);
+  border-radius: var(--radius-s);
+  color: var(--text);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+  text-align: left;
+}
+
+.session-bar__repo:hover {
+  background: var(--hover);
+}
+
+.session-bar__repo:active {
+  background: var(--pressed);
+}
+
+.session-bar__repo-name {
   flex: none;
-  white-space: nowrap;
-  color: var(--text-dim);
-  font-size: 11px;
 }
 
-code {
-  font: inherit;
-  font-size: 11px;
-  padding: 1px 4px;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-s);
-}
-
-kbd {
-  display: inline-block;
-  min-width: 16px;
-  padding: 1px 4px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-s);
-  background: var(--surface-raised);
-  color: var(--text-muted);
-  font-family: inherit;
-  font-size: 10px;
-  text-align: center;
-}
-
-.titlebar__repo {
+/* The parent directories: quieter than the repository name, and the first
+   thing to go when the bar is tight. Ellipsizes at the *head* via the rtl
+   trick, because the tail is the part worth keeping. */
+.session-bar__repo-dir {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* Ellipsize the head of the path, not the tail — the repository name is
-     the part worth keeping. */
+  color: var(--text-dim);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-normal);
   direction: rtl;
   text-align: left;
-  color: var(--text-muted);
-  font-size: 11px;
 }
 
 /* A strong left-to-right mark, so the path's leading slash does not get
    carried to the far end by the rtl ellipsis trick above. */
-.titlebar__repo::before {
+.session-bar__repo-dir::before {
   content: "\200e";
 }
 
-.titlebar__repo:hover {
-  color: var(--text);
-  text-decoration: underline;
-}
-
-.titlebar__action {
+.session-bar__state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
   flex: none;
-  white-space: nowrap;
-  padding: 3px 8px;
-  border-radius: var(--radius-m);
-  color: var(--text-muted);
-  font-size: 11px;
+  min-width: 0;
 }
 
-.titlebar__action:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
-.titlebar__action:active {
-  background: var(--pressed);
-}
-
-.titlebar__model,
-.titlebar__phase {
+.session-bar__model {
   flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-dim);
+  font-size: var(--text-micro);
 }
 
-.titlebar__writes {
+.session-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   flex: none;
-  white-space: nowrap;
-  padding: 1px 5px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-s);
-  color: var(--add);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
-/* ---------- open repository ---------- */
-
-.open {
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 18vh;
-}
-
-.open__panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: min(520px, calc(100vw - 48px));
-  padding: 22px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-l);
+.session-bar__error {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
   background: var(--surface);
+  color: var(--del);
+  font-size: var(--text-small);
 }
 
-.open__title {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text);
-}
-
-.open__label {
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-
-.open__row {
+/* ---------- view switcher ----------
+   The body has exactly three mutually exclusive views, so it gets a segmented
+   control that shows all three and which one is active — not three separate
+   buttons that swap their own labels ("attempts" becoming "timeline"), which
+   is what was there and which never told you what the other states were. */
+.viewswitch {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  flex: none;
+  gap: 2px; /* geometry: the seam between segments, not a spacing step */
+  padding: 2px;
+  border-radius: var(--radius-m);
+  background: var(--inset);
 }
 
-.open__browse {
-  flex: none;
-  padding: 6px 12px;
-  border-radius: var(--radius-m);
-  border: 1px solid var(--border);
-  background: transparent;
+.viewswitch__option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: calc(var(--control-m) - var(--space-1) * 2);
+  padding: 0 var(--space-3);
+  border-radius: calc(var(--radius-m) - 2px);
   color: var(--text-muted);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-flat);
   white-space: nowrap;
 }
 
-.open__browse:hover:not(:disabled) {
-  background: var(--hover);
-  border-color: var(--border-strong);
+.viewswitch__option:hover {
   color: var(--text);
 }
 
-.open__browse:active:not(:disabled) {
-  background: var(--pressed);
-}
-
-.open__browse:disabled {
-  border-color: var(--border-subtle);
-  color: var(--text-dim);
-  cursor: default;
-}
-
-.open__input {
-  width: 100%;
-  padding: 9px 10px;
-  border-radius: var(--radius-m);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-well);
+.viewswitch__option--active,
+.viewswitch__option--active:hover {
+  background: var(--surface-raised);
   color: var(--text);
-  font: inherit;
 }
 
-.open__input:focus {
-  border-color: var(--text-dim);
-}
-
-.open__toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  color: var(--text-muted);
-  cursor: pointer;
+/* Attempts carries a live count when there are any — the cheapest way to make
+   forking visible from anywhere in the app. */
+.viewswitch__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px; /* geometry: fits two digits without the pill going oval */
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--selected);
+  color: var(--text);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-strong);
+  font-variant-numeric: tabular-nums;
   line-height: 1.5;
 }
 
-.open__toggle input {
-  margin-top: 2px;
-  accent-color: var(--text-muted);
-}
-
-.open__submit {
-  align-self: flex-start;
-  padding: 7px 16px;
-  border-radius: var(--radius-m);
-  border: 1px solid var(--border-strong);
-  background: var(--surface-raised);
-  color: var(--text);
-  font-weight: 500;
-}
-
-.open__submit:hover:not(:disabled) {
-  background: var(--surface-raised-hover);
-  border-color: rgb(var(--fg) / 0.22);
-}
-
-.open__submit:active:not(:disabled) {
-  border-color: rgb(var(--fg) / 0.28);
-}
-
-.open__submit:disabled {
-  background: var(--surface);
-  border-color: var(--border-subtle);
-  color: var(--text-dim);
-  cursor: default;
-}
-
-.open__error {
-  color: var(--del);
-  line-height: 1.6;
-}
+/* ---------- status and presence ---------- */
 
 .status {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
+  gap: var(--space-2);
+  font-size: var(--text-small);
   color: var(--text-muted);
-}
-
-.presence {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  margin-left: 12px;
-}
-
-.presence__item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: var(--text-dim);
-}
-
-.presence__item--live {
-  color: var(--text-muted);
-}
-
-.presence__dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--text-dim);
-}
-
-.presence__item--live .presence__dot {
-  background: var(--live);
-  animation: pulse 1.6s ease-in-out infinite;
-}
-
-.presence__handoff {
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  font-size: 10px;
-  text-decoration: underline;
-  cursor: pointer;
-  padding: 0;
-}
-
-.presence__handoff:hover {
-  color: var(--text);
-}
-
-.rail__buttons {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.rail__buttons .open__browse {
-  flex: 1;
 }
 
 .status__dot {
-  width: 5px;
-  height: 5px;
+  width: 6px; /* geometry */
+  height: 6px;
   border-radius: 50%;
   background: var(--text-dim);
 }
@@ -836,9 +997,47 @@ kbd {
   }
 }
 
+/* The at-a-glance presence stack in the session bar. The legible version —
+   names, roles, who holds control, and the handoff action — is a rail section
+   (.party) rather than this; multiplayer is the product thesis and a
+   four-pixel chip was not carrying it. */
+.presence {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.presence__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-s);
+  height: var(--control-s);
+  margin-left: -6px; /* geometry: the overlap that makes a stack read as one */
+  border: 1px solid var(--surface);
+  border-radius: 50%;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-flat);
+  text-transform: uppercase;
+}
+
+.presence__avatar:first-child {
+  margin-left: 0;
+}
+
+.presence__avatar--live {
+  border-color: var(--live);
+  color: var(--text);
+}
+
+/* ---------- body grid ---------- */
+
 .body {
   display: grid;
-  grid-template-columns: 244px 1fr 220px;
+  grid-template-columns: var(--rail-w) 1fr var(--files-w);
   min-height: 0;
   min-width: 0;
 }
@@ -847,64 +1046,109 @@ kbd {
    files belong to CompareView's own per-attempt columns, not this session's
    panel, so the third column drops rather than sitting empty beside it. */
 .body--compare {
-  grid-template-columns: 244px 1fr;
+  grid-template-columns: var(--rail-w) 1fr;
 }
 
-/* Rail | tree | viewer. The rail stays — Goal and Run stats are still useful
-   context while looking at a file — so this is the same 244px first column
-   as the timeline and compare bodies, with the timeline+files columns
-   replaced by a narrower tree and a wide read-only viewer. */
+/* Rail | tree | viewer. The rail stays — goal, attempts and participants are
+   still useful context while looking at a file. */
 .body--browse {
-  grid-template-columns: 244px 220px 1fr;
+  grid-template-columns: var(--rail-w) var(--tree-w) 1fr;
 }
 
-/* ---------- rail ---------- */
-
+/* ---------- rail ----------
+ *
+ * THE NESTING RULE, stated once and applied everywhere below:
+ *
+ *   AT MOST ONE BORDER BETWEEN YOU AND THE CANVAS.
+ *
+ * If a container already sits inside something bordered, it separates with
+ * SPACE and a PLANE CHANGE, not with another line. "Too many boxes in boxes,
+ * very rectangular" was direct feedback, and the cause was mechanical: almost
+ * every separation in this file used to be a 1px border, so a panel inside a
+ * panel inside a body genuinely was three nested rectangles. The rail keeps
+ * its right edge (a genuine region boundary); nothing inside it draws a box.
+ */
 .rail {
   border-right: 1px solid var(--border);
   background: var(--surface);
   overflow-y: auto;
-  padding: 12px 0;
+  min-height: 0;
+  padding: var(--space-5) 0 var(--space-6);
 }
 
 .rail__section {
-  padding: 0 12px 16px;
+  padding: 0 var(--space-5);
+  /* Space, not a rule. Sections are separated by a gap large enough to read
+     as a break — this is the single biggest de-boxing move in the file. */
+  margin-bottom: var(--space-6);
 }
 
-.rail__label {
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 8px;
+.rail__section:last-child {
+  margin-bottom: 0;
 }
 
-.rail__label--inset {
-  padding: 0 12px;
+/* Full-bleed sections whose rows carry their own inset (jump list, attempts). */
+.rail__section--flush {
+  padding: 0;
 }
 
-/* The direction box appears when a run starts; it fades in rather than
-   popping the sections below it into a new layout unannounced. */
-.rail__section--direction {
-  animation: overlay-in var(--t-overlay) var(--ease);
+.rail__section--flush > .eyebrow {
+  padding-left: var(--space-5);
+  padding-right: var(--space-5);
 }
 
 .rail__goal {
-  color: var(--text-muted);
-  line-height: 1.6;
+  color: var(--text);
+  font-size: var(--text-small);
+  line-height: var(--leading-prose);
 }
+
+.rail__goal--empty {
+  color: var(--text-dim);
+}
+
+/* The run-control box appears when a run starts; it fades in rather than
+   popping the sections below it into a new layout unannounced. */
+.rail__section--live {
+  animation: overlay-in var(--t-overlay) var(--ease);
+}
+
+.rail__buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.rail__buttons .button {
+  flex: 1;
+}
+
+.rail__empty {
+  color: var(--text-dim);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+}
+
+/* For an empty state inside a --flush section, which has no padding of its
+   own because its rows carry their own. */
+.rail__empty--inset {
+  padding: 0 var(--space-5);
+}
+
+/* ---------- run statistics ---------- */
 
 .stat {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
-  padding: 3px 0;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
   color: var(--text-muted);
+  font-size: var(--text-small);
 }
 
 .stat__value {
   color: var(--text);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
 }
 
@@ -916,16 +1160,174 @@ kbd {
   color: var(--del);
 }
 
+/* ---------- attempts (the fork surface) ----------
+ *
+ * Branching a session, running competing attempts, and choosing between them
+ * on evidence is the product thesis (README, "Starting wedge"). It used to be
+ * one lowercase word in a corner of the session bar. It is now three things
+ * at once: a permanent rail section listing live attempts at a glance, a
+ * labelled segment in the view switcher carrying a count, and the compare
+ * screen itself. This is the rail section.
+ *
+ * It draws data useComparison already fetches for every tab, so it costs no
+ * new request and no new poll.
+ */
+.attempt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-3) var(--space-5);
+  border-left: 2px solid transparent; /* geometry: a selection marker */
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.attempt:hover {
+  background: var(--hover);
+}
+
+.attempt:active {
+  background: var(--pressed);
+}
+
+.attempt__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.attempt__dot {
+  flex: none;
+  width: 6px; /* geometry */
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.attempt__dot--running {
+  background: var(--live);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.attempt__dot--failed {
+  background: var(--del);
+}
+
+.attempt__dot--chosen {
+  background: var(--add);
+}
+
+.attempt__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+}
+
+.attempt__stats {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  /* geometry: aligns the stats under the label, past the dot and its gap */
+  padding-left: calc(6px + var(--space-2));
+  color: var(--text-dim);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.attempt__stat--pass {
+  color: var(--add);
+}
+
+.attempt__stat--fail {
+  color: var(--del);
+}
+
+.attempt__cta {
+  width: calc(100% - var(--space-5) * 2);
+  margin: var(--space-3) var(--space-5) 0;
+}
+
+/* ---------- participants ----------
+   Presence and roles were a chip. Who is here and who holds control is
+   multiplayer state, so it reads as a list with names, roles and the handoff
+   action in place. */
+.party {
+  display: flex;
+  flex-direction: column;
+}
+
+.party__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  min-width: 0;
+}
+
+.party__dot {
+  flex: none;
+  width: 6px; /* geometry */
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.party__row--live .party__dot {
+  background: var(--live);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.party__who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.party__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--text-small);
+}
+
+.party__role {
+  color: var(--text-dim);
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
+}
+
+.party__handoff {
+  flex: none;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-s);
+  color: var(--text-dim);
+  font-size: var(--text-micro);
+}
+
+.party__handoff:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* ---------- jump list ---------- */
+
 .jump {
   display: flex;
-  gap: 8px;
-  width: calc(100% - 8px);
-  margin: 0 4px;
-  padding: 5px 8px;
-  border-radius: var(--radius-m);
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-5);
   text-align: left;
   color: var(--text-muted);
-  border-left: 2px solid transparent;
+  font-size: var(--text-small);
+  border-left: 2px solid transparent; /* geometry: a selection marker */
 }
 
 .jump:hover {
@@ -944,7 +1346,9 @@ kbd {
 }
 
 .jump__seq {
+  flex: none;
   color: var(--text-dim);
+  font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
 }
 
@@ -957,10 +1361,7 @@ kbd {
 /* ---------- timeline ---------- */
 
 /* The grid's middle column in timeline mode: a scrollable event list plus a
-   pinned ask bar below it, never both scrolling together. This is the
-   docked-panel-with-a-bottom-pinned-editor shape every tool researched for
-   the ask flow uses (Zed's agent panel most literally) — the input is part
-   of the column's own layout, not an overlay floating on top of it. */
+   pinned composer below it, never both scrolling together. */
 .timeline-column {
   display: flex;
   flex-direction: column;
@@ -973,7 +1374,7 @@ kbd {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px 20px 16px;
+  padding: var(--space-6) var(--space-6) var(--space-4);
 }
 
 .timeline--compare {
@@ -983,64 +1384,238 @@ kbd {
   flex-direction: column;
 }
 
-/* ---------- ask bar ---------- */
-
-.ask-bar {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
+/* ---------- composer ----------
+ *
+ * "The composer feels empty", and asking should feel like the primary way you
+ * talk to this product. It was a one-line textarea and a button, on a bar
+ * with a rule above it — three nested rectangles to type one sentence into.
+ *
+ * Now: no bar, no rule. The composer sits on the same canvas as the timeline
+ * (so the column reads as one continuous thing) and the *field* is the only
+ * bordered element in it. The field is a container with a real minimum height
+ * and a toolbar inside it — the shape Cursor, Zed's agent panel and Claude's
+ * own composer all converge on, because it is the only one that can host
+ * controls without pushing them out into a second toolbar somewhere else.
+ */
+.composer {
   flex: none;
-  padding: 10px 16px;
-  border-top: 1px solid var(--border);
+  /* Opaque and on the canvas, so scrolled timeline content disappears behind
+     it without needing a border to say so. */
+  background: var(--bg);
+  padding: var(--space-3) var(--space-6) var(--space-5);
+}
+
+.composer__field {
+  position: relative; /* the model menu anchors to this */
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
   background: var(--surface);
 }
 
-.ask-bar__input {
-  flex: 1;
-  min-width: 0;
-  resize: none;
-  max-height: 96px;
-  padding: 8px 10px;
-  border-radius: var(--radius-m);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-well);
-  color: var(--text);
+.composer__field:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: var(--focus-halo);
+}
+
+/*
+ * Auto-grow with no JavaScript measurement.
+ *
+ * The obvious implementation reads scrollHeight and writes style.height on
+ * every keystroke, which forces a synchronous layout per character —
+ * performance was explicitly called out, so this uses the CSS-only technique
+ * instead: a grid with the textarea and an invisible ::after replica stacked
+ * in the same cell, the replica fed the same text through a data attribute.
+ * The grid row is sized by the replica; the textarea stretches to it. No
+ * measurement, no thrash, no layout read from script at all.
+ */
+.composer__grow {
+  display: grid;
+  /* geometry: three lines at rest, about nine before it scrolls. The minimum
+     is the point — a one-line box is what made this read as an afterthought
+     rather than as the primary way you talk to the product. */
+  min-height: 76px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.composer__grow::after {
+  /* The trailing space keeps a newline-terminated value one line taller, so
+     Shift+Enter grows the box before anything is typed on the new line. */
+  content: attr(data-value) " ";
+  visibility: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.composer__grow > textarea,
+.composer__grow::after {
+  /* Both occupy the one cell, and must share every metric that affects text
+     layout or the replica will not predict the textarea's height. */
+  grid-area: 1 / 1 / 2 / 2;
+  padding: var(--space-4) var(--space-4) var(--space-2);
+  border: none;
   font: inherit;
-  line-height: 1.5;
+  font-size: var(--text-body);
+  line-height: var(--leading-prose);
+  letter-spacing: inherit;
 }
 
-.ask-bar__input:focus {
-  border-color: var(--text-dim);
+.composer__input {
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: var(--text);
 }
 
-.ask-bar__input::placeholder {
+.composer__input:focus {
+  outline: none;
+}
+
+/* The field shows focus for it — a second ring inside the first reads as two
+   controls. */
+.composer__input:focus-visible {
+  box-shadow: none;
+}
+
+.composer__input::placeholder {
   color: var(--text-dim);
 }
 
-.ask-bar__submit {
+.composer__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.composer__spacer {
+  flex: 1;
+}
+
+.composer__send {
   flex: none;
-  padding: 8px 14px;
-  border-radius: var(--radius-m);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-m);
+  padding: 0 var(--space-4);
   border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
   background: var(--surface-raised);
   color: var(--text);
-  font-weight: 500;
+  font-size: var(--text-small);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-flat);
 }
 
-.ask-bar__submit:hover:not(:disabled) {
+.composer__send:hover:not(:disabled) {
   background: var(--surface-raised-hover);
-  border-color: rgb(var(--fg) / 0.22);
+  border-color: rgb(var(--fg) / 0.24);
 }
 
-.ask-bar__submit:active:not(:disabled) {
-  border-color: rgb(var(--fg) / 0.28);
+.composer__send:active:not(:disabled) {
+  border-color: rgb(var(--fg) / 0.3);
 }
 
-.ask-bar__submit:disabled {
-  background: var(--surface);
+.composer__send:disabled {
+  background: transparent;
   border-color: var(--border-subtle);
   color: var(--text-dim);
   cursor: default;
+}
+
+/* ---------- model picker ----------
+   Which model handles the next turn. The control and its state are real; the
+   routing behind it is a documented seam — see use-turn-model.ts. */
+/* The menu anchors to the button, not to the whole field, so it opens above
+   the control a person just pressed rather than above the toolbar. */
+.composer__model-wrap {
+  position: relative;
+  flex: none;
+}
+
+.composer__model {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  height: var(--control-m);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-m);
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  line-height: var(--leading-flat);
+  white-space: nowrap;
+}
+
+.composer__model:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.composer__model[aria-expanded="true"] {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.composer__model-name {
+  font-weight: var(--weight-medium);
+}
+
+.composer__model-caret {
+  color: var(--text-dim);
+  font-size: var(--text-eyebrow);
+}
+
+.composer__menu {
+  position: absolute;
+  bottom: calc(100% + var(--space-2));
+  left: 0;
+  z-index: 2;
+  width: 280px; /* geometry: fits the longest label beside its note */
+  padding: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow-popover);
+  transform-origin: bottom left;
+  animation: float-in var(--t-overlay) var(--ease);
+}
+
+.composer__model-option {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3);
+  border-radius: var(--radius-m);
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.composer__model-option:hover {
+  background: var(--hover);
+}
+
+.composer__model-option--active,
+.composer__model-option--active:hover {
+  background: var(--selected);
+}
+
+.composer__model-label {
+  flex: none;
+  color: var(--text);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+}
+
+.composer__model-note {
+  flex: 1;
+  color: var(--text-dim);
+  font-size: var(--text-micro);
+  text-align: right;
 }
 
 /* ---------- tool groups ---------- */
@@ -1049,16 +1624,29 @@ kbd {
    timeline-view.tsx for the grouping rule. The model's own words never live
    inside this collapsible body; they render above it, at full prominence,
    whenever the group is collapsed. */
+/* Indented into the timeline's content column rather than straddling the
+   sequence gutter. A group is not an event and has no sequence number of its
+   own, so left flush it started 48px to the left of every event's body — and
+   the model's prose, which renders as a direct child here when the group is
+   collapsed, was the most visible casualty: paragraphs hanging off the left
+   edge of the column everything else lined up in. 36px + gap is the event
+   grid's own first track plus its gap; see .event. */
 .tool-group {
-  margin: 2px 0;
+  /* The +2px is .event's transparent highlight border, which offsets every
+     event's body by that much; without it a collapsed group's prose sits two
+     pixels left of the identical prose on an ungrouped event. */
+  margin: var(--space-2) 0 var(--space-2) calc(36px + var(--space-4) + 2px);
 }
 
 .tool-group__head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   width: 100%;
-  padding: 5px 8px;
+  /* Pulled back by its own padding so the header TEXT lands on the content
+     column while its hover fill still has room to breathe around it. */
+  margin-left: calc(var(--space-3) * -1);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-m);
   color: var(--text-dim);
   text-align: left;
@@ -1079,21 +1667,22 @@ kbd {
 
 .tool-group__chevron {
   flex: none;
-  width: 10px;
-  font-size: 10px;
+  width: 12px; /* geometry: keeps the row still as the glyph swaps */
+  font-size: var(--text-eyebrow);
   text-align: center;
 }
 
 .tool-group__count {
   flex: none;
-  min-width: 14px;
-  padding: 0 4px;
-  border-radius: var(--radius-s);
-  background: var(--surface-raised);
+  min-width: 20px; /* geometry: two digits */
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--inset);
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--text-eyebrow);
   text-align: center;
   font-variant-numeric: tabular-nums;
+  line-height: 1.6;
 }
 
 .tool-group__summary {
@@ -1101,55 +1690,61 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--text-micro);
 }
 
+/* The one line this file keeps inside a container, and it earns it: it is the
+   thread tying a group's events to the header above them, and space alone
+   cannot say "these belong to that". */
 .tool-group__body {
-  margin-left: 9px;
-  padding-left: 4px;
+  margin: var(--space-1) 0 var(--space-2) var(--space-4);
+  padding-left: var(--space-4);
   border-left: 1px solid var(--border-subtle);
 }
 
 /* The model's own explanation, at full prominence — the one place in a tool
-   exchange it actually says something, so it does not get the muted
-   treatment the mechanical call summary beside it does. */
+   exchange it actually says something, so it does not get the muted treatment
+   the mechanical call summary beside it does. */
 .event__prose {
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-2);
   color: var(--text);
-  line-height: 1.6;
+  font-size: var(--text-body);
+  line-height: var(--leading-prose);
 }
 
 /* ---------- changed files ---------- */
 
-/* The honest Novus equivalent of Conductor's right-hand file list — sourced
-   from GET /sessions/:id/files, i.e. RunProjection.filesChanged, the same
-   numbers the compare screen already draws. Lives on the surface plane, like
-   the rail on the opposite edge, so the timeline in the middle reads as the
-   one recessed-relative-to-chrome content column. */
+/* Sourced from GET /sessions/:id/files, i.e. RunProjection.filesChanged, the
+   same numbers the compare screen already draws. Lives on the surface plane,
+   like the rail on the opposite edge, so the timeline in the middle reads as
+   the one recessed-relative-to-chrome content column. */
 .files {
   border-left: 1px solid var(--border);
   background: var(--surface);
   overflow-y: auto;
   min-height: 0;
+  padding: var(--space-5) 0;
 }
 
 .files__head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
-  padding: 12px 12px 8px;
+  gap: var(--space-3);
+  padding: 0 var(--space-5) var(--space-3);
 }
 
 .files__totals {
   flex: none;
-  font-size: 11px;
+  font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
 }
 
 .files__empty {
-  padding: 0 12px 12px;
+  padding: 0 var(--space-5);
   color: var(--text-dim);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
 }
 
 .files__empty--error {
@@ -1158,7 +1753,7 @@ kbd {
 
 .files__list {
   margin: 0;
-  padding: 0 0 12px;
+  padding: 0;
   list-style: none;
 }
 
@@ -1166,8 +1761,8 @@ kbd {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
-  padding: 4px 12px;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-5);
 }
 
 .files__row:hover {
@@ -1180,8 +1775,8 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-muted);
-  /* Ellipsize the head, like the titlebar's repo path — the filename at the
-     tail is the part worth keeping when a path is too long for the column. */
+  font-size: var(--text-small);
+  /* Ellipsize the head — the filename at the tail is the part worth keeping. */
   direction: rtl;
   text-align: left;
 }
@@ -1192,35 +1787,30 @@ kbd {
 
 .files__counts {
   flex: none;
-  font-size: 11px;
+  font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- file browser ("caveman mode") ---------- */
+/* ---------- file browser ---------- */
 
-/* A persistent left rail while it is showing (not a togglable dock like the
-   terminal) but the whole thing is itself a togglable *mode* of the body
-   grid, the same way "attempts" is — deliberately, not a permanent fourth
-   column beside the rail/timeline/files-changed three. Research into VS
-   Code's and Zed's own trees said keep a tree permanently visible; Novus's
-   window has real width constraints (900px minimum) that those editors do
-   not, and browsing files here is closer to an occasional reference lookup
-   than the constant target of every keystroke a real editor's tree is, so
-   it stays a mode toggled from the session bar, consistent with the other
-   two exclusive views the body already has.
-   No file-type icons — see the "Typography" block above for the same
-   reasoning applied to trees: VS Code's own Explorer ships icon-less by
+/* A toggled mode of the body grid, not a permanent fourth column. Research
+   into VS Code's Explorer and Zed's project panel both argue for a persistent
+   tree; Novus deliberately does not copy that — the window has a 900px
+   minimum already carrying a rail, and browsing files here is closer to an
+   occasional reference lookup than the constant target of every keystroke a
+   real editor's tree is.
+   No file-type icons, deliberately: VS Code's own Explorer ships icon-less by
    default. A chevron for directories and a monospace name is enough. */
 .tree {
   border-right: 1px solid var(--border);
   background: var(--surface);
   overflow-y: auto;
   min-height: 0;
-  padding: 8px 0;
+  padding: var(--space-5) 0;
 }
 
 .tree__head {
-  padding: 4px 12px 8px;
+  padding: 0 var(--space-5) var(--space-3);
 }
 
 .tree__body {
@@ -1231,12 +1821,11 @@ kbd {
 .tree__row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   width: 100%;
-  padding: 3px 10px 3px 0;
+  padding: var(--space-1) var(--space-4) var(--space-1) 0;
   color: var(--text-muted);
   text-align: left;
-  border-radius: var(--radius-s);
 }
 
 .tree__row:hover {
@@ -1256,9 +1845,9 @@ kbd {
 
 .tree__chevron {
   flex: none;
-  width: 10px;
+  width: 12px; /* geometry: keeps the row still as the glyph swaps */
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: var(--text-eyebrow);
   text-align: center;
 }
 
@@ -1266,13 +1855,13 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .tree__loading {
   flex: none;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: var(--text-eyebrow);
 }
 
 .viewer {
@@ -1288,26 +1877,21 @@ kbd {
   justify-content: center;
 }
 
-.viewer__hint {
-  margin: 0;
-  color: var(--text-dim);
-}
-
 .viewer__head {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--space-3);
   flex: none;
   min-width: 0;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-4) var(--space-5);
   background: var(--surface);
 }
 
 .viewer__path {
   flex: none;
   color: var(--text);
-  font-weight: 500;
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
 }
 
 .viewer__dir {
@@ -1316,7 +1900,7 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--text-micro);
   direction: rtl;
   text-align: left;
 }
@@ -1327,20 +1911,28 @@ kbd {
 
 .viewer__content {
   margin: 0;
-  padding: 12px 16px;
+  padding: var(--space-5) var(--space-6);
   overflow: auto;
   white-space: pre;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: var(--text-small);
+  line-height: var(--leading-prose);
 }
 
-/* ---------- terminal ---------- */
-
-/* Height is inline-styled from session-tab.tsx's terminalHeight state now,
-   driven by .terminal-dock__resize below — a fixed 260px read as correct
-   but not considered; every real terminal dock resizes. The inset shadow
-   is the well plane's own "output sinks" rule made literal at its one edge
-   that used to be a flat 1px line: a sunken well should look sunken. */
+/* ---------- terminal ----------
+ *
+ * "Looks generic — I want a stylish terminal." Three things make a terminal
+ * dock read as considered rather than as an xterm canvas in a bare div, and
+ * none of them is decoration:
+ *   1. a header that states what this is and where it is rooted,
+ *   2. the body genuinely sunk below the chrome, with an inset edge rather
+ *      than a flat 1px line, and
+ *   3. a full 16-colour ANSI palette tuned to this app's monochrome instead
+ *      of xterm's defaults — which is what actually made it look like a
+ *      different product's widget. That part cannot live here: xterm paints
+ *      to canvas and cannot read a CSS custom property, so it is mirrored as
+ *      literals in terminal-panel.tsx's TERMINAL_THEME. Change --bg-well or
+ *      --text and you must change that map; nothing enforces it.
+ */
 .terminal-dock {
   position: relative;
   border-top: 1px solid var(--border);
@@ -1348,12 +1940,20 @@ kbd {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  box-shadow: inset 0 6px 8px -8px rgba(0, 0, 0, 0.35);
+  /* Without this the dock is a grid item whose automatic minimum size is its
+     content's — and its content is an xterm canvas that FitAddon sizes from
+     the container it is in. Unbounded container -> wide fit -> wider
+     container: opening the terminal blew the whole window's layout out to
+     several thousand pixels and pushed the session bar's actions off screen.
+     Pre-existing; it needs saying because nothing about the terminal's own
+     code looks wrong when it happens. */
+  min-width: 0;
+  box-shadow: inset 0 6px 8px -8px rgba(0, 0, 0, 0.4);
 }
 
 .terminal-dock__resize {
   position: absolute;
-  top: -3px;
+  top: -3px; /* geometry: straddles the dock's top edge */
   left: 0;
   right: 0;
   height: 6px;
@@ -1368,37 +1968,51 @@ kbd {
 .terminal-dock__head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--space-3);
   flex-shrink: 0;
+  padding: 0 var(--space-4);
+  height: var(--bar-h);
+  background: var(--surface);
 }
 
 .terminal-dock__prompt {
   flex: none;
-  color: var(--text-dim);
+  color: var(--live);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
 }
 
-.terminal-dock__label {
+.terminal-dock__title {
+  flex: none;
+  color: var(--text);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+}
+
+.terminal-dock__path {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-muted);
-  font-size: 11px;
+  color: var(--text-dim);
+  font-size: var(--text-micro);
   direction: rtl;
   text-align: left;
 }
 
-.terminal-dock__label::before {
+.terminal-dock__path::before {
   content: "\200e";
 }
 
 .terminal-panel {
   flex: 1;
   min-height: 0;
-  padding: 4px 8px;
+  /* Same reason as the dock above: this is the flex item xterm actually
+     measures against, so it must be allowed to shrink below its content. */
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--space-4) var(--space-5);
 }
 
 /* xterm.js sizes its own canvas via FitAddon; it just needs a sized parent. */
@@ -1406,49 +2020,74 @@ kbd {
   height: 100%;
 }
 
-/* A real empty state, not bare centered text: a session's log is never
-   literally empty (session.created lands the instant it opens), so without
-   this the very first thing anyone saw was a lone sequence-0 "◇" card —
-   the exact moment called out as looking unfinished. session-tab.tsx swaps
-   this in for that one-row state and nothing else, so real history still
-   renders as real history the moment there is any. */
+/* ---------- empty states ----------
+ *
+ * "Feels empty" applies beyond the composer: a session with nothing running
+ * should still look like a product. A fresh session's log is never literally
+ * empty (session.created lands the instant it opens), so what a new tab
+ * actually showed was one bare "0 (diamond)" row. This replaces that with a
+ * real headline, a hint, and — the part that makes it a product rather than a
+ * placeholder — the session's own facts, which are true and already loaded.
+ */
 .timeline__empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--space-3);
   height: 100%;
-  min-height: 220px;
+  min-height: 260px; /* geometry: keeps it centred in a short window */
+  padding: var(--space-8) var(--space-6);
   text-align: center;
 }
 
 .timeline__empty-title {
   margin: 0;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-muted);
+  font-size: var(--text-hero);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
+  letter-spacing: -0.01em;
+  color: var(--text);
 }
 
 .timeline__empty-hint {
   margin: 0;
-  color: var(--text-dim);
+  max-width: 46ch; /* geometry: a comfortable measure */
+  color: var(--text-muted);
+  font-size: var(--text-body);
+  line-height: var(--leading-prose);
 }
+
+.timeline__empty-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+/* ---------- events ---------- */
 
 .event {
   display: grid;
-  grid-template-columns: 42px 1fr;
-  gap: 12px;
-  padding: 5px 0;
-  border-left: 1px solid transparent;
-  scroll-margin-top: 18px;
+  /* geometry: a gutter wide enough for four digits of sequence number */
+  grid-template-columns: 36px 1fr;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-left: 2px solid transparent; /* geometry: the highlight marker */
+  scroll-margin-top: var(--space-6);
 }
 
 .event__seq {
   color: var(--text-dim);
+  font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
   text-align: right;
   user-select: none;
+  /* Optically aligns the number with the first line of body text, which is
+     one step larger. */
+  line-height: 1.8;
 }
 
 .event__body {
@@ -1458,22 +2097,23 @@ kbd {
 .event__head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .event__glyph {
-  color: var(--text-dim);
-  width: 10px;
   flex: none;
+  width: 12px; /* geometry: one glyph cell */
+  color: var(--text-dim);
 }
 
 .event__type {
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--text-micro);
 }
 
 .event__text {
   color: var(--text);
+  font-size: var(--text-small);
   overflow-wrap: anywhere;
 }
 
@@ -1493,25 +2133,36 @@ kbd {
   border-left-color: var(--text-muted);
   background: var(--hover);
   border-radius: 0 var(--radius-m) var(--radius-m) 0;
-  margin-left: -12px;
-  padding-left: 11px;
+  margin-left: calc(var(--space-4) * -1);
+  padding-left: calc(var(--space-4) - 2px);
 }
 
+/* ---------- tool cards ----------
+   No border. A tool is mostly output, and "output sinks, chrome rises" is the
+   load-bearing depth decision in this system — so a tool result is a WELL
+   below the canvas, and the plane change does the separating a border used
+   to. That removes one rectangle from every single tool call. */
 .tool {
-  margin-top: 4px;
-  border: 1px solid var(--border);
+  margin-top: var(--space-2);
   border-radius: var(--radius-m);
-  background: var(--surface);
+  background: var(--bg-well);
   overflow: hidden;
 }
 
 .tool__head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
   width: 100%;
-  padding: 6px 10px;
+  padding: var(--space-3) var(--space-4);
   color: var(--text-muted);
+  font-size: var(--text-small);
+  /* This is a <button>, and the UA stylesheet centres a button's text. It
+     inherits into .tool__summary, which is `flex: 1` — so the summary was
+     floating in the middle of a 588px box instead of sitting next to the tool
+     name. Every other row-shaped control in this file already sets this; this
+     one was missed, before this pass as well as during it. */
+  text-align: left;
 }
 
 .tool__head:hover {
@@ -1523,8 +2174,9 @@ kbd {
 }
 
 .tool__name {
+  flex: none;
   color: var(--text);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .tool__summary {
@@ -1536,24 +2188,29 @@ kbd {
 }
 
 .tool__chevron {
+  flex: none;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: var(--text-eyebrow);
 }
 
+/* Space, not a border-top: the head above it is already a distinct row by
+   virtue of its hover state and its padding. */
 .tool__panel {
-  border-top: 1px solid var(--border);
-  padding: 8px 10px;
+  padding: 0 var(--space-4) var(--space-4);
 }
 
 .kv {
   display: grid;
-  grid-template-columns: 92px 1fr;
-  gap: 4px 10px;
+  /* geometry: a key column wide enough for the longest tool argument name */
+  grid-template-columns: 104px 1fr;
+  gap: var(--space-2) var(--space-4);
   color: var(--text-muted);
+  font-size: var(--text-small);
 }
 
 .kv__key {
   color: var(--text-dim);
+  font-size: var(--text-micro);
 }
 
 .kv__value {
@@ -1562,12 +2219,15 @@ kbd {
   white-space: pre-wrap;
 }
 
+/* A well inside a well. There is no plane below --bg-well, so this goes one
+   step deeper as an alpha instead — which is also why it needs no border. */
 pre.kv__value {
   margin: 0;
-  padding: 6px 8px;
-  background: var(--bg-well);
-  border: 1px solid var(--border-subtle);
+  padding: var(--space-3) var(--space-4);
+  background: var(--inset);
   border-radius: var(--radius-s);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
   overflow-x: auto;
 }
 
@@ -1575,13 +2235,15 @@ pre.kv__value {
   margin: 0;
   padding: 0;
   list-style: none;
+  font-size: var(--text-small);
 }
 
 .matches__row {
+  /* geometry: path | line number | text */
   display: grid;
-  grid-template-columns: minmax(0, 260px) 34px 1fr;
-  gap: 10px;
-  padding: 1px 0;
+  grid-template-columns: minmax(0, 280px) 40px 1fr;
+  gap: var(--space-4);
+  padding: var(--space-1) 0;
 }
 
 .matches__path {
@@ -1604,31 +2266,34 @@ pre.kv__value {
   white-space: nowrap;
 }
 
-/* ---------- diff ---------- */
-
+/* ---------- patches and diffs ----------
+   Same de-boxing as .tool, and it removes three lines rather than one: the
+   card's own border, the rule under its head, and the rule under its intent.
+   The diff sinks one further step inside the well, which is what separates
+   metadata from content now. */
 .patch {
-  margin-top: 4px;
-  border: 1px solid var(--border-strong);
+  margin-top: var(--space-2);
   border-radius: var(--radius-m);
-  background: var(--surface);
+  background: var(--bg-well);
   overflow: hidden;
 }
 
 .patch__head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-small);
 }
 
 .patch__path {
   color: var(--text);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .patch__count {
   font-variant-numeric: tabular-nums;
+  font-size: var(--text-micro);
 }
 
 .patch__count--add {
@@ -1641,35 +2306,40 @@ pre.kv__value {
 
 .patch__badge {
   margin-left: auto;
-  padding: 1px 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-s);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--inset);
   color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--track-eyebrow);
+  line-height: 1.7;
   text-transform: uppercase;
 }
 
 .patch__intent {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
+  padding: 0 var(--space-4) var(--space-3);
   color: var(--text-muted);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
 }
 
 .diff {
   overflow-x: auto;
-  background: var(--bg-well);
+  background: var(--inset);
+  font-size: var(--text-small);
 }
 
 .diff__line {
+  /* geometry: two line-number gutters and the code */
   display: grid;
-  grid-template-columns: 38px 38px 1fr;
+  grid-template-columns: 40px 40px 1fr;
   white-space: pre;
+  line-height: var(--leading-normal);
 }
 
 .diff__num {
-  padding-right: 8px;
+  padding-right: var(--space-3);
   text-align: right;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
@@ -1677,7 +2347,7 @@ pre.kv__value {
 }
 
 .diff__text {
-  padding: 0 10px 0 6px;
+  padding: 0 var(--space-4) 0 var(--space-2);
 }
 
 .diff__line--add {
@@ -1702,10 +2372,10 @@ pre.kv__value {
 }
 
 .diff__line--hunk {
-  background: var(--surface-raised);
+  background: var(--surface);
 }
 
-/* ---------- command overlay ---------- */
+/* ---------- overlays ---------- */
 
 .overlay {
   position: fixed;
@@ -1716,6 +2386,7 @@ pre.kv__value {
   background: rgba(6, 6, 7, 0.7);
   backdrop-filter: blur(3px);
   animation: overlay-in var(--t-overlay) var(--ease);
+  overflow-y: auto;
 }
 
 /* Anything on the overlay floats: it arrives from slightly behind the plane
@@ -1741,7 +2412,7 @@ pre.kv__value {
 }
 
 .palette {
-  width: min(520px, calc(100vw - 48px));
+  width: min(560px, calc(100vw - var(--space-8)));
   height: fit-content;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-l);
@@ -1754,12 +2425,13 @@ pre.kv__value {
 
 .palette__input {
   width: 100%;
-  padding: 12px 14px;
+  padding: var(--space-5);
   border: none;
   border-bottom: 1px solid var(--border);
   background: transparent;
   color: var(--text);
   font: inherit;
+  font-size: var(--text-title);
   outline: none;
 }
 
@@ -1779,21 +2451,21 @@ pre.kv__value {
 
 .palette__list {
   margin: 0;
-  padding: 4px 0;
+  padding: var(--space-2);
   list-style: none;
-  max-height: 320px;
+  max-height: 360px; /* geometry: about nine rows before it scrolls */
   overflow-y: auto;
 }
 
 .palette__item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: calc(100% - 8px);
-  margin: 0 4px;
-  padding: 6px 10px;
+  gap: var(--space-4);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-m);
   color: var(--text-muted);
+  font-size: var(--text-small);
   text-align: left;
 }
 
@@ -1814,259 +2486,432 @@ pre.kv__value {
 .palette__hint {
   margin-left: auto;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: var(--text-eyebrow);
 }
 
 .palette__empty {
-  padding: 12px 14px;
+  padding: var(--space-5);
   color: var(--text-dim);
+  font-size: var(--text-small);
 }
 
-/* Compare: two attempts at equal weight.
-   No column is styled as the winner. The moment one looks recommended the
-   screen has started making a decision that V1 leaves to a person. */
-.compare {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 16px 20px;
-  overflow-y: auto;
-}
-.compare--empty {
-  align-items: center;
-  padding-top: 48px;
-}
-.compare__contested {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  padding: 9px 11px;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-l);
-}
-.compare__contested-label {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.compare__columns {
-  display: grid;
-  /* Equal fractions, never auto: a wider column reads as the more important one. */
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 14px;
-  align-items: start;
-}
-.compare__attempt {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 13px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-l);
-}
-.compare__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-.compare__label {
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 500;
-}
-.compare__status {
-  color: var(--text-dim);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.compare__facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-.compare__fact {
-  color: var(--text-muted);
-}
-.compare__verdict {
-  font-variant-numeric: tabular-nums;
-}
-.compare__verdict--pass {
-  color: var(--add);
-}
-.compare__verdict--fail {
-  color: var(--del);
-}
-/* Neither green nor red. An attempt that ran no tests is unknown, and colouring
-   it either way would answer a question nobody asked. */
-.compare__verdict--unknown {
-  color: var(--text-dim);
-}
-.compare__summary,
-.compare__failure {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-muted);
-}
-.compare__failure {
-  color: var(--del);
-}
-.compare__files {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.compare__file {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-/* Marked because it is the decision: both attempts rewrote this file. */
-.compare__file--contested {
-  color: var(--text);
-}
-.compare__file--contested .compare__path::before {
-  content: "◆ ";
-  color: var(--text-dim);
-}
-.compare__path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.compare__empty {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-.compare__foot {
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
-}
-
-/* The compare screen's own chrome. The columns themselves are shared with the
-   guest; only what acts is here. */
+/* ---------- compare ----------
+   Two attempts at equal weight. No column is styled as the winner: the moment
+   one looks recommended the screen has started making a decision that V1
+   leaves to a person. */
 .compare-screen {
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
 }
+
 .compare-screen__bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-3);
+  flex: none;
+  padding: var(--space-5) var(--space-6) var(--space-4);
 }
+
+.compare-screen__heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
 .compare-screen__title {
   color: var(--text);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-screen);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
+  letter-spacing: -0.01em;
 }
-/* These used to inherit the timeline's padding; now the screen owns its own. */
-.compare-screen > .open__error {
-  margin: 12px 20px 0;
+
+.compare-screen__subtitle {
+  color: var(--text-muted);
+  font-size: var(--text-small);
 }
+
+/* The one bordered container on this screen, because starting a fork is the
+   action the whole surface exists for and it should read as a form. */
 .compare-screen__fork {
+  flex: none;
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(200px, 2fr) auto;
-  gap: 8px;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--border);
+  grid-template-columns: minmax(160px, 1fr) minmax(220px, 2fr) auto;
+  gap: var(--space-3);
+  margin: 0 var(--space-6) var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--surface);
 }
-.compare__chosen {
-  color: var(--add);
-  font-size: 12px;
+
+.compare-screen__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--space-6) var(--space-6);
 }
+
+.compare-screen > .open__error {
+  margin: 0 var(--space-6) var(--space-4);
+}
+
 /* Deliberately quiet. Choosing and applying are the same permissioned action
    here, and this states exactly what happened rather than implying more. */
 .compare-screen__note {
-  margin: 0;
-  padding: 0 20px 16px;
-  font-size: 12px;
-  line-height: 1.5;
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
   color: var(--text-dim);
 }
+
 .compare-screen__note--error {
   color: var(--del);
 }
+
 .compare-screen__conflicts {
-  margin: 6px 0 0;
-  padding-left: 16px;
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
 }
+
 .compare-screen__conflicts code {
   color: var(--text);
 }
 
-/* Not an error — the session works, two features do not. Amber rather than red,
-   and worded as a fact rather than a failure. */
-.titlebar__warn {
-  flex: none;
-  white-space: nowrap;
-  padding: 2px 7px;
-  border: 1px solid var(--warn, #8a6d2b);
-  border-radius: var(--radius-s);
-  color: var(--warn-text, #d3a84c);
-  font-size: 10px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.compare {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
 }
 
-/* Previous sessions. Quiet, because opening a repository is the primary action
-   and this is the shortcut for coming back to one. */
+.compare--empty {
+  align-items: center;
+  padding-top: var(--space-8);
+}
+
+.compare__contested {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  background: var(--inset);
+  border-radius: var(--radius-l);
+  font-size: var(--text-small);
+}
+
+.compare__contested-label {
+  color: var(--text-muted);
+}
+
+.compare__columns {
+  display: grid;
+  /* Equal fractions, never auto: a wider column reads as the more important
+     one. 320px is the narrowest a column can be and still show a file list. */
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-5);
+  align-items: start;
+}
+
+/* One border, because this is a genuine card in a grid of cards — nothing
+   inside it draws a second one. */
+.compare__attempt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+}
+
+.compare__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.compare__label {
+  color: var(--text);
+  font-size: var(--text-title);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
+}
+
+.compare__status {
+  color: var(--text-dim);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--track-eyebrow);
+}
+
+.compare__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--text-small);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.compare__fact {
+  color: var(--text-muted);
+}
+
+.compare__verdict {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium);
+}
+
+.compare__verdict--pass {
+  color: var(--add);
+}
+
+.compare__verdict--fail {
+  color: var(--del);
+}
+
+/* Neither green nor red. An attempt that ran no tests is unknown, and
+   colouring it either way would answer a question nobody asked. */
+.compare__verdict--unknown {
+  color: var(--text-dim);
+}
+
+.compare__summary,
+.compare__failure {
+  margin: 0;
+  font-size: var(--text-small);
+  line-height: var(--leading-prose);
+  color: var(--text-muted);
+}
+
+.compare__failure {
+  color: var(--del);
+}
+
+.compare__files {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  background: var(--inset);
+  border-radius: var(--radius-m);
+}
+
+.compare__file {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--space-3);
+  font-size: var(--text-small);
+  color: var(--text-muted);
+}
+
+/* Marked because it is the decision: both attempts rewrote this file. */
+.compare__file--contested {
+  color: var(--text);
+}
+
+.compare__file--contested .compare__path::before {
+  content: "\25c6 ";
+  color: var(--text-dim);
+}
+
+.compare__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare__empty {
+  margin: 0;
+  font-size: var(--text-small);
+  color: var(--text-dim);
+}
+
+.compare__foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.compare__chosen {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--add);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+}
+
+/* ---------- open a repository ---------- */
+
+.open {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh var(--space-6) var(--space-8);
+  overflow-y: auto;
+}
+
+.open__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  width: min(560px, 100%);
+  padding: var(--space-7);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+}
+
+.open__title {
+  font-size: var(--text-screen);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.open__subtitle {
+  margin: calc(var(--space-4) * -1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  line-height: var(--leading-prose);
+}
+
+.open__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.open__row {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.open__input {
+  width: 100%;
+  height: var(--control-l);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background: var(--bg-well);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-small);
+}
+
+.open__input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+  box-shadow: var(--focus-halo);
+}
+
+.open__input::placeholder {
+  color: var(--text-dim);
+}
+
+select.open__input {
+  padding: 0 var(--space-3);
+  font-family: var(--font-ui);
+}
+
+/* Permissions read as one grouped decision rather than two loose checkboxes,
+   and the group is a sunken well rather than another bordered box. */
+.open__toggles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-m);
+  background: var(--inset);
+}
+
+.open__toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  cursor: pointer;
+}
+
+.open__toggle:hover {
+  color: var(--text);
+}
+
+.open__toggle input {
+  margin: 2px 0 0; /* geometry: optical alignment with the first text line */
+  accent-color: var(--text-muted);
+}
+
+.open__error {
+  color: var(--del);
+  font-size: var(--text-small);
+  line-height: var(--leading-prose);
+}
+
+/* Previous sessions. Quiet, because opening a repository is the primary
+   action and this is the shortcut for coming back to one. */
 .open__recent {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 6px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+  gap: var(--space-1);
 }
+
+.open__recent > .eyebrow {
+  margin-bottom: var(--space-2);
+}
+
 .open__recent-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 10px;
-  padding: 7px 9px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  margin: 0 calc(var(--space-4) * -1);
   background: transparent;
-  border: 1px solid var(--border);
   border-radius: var(--radius-m);
   color: var(--text-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-small);
   text-align: left;
   cursor: pointer;
 }
+
 .open__recent-row:hover {
   background: var(--hover);
-  border-color: var(--border-strong);
   color: var(--text);
 }
 
 .open__recent-row:active {
   background: var(--pressed);
 }
+
 .open__recent-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .open__recent-meta {
   flex-shrink: 0;
   color: var(--text-dim);
+  font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- invite ---------- */
+
+.invite__link {
+  display: flex;
+  gap: var(--space-3);
 }

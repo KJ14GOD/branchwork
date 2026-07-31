@@ -55,7 +55,7 @@ const TreeRow = ({
 export const FileTree = ({ state }: { state: FileTreeState }) => (
   <aside className="tree">
     <div className="tree__head">
-      <span className="rail__label">Files</span>
+      <span className="eyebrow">Files</span>
     </div>
     {state.rootError ? (
       <div className="files__empty files__empty--error">{state.rootError}</div>
@@ -77,7 +77,7 @@ export const FileViewer = ({ state }: { state: FileTreeState }) => {
   if (!state.selectedPath) {
     return (
       <div className="viewer viewer--empty">
-        <p className="viewer__hint">Select a file on the left to look at it.</p>
+        <p className="rail__empty">Select a file on the left to read it.</p>
       </div>
     );
   }

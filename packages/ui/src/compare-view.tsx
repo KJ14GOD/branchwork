@@ -33,7 +33,7 @@ const Verdict = ({ attempt }: { attempt: AttemptComparison }) => {
   if (attempt.testsRun === 0) {
     return (
       <span className="compare__verdict compare__verdict--unknown">
-        tests not run
+        Tests not run
       </span>
     );
   }

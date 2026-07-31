@@ -295,12 +295,12 @@ export const App = () => {
 
   const themeToggle = (
     <button
-      className="titlebar__action"
+      className="icon-button"
       type="button"
       onClick={toggleTheme}
       title="Switch the display theme — stays on this machine"
     >
-      {theme === "dark" ? "light" : "dark"}
+      {theme === "dark" ? "Light" : "Dark"}
     </button>
   );
 

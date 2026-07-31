@@ -12,7 +12,7 @@ import type { FileChangesState } from "../use-file-changes.ts";
 export const FileChangesPanel = ({ state }: { state: FileChangesState }) => (
   <aside className="files">
     <div className="files__head">
-      <span className="rail__label">Files changed</span>
+      <span className="eyebrow">Files changed</span>
       {state.files.length > 0 ? (
         <span className="files__totals">
           <span className="stat__add">+{state.additions}</span>{" "}
@@ -25,7 +25,7 @@ export const FileChangesPanel = ({ state }: { state: FileChangesState }) => (
       <div className="files__empty files__empty--error">{state.error}</div>
     ) : state.files.length === 0 ? (
       <div className="files__empty">
-        {state.loading ? "Reading…" : "No files changed yet"}
+        {state.loading ? "Reading…" : "No files changed yet. Applied patches show up here."}
       </div>
     ) : (
       <ul className="files__list">

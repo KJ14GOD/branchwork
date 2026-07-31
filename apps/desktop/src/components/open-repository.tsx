@@ -7,6 +7,16 @@ import type {
 
 import { bridge } from "../bridge.ts";
 
+const basename = (path: string): string =>
+  path.split("/").filter(Boolean).at(-1) ?? path;
+
+/**
+ * The first screen, and the "new tab" form — one component, two contexts.
+ *
+ * `embedded` skips the full-page centering wrapper (the overlay supplies its
+ * own) and retitles for a second tab. Do not fork this into a separate
+ * "new tab" form.
+ */
 export const OpenRepository = ({
   onOpen,
   opening,
@@ -29,9 +39,7 @@ export const OpenRepository = ({
   capabilities: HostCapabilities | null;
   /**
    * True when this renders inside the "new tab" overlay rather than as the
-   * full-window empty state. Skips the full-page centering wrapper — the
-   * overlay already supplies its own — and titles itself for a second tab
-   * rather than the app's first screen.
+   * full-window empty state.
    */
   embedded?: boolean;
 }) => {
@@ -67,13 +75,20 @@ export const OpenRepository = ({
   };
 
   const panel = (
-      <form
-        className={embedded ? "open__panel modal" : "open__panel"}
-        onSubmit={submit}
-      >
-        <div className="open__title">
-          {embedded ? "Open another repository" : "Open a repository"}
-        </div>
+    <form
+      className={embedded ? "open__panel modal" : "open__panel"}
+      onSubmit={submit}
+    >
+      <div className="open__title">
+        {embedded ? "Open another repository" : "Open a repository"}
+      </div>
+      <p className="open__subtitle">
+        Novus runs its agent against one repository at a time, on this machine.
+        Nothing leaves it unless you invite someone.
+      </p>
+
+      <div className="open__field">
+        <span className="eyebrow">Repository</span>
         <div className="open__row">
           <input
             className="open__input"
@@ -85,7 +100,7 @@ export const OpenRepository = ({
           />
           {host ? (
             <button
-              className="open__browse"
+              className="button button--large"
               type="button"
               onClick={() => void browse()}
             >
@@ -93,57 +108,71 @@ export const OpenRepository = ({
             </button>
           ) : null}
         </div>
-        <label className="open__toggle">
-          <input
-            type="checkbox"
-            checked={allowWrites}
-            onChange={(event) => setAllowWrites(event.target.checked)}
-          />
-          <span>
-            Allow writes — the agent may apply patches to this repository
-          </span>
-        </label>
-        <label className="open__toggle">
-          <input
-            type="checkbox"
-            checked={allowCommands}
-            onChange={(event) => setAllowCommands(event.target.checked)}
-          />
-          <span>
-            Allow commands — the agent may run programs and your test suite
-          </span>
-        </label>
-        <button className="open__submit" type="submit" disabled={opening}>
-          {opening ? "Opening…" : "Open"}
-        </button>
-        {error ? <div className="open__error">{error}</div> : null}
+      </div>
 
-        {remembered.length > 0 ? (
-          <div className="open__recent">
-            <div className="open__label">Carry on with</div>
-            {remembered.slice(0, 6).map((entry) => (
-              <button
-                className="open__recent-row"
-                key={entry.id}
-                type="button"
-                // Resumes the id, which is what brings the old timeline back —
-                // a new one would start an empty stream beside a history nobody
-                // could reach. Permissions come from the checkboxes above, not
-                // from whatever the session had before.
-                onClick={() =>
-                  onOpen(entry.repositoryPath, allowWrites, allowCommands, entry.id)
-                }
-                title={`${entry.events} events · last active ${entry.lastActivityAt}`}
-              >
-                <span className="open__recent-path">{entry.repositoryPath}</span>
-                <span className="open__recent-meta">
-                  {entry.events} event{entry.events === 1 ? "" : "s"}
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </form>
+      <div className="open__field">
+        <span className="eyebrow">Permissions</span>
+        <div className="open__toggles">
+          <label className="open__toggle">
+            <input
+              type="checkbox"
+              checked={allowWrites}
+              onChange={(event) => setAllowWrites(event.target.checked)}
+            />
+            <span>
+              Allow writes — the agent may apply patches to this repository
+            </span>
+          </label>
+          <label className="open__toggle">
+            <input
+              type="checkbox"
+              checked={allowCommands}
+              onChange={(event) => setAllowCommands(event.target.checked)}
+            />
+            <span>
+              Allow commands — the agent may run programs and your test suite
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <button
+        className="button button--primary button--large"
+        type="submit"
+        disabled={opening}
+      >
+        {opening ? "Opening…" : "Open"}
+      </button>
+      {error ? <div className="open__error">{error}</div> : null}
+
+      {remembered.length > 0 ? (
+        <div className="open__recent">
+          <span className="eyebrow">Carry on with</span>
+          {remembered.slice(0, 6).map((entry) => (
+            <button
+              className="open__recent-row"
+              key={entry.id}
+              type="button"
+              // Resumes the id, which is what brings the old timeline back —
+              // a new one would start an empty stream beside a history nobody
+              // could reach. Permissions come from the checkboxes above, not
+              // from whatever the session had before.
+              onClick={() =>
+                onOpen(entry.repositoryPath, allowWrites, allowCommands, entry.id)
+              }
+              title={`${entry.repositoryPath} · ${entry.events} events · last active ${entry.lastActivityAt}`}
+            >
+              <span className="open__recent-path">
+                {basename(entry.repositoryPath)}
+              </span>
+              <span className="open__recent-meta">
+                {entry.events} event{entry.events === 1 ? "" : "s"}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </form>
   );
 
   return embedded ? panel : <div className="open">{panel}</div>;
