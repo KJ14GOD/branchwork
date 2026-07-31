@@ -38,7 +38,12 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "participant.joined": "◉",
   "participant.left": "◌",
   "control.requested": "✋",
+  "control.offered": "⇢",
+  "control.accepted": "✓",
+  "control.declined": "⊘",
+  "control.withdrawn": "↺",
   "control.transferred": "⇄",
+  "direction.queued": "»",
   "direction.applied": "»",
   "checkpoint.created": "◈",
   "fork.created": "⑂",
@@ -215,11 +220,49 @@ export const EventRow = ({
           </span>
         );
 
+      case "control.offered":
+        return (
+          <span className="event__text">
+            Control offered to {event.payload.toParticipantId}
+          </span>
+        );
+
+      case "control.accepted":
+        // Not the transfer: acceptance commits the move, and the gap until
+        // control.transferred is the wait for a safe boundary.
+        return (
+          <span className="event__text">
+            {event.payload.participantId} accepted control
+          </span>
+        );
+
+      case "control.declined":
+        return (
+          <span className="event__text event__text--muted">
+            {event.payload.participantId} declined control
+            {event.payload.reason ? ` · ${event.payload.reason}` : ""}
+          </span>
+        );
+
+      case "control.withdrawn":
+        return (
+          <span className="event__text event__text--muted">
+            Offer of control withdrawn
+          </span>
+        );
+
       case "control.transferred":
         return (
           <span className="event__text event__text--approved">
             Control moved from {event.payload.fromParticipantId} to{" "}
             {event.payload.toParticipantId}
+          </span>
+        );
+
+      case "direction.queued":
+        return (
+          <span className="event__text event__text--muted">
+            Queued for the next safe boundary · {event.payload.direction}
           </span>
         );
 

@@ -218,18 +218,32 @@ export const ControlRequestSchema = z.object({
 export type ControlRequest = z.infer<typeof ControlRequestSchema>;
 
 /**
- * What an owner submits to move execution authority to someone else.
+ * What a controller submits to offer execution authority to someone else.
  *
- * V1_README describes acceptance as a separate step; this contract keeps it
- * atomic, the same way an invite mints a role without a confirmation
- * round-trip — the recipient sees the transfer in the timeline the moment it
- * happens rather than being asked to confirm one first.
+ * An offer, not a transfer. The atomic version let a controller assign
+ * responsibility to someone offline, asleep, or not looking — control landing
+ * on a participant who never agreed to hold it. Now the recipient answers,
+ * and control moves only after acceptance, at a safe boundary if a run is
+ * executing.
  */
 export const HandoffRequestSchema = z.object({
   toParticipantId: z.string().min(1),
 });
 
 export type HandoffRequest = z.infer<typeof HandoffRequestSchema>;
+
+/**
+ * What a participant submits to answer a pending handoff offer — accept or
+ * decline as the recipient, withdraw as the offerer. The offerEventId pins
+ * which offer is being answered, so an answer racing a newer offer refuses
+ * rather than settling the wrong one.
+ */
+export const HandoffAnswerSchema = z.object({
+  offerEventId: z.string().min(1),
+  reason: z.string().min(1).optional(),
+});
+
+export type HandoffAnswer = z.infer<typeof HandoffAnswerSchema>;
 
 /**
  * Who has this session open right now, distinct from who was ever invited.

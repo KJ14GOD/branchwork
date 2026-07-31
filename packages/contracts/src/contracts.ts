@@ -969,6 +969,52 @@ export const ControlRequestedEventSchema = EventEnvelopeSchema.extend({
   }),
 });
 
+/**
+ * A handoff is a lifecycle, not a write: offer → accept or decline → transfer
+ * at a safe boundary. Each step is its own event because each step is a fact
+ * someone acted on — an offer somebody never answered must be visible as
+ * exactly that, not silently promoted into a transfer. The offer's own eventId
+ * is the offer's identity; every later step points back at it.
+ */
+export const ControlOfferedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("control.offered"),
+  payload: z.object({
+    fromParticipantId: IdSchema,
+    toParticipantId: IdSchema,
+  }),
+});
+
+/**
+ * The recipient said yes. Not the transfer itself: if a run is executing,
+ * control moves at the next safe boundary, and the gap between these two
+ * events is that wait, made visible.
+ */
+export const ControlAcceptedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("control.accepted"),
+  payload: z.object({
+    offerEventId: IdSchema,
+    participantId: IdSchema,
+  }),
+});
+
+export const ControlDeclinedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("control.declined"),
+  payload: z.object({
+    offerEventId: IdSchema,
+    participantId: IdSchema,
+    reason: z.string().min(1).optional(),
+  }),
+});
+
+/** The offerer took an unanswered offer back — the recipient may be offline. */
+export const ControlWithdrawnEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("control.withdrawn"),
+  payload: z.object({
+    offerEventId: IdSchema,
+    participantId: IdSchema,
+  }),
+});
+
 export const ControlTransferredEventSchema = EventEnvelopeSchema.extend({
   type: z.literal("control.transferred"),
   payload: z.object({
@@ -977,6 +1023,9 @@ export const ControlTransferredEventSchema = EventEnvelopeSchema.extend({
     // Accepted, because a handoff the recipient did not take is not a handoff —
     // it is a run nobody is holding.
     acceptedAt: TimestampSchema,
+    // The offer this transfer settles. Optional because logs recorded before
+    // the handoff lifecycle existed carry transfers with no offer behind them.
+    offerEventId: IdSchema.optional(),
   }),
 });
 
@@ -1001,6 +1050,22 @@ export const DirectionSubmittedEventSchema = EventEnvelopeSchema.extend({
   type: z.literal("direction.submitted"),
   payload: z.object({
     runId: IdSchema,
+    direction: z.string().min(1),
+  }),
+});
+
+/**
+ * A submitted direction a live execution has committed to fold in at its next
+ * safe boundary. Submitted alone means recorded — it will wait for the next
+ * execution if nothing is running. Queued means a specific run is about to
+ * follow it, which is the difference between "heard" and "happening next",
+ * and a participant needs to see which of the two their words are in.
+ */
+export const DirectionQueuedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("direction.queued"),
+  payload: z.object({
+    runId: IdSchema,
+    directionEventId: IdSchema,
     direction: z.string().min(1),
   }),
 });
@@ -1229,10 +1294,15 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   RunStartedEventSchema,
   RunProgressEventSchema,
   DirectionSubmittedEventSchema,
+  DirectionQueuedEventSchema,
   DirectionAppliedEventSchema,
   ParticipantJoinedEventSchema,
   ParticipantLeftEventSchema,
   ControlRequestedEventSchema,
+  ControlOfferedEventSchema,
+  ControlAcceptedEventSchema,
+  ControlDeclinedEventSchema,
+  ControlWithdrawnEventSchema,
   ControlTransferredEventSchema,
   ToolRequestedEventSchema,
   ToolApprovalRequestedEventSchema,
@@ -1276,6 +1346,11 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     sequence: true,
     occurredAt: true,
   }),
+  DirectionQueuedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
   DirectionAppliedEventSchema.omit({
     eventId: true,
     sequence: true,
@@ -1292,6 +1367,26 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   ControlRequestedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ControlOfferedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ControlAcceptedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ControlDeclinedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  ControlWithdrawnEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,
