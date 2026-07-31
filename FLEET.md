@@ -114,35 +114,28 @@ Rebase the other slices onto main after any contract change lands.
 
 ## A backlog that actually parallelises
 
-Derived from the V1 build order. The split is by whether the work touches the
-boundary, because that is what decides if two slices can run at the same time.
+The backlog this section originally carried — nine slices derived from the V1
+build order, from `git-tools` to `compare-screen` — has landed in its
+entirety; every one of those slices is merged and live. Do not resurrect them
+from an old checkout. The current source of slices is
+[PROGRESS.md § Known gaps](./PROGRESS.md#known-gaps): each numbered gap there
+is roughly one slice of work, already scoped by its consequence.
 
-### Needs the contract lock — run these one at a time
+The split that decides what can run in parallel is unchanged — whether the
+work touches `packages/contracts`:
 
-| Slice | Work | Milestone |
-| --- | --- | --- |
-| `git-tools` | `list_directory`, `git_status`, `git_diff` — read class | 2 |
-| `run-tools` | `run_command`, `run_tests` — dangerous class, approval gated | 2 |
-| `receipt` | Run receipt: goal, revision, tools, diff, tests, cost, tokens | 2 |
-| `direction-queue` | `direction.submitted` / `direction.applied`, applied at a turn boundary | 3 |
-| `checkpoint-fork` | `checkpoint.created` / `fork.created` plus the worktree manager | 4 |
+- **Needs the lock** (run one at a time): reconciling an attempt stuck
+  `running` after a worker exit, if it grows a new event or terminal status
+  (gap 2 — read `novus-extend-event-contract` first); anything widening the
+  receipt (gap 12).
+- **Boundary-free** (run beside anything): fork worktree teardown (gap 1),
+  dev-server lifetime (gap 3), rendering the cost that is already on the
+  receipt (gap 6), the guest's design system (gap 9), renderer test coverage
+  (gap 8), packaging (gap 16).
 
-### Boundary-free — run these in parallel with anything
-
-| Slice | Work | Milestone |
-| --- | --- | --- |
-| `sqlite-store` | Replace the in-memory event store with SQLite; events are the source of truth | 1 |
-| `secret-redaction` | Redact env vars, keys, and credential files before events leave the worker | 5 |
-| `guest-shell` | `apps/guest` is a bare `package.json` — build the browser guest client | 1 |
-| `compare-screen` | Side-by-side diff, tests, cost, elapsed for two attempts | 4 |
-
-Ready to paste:
-
-```
-./scripts/fleet.sh add sqlite-store    "Replace the worker's in-memory event store with SQLite. The event log is the source of truth and current state is a projection rebuilt from it. Do not change packages/contracts."
-./scripts/fleet.sh add secret-redaction "Redact environment variables, API keys, and credential-file contents from events before they leave the worker. Add tests proving a known key never reaches the event stream."
-./scripts/fleet.sh add guest-shell     "apps/guest has only a package.json. Build the browser guest client shell that connects to the session service and renders the same ordered event timeline the desktop shows."
-```
+Gap 7 — live-model exposure — is not a slice; it is a spending decision, and
+it should be made deliberately rather than by whichever agent next feels
+brave.
 
 Three at once is the honest ceiling here: you are the merge point, and a fourth
 slice produces work faster than one person can review and land it.

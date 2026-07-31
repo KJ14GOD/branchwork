@@ -23,7 +23,9 @@ with no meaningful shared control is also not V1.
 ## Where we actually are
 
 Updated 2026-07-30. Keep this honest; it is the section that decides what gets
-built next.
+built next. The at-a-glance version — per-capability status with the evidence
+for each claim, and the known-gaps register — is [PROGRESS.md](./PROGRESS.md);
+this section carries the narrative.
 
 **Both halves are now real, and the gap between them has closed almost all the
 way.** The harness half: a typed agent loop with a budget in place of a step
@@ -42,13 +44,51 @@ turn folds in at its next boundary, cancel/pause/resume endpoints the same run
 loop honours at that same boundary, a handoff endpoint that actually moves
 execution authority rather than just recording that it happened, live presence
 distinct from who was ever invited, and all of it now reachable from the
-desktop UI rather than curl only. Fork and compare exist too: checkpoints cut
-real Git worktrees, isolated attempts run without touching each other or the
-parent's index, the compare screen shows them side by side, and choosing one
-now records the decision and applies it.
+desktop UI rather than curl only. Fork and compare are genuinely real as of
+2026-07-30: checkpoints cut real Git worktrees, and a fork now actually
+executes — a child agent in the fork's own worktree, under the fork's own run
+id, its approval gate the intersection of the parent session's permissions
+and what the checkpoint recorded. Before that date `POST /fork` cut a
+worktree, appended `fork.created`, and ran nothing, while this document
+claimed otherwise — the correction is recorded under Milestone 4 rather than
+papered over. Two attempts run concurrently without touching each other or
+the parent's index, the compare screen shows them side by side, and choosing
+one records the decision and applies it, refusing wholesale on a conflict.
 
-What is still missing, plainly:
+Two more layers landed on 2026-07-30 that this section previously predated.
+The desktop app grew into an actual product surface: multi-session tabs whose
+background tabs keep their streams live, an embedded terminal (node-pty +
+xterm, the human's shell in the repo cwd — deliberately not the model's), a
+read-only file browser with host-side confinement, a persistent composer
+whose model picker is wired end-to-end to the per-turn override route, and a
+real spacing/type token system replacing ~2,900 lines of hand-picked values.
+And the model layer went from one hardwired choice to a system: a
+signal-based router across three Anthropic tiers (goal shape, context size,
+failure escalation, cost-budget step-down, every decision logged with its
+reason), per-run cache-aware cost in USD with pricing as configuration
+(`NOVUS_MODEL_PRICING`), a cost ceiling the budget enforces, and a per-turn
+human override that beats the router and 400s on a model this worker has no
+adapter for.
 
+The caveat that spans all of it: **nothing landed after 2026-07-29 has been
+exercised by a live model call.** The benchmark runs that day are the last
+live provider calls this project has made; everything since — the six new
+tools, fork execution, the router, the override, the multiplayer controls —
+is deterministically tested against scripted adapters and unproven live.
+PROGRESS.md carries this as its standing caveat; it is the single largest
+unknown here.
+
+What is still missing, plainly — the full numbered register is
+[PROGRESS.md § Known gaps](./PROGRESS.md#known-gaps); these are the ones that
+shape what gets built next:
+
+- **Nothing recent has run live** (above). Deterministic proof is real proof
+  of the harness, and no proof at all of what a model does with it.
+- **Attempt lifecycle has two holes.** Nothing ever tears a fork's worktree
+  down (they accumulate a full checkout each), and an attempt interrupted by
+  a worker exit stays `running` on the record forever with nothing to
+  reconcile it. Dev servers likewise die with the worker, not with the
+  session that started them — there is no session-close path at all.
 - **The renderer has no test coverage.** Every hook in `apps/desktop/src` and
   `apps/guest/src` is unverified by anything but hand-testing — worker logic is
   extensively tested, the React layer that calls it is not. That gap is exactly
@@ -130,8 +170,9 @@ Seven earlier failure modes, closed:
   fixtures and have each passed against the real model once. See *Benchmark
   results*.
 
-One piece of `README.md`'s own roadmap is also real now, ahead of the rest of
-this milestone rather than after it: **multiple model providers.** `apps/worker/src/openai-model.ts`
+Two pieces of `README.md`'s own roadmap are also real now, ahead of the rest
+of this milestone rather than after it. The first: **multiple model
+providers.** `apps/worker/src/openai-model.ts`
 is a second `ModelAdapter` beside Anthropic's, selected at boot with
 `NOVUS_MODEL_PROVIDER`/`NOVUS_MODEL` (unset, behaviour is unchanged). Reviewed
 by scope-warden before it was built, which flagged — correctly — that this is
@@ -146,6 +187,25 @@ and a real request reaches OpenAI's API and is validated by it. What is *not*
 proven: a full live round-trip against a real OpenAI model, because no valid
 `OPENAI_API_KEY` was available to run one with. `openai-smoke.ts` is there to
 run by hand the moment one is.
+
+The second: **model routing** — with a scope note, because this document's
+own exclusion list says "Learned model routing" and that exclusion still
+stands. What shipped is not learned: `SignalModelRouter` chooses between
+three Anthropic tiers on signals computable today (the shape of the goal,
+context size, consecutive failures escalating a tier, a cost budget stepping
+one back down) and records every decision's reason in the run log, so a model
+choice is explainable rather than one more thing the harness did silently.
+The signals that would make it learned — historical success, evaluation
+results — are marked extension points, deliberately absent until someone has
+data. Alongside it: per-run cost in USD with cache-aware accounting and
+pricing as configuration (`pricing.ts`, `NOVUS_MODEL_PRICING`), and a
+per-turn human override (`POST /sessions/:id/turns` with `model`) that beats
+the router and refuses, with a 400 before the run starts, a model this worker
+has no adapter for. Proven in `model-router.test.ts`, `pricing.test.ts`, and
+`turn-model-route.test.ts` — deterministically, like everything else since
+the benchmark runs. One honest wrinkle, recorded as gap 5 in PROGRESS.md:
+`claude-sonnet-5` is priced at its sticker rate while an introductory rate
+runs to 2026-08-31, so the fast tier's cost figure reads high until then.
 
 Before starting anything else from the roadmap in `README.md`, check it
 against this section. Multiplayer is no longer the thin half — apply, cancel,
@@ -424,6 +484,14 @@ run.completed
 run.failed
 ```
 
+Where the built contract diverges from this list, the contract won:
+`model.requested` and `model.responded` do not exist as events — per-call
+model activity is not evented, usage accumulates into per-run totals that the
+receipt carries (which is also why a resumed run's counters restart; see
+PROGRESS.md gap 4). The authoritative union is `SessionEventSchema` in
+`packages/contracts`, and `skills/novus-extend-event-contract` is the
+procedure for widening it without desyncing its five consumers.
+
 Every event includes:
 
 - Event ID
@@ -553,9 +621,16 @@ V1 needs three repeatable benchmark tasks:
    Built. `benchmarks/bug-fix/`, run with `./scripts/benchmark.sh`, scored by
    `apps/worker/src/benchmark.ts`.
 2. **Small feature:** a clear request requiring changes across several files.
-   Not built.
+   Built. `benchmarks/small-feature/`, same runner and scorer.
 3. **Repository reasoning:** a task where the obvious local change is wrong
-   without understanding a dependency elsewhere in the repository. Not built.
+   without understanding a dependency elsewhere in the repository. Built.
+   `benchmarks/repo-reasoning/` — see *Benchmark results* above for why this
+   one is worth reading.
+
+(Until 2026-07-30 this list claimed two of the three were "Not built" while
+*Benchmark results* above reported all three passing — the kind of internal
+contradiction this document is supposed to be incapable of. All three are
+built and each has passed against the real model once.)
 
 A benchmark fixture is committed and never run in place. The runner copies it to
 a scratch Git repository under the system temporary directory, and that copy is
@@ -584,11 +659,12 @@ Record:
 V1 is promising when multiplayer improves decision quality or human coordination
 without making every small task slower.
 
-Of that grid — three tasks by three configurations — one cell has been filled:
-the bug-fix task, run privately, once, on 2026-07-29. It passed. The two shared
-configurations are not blocked on writing more benchmarks; they are blocked on
-Milestones 3 and 4, which is the same asymmetry *Where we actually are* names
-at the top of this document.
+Of that grid — three tasks by three configurations — three cells are filled:
+each task, run privately, once, on 2026-07-29. All passed. The shared and
+forked configurations are no longer blocked on capability: Milestones 3 and 4
+both closed on 2026-07-30. They are blocked on nobody having run them, which
+is a decision about live provider spend rather than missing code — the same
+standing caveat PROGRESS.md leads with.
 
 ## Build order
 
@@ -610,7 +686,9 @@ surviving a restart, not just its events — is now also true, fixed 2026-07-30.
 ### Milestone 2 — real single-agent harness
 
 - [x] Repository selection
-- [x] Model adapter and BYOK credential storage
+- [x] Model adapter and BYOK credential storage — since 2026-07-30: two
+      adapters, a signal-based router with per-run pricing, and a per-turn
+      override; see *Where we actually are*
 - [~] Context assembly — goal plus prior turns; no repository context yet
 - [x] Native read/search/patch/command/Git/test tools — all nine of the
       initial list exist and are wired into every session. The live benchmark

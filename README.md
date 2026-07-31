@@ -14,7 +14,9 @@ artifacts, approvals, tests, and final decision.
 > Coding agents should not live in private sessions. Their work should be
 > inspectable, steerable, and collaborative by default.
 
-For the scoped first release, see [V1_README.md](./V1_README.md).
+For the scoped first release, see [V1_README.md](./V1_README.md). For how far
+along it actually is — status with evidence, and the known gaps in one place —
+see [PROGRESS.md](./PROGRESS.md).
 
 ## The thesis
 
@@ -139,6 +141,10 @@ Operations requiring maximum control and observability should be native:
 - Development-server and preview management
 - Browser interaction later in V1
 
+Everything on this list except browser interaction exists today — sixteen
+tools, each behind the same contract, permission class, and confinement
+([PROGRESS.md](./PROGRESS.md) names them and their evidence).
+
 ### Extensible tools
 
 External systems should be added through typed adapters and MCP:
@@ -153,21 +159,26 @@ External systems should be added through typed adapters and MCP:
 
 ### Model layer
 
-Models are accessed through a provider-neutral interface. A run records the
-provider, model, configuration, token usage, latency, and cost for every call.
+Models are accessed through a provider-neutral interface — two adapters exist
+today (Anthropic and OpenAI, selected at boot). A run accumulates token usage,
+model time, and cache-aware cost in USD, and its receipt carries the totals;
+per-call records are not kept, which is why a resumed run's counters restart
+(see PROGRESS.md).
 
-Adaptive routing is part of the long-term harness, not the initial product
-claim. Routing will eventually choose a model or agent using:
+Routing exists in its first form: a signal-based router chooses between three
+Anthropic tiers using signals it can compute today — the shape of the goal,
+context size, consecutive failures escalating a tier, a cost budget stepping
+one back down — and logs every decision with its reason, so a run's model
+choice is explainable from the event log. A human can override it per turn,
+and the override wins. The signals that need data nobody has measured yet
+remain deliberately unbuilt rather than invented:
 
-- Task type and estimated difficulty
-- Required tools and context size
 - Historical success on similar work
-- Latency and cost budget
 - Repository and organization policy
 - Independent evaluation results
 
-Users should be able to bring their own provider credentials. Novus must never
-make a single model provider its architectural foundation.
+Users bring their own provider credentials. Novus must never make a single
+model provider its architectural foundation.
 
 ## Multiplayer model
 
@@ -244,8 +255,14 @@ repository. Later cloud execution can be offered as a separate deployment mode.
 
 ### Isolation
 
-Parallel attempts use Git worktrees and separate process environments. They must
-not share writable working directories, development ports, or mutable run state.
+Parallel attempts use Git worktrees. They never share writable working
+directories, development ports, or mutable run state — but they do share a
+process: an attempt is an in-process runner inside the worker, not an OS
+boundary. This document used to claim "separate process environments", which
+was never true; the worker exiting takes every running attempt with it, and an
+attempt cannot be resource-limited apart from the worker. V1_README's
+*Forking* section states exactly what the isolation rests on and what a
+worktree does not protect.
 
 ### Persistence
 
@@ -288,6 +305,11 @@ tests and humans retain final authority.
 8. **Earn autonomy.** More autonomy follows demonstrated reliability.
 
 ## Roadmap
+
+This section is the plan, not the scoreboard — [PROGRESS.md](./PROGRESS.md)
+tracks which of it is real. Two Early-product items have already landed ahead
+of sequence: a second model provider, and signal-based routing (the learned
+kind stays excluded from V1).
 
 ### V1 — multiplayer local coding session
 
