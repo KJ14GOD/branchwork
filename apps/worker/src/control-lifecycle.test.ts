@@ -6,6 +6,7 @@ import { InMemorySessionEventStore } from "@novus/session-service";
 
 import { FixedModelRouter, type ModelAdapter } from "./model.ts";
 import { HOST_SESSION, ParticipantRegistry } from "./participants.ts";
+import { projectSession } from "./projection.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { startEventServer } from "./event-server.ts";
 
@@ -280,6 +281,63 @@ test("offer then withdraw: the offerer takes back an offer nobody answered", asy
   });
 });
 
+test("a second offer is refused while one is in flight", async () => {
+  await withSession(async ({ url, sessionId, invite }) => {
+    const first = await invite("editor", "first");
+    const second = await invite("editor", "second");
+
+    const offerEventId = await offer(url, sessionId, TOKEN, first.id);
+
+    // Two live offers would mean two people each told they are about to hold
+    // control, and whichever accepted last winning a race neither could see.
+    const overlapping = await post(
+      `${url}/sessions/${sessionId}/handoff`,
+      TOKEN,
+      { toParticipantId: second.id },
+    );
+
+    assert.equal(overlapping.status, 409);
+
+    const after = await authority(url, sessionId);
+    assert.equal(after.controlOffer?.offerEventId, offerEventId);
+    assert.equal(after.controlOffer?.toParticipantId, first.id);
+  });
+});
+
+test("an answer naming a superseded offer is refused", async () => {
+  await withSession(async ({ url, sessionId, invite }) => {
+    const editor = await invite("editor");
+
+    const stale = await offer(url, sessionId, TOKEN, editor.id);
+
+    assert.equal(
+      (await post(`${url}/sessions/${sessionId}/handoff/withdraw`, TOKEN, {
+        offerEventId: stale,
+      })).status,
+      202,
+    );
+
+    const current = await offer(url, sessionId, TOKEN, editor.id);
+    assert.notEqual(current, stale);
+
+    // A client that still had the withdrawn offer on screen answers the one it
+    // saw. Pinning the id is what stops that from settling an offer its sender
+    // never knew about — here, one made to the same person for a different
+    // reason a moment later.
+    const answered = await post(
+      `${url}/sessions/${sessionId}/handoff/accept`,
+      editor.token,
+      { offerEventId: stale },
+    );
+
+    assert.equal(answered.status, 409);
+
+    const after = await authority(url, sessionId);
+    assert.equal(after.controlOffer?.offerEventId, current);
+    assert.equal(after.controlOffer?.state, "offered");
+  });
+});
+
 test("an offer can only be answered by the participant it names", async () => {
   await withSession(async ({ url, sessionId, invite }) => {
     const editor = await invite("editor");
@@ -442,6 +500,8 @@ test("a disconnect is not a departure: a standing request survives it", async ()
 
     aborter.abort();
 
+    let dropped = false;
+
     for (let attempt = 0; attempt < 200; attempt += 1) {
       const presence = (await fetch(`${url}/sessions/${sessionId}/presence`, {
         headers: { authorization: `Bearer ${TOKEN}` },
@@ -453,11 +513,17 @@ test("a disconnect is not a departure: a standing request survives it", async ()
         presence.participants.find((entry) => entry.id === editor.id)
           ?.connected === false
       ) {
+        dropped = true;
         break;
       }
 
       await delay(10);
     }
+
+    // Asserted, not merely awaited: without this the test would pass on a
+    // build where the stream never opened, and "the request survived a
+    // disconnect" would be a claim about something that never happened.
+    assert.equal(dropped, true);
 
     // Back after the drop, and the request they made before it is still there.
     // A controller who was not looking when it arrived still learns it exists.
@@ -466,6 +532,73 @@ test("a disconnect is not a departure: a standing request survives it", async ()
     assert.equal(after.controlRequests[0]?.participantId, editor.id);
     assert.equal(after.controlRequests[0]?.reason, "please");
   });
+});
+
+/**
+ * The fold's own rule, tested directly, because no route can reach it.
+ *
+ * A dropped stream deliberately writes nothing to the log — it flips the
+ * registry's `connected` flag and that is all — so the route-level test above
+ * cannot distinguish "the request survived because the fold protects it" from
+ * "the request survived because nothing happened". This one can: it hands the
+ * fold the event a disconnect *would* write and checks it is not treated as a
+ * departure, which is the guard a future disconnect-writes-an-event change
+ * would otherwise silently remove.
+ */
+test("the fold keeps a request across a disconnect and drops it on a departure", () => {
+  const sessionId = "11111111-1111-4111-8111-111111111111";
+  const requester = "22222222-2222-4222-8222-222222222222";
+
+  const joined = {
+    eventId: "33333333-3333-4333-8333-333333333333",
+    sessionId,
+    actorId: requester,
+    sequence: 0,
+    occurredAt: "2026-07-31T00:00:00.000Z",
+    type: "participant.joined",
+    payload: {
+      participant: {
+        id: requester,
+        sessionId,
+        name: "Maya",
+        kind: "human",
+        role: "editor",
+        joinedAt: "2026-07-31T00:00:00.000Z",
+      },
+    },
+  } as const;
+
+  const requested = {
+    eventId: "44444444-4444-4444-8444-444444444444",
+    sessionId,
+    actorId: requester,
+    sequence: 1,
+    occurredAt: "2026-07-31T00:00:01.000Z",
+    type: "control.requested",
+    payload: { participantId: requester, reason: "I can take this from here" },
+  } as const;
+
+  const gone = (reason: "disconnected" | "left") =>
+    ({
+      eventId: "55555555-5555-4555-8555-555555555555",
+      sessionId,
+      actorId: requester,
+      sequence: 2,
+      occurredAt: "2026-07-31T00:00:02.000Z",
+      type: "participant.left",
+      payload: { participantId: requester, reason },
+    }) as const;
+
+  assert.equal(
+    projectSession(sessionId, [joined, requested, gone("disconnected")])
+      .controlRequests.length,
+    1,
+  );
+
+  assert.deepEqual(
+    projectSession(sessionId, [joined, requested, gone("left")]).controlRequests,
+    [],
+  );
 });
 
 test("asking twice sharpens one request rather than stacking two", async () => {
