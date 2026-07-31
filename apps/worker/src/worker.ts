@@ -403,3 +403,21 @@ const shutdown = (code: number) => {
 
 process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(143));
+
+// Every other way this process can stop.
+//
+// The two signals above are the polite exits, and they were the only ones
+// wired up — so an uncaught exception, an explicit process.exit from anywhere,
+// or Electron's parent going away took the worker down while leaving its
+// detached children alive. A dev server that outlives the worker holds its
+// port against the next launch and answers requests from a run nobody is
+// watching, which is worse than one that never started.
+//
+// An 'exit' handler may only do synchronous work, which is exactly what these
+// two are: both are process.kill loops. Nothing here can await, and nothing
+// here needs to. Both are idempotent, so the ordinary path — a signal handler
+// that already ran them before calling process.exit — is harmless.
+process.on("exit", () => {
+  killRunningCommands();
+  stopAllDevServers();
+});

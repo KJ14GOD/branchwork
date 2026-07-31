@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { connect, createServer } from "node:net";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
   ToolResultSchema,
@@ -54,6 +54,15 @@ const MAX_LOG_CHARS = 16_000;
 type ServerRecord = {
   serverId: string;
   command: string;
+  /**
+   * The resolved directory the server was started in.
+   *
+   * Recorded so a server can be found by where it lives, not only by who
+   * started it. Reclaiming a fork's worktree deletes that directory, and a
+   * detached dev server does not notice — it keeps running, keeps holding its
+   * port, and its working directory no longer exists.
+   */
+  root: string;
   port: number;
   child: ChildProcess;
   pid: number | null;
@@ -84,6 +93,52 @@ export const stopAllDevServers = (): void => {
   }
   liveServers.clear();
   claimedPorts.clear();
+};
+
+/**
+ * Stops every dev server running in a directory that is about to stop
+ * existing, and reports how many there were.
+ *
+ * Reclaiming a decided attempt deletes its worktree. A dev server started in
+ * that worktree is detached and in its own process group, so it does not go
+ * with it: it keeps running, keeps its port claimed, and its working directory
+ * is now a path with nothing at it. That is the precise leak `dev_server`
+ * exists to prevent, arriving through the door that teardown opened — so
+ * teardown is what has to close it.
+ *
+ * Containment is a path comparison rather than a string prefix, so a sibling
+ * directory whose name merely begins with the root's is not swept up with it.
+ *
+ * The root is resolved before it is compared, because `record.root` is a
+ * `realpath` and the caller's may not be. On macOS every temporary directory
+ * is reached through a symlink — `/var` is `/private/var` — so comparing the
+ * two forms directly matched nothing and this swept up no server at all. It
+ * failed silently in exactly the direction that leaks.
+ */
+export const stopDevServersUnder = async (root: string): Promise<number> => {
+  const resolved = await realpath(resolve(root)).catch(() => resolve(root));
+  let stopped = 0;
+
+  for (const record of [...liveServers]) {
+    const fromRoot = relative(resolved, record.root);
+    const inside =
+      record.root === resolved ||
+      !(fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot));
+
+    if (!inside) {
+      continue;
+    }
+
+    if (record.pid !== null) {
+      killGroup(record.pid, "SIGKILL");
+    }
+
+    liveServers.delete(record);
+    claimedPorts.delete(record.port);
+    stopped += 1;
+  }
+
+  return stopped;
 };
 
 const sleep = (ms: number): Promise<void> =>
@@ -254,6 +309,7 @@ export class DevServerTool implements AgentTool {
     const record: ServerRecord = {
       serverId: crypto.randomUUID(),
       command: commandLine,
+      root: repositoryRoot,
       port,
       child,
       pid: child.pid ?? null,

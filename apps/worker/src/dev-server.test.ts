@@ -5,7 +5,12 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { DevServerTool, liveDevServerCount, stopAllDevServers } from "./dev-server.ts";
+import {
+  DevServerTool,
+  liveDevServerCount,
+  stopAllDevServers,
+  stopDevServersUnder,
+} from "./dev-server.ts";
 
 const temporaryRepository = async (): Promise<string> =>
   mkdtemp(join(tmpdir(), "novus-dev-server-"));
@@ -266,4 +271,61 @@ test("stopAllDevServers takes down what the worker would otherwise leak", async 
   // before asserting the port actually came free.
   await new Promise((settle) => setTimeout(settle, 300));
   assert.equal(await canConnect(started.output.port), false);
+});
+
+/**
+ * Reclaiming a decided attempt deletes its worktree. A dev server started in
+ * that worktree is detached and in its own process group, so it does not go
+ * with the directory — it keeps running, keeps its port, and its working
+ * directory becomes a path with nothing at it. Teardown opened that door, so
+ * teardown has to close it.
+ */
+test("stopping the servers under a directory leaves the ones outside it running", async () => {
+  const reclaimed = await temporaryRepository();
+  const kept = await temporaryRepository();
+
+  // Cleanup in a finally, without exception. A detached server that outlives
+  // a failing assertion keeps this runner's stdio open and the whole test file
+  // hangs instead of reporting — which is how this test first failed, and it
+  // took the leak it exists to catch to do it.
+  try {
+    const doomed = await new DevServerTool(reclaimed).execute(
+      start("16", "node", ["-e", LISTENER]),
+    );
+    const survivor = await new DevServerTool(kept).execute(
+      start("17", "node", ["-e", LISTENER]),
+    );
+
+    if (doomed.name !== "dev_server") return assert.fail("wrong result");
+    if (doomed.output.action !== "start") return assert.fail("wrong action");
+    if (survivor.name !== "dev_server") return assert.fail("wrong result");
+    if (survivor.output.action !== "start") return assert.fail("wrong action");
+
+    // The caller's path is not a realpath — on macOS every temporary directory
+    // is reached through /var, which is a symlink to /private/var — and the
+    // recorded root is. Passing the unresolved form is the ordinary case, so
+    // it is the one the test uses.
+    assert.equal(await stopDevServersUnder(reclaimed), 1);
+
+    await new Promise((settle) => setTimeout(settle, 300));
+
+    assert.equal(
+      await canConnect(doomed.output.port),
+      false,
+      "a server in the directory being deleted has to go with it",
+    );
+    assert.equal(
+      await canConnect(survivor.output.port),
+      true,
+      "and one anywhere else must be left alone",
+    );
+
+    // A directory that merely shares a name prefix is not underneath it. A
+    // string comparison would have swept this up.
+    assert.equal(await stopDevServersUnder(`${reclaimed}-other`), 0);
+    await new Promise((settle) => setTimeout(settle, 100));
+    assert.equal(await canConnect(survivor.output.port), true);
+  } finally {
+    stopAllDevServers();
+  }
 });

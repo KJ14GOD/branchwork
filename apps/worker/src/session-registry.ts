@@ -41,7 +41,7 @@ import {
   type AgentTool,
 } from "./tools.ts";
 import { RunDiagnosticsTool } from "./diagnostics.ts";
-import { DevServerTool } from "./dev-server.ts";
+import { DevServerTool, stopDevServersUnder } from "./dev-server.ts";
 
 const run = promisify(execFile);
 
@@ -826,6 +826,26 @@ export class SessionRegistry {
       await session.worktrees.pruneRecords().catch(() => undefined);
 
       return;
+    }
+
+    // Before the directories go, not after. A dev server started inside an
+    // attempt's worktree is detached and in its own process group, so deleting
+    // the directory does not stop it — it would keep running, keep its port,
+    // and have a working directory that no longer exists.
+    for (const disposition of dispositions) {
+      const handle = session.worktrees.get(disposition.runId);
+
+      if (handle === undefined) {
+        continue;
+      }
+
+      const stopped = await stopDevServersUnder(handle.worktreePath);
+
+      if (stopped > 0) {
+        console.log(
+          `stopped ${stopped} dev server(s) in attempt ${disposition.runId} before reclaiming it`,
+        );
+      }
     }
 
     const { collected, failures } = await session.worktrees.collect(dispositions);
