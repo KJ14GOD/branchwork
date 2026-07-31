@@ -87,6 +87,9 @@ Nothing below is loaded automatically. Go read it when the task calls for it.
 - `V1_README.md` — the V1 scope contract, including what is *explicitly
   excluded*, the security boundary, and the build order. Read before proposing
   work that widens scope.
+- `PROGRESS.md` — what is actually met, partial, or not started, with the
+  evidence for each claim, and the known-gaps register. Read before claiming
+  a status, and update it in the same commit that changes one.
 - `FLEET.md` — how several agents run on this repo at once: worktree per slice,
   the lock on `packages/contracts`, and which slices can run beside each other.
   Read before starting parallel work.
@@ -109,3 +112,12 @@ into `.claude/skills/` so both harnesses load the same file.
 - `novus-ui` — the desktop UI's visual language: planes, alpha borders, radii,
   type, motion, and interaction states, and how to change styling without
   breaking it.
+- `novus-add-native-tool` — adding a tool as a complete vertical slice:
+  class and shape decisions, contract to renderers, and the
+  non-compiler-enforced places that have been missed twice.
+- `novus-fork-attempts` — fork/attempt execution: the permission
+  intersection, runner caching, restart adoption, what worktree isolation
+  does not give, and the open lifecycle gaps.
+- `novus-model-routing` — the router, pricing, and budgets: precedence of a
+  human's per-turn pick, adding a model or tier, rates as configuration, and
+  cache-aware cost accounting.
