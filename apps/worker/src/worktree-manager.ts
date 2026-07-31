@@ -85,6 +85,30 @@ const assertDisjoint = (repositoryRoot: string, forkRoot: string): void => {
   }
 };
 
+/**
+ * The last thing standing between a path bug and `rm -rf` on someone's work.
+ *
+ * Every path that reaches teardown was already proven to be under the fork
+ * root — by `createFork` when it derived it, by `adopt` when it re-read it
+ * from a log this process did not write. This asserts it again immediately
+ * before the deletion, which is redundant exactly the way a seatbelt is:
+ * those checks are far away from this line, they are separated from it by
+ * failure paths and by a public method, and one refactor that moves a call
+ * site is all it takes for a validated path to stop being the path that gets
+ * deleted. A recursive delete is the one operation in this file that cannot
+ * be taken back, so it does not get to rely on a check made elsewhere.
+ */
+export const assertUnderForkRoot = (
+  forkRoot: string,
+  worktreePath: string,
+): void => {
+  if (isOutside(forkRoot, worktreePath) || worktreePath === forkRoot) {
+    throw new Error(
+      `Refusing to delete ${worktreePath}: a fork's worktree must live under ${forkRoot}.`,
+    );
+  }
+};
+
 const assertSafeIdentifier = (value: string, what: string): void => {
   if (!SAFE_IDENTIFIER.test(value) || value.includes("..")) {
     throw new Error(
@@ -558,6 +582,53 @@ export class WorktreeManager {
     this.forks.delete(runId);
   }
 
+  /**
+   * Clears Git's registrations for worktrees whose directories are gone.
+   *
+   * `.git/worktrees` grows independently of the checkouts themselves: a human
+   * who deletes a fork's directory by hand, a `worktree add` killed part-way,
+   * a disk that filled — each leaves an administrative record pointing at
+   * nothing, and Git keeps them forever. They are what make `git worktree
+   * list` unreadable after a week and what stops a run id from ever being
+   * forked again.
+   *
+   * Safe unconditionally, which is why it is separate from `removeFork` and
+   * not gated on any policy: `prune` only ever removes a record whose
+   * directory has already stopped existing. It never deletes a file.
+   */
+  async pruneRecords(): Promise<void> {
+    const repositoryRoot = await this.resolveRepositoryRoot();
+
+    await this.git(repositoryRoot, ["worktree", "prune"]).catch(() => "");
+  }
+
+  /**
+   * Reclaims the forks a policy judged collectable, and says what it did.
+   *
+   * Failures are collected rather than thrown. A sweep runs at session open,
+   * where the host is waiting on their session and not on housekeeping: a
+   * worktree that would not delete — a permission, a file still open, a
+   * directory the human is standing in — is a thing to report, never a reason
+   * to refuse the session. The next open tries again.
+   */
+  async collect(
+    dispositions: readonly ForkDisposition[],
+  ): Promise<{ collected: string[]; failures: string[] }> {
+    const collected: string[] = [];
+    const failures: string[] = [];
+
+    for (const disposition of dispositions) {
+      try {
+        await this.removeFork(disposition.runId);
+        collected.push(disposition.runId);
+      } catch (error) {
+        failures.push(`${disposition.runId}: ${messageOf(error)}`);
+      }
+    }
+
+    return { collected, failures };
+  }
+
   /** Tears down every fork this manager still owns, reporting the first failure. */
   async removeAll(): Promise<void> {
     const failures: string[] = [];
@@ -702,6 +773,10 @@ export class WorktreeManager {
     worktreePath: string,
     branch: string,
   ): Promise<void> {
+    // Re-proven here rather than trusted from the caller. See
+    // `assertUnderForkRoot`: the `rm` two lines down is recursive and final.
+    assertUnderForkRoot(await this.resolveForkRoot(repositoryRoot), worktreePath);
+
     await this.git(repositoryRoot, ["worktree", "remove", "--force", worktreePath]).catch(
       () => "",
     );
@@ -830,6 +905,110 @@ const exists = async (path: string): Promise<boolean> => {
 
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+/** A fork's checkout, and why it is safe to reclaim. */
+export type ForkDisposition = {
+  runId: string;
+  reason: string;
+};
+
+/**
+ * The status an attempt's run projects as, or null when it never started.
+ *
+ * Narrower than importing `RunProjection` here on purpose: this file is the
+ * one that touches Git and the filesystem, and the reason it does not hold an
+ * event store is the same reason it should not depend on the projection.
+ */
+export type ForkRunStatus =
+  | "running"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | null;
+
+/**
+ * Which forks' checkouts are garbage, from the log alone.
+ *
+ * A worktree per attempt with nothing ever removing them is a repository that
+ * fills up over a week of use and a `.git/worktrees` that grows without
+ * bound. But deleting an attempt's checkout destroys work that exists nowhere
+ * else — a fork's changes live in its working tree, not in the log, which
+ * only records what its tools did — so the policy has to be conservative in
+ * the direction of keeping.
+ *
+ * Collectable is therefore one specific thing: **an applied decision was
+ * recorded after the attempt was created**. That is the moment a comparison
+ * stops being a question. The chosen attempt's changes are now in the parent
+ * repository; every attempt that was on the screen alongside it was
+ * considered and not chosen. Both are answered.
+ *
+ * Ordering by sequence, rather than grouping by `checkpointId`, is what makes
+ * this correct against the route that actually exists: `POST /sessions/:id/
+ * fork` mints a *fresh checkpoint per call*, so two sibling attempts started
+ * seconds apart do not share one. Grouping by checkpoint would therefore have
+ * collected only the attempt that was chosen and kept every attempt that lost
+ * — exactly backwards from the case that fills the disk, and the losing
+ * attempts are the ones there are more of.
+ *
+ * Everything else is kept, and each exclusion is a case that would otherwise
+ * lose work:
+ *
+ * - **`applied: false`.** The contract is explicit that this is not a failed
+ *   decision — a host may choose an attempt whose patch no longer applies and
+ *   still want the choice recorded. Nothing landed, so the only copy of that
+ *   work is still the worktree.
+ * - **Paused, and running.** A pause is durable state a host created in order
+ *   to come back to it. This guard wins over the decision rule, so a sibling
+ *   still paused when the decision lands survives the sweep.
+ * - **A finished attempt with no decision after it.** That is precisely what
+ *   the compare screen exists to show. Reclaiming it would delete the
+ *   candidate the human is being asked to choose — including an attempt
+ *   started *after* the last decision, which is the next round, not the last
+ *   one.
+ */
+export const collectableForks = (input: {
+  /** Each recorded fork with the log sequence of its `fork.created`. */
+  forks: readonly { fork: Fork; sequence: number }[];
+  statusOf: (runId: string) => ForkRunStatus;
+  /** Each `decision.recorded`, with the run it chose and whether it landed. */
+  decisions: readonly {
+    sequence: number;
+    runId: string;
+    applied: boolean;
+  }[];
+}): ForkDisposition[] => {
+  const applied = input.decisions.filter((decision) => decision.applied);
+
+  if (applied.length === 0) {
+    return [];
+  }
+
+  const lastApplied = Math.max(...applied.map((decision) => decision.sequence));
+  const chosen = new Set(applied.map((decision) => decision.runId));
+  const collectable: ForkDisposition[] = [];
+
+  for (const { fork, sequence } of input.forks) {
+    if (sequence >= lastApplied) {
+      continue;
+    }
+
+    const status = input.statusOf(fork.runId);
+
+    if (status === "paused" || status === "running") {
+      continue;
+    }
+
+    collectable.push({
+      runId: fork.runId,
+      reason: chosen.has(fork.runId)
+        ? "it was chosen and its changes were applied to the repository"
+        : "a decision was applied after it, so it was considered and not chosen",
+    });
+  }
+
+  return collectable;
+};
 
 /**
  * The two events, as drafts the event store assigns identity and order to.

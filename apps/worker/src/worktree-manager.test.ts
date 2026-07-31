@@ -6,13 +6,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { CheckpointSchema, SessionEventDraftSchema } from "@novus/contracts";
+import {
+  CheckpointSchema,
+  SessionEventDraftSchema,
+  type Fork,
+} from "@novus/contracts";
 
 import {
   WorktreeManager,
+  assertUnderForkRoot,
   checkpointCreatedEvent,
+  collectableForks,
   forkCreatedEvent,
   type CheckpointInput,
+  type ForkRunStatus,
 } from "./worktree-manager.ts";
 
 const run = promisify(execFile);
@@ -597,4 +604,199 @@ test("adopt refuses a worktree that is gone, and one that belongs to another rep
     await rm(rootA, { recursive: true, force: true });
     await rm(rootB, { recursive: true, force: true });
   }
+});
+
+/**
+ * Teardown is the one operation in this file that cannot be undone, so the
+ * boundary that decides where it may point is tested as its own unit rather
+ * than only through the paths that happen to reach it today.
+ */
+test("the deletion boundary refuses every path that is not under the fork root", () => {
+  const forkRoot = "/tmp/novus-forks/project";
+
+  assert.doesNotThrow(() => assertUnderForkRoot(forkRoot, `${forkRoot}/run-1`));
+  assert.doesNotThrow(() =>
+    assertUnderForkRoot(forkRoot, `${forkRoot}/run-1/nested`),
+  );
+
+  for (const crafted of [
+    // The root itself: deleting it would take every other attempt with it.
+    forkRoot,
+    // Straightforwardly outside.
+    "/tmp/novus-forks",
+    "/",
+    "/Users/someone/precious",
+    // Traversal that normalises back out of the root.
+    `${forkRoot}/../../etc`,
+    `${forkRoot}/run-1/../../../..`,
+    // A sibling whose name merely starts with the root's, which a string
+    // prefix check would have accepted and a path check does not.
+    `${forkRoot}-other/run-1`,
+  ]) {
+    assert.throws(
+      () => assertUnderForkRoot(forkRoot, crafted),
+      /Refusing to delete/,
+      `${crafted} should never be deletable`,
+    );
+  }
+});
+
+/**
+ * The same question asked through the public surface: a caller naming a fork
+ * this manager never made must not be able to delete anything at all.
+ */
+test("collecting a fork the manager does not own deletes nothing", async () => {
+  const root = await repository();
+  const manager = managerFor(root);
+
+  try {
+    const checkpoint = await manager.createCheckpoint(checkpointInput());
+    const handle = await manager.createFork(checkpoint, {
+      runId: "kept",
+      label: "Kept",
+    });
+
+    const outsider = await mkdtemp(join(tmpdir(), "novus-precious-"));
+
+    await writeFile(join(outsider, "important.txt"), "do not delete\n");
+
+    const { collected, failures } = await manager.collect([
+      { runId: "never-forked", reason: "test" },
+      { runId: outsider, reason: "test" },
+    ]);
+
+    assert.deepEqual(collected, []);
+    assert.equal(failures.length, 2);
+    assert.ok(failures.every((failure) => /No such fork/.test(failure)));
+
+    // Nothing outside was touched, and the fork that was not named survives.
+    assert.equal(
+      await readFile(join(outsider, "important.txt"), "utf8"),
+      "do not delete\n",
+    );
+    assert.ok(await exists(handle.worktreePath));
+
+    await rm(outsider, { recursive: true, force: true });
+  } finally {
+    await manager.removeAll().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("collect removes the checkouts it is given and leaves the rest", async () => {
+  const root = await repository();
+  const manager = managerFor(root);
+
+  try {
+    const checkpoint = await manager.createCheckpoint(checkpointInput());
+    const decided = await manager.createFork(checkpoint, {
+      runId: "decided",
+      label: "Decided",
+    });
+    const kept = await manager.createFork(checkpoint, {
+      runId: "kept",
+      label: "Kept",
+    });
+
+    const { collected, failures } = await manager.collect([
+      { runId: "decided", reason: "its comparison was decided and applied" },
+    ]);
+
+    assert.deepEqual(collected, ["decided"]);
+    assert.deepEqual(failures, []);
+
+    assert.equal(await exists(decided.worktreePath), false);
+    assert.equal(await branchExists(root, decided.branch), false);
+    assert.ok(await exists(kept.worktreePath));
+    assert.ok(await branchExists(root, kept.branch));
+
+    // Git's own record went with it, which is the half that otherwise grows
+    // without bound.
+    const list = await git(root, ["worktree", "list", "--porcelain"]);
+
+    assert.equal(list.stdout.includes(decided.worktreePath), false);
+    assert.ok(list.stdout.includes(kept.worktreePath));
+  } finally {
+    await manager.removeAll().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The policy, in isolation. Every case here is one where getting it wrong
+ * deletes work that exists in no other place, so they are enumerated rather
+ * than sampled.
+ */
+test("only attempts whose comparison was decided and applied are collectable", () => {
+  const fork = (runId: string, checkpointId: string): Fork => ({
+    runId,
+    sessionId: "session-1",
+    checkpointId,
+    parentRunId: "run-parent",
+    label: runId,
+    worktreePath: `/tmp/forks/${runId}`,
+    branch: `novus/fork/${runId}`,
+    revision: "a".repeat(40),
+    devPorts: [47_100, 47_101],
+    createdAt: new Date().toISOString(),
+  });
+
+  // Sequences read as the log: the four attempts of one round, then the
+  // decision at 50, then a fifth attempt started afterwards.
+  const forks = [
+    { fork: fork("chosen", "checkpoint-1"), sequence: 10 },
+    { fork: fork("sibling", "checkpoint-2"), sequence: 20 },
+    { fork: fork("paused-sibling", "checkpoint-3"), sequence: 30 },
+    { fork: fork("running-sibling", "checkpoint-4"), sequence: 35 },
+    { fork: fork("never-started", "checkpoint-5"), sequence: 40 },
+    { fork: fork("next-round", "checkpoint-6"), sequence: 60 },
+  ];
+
+  const statuses: Record<string, ForkRunStatus> = {
+    chosen: "completed",
+    sibling: "completed",
+    "paused-sibling": "paused",
+    "running-sibling": "running",
+    "never-started": null,
+    "next-round": "completed",
+  };
+  const statusOf = (runId: string): ForkRunStatus => statuses[runId] ?? null;
+
+  const collectable = collectableForks({
+    forks,
+    statusOf,
+    decisions: [{ sequence: 50, runId: "chosen", applied: true }],
+  });
+
+  assert.deepEqual(
+    collectable.map((entry) => entry.runId).sort(),
+    ["chosen", "never-started", "sibling"],
+    "an applied decision resolves every attempt that preceded it, and no other",
+  );
+
+  // The chosen attempt and the ones that lost are both collectable, but for
+  // different reasons, and the log line a host reads says which.
+  assert.match(
+    collectable.find((entry) => entry.runId === "chosen")?.reason ?? "",
+    /chosen and its changes were applied/,
+  );
+  assert.match(
+    collectable.find((entry) => entry.runId === "sibling")?.reason ?? "",
+    /considered and not chosen/,
+  );
+
+  // A decision that did not land leaves the work in the worktree as its only
+  // copy, so nothing is collectable.
+  assert.deepEqual(
+    collectableForks({
+      forks,
+      statusOf,
+      decisions: [{ sequence: 50, runId: "chosen", applied: false }],
+    }),
+    [],
+  );
+
+  // And a finished attempt nobody has decided on yet is the candidate the
+  // compare screen is asking about.
+  assert.deepEqual(collectableForks({ forks, statusOf, decisions: [] }), []);
 });

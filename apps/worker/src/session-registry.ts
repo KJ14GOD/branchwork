@@ -9,6 +9,8 @@ import type { SessionEventStore } from "@novus/session-service";
 import { AgentRunFailure, AgentRunner } from "./agent-runner.ts";
 import {
   WorktreeManager,
+  collectableForks,
+  type ForkDisposition,
   type ForkHandle,
 } from "./worktree-manager.ts";
 import { DEFAULT_RUN_BUDGET, type RunBudget } from "./budget.ts";
@@ -461,6 +463,14 @@ export class SessionRegistry {
     // resume its paused run, because the handle to its worktree lived only in
     // the process that forked it. A fresh session's log has nothing to adopt
     // and this loop is a no-op.
+    // Attempts an earlier open already reclaimed. Their checkouts are meant to
+    // be gone, so failing to re-attach one is the expected outcome rather than
+    // something to warn a host about on every open for the rest of the
+    // session's life. Everything else that fails to adopt still gets said.
+    const alreadyReclaimed = new Set(
+      this.collectableFor(session.id).map((entry) => entry.runId),
+    );
+
     for (const event of this.eventStore.list(session.id)) {
       if (event.type !== "fork.created") {
         continue;
@@ -474,6 +484,10 @@ export class SessionRegistry {
         // unopenable because one fork's directory was deleted. Said on the
         // host, and again — with the same words — by whatever operation
         // actually needed the missing worktree.
+        if (alreadyReclaimed.has(event.payload.fork.runId)) {
+          continue;
+        }
+
         console.warn(
           `fork ${event.payload.fork.runId} could not be re-attached: ${
             error instanceof Error ? error.message : String(error)
@@ -484,6 +498,7 @@ export class SessionRegistry {
 
     if (!alreadyOpenHere) {
       this.reconcileInterruptedRuns(session);
+      await this.reclaimResolvedForks(session);
     }
 
     // Announced rather than returned only, because a session's id is a runtime
@@ -713,6 +728,109 @@ export class SessionRegistry {
     session.forkTurns.set(runId, next);
 
     return next as Promise<void>;
+  }
+
+  /**
+   * The reclamation policy applied to one session's log. Reads only.
+   *
+   * Split out because two callers need the same answer for different reasons:
+   * the sweep, to delete, and the adoption loop, to know that a checkout it
+   * cannot find was supposed to be gone.
+   */
+  private collectableFor(sessionId: string): ForkDisposition[] {
+    const events = this.eventStore.list(sessionId);
+
+    if (events.length === 0) {
+      return [];
+    }
+
+    const forks: { fork: Fork; sequence: number }[] = [];
+    const decisions: { sequence: number; runId: string; applied: boolean }[] = [];
+
+    for (const event of events) {
+      if (event.type === "fork.created") {
+        forks.push({ fork: event.payload.fork, sequence: event.sequence });
+      }
+
+      if (event.type === "decision.recorded") {
+        decisions.push({
+          sequence: event.sequence,
+          runId: event.payload.runId,
+          applied: event.payload.outcome.applied,
+        });
+      }
+    }
+
+    if (forks.length === 0 || decisions.length === 0) {
+      return [];
+    }
+
+    const runs = new Map(
+      projectSession(sessionId, events).runs.map((run) => [run.runId, run]),
+    );
+
+    return collectableForks({
+      forks,
+      statusOf: (runId) => runs.get(runId)?.status ?? null,
+      decisions,
+    });
+  }
+
+  /**
+   * Gives back the disk that decided attempts are still holding.
+   *
+   * Nothing removed a fork's checkout, ever. Each one is a full second copy of
+   * the working tree plus a branch plus a record under `.git/worktrees`, so a
+   * team forking a few times a day for a week ends up with a repository whose
+   * sibling directory is larger than the repository and a `git worktree list`
+   * nobody can read.
+   *
+   * Run at session open — the same seam that adopts forks and reconciles runs
+   * — because that is where the log has just been read and where the host is
+   * deliberately picking up this repository. It is a sweep rather than an
+   * event handler on purpose: a sweep also collects what an earlier crash,
+   * an earlier version, or a decision recorded by some other process left
+   * behind, and it converges no matter how many of those it missed.
+   *
+   * The policy is `collectableForks`, and it is conservative on purpose — an
+   * attempt's work exists only in its worktree, so this deletes exactly the
+   * attempts whose comparison was decided and applied, and nothing else.
+   * Ordered after reconciliation so an attempt the worker died inside is
+   * already settled rather than looking live to the sweep.
+   */
+  private async reclaimResolvedForks(session: Session): Promise<void> {
+    // Only the ones this manager actually holds a handle for. A fork an
+    // earlier open already reclaimed is still collectable *by the policy* —
+    // the log does not forget that its comparison was decided — but there is
+    // nothing left to delete, and asking would report a failure per attempt
+    // per open forever.
+    const dispositions = this.collectableFor(session.id).filter(
+      (entry) => session.worktrees.get(entry.runId) !== undefined,
+    );
+
+    if (dispositions.length === 0) {
+      // Still worth pruning: a checkout the human deleted by hand leaves a
+      // registration behind whether or not any decision was ever recorded.
+      await session.worktrees.pruneRecords().catch(() => undefined);
+
+      return;
+    }
+
+    const { collected, failures } = await session.worktrees.collect(dispositions);
+
+    if (collected.length > 0) {
+      console.log(
+        `reclaimed ${collected.length} decided attempt worktree(s): ${collected.join(", ")}`,
+      );
+    }
+
+    for (const failure of failures) {
+      // Said, not thrown. Housekeeping must never be why a session refuses to
+      // open — and the next open will try this one again.
+      console.warn(`an attempt's worktree could not be reclaimed — ${failure}`);
+    }
+
+    await session.worktrees.pruneRecords().catch(() => undefined);
   }
 
   /**

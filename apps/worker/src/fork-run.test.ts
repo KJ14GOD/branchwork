@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -1210,6 +1210,159 @@ test("a fork that can never start is a failed attempt on the record, not a silen
     assert.match(comparison.attempts[0]?.failure ?? "", /No model adapter/);
   } finally {
     await server.close();
+    await cleanup(root);
+  }
+});
+
+/**
+ * Test 11. Decided attempts give their disk back; undecided ones keep it.
+ *
+ * Nothing ever removed a fork's checkout, so a week of forking left one full
+ * copy of the working tree per attempt plus a branch plus a record under
+ * `.git/worktrees`, forever. The sweep runs at session open, and this drives
+ * it the only way that proves anything: real worktrees on disk, a real
+ * decision through the route, and a restart in between.
+ *
+ * The negative half matters more than the positive one. Deleting a checkout
+ * destroys work that exists nowhere else — a fork's changes live in its
+ * working tree, not in the log — so the test pins that an attempt with no
+ * decision after it, and a paused attempt, both survive.
+ */
+test("attempts a decision resolved are reclaimed at the next open; undecided and paused ones are not", async () => {
+  const root = await repository();
+  const store = new InMemorySessionEventStore();
+  const forkRoot = join(dirname(root), ".novus-forks", basename(root));
+  const sessionBox = { id: "" };
+  let chosenId = "";
+  let losingId = "";
+  let pausedId = "";
+
+  const serverA = await startWorker(store, [
+    new GoalScriptedAdapter({
+      "Change the answer": editsAnswer("chosen\n", "Chose this one."),
+      "Change it differently": editsAnswer("not chosen\n", "The other way."),
+      "Pause and wait": pausesItselfThenEdits(
+        store,
+        sessionBox,
+        "still mine\n",
+        "Finished later.",
+      ),
+    }),
+  ]);
+
+  try {
+    const session = await openSession(serverA.url, {
+      repositoryPath: root,
+      allowWrites: true,
+    });
+
+    sessionBox.id = session.id;
+
+    chosenId = (
+      await forkSession(serverA.url, session.id, "Chosen", "Change the answer")
+    ).fork.runId;
+    losingId = (
+      await forkSession(
+        serverA.url,
+        session.id,
+        "Losing",
+        "Change it differently",
+      )
+    ).fork.runId;
+    pausedId = (
+      await forkSession(serverA.url, session.id, "Paused", "Pause and wait")
+    ).fork.runId;
+
+    assert.equal(await waitForRunEnd(store, session.id, chosenId), null);
+    assert.equal(await waitForRunEnd(store, session.id, losingId), null);
+    await waitForEvent(store, session.id, "the third attempt to pause", (events) =>
+      events.some(
+        (event) =>
+          event.type === "run.paused" && event.payload.runId === pausedId,
+      ),
+    );
+
+    const decision = await postJson<{
+      decision: { outcome: { applied: boolean } };
+    }>(serverA.url, `/sessions/${session.id}/decision`, { runId: chosenId });
+
+    assert.equal(decision.decision.outcome.applied, true);
+
+    // Everything is still on disk: the sweep runs at open, not at decide.
+    for (const runId of [chosenId, losingId, pausedId]) {
+      assert.ok(
+        await stat(join(forkRoot, runId)).then(
+          () => true,
+          () => false,
+        ),
+      );
+    }
+  } finally {
+    await serverA.close();
+  }
+
+  const serverB = await startWorker(store, [new GoalScriptedAdapter({})]);
+
+  try {
+    await openSession(serverB.url, {
+      repositoryPath: root,
+      resume: sessionBox.id,
+      allowWrites: true,
+    });
+
+    const gone = async (runId: string): Promise<boolean> =>
+      stat(join(forkRoot, runId)).then(
+        () => false,
+        () => true,
+      );
+
+    assert.ok(await gone(chosenId), "the applied attempt's checkout is garbage");
+    assert.ok(
+      await gone(losingId),
+      "an attempt the human saw and did not choose is garbage too",
+    );
+    assert.equal(
+      await gone(pausedId),
+      false,
+      "a paused attempt is work the host may still resume — never collected",
+    );
+
+    // Git's own record went with them, which is the half that otherwise grows
+    // without bound, and the dead branches went too.
+    const list = await git(root, ["worktree", "list", "--porcelain"]);
+
+    assert.equal(list.stdout.includes(`/${chosenId}`), false);
+    assert.equal(list.stdout.includes(`/${losingId}`), false);
+    assert.ok(list.stdout.includes(`/${pausedId}`));
+
+    const branches = await git(root, ["branch", "--list", "novus/fork/*"]);
+
+    assert.equal(branches.stdout.includes(chosenId), false);
+    assert.equal(branches.stdout.includes(losingId), false);
+    assert.ok(branches.stdout.includes(pausedId));
+
+    // The applied work is in the parent — reclamation took the copy, not the
+    // result — and the evidence is still on the compare screen, because that
+    // reads the log and not the checkouts.
+    assert.equal(await readFile(join(root, "answer.txt"), "utf8"), "chosen\n");
+
+    const comparison = await getJson<{
+      attempts: { runId: string; status: string; filesChanged: unknown[] }[];
+    }>(serverB.url, `/sessions/${sessionBox.id}/compare`);
+
+    assert.equal(comparison.attempts.length, 3);
+    assert.deepEqual(
+      comparison.attempts.map((attempt) => attempt.runId).sort(),
+      [chosenId, losingId, pausedId].sort(),
+      "reclaiming a checkout must not erase the attempt from the record",
+    );
+    assert.equal(
+      comparison.attempts.find((attempt) => attempt.runId === losingId)
+        ?.filesChanged.length,
+      1,
+    );
+  } finally {
+    await serverB.close();
     await cleanup(root);
   }
 });
