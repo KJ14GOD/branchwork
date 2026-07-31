@@ -6,7 +6,7 @@ defines the scope and carries the narrative; this file is the index you read
 in two minutes. If the two disagree, one of them is wrong — fix the wrong one
 in the same commit you notice it.
 
-Updated 2026-07-30, audited against commit `3dbb664`.
+Updated 2026-07-31, audited against commit `6b91b04`.
 
 ## The rules this file follows
 
@@ -75,6 +75,21 @@ Statuses against the exit conditions in V1_README's build order.
 | 3 — Multiplayer control | **Met**, deterministic only | `pause-resume.test.ts`, `pause-resume-route.test.ts`, `handoff-route.test.ts`, `presence.test.ts`, `cancel-route.test.ts`; the routes table below. Never run against a live model; the shared leg of the evaluation grid is still unrun |
 | 4 — Fork and compare | **Met**, deterministic only (2026-07-31) | `fork-run.test.ts` (13 tests, incl. a rendezvous barrier that fails loudly if attempts secretly serialise), `apply-decision.test.ts`, `decision-route.test.ts`, `compare.test.ts`. Gaps 1–2 are now mostly closed — worktrees are reclaimed when a decision resolves them, and an attempt the worker died inside is failed at the next open — with the residue recorded on each |
 | 5 — Hardening | **Partial** | Reconnect, crash recovery, redaction, authorization, replay, multi-client: met (`reconnect.test.ts`, `replay.test.ts`, `session-registry.test.ts`, `redaction.test.ts`, `access.test.ts`). Packaging: **not started** — no builder/notarization/entitlements config exists anywhere. Exit condition (repeatable demo on a clean machine) not attempted |
+
+## Steering brief slices
+
+Against the sequence in [STEERING.md](./STEERING.md). Separate from the
+milestones above: those track V1's build order, these track the product
+direction laid on top of it.
+
+| Slice | Status | Evidence |
+| --- | --- | --- |
+| 1 — Approach surface | **Met** (2026-07-31) | Baseline derived in `apps/worker/src/compare.ts` from `fork.created.parentRunId` and rendered as "Current work"; human status language; single-prompt fork form with derived label. `compare.test.ts`, `compare-view.render.test.tsx` |
+| 2 — First Decision Room | **Met** (2026-07-31) | Three decision kinds (`adopt` / `revision` / `exploration`), required rationale, interventions as evidence above the agent's summary, summary last and labelled "Unverified claim" when nothing was tested. `compare.test.ts`, `replay.test.ts`, `compare-view.render.test.tsx`. **Not done:** requesting a revision records the decision and does not restart the approach — the feedback is on the log, and a person acts on it |
+| 3 — Multiplayer authority | **Met**, deterministic only (2026-07-31) | `control-lifecycle.test.ts` (18 tests): offer/accept/decline/withdraw, superseded offers, disconnect vs departure, cross-session refusal, direction queued vs recorded. UI in `control-panel.tsx`, `control-panel.render.test.tsx` |
+| 4 — Reliability before pilot | **Partial** (2026-07-31) | Worktree reclamation, interrupted-run reconciliation, dev-server reaping, receipt checks, visible cost — gaps 1–6 above. **Open:** per-run budget still resets on resume (the guard that matters); no signed distributable |
+| 5 — Mission Inbox | **Met** (2026-07-31) | Attention grouping derived in `session-registry.ts:attentionFor`, ordered by urgency not recency; goal leads the row. `mission-inbox.test.ts` |
+| 6 — Team pilot surface | **Not started** | Durable shared sessions, role-aware invitations, and the usage/cost view already exist from earlier slices. What Slice 6 actually adds — GitHub connection, PR status and required checks, exportable receipt, team grouping, stable onboarding and updates — is untouched. This is a new external integration rather than a refinement of what is here, and none of it should be read as partially done |
 
 ## Capabilities
 
