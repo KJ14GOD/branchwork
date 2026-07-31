@@ -1,9 +1,11 @@
 # Novus
 
 A multiplayer coding harness for humans and AI agents. pnpm workspace: `apps/worker`
-(agent loop, tools, event server), `apps/desktop` (React + Electron), `apps/guest`
-(read-only browser viewer of one session's event log), `packages/contracts` (the Zod
-boundary all of them share).
+(agent loop, tools, event server), `apps/desktop` (React + Electron; hosts sessions,
+and joins another host's session from an invite), `apps/guest` (read-only browser
+viewer of one session's event log), `apps/session-service` (the relay),
+`packages/session-client` (the watch/join client the desktop and guest share),
+`packages/contracts` (the Zod boundary all of them share).
 
 ## Gate
 
@@ -40,6 +42,25 @@ pnpm typecheck && pnpm test && git diff --check
   over loopback as before — a host watching their own run should not need a
   relay standing up. Either way `?token=` is required; `?session=<id>` alone
   gets a 401. A relay off this machine must be `wss://`.
+- **The desktop hosts by default and joins on request — never both implicitly.**
+  A plain launch is hosting, exactly as it always was. `--join` (or
+  `NOVUS_JOIN=1`, or `NOVUS_JOIN=<invite link>`) opens a joining window: no
+  worker is spawned, no host token exists, and the terminal / file browser /
+  directory picker are refused at the IPC boundary, not merely unrendered. A
+  hosting window can also join without relaunching — Join, in the titlebar,
+  takes a pasted invite. A joined tab acts with the invite's role
+  (`GET /sessions/:id/me` says which, and follows handoffs); joined tabs are
+  deliberately not persisted, because the invite token is a credential.
+- **An invited token is for its session, not for the host.** The worker
+  refuses an invited caller on `POST /sessions` (opening repositories is
+  hosting) and `GET /sessions/history`, whatever role the invite carries.
+- **The default worker port moves when taken; a pinned one refuses.** Two
+  Novus instances on one machine used to collide on 4319 — the second app's
+  worker died with EADDRINUSE while its renderer health-checked the *first*
+  instance's worker and then 401'd all session. Now main probes first: the
+  default taken means the worker starts on a free port (the renderer learns
+  it over IPC, and minted invite links carry `?endpoint=`), while an
+  explicitly set `NOVUS_PORT` that is taken fails loudly at launch.
 - Ports: worker `4319` (`NOVUS_PORT`), desktop Vite `5273`, guest Vite `5274`. All
   loopback-only.
 - **Relay publishing is opt-in and outbound.** `pnpm --filter

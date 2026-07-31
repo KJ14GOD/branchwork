@@ -60,13 +60,39 @@ What is still missing, plainly:
 - **Requesting control has no UI trigger.** `control.requested` is a real
   event with a real route (`POST /sessions/:id/control/request`) any
   participant can call, and it renders in the timeline like anything else, but
-  no button calls it. The natural place would be the guest — the lower-privilege
-  participant asking the owner for control — and the guest client is
-  structurally read-only in this codebase (it has never issued a POST, per
-  `apps/guest`'s own description in AGENTS.md); wiring one in was judged out of
-  scope for this slice rather than something to bolt on quietly. Handoff itself
-  does not depend on it: the owner can hand off to anyone in the presence list
-  from the desktop UI without a request ever being made.
+  no button calls it. The natural place used to be argued away — the guest is
+  structurally read-only and has never issued a POST — but that argument
+  expired on 2026-07-30: the desktop's joined tab (below) is a
+  lower-privilege participant surface that already POSTs direction, and the
+  button has not been added there either. Handoff itself does not depend on
+  it: the owner can hand off to anyone in the presence list from the desktop
+  UI without a request ever being made.
+- **A teammate now joins in the Novus app itself, with honest limits.**
+  Since 2026-07-30 the desktop app has a join mode beside its hosting
+  default: a plain launch hosts exactly as before (no mode picker anywhere on
+  that path), while `--join` / `NOVUS_JOIN` opens a window that spawns no
+  worker at all, and a hosting window's titlebar Join button takes a pasted
+  invite without relaunching. A joined tab reads the same event stream the
+  browser guest reads — through `packages/session-client`, one shared client
+  rather than a third implementation — shows presence, and offers exactly
+  what `GET /sessions/:id/me` says the invite's role allows: direction for
+  editors, pause/resume/cancel for steer-holders, watch-only otherwise,
+  updating live across a handoff. The worker, not the UI, is the authority:
+  it newly refuses any invited caller `POST /sessions` and
+  `GET /sessions/history`, so an invite is a key to one session and nothing
+  else on the host. What this does not give you yet: joined tabs do not
+  survive a relaunch (the invite token is deliberately never persisted), a
+  relay join is watch-only in both directions and says so, approvals still
+  have no HTTP surface for a reviewer to act through, and cross-machine
+  joining needs the relay behind `wss://` — the plaintext refusal is
+  enforced in the shared client for the desktop exactly as for the browser,
+  and nobody has stood such a relay up, so same-machine joining is what is
+  actually proven (over real processes: a real worker, real invites, a real
+  `--join` Electron launch asserted to spawn nothing, and a second hosting
+  instance beside a live one landing on a fallback port without touching
+  it). The joined tab's own React code shares the renderer test-coverage gap
+  above; everything under it — launch plan, port choice, invite parsing,
+  transport, and the worker's enforcement — is tested.
 - **A handoff is atomic, not a two-step accept.** The protocol document below
   describes the recipient explicitly accepting a handoff; what is built
   transfers ownership the moment the owner clicks, the same way an invite
