@@ -93,9 +93,22 @@ const Attempt = ({
   /** Supplied by the host; absent for a guest, which cannot decide anything. */
   footer?: React.ReactNode;
 }) => (
-  <section className="compare__attempt">
+  <section
+    className={
+      attempt.baseline
+        ? "compare__attempt compare__attempt--baseline"
+        : "compare__attempt"
+    }
+  >
     <header className="compare__head">
       <span className="compare__label">{attempt.label}</span>
+      {attempt.baseline ? (
+        // Named, not decorated. This says which execution the alternatives
+        // branched from — it is not a badge for the leading candidate, and it
+        // must not read as one, so it gets the same weight as the status
+        // beside it rather than a colour of its own.
+        <span className="compare__origin">Current work</span>
+      ) : null}
       <span className="compare__status">{approachState(attempt)}</span>
     </header>
 
@@ -152,11 +165,13 @@ export const CompareView = ({
   footers?: Record<string, React.ReactNode>;
 }) => {
   if (comparison.attempts.length === 0) {
+    // Only reachable before any run has started. Once there is work in flight
+    // it is the baseline and appears here, so this no longer stands in for the
+    // far more common "nothing forked yet" — which is a comparison of one, not
+    // an empty screen.
     return (
       <div className="compare compare--empty">
-        <p className="compare__empty">
-          No attempts to compare yet. Fork a run to make two.
-        </p>
+        <p className="compare__empty">Nothing has run in this session yet.</p>
       </div>
     );
   }
@@ -164,12 +179,12 @@ export const CompareView = ({
   return (
     <div className="compare">
       {comparison.contestedPaths.length > 0 ? (
-        // First, because it is the question. Attempts that changed different
+        // First, because it is the question. Approaches that changed different
         // files are not really competing; the ones that changed the same file
         // are what somebody actually has to choose between.
         <div className="compare__contested">
           <span className="compare__contested-label">
-            Both attempts changed
+            Changed by more than one approach
           </span>
           {comparison.contestedPaths.map((path) => (
             <span className="compare__path" key={path}>
@@ -180,8 +195,8 @@ export const CompareView = ({
       ) : comparison.attempts.length > 1 ? (
         <div className="compare__contested">
           <span className="compare__contested-label">
-            The attempts changed different files — they are not competing for the
-            same lines.
+            These approaches changed different files — they are not competing
+            for the same lines.
           </span>
         </div>
       ) : null}

@@ -2858,10 +2858,19 @@ pre.kv__value {
   border-radius: var(--radius-l);
 }
 
+/*
+ * The baseline is the work in flight, so it is marked and not decorated: the
+ * same surface and the same border as every alternative beside it. A tinted
+ * card or an accent border here would read as "the recommended one", which is
+ * the one thing this screen is not allowed to say.
+ */
+.compare__attempt--baseline {
+  border-color: var(--border-strong);
+}
+
 .compare__head {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
   gap: var(--space-3);
 }
 
@@ -2872,7 +2881,25 @@ pre.kv__value {
   line-height: var(--leading-tight);
 }
 
+/*
+ * Sits with the status rather than with the title, because it describes where
+ * this approach came from and not how good it is. Muted for the same reason.
+ */
+.compare__origin {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  color: var(--text-dim);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--track-eyebrow);
+  white-space: nowrap;
+}
+
 .compare__status {
+  /* Pushed right by itself now that a third element can sit in this row. */
+  margin-left: auto;
   color: var(--text-dim);
   font-size: var(--text-eyebrow);
   font-weight: var(--weight-medium);
@@ -2977,6 +3004,20 @@ pre.kv__value {
   color: var(--text);
   font-size: var(--text-small);
   font-weight: var(--weight-medium);
+}
+
+/*
+ * Where the baseline's decision control would be. Sits at the same height as
+ * the buttons beside it so the row does not look like a card with something
+ * missing — there is nothing to click here, and saying why is the point.
+ */
+.compare__foot-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-height, 28px);
+  color: var(--text-dim);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
 }
 
 /* ---------- open a repository ---------- */

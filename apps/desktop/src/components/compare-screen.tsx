@@ -58,6 +58,9 @@ export const CompareScreen = ({
   const [forking, setForking] = useState(false);
 
   const count = state.comparison?.attempts.length ?? 0;
+  // One approach is the current work with nothing beside it yet — a real state
+  // with something on the screen, not the empty screen it used to be.
+  const alternatives = count === 0 ? 0 : count - 1;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -85,8 +88,10 @@ export const CompareScreen = ({
           <span className="compare-screen__title">Approaches</span>
           <span className="compare-screen__subtitle">
             {count === 0
-              ? "Every approach starts from the same recorded checkpoint and runs in its own worktree, so they cannot disturb each other."
-              : `${count} approach${count === 1 ? "" : "es"} · choose one on the evidence, not the summary`}
+              ? "Nothing has run yet. Every approach starts from the same recorded checkpoint and runs in its own worktree, so they cannot disturb each other."
+              : alternatives === 0
+                ? "The current work, with no alternative beside it yet. An approach starts from the same recorded checkpoint and runs in its own worktree, so it cannot disturb this one."
+                : `${count} approaches · decide on the evidence, not the summary`}
           </span>
         </div>
         <span className="titlebar__spacer" />
@@ -148,6 +153,16 @@ export const CompareScreen = ({
                   <span className="compare__chosen">
                     {state.decision.outcome.applied ? "Chosen · applied" : "Chosen"}
                   </span>
+                ) : attempt.baseline ? (
+                  // No button, and not because one is missing. Deciding means
+                  // adopting an alternative: the baseline's changes are already
+                  // in the working tree, so keeping it is what happens when you
+                  // decide nothing. A "choose" here would also have 404'd —
+                  // /decision resolves a run through the worktree manager, and
+                  // the baseline has no fork worktree to resolve.
+                  <span className="compare__foot-note">
+                    Already in the working tree. Keeping it needs no decision.
+                  </span>
                 ) : (
                   <button
                     className="button"
@@ -155,7 +170,7 @@ export const CompareScreen = ({
                     disabled={state.choosing}
                     onClick={() => state.choose(attempt.runId)}
                   >
-                    {state.choosing ? "Choosing…" : "Choose this approach"}
+                    {state.choosing ? "Choosing…" : "Adopt this approach"}
                   </button>
                 ),
               ]),
