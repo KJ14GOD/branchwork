@@ -112,8 +112,9 @@ export const InvitePanel = ({
         ) : (
           <>
             <p className="open__subtitle">
-              They get a read-only view of this session's live event log, over
-              loopback. Nothing about your machine is shared beyond it.
+              They join this session's live event log over loopback, with the
+              role you pick below — an Editor can steer and approve, not only
+              watch. Nothing about your machine is shared beyond the log.
             </p>
             <div className="open__field">
               <span className="eyebrow">Name</span>

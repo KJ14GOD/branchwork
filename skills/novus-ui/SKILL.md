@@ -737,10 +737,13 @@ the stream it already holds and passes that count as `useFileChanges`'s
 thing that can change the answer, so there is no reason to ask on a timer the
 way `use-presence.ts` has to (presence has no event to key off).
 
-Lives as the body grid's third column (`.files`, 220px, `.body`'s
-`grid-template-columns: 244px 1fr 220px`) — dropped entirely in the compare
-screen (`.body--compare: 244px 1fr`), because a fork's changed files belong
-to `CompareView`'s own per-attempt columns, not this session's panel.
+Lives as the body grid's third column (`.files`, `--files-w`, in `.body`'s
+`grid-template-columns: var(--rail-w) 1fr var(--files-w)`) — dropped entirely
+in the compare screen (`.body--compare: var(--rail-w) 1fr`), because a fork's
+changed files belong to `CompareView`'s own per-attempt columns, not this
+session's panel. The widths are tokens (`--rail-w`, `--files-w`, `--tree-w`)
+rather than literals; read them from `:root` rather than trusting a number
+quoted here, which is how this paragraph went stale once already.
 
 ## The boundaries that bite
 
@@ -761,24 +764,16 @@ to `CompareView`'s own per-attempt columns, not this session's panel.
   one inline style (`event-row.tsx`, `{minWidth: 0, flex: 1}`) breaks the
   guest, whose stylesheet knows nothing of your new class.
 - **The guest stylesheet is a deliberate mirror, and this pass put it much
-  further behind.** The guest now lacks the entire token system — scales,
-  planes-as-wells, `--inset`, the button and chip primitives — on top of tabs,
-  the files panel and the theme toggle. No `packages/ui` *markup* changed this
-  pass (only strings, which the guest renders identically), so nothing is
-  broken there; it simply looks like the old app. Mirroring the token block and
+  further behind.** This visual language lives only in
+  `apps/desktop/src/styles.css`. The guest now lacks the entire token system —
+  the spacing and type scales, planes-as-wells, `--inset`, the button and chip
+  primitives — on top of already lacking tabs, the files panel, and the theme
+  toggle. Nothing there is *broken*: no `packages/ui` markup changed this pass,
+  only display strings, which the guest renders identically. It simply looks
+  like the old app. Since the guest is single-session and read-only by design,
+  the real follow-up is narrower than it sounds — mirror the token block and
   the shared-component styles (`event`, `tool`, `patch`, `diff`, `kv`,
-  `matches`, `compare`) is now a real piece of work and should be one
-  deliberate pass, not drift. This visual language lives only in
-  `apps/desktop/src/styles.css`; the guest still has the old flat vocabulary, and now also lacks tabs, the files panel, and
-  the theme toggle — the guest is single-session and read-only by design, so
-  only the token block and the shared-component styles (`event`, `tool`,
-  `patch`, `diff`, `kv`, `matches`, `compare`) are the actual follow-up.
-  Mirror those in one deliberate pass, not by drift. This pass adds one more
-  concrete instance: `packages/ui/src/event-row.tsx` now emits
-  `.event__prose` for a `tool.requested` event that carries model text, since
-  that markup is shared — the guest will render the paragraph with no styling
-  at all until its stylesheet catches up, same category of gap as the rest of
-  this bullet, not a new one.
+  `matches`, `compare`) in one deliberate pass, not by drift.
 - **An unbounded xterm will blow the whole window's layout out.** This was
   found on screen at 1440px: opening the terminal expanded the body's middle
   grid column to **3316px** and pushed the session bar's actions off the right
