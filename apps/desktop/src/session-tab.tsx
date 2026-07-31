@@ -225,6 +225,35 @@ export const SessionTab = ({
     () => missionPhases(events, comparison.comparison),
     [events, comparison.comparison],
   );
+  /**
+   * What the evidence panel can honestly claim, from the comparison.
+   *
+   * Null until there is something to say — a session that has run nothing has
+   * no verification state, and drawing an empty block for it is the
+   * placeholder row this app has already been told to stop showing.
+   */
+  const evidenceVerdict = useMemo(() => {
+    const attempts = comparison.comparison?.attempts ?? [];
+
+    if (attempts.length === 0) {
+      return null;
+    }
+
+    const testsRun = attempts.reduce((total, attempt) => total + attempt.testsRun, 0);
+    const testsPassed = attempts.reduce(
+      (total, attempt) => total + attempt.testsPassed,
+      0,
+    );
+
+    return {
+      // Null when nothing ran anywhere. Not false, which would read as
+      // failing, and emphatically not true.
+      tests: testsRun === 0 ? null : testsPassed === testsRun,
+      testsRun,
+      testsPassed,
+      contested: comparison.comparison?.contestedPaths ?? [],
+    };
+  }, [comparison.comparison]);
   const fileTree = useFileTree(mode === "browse" ? session.repositoryPath : null);
   const turnModel = useTurnModel();
   const [filter, setFilter] = useState<Filter>("all");
@@ -955,7 +984,11 @@ export const SessionTab = ({
                 onDirect={(goal) => void direct(goal)}
               />
             </main>
-            <FileChangesPanel state={fileChanges} diffs={appliedDiffs} />
+            <FileChangesPanel
+              state={fileChanges}
+              diffs={appliedDiffs}
+              verdict={evidenceVerdict}
+            />
           </>
         )}
       </div>

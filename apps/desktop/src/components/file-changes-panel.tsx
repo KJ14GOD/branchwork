@@ -19,18 +19,86 @@ import type { FileChangesState } from "../use-file-changes.ts";
  * itself. The diffs come from the timeline the caller already holds — see
  * `appliedDiffsByPath` — so opening one costs no request.
  */
+/**
+ * What was actually proven, above what was merely touched.
+ *
+ * STEERING's evidence inspector "supplies the proof" while the canvas explains
+ * the decision. Changed files alone are not proof — they say something moved,
+ * not that it works — so verification leads and the file list follows.
+ *
+ * Absent when there is nothing to say. An empty verification block on a
+ * session that has not run anything is the kind of placeholder row this
+ * project has already been told to stop drawing.
+ */
+const Verification = ({ verdict }: { verdict: EvidenceVerdict | null }) => {
+  if (verdict === null) {
+    return null;
+  }
+
+  return (
+    <div className="evidence">
+      <span className="eyebrow">Verification</span>
+      <span
+        className={
+          verdict.tests === null
+            ? "evidence__line evidence__line--unknown"
+            : verdict.tests
+              ? "evidence__line evidence__line--pass"
+              : "evidence__line evidence__line--fail"
+        }
+      >
+        {/*
+          Never a tick for a run that tested nothing. This is the same rule the
+          compare screen and the exported receipt keep, in the third place a
+          person could otherwise read "finished" as "verified".
+        */}
+        {verdict.tests === null
+          ? "Tests not run — nothing here is verified"
+          : verdict.tests
+            ? `Tests passed (${verdict.testsRun})`
+            : `Tests failing (${verdict.testsPassed} of ${verdict.testsRun})`}
+      </span>
+
+      {verdict.contested.length > 0 ? (
+        <>
+          <span className="eyebrow">Contested files</span>
+          {verdict.contested.map((path) => (
+            <span className="evidence__path" key={path}>
+              {path}
+            </span>
+          ))}
+        </>
+      ) : null}
+    </div>
+  );
+};
+
+export type EvidenceVerdict = {
+  /** Null when nothing ran — not the same as failing, and never the same as passing. */
+  tests: boolean | null;
+  testsRun: number;
+  testsPassed: number;
+  /** Paths more than one approach changed. */
+  contested: string[];
+};
+
 export const FileChangesPanel = ({
   state,
   diffs,
+  verdict = null,
 }: {
   state: FileChangesState;
   /** Applied diffs by path. A file with no entry stays a flat row. */
   diffs: Map<string, PatchProposalView>;
+  /** Omitted by any caller that has no comparison to draw one from. */
+  verdict?: EvidenceVerdict | null;
 }) => {
   const [open, setOpen] = useState<string | null>(null);
 
   return (
     <aside className="files">
+      <Verification verdict={verdict} />
+
       <div className="files__head">
         <span className="eyebrow">Files changed</span>
         {state.files.length > 0 ? (

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { SessionEvent } from "@novus/contracts";
 
+import { FileChangesPanel } from "./file-changes-panel.tsx";
 import { TimelineView } from "./timeline-view.tsx";
 
 /**
@@ -110,4 +111,20 @@ test("a refusal is stated plainly and never dressed as an error", () => {
   // timeline should apologise for.
   assert.match(html, /1 refused/);
   assert.doesNotMatch(html, /error/i);
+});
+
+test("the evidence panel never draws a tick for a run that tested nothing", () => {
+
+  const html = renderToStaticMarkup(
+    <FileChangesPanel
+      state={{ files: [], additions: 0, deletions: 0, error: null, loading: false }}
+      diffs={new Map()}
+      verdict={{ tests: null, testsRun: 0, testsPassed: 0, contested: [] }}
+    />,
+  );
+
+  // The third place this rule has to hold, after the compare screen and the
+  // exported receipt. "Finished" must never be readable as "verified".
+  assert.match(html, /Tests not run/);
+  assert.doesNotMatch(html, /evidence__line--pass/);
 });
