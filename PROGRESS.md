@@ -73,7 +73,7 @@ Statuses against the exit conditions in V1_README's build order.
 | 1 — Foundation | **Met** | `apps/worker/src/reconnect.test.ts` drives one store to host and guest over a real SSE socket; SQLite store at `.novus/events.db`, replayed by `replay.test.ts` |
 | 2 — Single-agent harness | **Met**, live once per task (2026-07-29) | `benchmarks/{bug-fix,small-feature,repo-reasoning}/` via `./scripts/benchmark.sh`; scorer re-runs suites itself and applies a hidden test. Context assembly is the one Partial inside: goal + prior turns only, no repository context (`buildMessages`, `apps/worker/src/anthropic-model.ts`) |
 | 3 — Multiplayer control | **Met**, deterministic only | `pause-resume.test.ts`, `pause-resume-route.test.ts`, `handoff-route.test.ts`, `presence.test.ts`, `cancel-route.test.ts`; the routes table below. Never run against a live model; the shared leg of the evaluation grid is still unrun |
-| 4 — Fork and compare | **Met**, deterministic only (2026-07-30) | `fork-run.test.ts` (9 tests, incl. a rendezvous barrier that fails loudly if attempts secretly serialise), `apply-decision.test.ts`, `decision-route.test.ts`, `compare.test.ts`. Gaps 1–2 below are the known liabilities |
+| 4 — Fork and compare | **Met**, deterministic only (2026-07-31) | `fork-run.test.ts` (13 tests, incl. a rendezvous barrier that fails loudly if attempts secretly serialise), `apply-decision.test.ts`, `decision-route.test.ts`, `compare.test.ts`. Gaps 1–2 are now mostly closed — worktrees are reclaimed when a decision resolves them, and an attempt the worker died inside is failed at the next open — with the residue recorded on each |
 | 5 — Hardening | **Partial** | Reconnect, crash recovery, redaction, authorization, replay, multi-client: met (`reconnect.test.ts`, `replay.test.ts`, `session-registry.test.ts`, `redaction.test.ts`, `access.test.ts`). Packaging: **not started** — no builder/notarization/entitlements config exists anywhere. Exit condition (repeatable demo on a clean machine) not attempted |
 
 ## Capabilities
@@ -85,7 +85,7 @@ Statuses against the exit conditions in V1_README's build order.
 | Typed tool loop, budget-bounded (tokens, wall clock, cost, identical-read livelock check) | Met | `apps/worker/src/agent-runner.ts`, `agent-runner.test.ts`, `budget.test.ts` |
 | Tool failure returns as `is_error`, never ends a run | Met | `model-response.test.ts` (malformed calls, truncation), `tools.test.ts` |
 | Context assembly | Partial | Goal + prior turns + tool exchanges with elision budgets (`context-size.test.ts`). No repository-derived context: the model discovers the repo through its own tools |
-| Run receipts | Partial | `receipt.test.ts`. Counts `run_tests` only (gap 12); a resumed run's usage and budget clock restart (gap 4); `rates` are computed but stripped from the emitted receipt |
+| Run receipts | Partial | `receipt.test.ts` (16 tests). Now records every check — tests, build, typecheck, lint — and carries `verification`, so a run that finished having checked nothing reads as `unverified` rather than as a pass (gap 12). A resumed *run's* budget clock still restarts (gap 4); `rates` are computed but stripped from the emitted receipt (gap 6) |
 
 ### Native tools — sixteen
 
@@ -124,7 +124,7 @@ Statuses against the exit conditions in V1_README's build order.
 | Forks survive worker restart; decision still applies | Met | `WorktreeManager.adopt`; `fork-run.test.ts` |
 | Decision recorded and applied, conflicts refuse the whole apply | Met | `decision-route.test.ts`, `apply-decision.test.ts` |
 | Compare surfaces (rail, view switcher, screen) | Met | `apps/desktop/src/components/compare-screen.tsx`, `packages/ui/src/compare-view.tsx` |
-| Fork worktree teardown | **Not started** | `removeFork` exists with zero production callers (gap 1) |
+| Fork worktree teardown | **Mostly met** (2026-07-31) | `reclaimResolvedForks` sweeps at session open when an applied decision resolves an attempt; `collectableForks` is the policy, `assertUnderForkRoot` the deletion boundary. `fork-run.test.ts` test 11, `worktree-manager.test.ts` (policy, crafted paths, unowned forks). Undecided sessions still accumulate (gap 1) |
 
 ### Models, routing, and cost
 
@@ -175,35 +175,69 @@ exist** (gap 8).
 The single register. Each entry says what breaks and where the detail lives.
 Numbered so other documents can point at them.
 
-1. **Fork worktrees are never torn down.** `WorktreeManager.removeFork` /
-   `removeAll` exist and are called only by tests; nothing removes a
-   worktree when an attempt ends or a decision lands, so every fork
-   accumulates a full checkout on disk until someone deletes it by hand.
-2. **An attempt interrupted by a worker exit stays `running` forever.**
-   Every `run.failed` append site requires the in-process promise to
-   reject; session restore adopts recorded forks but never scans for a
-   `run.started` with no terminator. The compare screen, attempts rail, and
-   tab dot all report a dead attempt as live, indefinitely.
-3. **Dev servers are reaped on worker shutdown, not session close.** There
-   is no session-close path at all (no `DELETE /sessions/:id`, no registry
-   `close()`), so a server started by a session holds its port until the
-   worker process exits.
-4. **A resumed run's token usage and budget clock restart at zero.** Usage
-   is never logged per call, so there is nothing to rebuild it from; the
-   receipt reports only the segment since the last resume. Disclosed in
-   `agent-runner.ts`'s comments, invisible in the timeline.
+1. **Fork worktrees are torn down when a decision resolves them — and only
+   then.** *Mostly closed (2026-07-31.)* `SessionRegistry.reclaimResolvedForks`
+   sweeps at session open, using `collectableForks`: an attempt is collectable
+   when an applied `decision.recorded` follows it in the log and its run is
+   not paused or running. `pruneRecords` clears Git registrations whose
+   directories are already gone. `fork-run.test.ts` test 11 drives it through
+   the real routes; `worktree-manager.test.ts` covers the policy and the
+   deletion boundary (crafted paths, and a fork the manager does not own).
+   **Still open:** a session nobody ever decides in accumulates attempts
+   forever — the sweep has no trigger other than an applied decision, and
+   there is still no session-close path to hang one on (see gap 3). Deleting
+   an undecided attempt would destroy the only copy of its work, so the
+   conservative behaviour is deliberate, not an oversight.
+2. **An attempt interrupted by a worker exit is failed at the next session
+   open.** *Mostly closed (2026-07-31.)*
+   `SessionRegistry.reconcileInterruptedRuns` reads the projection at open and
+   appends `run.failed` for any run still `running`, with a reason naming the
+   interruption. Paused runs are untouched. `fork-run.test.ts` test 10 asserts
+   both directions in one log. **Still open:** liveness is only knowable
+   in-process. Two workers sharing one `NOVUS_DB` and one session id would let
+   one end a run the other is driving — guarded against for a session this
+   process already has open, and not otherwise. Proving it across processes
+   needs a heartbeat. Also: reconciliation runs at session *open*, so a
+   session nobody reopens keeps its stale `running` in the log.
+3. **Dev servers are reaped on every worker exit path, and before a worktree
+   is deleted — but there is still no session close.** *Partially closed
+   (2026-07-31.)* `process.on("exit")` now runs `killRunningCommands` and
+   `stopAllDevServers`, so an uncaught exception or a bare `process.exit` no
+   longer leaves detached servers holding ports; previously only SIGINT and
+   SIGTERM did. `stopDevServersUnder` takes down servers inside an attempt's
+   worktree before reclamation deletes it. **Still open:** there is no
+   session-close path at all (no `DELETE /sessions/:id`, no registry
+   `close()`), so a server a *session* started still holds its port until the
+   worker exits.
+4. **A single run's budget clock restarts on resume; a session's spend no
+   longer does.** *Partially closed (2026-07-31.)* `projectSession` folds
+   `receipt.created` into a session total, served by `GET /sessions/:id/usage`
+   and shown in the rail, so a resumed session reports what it has actually
+   spent instead of zero (`fork-run.test.ts` test 13 asserts this across a
+   real restart). **Still open, and this is the honest limit:** the per-*run*
+   budget that actually stops a runaway is still in-memory and still restarts
+   at zero on resume. No receipt is written at pause and per-call usage never
+   enters the log, so a paused-and-resumed run has nothing to rebuild its
+   counter from and can spend up to the full ceiling again per resume. Closing
+   it needs usage in the log at pause — an event-payload change, so read
+   `novus-extend-event-contract` first.
 5. **`claude-sonnet-5` is priced at its sticker rate** ($3/$15 per MTok)
    while an introductory rate ($2/$10) runs through 2026-08-31, so the fast
    tier's cost reads roughly 1.5x high until then. Deliberate — the default
    errs toward overstating and outlives the promotion; set
    `NOVUS_MODEL_PRICING` to reflect the intro rate meanwhile. Reasoning in
    `pricing.ts` beside the table.
-6. **Cost is computed and shown to nobody.** `costUsd` and `modelTimeMs`
-   accumulate per run, bound the budget, ride the receipt — and no desktop,
-   guest, or shared-UI component renders either. The receipt also strips
-   the `rates` that would let a reader judge the figure. A stale comment in
-   `contracts.ts` still claims cost is "deliberately absent" two lines
-   above the field that carries it.
+6. **Cost is on screen per run and per session.** *Mostly closed
+   (2026-07-31.)* The receipt row renders spend (`summariseReceipt` /
+   `formatSpend` in `packages/ui`, covered by `receipt-summary.test.ts`), and
+   the rail meter shows the session total from `GET /sessions/:id/usage`.
+   Null renders as "Cost not counted", never `$0.00` — a run reported as free
+   because nobody priced its model is a worse answer than one that admits it
+   does not know. **Still open:** the receipt still strips the `rates` that
+   would let a reader re-derive the figure (`ReceiptUsage` carries them,
+   `RunReceiptSchema.usage` does not); `modelTimeMs` is carried and rendered
+   nowhere; per-attempt spend is served by the route and named there, but the
+   compare screen does not yet draw it (that file belongs to another slice).
 7. **Nothing after 2026-07-29 has seen a live model call.** The standing
    caveat above; the single largest unknown in the project.
 8. **The renderer has no tests.** Zero test files under `apps/desktop/src`
@@ -222,9 +256,20 @@ Numbered so other documents can point at them.
 11. **Handoff is atomic, not a two-step accept** — the protocol section in
     V1_README describes recipient acceptance; what is built transfers
     ownership on the owner's click.
-12. **Receipts and projections count `run_tests` only.** A run that
-    verifies through `run_build` or `run_diagnostics` produces a receipt
-    with `tests: []` and prints "tests not run".
+12. **Receipts record every check, and separate finishing from being
+    verified.** *Closed (2026-07-31.)* `RunReceiptSchema` gained `checks`
+    (tests, build, typecheck, lint, with the structured problem count where a
+    checker reports one) and `verification` — `verified` / `failing` /
+    `unverified`. A run that checked nothing is `unverified` however cleanly
+    it finished; checks that ran before the final change are `unverified`
+    too, because a suite that passed against a tree that no longer exists
+    cannot vouch for this diff; a failing check outranks a missing one.
+    `receipt.test.ts` covers each branch, including a checker that fails with
+    output the parser did not recognise, which must not read as clean.
+    **Still open:** the *projection* half of the original claim —
+    `RunProjection.tests` and therefore `AttemptComparison.green` still see
+    `run_tests` only, so the compare screen's per-attempt verdict does not yet
+    reflect a build or a typecheck. `compare.ts` belongs to another slice.
 13. **Stale in-code doc claims** (owners notified rather than fixed here,
     since those files belong to active slices): `use-turn-model.ts`'s seam
     comment says the turns route "does not exist yet" — it exists and is
