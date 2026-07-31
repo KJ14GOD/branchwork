@@ -32,6 +32,23 @@ export type RunProjection = {
   approvals: { toolCallId: string; decision: "approved" | "denied" }[];
 };
 
+/**
+ * A pending or accepted transfer of control.
+ *
+ * Named rather than written inline inside `SessionProjection` because the fold
+ * below reads it back into a local, and an indexed access into a type that is
+ * still being inferred made that local circular.
+ */
+export type ControlOffer = {
+  offerEventId: string;
+  fromParticipantId: string;
+  toParticipantId: string;
+  /** Offered and not yet taken up, or accepted and awaiting a safe boundary. */
+  state: "offered" | "accepted";
+  offeredAt: string;
+  acceptedAt: string | null;
+};
+
 export type SessionProjection = {
   sessionId: string;
   /** Highest sequence folded in, so a projection can be resumed rather than redone. */
@@ -39,9 +56,37 @@ export type SessionProjection = {
   participants: Participant[];
   /** Who currently holds execution authority, by participant id. */
   controlHeldBy: string | null;
+  /**
+   * The handoff in flight, if any. "offered" is waiting on the recipient;
+   * "accepted" is waiting on a safe boundary. Declined, withdrawn, and
+   * transferred all clear it — a settled offer is history, not state.
+   */
+  controlOffer: ControlOffer | null;
+  /**
+   * Who has asked for control and not yet received it, oldest first, one per
+   * participant. A request is a standing fact until control reaches the
+   * requester or they leave — it must survive a refresh, or a controller who
+   * was not looking at the moment it arrived never learns it exists.
+   */
+  controlRequests: {
+    eventId: string;
+    participantId: string;
+    reason: string | null;
+    requestedAt: string;
+  }[];
   runs: RunProjection[];
-  /** Submitted but not yet applied, oldest first. */
-  pendingDirection: { eventId: string; direction: string }[];
+  /**
+   * Submitted but not yet applied, oldest first. Queued means a live run has
+   * committed to folding it in at its next safe boundary; still-unqueued means
+   * it is recorded and waits for the next execution.
+   */
+  pendingDirection: {
+    eventId: string;
+    direction: string;
+    submittedAt: string;
+    queuedForRunId: string | null;
+    queuedAt: string | null;
+  }[];
   /**
    * The most recent attempt a host chose on the compare screen, if any.
    *
@@ -87,9 +132,22 @@ export const projectSession = (
 
   const runs = new Map<string, RunProjection>();
   const participants = new Map<string, Participant>();
-  const submitted = new Map<string, string>();
+  const submitted = new Map<
+    string,
+    {
+      direction: string;
+      submittedAt: string;
+      queuedForRunId: string | null;
+      queuedAt: string | null;
+    }
+  >();
   const applied = new Set<string>();
+  const controlRequests = new Map<
+    string,
+    { eventId: string; participantId: string; reason: string | null; requestedAt: string }
+  >();
   let controlHeldBy: string | null = null;
+  let controlOffer: ControlOffer | null = null;
   let decision: SessionProjection["decision"] = null;
   let sequence = -1;
 
@@ -241,16 +299,106 @@ export const projectSession = (
           // is gone, which would read as a session under control when it is not.
           controlHeldBy = null;
         }
+
+        // A disconnect is not a departure: the recipient of an offer may come
+        // back and accept, so only a deliberate leave or a removal voids the
+        // handoff in flight and any standing request from the leaver.
+        if (event.payload.reason !== "disconnected") {
+          controlRequests.delete(event.payload.participantId);
+
+          if (
+            controlOffer &&
+            (controlOffer.toParticipantId === event.payload.participantId ||
+              controlOffer.fromParticipantId === event.payload.participantId)
+          ) {
+            controlOffer = null;
+          }
+        }
+        break;
+      }
+
+      case "control.requested": {
+        // Latest per participant: asking twice sharpens the one request
+        // rather than stacking duplicates in front of the controller.
+        controlRequests.set(event.payload.participantId, {
+          eventId: event.eventId,
+          participantId: event.payload.participantId,
+          reason: event.payload.reason ?? null,
+          requestedAt: event.occurredAt,
+        });
+        break;
+      }
+
+      case "control.offered": {
+        // A newer offer supersedes an unsettled one in the view. The server
+        // refuses to mint one while another is pending, but a projection must
+        // fold whatever log it is given without wedging.
+        controlOffer = {
+          offerEventId: event.eventId,
+          fromParticipantId: event.payload.fromParticipantId,
+          toParticipantId: event.payload.toParticipantId,
+          state: "offered",
+          offeredAt: event.occurredAt,
+          acceptedAt: null,
+        };
+        break;
+      }
+
+      case "control.accepted": {
+        // Written field by field rather than spread. The spread form tripped
+        // TypeScript into treating the narrowed local as non-object here, and
+        // naming the fields is clearer about what acceptance actually changes:
+        // the offer stands, its state advances, and the moment is recorded.
+        if (
+          controlOffer !== null &&
+          controlOffer.offerEventId === event.payload.offerEventId
+        ) {
+          controlOffer = {
+            offerEventId: controlOffer.offerEventId,
+            fromParticipantId: controlOffer.fromParticipantId,
+            toParticipantId: controlOffer.toParticipantId,
+            state: "accepted",
+            offeredAt: controlOffer.offeredAt,
+            acceptedAt: event.occurredAt,
+          };
+        }
+        break;
+      }
+
+      case "control.declined":
+      case "control.withdrawn": {
+        if (controlOffer?.offerEventId === event.payload.offerEventId) {
+          controlOffer = null;
+        }
         break;
       }
 
       case "control.transferred": {
         controlHeldBy = event.payload.toParticipantId;
+        // Control reaching the requester answers the request, and any offer
+        // in flight is settled by authority actually moving.
+        controlRequests.delete(event.payload.toParticipantId);
+        controlOffer = null;
         break;
       }
 
       case "direction.submitted": {
-        submitted.set(event.eventId, event.payload.direction);
+        submitted.set(event.eventId, {
+          direction: event.payload.direction,
+          submittedAt: event.occurredAt,
+          queuedForRunId: null,
+          queuedAt: null,
+        });
+        break;
+      }
+
+      case "direction.queued": {
+        const entry = submitted.get(event.payload.directionEventId);
+
+        if (entry) {
+          entry.queuedForRunId = event.payload.runId;
+          entry.queuedAt = event.occurredAt;
+        }
         break;
       }
 
@@ -281,10 +429,12 @@ export const projectSession = (
     sequence,
     participants: [...participants.values()],
     controlHeldBy,
+    controlOffer,
+    controlRequests: [...controlRequests.values()],
     runs: [...runs.values()],
     decision,
     pendingDirection: [...submitted.entries()]
       .filter(([eventId]) => !applied.has(eventId))
-      .map(([eventId, direction]) => ({ eventId, direction })),
+      .map(([eventId, entry]) => ({ eventId, ...entry })),
   };
 };
