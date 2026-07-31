@@ -23,8 +23,13 @@ import type { Theme } from "../use-theme.ts";
  *    runner, a compiler's diagnostics — rendered in xterm's stock palette,
  *    which is bright, saturated, and belongs to a different product. These
  *    are desaturated toward this app's own palette (`--add`, `--del`,
- *    `--warn-text` are used verbatim for green, red and yellow) so coloured
+ *    `--alert` are used verbatim for green, red and yellow) so coloured
  *    output reads as part of Novus rather than as a widget dropped into it.
+ *
+ *    ANSI is the one place the app's "green means added lines and nothing
+ *    else" rule does not reach, and deliberately so: the colour of `git`'s
+ *    output is `git`'s decision, not this app's. What Novus controls is the
+ *    *shade*, so a green from a program still looks like this product's green.
  *    This is not decoration: a terminal that cannot show sixteen colours
  *    cannot show `git diff`, and a terminal showing them in someone else's
  *    palette is the thing that looked unconsidered.
@@ -38,9 +43,9 @@ const TERMINAL_THEME: Record<Theme, ITheme> = {
     selectionBackground: "rgba(231, 231, 234, 0.18)",
 
     black: "#1b1b1f",
-    red: "#d4564f", // === --del (dark)
-    green: "#4ba85a", // === --add (dark)
-    yellow: "#d3a84c", // === --warn-text (dark)
+    red: "#c96a63", // === --del (dark)
+    green: "#5fa26c", // === --add (dark)
+    yellow: "#cfa055", // === --alert (dark)
     blue: "#6a8cc7",
     magenta: "#a97bc4",
     cyan: "#5aa8a0",
@@ -63,9 +68,9 @@ const TERMINAL_THEME: Record<Theme, ITheme> = {
     selectionBackground: "rgba(23, 23, 26, 0.12)",
 
     black: "#2b2b30",
-    red: "#b3382f", // === --del (light)
-    green: "#1f7a3d", // === --add (light)
-    yellow: "#7a5b16", // === --warn-text (light)
+    red: "#a8443c", // === --del (light)
+    green: "#28703f", // === --add (light)
+    yellow: "#7a5b16", // === --alert (light)
     blue: "#2f5aa8",
     magenta: "#7a3f96",
     cyan: "#10706a",

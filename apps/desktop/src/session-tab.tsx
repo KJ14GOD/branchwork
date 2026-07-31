@@ -798,24 +798,24 @@ export const SessionTab = ({
             <main className="timeline-column">
               <div className="timeline">
                 {trulyEmpty ? (
-                  <div className="timeline__empty">
+                  <div className="empty empty--page">
                     {status === "error" ? (
                       <>
-                        <p className="timeline__empty-title">No connection</p>
-                        <p className="timeline__empty-hint">
+                        <p className="empty__title">No connection</p>
+                        <p className="empty__hint">
                           The worker at {endpoint} is not answering. Reconnect
                           from the command palette, or check that it is running.
                         </p>
                       </>
                     ) : (
                       <>
-                        <p className="timeline__empty-title">Nothing has run yet</p>
-                        <p className="timeline__empty-hint">
+                        <p className="empty__title">Nothing has run yet</p>
+                        <p className="empty__hint">
                           Ask the agent to do something and every command,
                           patch and test it runs will appear here as it
                           happens.
                         </p>
-                        <div className="timeline__empty-facts">
+                        <div className="empty__facts">
                           <span className="chip">
                             {basename(session.repositoryPath)}
                           </span>

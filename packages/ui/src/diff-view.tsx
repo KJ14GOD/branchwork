@@ -6,22 +6,50 @@
  * diff has none of those, but below the header they are the same picture.
  */
 
-import { parseUnifiedDiff } from "./diff.ts";
+import { useMemo } from "react";
 
-export const DiffLines = ({ diff }: { diff: string }) => (
-  <div className="diff">
-    {parseUnifiedDiff(diff).map((line, index) => (
-      <div key={index} className={`diff__line diff__line--${line.kind}`}>
-        <span className="diff__num">{line.beforeLine ?? ""}</span>
-        <span className="diff__num">{line.afterLine ?? ""}</span>
-        <span className="diff__text">
-          {line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "}
-          {line.text}
-        </span>
-      </div>
-    ))}
-  </div>
-);
+import { CodeLine } from "./code-view.tsx";
+import { highlightDiffLines, parseUnifiedDiff } from "./diff.ts";
+
+/**
+ * `path` is optional and only improves the result: it tells the tokenizer
+ * which language a single-file patch is in. A `git diff` names its own files
+ * in its headers and needs nothing; an unknown or absent path means the diff
+ * renders exactly as it did before highlighting existed.
+ *
+ * Memoized on the diff text because a patch card re-renders whenever anything
+ * around it does, and a diff's tokens depend on nothing else.
+ */
+export const DiffLines = ({ diff, path }: { diff: string; path?: string }) => {
+  const lines = useMemo(
+    () => highlightDiffLines(parseUnifiedDiff(diff), path ?? null),
+    [diff, path],
+  );
+
+  return (
+    <div className="diff">
+      {lines.map((line, index) => (
+        <div key={index} className={`diff__line diff__line--${line.kind}`}>
+          <span className="diff__num">{line.beforeLine ?? ""}</span>
+          <span className="diff__num">{line.afterLine ?? ""}</span>
+          {/*
+            The marker stays a plain text child of .diff__text, exactly where
+            it was. Moving it into its own span would add a fourth child to a
+            grid the guest's stylesheet declares as three columns — see the
+            "packages/ui markup is shared" note in novus-ui/SKILL.md. The
+            highlighted runs are spans *inside* this element, which the guest
+            simply does not style, so a diff there renders as the plain text it
+            renders today.
+          */}
+          <span className="diff__text">
+            {line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "}
+            <CodeLine text={line.text} tokens={line.tokens} />
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 export type PatchProposalView = {
   path: string;
@@ -60,6 +88,6 @@ export const DiffView = ({ patch }: { patch: PatchProposalView }) => (
       <span className="patch__badge">{patch.status}</span>
     </div>
     <div className="patch__intent">{patch.intent}</div>
-    <DiffLines diff={patch.diff} />
+    <DiffLines diff={patch.diff} path={patch.path} />
   </div>
 );
