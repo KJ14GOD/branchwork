@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { Authority } from "../authority-contract.ts";
+import type { Authority } from "@novus/contracts/protocol";
 import type { PresenceEntry } from "../use-presence.ts";
 
 /**

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { isAuthority, type Authority } from "./authority-contract.ts";
+import { AuthorityResponseSchema, type Authority } from "@novus/contracts/protocol";
+
 import { authorization } from "./access.ts";
 
 /**
@@ -77,10 +78,10 @@ export const useAuthority = (
           return;
         }
 
-        const body: unknown = await response.json();
+        const parsed = AuthorityResponseSchema.safeParse(await response.json());
 
-        if (!cancelled && isAuthority(body)) {
-          setAuthority(body);
+        if (!cancelled && parsed.success) {
+          setAuthority(parsed.data);
         }
       } catch {
         // The event stream's own status already reports an unreachable worker.

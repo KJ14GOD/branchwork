@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
+import { AuthorityResponseSchema } from "@novus/contracts/protocol";
 import { InMemorySessionEventStore } from "@novus/session-service";
 
 import { FixedModelRouter, type ModelAdapter } from "./model.ts";
@@ -186,6 +187,46 @@ const startRun = async (url: string, sessionId: string): Promise<string> => {
 
   assert.fail("the run never started");
 };
+
+test("what /authority sends validates against the contract", async () => {
+  await withSession(async ({ url, sessionId, invite }) => {
+    // Populated rather than empty: every nullable field null is the one shape
+    // a wrong schema is most likely to accept by accident.
+    const editor = await invite("editor");
+    const runId = await startRun(url, sessionId);
+
+    await post(`${url}/sessions/${sessionId}/control/request`, editor.token, {
+      reason: "I have context on this",
+    });
+    await post(`${url}/sessions/${sessionId}/direction`, TOKEN, {
+      goal: "prefer the smaller change",
+    });
+    await offer(url, sessionId, TOKEN, editor.id);
+
+    const body = await fetch(`${url}/sessions/${sessionId}/authority`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    }).then((response) => response.json());
+
+    // The route's payload is annotated `Authority`, so the field *names* are
+    // compiler-checked. Nothing checks the values — a timestamp in the wrong
+    // format satisfies `string` and fails `z.string().datetime()` at the
+    // renderer, where it shows up as a panel that silently never populates.
+    const parsed = AuthorityResponseSchema.safeParse(body);
+
+    assert.equal(
+      parsed.success,
+      true,
+      parsed.success ? "" : JSON.stringify(parsed.error.issues, null, 2),
+    );
+
+    assert.equal(parsed.success && parsed.data.controlOffer?.state, "offered");
+    assert.equal(parsed.success && parsed.data.controlRequests.length, 1);
+    assert.equal(
+      parsed.success && parsed.data.pendingDirection[0]?.queuedForRunId,
+      runId,
+    );
+  });
+});
 
 test("offer then accept: control moves, and only after the acceptance", async () => {
   await withSession(async ({ url, sessionId, hostId, invite }) => {

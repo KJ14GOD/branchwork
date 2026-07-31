@@ -6,6 +6,7 @@ import {
 } from "node:http";
 
 import type { SessionEvent } from "@novus/contracts";
+import type { Authority } from "@novus/contracts/protocol";
 import {
   CancelRunRequestSchema,
   ControlRequestSchema,
@@ -963,9 +964,12 @@ export const startEventServer = (
       // It also makes the standing-fact rule true by construction: a client
       // that just opened asks this and learns that somebody requested control
       // an hour ago, without replaying anything.
+      // Annotated, not merely shaped like the contract. This is the one link
+      // between the fold and every renderer that the compiler can be made to
+      // check, and without it the two drift silently — a field renamed here
+      // leaves the panel blank rather than failing a build.
       const projection = projectionOf(session.id);
-
-      sendJson(response, 200, {
+      const payload: Authority = {
         // Which of these is the caller. A client cannot render authority
         // without it: "Maya in control" and "You are in control" are the same
         // fact and completely different screens, and the alternative is every
@@ -983,7 +987,9 @@ export const startEventServer = (
         // names the runs, so a client can say which execution is holding it up
         // rather than only that something is.
         executingRunIds: executingRunIds(session.id),
-      });
+      };
+
+      sendJson(response, 200, payload);
       return true;
     }
 
