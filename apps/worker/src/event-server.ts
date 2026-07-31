@@ -443,6 +443,62 @@ export const startEventServer = (
       return true;
     }
 
+    /**
+     * Cuts a checkpoint, builds an approach on it, and starts it running.
+     *
+     * The three steps are one operation and have to stay together: a
+     * checkpoint has to be on the log before anything is built from it, and a
+     * fork that is recorded and never started is the bug this project already
+     * shipped once — a directory with a label, and a compare screen comparing
+     * work that never happened.
+     */
+    const startRevision = async (
+      session: NonNullable<ReturnType<typeof sessions.get>>,
+      input: {
+        parentRunId: string;
+        label: string;
+        goal: string;
+        actorId: string;
+      },
+    ): Promise<string> => {
+      const history = store.list(session.id);
+      const checkpoint = await session.worktrees.createCheckpoint({
+        sessionId: session.id,
+        parentRunId: input.parentRunId,
+        parentSequence: history.length - 1,
+        agentState: `Revision requested at sequence ${history.length - 1}`,
+        goal: input.goal,
+        model: session.runner.modelSelection(),
+        toolPolicy: {
+          allowWrites: session.allowWrites,
+          allowCommands: session.allowCommands,
+        },
+      });
+
+      store.append({
+        sessionId: session.id,
+        actorId: input.actorId,
+        type: "checkpoint.created",
+        payload: { checkpoint },
+      });
+
+      const handle = await session.worktrees.createFork(checkpoint, {
+        runId: crypto.randomUUID(),
+        label: input.label,
+      });
+
+      store.append({
+        sessionId: session.id,
+        actorId: input.actorId,
+        type: "fork.created",
+        payload: { fork: handle.fork },
+      });
+
+      void sessions.startForkRun(session, handle, input.goal);
+
+      return handle.fork.runId;
+    };
+
     const forkMatch = /^\/sessions\/([^/]+)\/fork$/.exec(pathname);
 
     if (forkMatch && request.method === "POST") {
@@ -1274,7 +1330,50 @@ export const startEventServer = (
         },
       });
 
-      sendJson(response, 201, { decision: event.payload, eventId: event.eventId });
+      // A revision is a new attempt, not a note. Recording the feedback and
+      // stopping there left the person holding it with nowhere to put it, so
+      // the honest move is to cut another approach from the same checkpoint
+      // with the feedback folded into its goal — which also means the revision
+      // and the thing it revises can be compared, rather than one replacing
+      // the other in place.
+      //
+      // After the decision is on the log, and separately caught. The decision
+      // stands whether or not the follow-up attempt could be built; reporting a
+      // recorded decision as failed because a worktree could not be cut would
+      // be the same conflation the outcome language exists to prevent.
+      let revision: string | null = null;
+      let revisionError: string | null = null;
+
+      if (kind === "revision") {
+        try {
+          const original = store.list(session.id).findLast(
+            (candidate) =>
+              candidate.type === "checkpoint.created" &&
+              candidate.payload.checkpoint.id === handle.fork.checkpointId,
+          );
+          const previousGoal =
+            original?.type === "checkpoint.created"
+              ? original.payload.checkpoint.goal
+              : handle.fork.label;
+          const feedback = parsed.data.rationale ?? "Revise this approach.";
+
+          revision = await startRevision(session, {
+            parentRunId: handle.fork.parentRunId,
+            label: `${handle.fork.label} revised`,
+            goal: `${previousGoal}\n\nA reviewer asked for a revision of the previous attempt: ${feedback}`,
+            actorId: caller?.participant.id ?? "host",
+          });
+        } catch (error) {
+          revisionError = (error as Error).message;
+        }
+      }
+
+      sendJson(response, 201, {
+        decision: event.payload,
+        eventId: event.eventId,
+        ...(revision ? { revisionRunId: revision } : {}),
+        ...(revisionError ? { revisionError } : {}),
+      });
       return true;
     }
 

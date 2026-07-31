@@ -169,3 +169,92 @@ test("an unknown attempt is refused rather than silently ignored", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("requesting a revision writes nothing and cuts a new approach carrying the feedback", async () => {
+  const root = await repository();
+
+  try {
+    await withChosenAttempt(root, true, async ({ url, sessionId, runId }) => {
+      const before = await readFile(join(root, "answer.txt"), "utf8");
+
+      const response = await fetch(`${url}/sessions/${sessionId}/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({
+          runId,
+          kind: "revision",
+          rationale: "Right shape, but it drops the retry budget on reconnect.",
+        }),
+      });
+
+      assert.equal(response.status, 201);
+      const body = (await response.json()) as {
+        decision: { kind: string; outcome: { applied: boolean } };
+        revisionRunId?: string;
+        revisionError?: string;
+      };
+
+      // Asking for another pass is not adopting. Nothing may reach the tree.
+      assert.equal(body.decision.kind, "revision");
+      assert.equal(body.decision.outcome.applied, false);
+      assert.equal(await readFile(join(root, "answer.txt"), "utf8"), before);
+
+      // And it is not merely a note: the feedback becomes an approach, so the
+      // revision and the thing it revises can be compared rather than one
+      // quietly replacing the other.
+      assert.equal(body.revisionError, undefined);
+      assert.ok(body.revisionRunId, "no revision approach was started");
+      assert.notEqual(body.revisionRunId, runId);
+
+      const comparison = (await fetch(`${url}/sessions/${sessionId}/compare`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      }).then((response) => response.json())) as {
+        attempts: { runId: string; label: string }[];
+      };
+
+      const revision = comparison.attempts.find(
+        (attempt) => attempt.runId === body.revisionRunId,
+      );
+      assert.ok(revision, "the revision is not among the approaches");
+      assert.match(revision.label, /revised/);
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("keeping exploring records the decision and writes nothing", async () => {
+  const root = await repository();
+
+  try {
+    await withChosenAttempt(root, true, async ({ url, sessionId, runId }) => {
+      const before = await readFile(join(root, "answer.txt"), "utf8");
+
+      const response = await fetch(`${url}/sessions/${sessionId}/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({
+          runId,
+          kind: "exploration",
+          rationale: "Neither approach covers the reconnect path yet.",
+        }),
+      });
+
+      assert.equal(response.status, 201);
+      const body = (await response.json()) as {
+        decision: { kind: string; outcome: { applied: boolean } };
+        revisionRunId?: string;
+      };
+
+      assert.equal(body.decision.kind, "exploration");
+      assert.equal(body.decision.outcome.applied, false);
+
+      // Nothing written and nothing started: "keep exploring" says the work is
+      // not finished, not that a particular next attempt was asked for.
+      assert.equal(await readFile(join(root, "answer.txt"), "utf8"), before);
+      assert.equal(body.revisionRunId, undefined);
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
