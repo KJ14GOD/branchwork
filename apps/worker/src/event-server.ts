@@ -732,18 +732,22 @@ export const startEventServer = (
       // every attempt the moment the worker restarted — the log remembered
       // them, and their evidence, the whole time.
       const events = store.list(session.id);
-      const attempts = events.flatMap((event) =>
+      // parentRunId comes along now: it is what lets the comparison include the
+      // execution the forks branched from, rather than showing alternatives
+      // with nothing to be alternatives to.
+      const forks = events.flatMap((event) =>
         event.type === "fork.created"
           ? [
               {
                 runId: event.payload.fork.runId,
                 label: event.payload.fork.label,
+                parentRunId: event.payload.fork.parentRunId,
               },
             ]
           : [],
       );
 
-      sendJson(response, 200, compareAttempts(session.id, events, attempts));
+      sendJson(response, 200, compareAttempts(session.id, events, forks));
       return true;
     }
 

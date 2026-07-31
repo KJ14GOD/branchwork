@@ -13,6 +13,7 @@ import { ComparisonSchema } from "@novus/contracts/protocol";
 const attempt = (over: Record<string, unknown> = {}) => ({
   runId: "fork-a",
   label: "locking",
+  baseline: false,
   status: "completed",
   summary: "Fixed the lock ordering.",
   failure: null,
@@ -43,6 +44,24 @@ test("a comparison carries no score, rank, or recommendation", () => {
   for (const forbidden of ["score", "rank", "recommended", "winner", "best"]) {
     assert.ok(!shape.includes(forbidden), `attempts carry a ${forbidden}`);
   }
+});
+
+test("a comparison of one is valid: work that has not branched still shows", () => {
+  const parsed = ComparisonSchema.parse({
+    attempts: [attempt({ baseline: true, label: "Baseline" })],
+    contestedPaths: [],
+    uniquePaths: { "fork-a": [] },
+    decision: null,
+  });
+
+  // The screen is not "empty until you fork". One approach is a real state, and
+  // the schema has to admit it or the pre-fork view has nothing to render.
+  assert.equal(parsed.attempts.length, 1);
+  assert.equal(parsed.attempts[0]?.baseline, true);
+
+  // And baseline is not a verdict wearing another name: it says which execution
+  // the alternatives branched from, and carries no evidence of its own.
+  assert.equal(parsed.decision, null);
 });
 
 test("green is nullable, because running no tests is not passing them", () => {

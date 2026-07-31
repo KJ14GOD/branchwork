@@ -133,6 +133,17 @@ export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 export const AttemptComparisonSchema = z.object({
   runId: z.string().min(1),
   label: z.string().min(1),
+  /**
+   * The execution the alternatives are alternatives *to*.
+   *
+   * At most one attempt carries it, and it is not a rank: the baseline is the
+   * work already in flight, not the leading candidate. The screen drew only
+   * forks before this existed, so a session with no fork yet showed an empty
+   * comparison — a decision surface with nothing on it — and a session with one
+   * fork showed the alternative without the thing it was an alternative to.
+   * One approach on screen is the correct state for work that has not branched.
+   */
+  baseline: z.boolean(),
   status: z.enum(["running", "paused", "completed", "failed", "cancelled"]),
   summary: z.string().min(1).nullable(),
   failure: z.string().min(1).nullable(),

@@ -82,6 +82,99 @@ const finish = (store: InMemorySessionEventStore, runId: string, summary: string
     payload: { runId, summary },
   });
 
+test("the work in flight is on the screen before anything has been forked", () => {
+  const store = new InMemorySessionEventStore();
+
+  startRun(store, "run-1", "Fix the locking");
+  applyPatch(store, "run-1", "src/lock.ts", 12, 3);
+
+  const comparison = compareAttempts(SESSION, store.list(SESSION), []);
+
+  // One approach, not zero. The screen used to draw forks only, so a session
+  // that had not branched yet was a decision surface with nothing on it — and
+  // the first fork then appeared as an alternative to nothing.
+  assert.equal(comparison.attempts.length, 1);
+  assert.equal(comparison.attempts[0]?.runId, "run-1");
+  assert.equal(comparison.attempts[0]?.baseline, true);
+  assert.equal(comparison.attempts[0]?.additions, 12);
+});
+
+test("the baseline is the run the forks branched from, not the newest one", () => {
+  const store = new InMemorySessionEventStore();
+
+  startRun(store, "turn-1", "Fix the locking");
+  applyPatch(store, "turn-1", "src/lock.ts", 5, 0);
+  finish(store, "turn-1", "Fixed it one way.");
+
+  startRun(store, "fork-a", "Fix the locking differently");
+  applyPatch(store, "fork-a", "src/lock.ts", 9, 1);
+
+  // The parent kept going after the fork was taken. Comparing the fork against
+  // this run would line it up against work it branched before and never saw.
+  startRun(store, "turn-2", "Something else entirely");
+  applyPatch(store, "turn-2", "src/unrelated.ts", 80, 0);
+
+  const comparison = compareAttempts(SESSION, store.list(SESSION), [
+    { runId: "fork-a", label: "differently", parentRunId: "turn-1" },
+  ]);
+
+  const baseline = comparison.attempts.find((attempt) => attempt.baseline);
+
+  assert.equal(baseline?.runId, "turn-1");
+  assert.equal(comparison.attempts.length, 2);
+  assert.equal(
+    comparison.attempts.some((attempt) => attempt.runId === "turn-2"),
+    false,
+  );
+
+  // And the two of them genuinely disagree about the same file, which is the
+  // comparison a reviewer is here to make.
+  assert.deepEqual(comparison.contestedPaths, ["src/lock.ts"]);
+});
+
+test("exactly one attempt is the baseline, and being it is not a verdict", () => {
+  const store = new InMemorySessionEventStore();
+
+  startRun(store, "turn-1", "Original");
+  applyPatch(store, "turn-1", "src/a.ts", 3, 0);
+  startRun(store, "fork-a", "One way");
+  startRun(store, "fork-b", "Another way");
+
+  const comparison = compareAttempts(SESSION, store.list(SESSION), [
+    { runId: "fork-a", label: "a", parentRunId: "turn-1" },
+    { runId: "fork-b", label: "b", parentRunId: "turn-1" },
+  ]);
+
+  assert.equal(comparison.attempts.filter((attempt) => attempt.baseline).length, 1);
+
+  // The baseline leads because it is the work already in flight, not because it
+  // is winning. Nothing on it says it is preferred, and it carries no evidence
+  // the alternatives do not carry in the same fields.
+  const baseline = comparison.attempts[0];
+  assert.equal(baseline?.baseline, true);
+  assert.equal("recommended" in (baseline ?? {}), false);
+  assert.equal("score" in (baseline ?? {}), false);
+  assert.equal(comparison.decision, null);
+});
+
+test("a fork of a fork does not make its parent appear twice", () => {
+  const store = new InMemorySessionEventStore();
+
+  startRun(store, "turn-1", "Original");
+  startRun(store, "fork-a", "One way");
+  startRun(store, "fork-b", "A variation on the fork");
+
+  const comparison = compareAttempts(SESSION, store.list(SESSION), [
+    { runId: "fork-a", label: "a", parentRunId: "turn-1" },
+    { runId: "fork-b", label: "b", parentRunId: "fork-a" },
+  ]);
+
+  const ids = comparison.attempts.map((attempt) => attempt.runId);
+
+  assert.deepEqual([...new Set(ids)], ids);
+  assert.equal(comparison.attempts.filter((attempt) => attempt.baseline).length, 0);
+});
+
 test("two attempts are lined up on the evidence, not ranked", () => {
   const store = new InMemorySessionEventStore();
 
@@ -96,8 +189,8 @@ test("two attempts are lined up on the evidence, not ranked", () => {
   finish(store, "fork-b", "Reworked the retry policy.");
 
   const comparison = compareAttempts(SESSION, store.list(SESSION), [
-    { runId: "fork-a", label: "locking" },
-    { runId: "fork-b", label: "retries" },
+    { runId: "fork-a", label: "locking", parentRunId: "parent" },
+    { runId: "fork-b", label: "retries", parentRunId: "parent" },
   ]);
 
   const [a, b] = comparison.attempts;
@@ -123,7 +216,7 @@ test("an attempt that ran no tests is not green", () => {
   finish(store, "fork-a", "Changed it. Did not run the tests.");
 
   const comparison = compareAttempts(SESSION, store.list(SESSION), [
-    { runId: "fork-a", label: "untested" },
+    { runId: "fork-a", label: "untested", parentRunId: "parent" },
   ]);
 
   // Null, not true. A tick here would tell somebody an unverified attempt was
@@ -144,8 +237,8 @@ test("files both attempts changed are named as contested", () => {
   applyPatch(store, "fork-b", "src/only-b.ts", 2, 0);
 
   const comparison = compareAttempts(SESSION, store.list(SESSION), [
-    { runId: "fork-a", label: "a" },
-    { runId: "fork-b", label: "b" },
+    { runId: "fork-a", label: "a", parentRunId: "parent" },
+    { runId: "fork-b", label: "b", parentRunId: "parent" },
   ]);
 
   // The distinction that matters: two attempts touching different files are not
@@ -167,7 +260,7 @@ test("a failed attempt is compared rather than hidden", () => {
   });
 
   const comparison = compareAttempts(SESSION, store.list(SESSION), [
-    { runId: "fork-a", label: "failed one" },
+    { runId: "fork-a", label: "failed one", parentRunId: "parent" },
   ]);
 
   // Why an attempt failed is evidence too. Dropping it would leave a reviewer
@@ -203,7 +296,7 @@ test("only proposals that were applied count as changes", () => {
   });
 
   const comparison = compareAttempts(SESSION, store.list(SESSION), [
-    { runId: "fork-a", label: "proposed only" },
+    { runId: "fork-a", label: "proposed only", parentRunId: "parent" },
   ]);
 
   // A denial prevented this. Counting it would show a reviewer 30 lines that

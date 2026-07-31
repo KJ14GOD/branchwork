@@ -19,6 +19,8 @@ import { projectSession, type RunProjection } from "./projection.ts";
 export type AttemptComparison = {
   runId: string;
   label: string;
+  /** The execution the alternatives branched from. At most one, never a rank. */
+  baseline: boolean;
   status: RunProjection["status"];
   summary: string | null;
   failure: string | null;
@@ -52,12 +54,14 @@ export type Comparison = {
 const compareAttempt = (
   run: RunProjection,
   label: string,
+  baseline: boolean,
 ): AttemptComparison => {
   const testsPassed = run.tests.filter((test) => test.passed).length;
 
   return {
     runId: run.runId,
     label,
+    baseline,
     status: run.status,
     summary: run.summary,
     failure: run.failure,
@@ -71,19 +75,59 @@ const compareAttempt = (
   };
 };
 
+/**
+ * Which run the alternatives are alternatives to.
+ *
+ * A fork branches from a checkpoint of one specific run, so when forks exist
+ * the honest baseline is the run they branched from — not simply the newest
+ * one. Forking at turn three and then continuing the parent to turn four would
+ * otherwise line the fork up against work it never saw.
+ *
+ * With no forks yet there is nothing to have branched from, and the baseline is
+ * the latest run: the work currently in flight, which is exactly what a first
+ * alternative would be compared against.
+ */
+const baselineRunId = (
+  projected: ReturnType<typeof projectSession>,
+  forks: readonly { runId: string; parentRunId: string }[],
+): string | null => {
+  const branchedFrom = forks.at(-1)?.parentRunId;
+
+  if (branchedFrom !== undefined) {
+    return branchedFrom;
+  }
+
+  return projected.runs.at(-1)?.runId ?? null;
+};
+
 export const compareAttempts = (
   sessionId: string,
   events: readonly SessionEvent[],
-  attempts: readonly { runId: string; label: string }[],
+  forks: readonly { runId: string; label: string; parentRunId: string }[],
 ): Comparison => {
   const projected = projectSession(sessionId, events);
   const compared: AttemptComparison[] = [];
 
-  for (const attempt of attempts) {
+  // The baseline leads because it is the work in flight, not because it is
+  // winning. Ordering is the one ranking signal a screen gives away for free,
+  // so the alternatives that follow stay in the order they were created rather
+  // than in any order derived from their evidence.
+  const baseline = baselineRunId(projected, forks);
+  const forkIds = new Set(forks.map((fork) => fork.runId));
+  const baselineRun =
+    baseline !== null && !forkIds.has(baseline)
+      ? projected.runs.find((entry) => entry.runId === baseline)
+      : undefined;
+
+  if (baselineRun) {
+    compared.push(compareAttempt(baselineRun, "Baseline", true));
+  }
+
+  for (const attempt of forks) {
     const run = projected.runs.find((entry) => entry.runId === attempt.runId);
 
     if (run) {
-      compared.push(compareAttempt(run, attempt.label));
+      compared.push(compareAttempt(run, attempt.label, false));
       continue;
     }
 
@@ -105,6 +149,7 @@ export const compareAttempts = (
       compared.push({
         runId: attempt.runId,
         label: attempt.label,
+        baseline: false,
         status: "failed",
         summary: null,
         failure: failed.payload.reason,
