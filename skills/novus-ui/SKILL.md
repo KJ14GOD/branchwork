@@ -11,7 +11,109 @@ absence is what made the app read flat; break one and that flatness returns
 locally, which is worse than globally because it shows.
 
 All tokens live in `:root` at the top of `apps/desktop/src/styles.css`. Do not
-introduce a literal where a token exists.
+introduce a literal where a token exists — and after the scales below, a token
+exists for essentially everything.
+
+## Scales
+
+This is the section the rest of the file now hangs off, and it is the one that
+did not exist. `:root` used to define radii, easing and font families and
+nothing else: no spacing scale, no type scale. Every padding, gap, margin and
+font-size across ~1600 lines was therefore hand-picked at its call site, and
+every type size sat inside a 10–13px band.
+
+**That absence was the "extremely vibecoded and generic" complaint, stated
+mechanically.** Values that do not come from a system cannot produce rhythm,
+and a type scale whose steps are 10/11/12/13 cannot produce hierarchy — nothing
+can read as more important than anything else because nothing is meaningfully
+bigger than anything else. Neither problem is fixable by nudging individual
+values, which is why the fix was a full refactor rather than a pass of tweaks.
+
+**Spacing** — `--space-1`…`--space-8`: 2, 4, 8, 12, 16, 24, 32, 48. Base 4 with
+real jumps at the top. Named by intent in the stylesheet's own comment
+(hairline / tight / compact / default / comfortable / roomy / section / page)
+so the right step is obvious at the call site and adjacent steps do not get
+picked by feel.
+
+**Type** — `--text-eyebrow` 11, `--text-micro` 12, `--text-small` 13,
+`--text-body` **14**, `--text-title` 16, `--text-screen` 19, `--text-hero` 24.
+
+- **Body went 12px → 14px.** "Everything still feels very small/tiny in the
+  grand scheme of things" was direct feedback. This is a desktop application,
+  not a terminal status line; 14px is what GitHub, Zed and Linear use for body
+  text. Sizes came up across the board as a consequence, not as a separate
+  decision.
+- The bottom three steps are deliberately close, because dense technical data
+  has to live somewhere and a diff gutter cannot be 16px. **Hierarchy does not
+  come from that end.** It comes from 14 → 16 → 19 → 24, which are real jumps.
+  The old scale had no step above 14 at all, which is exactly why nothing on
+  screen had a top.
+
+**Line height** — `--leading-flat` 1.15 (single-line chrome where the box sets
+the height), `--leading-tight` 1.35 (headings), `--leading-normal` 1.5,
+`--leading-prose` 1.65 (anything the model or a person wrote).
+
+**Weight** — `--weight-normal` 400, `--weight-medium` 500, `--weight-strong`
+600. **"500 is the app-wide maximum weight" is superseded.** That rule existed
+because mono bolds optically fast, and it stopped being true for chrome the
+moment the type split put chrome on a proportional face. 600 is now correct for
+headings and primary buttons. 500 remains the maximum on anything set in
+`--mono` — the original reasoning still holds there, and that is the selector
+list near the top of the stylesheet.
+
+**Control heights** — `--control-s` 24, `--control-m` 30, `--control-l` 36. A
+design system sizes its controls; picking a height per button is how you end up
+with five buttons that are all almost the same height.
+
+**Layout** — `--bar-h` 40, `--session-bar-h` 46, `--rail-w` 264, `--files-w`
+240, `--tree-w` 236.
+
+### What is still allowed to be a literal
+
+Geometry, not rhythm, and each one carries an inline comment saying so:
+
+- 1px/2px hairlines and accent bars (a border is not a spacing step)
+- dot and glyph diameters (6px dots, 12px glyph cells)
+- grid track widths, min-widths, max-widths (component geometry)
+- percentages, viewport units, `ch`, and `999px` for a pill
+
+Anything else that is not a `var()` is a bug. **A half-migrated stylesheet is
+worse than either extreme**, because the next person cannot tell which values
+are load-bearing.
+
+## The nesting rule
+
+> **At most one border between you and the canvas.**
+
+If a container already sits inside something bordered, it separates with
+**space** and a **plane change**, never another line.
+
+"Too many boxes in boxes, very rectangular — I'm looking for something more
+free flowing" was direct feedback, and the cause was mechanical rather than
+aesthetic: almost every separation in the stylesheet was a 1px border, so a
+panel inside a panel inside a body genuinely *was* three nested rectangles.
+
+What this changed, concretely:
+
+- **Tool cards and patch cards lost their borders and became wells.** A tool is
+  mostly output, and "output sinks, chrome rises" (see *Planes*) already said
+  where output belongs — so the plane change now does the separating a border
+  used to. That removes one rectangle from every single tool call.
+- **`.patch` lost three lines, not one**: its own border, the rule under its
+  head, and the rule under its intent.
+- **Rail sections separate with `--space-6`,** not rules. Single biggest
+  de-boxing move in the file.
+- **`--inset`** is new: "one step deeper than whatever you are on", expressed as
+  a *black* alpha (`rgb(0 0 0 / 0.28)` dark, `rgb(20 20 22 / 0.05)` light) so it
+  darkens on any plane instead of being tuned for one. It is what a nested well
+  uses — a raw payload inside a tool card, a diff inside a patch card, the
+  segmented control's track, the permissions group. There is no plane below
+  `--bg-well`, so this is how you go deeper without inventing one.
+
+Two places deliberately keep a line, and both earn it: `.tool-group__body`'s
+left rule is the thread tying a group's events to the header above them, which
+space alone cannot say; and the rail/files/tree outer edges are genuine region
+boundaries.
 
 ## Theme
 
@@ -21,9 +123,8 @@ Two token blocks, both in `:root` at the top of `styles.css`: `:root,
 React mounts, not in an effect — and kept there by `use-theme.ts`'s
 `useTheme()` hook, which persists the choice to `localStorage`
 (`novus.theme`) and defaults to `prefers-color-scheme` when nothing is
-stored. The toggle itself lives in `app.tsx`'s titlebar (`.titlebar__action`,
-labelled with the theme switching *to*, matching the "attempts"/"timeline"
-convention). `apps/desktop/index.html`'s `color-scheme` meta tag is `dark
+stored. The toggle itself lives in `app.tsx`'s titlebar (`.icon-button`,
+labelled with the theme switching *to* — "Light" while dark). `apps/desktop/index.html`'s `color-scheme` meta tag is `dark
 light` — both, not just dark, or the UA assumes the page never supports light
 before any CSS has run.
 
@@ -111,11 +212,16 @@ control lifting.
 
 ## Radii
 
-`--radius-s` 3px (chips, kbd, badges), `--radius-m` 5px (controls, inputs,
-rows, timeline cards), `--radius-l` 8px (panels, palette, modal, compare
-cards). Outer always ≥ inner — nested radius is the cheapest depth cue there
-is. Cards with full-bleed children (`.tool`, `.patch`, `.palette`) need
-`overflow: hidden` or the child's background pokes the corner.
+`--radius-s` **4px** (chips, kbd, badges), `--radius-m` **7px** (controls,
+inputs, rows, timeline cards), `--radius-l` **12px** (panels, palette, modal,
+compare cards), `--radius-pill` 999px (chips, counts, badges).
+
+Raised from 3/5/8. "Very rectangular" was feedback about the whole screen, and
+a larger radius on the containers that survived the border-removal pass is half
+the answer — space is the other half. Outer always ≥ inner; nested radius is
+the cheapest depth cue there is. Cards with full-bleed children (`.tool`,
+`.patch`, `.palette`) need `overflow: hidden` or the child's background pokes
+the corner.
 
 ## Shadows
 
@@ -161,18 +267,30 @@ Two faces now, both tokens in `:root`:
   technical-content classes join that list; new chrome/prose classes do not
   need to do anything, since `--font-ui` is body's default.
 
-Hierarchy still comes from exactly one extra weight and one extra size, on
-top of the font split:
+**"Hierarchy comes from one extra weight and one extra size" is superseded**
+by the type scale in *Scales* above — that framing was a description of having
+no scale. Hierarchy now comes from the scale's own jumps. What survives:
 
-- **500 is the app-wide maximum weight** (mono bolds optically fast).
-  It marks eyebrows (the 10px uppercase tracked labels), panel titles, and
-  primary data (`.stat__value`, `.tool__name`, `.patch__path`).
-- 14px exists for a small set of hero moments: the open panel title, the
-  timeline empty state's title line, and the file viewer's empty hint.
-  Everything else is the 10/11/12/13 scale that was already here.
-- Wide tracking (0.06–0.16em) is for uppercase eyebrows only. Never track
-  sentence-case text.
-- Floor is 10px, and only for uppercase eyebrows; body stays 12px.
+- Wide tracking (`--track-eyebrow`, 0.09em) is for uppercase eyebrows only.
+  Never track sentence-case text.
+- The floor is `--text-eyebrow` (11px) and only for uppercase eyebrows.
+- **`.eyebrow` is a single primitive**, not a per-region label class. Every
+  section title in the rail, the panels and the open screen uses it. It
+  replaced `.rail__label` and `.open__label`, which were two hand-tuned
+  near-matches for the same thing.
+
+### Tone
+
+**Capitalise the first letter of every user-visible string.** The lowercase
+`invite` / `attempts` / `terminal` / `browse` chrome read as affected, and was
+called out as such.
+
+Machine-shaped values are the trap: run status, stream state and participant
+roles all arrive lowercase because that is how they are spelled in
+`packages/contracts`, and rendering the contract's spelling verbatim is how
+they got on screen that way. `session-tab.tsx`'s `sentenceCase()` fixes it **at
+the render boundary** — the contract keeps its spelling, the screen gets a
+capital. Do not "fix" this by changing the contract.
 
 ## Motion
 
@@ -192,13 +310,27 @@ the one exemption (focused by construction; its lit bottom rule is the
 affordance). If you add a focusable element you get the ring for free; do not
 `outline: none` anything without replacing it.
 
-## Buttons
+## Buttons and chips
 
-Two kinds. `.open__submit` is the primary: raised fill, strong border,
-weight 500. `.open__browse` is the quiet one: transparent until hover.
-`.titlebar__action` is the ghost for chrome. All three have `:hover`,
-`:active`, and `:disabled` states — a new button variant needs all three or
-it will be the one control that snaps.
+Three button variants, one geometry, all sized from `--control-*`:
+
+- **`.button`** — quiet: transparent until hover. The default.
+- **`.button--primary`** — raised fill, strong border, weight 600.
+- **`.icon-button`** — the ghost for chrome: no border at all, hover fill only.
+- **`.button--large`** is a size modifier (`--control-l`), not a fourth variant.
+
+Every variant has `:hover`, `:active` and `:disabled`. A new variant needs all
+three or it will be the one control that snaps.
+
+This replaced `.open__submit` / `.open__browse` / `.titlebar__action`, which
+were three per-location button classes that happened to be used everywhere —
+so "the quiet button" was spelled `open__browse` in the rail, in the compare
+screen and in the invite modal.
+
+**`.chip`** is the matching primitive for a small stated fact: permissions,
+repository state, the session facts in the empty state. `--allow` (green) and
+`--warn` (amber) are its two modifiers. It replaced `.titlebar__writes` and
+`.titlebar__warn`, which were near-identical.
 
 ## Tabs
 
@@ -263,7 +395,7 @@ wrapper and renders just `.open__panel modal`, which the caller (`App`) wraps
 in `.overlay`. One component, two contexts — do not fork it into a second
 "new tab" form.
 
-## Ask flow
+## Composer
 
 **"`/` overlay, not a chat bar" is superseded.** That was this app's earlier
 position on how a person asks the agent something, and direct feedback
@@ -274,29 +406,111 @@ a platform" complaint the rest of this pass answers. Do not revert to
 governs decoration, not discoverability, and a control nobody can find is not
 restrained, it is hidden.
 
-`ask-bar.tsx` is a persistent, always-visible control docked at the bottom of
-the timeline column (`.ask-bar`, inside `.timeline-column` alongside the
-scrollable `.timeline` above it), not a modal and not conditional on any
-mode. This is the shape every tool researched for this that serves both a
-chat-style and a command-driven audience converges on — Zed's agent panel
-keeps a permanently docked, bottom-pinned message editor *and* a separate
-`Cmd+Shift+P` command palette, and the two do not compete because they answer
-different questions ("what do I want to say" vs. "what do I want to run").
-Novus now does the same split:
+**`ask-bar.tsx` is superseded by `components/composer.tsx`.** The ask bar was
+a one-line textarea and a button on a bar with a rule above it — three nested
+rectangles to type one sentence into — and the feedback was that it "feels
+empty" and needs to actually hold things.
 
-- The ask bar is one control for two jobs, decided by `busy`: idle, it calls
+The composer is a persistent, always-visible control at the bottom of the
+timeline column, not a modal and not conditional on any mode. What changed:
+
+- **No bar and no rule.** `.composer` sits on the same canvas as the timeline
+  (`background: var(--bg)`), so the column reads as one continuous thing. The
+  *field* is the only bordered element in it, which is the nesting rule applied
+  to the control a person looks at most.
+- **`.composer__field` is a container with a real minimum height**
+  (`--space`-derived 76px, about three lines) and a **toolbar inside it**. That
+  is the shape Cursor, Zed's agent panel and Claude's own composer converge on,
+  and the reason is structural rather than stylistic: it is the only shape that
+  can host controls without pushing them out into a second toolbar somewhere
+  else. A one-line box had nowhere to put anything, which is why it was empty.
+- It holds a **model picker**, what Enter is about to do, and the send action —
+  all real state, no decoration.
+
+**Auto-grow is CSS-only and this is not optional.** `.composer__grow` is a grid
+with the textarea and an invisible `::after` replica in the same cell, the
+replica fed the same text via `data-value`. The row is sized by the replica; the
+textarea stretches to it. The obvious implementation — read `scrollHeight`,
+write `style.height` — forces a synchronous layout on **every keystroke**, and
+performance was explicitly called out. Both must keep identical padding,
+font-size, line-height and letter-spacing or the replica stops predicting the
+height. Verified: 76px at rest, 108px at four lines, caps at 220px and scrolls.
+
+`/` still opens `CommandOverlay`, and the two do not compete because they answer
+different questions ("what do I want to say" vs. "what do I want to run") — the
+same split Zed's agent panel makes:
+
+- The composer is one control for two jobs, decided by `busy`: idle, it calls
   `ask()` and starts a turn; mid-run, it calls `direct()` and steers the one
-  already running, folded in at the run's next safe boundary the same way
-  the rail's old direction box used to. The placeholder text says which job
-  it is about to do.
+  already running, folded in at the run's next safe boundary. The placeholder
+  *and* the button label say which job it is about to do.
 - `/` still opens `CommandOverlay` — filters, jump-to-patch, copy-diff,
   reconnect, and its own quick-ask input — kept as a power-user accelerant,
   not removed. Its `onAsk` is busy-aware the same way the bar is (`direct()`
   mid-run, `ask()` otherwise), so the two entry points never disagree about
   which action a typed goal means.
-- The session-bar's `<kbd>/</kbd>` hint now reads "commands," not "ask" —
-  it is honest about what the shortcut is for now that asking has its own
-  visible control.
+- The session-bar's `<kbd>/</kbd>` hint reads "Commands," not "Ask" — it is
+  honest about what the shortcut is for now that asking has its own visible
+  control. It uses `.kbd-hint`, the same primitive as the composer's own
+  Enter/Shift+Enter hint.
+
+### The model picker is a seam, not a feature
+
+`use-turn-model.ts` owns which model should handle the next turn: Auto, Opus,
+Sonnet, Fable. **It deliberately does not talk to the worker.**
+`POST /sessions/:id/turns` accepts `{ goal }` and the worker picks its model
+from `FixedModelRouter`, built once at boot from `NOVUS_MODEL_PROVIDER` /
+`NOVUS_MODEL`. Per-turn routing is a separate slice against `apps/worker`;
+inventing a request shape here would be guessing at a contract that slice owns.
+
+Closing the seam is three steps, in order, and they are written out in the
+hook's own header comment: an optional additive field on the turn request in
+`packages/contracts`; the worker's turn route reading it; **then**
+`session-tab.tsx` passing `turnModel.selected` into `ask()`/`direct()` and
+`use-session-actions.ts` putting it in the body. The call site in
+`composer.tsx` carries a `TODO(model routing)` pointing back.
+
+Until then the control is honest about what it is: it remembers a preference
+(per tab, persisted app-wide to `novus.turn-model`) and shows it. **Nothing in
+the UI claims a run obeyed it.** The only place a model is stated as fact is
+the session bar, which reads it from the run's own `run.started` event, as it
+always has. Do not "finish" this by displaying the picked model as though it
+were the model that ran.
+
+## Attempts, participants, and the view switcher
+
+Branching a session, running competing attempts, and choosing between them on
+evidence is the product thesis (README, *Starting wedge*). It was one lowercase
+word in the corner of the session bar. Feedback said so directly.
+
+It is now three surfaces over the same data:
+
+- **A permanent rail section** (`.attempt`) listing each attempt with a status
+  dot, label, diffstat, file count and test verdict. It draws
+  `useComparison`'s `/compare` response, **which every tab already fetches** —
+  so it costs no new request and no new poll. When there are none it says what
+  forking is *for* and offers the action, rather than being absent.
+- **A count in the view switcher** — `.viewswitch` is a real segmented control
+  replacing three independent buttons that swapped their own labels
+  ("attempts" becoming "timeline"). Those never told you what the other states
+  were. Attempts carries a live count badge.
+- **The compare screen**, retitled and given a subtitle, with the fork form as
+  the one bordered container on it and the evidence scrolling under a pinned
+  header.
+
+**Presence got the same promotion.** Roles and handoff were a row of 5px dots.
+Who is here and who holds control is multiplayer state, so it is a
+**Participants** rail section (`.party`) with names, roles and the handoff
+action in place. The session bar keeps a compact overlapping avatar stack
+(`.presence__avatar`) as the at-a-glance version.
+
+**Known gap, and it is not a UI gap:** `POST /sessions/:id/fork` cuts the
+worktree and appends `fork.created`, but **never starts a run**.
+`compareAttempts` intersects the session's fork handles with
+`projectSession(...).runs`, so an attempt does not exist until something has
+actually executed in the fork — and nothing in the worker does that today.
+Forking from the UI therefore leaves the attempts list empty until a run
+happens. That is `apps/worker`'s to fix, not this stylesheet's.
 
 ## Timeline: prose and grouped tool activity
 
@@ -347,6 +561,15 @@ would recreate the exact problem this exists to fix. Expanded, that same
 text renders exactly once, inline, as part of that event's own row; the
 group header does not duplicate it.
 
+**A group is indented into the content column, not flush left.**
+`.tool-group` carries `margin-left: calc(36px + var(--space-4) + 2px)` — the
+event grid's first track, its gap, and `.event`'s transparent highlight border.
+A group has no sequence number of its own, so left-flush it started 48px to the
+left of every event's body, and the model's prose (which renders as a direct
+child of the group when it is collapsed) hung off the left edge of the column
+everything else lined up in. Measured on screen; prose and event body now share
+an x to the pixel. If you change `.event`'s grid or its border, change this.
+
 Grouping applies only when the timeline filter is `"all"`. The `"tools"` and
 `"patches"` filters already do their own flattening on purpose — someone who
 asked to see only tool activity is asking for a flat, scannable list, and
@@ -363,8 +586,11 @@ That row, alone, was the "still feels very MVP" complaint made literal.
 
 `session-tab.tsx`'s `trulyEmpty` treats "exactly one event and it is
 `session.created`" (under the `"all"` filter) the same as "no events," and
-swaps in `.timeline__empty` — a real title-plus-hint pair, not bare centered
-text — instead of rendering that one row. The instant a run starts,
+swaps in `.timeline__empty` instead of rendering that one row. It is now a
+`--text-hero` headline, a hint at `--text-body`, **and the session's own facts
+as chips** — repository name, whether writes are allowed, whether commands are.
+"Feels empty" applied beyond the composer, and the answer to it is real state
+the app has already loaded, not invented affordances or placeholder suggestions. The instant a run starts,
 `session.created` goes back to rendering normally as part of real history;
 nothing is ever hidden once there is anything else to show. The rail's Goal
 section and the changed-files panel got the same treatment in miniature —
@@ -439,23 +665,43 @@ report "binary file — not shown" instead of garbling one.
 
 ## Terminal chrome
 
-Fixed at last pass for correctness (light/dark colors match tokens); this
-pass is about it looking considered. `.terminal-dock` now:
+"Looks generic — I want a stylish terminal." Three things make a terminal dock
+read as considered, and none of them is decoration.
 
-- **Resizes.** `.terminal-dock__resize` is a thin, absolutely-positioned
-  strip straddling the dock's top edge (`cursor: row-resize`); dragging it
-  adjusts `terminalHeight` state in `session-tab.tsx`, clamped
-  `140–640px`, applied as the dock's inline `height`. xterm's own
-  `FitAddon` re-fits on every resize via the `ResizeObserver` `TerminalPanel`
-  already had — no new wiring needed there.
-- **Has a real header**, not just a label and a close button: a small
-  monospace prompt glyph (`›_`, `.terminal-dock__prompt`) ahead of the
-  repository path, which still ellipsizes from the head via the same
-  `direction: rtl` + LRM-`::before` trick `.titlebar__repo` uses.
-- **Reads as sunken**, not just colored like the well plane: an inset top
-  shadow (`box-shadow: inset 0 6px 8px -8px …`) makes the "output sinks"
-  rule from *Planes* literal at the one edge that used to be a flat 1px
-  line.
+- **A real header**: a prompt glyph (`❯`, `.terminal-dock__prompt`, in
+  `--live`), the word Terminal, and the repository path, which ellipsizes from
+  the head via the same `direction: rtl` + LRM-`::before` trick the session bar
+  uses. Full `--bar-h`, on `--surface`, so it is chrome and the body below is
+  output.
+- **Genuinely sunken**: an inset top shadow rather than a flat 1px line makes
+  the "output sinks" rule from *Planes* literal at that edge.
+- **A full 16-colour ANSI palette.** This is the one that actually mattered.
+  Only `background`/`foreground`/`cursor`/`selection` were set before, so every
+  program that emitted colour — `git`, `ls`, a test runner, a compiler's
+  diagnostics — rendered in xterm's stock palette, which is bright, saturated,
+  and belongs to a different product. `TERMINAL_THEME` now carries all sixteen,
+  desaturated toward this app's own: `--add`, `--del` and `--warn-text` are
+  used **verbatim** for green, red and yellow. A terminal that cannot show
+  sixteen colours cannot show `git diff`; a terminal showing them in someone
+  else's palette is the thing that read as unconsidered.
+
+Also: 13px (`--text-small`, the same step the diff and file viewers use — it
+was 12, a step below everything else that shows code), `lineHeight` 1.35, and a
+**bar cursor**. The block cursor is the single most recognisable stock-xterm
+tell.
+
+It still resizes: `.terminal-dock__resize` is a thin absolutely-positioned strip
+straddling the dock's top edge, dragging it adjusts `terminalHeight` in
+`session-tab.tsx`, clamped 140–640px. `FitAddon` re-fits via the
+`ResizeObserver` `TerminalPanel` already had.
+
+> **The mirror is unenforced and now larger.** xterm paints to canvas and
+> cannot read a CSS custom property, so `TERMINAL_THEME` in
+> `terminal-panel.tsx` hand-mirrors design tokens as literals. Change
+> `--bg-well`, `--text`, `--text-dim`, `--add`, `--del` or `--warn-text` and you
+> must change that map in the same commit. Nothing checks this — not the
+> compiler, not a test. Each mirrored line carries a `// === --token` comment
+> so the correspondence is greppable.
 
 ## Tab strip
 
@@ -514,9 +760,16 @@ to `CompareView`'s own per-attempt columns, not this session's panel.
   names in the desktop stylesheet is fine; changing its markup or moving its
   one inline style (`event-row.tsx`, `{minWidth: 0, flex: 1}`) breaks the
   guest, whose stylesheet knows nothing of your new class.
-- **The guest stylesheet is a deliberate mirror, currently behind.** This
-  visual language lives only in `apps/desktop/src/styles.css`; the guest still
-  has the old flat vocabulary, and now also lacks tabs, the files panel, and
+- **The guest stylesheet is a deliberate mirror, and this pass put it much
+  further behind.** The guest now lacks the entire token system — scales,
+  planes-as-wells, `--inset`, the button and chip primitives — on top of tabs,
+  the files panel and the theme toggle. No `packages/ui` *markup* changed this
+  pass (only strings, which the guest renders identically), so nothing is
+  broken there; it simply looks like the old app. Mirroring the token block and
+  the shared-component styles (`event`, `tool`, `patch`, `diff`, `kv`,
+  `matches`, `compare`) is now a real piece of work and should be one
+  deliberate pass, not drift. This visual language lives only in
+  `apps/desktop/src/styles.css`; the guest still has the old flat vocabulary, and now also lacks tabs, the files panel, and
   the theme toggle — the guest is single-session and read-only by design, so
   only the token block and the shared-component styles (`event`, `tool`,
   `patch`, `diff`, `kv`, `matches`, `compare`) are the actual follow-up.
@@ -526,14 +779,44 @@ to `CompareView`'s own per-attempt columns, not this session's panel.
   that markup is shared — the guest will render the paragraph with no styling
   at all until its stylesheet catches up, same category of gap as the rest of
   this bullet, not a new one.
-- **Long repository paths.** The titlebar path ellipsizes at the head via
-  `direction: rtl` plus an LRM `::before` that pins the leading slash. If you
-  touch `.titlebar__repo`, re-test with a path longer than half the window —
+- **An unbounded xterm will blow the whole window's layout out.** This was
+  found on screen at 1440px: opening the terminal expanded the body's middle
+  grid column to **3316px** and pushed the session bar's actions off the right
+  edge. `.terminal-dock` is a grid item and `.terminal-panel` is the flex item
+  `FitAddon` measures against; without `min-width: 0` on both, their automatic
+  minimum size is their content's, and the feedback loop is
+  unbounded container → wide fit → wider container. Nothing about
+  `terminal-panel.tsx` looks wrong while it happens, which is why it is worth
+  saying out loud. Pre-existing, fixed this pass. Re-test by opening the
+  terminal at 900px, the shell's own minimum.
+- **A `<button>` centres its own text, and that inherits.** `.tool__head` is a
+  button whose `.tool__summary` is `flex: 1`, so the summary sat centred in a
+  588px box instead of next to the tool name. Every other row-shaped control in
+  the file sets `text-align: left`; this one was missed, before this pass as
+  well as during it. If you make a row a `<button>`, set it.
+- **Long repository paths.** The session bar splits the path into
+  `.session-bar__repo-name` (the basename, kept) and
+  `.session-bar__repo-dir` (the parents, ellipsized at the *head* via
+  `direction: rtl` plus an LRM `::before` that pins the leading slash, and the
+  first thing to go when the bar is tight). If you touch it, re-test with a path
+  longer than half the window —
   and see the min-width bullet above, which is the other half of what makes
   this actually work now that it sits inside `.session-bar` rather than the
   top-level `.titlebar`.
-- The gate does not see pixels. `pnpm typecheck && pnpm test` passes on any
-  CSS; after a styling change, run the app (`novus-run-app`) and look at the
-  screen you touched, in both a fresh session and one with a long history —
-  and in both themes now, since `useTheme` makes light a first-class state,
-  not a hypothetical.
+- **The gate does not see pixels.** `pnpm typecheck && pnpm test` passes on any
+  CSS. Every bug in this section was found by *measuring the running app*, not
+  by reading the stylesheet — and two of them (the xterm blowout, the centred
+  tool summary) were invisible in a screenshot until the numbers were pulled
+  out of `getBoundingClientRect()`. After a styling change: run the app, look
+  at the screen you touched in a fresh session and one with long history, in
+  both themes, and **measure the boxes you changed**.
+- **Verify without spending model credit.** Drive a scripted `ModelAdapter`
+  through the real `SessionRegistry` + `AgentRunner` against a scratch git
+  repo, pointed at a throwaway `NOVUS_DB`; that produces genuine
+  contract-validated events (including tool failures and the approval gate)
+  with zero provider calls. Then launch with `NOVUS_CDP_PORT` set and drive the
+  window over CDP. `SessionRegistry.create()` is what appends
+  `session.created`, and without it the Open screen will not list the session.
+  Pin `ANTHROPIC_API_KEY` to an obvious placeholder in the launch environment —
+  `--env-file` does not override an already-set variable, so this is what
+  guarantees a stray click cannot reach a provider.

@@ -1624,8 +1624,18 @@ kbd {
    timeline-view.tsx for the grouping rule. The model's own words never live
    inside this collapsible body; they render above it, at full prominence,
    whenever the group is collapsed. */
+/* Indented into the timeline's content column rather than straddling the
+   sequence gutter. A group is not an event and has no sequence number of its
+   own, so left flush it started 48px to the left of every event's body — and
+   the model's prose, which renders as a direct child here when the group is
+   collapsed, was the most visible casualty: paragraphs hanging off the left
+   edge of the column everything else lined up in. 36px + gap is the event
+   grid's own first track plus its gap; see .event. */
 .tool-group {
-  margin: var(--space-2) 0;
+  /* The +2px is .event's transparent highlight border, which offsets every
+     event's body by that much; without it a collapsed group's prose sits two
+     pixels left of the identical prose on an ungrouped event. */
+  margin: var(--space-2) 0 var(--space-2) calc(36px + var(--space-4) + 2px);
 }
 
 .tool-group__head {
@@ -1633,6 +1643,9 @@ kbd {
   align-items: center;
   gap: var(--space-3);
   width: 100%;
+  /* Pulled back by its own padding so the header TEXT lands on the content
+     column while its hover fill still has room to breathe around it. */
+  margin-left: calc(var(--space-3) * -1);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-m);
   color: var(--text-dim);
@@ -1927,6 +1940,14 @@ kbd {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Without this the dock is a grid item whose automatic minimum size is its
+     content's — and its content is an xterm canvas that FitAddon sizes from
+     the container it is in. Unbounded container -> wide fit -> wider
+     container: opening the terminal blew the whole window's layout out to
+     several thousand pixels and pushed the session bar's actions off screen.
+     Pre-existing; it needs saying because nothing about the terminal's own
+     code looks wrong when it happens. */
+  min-width: 0;
   box-shadow: inset 0 6px 8px -8px rgba(0, 0, 0, 0.4);
 }
 
@@ -1987,6 +2008,10 @@ kbd {
 .terminal-panel {
   flex: 1;
   min-height: 0;
+  /* Same reason as the dock above: this is the flex item xterm actually
+     measures against, so it must be allowed to shrink below its content. */
+  min-width: 0;
+  overflow: hidden;
   padding: var(--space-4) var(--space-5);
 }
 
@@ -2132,6 +2157,12 @@ kbd {
   padding: var(--space-3) var(--space-4);
   color: var(--text-muted);
   font-size: var(--text-small);
+  /* This is a <button>, and the UA stylesheet centres a button's text. It
+     inherits into .tool__summary, which is `flex: 1` — so the summary was
+     floating in the middle of a 588px box instead of sitting next to the tool
+     name. Every other row-shaped control in this file already sets this; this
+     one was missed, before this pass as well as during it. */
+  text-align: left;
 }
 
 .tool__head:hover {
