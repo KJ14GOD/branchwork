@@ -230,7 +230,26 @@ export const startEventServer = (
       return false;
     }
 
+    // An invited participant, as opposed to the host or a bare-token caller.
+    // The distinction hosting vs joining rests on: an invite is a credential
+    // *for one session*, and holding one must not confer anything about the
+    // host's machine beyond that session. The capability table alone cannot
+    // say this — an editor legitimately holds "steer" — so the two routes
+    // that are about the host rather than about a session check it here.
+    const invited =
+      caller !== null && caller.participant.sessionId !== HOST_SESSION;
+
     if (pathname === "/sessions/history" && request.method === "GET") {
+      if (invited) {
+        // The log remembers every repository this worker ever opened. An
+        // invite is scoped to one session; the host's whole history is not
+        // part of what it grants.
+        sendJson(response, 403, {
+          error: "An invited participant cannot read the host's session history.",
+        });
+        return true;
+      }
+
       // Everything the log remembers, including sessions this process never
       // opened. Durable history nothing can reach is not really durable.
       sendJson(response, 200, { sessions: sessions.remembered() });
@@ -244,6 +263,18 @@ export const startEventServer = (
     }
 
     if (pathname === "/sessions" && request.method === "POST") {
+      if (invited) {
+        // Opening a session names a path on the host's filesystem and starts
+        // an agent against it. That is what *hosting* means, and no invited
+        // role includes it — an editor's "steer" is authority over the run
+        // they were invited to, not over the host's machine.
+        sendJson(response, 403, {
+          error:
+            "Only the host can open a repository. An invite joins the session it names; it does not open new ones.",
+        });
+        return true;
+      }
+
       const parsed = CreateSessionRequestSchema.safeParse(
         await readJsonBody(request),
       );
@@ -633,6 +664,27 @@ export const startEventServer = (
       });
 
       sendJson(response, 200, { transferred: true, eventId: event.eventId });
+      return true;
+    }
+
+    const meMatch = /^\/sessions\/([^/]+)\/me$/.exec(pathname);
+
+    if (meMatch && request.method === "GET") {
+      const session = sessions.get(decodeURIComponent(meMatch[1]!));
+
+      // Who the calling token is, in this session. An invite link carries a
+      // credential and nothing else, so a joined client has no honest way to
+      // know its own role — and the role moves under it on a handoff — except
+      // by asking. 404s mirror /presence: a worker with no participant
+      // registry has nobody to be.
+      if (!session || !participants || !caller) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      // The envelope is hand-shaped and the payload is ParticipantSchema on
+      // the client side — the same split /sessions already uses.
+      sendJson(response, 200, { participant: caller.participant });
       return true;
     }
 
