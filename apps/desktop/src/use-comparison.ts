@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ComparisonSchema,
   type Comparison,
+  type DecisionKind,
   type DecisionSummary,
 } from "@novus/contracts/protocol";
 
@@ -37,7 +38,15 @@ export type ComparisonState = {
    */
   decision: DecisionSummary | null;
   choosing: boolean;
-  choose: (runId: string) => Promise<void>;
+  /**
+   * Records a decision. `kind` says which of the three ways a review ended;
+   * `rationale` is required by the screen and carried into the log.
+   */
+  choose: (
+    runId: string,
+    kind: DecisionKind,
+    rationale: string,
+  ) => Promise<void>;
 };
 
 export const useComparison = (
@@ -159,7 +168,7 @@ export const useComparison = (
   );
 
   const choose = useCallback(
-    async (runId: string) => {
+    async (runId: string, kind: DecisionKind, rationale: string) => {
       if (!sessionId) {
         return;
       }
@@ -176,7 +185,7 @@ export const useComparison = (
               "content-type": "application/json",
               ...(await authorization()),
             },
-            body: JSON.stringify({ runId }),
+            body: JSON.stringify({ runId, kind, rationale }),
           },
         );
 

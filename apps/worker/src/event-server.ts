@@ -1221,24 +1221,43 @@ export const startEventServer = (
         return true;
       }
 
-      // Recorded regardless of whether the apply below succeeds. V1 says the
-      // merge is always a human decision — a host choosing an attempt whose
-      // patch no longer applies cleanly still made that choice, and the log
-      // should say so rather than staying silent because the mechanics failed.
-      const outcome = !session.allowWrites
-        ? {
-            applied: false as const,
-            reason:
-              "Writes are not enabled for this session, so the chosen attempt was recorded but not applied.",
-            conflicts: [],
-          }
-        : await applyDecision(session.repositoryPath, session.worktrees, parsed.data.runId).catch(
-            (error: unknown) => ({
+      const kind = parsed.data.kind ?? "adopt";
+
+      // Only adopting writes anything. Asking for a revision or for more
+      // exploration is a decision about what should happen next, not an
+      // instruction to fold this approach into the tree — running the apply
+      // for those would turn "not yet" into a merge.
+      //
+      // Recorded regardless of whether the apply succeeds. V1 says the merge is
+      // always a human decision — a host choosing an attempt whose patch no
+      // longer applies cleanly still made that choice, and the log should say
+      // so rather than staying silent because the mechanics failed.
+      const outcome =
+        kind !== "adopt"
+          ? {
               applied: false as const,
-              reason: (error as Error).message,
+              reason:
+                kind === "revision"
+                  ? "Revision requested — this approach was not applied."
+                  : "Further exploration requested — no approach was applied.",
               conflicts: [],
-            }),
-          );
+            }
+          : !session.allowWrites
+            ? {
+                applied: false as const,
+                reason:
+                  "Writes are not enabled for this session, so the chosen attempt was recorded but not applied.",
+                conflicts: [],
+              }
+            : await applyDecision(
+                session.repositoryPath,
+                session.worktrees,
+                parsed.data.runId,
+              ).catch((error: unknown) => ({
+                applied: false as const,
+                reason: (error as Error).message,
+                conflicts: [],
+              }));
 
       const event = store.append({
         sessionId: session.id,
@@ -1247,6 +1266,10 @@ export const startEventServer = (
         payload: {
           runId: handle.fork.runId,
           checkpointId: handle.fork.checkpointId,
+          kind,
+          ...(parsed.data.rationale
+            ? { rationale: parsed.data.rationale }
+            : {}),
           outcome,
         },
       });

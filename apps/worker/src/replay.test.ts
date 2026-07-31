@@ -256,11 +256,45 @@ test("a chosen attempt survives into the projection, not only the live event str
 
   const withDecision = projectSession(SESSION, store.list(SESSION));
 
+  // The event above carries no `kind` and no `rationale`, exactly like every
+  // decision recorded before those fields existed. The projection fills the
+  // kind in as `adopt` — which is what those decisions were, since adopting
+  // was the only decision the product could record — and leaves the rationale
+  // null rather than inventing one. A log that could not be replayed after a
+  // schema addition would make every past session unreadable.
   assert.deepEqual(withDecision.decision, {
     runId: "run-1",
     checkpointId: "checkpoint-1",
+    kind: "adopt",
+    rationale: null,
     outcome: { applied: true, files: ["src/lock.ts"] },
   });
+
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "decision.recorded",
+    payload: {
+      runId: "run-1",
+      checkpointId: "checkpoint-1",
+      kind: "revision",
+      rationale: "Right shape, but it drops the retry budget on reconnect.",
+      outcome: {
+        applied: false,
+        reason: "Revision requested — this approach was not applied.",
+        conflicts: [],
+      },
+    },
+  });
+
+  const revised = projectSession(SESSION, store.list(SESSION));
+
+  // A revision request is a decision and survives replay like any other. It is
+  // recorded and not applied, which is the distinction the outcome language
+  // exists to keep: asking for another pass is not a failed application.
+  assert.equal(revised.decision?.kind, "revision");
+  assert.match(revised.decision?.rationale ?? "", /retry budget/);
+  assert.equal(revised.decision?.outcome.applied, false);
 });
 
 test("pending direction survives into the projection, applied direction does not", () => {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { RepositoryState } from "@novus/contracts/protocol";
+import type { DecisionKind, RepositoryState } from "@novus/contracts/protocol";
 import { CompareView } from "@novus/ui";
 
 import type { ComparisonState } from "../use-comparison.ts";
@@ -56,6 +56,22 @@ export const CompareScreen = ({
 }) => {
   const [intent, setIntent] = useState("");
   const [forking, setForking] = useState(false);
+  // Which decision is being written, if any. Held here rather than per-card so
+  // that two half-written rationales cannot exist at once — a decision is one
+  // act, and the form is the moment of making it.
+  const [deciding, setDeciding] = useState<{
+    runId: string;
+    kind: DecisionKind;
+  } | null>(null);
+  const [rationale, setRationale] = useState("");
+
+  const decidingAttempt = state.comparison?.attempts.find(
+    (attempt) => attempt.runId === deciding?.runId,
+  );
+  // The floor the contract sets. Enforced here too, because the boundary
+  // refusing a decision is a 400 the person cannot act on, while a disabled
+  // button next to the box they are typing in is an answer they can.
+  const rationaleReady = rationale.trim().length >= 12;
 
   const count = state.comparison?.attempts.length ?? 0;
   // One approach is the current work with nothing beside it yet — a real state
@@ -151,7 +167,13 @@ export const CompareScreen = ({
                 attempt.runId,
                 state.decision?.runId === attempt.runId ? (
                   <span className="compare__chosen">
-                    {state.decision.outcome.applied ? "Chosen · applied" : "Chosen"}
+                    {state.decision.outcome.applied
+                      ? "Adopted · applied"
+                      : state.decision.kind === "revision"
+                        ? "Revision requested"
+                        : state.decision.kind === "exploration"
+                          ? "Exploring further"
+                          : "Adopted · not applied"}
                   </span>
                 ) : attempt.baseline ? (
                   // No button, and not because one is missing. Deciding means
@@ -168,14 +190,126 @@ export const CompareScreen = ({
                     className="button"
                     type="button"
                     disabled={state.choosing}
-                    onClick={() => state.choose(attempt.runId)}
+                    onClick={() => setDeciding({ runId: attempt.runId, kind: "adopt" })}
                   >
-                    {state.choosing ? "Choosing…" : "Adopt this approach"}
+                    Adopt this approach
                   </button>
                 ),
               ]),
             )}
           />
+        ) : null}
+
+        {deciding ? (
+          <form
+            className="decision"
+            onSubmit={(event) => {
+              event.preventDefault();
+
+              if (!rationaleReady) {
+                return;
+              }
+
+              void state
+                .choose(deciding.runId, deciding.kind, rationale.trim())
+                .then(() => {
+                  setDeciding(null);
+                  setRationale("");
+                });
+            }}
+          >
+            <div className="decision__head">
+              <span className="decision__title">
+                {deciding.kind === "adopt"
+                  ? `Adopt ${decidingAttempt?.label ?? "this approach"}`
+                  : deciding.kind === "revision"
+                    ? `Request a revision of ${decidingAttempt?.label ?? "this approach"}`
+                    : "Keep exploring"}
+              </span>
+              <span className="decision__note">
+                {deciding.kind === "adopt"
+                  ? "Its changes are written into the working tree. The other approaches stay on the record."
+                  : deciding.kind === "revision"
+                    ? "Nothing is written. Your reasoning is the feedback, and it stays on the record."
+                    : "Nothing is written and nothing is discarded. This records that neither was enough yet."}
+              </span>
+            </div>
+
+            {/*
+              Required, and the reason is not bureaucracy. The evidence above
+              is gone the moment the tab closes; a sentence about why it was
+              enough is the only part a teammate can read three weeks later.
+            */}
+            <textarea
+              className="decision__rationale"
+              value={rationale}
+              onChange={(event) => setRationale(event.target.value)}
+              rows={3}
+              autoFocus
+              placeholder="Why this, what evidence mattered, what risk you are accepting, what is still unresolved"
+              aria-label="Why you decided this"
+            />
+
+            <div className="decision__actions">
+              <span className="decision__count">
+                {rationaleReady
+                  ? "Recorded in the log, the receipt, and every joined view."
+                  : "A sentence, at least — this is the part that outlives the tab."}
+              </span>
+              <button
+                className="button"
+                type="button"
+                onClick={() => {
+                  setDeciding(null);
+                  setRationale("");
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button--primary"
+                type="submit"
+                disabled={state.choosing || !rationaleReady}
+              >
+                {state.choosing ? "Recording…" : "Record decision"}
+              </button>
+            </div>
+          </form>
+        ) : state.comparison && state.comparison.attempts.length > 1 ? (
+          // The two ways a review ends that are not "one of these wins". Both
+          // are decisions, both are recorded, and neither writes anything —
+          // without them the honest answer is taken outside the product, which
+          // is exactly where it stops being reviewable.
+          <div className="decision__alternatives">
+            <button
+              className="button"
+              type="button"
+              onClick={() =>
+                setDeciding({
+                  runId:
+                    state.comparison?.attempts.find((attempt) => !attempt.baseline)
+                      ?.runId ?? "",
+                  kind: "revision",
+                })
+              }
+            >
+              Request a revision
+            </button>
+            <button
+              className="button"
+              type="button"
+              onClick={() =>
+                setDeciding({
+                  runId:
+                    state.comparison?.attempts.find((attempt) => !attempt.baseline)
+                      ?.runId ?? "",
+                  kind: "exploration",
+                })
+              }
+            >
+              Keep exploring
+            </button>
+          </div>
         ) : null}
 
         {state.decision ? (
@@ -192,12 +326,25 @@ export const CompareScreen = ({
           >
             {state.decision.outcome.applied ? (
               <>
-                Applied to the working tree:{" "}
+                Decision recorded and applied:{" "}
                 {state.decision.outcome.files.join(", ") || "no files"}.
               </>
+            ) : state.decision.kind === "revision" ? (
+              <>Revision requested. Nothing was written.</>
+            ) : state.decision.kind === "exploration" ? (
+              <>Further exploration requested. Nothing was written or discarded.</>
             ) : (
               <>
-                Recorded, but not applied — {state.decision.outcome.reason}
+                {/*
+                  Selection and application stay distinct. A conflict means the
+                  decision stands and the write did not happen — calling that a
+                  failed decision would tell somebody their judgement was wrong
+                  when only the mechanics were.
+                */}
+                {state.decision.outcome.conflicts.length > 0
+                  ? "Decision recorded, application blocked by conflicts — "
+                  : "Decision recorded, awaiting application — "}
+                {state.decision.outcome.reason}
                 {state.decision.outcome.conflicts.length > 0 ? (
                   <ul className="compare-screen__conflicts">
                     {state.decision.outcome.conflicts.map((conflict) => (

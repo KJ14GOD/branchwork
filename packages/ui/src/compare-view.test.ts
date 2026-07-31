@@ -14,6 +14,7 @@ const attempt = (over: Record<string, unknown> = {}) => ({
   runId: "fork-a",
   label: "locking",
   baseline: false,
+  interventions: [],
   status: "completed",
   summary: "Fixed the lock ordering.",
   failure: null,

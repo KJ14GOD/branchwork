@@ -1322,6 +1322,33 @@ export const DecisionOutcomeSchema = z.discriminatedUnion("applied", [
 
 export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
 
+/**
+ * What the human actually decided, as opposed to what the mechanics then did.
+ *
+ * Choosing was the only decision this log could record, so the two ways a
+ * review genuinely ends — "go again with this feedback" and "neither of these
+ * yet" — had nowhere to go and were taken outside the product, which is
+ * exactly where a decision stops being reviewable. All three are decisions and
+ * all three are recorded; only `adopt` implies anything should be written.
+ */
+export const DecisionKindSchema = z.enum(["adopt", "revision", "exploration"]);
+
+export type DecisionKind = z.infer<typeof DecisionKindSchema>;
+
+/**
+ * Why, in the decider's own words.
+ *
+ * Required, and deliberately one field rather than four. A form asking
+ * separately for the reason, the evidence, the risk and the unresolved part
+ * gets four boxes of filler from somebody who has already made up their mind;
+ * one box that a person has to write a sentence in is the thing a teammate
+ * reads three weeks later and actually learns from.
+ *
+ * Capped because this is a justification, not a design document — and floored
+ * above nothing at all, because "ok" is the answer this field exists to stop.
+ */
+export const DecisionRationaleSchema = z.string().trim().min(12).max(2_000);
+
 // A human choosing between attempts, recorded whether or not the patch that
 // followed actually landed. V1 says the merge is always a human decision —
 // this is that decision's evidence, separate from the mechanics of applying
@@ -1333,6 +1360,15 @@ export const DecisionRecordedEventSchema = EventEnvelopeSchema.extend({
     /** The attempt's run id — the fork that was chosen. */
     runId: IdSchema,
     checkpointId: IdSchema,
+    /**
+     * Which of the three ways a review ends. Optional so that decisions
+     * recorded before this field existed still parse — the log is durable and
+     * a schema that refused its own history would make every old session
+     * unreadable. Absent means `adopt`, which is what those decisions were.
+     */
+    kind: DecisionKindSchema.optional(),
+    /** Optional for the same reason. Nothing recorded before this asked for one. */
+    rationale: DecisionRationaleSchema.optional(),
     outcome: DecisionOutcomeSchema,
   }),
 });

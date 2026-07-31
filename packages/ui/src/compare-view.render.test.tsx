@@ -16,10 +16,13 @@ import { CompareView } from "./compare-view.tsx";
  * a string is the whole of its behaviour and needs no jsdom to inspect.
  */
 
-const attempt = (over: Partial<Comparison["attempts"][number]> = {}) => ({
+const attempt = (
+  over: Partial<Comparison["attempts"][number]> = {},
+): Comparison["attempts"][number] => ({
   runId: "fork-a",
   label: "locking",
   baseline: false,
+  interventions: [],
   status: "completed" as const,
   summary: "Fixed the lock ordering.",
   failure: null,
@@ -155,4 +158,75 @@ test("a guest gets the same evidence and no controls", () => {
   assert.doesNotMatch(guest, /<button/);
   assert.match(host, /<button/);
   assert.match(guest, /src\/lock\.ts/);
+});
+
+test("the agent's summary comes last, under everything that was measured", () => {
+  const html = renderToStaticMarkup(
+    <CompareView
+      comparison={comparison({
+        attempts: [
+          attempt({
+            summary: "Cleanly refactored the lock ordering.",
+            interventions: [
+              { kind: "denied", detail: "apply_patch", at: "2026-07-31T00:00:00.000Z" },
+            ],
+          }),
+        ],
+      })}
+    />,
+  );
+
+  // Ordering is the argument. A summary is the approach's account of itself and
+  // reads as authoritative because it is confident prose sitting beside numbers
+  // somebody actually measured — so it goes under all of them.
+  const summaryAt = html.indexOf("Cleanly refactored");
+  assert.ok(summaryAt > html.indexOf("Tests run"), "summary precedes verification");
+  assert.ok(summaryAt > html.indexOf("src/lock.ts"), "summary precedes files changed");
+  assert.ok(summaryAt > html.indexOf("apply_patch"), "summary precedes interventions");
+});
+
+test("a summary from an approach that ran no tests is labelled a claim", () => {
+  const html = renderToStaticMarkup(
+    <CompareView
+      comparison={comparison({
+        attempts: [
+          attempt({
+            testsRun: 0,
+            testsPassed: 0,
+            green: null,
+            summary: "Everything works now.",
+          }),
+        ],
+      })}
+    />,
+  );
+
+  // The most dangerous sentence on the screen: confident prose from a run that
+  // verified nothing. It is shown, and it is named for what it is.
+  assert.match(html, /Unverified claim/);
+  assert.match(html, /Everything works now/);
+});
+
+test("what a person had to do is shown, and a refusal is not styled as success", () => {
+  const html = renderToStaticMarkup(
+    <CompareView
+      comparison={comparison({
+        attempts: [
+          attempt({
+            interventions: [
+              { kind: "direction", detail: "keep the public API stable", at: "2026-07-31T00:00:00.000Z" },
+              { kind: "denied", detail: "apply_patch", at: "2026-07-31T00:01:00.000Z" },
+              { kind: "approved", detail: "run_command", at: "2026-07-31T00:02:00.000Z" },
+            ],
+          }),
+        ],
+      })}
+    />,
+  );
+
+  assert.match(html, /Steered/);
+  assert.match(html, /Refused/);
+  assert.match(html, /Approved/);
+  assert.match(html, /keep the public API stable/);
+  assert.match(html, /compare__intervention-kind--denied/);
 });

@@ -1,4 +1,4 @@
-import type { DecisionOutcome, SessionEvent } from "@novus/contracts";
+import type { DecisionKind, DecisionOutcome, SessionEvent } from "@novus/contracts";
 
 import { projectSession, type RunProjection } from "./projection.ts";
 
@@ -39,6 +39,14 @@ export type AttemptComparison = {
    * attempt was verified.
    */
   green: boolean | null;
+  /** What a person did during this approach. Evidence, ranked above its summary. */
+  interventions: Intervention[];
+};
+
+export type Intervention = {
+  kind: "direction" | "approved" | "denied";
+  detail: string;
+  at: string;
 };
 
 export type Comparison = {
@@ -48,13 +56,82 @@ export type Comparison = {
   /** Paths only one attempt changed, by run id. */
   uniquePaths: Record<string, string[]>;
   /** The most recent choice recorded for this session, or null if none yet. */
-  decision: { runId: string; outcome: DecisionOutcome } | null;
+  decision: {
+    runId: string;
+    /** Absent on decisions recorded before the kind existed; those were adoptions. */
+    kind?: DecisionKind;
+    rationale?: string;
+    outcome: DecisionOutcome;
+  } | null;
+};
+
+/**
+ * The human actions taken during one run, oldest first.
+ *
+ * Read from the log rather than from the projection: the projection keeps
+ * approvals as a decision per tool call id, which is what it needs to answer
+ * "was this allowed", and loses both the *when* and the tool's name — neither
+ * of which matters for permission and both of which are the whole point when
+ * the question is "what did a person have to do to get this result".
+ */
+const interventionsFor = (
+  sessionId: string,
+  events: readonly SessionEvent[],
+  runId: string,
+): Intervention[] => {
+  const toolNames = new Map<string, string>();
+
+  for (const event of events) {
+    if (event.type === "tool.requested" && event.payload.runId === runId) {
+      toolNames.set(event.payload.call.id, event.payload.call.name);
+    }
+  }
+
+  const named = (toolCallId: string): string =>
+    toolNames.get(toolCallId) ?? "a tool call";
+
+  return events
+    .filter((event) => event.sessionId === sessionId)
+    .flatMap((event): Intervention[] => {
+      if (event.type === "direction.queued" && event.payload.runId === runId) {
+        return [
+          {
+            kind: "direction",
+            detail: event.payload.direction,
+            at: event.occurredAt,
+          },
+        ];
+      }
+
+      if (event.type === "tool.approved" && event.payload.runId === runId) {
+        return [
+          {
+            kind: "approved",
+            detail: named(event.payload.toolCallId),
+            at: event.occurredAt,
+          },
+        ];
+      }
+
+      if (event.type === "tool.denied" && event.payload.runId === runId) {
+        return [
+          {
+            kind: "denied",
+            detail: named(event.payload.toolCallId),
+            at: event.occurredAt,
+          },
+        ];
+      }
+
+      return [];
+    });
 };
 
 const compareAttempt = (
   run: RunProjection,
   label: string,
   baseline: boolean,
+  interventions: Intervention[],
 ): AttemptComparison => {
   const testsPassed = run.tests.filter((test) => test.passed).length;
 
@@ -72,6 +149,7 @@ const compareAttempt = (
     testsRun: run.tests.length,
     testsPassed,
     green: run.tests.length === 0 ? null : testsPassed === run.tests.length,
+    interventions,
   };
 };
 
@@ -120,14 +198,24 @@ export const compareAttempts = (
       : undefined;
 
   if (baselineRun) {
-    compared.push(compareAttempt(baselineRun, "Baseline", true));
+    compared.push(compareAttempt(
+        baselineRun,
+        "Baseline",
+        true,
+        interventionsFor(sessionId, events, baselineRun.runId),
+      ));
   }
 
   for (const attempt of forks) {
     const run = projected.runs.find((entry) => entry.runId === attempt.runId);
 
     if (run) {
-      compared.push(compareAttempt(run, attempt.label, false));
+      compared.push(compareAttempt(
+        run,
+        attempt.label,
+        false,
+        interventionsFor(sessionId, events, run.runId),
+      ));
       continue;
     }
 
@@ -160,6 +248,7 @@ export const compareAttempts = (
         testsRun: 0,
         testsPassed: 0,
         green: null,
+        interventions: [],
       });
     }
   }
@@ -202,8 +291,19 @@ export const compareAttempts = (
     .sort((first, second) => first.sequence - second.sequence)
     .at(-1);
 
+  // Spread conditionally rather than writing `kind: payload.kind`: under
+  // exactOptionalPropertyTypes an explicit `undefined` is not the same as an
+  // absent key, and it would serialise as `"kind": null` for every decision
+  // recorded before the field existed.
   const decision = decided
-    ? { runId: decided.payload.runId, outcome: decided.payload.outcome }
+    ? {
+        runId: decided.payload.runId,
+        ...(decided.payload.kind ? { kind: decided.payload.kind } : {}),
+        ...(decided.payload.rationale
+          ? { rationale: decided.payload.rationale }
+          : {}),
+        outcome: decided.payload.outcome,
+      }
     : null;
 
   return { attempts: compared, contestedPaths, uniquePaths, decision };

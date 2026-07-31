@@ -1,4 +1,9 @@
-import type { DecisionOutcome, Participant, SessionEvent } from "@novus/contracts";
+import type {
+  DecisionKind,
+  DecisionOutcome,
+  Participant,
+  SessionEvent,
+} from "@novus/contracts";
 
 /**
  * Session state, rebuilt from the log and nowhere else.
@@ -95,7 +100,19 @@ export type SessionProjection = {
    * the log (a restart, a replay, a guest that missed the live event) had no
    * way to know one had ever been made.
    */
-  decision: { runId: string; checkpointId: string; outcome: DecisionOutcome } | null;
+  decision: {
+    runId: string;
+    checkpointId: string;
+    /**
+     * Defaulted to `adopt` rather than left optional. Every decision recorded
+     * before the kind existed was an adoption, so filling it in here is what
+     * the log actually meant — and it keeps every reader downstream from having
+     * to re-derive that same fact.
+     */
+    kind: DecisionKind;
+    rationale: string | null;
+    outcome: DecisionOutcome;
+  } | null;
   /**
    * What this session has spent, summed from the receipts in its own log.
    *
@@ -458,6 +475,8 @@ export const projectSession = (
         decision = {
           runId: event.payload.runId,
           checkpointId: event.payload.checkpointId,
+          kind: event.payload.kind ?? "adopt",
+          rationale: event.payload.rationale ?? null,
           outcome: event.payload.outcome,
         };
         break;

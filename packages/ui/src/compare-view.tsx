@@ -127,8 +127,27 @@ const Attempt = ({
       // Why an attempt failed is evidence, not an error to hide. A reviewer who
       // asked for two attempts and sees one column empty learns nothing.
       <p className="compare__failure">{attempt.failure}</p>
-    ) : attempt.summary ? (
-      <p className="compare__summary">{attempt.summary}</p>
+    ) : null}
+
+    {attempt.interventions.length > 0 ? (
+      // Above the summary, deliberately. A person having had to steer or refuse
+      // says something about an approach that its own account of itself will
+      // not, and an approach that only reached a clean result because somebody
+      // denied a bad patch did not reach it alone.
+      <ul className="compare__interventions">
+        {attempt.interventions.map((intervention, index) => (
+          <li className="compare__intervention" key={`${intervention.at}-${index}`}>
+            <span className={`compare__intervention-kind compare__intervention-kind--${intervention.kind}`}>
+              {intervention.kind === "direction"
+                ? "Steered"
+                : intervention.kind === "denied"
+                  ? "Refused"
+                  : "Approved"}
+            </span>
+            <span className="compare__intervention-detail">{intervention.detail}</span>
+          </li>
+        ))}
+      </ul>
     ) : null}
 
     {attempt.filesChanged.length > 0 ? (
@@ -151,6 +170,22 @@ const Attempt = ({
     ) : (
       <p className="compare__empty">Changed nothing.</p>
     )}
+
+    {attempt.summary && !attempt.failure ? (
+      // Last, and labelled as a claim. STEERING is explicit that an agent's
+      // summary is not proof: it is the approach's account of itself, and it
+      // reads as authoritative precisely because it is written in confident
+      // prose next to numbers that were actually measured. Putting it under
+      // everything that was measured is the whole point of the ordering.
+      <div className="compare__claim">
+        <span className="compare__claim-label">
+          {attempt.green === null
+            ? "Unverified claim — this approach ran no tests"
+            : "The approach's own summary"}
+        </span>
+        <p className="compare__summary">{attempt.summary}</p>
+      </div>
+    ) : null}
 
     {footer ? <footer className="compare__foot">{footer}</footer> : null}
   </section>

@@ -3196,6 +3196,131 @@ pre.kv__value {
   font-weight: var(--weight-medium);
 }
 
+/* ---------- decision room ---------- */
+
+/*
+ * What a person did during an approach. Above the summary, because it was
+ * measured and the summary is only claimed.
+ */
+.compare__interventions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.compare__intervention {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  font-size: var(--text-small);
+  color: var(--text-muted);
+}
+
+.compare__intervention-kind {
+  flex: none;
+  min-width: 62px;
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--track-eyebrow);
+  color: var(--text-dim);
+}
+
+.compare__intervention-kind--denied {
+  color: var(--del);
+}
+
+.compare__intervention-detail {
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The approach's own account of itself, last and labelled. Recessed rather
+ * than highlighted: it reads as authoritative already, because it is confident
+ * prose sitting next to numbers somebody actually measured.
+ */
+.compare__claim {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.compare__claim-label {
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--track-eyebrow);
+  color: var(--text-dim);
+}
+
+.decision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: var(--space-4) var(--space-6) 0;
+  padding: var(--space-5);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+}
+
+.decision__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.decision__title {
+  color: var(--text);
+  font-size: var(--text-title);
+  font-weight: var(--weight-strong);
+}
+
+.decision__note,
+.decision__count {
+  color: var(--text-dim);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+}
+
+.decision__rationale {
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  line-height: var(--leading-normal);
+  resize: vertical;
+  outline: none;
+}
+
+.decision__rationale:focus {
+  border-color: var(--text-dim);
+}
+
+.decision__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.decision__count {
+  flex: 1;
+}
+
+.decision__alternatives {
+  display: flex;
+  gap: var(--space-3);
+  margin: var(--space-4) var(--space-6) 0;
+}
+
 /*
  * Where the baseline's decision control would be. Sits at the same height as
  * the buttons beside it so the row does not look like a card with something

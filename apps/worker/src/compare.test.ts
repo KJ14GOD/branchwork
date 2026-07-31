@@ -304,3 +304,106 @@ test("only proposals that were applied count as changes", () => {
   assert.deepEqual(comparison.attempts[0]?.filesChanged, []);
   assert.equal(comparison.attempts[0]?.additions, 0);
 });
+
+test("what a person did during an approach is evidence, and is carried", () => {
+  const store = new InMemorySessionEventStore();
+
+  startRun(store, "fork-a", "Do it");
+  store.append({
+    sessionId: SESSION,
+    actorId: "agent-1",
+    type: "tool.requested",
+    payload: {
+      runId: "fork-a",
+      call: { id: "c1", name: "read_file", input: { path: "src/a.ts" } },
+    },
+  });
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "tool.denied",
+    payload: {
+      runId: "fork-a",
+      toolCallId: "c1",
+      deniedBy: "host",
+      reason: "Reads outside the change under review.",
+    },
+  });
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "direction.queued",
+    payload: {
+      runId: "fork-a",
+      directionEventId: "d1",
+      direction: "keep the public API stable",
+    },
+  });
+
+  const comparison = compareAttempts(SESSION, store.list(SESSION), [
+    { runId: "fork-a", label: "a", parentRunId: "parent" },
+  ]);
+
+  const interventions = comparison.attempts[0]?.interventions ?? [];
+
+  // An approach that only got there because somebody refused a bad patch is
+  // not the same result as one that got there alone, and the agent's own
+  // summary will never say so.
+  assert.equal(interventions.length, 2);
+  assert.equal(interventions[0]?.kind, "denied");
+  assert.equal(interventions[0]?.detail, "read_file");
+  assert.equal(interventions[1]?.kind, "direction");
+  assert.match(interventions[1]?.detail ?? "", /public API/);
+});
+
+test("one approach's interventions do not leak into another's", () => {
+  const store = new InMemorySessionEventStore();
+
+  startRun(store, "fork-a", "One way");
+  startRun(store, "fork-b", "Another way");
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "direction.queued",
+    payload: { runId: "fork-a", directionEventId: "d1", direction: "only for a" },
+  });
+
+  const comparison = compareAttempts(SESSION, store.list(SESSION), [
+    { runId: "fork-a", label: "a", parentRunId: "parent" },
+    { runId: "fork-b", label: "b", parentRunId: "parent" },
+  ]);
+
+  assert.equal(comparison.attempts[0]?.interventions.length, 1);
+  assert.equal(comparison.attempts[1]?.interventions.length, 0);
+});
+
+test("a decision carries what the human decided and why", () => {
+  const store = new InMemorySessionEventStore();
+
+  startRun(store, "fork-a", "Do it");
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "decision.recorded",
+    payload: {
+      runId: "fork-a",
+      checkpointId: "cp-1",
+      kind: "exploration",
+      rationale: "Neither approach covers the reconnect path yet.",
+      outcome: {
+        applied: false,
+        reason: "Further exploration requested — no approach was applied.",
+        conflicts: [],
+      },
+    },
+  });
+
+  const comparison = compareAttempts(SESSION, store.list(SESSION), [
+    { runId: "fork-a", label: "a", parentRunId: "parent" },
+  ]);
+
+  // "Keep exploring" is a decision with a record, not the absence of one.
+  assert.equal(comparison.decision?.kind, "exploration");
+  assert.match(comparison.decision?.rationale ?? "", /reconnect path/);
+  assert.equal(comparison.decision?.outcome.applied, false);
+});

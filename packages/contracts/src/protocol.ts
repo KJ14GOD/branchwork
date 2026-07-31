@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import { DecisionOutcomeSchema, ParticipantSchema } from "./contracts.ts";
+import {
+  DecisionKindSchema,
+  DecisionOutcomeSchema,
+  DecisionRationaleSchema,
+  ParticipantSchema,
+} from "./contracts.ts";
 
 const IdSchema = z.string().min(1);
 
@@ -162,6 +167,24 @@ export const AttemptComparisonSchema = z.object({
   // Null when the attempt ran no tests, which is not the same as failing them
   // and very much not the same as passing them.
   green: z.boolean().nullable(),
+  /**
+   * What a person did during this approach: steered it, approved a write,
+   * refused one.
+   *
+   * Evidence, and ranked above the agent's summary deliberately — a human
+   * having had to intervene three times says something about an approach that
+   * its own account of itself will not, and an approach that reached a clean
+   * result only because somebody denied a bad patch is not the same result as
+   * one that got there alone.
+   */
+  interventions: z.array(
+    z.object({
+      kind: z.enum(["direction", "approved", "denied"]),
+      /** The direction's text, or the tool that was approved or refused. */
+      detail: z.string().min(1),
+      at: z.string().datetime(),
+    }),
+  ),
 });
 
 export type AttemptComparison = z.infer<typeof AttemptComparisonSchema>;
@@ -176,10 +199,17 @@ export type AttemptComparison = z.infer<typeof AttemptComparisonSchema>;
  */
 export const DecisionSummarySchema = z.object({
   runId: z.string().min(1),
+  /** Absent on decisions recorded before the kind existed; those were adoptions. */
+  kind: DecisionKindSchema.optional(),
+  rationale: z.string().min(1).optional(),
   outcome: DecisionOutcomeSchema,
 });
 
 export type DecisionSummary = z.infer<typeof DecisionSummarySchema>;
+
+// Re-exported so a renderer importing the HTTP contract does not also have to
+// import the domain contract for the one enum it needs alongside it.
+export type { DecisionKind } from "./contracts.ts";
 
 export const ComparisonSchema = z.object({
   attempts: z.array(AttemptComparisonSchema),
@@ -196,6 +226,21 @@ export type Comparison = z.infer<typeof ComparisonSchema>;
 /** What a host submits to choose between attempts. */
 export const DecisionRequestSchema = z.object({
   runId: z.string().min(1),
+  /**
+   * Absent means adopt, so a caller written before this existed still works.
+   * Nothing in the desktop app relies on that — the composer always sends one
+   * — but the route is the boundary and it should not break on an old client.
+   */
+  kind: DecisionKindSchema.optional(),
+  /**
+   * Required by the *screen*, not by the schema.
+   *
+   * Enforcing it here would make every decision recorded before rationales
+   * existed unreplayable, and would refuse a decision at the boundary rather
+   * than in the form where a person can actually fix it. The compare screen
+   * will not submit without one; this validates the shape of what arrives.
+   */
+  rationale: DecisionRationaleSchema.optional(),
 });
 
 export type DecisionRequest = z.infer<typeof DecisionRequestSchema>;
