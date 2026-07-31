@@ -624,13 +624,44 @@ export class AgentRunner {
     // genuine question again.
     const readRepeats = new Map<string, number>();
     let identicalReads = 0;
+    // A resume continues the count rather than restarting it. Read from the
+    // log rather than carried in memory, because the process that held that
+    // memory is exactly what may have gone away — and a run that resumed
+    // believing it had spent nothing could spend its whole ceiling again on
+    // every resume, which is the guard failing in the one direction that
+    // costs money.
+    //
+    // Absent on pauses recorded before the snapshot existed, and on a fresh
+    // run. Both start from zero, which is the honest reading of a log that
+    // never wrote it down.
+    const resumedFrom = continuing
+      ? this.eventStore
+          .list(input.sessionId)
+          .filter(
+            (event) =>
+              event.type === "run.paused" && event.payload.runId === run.id,
+          )
+          .sort((first, second) => first.sequence - second.sequence)
+          .at(-1)
+      : undefined;
+    const priorUsage =
+      resumedFrom?.type === "run.paused" ? resumedFrom.payload.usage : undefined;
+
     const usage: ReceiptUsage = {
-      inputTokens: 0,
-      outputTokens: 0,
-      modelCalls: 0,
-      callsMissingUsage: 0,
-      modelTimeMs: 0,
-      costUsd: rates === null ? null : 0,
+      inputTokens: priorUsage?.inputTokens ?? 0,
+      outputTokens: priorUsage?.outputTokens ?? 0,
+      modelCalls: priorUsage?.modelCalls ?? 0,
+      callsMissingUsage: priorUsage?.callsMissingUsage ?? 0,
+      modelTimeMs: priorUsage?.modelTimeMs ?? 0,
+      // Null is sticky in the right direction: a prior leg that could not be
+      // priced makes the whole run unpriced, rather than resuming at zero and
+      // reporting only what the second leg happened to cost.
+      costUsd:
+        rates === null
+          ? null
+          : priorUsage === undefined
+            ? 0
+            : priorUsage.costUsd,
       rates,
     };
     // Reading the base is reporting, not execution: a run that has already
@@ -734,7 +765,23 @@ export class AgentRunner {
         sessionId: input.sessionId,
         actorId: input.actorId,
         type: "run.paused",
-        payload: { runId: run.id },
+        // The spend goes with it. Budgets accumulate in memory and that
+        // memory dies with the process, so a resumed run used to come back
+        // believing it had spent nothing — and a cost ceiling could be spent
+        // again in full on every resume. No receipt is written here on
+        // purpose (a paused run is not over), so this event is the only place
+        // the figure can survive.
+        payload: {
+          runId: run.id,
+          usage: {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            modelCalls: usage.modelCalls,
+            callsMissingUsage: usage.callsMissingUsage,
+            costUsd: usage.costUsd,
+            modelTimeMs: usage.modelTimeMs,
+          },
+        },
       });
 
       return { runId: run.id, events: this.eventStore.list(input.sessionId) };

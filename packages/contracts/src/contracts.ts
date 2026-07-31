@@ -779,6 +779,48 @@ export type Fork = z.infer<typeof ForkSchema>;
  * inside a document whose whole purpose is evidence is worse than no number.
  * Cost belongs with routing, which V1 defers.
  */
+/**
+ * What a run has consumed so far.
+ *
+ * Named rather than written inline in the receipt because `run.paused` carries
+ * it too. A budget accumulates in memory and that memory dies with the
+ * process, so a paused run that resumed came back believing it had spent
+ * nothing — and could spend its whole ceiling again on every resume. The
+ * receipt is written when a run *ends*, which is exactly the case a paused run
+ * is not, so the pause event is the only place this survives.
+ */
+export const RunUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  modelCalls: z.number().int().nonnegative(),
+  // Calls whose adapter reported nothing. When this is above zero the totals
+  // are a floor, not a count, and anything displaying them has to say so
+  // rather than print a confident number that is quietly short.
+  //
+  // Provider-side retries are invisible here for the same reason: the SDK
+  // reports usage for the response it finally returned, not for the attempts
+  // it made, so a retried call under-reports against what was billed.
+  callsMissingUsage: z.number().int().nonnegative(),
+  /**
+   * What this run cost, in US dollars, when every model it called had a
+   * published rate.
+   *
+   * Null rather than zero when any call's model was unpriced — a run
+   * reported as costing $0.00 because nobody had a rate for its model is
+   * a worse answer than one that says it does not know. README asks a run
+   * to record cost per call; this is the total those calls add up to.
+   */
+  costUsd: z.number().nonnegative().nullable(),
+  /**
+   * Time spent inside model calls, as distinct from the run's wall clock.
+   * The gap between the two is what the harness itself spent — tools,
+   * approvals, waiting on a human.
+   */
+  modelTimeMs: z.number().int().nonnegative(),
+});
+
+export type RunUsage = z.infer<typeof RunUsageSchema>;
+
 export const RunReceiptSchema = z.object({
   runId: IdSchema,
   sessionId: IdSchema,
@@ -803,35 +845,7 @@ export const RunReceiptSchema = z.object({
   startedAt: TimestampSchema,
   finishedAt: TimestampSchema,
   elapsedMs: z.number().int().nonnegative(),
-  usage: z.object({
-    inputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-    modelCalls: z.number().int().nonnegative(),
-    // Calls whose adapter reported nothing. When this is above zero the totals
-    // are a floor, not a count, and anything displaying them has to say so
-    // rather than print a confident number that is quietly short.
-    //
-    // Provider-side retries are invisible here for the same reason: the SDK
-    // reports usage for the response it finally returned, not for the attempts
-    // it made, so a retried call under-reports against what was billed.
-    callsMissingUsage: z.number().int().nonnegative(),
-    /**
-     * What this run cost, in US dollars, when every model it called had a
-     * published rate.
-     *
-     * Null rather than zero when any call's model was unpriced — a run
-     * reported as costing $0.00 because nobody had a rate for its model is
-     * a worse answer than one that says it does not know. README asks a run
-     * to record cost per call; this is the total those calls add up to.
-     */
-    costUsd: z.number().nonnegative().nullable(),
-    /**
-     * Time spent inside model calls, as distinct from the run's wall clock.
-     * The gap between the two is what the harness itself spent — tools,
-     * approvals, waiting on a human.
-     */
-    modelTimeMs: z.number().int().nonnegative(),
-  }),
+  usage: RunUsageSchema,
   toolCalls: z.array(
     z.object({
       toolCallId: IdSchema,
@@ -1278,6 +1292,21 @@ export const RunPausedEventSchema = EventEnvelopeSchema.extend({
   type: z.literal("run.paused"),
   payload: z.object({
     runId: IdSchema,
+    /**
+     * What the run had spent when it stopped, so resuming continues the
+     * count instead of restarting it.
+     *
+     * A run's budget lives in memory and dies with the process. Pause is the
+     * only way a run comes back — a crashed one is reconciled to failed and a
+     * cancelled one does not resume — so this is the single place the figure
+     * has to survive, and without it a ceiling could be spent again in full on
+     * every resume.
+     *
+     * Optional because pauses recorded before this existed have none. A
+     * resumed run that finds none starts from zero, which is the old
+     * behaviour and the honest reading of a log that never wrote it down.
+     */
+    usage: RunUsageSchema.optional(),
   }),
 });
 

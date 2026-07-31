@@ -413,3 +413,138 @@ test("resuming an unknown run is refused", async () => {
     /No run .* exists to resume/,
   );
 });
+
+/**
+ * The guard that actually matters when a budget is set.
+ *
+ * A run's spend lived only in the memory of the process running it, so a
+ * resumed run came back believing it had spent nothing — and a cost ceiling
+ * could be spent again in full on every resume. Pause is the only path back
+ * into a run (a crashed one is reconciled to failed, a cancelled one does not
+ * resume), so the pause event is the only place the figure can survive.
+ */
+test("a resumed run continues its spend rather than restarting it", async () => {
+  const eventStore = new InMemorySessionEventStore();
+  let asked = 0;
+
+  const adapter: ModelAdapter = {
+    selection: { provider: "anthropic", model: "test" },
+    async complete() {
+      asked += 1;
+
+      if (asked === 1) {
+        return {
+          type: "tool_call",
+          call: { id: "c1", name: "read_file", input: { path: "package.json" } },
+          usage: { inputTokens: 1_000, outputTokens: 500 },
+        };
+      }
+
+      return {
+        type: "final",
+        summary: "Done after resuming.",
+        usage: { inputTokens: 1_000, outputTokens: 500 },
+      };
+    },
+  };
+
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(adapter.selection),
+    [adapter],
+    [new PausingTool(eventStore, "spend-session")],
+  );
+
+  const paused = await runner.run({
+    sessionId: "spend-session",
+    actorId: "agent-1",
+    goal: "Read the manifest",
+  });
+
+  const pausedEvent = paused.events.find((event) => event.type === "run.paused");
+  assert.equal(pausedEvent?.type, "run.paused");
+
+  // The snapshot is on the pause event, because no receipt is written for a
+  // run that has not ended.
+  const snapshot =
+    pausedEvent?.type === "run.paused" ? pausedEvent.payload.usage : undefined;
+  assert.equal(snapshot?.modelCalls, 1);
+  assert.equal(snapshot?.inputTokens, 1_000);
+
+  const started = paused.events.find((event) => event.type === "run.started");
+  const runId = started?.type === "run.started" ? started.payload.run.id : "";
+
+  await runner.resume({
+    sessionId: "spend-session",
+    actorId: "agent-1",
+    runId,
+  });
+
+  const receipt = eventStore
+    .list("spend-session")
+    .find((event) => event.type === "receipt.created");
+  assert.equal(receipt?.type, "receipt.created");
+
+  // Two calls across the whole run, not one. Restarting the count would make
+  // this read 1 and 1,000 — the run's second leg only — and every ceiling
+  // checked against it would be checking the wrong number.
+  const total =
+    receipt?.type === "receipt.created" ? receipt.payload.receipt.usage : undefined;
+  assert.equal(total?.modelCalls, 2);
+  assert.equal(total?.inputTokens, 2_000);
+  assert.equal(total?.outputTokens, 1_000);
+});
+
+test("a pause recorded before spend was snapshotted still resumes", async () => {
+  const eventStore = new InMemorySessionEventStore();
+
+  // Exactly the shape of a log written before the snapshot existed: run
+  // started, then paused with no usage on the event.
+  eventStore.append({
+    sessionId: "old-log",
+    actorId: "agent-1",
+    type: "run.started",
+    payload: {
+      run: {
+        id: "run-1",
+        sessionId: "old-log",
+        goal: "Something from before",
+        status: "running",
+        startedBy: "agent-1",
+        model: { provider: "anthropic", model: "test" },
+        createdAt: new Date().toISOString(),
+      },
+    },
+  });
+  eventStore.append({
+    sessionId: "old-log",
+    actorId: "agent-1",
+    type: "run.paused",
+    payload: { runId: "run-1" },
+  });
+
+  const adapter: ModelAdapter = {
+    selection: { provider: "anthropic", model: "test" },
+    async complete() {
+      return { type: "final", summary: "Finished an old run." };
+    },
+  };
+
+  const runner = new AgentRunner(
+    eventStore,
+    new FixedModelRouter(adapter.selection),
+    [adapter],
+    [],
+  );
+
+  // Starts from zero, which is the honest reading of a log that never wrote
+  // the figure down — and does not refuse to resume, which would make every
+  // session paused before tonight unresumable.
+  const resumed = await runner.resume({
+    sessionId: "old-log",
+    actorId: "agent-1",
+    runId: "run-1",
+  });
+
+  assert.ok(resumed.events.some((event) => event.type === "run.completed"));
+});
