@@ -1951,7 +1951,22 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-micro);
+  /* The mission story, so it reads at the same size as the events around it
+     rather than as chrome. It used to be the smallest type on the row while
+     the call count wore a pill — exactly backwards. */
+  font-size: var(--text-small);
+  color: var(--text);
+}
+
+/* The machinery, named and quiet. Right-aligned so a column of groups has a
+   consistent place for "there is more behind this". */
+.tool-group__detail {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: var(--text-eyebrow);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* The one line this file keeps inside a container, and it earns it: it is the

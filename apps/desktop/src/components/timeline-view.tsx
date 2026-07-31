@@ -104,14 +104,49 @@ export const groupKeyFor = (
   return null;
 };
 
+const plural = (count: number, one: string, many = `${one}s`): string =>
+  `${count} ${count === 1 ? one : many}`;
+
+/**
+ * What a run of tool calls actually amounted to, in a person's words.
+ *
+ * This line used to read `read_file ×3, apply_patch` — the contract's
+ * vocabulary, printed verbatim. It is accurate and it tells you nothing: tool
+ * names are how the harness talks to itself, and reading a mission's history
+ * in them means reconstructing the story from the machinery every time.
+ *
+ * STEERING asks for the default view to tell the mission story and for the
+ * machinery to live under Technical details, which is exactly what the fold
+ * below now is. Nothing is hidden — every call is one click away, and the
+ * expanded view is unchanged.
+ *
+ * Deliberately says what happened rather than whether it went well. "Ran the
+ * tests" is a milestone; "tests passed" is a verdict, and verdicts belong in
+ * the evidence panel where they can be qualified.
+ */
 const summariseGroup = (events: readonly SessionEvent[]): string => {
   const counts = new Map<string, number>();
+  const readPaths = new Set<string>();
+  const writePaths = new Set<string>();
   let denied = 0;
   let failed = 0;
 
   for (const event of events) {
     if (event.type === "tool.requested") {
-      counts.set(event.payload.call.name, (counts.get(event.payload.call.name) ?? 0) + 1);
+      const { name, input } = event.payload.call;
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+
+      if (name === "read_file") {
+        readPaths.add(input.path);
+      }
+
+      if (
+        name === "propose_patch" ||
+        name === "propose_new_file" ||
+        name === "propose_deletion"
+      ) {
+        writePaths.add(input.path);
+      }
     } else if (event.type === "tool.denied") {
       denied += 1;
     } else if (event.type === "tool.failed") {
@@ -119,19 +154,63 @@ const summariseGroup = (events: readonly SessionEvent[]): string => {
     }
   }
 
-  const parts = [...counts.entries()].map(([name, count]) =>
-    count > 1 ? `${name} ×${count}` : name,
-  );
+  const used = (...names: string[]): number =>
+    names.reduce((total, name) => total + (counts.get(name) ?? 0), 0);
 
+  const parts: string[] = [];
+  const searched = used("search_repository", "list_directory", "git_status", "git_diff", "git_branches");
+
+  if (readPaths.size > 0 || searched > 0) {
+    // Files, not calls. Reading one file four times is one file's worth of
+    // understanding, and counting the calls made a stuck agent look busy.
+    parts.push(
+      readPaths.size > 0
+        ? `Read ${plural(readPaths.size, "file")}`
+        : "Searched the repository",
+    );
+  }
+
+  if (writePaths.size > 0) {
+    parts.push(`Proposed changes to ${plural(writePaths.size, "file")}`);
+  }
+
+  const applied = used("apply_patch");
+
+  if (applied > 0) {
+    parts.push(`Applied ${plural(applied, "change")}`);
+  }
+
+  if (used("run_tests") > 0) {
+    parts.push("Ran the tests");
+  }
+
+  if (used("run_build") > 0) {
+    parts.push("Built the project");
+  }
+
+  if (used("run_diagnostics") > 0) {
+    parts.push("Checked diagnostics");
+  }
+
+  if (used("run_command") > 0) {
+    parts.push(`Ran ${plural(used("run_command"), "command")}`);
+  }
+
+  if (used("dev_server") > 0) {
+    parts.push("Started a dev server");
+  }
+
+  // Both stay last and stay plain. A refusal is a fact about what a person
+  // decided, not an error the timeline should apologise for.
   if (denied > 0) {
-    parts.push(`${denied} denied`);
+    parts.push(`${denied} refused`);
   }
 
   if (failed > 0) {
-    parts.push(`${failed} failed`);
+    parts.push(`${plural(failed, "call")} failed`);
   }
 
-  return parts.length > 0 ? parts.join(", ") : "tool activity";
+  return parts.length > 0 ? parts.join(" · ") : "Worked on the repository";
 };
 
 const ToolGroupRow = ({
@@ -178,8 +257,16 @@ const ToolGroupRow = ({
         aria-expanded={open}
       >
         <span className="tool-group__chevron">{open ? "▾" : "▸"}</span>
-        <span className="tool-group__count">{requestCount}</span>
         <span className="tool-group__summary">{summariseGroup(group.events)}</span>
+        {/*
+          Named, so the fold says what is behind it rather than leaving a
+          count of calls as the headline. The call total moves in here with
+          the rest of the machinery: it is implementation telemetry, and as a
+          headline it invited reading more calls as more work done.
+        */}
+        <span className="tool-group__detail">
+          Technical details · {requestCount}
+        </span>
       </button>
       {open ? (
         <div className="tool-group__body">
