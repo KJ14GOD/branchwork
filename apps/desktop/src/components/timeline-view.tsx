@@ -35,6 +35,36 @@ export type TimelineItem = { kind: "event"; event: SessionEvent } | TimelineGrou
  * stable across re-renders and unique, since sequence numbers never repeat
  * within a session.
  */
+/**
+ * Every `session.created` after the first, dropped.
+ *
+ * Opening a session appends one, and so does every resume — that is what
+ * makes a session findable again, so the log is right to carry them all. The
+ * timeline is not: reopening a session four times drew four identical rows
+ * above the actual work, saying nothing the header does not already say. The
+ * events stay in the log, in raw payloads, and in replay; only the repeats
+ * stop being drawn.
+ */
+const withoutRepeatedOpens = (
+  events: readonly SessionEvent[],
+): SessionEvent[] => {
+  let seenOpen = false;
+
+  return events.filter((event) => {
+    if (event.type !== "session.created") {
+      return true;
+    }
+
+    if (seenOpen) {
+      return false;
+    }
+
+    seenOpen = true;
+
+    return true;
+  });
+};
+
 export const buildTimelineItems = (events: readonly SessionEvent[]): TimelineItem[] => {
   const items: TimelineItem[] = [];
   let current: SessionEvent[] = [];
@@ -195,10 +225,13 @@ export const TimelineView = ({
    */
   group?: boolean;
 }) => {
-  const items = useMemo(
-    () => (group ? buildTimelineItems(events) : events.map((event) => ({ kind: "event" as const, event }))),
-    [events, group],
-  );
+  const items = useMemo(() => {
+    const visible = withoutRepeatedOpens(events);
+
+    return group
+      ? buildTimelineItems(visible)
+      : visible.map((event) => ({ kind: "event" as const, event }));
+  }, [events, group]);
 
   return (
     <>

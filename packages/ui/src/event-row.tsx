@@ -76,7 +76,19 @@ export const EventRow = ({
 
     switch (event.type) {
       case "session.created":
-        return <span className="event__text">{event.payload.session.goal}</span>;
+        // Never the goal: a session's goal is deliberately null — goals belong
+        // to the runs inside it — so rendering it drew an empty row under a
+        // bare glyph, once per open *and* once per resume. That stack of blank
+        // diamonds at the top of every reopened session was this line.
+        return (
+          <span className="event__text event__text--muted">
+            Session opened
+            <span className="event__type">
+              {" "}
+              · {event.payload.session.repositoryPath}
+            </span>
+          </span>
+        );
 
       case "run.started":
         return (
