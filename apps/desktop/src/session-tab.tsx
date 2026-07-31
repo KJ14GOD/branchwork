@@ -547,7 +547,9 @@ export const SessionTab = ({
           <div className="viewswitch" role="group" aria-label="View">
             {viewOption("timeline", "Timeline")}
             {viewOption("compare", "Attempts", attempts.length)}
-            {host ? viewOption("browse", "Files") : null}
+            {/* "Browse", not "Files": the right-hand panel is already "Files changed",
+                and two things called Files in one bar is a puzzle, not a label. */}
+            {host ? viewOption("browse", "Browse") : null}
           </div>
           <button
             className="icon-button"
