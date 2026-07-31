@@ -55,7 +55,7 @@ export const JoinEntry = ({
       className={embedded ? "open__panel modal" : "open__panel"}
       onSubmit={submit}
     >
-      <div className="open__title">Join a session</div>
+      <div className="open__title">Join a mission</div>
       <p className="open__subtitle">
         Paste an invite from a Novus host. You join their live session with the
         role the invite carries — their repository and credentials stay on

@@ -81,7 +81,7 @@ export const ControlBaton = ({
       title={
         waiting
           ? `${holder} · ${waiting} — see Control in the rail`
-          : "Who holds execution authority for this session"
+          : "Who holds execution authority for this mission"
       }
     >
       <span className="baton__mark" />

@@ -419,7 +419,7 @@ export const App = () => {
       className="icon-button"
       type="button"
       onClick={() => setJoinOpen(true)}
-      title="Join another host's session with an invite link"
+      title="Join another host's mission with an invite link"
     >
       Join
     </button>
@@ -545,7 +545,7 @@ export const App = () => {
                     setActiveId(entry.key);
                   }
                 }}
-                title="A session this window joined — it lives on another host"
+                title="A mission this window joined — it lives on another host"
               >
                 <span
                   className={`tab__dot tab__dot--${dotClass(entryStatus?.runStatus)}`}
@@ -558,7 +558,7 @@ export const App = () => {
                     event.stopPropagation();
                     closeJoined(entry.key);
                   }}
-                  title="Leave this session"
+                  title="Leave this mission"
                 >
                   ×
                 </button>
@@ -574,7 +574,7 @@ export const App = () => {
             title={
               hosting
                 ? "Open another repository in a new tab"
-                : "Join another session"
+                : "Join another mission"
             }
           >
             +

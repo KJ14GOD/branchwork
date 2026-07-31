@@ -67,7 +67,7 @@ export const JoinedTab = ({
   const report = describeConnection(
     connection,
     endpoint ?? relay ?? "",
-    sessionId ?? "the relayed session",
+    sessionId ?? "the relayed mission",
   );
 
   // Unknown role means watch-only: the safe direction to be wrong in. A
@@ -152,7 +152,7 @@ export const JoinedTab = ({
         <aside className="rail">
           <div className="rail__section">
             <div className="eyebrow">Goal</div>
-            <div>{summary.goal ?? "No run has started in this session."}</div>
+            <div>{summary.goal ?? "No run has started in this mission."}</div>
           </div>
 
           <div className="rail__section">
