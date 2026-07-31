@@ -18,6 +18,8 @@ import {
 } from "./model.ts";
 import { SessionRegistry, type HostDefaults } from "./session-registry.ts";
 import { startEventServer } from "./event-server.ts";
+import { DEFAULT_RUN_BUDGET, type RunBudget } from "./budget.ts";
+import type { PricingTable } from "./pricing.ts";
 
 const run = promisify(execFile);
 const git = (cwd: string, args: string[]) => run("git", args, { cwd });
@@ -59,12 +61,14 @@ const startWorker = (
   store: InMemorySessionEventStore,
   adapters: ModelAdapter[],
   defaults?: HostDefaults,
+  economics?: { pricing?: PricingTable; budget?: RunBudget },
 ) => {
   const sessions = new SessionRegistry(
     store,
     new FixedModelRouter(SELECTION),
     adapters,
     defaults,
+    economics,
   );
 
   return startEventServer(store, { port: 0, token: TOKEN, sessions });
@@ -1208,6 +1212,83 @@ test("a fork that can never start is a failed attempt on the record, not a silen
     assert.equal(comparison.attempts[0]?.runId, runId);
     assert.equal(comparison.attempts[0]?.status, "failed");
     assert.match(comparison.attempts[0]?.failure ?? "", /No model adapter/);
+  } finally {
+    await server.close();
+    await cleanup(root);
+  }
+});
+
+/**
+ * Test 12. The host's bounds reach the attempts, not only the parent's runs.
+ *
+ * `buildForkRunner` constructed its `AgentRunner` with six arguments where the
+ * budget is the seventh and pricing the ninth, so every forked attempt quietly
+ * used `DEFAULT_RUN_BUDGET` — whose `costUsd` is null, meaning uncapped. A host
+ * who set `NOVUS_COST_BUDGET_USD` therefore had a ceiling that bound their own
+ * runs and none of their attempts, which is the one place spend multiplies:
+ * attempts are the feature you deliberately start several of at once.
+ *
+ * Asserted through the cost budget's refusal-to-start rule rather than by
+ * spending anything: an unpriced model under a set ceiling must stop before
+ * the first call, because a budget that cannot count is a budget that is not
+ * enforcing. That one message proves both arguments arrived — the budget,
+ * because it tripped at all, and the pricing table, because the reason names
+ * missing pricing rather than a dollar figure.
+ */
+test("a forked attempt is bound by the host's cost budget, not by the defaults", async () => {
+  const root = await repository();
+  const store = new InMemorySessionEventStore();
+
+  const server = await startWorker(
+    store,
+    [
+      new GoalScriptedAdapter({
+        "Change the answer": editsAnswer("attempt a\n", "Changed it."),
+      }),
+    ],
+    undefined,
+    { budget: { ...DEFAULT_RUN_BUDGET, costUsd: 5 } },
+  );
+
+  try {
+    const session = await openSession(server.url, {
+      repositoryPath: root,
+      allowWrites: true,
+    });
+
+    const forked = await forkSession(
+      server.url,
+      session.id,
+      "Attempt A",
+      "Change the answer",
+    );
+
+    const failure = await waitForRunEnd(
+      store,
+      session.id,
+      forked.fork.runId,
+    );
+
+    assert.match(
+      failure ?? "",
+      /cost budget is set, but this run's model has no configured pricing/,
+      "the host's ceiling has to bind the attempt, not just the parent",
+    );
+
+    // And it stopped before spending, rather than after: no model call, so no
+    // tool call, so nothing was written in the fork's tree.
+    assert.equal(
+      store
+        .list(session.id)
+        .some(
+          (event) =>
+            event.type === "tool.completed" &&
+            event.payload.result.toolCallId !== undefined &&
+            "runId" in event.payload &&
+            event.payload.runId === forked.fork.runId,
+        ),
+      false,
+    );
   } finally {
     await server.close();
     await cleanup(root);

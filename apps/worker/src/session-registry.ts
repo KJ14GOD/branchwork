@@ -662,6 +662,18 @@ export class SessionRegistry {
         session.allowCommands && recorded.allowCommands,
       ),
       () => readRepositoryBase(handle.worktreePath),
+      // The host's budget and pricing, not the defaults. These two arguments
+      // were simply absent, so every forked attempt fell back to
+      // DEFAULT_RUN_BUDGET — whose costUsd is null, meaning uncapped — and a
+      // host who set NOVUS_COST_BUDGET_USD had a ceiling that bound their own
+      // runs and none of their attempts. Attempts are the thing you deliberately
+      // start several of at once, so that was the ceiling failing exactly where
+      // spend multiplies. Pricing goes with it: an unpriced model makes usage
+      // costUsd null, and a null spend under a set ceiling is refused rather
+      // than silently unenforced.
+      this.budget,
+      undefined,
+      this.pricing,
     );
 
     session.forkRunners.set(handle.fork.runId, runner);
