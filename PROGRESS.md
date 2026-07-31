@@ -283,3 +283,17 @@ Numbered so other documents can point at them.
     them since `3dbb664`, the log keeps them).
 16. **No packaging.** No signed build, no notarization, no entitlements —
     Milestone 5's "clean machine" exit is unreachable until this exists.
+17. **One flaky test under heavy machine contention.** *Open (2026-07-31.)*
+    `control-lifecycle.test.ts`, "what /authority sends validates against the
+    contract", failed twice in three full-suite runs while a second agent's
+    test suite was saturating the CPU: `pendingDirection` came back empty when
+    the direction had just been posted against a run `startRun` had already
+    confirmed was executing. It has not reproduced in nine runs since that load
+    went away, and 12 isolated runs of the test alone are clean — so the cause
+    is not established and the test is instrumented rather than fixed. Its
+    assertion message now prints the `pendingDirection` and `executingRunIds`
+    it actually saw, so the next occurrence says what happened instead of only
+    `undefined`. **Do not treat a green suite as evidence this is gone.** It is
+    a test-level flake with no matching product symptom found so far; if it
+    turns out `direction.submitted` can be read back missing right after its
+    POST returns, that is a real bug and this entry is wrong about its scope.

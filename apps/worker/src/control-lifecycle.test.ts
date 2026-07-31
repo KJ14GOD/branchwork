@@ -224,6 +224,7 @@ test("what /authority sends validates against the contract", async () => {
     assert.equal(
       parsed.success && parsed.data.pendingDirection[0]?.queuedForRunId,
       runId,
+      `pendingDirection was ${JSON.stringify(parsed.success ? parsed.data.pendingDirection : null)}, executing ${JSON.stringify(parsed.success ? parsed.data.executingRunIds : null)}`,
     );
   });
 });
