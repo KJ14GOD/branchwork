@@ -347,6 +347,17 @@ const rendezvous = (parties: number, timeoutMs: number): (() => Promise<void>) =
   };
 };
 
+/**
+ * A model call that never comes back — the shape a worker exit leaves behind.
+ *
+ * Killing the process mid-run is not something a test in this process can do,
+ * and it does not need to: what a dead worker leaves in the log is a
+ * `run.started` with no terminator and no loop that will ever write one, and a
+ * call suspended forever is exactly that. Closing the server afterwards
+ * abandons it for good.
+ */
+const neverReturns = (): Script => () => new Promise<ModelResponse>(() => {});
+
 const captureWarnings = (): { lines: string[]; restore: () => void } => {
   const lines: string[] = [];
   const original = console.warn;
@@ -1199,6 +1210,174 @@ test("a fork that can never start is a failed attempt on the record, not a silen
     assert.match(comparison.attempts[0]?.failure ?? "", /No model adapter/);
   } finally {
     await server.close();
+    await cleanup(root);
+  }
+});
+
+/**
+ * Test 10. An attempt the worker died inside is reconciled; a paused one is not.
+ *
+ * These are the same code path pulling in opposite directions, so they are
+ * asserted against one another in a single log rather than in two tests that
+ * could each pass while the pair is wrong. A run left `running` by a process
+ * exit has to be ended — the compare screen was otherwise showing work in
+ * flight with no loop behind it, indefinitely. A *paused* run has to survive
+ * untouched, because a pause is a deliberate, durable state a host created in
+ * order to come back to it, and reconciliation that cannot tell the two apart
+ * destroys the feature it is meant to protect.
+ */
+test("an attempt the worker died inside is failed at session open, while a paused one survives", async () => {
+  const root = await repository();
+  const store = new InMemorySessionEventStore();
+  const sessionBox = { id: "" };
+  let hungRunId = "";
+  let pausedRunId = "";
+
+  const serverA = await startWorker(store, [
+    new GoalScriptedAdapter({
+      "Hang forever": neverReturns(),
+      "Pause and wait": pausesItselfThenEdits(
+        store,
+        sessionBox,
+        "resumed after restart\n",
+        "Finished after the restart.",
+      ),
+    }),
+  ]);
+
+  try {
+    const session = await openSession(serverA.url, {
+      repositoryPath: root,
+      allowWrites: true,
+    });
+
+    sessionBox.id = session.id;
+
+    hungRunId = (
+      await forkSession(serverA.url, session.id, "Hung", "Hang forever")
+    ).fork.runId;
+    pausedRunId = (
+      await forkSession(serverA.url, session.id, "Paused", "Pause and wait")
+    ).fork.runId;
+
+    await waitForEvent(store, session.id, "the hung attempt to start", (events) =>
+      events.some(
+        (event) =>
+          event.type === "run.started" && event.payload.run.id === hungRunId,
+      ),
+    );
+    await waitForEvent(store, session.id, "the other attempt to pause", (events) =>
+      events.some(
+        (event) =>
+          event.type === "run.paused" && event.payload.runId === pausedRunId,
+      ),
+    );
+
+    // Before the restart the hung attempt is legitimately running: a live loop
+    // is inside a model call. Nothing should have ended it here.
+    const live = await getJson<{ attempts: { runId: string; status: string }[] }>(
+      serverA.url,
+      `/sessions/${session.id}/compare`,
+    );
+
+    assert.equal(
+      live.attempts.find((attempt) => attempt.runId === hungRunId)?.status,
+      "running",
+    );
+  } finally {
+    await serverA.close();
+  }
+
+  // A fresh registry over the same durable log — a real restart, and the model
+  // call the first worker was suspended inside will never return.
+  const serverB = await startWorker(store, [
+    new GoalScriptedAdapter({
+      "Pause and wait": editsAnswer(
+        "resumed after restart\n",
+        "Finished after the restart.",
+      ),
+    }),
+  ]);
+
+  try {
+    await openSession(serverB.url, {
+      repositoryPath: root,
+      resume: sessionBox.id,
+      allowWrites: true,
+    });
+
+    const after = await getJson<{
+      attempts: { runId: string; status: string }[];
+    }>(serverB.url, `/sessions/${sessionBox.id}/compare`);
+
+    assert.equal(
+      after.attempts.find((attempt) => attempt.runId === hungRunId)?.status,
+      "failed",
+      "an attempt whose worker exited must not still read as running",
+    );
+    assert.equal(
+      after.attempts.find((attempt) => attempt.runId === pausedRunId)?.status,
+      "paused",
+      "a paused attempt is resumable state, not an orphan to reconcile",
+    );
+
+    const failure = store
+      .list(sessionBox.id)
+      .find(
+        (event) =>
+          event.type === "run.failed" && event.payload.runId === hungRunId,
+      );
+
+    assert.ok(failure?.type === "run.failed");
+    assert.match(failure.payload.reason, /interrupted/);
+
+    // The paused attempt is not merely labelled paused — it still runs, in its
+    // own worktree, which is what "survives" has to mean.
+    await postJson(serverB.url, `/sessions/${sessionBox.id}/resume`, {
+      runId: pausedRunId,
+    });
+
+    const resumeFailure = await waitForRunEnd(store, sessionBox.id, pausedRunId);
+
+    assert.equal(resumeFailure, null, `the resumed fork failed: ${resumeFailure}`);
+
+    const forkPath = join(
+      dirname(root),
+      ".novus-forks",
+      basename(root),
+      pausedRunId,
+      "answer.txt",
+    );
+
+    assert.equal(await readFile(forkPath, "utf8"), "resumed after restart\n");
+  } finally {
+    await serverB.close();
+  }
+
+  // Opening a third time must not append a second terminator: the run is
+  // settled, and reconciliation reads the projection rather than a memory of
+  // having run. A different registry again, so the guard against reconciling a
+  // session this process already has open is not what is being credited here.
+  const serverC = await startWorker(store, [new GoalScriptedAdapter({})]);
+
+  try {
+    await openSession(serverC.url, {
+      repositoryPath: root,
+      resume: sessionBox.id,
+      allowWrites: true,
+    });
+
+    assert.equal(
+      store
+        .list(sessionBox.id)
+        .filter(
+          (event) =>
+            event.type === "run.failed" && event.payload.runId === hungRunId,
+        ).length,
+      1,
+    );
+  } finally {
+    await serverC.close();
     await cleanup(root);
   }
 });

@@ -15,6 +15,7 @@ import { DEFAULT_RUN_BUDGET, type RunBudget } from "./budget.ts";
 import type { ModelSelection } from "@novus/contracts";
 import type { ModelAdapter, ModelRouter } from "./model.ts";
 import { DEFAULT_MODEL_PRICING, type PricingTable } from "./pricing.ts";
+import { projectSession } from "./projection.ts";
 import {
   AllowListApprovalGate,
   DenyAllApprovalGate,
@@ -402,6 +403,12 @@ export class SessionRegistry {
     const allowCommands = options.allowCommands ?? this.defaults.allowCommands;
     const repositoryState = await readRepositoryState(repositoryPath);
 
+    // Captured before the map is written, because reconciliation below depends
+    // on the answer: a session this process already has open may have loops
+    // live under its run ids right now, and those must never be reconciled.
+    const alreadyOpenHere =
+      options.resume !== undefined && this.sessions.has(options.resume);
+
     const session: Session = {
       id: options.resume ?? crypto.randomUUID(),
       repositoryPath,
@@ -473,6 +480,10 @@ export class SessionRegistry {
           }`,
         );
       }
+    }
+
+    if (!alreadyOpenHere) {
+      this.reconcileInterruptedRuns(session);
     }
 
     // Announced rather than returned only, because a session's id is a runtime
@@ -702,6 +713,78 @@ export class SessionRegistry {
     session.forkTurns.set(runId, next);
 
     return next as Promise<void>;
+  }
+
+  /**
+   * Ends the runs that a worker exit left claiming to be in flight.
+   *
+   * A run is driven by a live loop in this process and by nothing else. The
+   * log records `run.started` and, later, a terminator; if the process dies
+   * between the two, nothing is left to write the second one. The run then
+   * projects as `running` forever — the compare screen shows an attempt still
+   * working, the timeline shows a spinner, and both are describing a loop that
+   * stopped existing when the worker did. That is the failure mode this closes:
+   * not a cosmetic status, but a surface that reports work in flight that is
+   * not.
+   *
+   * Reconciled to `run.failed` rather than to a new terminal status. Four
+   * places keep their own copy of "how a run can end" — the projection, the
+   * receipt, the compare screen, and the guest timeline — and only one of them
+   * is compiler-enforced, so a new status is a cross-surface change with three
+   * silent ways to be wrong. `run.failed` is also the honest answer: an
+   * interrupted run did not finish, and the one thing it must never do is read
+   * as a pass. The reason says what actually happened, so a reader is not left
+   * inferring it from a generic failure.
+   *
+   * Paused runs are deliberately untouched. A pause is a durable, intentional
+   * state that outlives the process — the host paused an attempt precisely so
+   * they could come back to it — so failing one here would destroy the thing
+   * the feature exists to preserve.
+   *
+   * What this cannot see is a loop in *another* process. Two workers sharing
+   * one `NOVUS_DB` and one session id would let this end a run the other is
+   * still driving. That configuration is already unsupported for other reasons
+   * (two runners, two turn queues, one log), and it is recorded as a known gap
+   * rather than papered over: proving liveness across processes needs a
+   * heartbeat, which is a bigger change than this one.
+   */
+  private reconcileInterruptedRuns(session: Session): void {
+    const events = this.eventStore.list(session.id);
+
+    if (events.length === 0) {
+      return;
+    }
+
+    // The projection is the authority on what "running" means, rather than a
+    // second hand-rolled fold beside it. A run that is paused, cancelled,
+    // completed, or failed is already settled and is not touched.
+    const interrupted = projectSession(session.id, events).runs.filter(
+      (candidate) => candidate.status === "running",
+    );
+
+    for (const orphan of interrupted) {
+      try {
+        this.eventStore.append({
+          sessionId: session.id,
+          actorId: "agent-1",
+          type: "run.failed",
+          payload: {
+            runId: orphan.runId,
+            reason:
+              "interrupted — the worker exited while this run was in flight, so no loop was left to finish it. Nothing it had already done was lost: its tool calls and file changes are above. Fork a checkpoint to carry on from here.",
+          },
+        });
+      } catch (error) {
+        // A log that cannot be appended to is not a reason to refuse the
+        // session: the host still needs to open it, and the stale `running`
+        // is what they had before this ran at all.
+        console.error(
+          `run ${orphan.runId} was interrupted and the log could not be told: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
   }
 
   /**
