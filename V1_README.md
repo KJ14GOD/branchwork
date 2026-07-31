@@ -372,7 +372,14 @@ data is available.
 Start with three classes:
 
 - **Read:** repository search and file reads; allowed automatically.
-- **Write:** patches inside the selected repository; session-owner configurable.
+- **Write:** patches inside the selected repository, including creating a file
+  and deleting one; session-owner configurable. Deletion is deliberately in
+  this class rather than Dangerous — an ordinary patch could already blank a
+  file's contents, so a separate class for removing it would be a distinction
+  the threat model does not actually make — but it does mean
+  `NOVUS_ALLOW_WRITES=1` authorises removal without a per-call prompt. Every
+  deletion still goes through propose-then-apply, so what is being authorised
+  is reviewable as a diff first.
 - **Dangerous:** arbitrary commands, network access, destructive Git operations,
   paths outside the repository, and secrets; explicit approval required or denied.
   One narrow exception: `list_provider_models` is network but classed Read — it

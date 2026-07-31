@@ -35,11 +35,18 @@ export type TabStatus = {
   deletions: number;
 };
 
+// All three proposal tools. Kept deliberately in step with the guest's own
+// copy in apps/guest/src/timeline.ts — the two clients each keep their own
+// predicate, and when only the guest learned about creations and deletions
+// the host's patch filter, patch count, and "jump to latest patch" all
+// silently disagreed with what a teammate was looking at.
 const isPatchEvent = (
   event: SessionEvent,
 ): event is Extract<SessionEvent, { type: "tool.completed" }> =>
   event.type === "tool.completed" &&
-  event.payload.result.name === "propose_patch";
+  (event.payload.result.name === "propose_patch" ||
+    event.payload.result.name === "propose_new_file" ||
+    event.payload.result.name === "propose_deletion");
 
 const isAppliedPatchEvent = (event: SessionEvent): boolean =>
   event.type === "tool.completed" && event.payload.result.name === "apply_patch";

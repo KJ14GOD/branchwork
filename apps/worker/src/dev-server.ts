@@ -237,6 +237,14 @@ export class DevServerTool implements AgentTool {
         ...scrubbedEnvironment(),
         PORT: String(port),
         NOVUS_DEV_PORT: String(port),
+        // Everything else in Novus is loopback-only — the worker, the relay,
+        // both Vite servers — and a dev server an *agent* started should not
+        // be the one thing that quietly listens to the network. HOST is the
+        // convention Vite, Next, Nuxt, and CRA all honour. It is a request,
+        // not a guarantee: a server is free to ignore it and bind
+        // 0.0.0.0 anyway, which is why the tool reports the port it observed
+        // rather than claiming an interface it did not verify.
+        HOST: "127.0.0.1",
       },
       shell: false,
       detached: true,

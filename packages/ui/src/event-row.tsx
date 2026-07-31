@@ -348,7 +348,17 @@ export const EventRow = ({
       case "tool.completed": {
         const { result } = event.payload;
 
-        if (result.name === "propose_patch") {
+        // All three proposal tools, not just propose_patch. A proposal is the
+        // artefact a human authorises `apply_patch` against, so a proposal
+        // whose diff renders nowhere is a change approved blind — and that
+        // mattered most for the one that cannot be undone by another edit:
+        // a deletion used to reach this switch, match nothing, and fall
+        // through to an empty panel.
+        if (
+          result.name === "propose_patch" ||
+          result.name === "propose_new_file" ||
+          result.name === "propose_deletion"
+        ) {
           return (
             <DiffView
               patch={{
@@ -358,6 +368,12 @@ export const EventRow = ({
                 diff: result.output.diff,
                 additions: result.output.additions,
                 deletions: result.output.deletions,
+                kind:
+                  result.name === "propose_new_file"
+                    ? "create"
+                    : result.name === "propose_deletion"
+                      ? "delete"
+                      : "edit",
               }}
             />
           );

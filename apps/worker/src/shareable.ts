@@ -155,6 +155,20 @@ export const shareableEvent = (event: SessionEvent): SessionEvent => {
               output: {
                 ...result.output,
                 raw: result.output.raw === "" ? "" : WITHHELD,
+                // A diagnostic path is relativised against the repository
+                // root when it sits inside it, and kept verbatim when it does
+                // not — a checker following an import into a linked package
+                // or a global type root reports a real absolute path. Those
+                // name the host's filesystem, which is precisely what
+                // git_branches' worktreePath is withheld for a few lines
+                // below. Relative paths are the evidence a teammate needs and
+                // cross unchanged; an absolute one is withheld rather than
+                // dropped, so the diagnostic still counts and still reads.
+                diagnostics: result.output.diagnostics.map((diagnostic) =>
+                  diagnostic.path?.startsWith("/")
+                    ? { ...diagnostic, path: WITHHELD }
+                    : diagnostic,
+                ),
               },
             },
           },
