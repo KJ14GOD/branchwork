@@ -9,6 +9,7 @@ import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
 import { CompareScreen } from "./components/compare-screen.tsx";
 import { Composer } from "./components/composer.tsx";
 import { FileChangesPanel } from "./components/file-changes-panel.tsx";
+import { appliedDiffsByPath } from "./applied-diffs.ts";
 import { InvitePanel } from "./components/invite-panel.tsx";
 import { TerminalPanel } from "./components/terminal-panel.tsx";
 import { groupKeyFor, TimelineView } from "./components/timeline-view.tsx";
@@ -212,6 +213,15 @@ export const SessionTab = ({
     () => events.filter(isAppliedPatchEvent).length,
     [events],
   );
+  // Paired from the timeline this tab already holds, so opening a diff in
+  // the panel costs no request. Keyed on the applied-patch count rather
+  // than on every event, so an unrelated progress line does not re-pair.
+  const appliedDiffs = useMemo(
+    () => appliedDiffsByPath(events),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [appliedPatchCount, events.length],
+  );
+
   const fileChanges = useFileChanges(endpoint, session.id, appliedPatchCount);
 
   const run = events.find((event) => event.type === "run.started");
@@ -860,7 +870,7 @@ export const SessionTab = ({
                 onDirect={(goal) => void direct(goal)}
               />
             </main>
-            <FileChangesPanel state={fileChanges} />
+            <FileChangesPanel state={fileChanges} diffs={appliedDiffs} />
           </>
         )}
       </div>

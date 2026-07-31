@@ -1812,16 +1812,51 @@ kbd {
   list-style: none;
 }
 
+.files__item {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.files__item:last-child {
+  border-bottom: none;
+}
+
+/* A button now, so the row is reachable by keyboard and announces its own
+   expanded state. Width and text alignment are reset because a button
+   defaults to neither, which is what left the tool summary floating mid-box
+   the last time a row became a control. */
 .files__row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-5);
+  width: 100%;
+  text-align: left;
 }
 
-.files__row:hover {
+.files__row:hover:not(:disabled) {
   background: var(--hover);
+}
+
+.files__row--open {
+  background: var(--selected);
+}
+
+/* Disabled means "this client never saw the diff", not "inert row": it still
+   reads at full strength, it simply does not pretend to open. */
+.files__row:disabled {
+  cursor: default;
+}
+
+.files__chevron {
+  flex: 0 0 auto;
+  width: 10px;
+  color: var(--text-dim);
+}
+
+.files__diff {
+  padding: 0 var(--space-4) var(--space-4);
+  background: var(--bg-well);
 }
 
 .files__path {
