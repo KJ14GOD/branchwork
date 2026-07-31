@@ -103,6 +103,11 @@ host's current defaults and the checkboxes still decide.
 
 Nothing below is loaded automatically. Go read it when the task calls for it.
 
+- `STEERING.md` — the product decision this repo is built around: Novus as the
+  collaborative verification and decision layer for coding agents, the
+  vocabulary, the visual direction, the slice sequence, and what we refuse to
+  build. Read before proposing work; it is the tiebreaker when the other
+  documents pull apart.
 - `README.md` — the product thesis, the multiplayer model, the roadmap. Read
   before arguing about what Novus is for.
 - `V1_README.md` — the V1 scope contract, including what is *explicitly
