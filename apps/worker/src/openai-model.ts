@@ -16,7 +16,11 @@ import type {
   ModelResponse,
   ModelToolExchange,
 } from "./model.ts";
-import { SYSTEM_PROMPT, TOOL_DESCRIPTIONS } from "./tool-descriptions.ts";
+import {
+  expectedInputFor,
+  SYSTEM_PROMPT,
+  TOOL_DESCRIPTIONS,
+} from "./tool-descriptions.ts";
 
 /**
  * The second concrete `ModelAdapter` — proof that the provider-neutral
@@ -212,9 +216,9 @@ export const interpretToolCall = (
       id: toolCall.id,
       name: toolCall.function.name,
       input,
-      message: call.error.issues
+      message: `${call.error.issues
         .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
-        .join("; "),
+        .join("; ")} — ${expectedInputFor(toolCall.function.name)}`,
       ...usage,
     };
   }

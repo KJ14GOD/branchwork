@@ -13,7 +13,8 @@ import {
   type ModelResponse,
   type ModelToolExchange,
 } from "./model.ts";
-import { SYSTEM_PROMPT, TOOL_DESCRIPTIONS } from "./tool-descriptions.ts";
+import {
+  expectedInputFor, SYSTEM_PROMPT, TOOL_DESCRIPTIONS } from "./tool-descriptions.ts";
 
 // Anthropic's own envelope around the shared, provider-neutral descriptions —
 // same name and description every provider gets, wrapped in the one field
@@ -289,9 +290,9 @@ export const responseFromMessage = (
         id: toolUse.id,
         name: toolUse.name,
         input: toolUse.input,
-        message: call.error.issues
+        message: `${call.error.issues
           .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
-          .join("; "),
+          .join("; ")} — ${expectedInputFor(toolUse.name)}`,
         usage,
       };
     }

@@ -412,3 +412,37 @@ export const TOOL_DESCRIPTIONS: readonly ToolDescription[] = [
     },
   },
 ];
+
+/**
+ * What a malformed tool call should be told, beyond which field was wrong.
+ *
+ * A Zod issue on its own reads "input.edits: expected array, received
+ * undefined" — true, and not enough to act on. A live run met exactly that:
+ * the model wanted to replace a whole file, reached for propose_patch,
+ * omitted the edits it had no intention of writing, and repeated the same
+ * malformed call until the consecutive-failure budget ended the run. It was
+ * never told what the call should have looked like, only that it was wrong.
+ *
+ * Restating the tool's own accepted input closes that loop with the thing
+ * the model already understands, since this is the same schema it was
+ * offered the tool with.
+ */
+export const expectedInputFor = (name: string): string => {
+  const tool = TOOL_DESCRIPTIONS.find((candidate) => candidate.name === name);
+
+  if (!tool) {
+    return `No tool named ${name} exists. Call one of: ${TOOL_DESCRIPTIONS.map((candidate) => candidate.name).join(", ")}.`;
+  }
+
+  const parameters = tool.parameters as {
+    properties?: Record<string, { type?: string; description?: string }>;
+    required?: string[];
+  };
+  const required = new Set(parameters.required ?? []);
+  const fields = Object.entries(parameters.properties ?? {}).map(
+    ([field, shape]) =>
+      `${field}${required.has(field) ? "" : "?"}: ${shape.type ?? "unknown"}`,
+  );
+
+  return `${name} accepts { ${fields.join(", ")} }. ${tool.description}`;
+};
