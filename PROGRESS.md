@@ -74,7 +74,7 @@ Statuses against the exit conditions in V1_README's build order.
 | 2 — Single-agent harness | **Met**, live once per task (2026-07-29) | `benchmarks/{bug-fix,small-feature,repo-reasoning}/` via `./scripts/benchmark.sh`; scorer re-runs suites itself and applies a hidden test. Context assembly is the one Partial inside: goal + prior turns only, no repository context (`buildMessages`, `apps/worker/src/anthropic-model.ts`) |
 | 3 — Multiplayer control | **Met**, deterministic only | `pause-resume.test.ts`, `pause-resume-route.test.ts`, `handoff-route.test.ts`, `presence.test.ts`, `cancel-route.test.ts`; the routes table below. Never run against a live model; the shared leg of the evaluation grid is still unrun |
 | 4 — Fork and compare | **Met**, deterministic only (2026-07-31) | `fork-run.test.ts` (13 tests, incl. a rendezvous barrier that fails loudly if attempts secretly serialise), `apply-decision.test.ts`, `decision-route.test.ts`, `compare.test.ts`. Gaps 1–2 are now mostly closed — worktrees are reclaimed when a decision resolves them, and an attempt the worker died inside is failed at the next open — with the residue recorded on each |
-| 5 — Hardening | **Partial** | Reconnect, crash recovery, redaction, authorization, replay, multi-client: met (`reconnect.test.ts`, `replay.test.ts`, `session-registry.test.ts`, `redaction.test.ts`, `access.test.ts`). Packaging: **not started** — no builder/notarization/entitlements config exists anywhere. Exit condition (repeatable demo on a clean machine) not attempted |
+| 5 — Hardening | **Partial** | Reconnect, crash recovery, redaction, authorization, replay, multi-client: met (`reconnect.test.ts`, `replay.test.ts`, `session-registry.test.ts`, `redaction.test.ts`, `access.test.ts`). Packaging: **met, unsigned** (2026-07-31) — builder config and entitlements exist, `pnpm --filter @novus/desktop dist` produces a launch-verified DMG. Exit condition (repeatable demo on a genuinely clean machine) still not attempted, and the build is unsigned so Gatekeeper warns |
 
 ## Steering brief slices
 
@@ -85,11 +85,11 @@ direction laid on top of it.
 | Slice | Status | Evidence |
 | --- | --- | --- |
 | 1 — Approach surface | **Met** (2026-07-31) | Baseline derived in `apps/worker/src/compare.ts` from `fork.created.parentRunId` and rendered as "Current work"; human status language; single-prompt fork form with derived label. `compare.test.ts`, `compare-view.render.test.tsx` |
-| 2 — First Decision Room | **Met** (2026-07-31) | Three decision kinds (`adopt` / `revision` / `exploration`), required rationale, interventions as evidence above the agent's summary, summary last and labelled "Unverified claim" when nothing was tested. `compare.test.ts`, `replay.test.ts`, `compare-view.render.test.tsx`. **Not done:** requesting a revision records the decision and does not restart the approach — the feedback is on the log, and a person acts on it |
+| 2 — First Decision Room | **Met** (2026-07-31) | Three decision kinds (`adopt` / `revision` / `exploration`), required rationale, interventions as evidence above the agent's summary, summary last and labelled "Unverified claim" when nothing was tested. Requesting a revision cuts a new approach from the same checkpoint carrying the feedback, so the revision and what it revises can be compared. Exportable Markdown receipt at `GET /sessions/:id/receipt`. `compare.test.ts`, `replay.test.ts`, `decision-route.test.ts`, `receipt-export.test.ts`, `compare-view.render.test.tsx` |
 | 3 — Multiplayer authority | **Met**, deterministic only (2026-07-31) | `control-lifecycle.test.ts` (18 tests): offer/accept/decline/withdraw, superseded offers, disconnect vs departure, cross-session refusal, direction queued vs recorded. UI in `control-panel.tsx`, `control-panel.render.test.tsx` |
-| 4 — Reliability before pilot | **Partial** (2026-07-31) | Worktree reclamation, interrupted-run reconciliation, dev-server reaping, receipt checks, visible cost — gaps 1–6 above. **Open:** per-run budget still resets on resume (the guard that matters); no signed distributable |
+| 4 — Reliability before pilot | **Met**, unsigned (2026-07-31) | Worktree reclamation, interrupted-run reconciliation, dev-server reaping, receipt checks, visible cost. Spend now survives a pause: `run.paused` carries a usage snapshot and `execute()` seeds from it (`pause-resume.test.ts`). Packaged and launch-verified — bundled worker under Electron's own Node, database in userData. **Open:** the DMG is unsigned; that needs an Apple Developer certificate |
 | 5 — Mission Inbox | **Met** (2026-07-31) | Attention grouping derived in `session-registry.ts:attentionFor`, ordered by urgency not recency; goal leads the row. `mission-inbox.test.ts` |
-| 6 — Team pilot surface | **Not started** | Durable shared sessions, role-aware invitations, and the usage/cost view already exist from earlier slices. What Slice 6 actually adds — GitHub connection, PR status and required checks, exportable receipt, team grouping, stable onboarding and updates — is untouched. This is a new external integration rather than a refinement of what is here, and none of it should be read as partially done |
+| 6 — Team pilot surface | **Partial** (2026-07-31) | Exportable receipt: done (`receipt-export.ts`). Installable build: done but unsigned. Durable shared sessions, role-aware invitations, and the usage/cost view came from earlier slices. **Not started, and not partially started:** GitHub connection, PR status and required checks, team grouping, and update delivery. Those are a new external integration, not a refinement of what is here |
 
 ## Capabilities
 
@@ -296,8 +296,16 @@ Numbered so other documents can point at them.
 15. **StrictMode hydration still issues N+1 resume POSTs** per dev-mode
     launch (harmless duplicate `session.created` rows; the timeline hides
     them since `3dbb664`, the log keeps them).
-16. **No packaging.** No signed build, no notarization, no entitlements —
-    Milestone 5's "clean machine" exit is unreachable until this exists.
+16. **Packaging exists; signing does not.** *Mostly closed (2026-07-31.)*
+    `electron-builder` config, entitlements, and a hardened-runtime setup are
+    in `apps/desktop/package.json` and `apps/desktop/build/`. `pnpm --filter
+    @novus/desktop dist` produces a DMG; the built app was launched and
+    verified to start its bundled worker, answer `/health`, and write its
+    database to userData rather than inside its own bundle. **Still open:**
+    the build is unsigned and un-notarized, so Gatekeeper warns on another
+    machine — that needs an Apple Developer certificate. Milestone 5's "clean
+    machine" exit is reachable but has not been run on a genuinely clean
+    machine.
 17. **One flaky test under heavy machine contention.** *Open (2026-07-31.)*
     `control-lifecycle.test.ts`, "what /authority sends validates against the
     contract", failed twice in three full-suite runs while a second agent's
