@@ -3,9 +3,10 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react()],
-  // The contracts package is linked TypeScript source, not a built artifact.
+  // The contracts and session-client packages are linked TypeScript source,
+  // not built artifacts.
   optimizeDeps: {
-    exclude: ["@novus/contracts"],
+    exclude: ["@novus/contracts", "@novus/session-client"],
   },
   server: {
     // 5273 is the host renderer; the guest sits beside it on the next port.

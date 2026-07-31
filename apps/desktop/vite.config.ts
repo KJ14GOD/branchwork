@@ -40,9 +40,10 @@ export default defineConfig({
       },
     ]),
   ],
-  // The contracts package is linked TypeScript source, not a built artifact.
+  // The contracts and session-client packages are linked TypeScript source,
+  // not built artifacts.
   optimizeDeps: {
-    exclude: ["@novus/contracts"],
+    exclude: ["@novus/contracts", "@novus/session-client"],
   },
   build: {
     // Loaded over file:// in the packaged app.
