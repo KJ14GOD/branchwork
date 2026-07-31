@@ -33,6 +33,7 @@ import {
 import { applyDecision } from "./apply-decision.ts";
 import { compareAttempts } from "./compare.ts";
 import { projectSession } from "./projection.ts";
+import { exportReceipt } from "./receipt-export.ts";
 import { createRedactor, type Redactor } from "./redaction.ts";
 import type { Session, SessionRegistry } from "./session-registry.ts";
 
@@ -1130,6 +1131,34 @@ export const startEventServer = (
       );
 
       sendJson(response, 200, compareAttempts(session.id, events, forks));
+      return true;
+    }
+
+    const receiptMatch = /^\/sessions\/([^/]+)\/receipt$/.exec(pathname);
+
+    if (receiptMatch && request.method === "GET") {
+      const session = sessions.get(decodeURIComponent(receiptMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      // Redacted like anything else leaving the worker. This is the one
+      // artefact explicitly meant to be sent to somebody else, so a secret
+      // surviving it travels further than a secret on a screen ever would.
+      const markdown = exportReceipt(
+        session.id,
+        session.repositoryPath,
+        store.list(session.id).map((event) => redactor.redactEvent(event)),
+      );
+
+      response
+        .writeHead(200, {
+          "content-type": "text/markdown; charset=utf-8",
+          "content-disposition": `attachment; filename="novus-${session.id.slice(0, 8)}.md"`,
+        })
+        .end(markdown);
       return true;
     }
 

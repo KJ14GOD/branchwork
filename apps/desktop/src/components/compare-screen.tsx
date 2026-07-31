@@ -3,6 +3,8 @@ import { useState } from "react";
 import type { DecisionKind, RepositoryState } from "@novus/contracts/protocol";
 import { CompareView } from "@novus/ui";
 
+import { authorization } from "../access.ts";
+
 import type { ComparisonState } from "../use-comparison.ts";
 
 /**
@@ -48,10 +50,15 @@ const labelFor = (differentiator: string): string => {
 export const CompareScreen = ({
   state,
   repositoryState,
+  endpoint,
+  sessionId,
   onClose,
 }: {
   state: ComparisonState;
   repositoryState: RepositoryState;
+  /** Where the worker is, for the receipt export. */
+  endpoint: string;
+  sessionId: string | null;
   onClose: () => void;
 }) => {
   const [intent, setIntent] = useState("");
@@ -65,9 +72,48 @@ export const CompareScreen = ({
   } | null>(null);
   const [rationale, setRationale] = useState("");
 
+  const [exporting, setExporting] = useState(false);
+
   const decidingAttempt = state.comparison?.attempts.find(
     (attempt) => attempt.runId === deciding?.runId,
   );
+
+  /**
+   * Saves the mission's receipt as Markdown.
+   *
+   * Fetched rather than assembled here: the worker derives it from the same
+   * projection the screens read, so the file and the screen cannot drift. Sent
+   * through a blob and an anchor rather than a new IPC channel — the renderer
+   * already has the bytes, and adding a filesystem capability to the preload
+   * bridge for a download would widen a boundary that exists to be narrow.
+   */
+  const exportReceipt = async () => {
+    if (!sessionId) {
+      return;
+    }
+
+    setExporting(true);
+
+    try {
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(sessionId)}/receipt`,
+        { headers: await authorization() },
+      );
+
+      if (!response.ok) {
+        return;
+      }
+
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `novus-${sessionId.slice(0, 8)}.md`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  };
   // The floor the contract sets. Enforced here too, because the boundary
   // refusing a decision is a 400 the person cannot act on, while a disabled
   // button next to the box they are typing in is an answer they can.
@@ -118,6 +164,19 @@ export const CompareScreen = ({
           disabled={state.loading}
         >
           {state.loading ? "Reading…" : "Refresh"}
+        </button>
+        {/*
+          The evidence outlives the window. Everything on this screen used to
+          vanish with the tab, leaving a diff in somebody's tree with no record
+          of what it was chosen over or why.
+        */}
+        <button
+          className="button"
+          type="button"
+          disabled={exporting || count === 0}
+          onClick={() => void exportReceipt()}
+        >
+          {exporting ? "Exporting…" : "Export receipt"}
         </button>
         <button className="button" type="button" onClick={onClose}>
           Back to timeline

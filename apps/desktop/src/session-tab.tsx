@@ -854,6 +854,8 @@ export const SessionTab = ({
             <CompareScreen
               state={comparison}
               repositoryState={session.repositoryState}
+              endpoint={endpoint}
+              sessionId={session.id}
               onClose={() => setMode("timeline")}
             />
           </main>
