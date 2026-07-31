@@ -89,6 +89,68 @@ const runTests = (store: InMemorySessionEventStore, passed: boolean) =>
     },
   });
 
+const runBuild = (store: InMemorySessionEventStore, succeeded: boolean) =>
+  store.append({
+    sessionId: SESSION,
+    actorId: "agent-1",
+    type: "tool.completed",
+    payload: {
+      runId: RUN,
+      result: {
+        toolCallId: `call-build-${succeeded}`,
+        name: "run_build",
+        output: {
+          command: "pnpm build",
+          exitCode: succeeded ? 0 : 2,
+          timedOut: false,
+          durationMs: 11_000,
+          stdout: "",
+          stderr: "",
+          truncated: false,
+          succeeded,
+        },
+      },
+    },
+  });
+
+const runDiagnostics = (
+  store: InMemorySessionEventStore,
+  kind: "typecheck" | "lint",
+  ok: boolean,
+  problems = 0,
+) =>
+  store.append({
+    sessionId: SESSION,
+    actorId: "agent-1",
+    type: "tool.completed",
+    payload: {
+      runId: RUN,
+      result: {
+        toolCallId: `call-${kind}-${ok}`,
+        name: "run_diagnostics",
+        output: {
+          kind,
+          command: kind === "lint" ? "pnpm lint" : "pnpm typecheck",
+          exitCode: ok ? 0 : 1,
+          timedOut: false,
+          durationMs: 3_000,
+          ok,
+          diagnostics: Array.from({ length: problems }, (_, index) => ({
+            path: "src/auth.ts",
+            line: index + 1,
+            column: 1,
+            severity: "error" as const,
+            message: "Type 'string' is not assignable to type 'number'.",
+            code: "TS2322",
+          })),
+          diagnosticsTruncated: false,
+          raw: "",
+          rawTruncated: false,
+        },
+      },
+    },
+  });
+
 const complete = (store: InMemorySessionEventStore) =>
   store.append({
     sessionId: SESSION,
@@ -369,6 +431,109 @@ test("a run that has not finished has no receipt", () => {
     }),
     null,
   );
+});
+
+test("a build and a typecheck are recorded as verification, not thrown away", () => {
+  const store = storeWithRun();
+  applyPatch(store, "src/auth.ts");
+  runDiagnostics(store, "typecheck", true);
+  runBuild(store, true);
+  runTests(store, true);
+  complete(store);
+
+  const receipt = buildReceipt(store.list(SESSION), RUN, {
+    base: BASE,
+    usage: USAGE,
+  });
+
+  assert.ok(receipt);
+  assert.deepEqual(
+    receipt.checks.map((check) => [check.kind, check.passed]),
+    [
+      ["typecheck", true],
+      ["build", true],
+      ["tests", true],
+    ],
+    "every check the run ran belongs in the receipt, in the order it ran them",
+  );
+  assert.equal(receipt.verification, "verified");
+  // The narrower list is untouched, because other surfaces already read it.
+  assert.equal(receipt.tests.length, 1);
+});
+
+test("a run that ran no checks is unverified, never a pass", () => {
+  const store = storeWithRun();
+  applyPatch(store, "src/auth.ts");
+  complete(store);
+
+  const receipt = buildReceipt(store.list(SESSION), RUN, {
+    base: BASE,
+    usage: USAGE,
+  });
+
+  assert.ok(receipt);
+  // The run finished. That is the whole point: completion is not verification,
+  // and the receipt has to keep the two apart or every surface that renders
+  // "completed" as green reports an unchecked diff as a good one.
+  assert.equal(receipt.status, "completed");
+  assert.deepEqual(receipt.checks, []);
+  assert.equal(receipt.verification, "unverified");
+});
+
+test("checks that ran before the final change are stale, so unverified", () => {
+  const store = storeWithRun();
+  runTests(store, true);
+  runBuild(store, true);
+  applyPatch(store, "src/auth.ts");
+  complete(store);
+
+  const receipt = buildReceipt(store.list(SESSION), RUN, {
+    base: BASE,
+    usage: USAGE,
+  });
+
+  assert.ok(receipt);
+  // Everything passed, and none of it describes the tree the run ended with.
+  assert.ok(receipt.checks.every((check) => check.passed));
+  assert.equal(receipt.verification, "unverified");
+});
+
+test("a failing check outranks a missing one", () => {
+  const store = storeWithRun();
+  applyPatch(store, "src/auth.ts");
+  runDiagnostics(store, "lint", false, 4);
+  complete(store);
+
+  const receipt = buildReceipt(store.list(SESSION), RUN, {
+    base: BASE,
+    usage: USAGE,
+  });
+
+  assert.ok(receipt);
+  assert.equal(receipt.verification, "failing");
+  assert.equal(receipt.checks[0]?.kind, "lint");
+  assert.equal(receipt.checks[0]?.problems, 4);
+});
+
+test("a checker that fails without parseable output is not clean", () => {
+  const store = storeWithRun();
+  applyPatch(store, "src/auth.ts");
+  // ok: false with zero diagnostics — the parser recognised nothing in the
+  // checker's output. Counting problems instead of reading the verdict would
+  // report this as a pass, which is the exact shape of a confidently wrong
+  // green.
+  runDiagnostics(store, "typecheck", false, 0);
+  complete(store);
+
+  const receipt = buildReceipt(store.list(SESSION), RUN, {
+    base: BASE,
+    usage: USAGE,
+  });
+
+  assert.ok(receipt);
+  assert.equal(receipt.checks[0]?.problems, 0);
+  assert.equal(receipt.checks[0]?.passed, false);
+  assert.equal(receipt.verification, "failing");
 });
 
 test("an unknown run has no receipt rather than an empty one", () => {

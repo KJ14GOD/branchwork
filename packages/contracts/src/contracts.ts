@@ -884,6 +884,54 @@ export const RunReceiptSchema = z.object({
    * written by run_command after the tests ran will not make this false.
    */
   testsFollowedFinalChange: z.boolean().nullable(),
+  /**
+   * Every check the run actually ran, of every kind, in the order it ran them.
+   *
+   * `tests` above is the same data for `run_tests` alone, and it stays because
+   * things already read it. It was also the receipt's *only* verification
+   * signal, which meant a run that typechecked clean and built green produced
+   * a receipt indistinguishable from one that never checked anything — the
+   * evidence was in the log and thrown away on the way to the artifact people
+   * trust when they were not watching.
+   *
+   * `problems` is the count of structured diagnostics a checker reported, or
+   * null for a check that does not report any. It never substitutes for
+   * `passed`: a checker can fail with output the parser did not recognise, so
+   * zero problems must never be read as clean.
+   */
+  checks: z.array(
+    z.object({
+      kind: z.enum(["tests", "build", "typecheck", "lint"]),
+      command: z.string().min(1),
+      passed: z.boolean(),
+      exitCode: z.number().int().nullable(),
+      durationMs: z.number().int().nonnegative(),
+      problems: z.number().int().nonnegative().nullable(),
+      sequence: z.number().int().nonnegative(),
+    }),
+  ),
+  /**
+   * What the checks say about the changes — never what the agent says about
+   * itself.
+   *
+   * A run's `status` answers "did the loop finish". This answers "is there
+   * evidence it worked", and the two are independent: the most dangerous
+   * receipt in the system is a completed run with no checks, because every
+   * surface that renders completion as green is then reporting an unverified
+   * diff as a good one.
+   *
+   * - `verified` — at least one check ran, all of them passed, and the last
+   *   one ran after the last change.
+   * - `failing` — a check ran and did not pass. Beats `unverified`, because a
+   *   known failure is a stronger fact than a missing one.
+   * - `unverified` — nothing ran, or everything that ran did so *before* the
+   *   final change. Stale-and-green is not verified: a suite that passed
+   *   before the last edit says nothing about the diff this receipt is
+   *   attached to.
+   *
+   * There is deliberately no fourth value meaning "probably fine".
+   */
+  verification: z.enum(["verified", "failing", "unverified"]),
   approvals: z.array(
     z.object({
       toolCallId: IdSchema,

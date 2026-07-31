@@ -18,6 +18,7 @@ import { useState } from "react";
 import type { SessionEvent } from "@novus/contracts";
 
 import { DiffView } from "./diff-view.tsx";
+import { summariseReceipt } from "./receipt-summary.ts";
 import { summariseCall, summariseToolResult } from "./tool-results.ts";
 import { ToolResultPanel, type ToolPanels } from "./tool-result-panel.tsx";
 
@@ -331,43 +332,16 @@ export const EventRow = ({
 
       case "receipt.created": {
         const { receipt } = event.payload;
-        const failing = receipt.tests.filter((test) => !test.passed).length;
-        const tokens = receipt.usage.inputTokens + receipt.usage.outputTokens;
-        // A green suite that ran before the final edit says nothing about the
-        // diff this receipt is attached to, so it does not get to read as a
-        // plain pass.
-        const verdict =
-          receipt.tests.length === 0
-            ? "Tests not run"
-            : failing > 0
-              ? `${failing} of ${receipt.tests.length} test runs failed`
-              : receipt.testsFollowedFinalChange === false
-                ? "tests passed, but before the last change"
-                : `${receipt.tests.length} test run${receipt.tests.length === 1 ? "" : "s"} passed`;
-
-        // Lead with what a reviewer checks first: did it change anything, and
-        // did the tests agree.
-        const parts = [
-          `${receipt.filesChanged.length} file${receipt.filesChanged.length === 1 ? "" : "s"} changed`,
-          verdict,
-          `${receipt.usage.modelCalls} model call${receipt.usage.modelCalls === 1 ? "" : "s"}`,
-          // "Effective" because cached tokens are counted at what they bill —
-          // a tenth for a cache read — so this is spend, not a raw count.
-          receipt.usage.callsMissingUsage > 0
-            ? `≥${tokens} effective tokens`
-            : `${tokens} effective tokens`,
-          `${Math.round(receipt.elapsedMs / 100) / 10}s`,
-        ];
+        // Verdict, spend and tone come from `summariseReceipt` so the rule
+        // they encode — completion is not verification — lives somewhere a
+        // test can reach. This row used to read only `receipt.tests`, so a run
+        // that typechecked clean and built green rendered exactly like one
+        // that checked nothing at all.
+        const summary = summariseReceipt(receipt);
 
         return (
-          <span
-            className={
-              failing > 0
-                ? "event__text event__text--error"
-                : "event__text event__text--muted"
-            }
-          >
-            {parts.join(" · ")}
+          <span className={`event__text event__text--${summary.tone}`}>
+            {summary.parts.join(" · ")}
             {receipt.base.revision ? (
               <span className="event__type">
                 {" "}

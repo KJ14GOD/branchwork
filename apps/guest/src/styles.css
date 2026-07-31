@@ -20,6 +20,10 @@
   --add-bg: rgba(75, 168, 90, 0.09);
   --del: #d4564f;
   --del-bg: rgba(212, 86, 79, 0.09);
+  /* Mirrors --alert in apps/desktop/src/styles.css. Amber, for a fact that is
+     not a failure — the guest had no such token because nothing here needed
+     one until an unverified run had to be distinguishable from a failing one. */
+  --alert: #cfa055;
   --live: #4ba85a;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 
@@ -492,6 +496,14 @@ button {
 
 .event__text--error {
   color: var(--del);
+}
+
+/* Mirrors apps/desktop/src/styles.css's rule of the same name. A run that
+   finished with nothing checking it is not muted here either — a watcher
+   reading someone else's run has even less context than the host, so the one
+   thing the row must not do is let an unverified diff read as a quiet pass. */
+.event__text--unverified {
+  color: var(--alert);
 }
 
 .event__text--approved {
