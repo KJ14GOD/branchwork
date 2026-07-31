@@ -141,8 +141,10 @@ test("an unanswered approval outranks a run that is merely going", () => {
   });
 
   // Answered, so it stops asking. A blocked-forever badge is how a screen
-  // teaches people to ignore it.
-  assert.equal(only(store).attention, "running");
+  // teaches people to ignore it. Not "running": this session is not open in
+  // this process, so nothing here is driving that run — see the stale-Running
+  // test below.
+  assert.equal(only(store).attention, "needs-direction");
 });
 
 test("a mission that ran no tests is unverified, never clean", () => {
@@ -221,7 +223,9 @@ test("urgency orders the inbox, because recency buries what has stopped moving",
   assert.equal(missions[0]?.id, "waiting");
   assert.equal(missions[0]?.attention, "needs-decision");
   assert.equal(missions[1]?.id, "busy");
-  assert.equal(missions[1]?.attention, "running");
+  // Not "running" — neither session is open in this process. What is being
+  // asserted is the ordering, and needs-decision still outranks it.
+  assert.equal(missions[1]?.attention, "needs-direction");
 });
 
 test("a decided mission stops asking for anything", () => {
@@ -245,4 +249,35 @@ test("a decided mission stops asking for anything", () => {
   });
 
   assert.equal(only(store).attention, "settled");
+});
+
+test("a run nobody is driving does not keep reading as Running", () => {
+  const store = new InMemorySessionEventStore();
+  created(store);
+  startRun(store, "run-1", "Interrupted by a worker exit");
+
+  // The session is in the log and not open in this process, which is exactly
+  // the state every session is in when the home screen lists them. A run is
+  // only "running" in the log until something writes its ending, and a worker
+  // that exits mid-run writes nothing — so this row claimed to be running for
+  // as long as the log survived.
+  const mission = only(store);
+
+  assert.notEqual(mission.attention, "running");
+  assert.equal(mission.attention, "needs-direction");
+});
+
+test("a session this process really is driving still reads as Running", async () => {
+  const store = new InMemorySessionEventStore();
+  const registry = registryOver(store);
+
+  // Opened here, so the claim is one this process can actually stand behind.
+  const session = await registry.create({ repositoryPath: process.cwd() });
+  startRun(store, "run-1", "Genuinely in flight", session.id);
+
+  const mission = registry
+    .remembered()
+    .find((entry) => entry.id === session.id);
+
+  assert.equal(mission?.attention, "running");
 });

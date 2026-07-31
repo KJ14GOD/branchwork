@@ -202,6 +202,20 @@ const ATTENTION_ORDER: MissionAttention[] = [
 const attentionFor = (
   projected: SessionProjection,
   events: readonly SessionEvent[],
+  /**
+   * Whether this process actually has the session open.
+   *
+   * A run is only `running` in the log until something writes its ending, and
+   * a worker that exits mid-run writes nothing. Reconciliation fixes that at
+   * the next session *open*, so the inbox — which reads every session without
+   * opening any of them — showed "Running" for sessions abandoned days ago.
+   *
+   * Derived rather than repaired: a read must not append to the log. And the
+   * claim stays narrow on purpose. This says the run is not live *here*, which
+   * is all one process can honestly know; two workers sharing one NOVUS_DB
+   * would need a heartbeat to say more, and that is recorded as gap 2.
+   */
+  live: boolean,
 ): MissionAttention => {
   // An approval that was requested and never answered blocks a live run, so it
   // outranks everything except a decision nobody made.
@@ -233,7 +247,7 @@ const attentionFor = (
     return "waiting-on-someone";
   }
 
-  if (projected.runs.some((run) => run.status === "running")) {
+  if (live && projected.runs.some((run) => run.status === "running")) {
     return "running";
   }
 
@@ -390,7 +404,7 @@ export class SessionRegistry {
         events: events.length,
         lastActivityAt: events.at(-1)?.occurredAt ?? created.occurredAt,
         goal: projected.runs[0]?.goal ?? null,
-        attention: attentionFor(projected, events),
+        attention: attentionFor(projected, events, this.sessions.has(sessionId)),
         approaches: projected.runs.length,
         evidence: evidenceFor(projected),
         controller:
