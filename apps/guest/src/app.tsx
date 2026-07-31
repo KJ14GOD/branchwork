@@ -24,6 +24,20 @@ const DEFAULT_ENDPOINT =
 const readParam = (name: string): string | null =>
   new URLSearchParams(window.location.search).get(name);
 
+/** The last path segment, which is the part a person calls the repository. */
+const basename = (path: string): string =>
+  path.split("/").filter(Boolean).at(-1) ?? path;
+
+/**
+ * Sentence case for a machine-shaped word.
+ *
+ * Statuses arrive lowercase because that is how the contract spells them.
+ * Rendering the contract's spelling verbatim is what made this chrome read as
+ * affected — the desktop was fixed for it and the guest was not.
+ */
+const sentenceCase = (value: string): string =>
+  value.length === 0 ? value : value[0]!.toUpperCase() + value.slice(1);
+
 const writeParams = (endpoint: string, sessionId: string | null): void => {
   const params = new URLSearchParams();
 
@@ -127,7 +141,7 @@ export const App = () => {
       <div className="shell">
         <header className="titlebar">
           <span className="titlebar__mark">Novus</span>
-          <span className="titlebar__guest">guest · read-only</span>
+          <span className="titlebar__guest">Guest · read-only</span>
         </header>
         <JoinSession
           endpoint={endpoint}
@@ -161,7 +175,7 @@ export const App = () => {
       <div className="notice__row">
         {countdown !== null ? (
           <span className="notice__countdown">
-            retrying in {countdown}s{attempt}
+            Retrying in {countdown}s{attempt}
           </span>
         ) : null}
         {connection.kind === "stopped" ? (
@@ -187,21 +201,28 @@ export const App = () => {
     <div className="shell">
       <header className="titlebar">
         <span className="titlebar__mark">Novus</span>
-        <span className="titlebar__guest">guest · read-only</span>
+        <span className="titlebar__guest">Guest · read-only</span>
         <div className="titlebar__meta">
+          <span className="titlebar__goal" title={summary.goal ?? undefined}>
+            {summary.goal ?? "Nothing has run yet"}
+          </span>
           <button
             className="titlebar__repo"
             type="button"
             onClick={() => setSessionId(null)}
-            title="Stop watching this session"
+            title={
+              session
+                ? `${session.repositoryPath} — stop watching this mission`
+                : "Stop watching this mission"
+            }
           >
-            {session ? session.repositoryPath : sessionId}
+            {session ? basename(session.repositoryPath) : sessionId}
           </button>
           {summary.model ? <span>{summary.model}</span> : null}
-          <span>{summary.runStatus}</span>
+          <span>{sentenceCase(summary.runStatus)}</span>
         </div>
         {presence.length > 0 ? (
-          <div className="presence" title="Who has this session open right now">
+          <div className="presence" title="Who has this mission open right now">
             {presence.map((participant) => (
               <span
                 key={participant.id}
@@ -226,33 +247,33 @@ export const App = () => {
           <div className="rail__section">
             <div className="rail__label">Goal</div>
             <div className="rail__goal">
-              {summary.goal ?? "No run has started in this session."}
+              {summary.goal ?? "No run has started in this mission."}
             </div>
           </div>
 
           <div className="rail__section">
             <div className="rail__label">Run</div>
             <div className="stat">
-              <span>events</span>
+              <span>Events</span>
               <span className="stat__value">{summary.events}</span>
             </div>
             <div className="stat">
-              <span>tool calls</span>
+              <span>Tool calls</span>
               <span className="stat__value">{summary.toolCalls.length}</span>
             </div>
             <div className="stat">
-              <span>patches</span>
+              <span>Patches</span>
               <span className="stat__value">{summary.patches.length}</span>
             </div>
             <div className="stat">
-              <span>lines</span>
+              <span>Lines</span>
               <span className="stat__value">
                 <span style={{ color: "var(--add)" }}>+{summary.additions}</span>{" "}
                 <span style={{ color: "var(--del)" }}>−{summary.deletions}</span>
               </span>
             </div>
             <div className="stat">
-              <span>elapsed</span>
+              <span>Elapsed</span>
               <span className="stat__value">{summary.elapsed}</span>
             </div>
           </div>

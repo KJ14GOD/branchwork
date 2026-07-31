@@ -1,0 +1,276 @@
+/*
+ * The design tokens both Novus clients draw from.
+ *
+ * Extracted from the desktop's stylesheet rather than copied a second time.
+ * The guest carried its own fifteen hand-maintained values against the
+ * desktop's hundred-plus, which is why a teammate watching a mission saw
+ * visibly cruder chrome than the host did — and why the two drifted further
+ * apart with every pass over the desktop.
+ *
+ * Only tokens live here. Component rules stay with the app that owns them,
+ * because the two clients genuinely differ in what they render: the guest has
+ * no composer, no terminal, and no decision controls, and it must not grow
+ * them by inheriting a stylesheet.
+ */
+
+:root {
+  /* ---------- spacing scale ----------
+     Base 4, with real jumps at the top. Named by intent so the right step is
+     obvious at the call site and adjacent steps do not get picked by feel:
+       1 hairline    — icon-to-label inside a chip
+       2 tight       — chip padding, dense row gaps
+       3 compact     — control padding, list gaps
+       4 default     — row padding, gaps between controls
+       5 comfortable — panel padding, gaps between fields
+       6 roomy       — separation between sections inside a panel
+       7 section     — separation between regions
+       8 page        — empty-state and hero breathing room */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+
+  /* ---------- type scale ----------
+     Body is 14px. It was 12px, and "everything feels very small/tiny in the
+     grand scheme of things" was the direct feedback: this is a desktop
+     application, not a terminal status line. 14px is what GitHub, Zed and
+     Linear use for body text.
+
+     The bottom three steps sit close together on purpose — 11/12/13 is the
+     range where dense technical data has to live (a diff gutter cannot be
+     16px) — but hierarchy does not come from that end. It comes from the top:
+     14 -> 16 -> 19 -> 24 are real jumps, and they are what makes a title read
+     as a title. The old scale had no steps above 14 at all, which is why
+     nothing had a top. */
+  --text-eyebrow: 11px;  /* uppercase tracked labels ONLY */
+  --text-micro: 12px;    /* dense tabular metadata: sequence, counts, kbd */
+  --text-small: 13px;    /* secondary text, diffs, terminal, file content */
+  --text-body: 14px;     /* default — set on `body` */
+  --text-title: 16px;    /* panel and section titles */
+  --text-screen: 19px;   /* screen titles */
+  --text-hero: 24px;     /* empty-state headline */
+
+  /* ---------- line height ---------- */
+  --leading-flat: 1.15;   /* single-line chrome where the box sets the height */
+  --leading-tight: 1.35;  /* headings */
+  --leading-normal: 1.5;  /* default */
+  --leading-prose: 1.65;  /* paragraphs the model or a person wrote */
+
+  /* ---------- weight ----------
+     500 used to be the app-wide maximum because mono bolds optically fast.
+     Chrome is `--font-ui` (a proportional face) since the type split, so 600
+     is now available and correct for headings. 500 remains the maximum on
+     anything set in `--mono` — see the mono selector list below. */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-strong: 600;
+
+  /* ---------- tracking ---------- */
+  --track-eyebrow: 0.09em; /* uppercase eyebrows only; never sentence case */
+
+  /* ---------- radii ----------
+     Raised across the board (was 3/5/8). "Very rectangular" was direct
+     feedback; a larger radius on the containers that survived the
+     border-removal pass is half the answer, space is the other half.
+     Outer must always be >= inner. */
+  --radius-s: 4px;
+  --radius-m: 7px;
+  --radius-l: 12px;
+  --radius-pill: 999px;
+
+  /* ---------- control heights ----------
+     A design system sizes its controls; picking a height per button is how
+     you get five buttons that are all almost the same height. */
+  --control-s: 24px;  /* chips, tab close, avatars */
+  --control-m: 30px;  /* chrome buttons, tabs, segmented options */
+  --control-l: 36px;  /* primary buttons, inputs */
+
+  /* ---------- layout constants ---------- */
+  --bar-h: 40px;          /* titlebar — see the traffic-light note in SKILL.md */
+  --session-bar-h: 46px;  /* a tab's own bar */
+  --rail-w: 264px;
+  --files-w: 240px;
+  --tree-w: 236px;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --t-fast: 120ms;
+  --t-overlay: 160ms;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  /* UI chrome and prose — see the "typography" rule below for why
+     mono-everywhere did not survive research into what Zed, Linear, Warp and
+     Cursor actually ship. */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
+    "Helvetica Neue", sans-serif;
+}
+
+/* Dark is the default (`:root` alone matches it) so a stylesheet that loads
+   before `main.tsx` stamps `data-theme` — or a build that never calls
+   `useTheme` at all, like a stray test harness — still renders correctly. */
+:root,
+:root[data-theme="dark"] {
+  /* Planes, deepest to highest: well < bg < surface < raised < floating.
+     Steps are deliberately small — separation is the border's job, not the
+     surface's. --bg must match backgroundColor in electron/main.ts. */
+  --bg: #0a0a0b;
+  --bg-well: #060607;
+  --surface: #101012;
+  --surface-raised: #17171a;
+  --surface-raised-hover: #1c1c20;
+
+  /* One step deeper than whatever it sits on, expressed as a *black* alpha so
+     it darkens on every plane rather than being tuned for one. This is what a
+     nested well (a raw payload inside a tool card, a diff inside a patch card)
+     uses instead of a border — see "the nesting rule" below. */
+  --inset: rgb(0 0 0 / 0.28);
+
+  /* Borders and ghost states are the foreground at low alpha, so they read
+     the same on every plane instead of being tuned for one background. */
+  --fg: 231 231 234;
+  --border-subtle: rgb(var(--fg) / 0.07);
+  --border: rgb(var(--fg) / 0.1);
+  --border-strong: rgb(var(--fg) / 0.16);
+  --hover: rgb(var(--fg) / 0.06);
+  --pressed: rgb(var(--fg) / 0.1);
+  --selected: rgb(var(--fg) / 0.11);
+
+  --text: #e7e7ea;
+  --text-muted: #8a8a93;
+  --text-dim: #56565e;
+
+  /* ---------- the three hues ----------
+     See "colour" in skills/novus-ui/SKILL.md. Each of these means exactly one
+     thing and appears nowhere else. Green used to mean six things at once
+     (permission granted, lines added, tests passed, choice made, run in
+     progress, person online) and --add and --live were the same hex, which is
+     what read as sprayed on. */
+
+  /* ADDED LINES. Not "good", not "on", not "running". */
+  --add: #5fa26c;
+  --add-bg: rgba(95, 162, 108, 0.13);
+  /* REMOVED LINES. Not "failed" and not "error" — those are --alert. */
+  --del: #c96a63;
+  --del-bg: rgba(201, 106, 99, 0.13);
+  /* SOMETHING NEEDS A PERSON: a failed run, a failing check, a denied tool, a
+     repository that cannot be forked, an error worth reading. Amber rather
+     than red because red is already spoken for by every diff on screen, and a
+     failed run must not share a colour with a routine deletion. */
+  --alert: #cfa055;
+  --alert-line: #8a6d2b;
+  --alert-bg: rgba(207, 160, 85, 0.1);
+
+  /* LIVENESS IS NOT A HUE. A pulsing dot in the foreground colour says "now"
+     more clearly on a monochrome screen than a green one does, and it stops
+     "running" from sharing a colour with "added". Kept as a token rather than
+     inlined: apps/guest declares its own copy of this name. */
+  --live: var(--text);
+
+  /* ---------- code palette ----------
+     A SEPARATE SYSTEM FROM THE THREE HUES ABOVE, and the boundary is strict:
+     these appear only inside code surfaces (the file viewer, a diff) and never
+     in chrome; --add / --del / --alert never appear inside code. They answer
+     different questions — "this token is a string" versus "this needs you" —
+     and sharing a ramp between them is how a diff ends up looking like an
+     alert. Cool-leaning and low-chroma on purpose so nothing here can be
+     mistaken for the semantic three. Comments and punctuation take no hue at
+     all; they use --text-dim and --text-muted. */
+  --code-keyword: #9e8fd0;
+  --code-entity: #7aa2d0;
+  --code-string: #c2a175;
+  --code-number: #6fada8;
+
+  /* Shadows need a ring in front (the eye reads the 1px edge, the blur is
+     atmosphere) and a color darker than the canvas, or they vanish on it.
+     Only floating surfaces — palette, modal, the composer's model menu — ever
+     cast. Pure black cast nothing on a near-black canvas, which is why this
+     ring is a literal near-black rather than an alpha-black; see the light
+     block for why that reasoning reverses on a white canvas. */
+  --shadow-popover: 0 0 0 1px #050506, 0 6px 12px -3px rgba(0, 0, 0, 0.5),
+    0 16px 32px -8px rgba(0, 0, 0, 0.55);
+  --shadow-modal: 0 0 0 1px #050506, 0 8px 16px -4px rgba(0, 0, 0, 0.5),
+    0 24px 48px -12px rgba(0, 0, 0, 0.6);
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--fg) / 0.28);
+  /* A large already-bordered field (the composer, the open-screen inputs)
+     shows focus as a soft halo instead of the double ring, which on a 12px
+     radius reads as a second control drawn around the first. */
+  --focus-halo: 0 0 0 3px rgb(var(--fg) / 0.07);
+
+  color-scheme: dark;
+}
+
+/*
+ * Light theme. Deliberately not the dark block with lightness inverted —
+ * "well < canvas < surface < raised < floating" in dark mode is a single
+ * monotonic lightness ramp because there is nowhere to go but lighter. On a
+ * light canvas there is nowhere to go but *darker* than white, so a real
+ * light IDE (VS Code's Light+, Zed's light theme) splits the same five planes
+ * into two moves instead of one ramp:
+ *
+ *   - content planes (canvas, raised, floating) go toward paper white —
+ *     these are what you read and act on, so they get the most contrast.
+ *   - chrome/recessed planes (well, surface) sit a shade grayer than the
+ *     paper — the frame around the content, and the sunken output within it,
+ *     read as a single "not paper" register.
+ *
+ * Borders still do the separating, at the same alpha formula as dark mode —
+ * only --fg flips from a light triple to a dark one, so `rgb(var(--fg) /
+ * 0.1)` keeps meaning "a border, not a fill" on either background.
+ */
+:root[data-theme="light"] {
+  --bg-well: #eef0f2;
+  --bg: #fbfbfc;
+  --surface: #f3f4f6;
+  --surface-raised: #ffffff;
+  --surface-raised-hover: #f6f7f8;
+
+  /* Much weaker than dark mode's: the same 28% black that reads as one gentle
+     step down on a near-black canvas reads as a hole punched in paper. */
+  --inset: rgb(20 20 22 / 0.05);
+
+  --fg: 23 23 26;
+  --border-subtle: rgb(var(--fg) / 0.08);
+  --border: rgb(var(--fg) / 0.13);
+  --border-strong: rgb(var(--fg) / 0.22);
+  --hover: rgb(var(--fg) / 0.05);
+  --pressed: rgb(var(--fg) / 0.09);
+  --selected: rgb(var(--fg) / 0.09);
+
+  --text: #17171a;
+  --text-muted: #5b5b64;
+  --text-dim: #85858e;
+
+  --add: #28703f;
+  --add-bg: rgba(40, 112, 63, 0.11);
+  --del: #a8443c;
+  --del-bg: rgba(168, 68, 60, 0.1);
+  --alert: #7a5b16;
+  --alert-line: #a9832f;
+  --alert-bg: rgba(169, 131, 47, 0.12);
+
+  --live: var(--text);
+
+  /* Darker and a little more saturated than the dark set: the same hue at the
+     same chroma reads fainter as dark-on-light than as light-on-dark. */
+  --code-keyword: #6b4fa8;
+  --code-entity: #2f5f9e;
+  --code-string: #8a5a1f;
+  --code-number: #1f6f6a;
+
+  /* A black ring at low alpha reads perfectly well on white — light UIs do
+     this everywhere — so unlike the dark block this does not need a literal
+     near-black to be visible. */
+  --shadow-popover: 0 0 0 1px rgba(20, 20, 22, 0.1), 0 6px 12px -3px rgba(20, 20, 22, 0.1),
+    0 16px 32px -8px rgba(20, 20, 22, 0.12);
+  --shadow-modal: 0 0 0 1px rgba(20, 20, 22, 0.1), 0 8px 16px -4px rgba(20, 20, 22, 0.12),
+    0 24px 48px -12px rgba(20, 20, 22, 0.14);
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgb(var(--fg) / 0.32);
+  --focus-halo: 0 0 0 3px rgb(var(--fg) / 0.08);
+
+  color-scheme: light;
+}
