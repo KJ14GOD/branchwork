@@ -91,6 +91,17 @@ direction laid on top of it.
 | 5 — Mission Inbox | **Met** (2026-07-31) | Attention grouping derived in `session-registry.ts:attentionFor`, ordered by urgency not recency; goal leads the row. `mission-inbox.test.ts` |
 | 6 — Team pilot surface | **Partial** (2026-07-31) | Exportable receipt: done (`receipt-export.ts`). Installable build: done but unsigned. Durable shared sessions, role-aware invitations, and the usage/cost view came from earlier slices. **Not started, and not partially started:** GitHub connection, PR status and required checks, team grouping, and update delivery. Those are a new external integration, not a refinement of what is here |
 
+### Steering brief: presentation
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Mission Room — decision spine | **Met** (2026-07-31) | `mission-phase.ts` derives Brief → Execution → Approaches → Decision → Receipt from the log and the comparison; `decision-spine.tsx` draws it. `mission-phase.test.ts` |
+| Mission Room — evidence inspector | **Met** (2026-07-31) | Verification above changed files, contested files beside it, absent when there is nothing to say. `file-changes-panel.tsx`, `timeline-summary.test.tsx` |
+| Mission Room — active canvas | **Partial** | The centre column is the timeline and switches to approaches/browse, which is the behaviour STEERING asks for. The *branching* picture — approaches visibly sharing a checkpoint and converging — is not drawn |
+| Activity as milestones | **Met** (2026-07-31) | Collapsed groups read "Read 2 files · Ran the tests" rather than `read_file ×2`; machinery and the call total sit under Technical details. `timeline-summary.test.tsx` |
+| Vocabulary | **Met** (2026-07-31) | Attempt → Approach and Session → Mission in customer-facing text; event types and URL parameters deliberately keep the contract's spelling |
+| Guest parity | **Met** (2026-07-31) | Shared tokens in `packages/ui/src/tokens.css`, imported by both apps; guest literals snapped onto the scale; labels capitalised; header leads with the goal |
+
 ## Capabilities
 
 ### Harness core
