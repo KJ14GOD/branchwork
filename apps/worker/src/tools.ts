@@ -924,18 +924,32 @@ export class ProposeNewFileTool implements AgentTool {
 
     const existing = await stat(targetPath).catch(() => null);
 
-    if (existing !== null) {
+    if (existing !== null && !existing.isFile()) {
+      throw new Error(`${call.input.path} already exists and is not a file.`);
+    }
+
+    const overwriting = existing !== null;
+
+    if (overwriting && call.input.overwrite !== true) {
+      // Actionable on purpose. This message used to say "use propose_patch to
+      // edit an existing file", which is advice that cannot be followed when
+      // what you hold is the file's full new text: propose_patch matches on
+      // exact oldText, so a whole-file rewrite meant reproducing the current
+      // file byte-perfect first. A live run hit exactly that, tried
+      // propose_patch without edits twice, and died on consecutive failures.
       throw new Error(
-        existing.isFile()
-          ? `${call.input.path} already exists. Use propose_patch to edit an existing file.`
-          : `${call.input.path} already exists and is not a file.`,
+        `${call.input.path} already exists. Call propose_new_file again with overwrite: true to replace its whole contents, or propose_patch with exact edits to change part of it.`,
       );
     }
 
     const path = relative(repositoryRoot, targetPath);
+    // What is being replaced, so the apply step can refuse a file that moved
+    // under the proposal — an overwrite is reviewed against a specific
+    // version of the file, same as an edit.
+    const baseContent = overwriting ? await readFile(targetPath, "utf8") : "";
     const { diff, additions, deletions } = buildUnifiedDiff(
       path,
-      "",
+      baseContent,
       call.input.content,
     );
     const patchId = crypto.randomUUID();
@@ -944,8 +958,8 @@ export class ProposeNewFileTool implements AgentTool {
       patchId,
       path,
       intent: call.input.intent,
-      kind: "create",
-      baseContent: "",
+      kind: overwriting ? "edit" : "create",
+      baseContent,
       proposedContent: call.input.content,
       additions,
       deletions,

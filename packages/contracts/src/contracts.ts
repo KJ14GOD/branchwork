@@ -73,6 +73,22 @@ export const ProposeNewFileToolCallSchema = z.object({
     // Empty allowed: an empty marker file is a legitimate thing to create, and
     // refusing it would push exactly that case back out to run_command.
     content: z.string(),
+    /**
+     * Replace a file that already exists, rather than only creating one.
+     *
+     * Absent or false, an existing path is refused — creating a file is a
+     * different intention from rewriting one, and a model that mistyped a
+     * path should not silently flatten something. True is the model saying
+     * it means to replace the whole file, which is an ordinary operation
+     * that had no tool at all: `propose_patch` needs exact `oldText` to
+     * match against, so a full rewrite meant reproducing the entire current
+     * file byte-perfect just to say "replace all of this".
+     *
+     * The apply step still refuses if the file changed after the proposal
+     * was made — an overwrite records what it was replacing, exactly like
+     * an edit does.
+     */
+    overwrite: z.boolean().optional(),
   }),
 });
 

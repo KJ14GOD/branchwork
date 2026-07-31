@@ -127,14 +127,14 @@ export const TOOL_DESCRIPTIONS: readonly ToolDescription[] = [
   {
     name: "propose_new_file",
     description:
-      "Propose creating a file that does not exist yet, with its complete content. Novus returns a patchId and a reviewable diff of the whole file; nothing is written until apply_patch is called with that patchId. Use this for new files only — propose_patch edits existing ones. Parent directories are created on apply.",
+      "Propose writing a file's complete content — creating it, or replacing an existing one when you pass overwrite: true. Novus returns a patchId and a reviewable diff; nothing is written until apply_patch is called with that patchId. Use this whenever you have the whole file text, including a full rewrite of an existing file; use propose_patch instead when you are changing part of a file and can quote the exact text you are replacing. Parent directories are created on apply.",
     parameters: {
       type: "object",
       properties: {
         path: {
           type: "string",
           description:
-            "Repository-relative path for the new file. It must not exist yet.",
+            "Repository-relative path. It must not already exist unless overwrite is true.",
         },
         intent: {
           type: "string",
@@ -142,7 +142,12 @@ export const TOOL_DESCRIPTIONS: readonly ToolDescription[] = [
         },
         content: {
           type: "string",
-          description: "The complete content of the new file.",
+          description: "The complete content the file should have.",
+        },
+        overwrite: {
+          type: "boolean",
+          description:
+            "Set true to replace a file that already exists. Omit it when creating a new file; an existing path is refused without it, so a mistyped path cannot silently flatten something.",
         },
       },
       required: ["path", "intent", "content"],

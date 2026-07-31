@@ -35,11 +35,21 @@ const suite = async (): Promise<Suite> => {
   };
 };
 
-const proposeNewFile = (id: string, path: string, content: string) =>
+const proposeNewFile = (
+  id: string,
+  path: string,
+  content: string,
+  overwrite?: boolean,
+) =>
   ({
     id,
     name: "propose_new_file" as const,
-    input: { path, intent: "test file creation", content },
+    input: {
+      path,
+      intent: "test file creation",
+      content,
+      ...(overwrite === undefined ? {} : { overwrite }),
+    },
   });
 
 const proposeDeletion = (id: string, path: string) =>
@@ -86,11 +96,79 @@ test("propose_new_file refuses a file that already exists", async () => {
 
   await writeFile(join(repository, "present.txt"), "already here\n");
 
-  // Creation must not be a quiet overwrite path: an existing file is edited
-  // through propose_patch, where the reviewer sees what is being replaced.
+  // Creation must not be a quiet overwrite path: a mistyped path should never
+  // silently flatten something that was already there.
   await assert.rejects(
     () => newFile.execute(proposeNewFile("3", "present.txt", "new content")),
     /already exists/,
+  );
+
+  // And the refusal has to be followable. It used to say "use propose_patch
+  // to edit an existing file", which cannot be done when what you hold is the
+  // file's whole new text — propose_patch matches on exact oldText. A live
+  // run hit that, called propose_patch without edits twice, and died on
+  // consecutive failures.
+  await assert.rejects(
+    () => newFile.execute(proposeNewFile("3b", "present.txt", "new content")),
+    /overwrite: true/,
+  );
+});
+
+test("propose_new_file replaces a whole file when told to, and apply refuses drift", async () => {
+  const { repository, newFile, apply } = await suite();
+  const target = join(repository, "styles.css");
+
+  await writeFile(target, "old { color: red }\n");
+
+  const proposed = await newFile.execute(
+    proposeNewFile("ow1", "styles.css", "new { color: blue }\n", true),
+  );
+
+  assert.equal(proposed.name, "propose_new_file");
+
+  // Still a proposal: nothing is written until apply.
+  assert.equal(await readFile(target, "utf8"), "old { color: red }\n");
+
+  if (proposed.name !== "propose_new_file") {
+    throw new Error("unreachable");
+  }
+
+  // The diff shows what is being replaced, not a file appearing from nothing —
+  // that is the whole reason an overwrite is reviewable.
+  assert.match(proposed.output.diff, /-old \{ color: red \}/);
+  assert.match(proposed.output.diff, /\+new \{ color: blue \}/);
+
+  await apply.execute(applyPatch("ow2", proposed.output.patchId));
+
+  assert.equal(await readFile(target, "utf8"), "new { color: blue }\n");
+});
+
+test("an overwrite is refused when the file changed after it was proposed", async () => {
+  const { repository, newFile, apply } = await suite();
+  const target = join(repository, "styles.css");
+
+  await writeFile(target, "original\n");
+
+  const proposed = await newFile.execute(
+    proposeNewFile("d1", "styles.css", "replacement\n", true),
+  );
+
+  if (proposed.name !== "propose_new_file") {
+    throw new Error("unreachable");
+  }
+
+  // Somebody else edits it between review and apply. Approving a rewrite of
+  // what you read is not approving a rewrite of whatever is there now.
+  await writeFile(target, "someone else got here first\n");
+
+  await assert.rejects(
+    () => apply.execute(applyPatch("d2", proposed.output.patchId)),
+    /changed/i,
+  );
+
+  assert.equal(
+    await readFile(target, "utf8"),
+    "someone else got here first\n",
   );
 });
 
