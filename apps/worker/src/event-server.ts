@@ -11,6 +11,7 @@ import {
   ControlRequestSchema,
   CreateSessionRequestSchema,
   DecisionRequestSchema,
+  HandoffAnswerSchema,
   HandoffRequestSchema,
   PauseRunRequestSchema,
   ResumeRunRequestSchema,
@@ -21,6 +22,8 @@ import type { SessionEventStore } from "@novus/session-service";
 import { isAllowedOrigin, offeredToken, tokensMatch } from "./access.ts";
 import {
   HOST_SESSION,
+  refuseControlOffer,
+  refuseHandoffAnswer,
   roleCan,
   type Capability,
   type Membership,
@@ -219,6 +222,125 @@ export const startEventServer = (
     allowCommands: session.allowCommands,
     createdAt: session.createdAt,
   });
+
+  /**
+   * What the log says about a session, folded once and read by every route
+   * that needs to know who holds control.
+   *
+   * The fold is the only description of authority. Routes deliberately do not
+   * keep their own copy of who is holding what: a second structure beside the
+   * log is how the timeline and the baton end up disagreeing, and the timeline
+   * is the thing a participant is being asked to trust.
+   */
+  const projectionOf = (sessionId: string) =>
+    projectSession(sessionId, store.list(sessionId));
+
+  /**
+   * Run ids belonging to forked attempts rather than to the session's own run.
+   *
+   * Needed because a fork is visible in the parent's log — its events land
+   * there so the timeline and /compare can see them — but it is not the run a
+   * direction reaches. `AgentRunner` refuses to drain direction inside a forked
+   * attempt (an attempt's goal is frozen at its checkpoint), so queueing a
+   * direction against a fork would promise something the runner will not do.
+   */
+  const forkRunIds = (sessionId: string): Set<string> =>
+    new Set(
+      store
+        .list(sessionId)
+        .flatMap((event) =>
+          event.type === "fork.created" ? [event.payload.fork.runId] : [],
+        ),
+    );
+
+  /**
+   * The session's own executing run, if one is executing — the run a direction
+   * submitted right now would be folded into at its next turn boundary.
+   */
+  const directionTargetRun = (sessionId: string): string | null => {
+    const forks = forkRunIds(sessionId);
+    const running = projectionOf(sessionId).runs.find(
+      (run) => run.status === "running" && !forks.has(run.runId),
+    );
+
+    return running?.runId ?? null;
+  };
+
+  /**
+   * Whether anything at all is executing in this session, forks included.
+   *
+   * Stricter than `directionTargetRun` on purpose, and the difference is not an
+   * oversight. Direction asks "which run will read this", which only the
+   * session's own run can answer. Control asks "is it safe to change who is
+   * responsible", and handing the baton to somebody while an attempt of theirs
+   * is mid-flight makes them accountable for an execution they never watched
+   * start. So a running attempt holds the transfer too.
+   */
+  const anythingExecuting = (sessionId: string): boolean =>
+    projectionOf(sessionId).runs.some((run) => run.status === "running");
+
+  /**
+   * Moves control if an accepted handoff is waiting and nothing is executing.
+   *
+   * This is the last of the six steps STEERING §10 names — offer, receive,
+   * accept, safe boundary, transfer, recorded — and the only one that is not
+   * triggered by somebody clicking. It runs both from the acceptance itself
+   * (the common case: nothing was running, so the boundary is now) and from
+   * every run ending, which is what makes "control transfers at the next safe
+   * boundary" a promise the worker keeps rather than a label the UI shows.
+   *
+   * Returns the transfer event, or null when there was nothing to settle.
+   */
+  const settleAcceptedHandoff = (sessionId: string) => {
+    if (!participants) {
+      return null;
+    }
+
+    const offer = projectionOf(sessionId).controlOffer;
+
+    if (offer === null || offer.state !== "accepted") {
+      return null;
+    }
+
+    if (anythingExecuting(sessionId)) {
+      return null;
+    }
+
+    const moved = participants.transferOwnership(
+      offer.fromParticipantId,
+      offer.toParticipantId,
+    );
+
+    if (!moved) {
+      // The offerer is no longer able to give what they offered — they were
+      // removed, or control moved elsewhere while this offer sat accepted.
+      // Withdrawn rather than left pending: an offer that can never be
+      // honoured has to stop being displayed as one, and the alternative is a
+      // session that shows "control transfers at the next safe boundary"
+      // forever while every boundary passes.
+      return store.append({
+        sessionId,
+        actorId: offer.fromParticipantId,
+        type: "control.withdrawn",
+        payload: {
+          offerEventId: offer.offerEventId,
+          participantId: offer.fromParticipantId,
+        },
+      });
+    }
+
+    return store.append({
+      sessionId,
+      actorId: offer.fromParticipantId,
+      type: "control.transferred",
+      payload: {
+        fromParticipantId: offer.fromParticipantId,
+        toParticipantId: offer.toParticipantId,
+        acceptedAt: offer.acceptedAt ?? new Date().toISOString(),
+        offerEventId: offer.offerEventId,
+      },
+    });
+  };
 
   const handleCommand = async (
     caller: Membership | null,
@@ -631,39 +753,201 @@ export const startEventServer = (
       const fromId = caller.participant.id;
       const target = participants.byId(parsed.data.toParticipantId);
 
-      if (!target || target.participant.sessionId !== session.id) {
+      // The host's own participant is registered under HOST_SESSION rather
+      // than this session's id — the worker outlives any one session — so it
+      // counts as being in the room the same way /presence already treats it.
+      const inRoom =
+        target !== null &&
+        (target.participant.sessionId === session.id ||
+          target.participant.sessionId === HOST_SESSION);
+
+      if (!inRoom) {
         sendJson(response, 404, {
           error: "That participant is not in this session.",
         });
         return true;
       }
 
-      const transferred = participants.transferOwnership(
+      const refusal = refuseControlOffer(
+        projectionOf(session.id),
         fromId,
         parsed.data.toParticipantId,
       );
 
-      if (!transferred) {
-        sendJson(response, 409, {
-          error: "Only the current owner can hand off control.",
+      if (refusal) {
+        sendJson(response, refusal.status, { error: refusal.error });
+        return true;
+      }
+
+      // An offer, and nothing more. Control does not move here, the registry
+      // is not touched, and the recipient's role is unchanged — this route
+      // used to do all three at once, which meant a controller could make
+      // somebody responsible for a running execution while they were asleep.
+      // The recipient answers next.
+      const event = store.append({
+        sessionId: session.id,
+        actorId: fromId,
+        type: "control.offered",
+        payload: {
+          fromParticipantId: fromId,
+          toParticipantId: parsed.data.toParticipantId,
+        },
+      });
+
+      sendJson(response, 202, { offered: true, offerEventId: event.eventId });
+      return true;
+    }
+
+    const handoffAnswerMatch =
+      /^\/sessions\/([^/]+)\/handoff\/(accept|decline|withdraw)$/.exec(pathname);
+
+    if (handoffAnswerMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(handoffAnswerMatch[1]!));
+      const answering = handoffAnswerMatch[2] as
+        | "accept"
+        | "decline"
+        | "withdraw";
+
+      if (!session || !participants) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      if (!caller) {
+        sendJson(response, 401, {
+          error: "The caller could not be identified for a handoff.",
         });
         return true;
       }
 
-      const acceptedAt = new Date().toISOString();
+      const parsed = HandoffAnswerSchema.safeParse(await readJsonBody(request));
 
-      const event = store.append({
+      if (!parsed.success) {
+        sendJson(response, 400, { error: "An offerEventId is required." });
+        return true;
+      }
+
+      const refusal = refuseHandoffAnswer(
+        projectionOf(session.id).controlOffer,
+        parsed.data.offerEventId,
+        caller.participant.id,
+        answering,
+      );
+
+      if (refusal) {
+        sendJson(response, refusal.status, { error: refusal.error });
+        return true;
+      }
+
+      if (answering !== "accept") {
+        const event = store.append({
+          sessionId: session.id,
+          actorId: caller.participant.id,
+          type:
+            answering === "decline" ? "control.declined" : "control.withdrawn",
+          payload: {
+            offerEventId: parsed.data.offerEventId,
+            participantId: caller.participant.id,
+            ...(answering === "decline" && parsed.data.reason
+              ? { reason: parsed.data.reason }
+              : {}),
+          },
+        });
+
+        sendJson(response, 202, { settled: true, eventId: event.eventId });
+        return true;
+      }
+
+      // Acceptance is its own event even when the transfer follows one line
+      // later. Collapsing them would lose the fact that the recipient agreed —
+      // which is the whole difference between a handoff and an assignment —
+      // and would make the waiting case, where a run is still executing, look
+      // like a different mechanism rather than the same one mid-flight.
+      const accepted = store.append({
         sessionId: session.id,
-        actorId: fromId,
-        type: "control.transferred",
+        actorId: caller.participant.id,
+        type: "control.accepted",
         payload: {
-          fromParticipantId: fromId,
-          toParticipantId: parsed.data.toParticipantId,
-          acceptedAt,
+          offerEventId: parsed.data.offerEventId,
+          participantId: caller.participant.id,
         },
       });
 
-      sendJson(response, 200, { transferred: true, eventId: event.eventId });
+      const transfer = settleAcceptedHandoff(session.id);
+
+      sendJson(response, 202, {
+        accepted: true,
+        eventId: accepted.eventId,
+        // False means accepted and waiting: the run in flight has to reach a
+        // boundary first. The client says so rather than showing the baton as
+        // already moved.
+        transferred: transfer?.type === "control.transferred",
+      });
+      return true;
+    }
+
+    const leaveMatch = /^\/sessions\/([^/]+)\/leave$/.exec(pathname);
+
+    if (leaveMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(leaveMatch[1]!));
+
+      if (!session || !participants || !caller) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      // Deliberate, and distinct from a dropped connection. The projection
+      // treats the two differently on purpose — a standing control request
+      // survives a refresh but not a departure — and until this route existed
+      // the "left" reason had no way to ever be written, so every fact about
+      // somebody who was gone for good outlived them.
+      const event = store.append({
+        sessionId: session.id,
+        actorId: caller.participant.id,
+        type: "participant.left",
+        payload: { participantId: caller.participant.id, reason: "left" },
+      });
+
+      // Control the leaver was holding is now held by nobody, which the fold
+      // above already says. A handoff they were half of is void, so anything
+      // that was waiting on a boundary is re-examined here rather than left
+      // to a run ending that may never come.
+      settleAcceptedHandoff(session.id);
+
+      sendJson(response, 202, { left: true, eventId: event.eventId });
+      return true;
+    }
+
+    const authorityMatch = /^\/sessions\/([^/]+)\/authority$/.exec(pathname);
+
+    if (authorityMatch && request.method === "GET") {
+      const session = sessions.get(decodeURIComponent(authorityMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      // The authority slice of the projection, served rather than re-folded in
+      // each renderer. Every client already receives the whole event log over
+      // /events and could fold this itself; three folds of one lifecycle is
+      // how a timeline and a baton come to disagree, and it is the disagreement
+      // — not the absence — that would cost trust here.
+      //
+      // It also makes the standing-fact rule true by construction: a client
+      // that just opened asks this and learns that somebody requested control
+      // an hour ago, without replaying anything.
+      const projection = projectionOf(session.id);
+
+      sendJson(response, 200, {
+        controlHeldBy: projection.controlHeldBy,
+        controlOffer: projection.controlOffer,
+        controlRequests: projection.controlRequests,
+        pendingDirection: projection.pendingDirection,
+        // What the transfer is waiting on, when it is waiting. The offer's
+        // own state says "accepted"; this says why that is not yet "moved".
+        executing: anythingExecuting(session.id),
+      });
       return true;
     }
 
@@ -903,7 +1187,39 @@ export const startEventServer = (
         payload: { runId: session.id, direction: parsed.data.goal },
       });
 
-      sendJson(response, 202, { accepted: true, eventId: event.eventId });
+      // Whether a run is live decides what the submitter is actually promised,
+      // and those are two different promises. With an execution running, that
+      // execution drains direction at its next turn boundary — the direction is
+      // queued, and the person who typed it can expect it to matter within the
+      // minute. With nothing running it is recorded and waits for whatever runs
+      // next, which may be never. Both are honest; "submitted" alone cannot
+      // tell them apart, and a participant reading a shared timeline needs to
+      // know whether their words are about to be acted on.
+      //
+      // Queued at submission rather than at the boundary the runner drains at:
+      // by that boundary the direction is being applied in the same instant, so
+      // an event emitted there would describe a state that never lasted long
+      // enough for anyone to see it.
+      const targetRun = directionTargetRun(session.id);
+
+      if (targetRun !== null) {
+        store.append({
+          sessionId: session.id,
+          actorId: caller?.participant.id ?? "host",
+          type: "direction.queued",
+          payload: {
+            runId: targetRun,
+            directionEventId: event.eventId,
+            direction: parsed.data.goal,
+          },
+        });
+      }
+
+      sendJson(response, 202, {
+        accepted: true,
+        eventId: event.eventId,
+        queuedForRunId: targetRun,
+      });
       return true;
     }
 
@@ -1150,7 +1466,21 @@ export const startEventServer = (
                   // the rest of this table already relies on.
                   /^\/sessions\/[^/]+\/handoff$/.test(url.pathname)
                   ? "transfer"
-                  : "steer";
+                  : // Answering an offer, and leaving, are not privileges of
+                    // rank. Control is routinely offered to people who do not
+                    // hold it — that is what a baton is for — so requiring
+                    // "transfer" to accept would mean the only participants
+                    // allowed to take control are the ones who already have
+                    // it. What authorises these is being named in the offer,
+                    // or being oneself, and `refuseHandoffAnswer` checks that
+                    // identity at the route. "watch" here is the floor: you
+                    // must still be a participant of this session, which the
+                    // scope check above enforces.
+                    /^\/sessions\/[^/]+\/(handoff\/(accept|decline|withdraw)|leave)$/.test(
+                      url.pathname,
+                    )
+                    ? "watch"
+                    : "steer";
 
     if (refusedFor(required)) {
       return;
@@ -1247,6 +1577,30 @@ export const startEventServer = (
     });
   });
 
+  /**
+   * The safe boundary, watched rather than polled.
+   *
+   * An acceptance that arrived while a run was executing left the offer sitting
+   * in the "accepted" state, and something has to notice when the execution
+   * ends. This subscription is that something: every terminal run event —
+   * completed, failed, cancelled, and paused, which is a boundary too because
+   * the loop has genuinely stopped — re-examines the session for a handoff
+   * waiting on it.
+   *
+   * Process-wide, like `store.subscribe` itself, so it is filtered by the event
+   * carrying its own session id rather than by one subscription per session.
+   */
+  const unsubscribeBoundaries = store.subscribe((event) => {
+    if (
+      event.type === "run.completed" ||
+      event.type === "run.failed" ||
+      event.type === "run.cancelled" ||
+      event.type === "run.paused"
+    ) {
+      settleAcceptedHandoff(event.sessionId);
+    }
+  });
+
   return new Promise((resolve, reject) => {
     server.once("error", (error: NodeJS.ErrnoException) => {
       if (error.code === "EADDRINUSE") {
@@ -1273,6 +1627,7 @@ export const startEventServer = (
         url: `http://${host}:${boundPort}`,
         close: () =>
           new Promise((closed) => {
+            unsubscribeBoundaries();
             server.close(() => closed());
           }),
       });

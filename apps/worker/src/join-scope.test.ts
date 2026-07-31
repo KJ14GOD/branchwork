@@ -118,13 +118,36 @@ test("/me follows a handoff — the roles a joined window shows move with the au
   await withSession(async ({ url, sessionId, invite }) => {
     const editor = await invite("editor");
 
-    const handoff = await fetch(`${url}/sessions/${sessionId}/handoff`, {
+    const offered = await fetch(`${url}/sessions/${sessionId}/handoff`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
       body: JSON.stringify({ toParticipantId: editor.id }),
     });
 
-    assert.equal(handoff.status, 200);
+    assert.equal(offered.status, 202);
+
+    // The offer alone must not move the role — that is the whole point of the
+    // lifecycle, and /me is exactly where a joined window would see it move
+    // too early. Checked before accepting, so this test fails if acceptance
+    // ever stops being required.
+    const beforeAccepting = (await fetch(`${url}/sessions/${sessionId}/me`, {
+      headers: { authorization: `Bearer ${editor.token}` },
+    }).then((response) => response.json())) as { participant: { role: string } };
+
+    assert.equal(beforeAccepting.participant.role, "editor");
+
+    const { offerEventId } = (await offered.json()) as { offerEventId: string };
+
+    const accepted = await fetch(`${url}/sessions/${sessionId}/handoff/accept`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${editor.token}`,
+      },
+      body: JSON.stringify({ offerEventId }),
+    });
+
+    assert.equal(accepted.status, 202);
 
     const joiner = (await fetch(`${url}/sessions/${sessionId}/me`, {
       headers: { authorization: `Bearer ${editor.token}` },

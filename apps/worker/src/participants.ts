@@ -1,6 +1,7 @@
 import { ParticipantSchema, type Participant } from "@novus/contracts";
 
 import { mintAccessToken } from "./access.ts";
+import type { ControlOffer, SessionProjection } from "./projection.ts";
 
 /**
  * Who holds which token, and therefore who may do what.
@@ -60,6 +61,119 @@ export type Capability = (typeof CAPABILITIES)[Role][number];
 
 export const roleCan = (role: Role, capability: Capability): boolean =>
   (CAPABILITIES[role] as readonly string[]).includes(capability);
+
+/**
+ * Why a control action was refused, in the shape a route can answer with.
+ *
+ * Separate from `roleCan` because the handoff lifecycle asks a different
+ * question. A capability asks what someone's rank permits. A handoff asks
+ * whether this particular person is the one the log says may act right now —
+ * the holder of control, or the participant an offer names. Those cannot be
+ * answered from a role: control is offered *to* people who do not have it yet,
+ * so the recipient of an offer is frequently a viewer, and gating acceptance on
+ * rank would mean the only people allowed to accept control are the people who
+ * least need to be handed it.
+ */
+export type AuthorityRefusal = { status: number; error: string };
+
+/**
+ * Whether this caller may offer control to that participant.
+ *
+ * Two rules, and the second one has a deliberate hole in it.
+ *
+ * You must hold control to offer it — otherwise two people could each offer a
+ * baton neither is holding, and whichever offer was accepted last would win a
+ * race nobody could see. But when *nobody* holds control the rule cannot apply:
+ * the previous holder left, the projection set `controlHeldBy` to null, and
+ * requiring the holder's identity would wedge the session with no way to ever
+ * name a new controller. So an unheld baton falls back to the capability table,
+ * which is checked before this function runs and admits only roles carrying
+ * `transfer`.
+ */
+export const refuseControlOffer = (
+  projection: Pick<SessionProjection, "controlHeldBy" | "controlOffer">,
+  fromParticipantId: string,
+  toParticipantId: string,
+): AuthorityRefusal | null => {
+  if (projection.controlOffer !== null) {
+    return {
+      status: 409,
+      error:
+        "A handoff is already in flight. Withdraw it before offering control to somebody else.",
+    };
+  }
+
+  if (fromParticipantId === toParticipantId) {
+    return { status: 400, error: "Control cannot be offered to its own holder." };
+  }
+
+  if (
+    projection.controlHeldBy !== null &&
+    projection.controlHeldBy !== fromParticipantId
+  ) {
+    return {
+      status: 409,
+      error: "Only whoever holds control can offer it.",
+    };
+  }
+
+  return null;
+};
+
+/** Answering an offer: accept and decline are the recipient's, withdraw the offerer's. */
+export type HandoffAnswerKind = "accept" | "decline" | "withdraw";
+
+/**
+ * Whether this caller may answer that offer.
+ *
+ * The offer id is checked rather than assumed. An answer arrives from a client
+ * that rendered some state, and that state can be stale — the offer it is
+ * answering may already have been withdrawn and a different one made in its
+ * place. Pinning the id means a stale answer is refused instead of quietly
+ * settling an offer the answerer never saw.
+ *
+ * Accepting twice is refused because acceptance is not idempotent from where
+ * the participant sits: the first acceptance may still be waiting on a running
+ * execution, and a second one that returned 202 would read as "it went through
+ * this time".
+ */
+export const refuseHandoffAnswer = (
+  offer: ControlOffer | null,
+  offerEventId: string,
+  callerId: string,
+  answering: HandoffAnswerKind,
+): AuthorityRefusal | null => {
+  if (offer === null) {
+    return { status: 409, error: "There is no handoff in flight to answer." };
+  }
+
+  if (offer.offerEventId !== offerEventId) {
+    return {
+      status: 409,
+      error: "That offer has been settled; a different handoff is in flight.",
+    };
+  }
+
+  if (answering === "withdraw") {
+    return offer.fromParticipantId === callerId
+      ? null
+      : { status: 403, error: "Only whoever offered control can withdraw it." };
+  }
+
+  if (offer.toParticipantId !== callerId) {
+    return { status: 403, error: "That handoff was offered to somebody else." };
+  }
+
+  if (answering === "accept" && offer.state === "accepted") {
+    return {
+      status: 409,
+      error:
+        "You already accepted this handoff. Control moves when the running execution reaches a safe boundary.",
+    };
+  }
+
+  return null;
+};
 
 export type Membership = {
   participant: Participant;
