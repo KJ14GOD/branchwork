@@ -30,8 +30,19 @@ export type SessionActions = {
   pause: (runId: string) => Promise<void>;
   /** Continues a run this session previously paused. */
   resume: (runId: string) => Promise<void>;
-  /** Moves execution authority to another participant in this session. */
+  /**
+   * Offers execution authority to another participant. An offer, not a move —
+   * control changes hands only once they accept, and then only at a safe
+   * boundary if something is running.
+   */
   handoff: (toParticipantId: string) => Promise<void>;
+  /** Asks whoever holds control for it. Standing until answered or you leave. */
+  requestControl: (reason?: string) => Promise<void>;
+  /** Answers an offer made to you, or takes back one you made. */
+  answerHandoff: (
+    offerEventId: string,
+    answer: "accept" | "decline" | "withdraw",
+  ) => Promise<void>;
 };
 
 /**
@@ -202,5 +213,62 @@ export const useSessionActions = (
     [endpoint, sessionId],
   );
 
-  return { error, ask, invite, direct, cancel, pause, resume, handoff };
+  const requestControl = useCallback(
+    async (reason?: string) => {
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(sessionId)}/control/request`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
+          body: JSON.stringify(reason ? { reason } : {}),
+        },
+      );
+
+      if (!response.ok) {
+        setError(await readError(response));
+      }
+    },
+    [endpoint, sessionId],
+  );
+
+  const answerHandoff = useCallback(
+    async (offerEventId: string, answer: "accept" | "decline" | "withdraw") => {
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(sessionId)}/handoff/${answer}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
+          // The offer's id, not just the verb. An answer sent from a screen
+          // that has gone stale — the offer withdrawn and another made in its
+          // place — is refused rather than settling one this window never
+          // showed anybody.
+          body: JSON.stringify({ offerEventId }),
+        },
+      );
+
+      if (!response.ok) {
+        setError(await readError(response));
+      }
+    },
+    [endpoint, sessionId],
+  );
+
+  return {
+    error,
+    ask,
+    invite,
+    direct,
+    cancel,
+    pause,
+    resume,
+    handoff,
+    requestControl,
+    answerHandoff,
+  };
 };

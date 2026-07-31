@@ -966,6 +966,14 @@ export const startEventServer = (
       const projection = projectionOf(session.id);
 
       sendJson(response, 200, {
+        // Which of these is the caller. A client cannot render authority
+        // without it: "Maya in control" and "You are in control" are the same
+        // fact and completely different screens, and the alternative is every
+        // renderer calling /me alongside this and correlating two responses
+        // that can disagree by a handoff. Null for a bare-token caller on a
+        // worker with no participant registry — the single-user path, where
+        // there is nobody to be.
+        you: caller?.participant.id ?? null,
         controlHeldBy: projection.controlHeldBy,
         controlOffer: projection.controlOffer,
         controlRequests: projection.controlRequests,
