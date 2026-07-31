@@ -31,6 +31,9 @@ export type { PatchProposalView } from "./diff-view.tsx";
 export { EventRow } from "./event-row.tsx";
 export type { EventRowProps } from "./event-row.tsx";
 
+export { formatSpend, summariseReceipt } from "./receipt-summary.ts";
+export type { ReceiptSummary } from "./receipt-summary.ts";
+
 export { ToolResultPanel } from "./tool-result-panel.tsx";
 export type { ToolPanels } from "./tool-result-panel.tsx";
 

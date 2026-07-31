@@ -88,6 +88,7 @@ export const buildReceipt = (
   // Keyed by path so repeated patches to one file stay one changed file.
   const changedByPath = new Map<string, RunReceipt["filesChanged"][number]>();
   const tests: RunReceipt["tests"] = [];
+  const checks: RunReceipt["checks"] = [];
   const approvals: RunReceipt["approvals"] = [];
   // A denial names only its tool call id, but the approval request that
   // preceded it carries the tool name, so the pair recovers what was refused.
@@ -129,6 +130,50 @@ export const buildReceipt = (
           passed: result.output.passed,
           exitCode: result.output.exitCode,
           durationMs: result.output.durationMs,
+          sequence: event.sequence,
+        });
+        checks.push({
+          kind: "tests",
+          command: result.output.command,
+          passed: result.output.passed,
+          exitCode: result.output.exitCode,
+          durationMs: result.output.durationMs,
+          problems: null,
+          sequence: event.sequence,
+        });
+      }
+
+      // A build is a verification the receipt used to drop on the floor. Its
+      // own word for passing is `succeeded`, for the reason the contract gives
+      // — "does it still build" is the entire question — and it maps onto the
+      // same `passed` as everything else here so a reader does not have to
+      // learn one vocabulary per checker.
+      if (result.name === "run_build") {
+        checks.push({
+          kind: "build",
+          command: result.output.command,
+          passed: result.output.succeeded,
+          exitCode: result.output.exitCode,
+          durationMs: result.output.durationMs,
+          problems: null,
+          sequence: event.sequence,
+        });
+      }
+
+      // Typecheck and lint arrive through one tool that says which it was, so
+      // the receipt records them as the two kinds they are rather than as one
+      // undifferentiated "diagnostics" row. `ok` is the verdict and the
+      // diagnostic count is not: the contract is explicit that a checker can
+      // fail with output the parser did not recognise, so zero problems is not
+      // clean unless `ok` also says so.
+      if (result.name === "run_diagnostics") {
+        checks.push({
+          kind: result.output.kind,
+          command: result.output.command,
+          passed: result.output.ok,
+          exitCode: result.output.exitCode,
+          durationMs: result.output.durationMs,
+          problems: result.output.diagnostics.length,
           sequence: event.sequence,
         });
       }
@@ -178,6 +223,24 @@ export const buildReceipt = (
       ? null
       : lastTest > lastChange;
 
+  const lastCheck = checks.at(-1)?.sequence;
+  // Stale-and-green is not verified. A check that ran before the final edit
+  // describes a tree that no longer exists, so it cannot vouch for the diff
+  // this receipt is attached to. When nothing was changed there is nothing to
+  // go stale, and a passing check still counts.
+  const checksAreCurrent =
+    lastCheck !== undefined && (lastChange === undefined || lastCheck > lastChange);
+  // Ordered so a known failure outranks a missing one: `failing` is a fact,
+  // `unverified` is the absence of one, and reporting the absence would hide
+  // the fact.
+  const verification: RunReceipt["verification"] = checks.some(
+    (check) => !check.passed,
+  )
+    ? "failing"
+    : checksAreCurrent
+      ? "verified"
+      : "unverified";
+
   return RunReceiptSchema.parse({
     runId,
     sessionId: started.sessionId,
@@ -196,6 +259,8 @@ export const buildReceipt = (
     filesChanged,
     tests,
     testsFollowedFinalChange,
+    checks,
+    verification,
     approvals,
     ...(completed?.type === "run.completed"
       ? { summary: completed.payload.summary }

@@ -9,12 +9,15 @@ import type { SessionEventStore } from "@novus/session-service";
 import { AgentRunFailure, AgentRunner } from "./agent-runner.ts";
 import {
   WorktreeManager,
+  collectableForks,
+  type ForkDisposition,
   type ForkHandle,
 } from "./worktree-manager.ts";
 import { DEFAULT_RUN_BUDGET, type RunBudget } from "./budget.ts";
 import type { ModelSelection } from "@novus/contracts";
 import type { ModelAdapter, ModelRouter } from "./model.ts";
 import { DEFAULT_MODEL_PRICING, type PricingTable } from "./pricing.ts";
+import { projectSession } from "./projection.ts";
 import {
   AllowListApprovalGate,
   DenyAllApprovalGate,
@@ -38,7 +41,7 @@ import {
   type AgentTool,
 } from "./tools.ts";
 import { RunDiagnosticsTool } from "./diagnostics.ts";
-import { DevServerTool } from "./dev-server.ts";
+import { DevServerTool, stopDevServersUnder } from "./dev-server.ts";
 
 const run = promisify(execFile);
 
@@ -402,6 +405,12 @@ export class SessionRegistry {
     const allowCommands = options.allowCommands ?? this.defaults.allowCommands;
     const repositoryState = await readRepositoryState(repositoryPath);
 
+    // Captured before the map is written, because reconciliation below depends
+    // on the answer: a session this process already has open may have loops
+    // live under its run ids right now, and those must never be reconciled.
+    const alreadyOpenHere =
+      options.resume !== undefined && this.sessions.has(options.resume);
+
     const session: Session = {
       id: options.resume ?? crypto.randomUUID(),
       repositoryPath,
@@ -454,6 +463,14 @@ export class SessionRegistry {
     // resume its paused run, because the handle to its worktree lived only in
     // the process that forked it. A fresh session's log has nothing to adopt
     // and this loop is a no-op.
+    // Attempts an earlier open already reclaimed. Their checkouts are meant to
+    // be gone, so failing to re-attach one is the expected outcome rather than
+    // something to warn a host about on every open for the rest of the
+    // session's life. Everything else that fails to adopt still gets said.
+    const alreadyReclaimed = new Set(
+      this.collectableFor(session.id).map((entry) => entry.runId),
+    );
+
     for (const event of this.eventStore.list(session.id)) {
       if (event.type !== "fork.created") {
         continue;
@@ -467,12 +484,21 @@ export class SessionRegistry {
         // unopenable because one fork's directory was deleted. Said on the
         // host, and again — with the same words — by whatever operation
         // actually needed the missing worktree.
+        if (alreadyReclaimed.has(event.payload.fork.runId)) {
+          continue;
+        }
+
         console.warn(
           `fork ${event.payload.fork.runId} could not be re-attached: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
       }
+    }
+
+    if (!alreadyOpenHere) {
+      this.reconcileInterruptedRuns(session);
+      await this.reclaimResolvedForks(session);
     }
 
     // Announced rather than returned only, because a session's id is a runtime
@@ -636,6 +662,18 @@ export class SessionRegistry {
         session.allowCommands && recorded.allowCommands,
       ),
       () => readRepositoryBase(handle.worktreePath),
+      // The host's budget and pricing, not the defaults. These two arguments
+      // were simply absent, so every forked attempt fell back to
+      // DEFAULT_RUN_BUDGET — whose costUsd is null, meaning uncapped — and a
+      // host who set NOVUS_COST_BUDGET_USD had a ceiling that bound their own
+      // runs and none of their attempts. Attempts are the thing you deliberately
+      // start several of at once, so that was the ceiling failing exactly where
+      // spend multiplies. Pricing goes with it: an unpriced model makes usage
+      // costUsd null, and a null spend under a set ceiling is refused rather
+      // than silently unenforced.
+      this.budget,
+      undefined,
+      this.pricing,
     );
 
     session.forkRunners.set(handle.fork.runId, runner);
@@ -702,6 +740,201 @@ export class SessionRegistry {
     session.forkTurns.set(runId, next);
 
     return next as Promise<void>;
+  }
+
+  /**
+   * The reclamation policy applied to one session's log. Reads only.
+   *
+   * Split out because two callers need the same answer for different reasons:
+   * the sweep, to delete, and the adoption loop, to know that a checkout it
+   * cannot find was supposed to be gone.
+   */
+  private collectableFor(sessionId: string): ForkDisposition[] {
+    const events = this.eventStore.list(sessionId);
+
+    if (events.length === 0) {
+      return [];
+    }
+
+    const forks: { fork: Fork; sequence: number }[] = [];
+    const decisions: { sequence: number; runId: string; applied: boolean }[] = [];
+
+    for (const event of events) {
+      if (event.type === "fork.created") {
+        forks.push({ fork: event.payload.fork, sequence: event.sequence });
+      }
+
+      if (event.type === "decision.recorded") {
+        decisions.push({
+          sequence: event.sequence,
+          runId: event.payload.runId,
+          applied: event.payload.outcome.applied,
+        });
+      }
+    }
+
+    if (forks.length === 0 || decisions.length === 0) {
+      return [];
+    }
+
+    const runs = new Map(
+      projectSession(sessionId, events).runs.map((run) => [run.runId, run]),
+    );
+
+    return collectableForks({
+      forks,
+      statusOf: (runId) => runs.get(runId)?.status ?? null,
+      decisions,
+    });
+  }
+
+  /**
+   * Gives back the disk that decided attempts are still holding.
+   *
+   * Nothing removed a fork's checkout, ever. Each one is a full second copy of
+   * the working tree plus a branch plus a record under `.git/worktrees`, so a
+   * team forking a few times a day for a week ends up with a repository whose
+   * sibling directory is larger than the repository and a `git worktree list`
+   * nobody can read.
+   *
+   * Run at session open — the same seam that adopts forks and reconciles runs
+   * — because that is where the log has just been read and where the host is
+   * deliberately picking up this repository. It is a sweep rather than an
+   * event handler on purpose: a sweep also collects what an earlier crash,
+   * an earlier version, or a decision recorded by some other process left
+   * behind, and it converges no matter how many of those it missed.
+   *
+   * The policy is `collectableForks`, and it is conservative on purpose — an
+   * attempt's work exists only in its worktree, so this deletes exactly the
+   * attempts whose comparison was decided and applied, and nothing else.
+   * Ordered after reconciliation so an attempt the worker died inside is
+   * already settled rather than looking live to the sweep.
+   */
+  private async reclaimResolvedForks(session: Session): Promise<void> {
+    // Only the ones this manager actually holds a handle for. A fork an
+    // earlier open already reclaimed is still collectable *by the policy* —
+    // the log does not forget that its comparison was decided — but there is
+    // nothing left to delete, and asking would report a failure per attempt
+    // per open forever.
+    const dispositions = this.collectableFor(session.id).filter(
+      (entry) => session.worktrees.get(entry.runId) !== undefined,
+    );
+
+    if (dispositions.length === 0) {
+      // Still worth pruning: a checkout the human deleted by hand leaves a
+      // registration behind whether or not any decision was ever recorded.
+      await session.worktrees.pruneRecords().catch(() => undefined);
+
+      return;
+    }
+
+    // Before the directories go, not after. A dev server started inside an
+    // attempt's worktree is detached and in its own process group, so deleting
+    // the directory does not stop it — it would keep running, keep its port,
+    // and have a working directory that no longer exists.
+    for (const disposition of dispositions) {
+      const handle = session.worktrees.get(disposition.runId);
+
+      if (handle === undefined) {
+        continue;
+      }
+
+      const stopped = await stopDevServersUnder(handle.worktreePath);
+
+      if (stopped > 0) {
+        console.log(
+          `stopped ${stopped} dev server(s) in attempt ${disposition.runId} before reclaiming it`,
+        );
+      }
+    }
+
+    const { collected, failures } = await session.worktrees.collect(dispositions);
+
+    if (collected.length > 0) {
+      console.log(
+        `reclaimed ${collected.length} decided attempt worktree(s): ${collected.join(", ")}`,
+      );
+    }
+
+    for (const failure of failures) {
+      // Said, not thrown. Housekeeping must never be why a session refuses to
+      // open — and the next open will try this one again.
+      console.warn(`an attempt's worktree could not be reclaimed — ${failure}`);
+    }
+
+    await session.worktrees.pruneRecords().catch(() => undefined);
+  }
+
+  /**
+   * Ends the runs that a worker exit left claiming to be in flight.
+   *
+   * A run is driven by a live loop in this process and by nothing else. The
+   * log records `run.started` and, later, a terminator; if the process dies
+   * between the two, nothing is left to write the second one. The run then
+   * projects as `running` forever — the compare screen shows an attempt still
+   * working, the timeline shows a spinner, and both are describing a loop that
+   * stopped existing when the worker did. That is the failure mode this closes:
+   * not a cosmetic status, but a surface that reports work in flight that is
+   * not.
+   *
+   * Reconciled to `run.failed` rather than to a new terminal status. Four
+   * places keep their own copy of "how a run can end" — the projection, the
+   * receipt, the compare screen, and the guest timeline — and only one of them
+   * is compiler-enforced, so a new status is a cross-surface change with three
+   * silent ways to be wrong. `run.failed` is also the honest answer: an
+   * interrupted run did not finish, and the one thing it must never do is read
+   * as a pass. The reason says what actually happened, so a reader is not left
+   * inferring it from a generic failure.
+   *
+   * Paused runs are deliberately untouched. A pause is a durable, intentional
+   * state that outlives the process — the host paused an attempt precisely so
+   * they could come back to it — so failing one here would destroy the thing
+   * the feature exists to preserve.
+   *
+   * What this cannot see is a loop in *another* process. Two workers sharing
+   * one `NOVUS_DB` and one session id would let this end a run the other is
+   * still driving. That configuration is already unsupported for other reasons
+   * (two runners, two turn queues, one log), and it is recorded as a known gap
+   * rather than papered over: proving liveness across processes needs a
+   * heartbeat, which is a bigger change than this one.
+   */
+  private reconcileInterruptedRuns(session: Session): void {
+    const events = this.eventStore.list(session.id);
+
+    if (events.length === 0) {
+      return;
+    }
+
+    // The projection is the authority on what "running" means, rather than a
+    // second hand-rolled fold beside it. A run that is paused, cancelled,
+    // completed, or failed is already settled and is not touched.
+    const interrupted = projectSession(session.id, events).runs.filter(
+      (candidate) => candidate.status === "running",
+    );
+
+    for (const orphan of interrupted) {
+      try {
+        this.eventStore.append({
+          sessionId: session.id,
+          actorId: "agent-1",
+          type: "run.failed",
+          payload: {
+            runId: orphan.runId,
+            reason:
+              "interrupted — the worker exited while this run was in flight, so no loop was left to finish it. Nothing it had already done was lost: its tool calls and file changes are above. Fork a checkpoint to carry on from here.",
+          },
+        });
+      } catch (error) {
+        // A log that cannot be appended to is not a reason to refuse the
+        // session: the host still needs to open it, and the stale `running`
+        // is what they had before this ran at all.
+        console.error(
+          `run ${orphan.runId} was interrupted and the log could not be told: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
   }
 
   /**

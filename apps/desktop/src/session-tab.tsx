@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { SessionEvent } from "@novus/contracts";
 import type { AttemptComparison, SessionSummary } from "@novus/contracts/protocol";
+import { formatSpend } from "@novus/ui";
 
 import { bridge } from "./bridge.ts";
 import { FileTree, FileViewer } from "./components/browse-panel.tsx";
@@ -21,6 +22,7 @@ import { groupKeyFor, TimelineView } from "./components/timeline-view.tsx";
 import { useComparison } from "./use-comparison.ts";
 import { useFileChanges } from "./use-file-changes.ts";
 import { useAuthority } from "./use-authority.ts";
+import { useSessionUsage } from "./use-session-usage.ts";
 import { useFileTree } from "./use-file-tree.ts";
 import { usePresence } from "./use-presence.ts";
 import { useSessionActions } from "./use-session-actions.ts";
@@ -240,6 +242,13 @@ export const SessionTab = ({
   );
 
   const fileChanges = useFileChanges(endpoint, session.id, appliedPatchCount);
+  // A receipt is the only event that can change what this session has spent,
+  // so counting them is the whole refetch trigger — no timer, same rule the
+  // changed-files panel follows with applied patches.
+  const receiptCount = events.filter(
+    (event) => event.type === "receipt.created",
+  ).length;
+  const usage = useSessionUsage(endpoint, session.id, receiptCount);
 
   const run = events.find((event) => event.type === "run.started");
   const completed = events.findLast((event) => event.type === "run.completed");
@@ -810,6 +819,32 @@ export const SessionTab = ({
               <span className="stat__del">−{fileChanges.deletions}</span>
             </span>
             <span className="rail__meter-item">{formatElapsed(events)}</span>
+            {/*
+              What the session has cost. It was computed on every model call,
+              stored on every receipt, and shown nowhere — so the person whose
+              money it is had to read a log line to find out. Drawn from the
+              worker's projection over the log rather than from a counter, so
+              a resumed session shows what it has actually spent instead of
+              starting again at zero.
+            */}
+            <span
+              className="rail__meter-item"
+              title={
+                usage.session.costUsd === null
+                  ? `No model in this session has a configured price, so spend is not being counted. ${usage.session.runs} run(s) finished.`
+                  : `${usage.session.modelCalls} model call(s) across ${usage.session.runs} finished run(s)${
+                      usage.session.costIsFloor
+                        ? " — at least this much: a run is still going, or some of it could not be priced"
+                        : ""
+                    }`
+              }
+            >
+              {usage.session.costUsd === null
+                ? usage.session.runs === 0
+                  ? "$—"
+                  : "Not counted"
+                : formatSpend(usage.session.costUsd, usage.session.costIsFloor ? 1 : 0)}
+            </span>
           </div>
 
         </aside>

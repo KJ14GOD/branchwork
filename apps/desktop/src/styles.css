@@ -2517,6 +2517,16 @@ kbd {
   color: var(--alert);
 }
 
+/* A run that finished without anything checking it. Deliberately not muted:
+   muted is the colour of "nothing to see here", and the whole point of this
+   state is that a completed run with no evidence behind it is the one a
+   reviewer must not skim past. It takes --alert rather than a new hue,
+   because it is the same kind of statement .chip--warn makes — a fact about
+   the session, not a failure. */
+.event__text--unverified {
+  color: var(--alert);
+}
+
 /* Approved / resumed / applied / transferred. These were green, which made
    every routine approval read as a celebration and put six unrelated meanings
    on one hue. They are ordinary history and take the ordinary colour. */

@@ -395,3 +395,47 @@ export const SessionFilesResponseSchema = z.object({
 });
 
 export type SessionFilesResponse = z.infer<typeof SessionFilesResponseSchema>;
+
+/**
+ * What a session has spent, and what each run in it spent.
+ *
+ * Folded from the receipts in the session's own log, so it survives the
+ * restart that used to reset it: budgets accumulate in memory, and that memory
+ * dies with the process — a resumed session showed zero spend to a host who
+ * had already spent real money on it, which made the cost ceiling they set
+ * decoration rather than a guard.
+ *
+ * `costUsd` is null, never zero, when nothing could be priced. A session
+ * reported as free because no model in it had a published rate is a worse
+ * answer than one that says it does not know, and a ceiling checked against
+ * an uncounted spend would never trip.
+ */
+export const SessionUsageResponseSchema = z.object({
+  session: z.object({
+    costUsd: z.number().nonnegative().nullable(),
+    /**
+     * True when the figure is a floor rather than a total — some run was
+     * unpriced, some call reported no usage, or a run is still in flight and
+     * has not written its receipt yet.
+     */
+    costIsFloor: z.boolean(),
+    totalTokens: z.number().int().nonnegative(),
+    modelCalls: z.number().int().nonnegative(),
+    runs: z.number().int().nonnegative(),
+    unpricedRuns: z.number().int().nonnegative(),
+  }),
+  /** One row per finished run, attempts named so spend reads per approach. */
+  runs: z.array(
+    z.object({
+      runId: IdSchema,
+      label: z.string().min(1).nullable(),
+      isAttempt: z.boolean(),
+      costUsd: z.number().nonnegative().nullable(),
+      totalTokens: z.number().int().nonnegative(),
+      modelCalls: z.number().int().nonnegative(),
+      verification: z.enum(["verified", "failing", "unverified"]),
+    }),
+  ),
+});
+
+export type SessionUsageResponse = z.infer<typeof SessionUsageResponseSchema>;

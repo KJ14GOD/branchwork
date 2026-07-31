@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -18,6 +18,8 @@ import {
 } from "./model.ts";
 import { SessionRegistry, type HostDefaults } from "./session-registry.ts";
 import { startEventServer } from "./event-server.ts";
+import { DEFAULT_RUN_BUDGET, type RunBudget } from "./budget.ts";
+import type { PricingTable } from "./pricing.ts";
 
 const run = promisify(execFile);
 const git = (cwd: string, args: string[]) => run("git", args, { cwd });
@@ -59,12 +61,14 @@ const startWorker = (
   store: InMemorySessionEventStore,
   adapters: ModelAdapter[],
   defaults?: HostDefaults,
+  economics?: { pricing?: PricingTable; budget?: RunBudget },
 ) => {
   const sessions = new SessionRegistry(
     store,
     new FixedModelRouter(SELECTION),
     adapters,
     defaults,
+    economics,
   );
 
   return startEventServer(store, { port: 0, token: TOKEN, sessions });
@@ -346,6 +350,17 @@ const rendezvous = (parties: number, timeoutMs: number): (() => Promise<void>) =
     await gate;
   };
 };
+
+/**
+ * A model call that never comes back — the shape a worker exit leaves behind.
+ *
+ * Killing the process mid-run is not something a test in this process can do,
+ * and it does not need to: what a dead worker leaves in the log is a
+ * `run.started` with no terminator and no loop that will ever write one, and a
+ * call suspended forever is exactly that. Closing the server afterwards
+ * abandons it for good.
+ */
+const neverReturns = (): Script => () => new Promise<ModelResponse>(() => {});
 
 const captureWarnings = (): { lines: string[]; restore: () => void } => {
   const lines: string[] = [];
@@ -1199,6 +1214,500 @@ test("a fork that can never start is a failed attempt on the record, not a silen
     assert.match(comparison.attempts[0]?.failure ?? "", /No model adapter/);
   } finally {
     await server.close();
+    await cleanup(root);
+  }
+});
+
+/**
+ * Test 13. Spend survives the restart that used to reset it to zero.
+ *
+ * `budget.ts` accumulates in memory, which dies with the process — so a
+ * resumed session's spend restarted at zero. A host who had already spent
+ * real money on a session was shown nothing, and the cost ceiling they had
+ * set was, for that session, decoration. The log survives a restart and every
+ * finished run's receipt carries its usage, so the projection can answer
+ * honestly where the counter could not.
+ */
+test("a session's spend is read from the log, so a restart does not reset it", async () => {
+  const root = await repository();
+  const store = new InMemorySessionEventStore();
+  const sessionBox = { id: "" };
+  let runId = "";
+
+  // A real rate for the scripted model, so the figures under test are money
+  // rather than nulls. 1M in + 1M out at these rates is $3 + $15.
+  const pricing = new Map([
+    [
+      "scripted/fork-runner",
+      { inputPerMTokUsd: 3, outputPerMTokUsd: 15, asOf: "2026-07-31" },
+    ],
+  ]);
+  const priced = (summary: string): Script => () => ({
+    type: "final",
+    summary,
+    usage: { inputTokens: 200_000, outputTokens: 100_000 },
+  });
+
+  const serverA = await startWorker(
+    store,
+    [new GoalScriptedAdapter({ "Do the work": priced("Done.") })],
+    undefined,
+    { pricing },
+  );
+
+  try {
+    const session = await openSession(serverA.url, {
+      repositoryPath: root,
+      allowWrites: true,
+    });
+
+    sessionBox.id = session.id;
+    runId = (await forkSession(serverA.url, session.id, "Attempt A", "Do the work"))
+      .fork.runId;
+
+    assert.equal(await waitForRunEnd(store, session.id, runId), null);
+
+    const live = await getJson<{
+      session: { costUsd: number | null; runs: number };
+    }>(serverA.url, `/sessions/${session.id}/usage`);
+
+    // 0.2M in at $3 + 0.1M out at $15 = $0.60 + $1.50.
+    assert.equal(live.session.costUsd, 2.1);
+    assert.equal(live.session.runs, 1);
+  } finally {
+    await serverA.close();
+  }
+
+  const serverB = await startWorker(store, [new GoalScriptedAdapter({})], undefined, {
+    pricing,
+  });
+
+  try {
+    await openSession(serverB.url, {
+      repositoryPath: root,
+      resume: sessionBox.id,
+      allowWrites: true,
+    });
+
+    const after = await getJson<{
+      session: { costUsd: number | null; totalTokens: number; runs: number };
+      runs: { runId: string; label: string | null; costUsd: number | null }[];
+    }>(serverB.url, `/sessions/${sessionBox.id}/usage`);
+
+    assert.equal(
+      after.session.costUsd,
+      2.1,
+      "a restart must not make money already spent disappear",
+    );
+    assert.equal(after.session.totalTokens, 300_000);
+    assert.equal(after.session.runs, 1);
+
+    // And per approach, not only as one session total — deciding between
+    // attempts on evidence includes what each of them cost.
+    assert.equal(after.runs.length, 1);
+    assert.equal(after.runs[0]?.runId, runId);
+    assert.equal(after.runs[0]?.label, "Attempt A");
+    assert.equal(after.runs[0]?.costUsd, 2.1);
+  } finally {
+    await serverB.close();
+    await cleanup(root);
+  }
+});
+
+/**
+ * Test 12. The host's bounds reach the attempts, not only the parent's runs.
+ *
+ * `buildForkRunner` constructed its `AgentRunner` with six arguments where the
+ * budget is the seventh and pricing the ninth, so every forked attempt quietly
+ * used `DEFAULT_RUN_BUDGET` — whose `costUsd` is null, meaning uncapped. A host
+ * who set `NOVUS_COST_BUDGET_USD` therefore had a ceiling that bound their own
+ * runs and none of their attempts, which is the one place spend multiplies:
+ * attempts are the feature you deliberately start several of at once.
+ *
+ * Asserted through the cost budget's refusal-to-start rule rather than by
+ * spending anything: an unpriced model under a set ceiling must stop before
+ * the first call, because a budget that cannot count is a budget that is not
+ * enforcing. That one message proves both arguments arrived — the budget,
+ * because it tripped at all, and the pricing table, because the reason names
+ * missing pricing rather than a dollar figure.
+ */
+test("a forked attempt is bound by the host's cost budget, not by the defaults", async () => {
+  const root = await repository();
+  const store = new InMemorySessionEventStore();
+
+  const server = await startWorker(
+    store,
+    [
+      new GoalScriptedAdapter({
+        "Change the answer": editsAnswer("attempt a\n", "Changed it."),
+      }),
+    ],
+    undefined,
+    { budget: { ...DEFAULT_RUN_BUDGET, costUsd: 5 } },
+  );
+
+  try {
+    const session = await openSession(server.url, {
+      repositoryPath: root,
+      allowWrites: true,
+    });
+
+    const forked = await forkSession(
+      server.url,
+      session.id,
+      "Attempt A",
+      "Change the answer",
+    );
+
+    const failure = await waitForRunEnd(
+      store,
+      session.id,
+      forked.fork.runId,
+    );
+
+    assert.match(
+      failure ?? "",
+      /cost budget is set, but this run's model has no configured pricing/,
+      "the host's ceiling has to bind the attempt, not just the parent",
+    );
+
+    // And it stopped before spending, rather than after: no model call, so no
+    // tool call, so nothing was written in the fork's tree.
+    assert.equal(
+      store
+        .list(session.id)
+        .some(
+          (event) =>
+            event.type === "tool.completed" &&
+            event.payload.result.toolCallId !== undefined &&
+            "runId" in event.payload &&
+            event.payload.runId === forked.fork.runId,
+        ),
+      false,
+    );
+  } finally {
+    await server.close();
+    await cleanup(root);
+  }
+});
+
+/**
+ * Test 11. Decided attempts give their disk back; undecided ones keep it.
+ *
+ * Nothing ever removed a fork's checkout, so a week of forking left one full
+ * copy of the working tree per attempt plus a branch plus a record under
+ * `.git/worktrees`, forever. The sweep runs at session open, and this drives
+ * it the only way that proves anything: real worktrees on disk, a real
+ * decision through the route, and a restart in between.
+ *
+ * The negative half matters more than the positive one. Deleting a checkout
+ * destroys work that exists nowhere else — a fork's changes live in its
+ * working tree, not in the log — so the test pins that an attempt with no
+ * decision after it, and a paused attempt, both survive.
+ */
+test("attempts a decision resolved are reclaimed at the next open; undecided and paused ones are not", async () => {
+  const root = await repository();
+  const store = new InMemorySessionEventStore();
+  const forkRoot = join(dirname(root), ".novus-forks", basename(root));
+  const sessionBox = { id: "" };
+  let chosenId = "";
+  let losingId = "";
+  let pausedId = "";
+
+  const serverA = await startWorker(store, [
+    new GoalScriptedAdapter({
+      "Change the answer": editsAnswer("chosen\n", "Chose this one."),
+      "Change it differently": editsAnswer("not chosen\n", "The other way."),
+      "Pause and wait": pausesItselfThenEdits(
+        store,
+        sessionBox,
+        "still mine\n",
+        "Finished later.",
+      ),
+    }),
+  ]);
+
+  try {
+    const session = await openSession(serverA.url, {
+      repositoryPath: root,
+      allowWrites: true,
+    });
+
+    sessionBox.id = session.id;
+
+    chosenId = (
+      await forkSession(serverA.url, session.id, "Chosen", "Change the answer")
+    ).fork.runId;
+    losingId = (
+      await forkSession(
+        serverA.url,
+        session.id,
+        "Losing",
+        "Change it differently",
+      )
+    ).fork.runId;
+    pausedId = (
+      await forkSession(serverA.url, session.id, "Paused", "Pause and wait")
+    ).fork.runId;
+
+    assert.equal(await waitForRunEnd(store, session.id, chosenId), null);
+    assert.equal(await waitForRunEnd(store, session.id, losingId), null);
+    await waitForEvent(store, session.id, "the third attempt to pause", (events) =>
+      events.some(
+        (event) =>
+          event.type === "run.paused" && event.payload.runId === pausedId,
+      ),
+    );
+
+    const decision = await postJson<{
+      decision: { outcome: { applied: boolean } };
+    }>(serverA.url, `/sessions/${session.id}/decision`, { runId: chosenId });
+
+    assert.equal(decision.decision.outcome.applied, true);
+
+    // Everything is still on disk: the sweep runs at open, not at decide.
+    for (const runId of [chosenId, losingId, pausedId]) {
+      assert.ok(
+        await stat(join(forkRoot, runId)).then(
+          () => true,
+          () => false,
+        ),
+      );
+    }
+  } finally {
+    await serverA.close();
+  }
+
+  const serverB = await startWorker(store, [new GoalScriptedAdapter({})]);
+
+  try {
+    await openSession(serverB.url, {
+      repositoryPath: root,
+      resume: sessionBox.id,
+      allowWrites: true,
+    });
+
+    const gone = async (runId: string): Promise<boolean> =>
+      stat(join(forkRoot, runId)).then(
+        () => false,
+        () => true,
+      );
+
+    assert.ok(await gone(chosenId), "the applied attempt's checkout is garbage");
+    assert.ok(
+      await gone(losingId),
+      "an attempt the human saw and did not choose is garbage too",
+    );
+    assert.equal(
+      await gone(pausedId),
+      false,
+      "a paused attempt is work the host may still resume — never collected",
+    );
+
+    // Git's own record went with them, which is the half that otherwise grows
+    // without bound, and the dead branches went too.
+    const list = await git(root, ["worktree", "list", "--porcelain"]);
+
+    assert.equal(list.stdout.includes(`/${chosenId}`), false);
+    assert.equal(list.stdout.includes(`/${losingId}`), false);
+    assert.ok(list.stdout.includes(`/${pausedId}`));
+
+    const branches = await git(root, ["branch", "--list", "novus/fork/*"]);
+
+    assert.equal(branches.stdout.includes(chosenId), false);
+    assert.equal(branches.stdout.includes(losingId), false);
+    assert.ok(branches.stdout.includes(pausedId));
+
+    // The applied work is in the parent — reclamation took the copy, not the
+    // result — and the evidence is still on the compare screen, because that
+    // reads the log and not the checkouts.
+    assert.equal(await readFile(join(root, "answer.txt"), "utf8"), "chosen\n");
+
+    const comparison = await getJson<{
+      attempts: { runId: string; status: string; filesChanged: unknown[] }[];
+    }>(serverB.url, `/sessions/${sessionBox.id}/compare`);
+
+    assert.equal(comparison.attempts.length, 3);
+    assert.deepEqual(
+      comparison.attempts.map((attempt) => attempt.runId).sort(),
+      [chosenId, losingId, pausedId].sort(),
+      "reclaiming a checkout must not erase the attempt from the record",
+    );
+    assert.equal(
+      comparison.attempts.find((attempt) => attempt.runId === losingId)
+        ?.filesChanged.length,
+      1,
+    );
+  } finally {
+    await serverB.close();
+    await cleanup(root);
+  }
+});
+
+/**
+ * Test 10. An attempt the worker died inside is reconciled; a paused one is not.
+ *
+ * These are the same code path pulling in opposite directions, so they are
+ * asserted against one another in a single log rather than in two tests that
+ * could each pass while the pair is wrong. A run left `running` by a process
+ * exit has to be ended — the compare screen was otherwise showing work in
+ * flight with no loop behind it, indefinitely. A *paused* run has to survive
+ * untouched, because a pause is a deliberate, durable state a host created in
+ * order to come back to it, and reconciliation that cannot tell the two apart
+ * destroys the feature it is meant to protect.
+ */
+test("an attempt the worker died inside is failed at session open, while a paused one survives", async () => {
+  const root = await repository();
+  const store = new InMemorySessionEventStore();
+  const sessionBox = { id: "" };
+  let hungRunId = "";
+  let pausedRunId = "";
+
+  const serverA = await startWorker(store, [
+    new GoalScriptedAdapter({
+      "Hang forever": neverReturns(),
+      "Pause and wait": pausesItselfThenEdits(
+        store,
+        sessionBox,
+        "resumed after restart\n",
+        "Finished after the restart.",
+      ),
+    }),
+  ]);
+
+  try {
+    const session = await openSession(serverA.url, {
+      repositoryPath: root,
+      allowWrites: true,
+    });
+
+    sessionBox.id = session.id;
+
+    hungRunId = (
+      await forkSession(serverA.url, session.id, "Hung", "Hang forever")
+    ).fork.runId;
+    pausedRunId = (
+      await forkSession(serverA.url, session.id, "Paused", "Pause and wait")
+    ).fork.runId;
+
+    await waitForEvent(store, session.id, "the hung attempt to start", (events) =>
+      events.some(
+        (event) =>
+          event.type === "run.started" && event.payload.run.id === hungRunId,
+      ),
+    );
+    await waitForEvent(store, session.id, "the other attempt to pause", (events) =>
+      events.some(
+        (event) =>
+          event.type === "run.paused" && event.payload.runId === pausedRunId,
+      ),
+    );
+
+    // Before the restart the hung attempt is legitimately running: a live loop
+    // is inside a model call. Nothing should have ended it here.
+    const live = await getJson<{ attempts: { runId: string; status: string }[] }>(
+      serverA.url,
+      `/sessions/${session.id}/compare`,
+    );
+
+    assert.equal(
+      live.attempts.find((attempt) => attempt.runId === hungRunId)?.status,
+      "running",
+    );
+  } finally {
+    await serverA.close();
+  }
+
+  // A fresh registry over the same durable log — a real restart, and the model
+  // call the first worker was suspended inside will never return.
+  const serverB = await startWorker(store, [
+    new GoalScriptedAdapter({
+      "Pause and wait": editsAnswer(
+        "resumed after restart\n",
+        "Finished after the restart.",
+      ),
+    }),
+  ]);
+
+  try {
+    await openSession(serverB.url, {
+      repositoryPath: root,
+      resume: sessionBox.id,
+      allowWrites: true,
+    });
+
+    const after = await getJson<{
+      attempts: { runId: string; status: string }[];
+    }>(serverB.url, `/sessions/${sessionBox.id}/compare`);
+
+    assert.equal(
+      after.attempts.find((attempt) => attempt.runId === hungRunId)?.status,
+      "failed",
+      "an attempt whose worker exited must not still read as running",
+    );
+    assert.equal(
+      after.attempts.find((attempt) => attempt.runId === pausedRunId)?.status,
+      "paused",
+      "a paused attempt is resumable state, not an orphan to reconcile",
+    );
+
+    const failure = store
+      .list(sessionBox.id)
+      .find(
+        (event) =>
+          event.type === "run.failed" && event.payload.runId === hungRunId,
+      );
+
+    assert.ok(failure?.type === "run.failed");
+    assert.match(failure.payload.reason, /interrupted/);
+
+    // The paused attempt is not merely labelled paused — it still runs, in its
+    // own worktree, which is what "survives" has to mean.
+    await postJson(serverB.url, `/sessions/${sessionBox.id}/resume`, {
+      runId: pausedRunId,
+    });
+
+    const resumeFailure = await waitForRunEnd(store, sessionBox.id, pausedRunId);
+
+    assert.equal(resumeFailure, null, `the resumed fork failed: ${resumeFailure}`);
+
+    const forkPath = join(
+      dirname(root),
+      ".novus-forks",
+      basename(root),
+      pausedRunId,
+      "answer.txt",
+    );
+
+    assert.equal(await readFile(forkPath, "utf8"), "resumed after restart\n");
+  } finally {
+    await serverB.close();
+  }
+
+  // Opening a third time must not append a second terminator: the run is
+  // settled, and reconciliation reads the projection rather than a memory of
+  // having run. A different registry again, so the guard against reconciling a
+  // session this process already has open is not what is being credited here.
+  const serverC = await startWorker(store, [new GoalScriptedAdapter({})]);
+
+  try {
+    await openSession(serverC.url, {
+      repositoryPath: root,
+      resume: sessionBox.id,
+      allowWrites: true,
+    });
+
+    assert.equal(
+      store
+        .list(sessionBox.id)
+        .filter(
+          (event) =>
+            event.type === "run.failed" && event.payload.runId === hungRunId,
+        ).length,
+      1,
+    );
+  } finally {
+    await serverC.close();
     await cleanup(root);
   }
 });
