@@ -808,6 +808,58 @@ export const startEventServer = (
       return true;
     }
 
+    // What this session has spent, and what each attempt in it spent.
+    //
+    // Served from the projection rather than from any in-memory counter,
+    // because the counters die with the process: a resumed session's spend
+    // restarted at zero, so a person who had already spent real money on it
+    // was shown nothing and the budget ceiling they had set was, for that
+    // session, decoration. The log survives restarts and carries every
+    // finished run's usage on its receipt, so this figure does too.
+    const usageMatch = /^\/sessions\/([^/]+)\/usage$/.exec(pathname);
+
+    if (usageMatch && request.method === "GET") {
+      const session = sessions.get(decodeURIComponent(usageMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const events = store.list(session.id);
+      const projected = projectSession(session.id, events);
+      // Attempts are named so spend can be read per approach, not only as one
+      // session total — deciding between attempts on evidence includes what
+      // each of them cost.
+      const labels = new Map(
+        events.flatMap((event) =>
+          event.type === "fork.created"
+            ? [[event.payload.fork.runId, event.payload.fork.label] as const]
+            : [],
+        ),
+      );
+      const perRun = events.flatMap((event) =>
+        event.type === "receipt.created"
+          ? [
+              {
+                runId: event.payload.receipt.runId,
+                label: labels.get(event.payload.receipt.runId) ?? null,
+                isAttempt: labels.has(event.payload.receipt.runId),
+                costUsd: event.payload.receipt.usage.costUsd,
+                totalTokens:
+                  event.payload.receipt.usage.inputTokens +
+                  event.payload.receipt.usage.outputTokens,
+                modelCalls: event.payload.receipt.usage.modelCalls,
+                verification: event.payload.receipt.verification,
+              },
+            ]
+          : [],
+      );
+
+      sendJson(response, 200, { session: projected.usage, runs: perRun });
+      return true;
+    }
+
     const decisionMatch = /^\/sessions\/([^/]+)\/decision$/.exec(pathname);
 
     if (decisionMatch && request.method === "POST") {

@@ -96,6 +96,41 @@ export type SessionProjection = {
    * way to know one had ever been made.
    */
   decision: { runId: string; checkpointId: string; outcome: DecisionOutcome } | null;
+  /**
+   * What this session has spent, summed from the receipts in its own log.
+   *
+   * Budgets accumulate in memory, per run, and that memory dies with the
+   * process — so a resumed session's spend restarted at zero and a person who
+   * had already spent real money on it was shown nothing. The log is the only
+   * thing that survives a restart, and `receipt.created` carries each run's
+   * usage, so this is where an honest session total has to come from.
+   *
+   * Per *run*, not per attempt-in-flight: a receipt is written when a run ends,
+   * so a run still going is not in here yet. That is a floor, and `costIsFloor`
+   * says when it is one for the other reason too — a call whose adapter
+   * reported no usage, or a run whose model had no published rate.
+   */
+  usage: {
+    /**
+     * Dollars, summed over the runs that could be priced. Null when no run
+     * could be — never zero, because a session reported as free because
+     * nobody priced its model is a worse answer than one that says it does
+     * not know.
+     */
+    costUsd: number | null;
+    /**
+     * Whether the figure above is a floor rather than a total. True when a
+     * run's model had no rate, or when some call's adapter reported no usage,
+     * or when a run is still in flight and has not written its receipt.
+     */
+    costIsFloor: boolean;
+    totalTokens: number;
+    modelCalls: number;
+    /** Finished runs whose receipt was counted. */
+    runs: number;
+    /** Of those, how many could not be priced at all. */
+    unpricedRuns: number;
+  };
 };
 
 const emptyRun = (
@@ -150,6 +185,15 @@ export const projectSession = (
   let controlOffer: ControlOffer | null = null;
   let decision: SessionProjection["decision"] = null;
   let sequence = -1;
+  // Session spend, folded from receipts. Null rather than 0 until something
+  // priced actually lands, so "nothing was counted" stays distinguishable
+  // from "it was counted and came to nothing".
+  let costUsd: number | null = null;
+  let totalTokens = 0;
+  let modelCalls = 0;
+  let countedRuns = 0;
+  let unpricedRuns = 0;
+  let someUsageMissing = false;
 
   const runFor = (runId: string): RunProjection | undefined => runs.get(runId);
 
@@ -419,14 +463,52 @@ export const projectSession = (
         break;
       }
 
+      // Usage enters the log here and nowhere else — there is no
+      // model.requested / model.responded family yet — so this is the only
+      // place a session total can be folded from.
+      case "receipt.created": {
+        const { usage } = event.payload.receipt;
+
+        countedRuns += 1;
+        totalTokens += usage.inputTokens + usage.outputTokens;
+        modelCalls += usage.modelCalls;
+
+        if (usage.costUsd === null) {
+          unpricedRuns += 1;
+        } else {
+          costUsd = (costUsd ?? 0) + usage.costUsd;
+        }
+
+        if (usage.callsMissingUsage > 0) {
+          someUsageMissing = true;
+        }
+
+        break;
+      }
+
       default:
         break;
     }
   }
 
+  // A run that started and has not ended has no receipt yet, so its spend is
+  // not in the total. Saying the total is a floor is the honest way to report
+  // that, rather than quietly under-counting a session that is mid-run.
+  const runInFlight = [...runs.values()].some(
+    (run) => run.status === "running" || run.status === "paused",
+  );
+
   return {
     sessionId,
     sequence,
+    usage: {
+      costUsd,
+      costIsFloor: someUsageMissing || unpricedRuns > 0 || runInFlight,
+      totalTokens,
+      modelCalls,
+      runs: countedRuns,
+      unpricedRuns,
+    },
     participants: [...participants.values()],
     controlHeldBy,
     controlOffer,

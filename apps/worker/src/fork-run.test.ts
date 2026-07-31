@@ -1219,6 +1219,102 @@ test("a fork that can never start is a failed attempt on the record, not a silen
 });
 
 /**
+ * Test 13. Spend survives the restart that used to reset it to zero.
+ *
+ * `budget.ts` accumulates in memory, which dies with the process — so a
+ * resumed session's spend restarted at zero. A host who had already spent
+ * real money on a session was shown nothing, and the cost ceiling they had
+ * set was, for that session, decoration. The log survives a restart and every
+ * finished run's receipt carries its usage, so the projection can answer
+ * honestly where the counter could not.
+ */
+test("a session's spend is read from the log, so a restart does not reset it", async () => {
+  const root = await repository();
+  const store = new InMemorySessionEventStore();
+  const sessionBox = { id: "" };
+  let runId = "";
+
+  // A real rate for the scripted model, so the figures under test are money
+  // rather than nulls. 1M in + 1M out at these rates is $3 + $15.
+  const pricing = new Map([
+    [
+      "scripted/fork-runner",
+      { inputPerMTokUsd: 3, outputPerMTokUsd: 15, asOf: "2026-07-31" },
+    ],
+  ]);
+  const priced = (summary: string): Script => () => ({
+    type: "final",
+    summary,
+    usage: { inputTokens: 200_000, outputTokens: 100_000 },
+  });
+
+  const serverA = await startWorker(
+    store,
+    [new GoalScriptedAdapter({ "Do the work": priced("Done.") })],
+    undefined,
+    { pricing },
+  );
+
+  try {
+    const session = await openSession(serverA.url, {
+      repositoryPath: root,
+      allowWrites: true,
+    });
+
+    sessionBox.id = session.id;
+    runId = (await forkSession(serverA.url, session.id, "Attempt A", "Do the work"))
+      .fork.runId;
+
+    assert.equal(await waitForRunEnd(store, session.id, runId), null);
+
+    const live = await getJson<{
+      session: { costUsd: number | null; runs: number };
+    }>(serverA.url, `/sessions/${session.id}/usage`);
+
+    // 0.2M in at $3 + 0.1M out at $15 = $0.60 + $1.50.
+    assert.equal(live.session.costUsd, 2.1);
+    assert.equal(live.session.runs, 1);
+  } finally {
+    await serverA.close();
+  }
+
+  const serverB = await startWorker(store, [new GoalScriptedAdapter({})], undefined, {
+    pricing,
+  });
+
+  try {
+    await openSession(serverB.url, {
+      repositoryPath: root,
+      resume: sessionBox.id,
+      allowWrites: true,
+    });
+
+    const after = await getJson<{
+      session: { costUsd: number | null; totalTokens: number; runs: number };
+      runs: { runId: string; label: string | null; costUsd: number | null }[];
+    }>(serverB.url, `/sessions/${sessionBox.id}/usage`);
+
+    assert.equal(
+      after.session.costUsd,
+      2.1,
+      "a restart must not make money already spent disappear",
+    );
+    assert.equal(after.session.totalTokens, 300_000);
+    assert.equal(after.session.runs, 1);
+
+    // And per approach, not only as one session total — deciding between
+    // attempts on evidence includes what each of them cost.
+    assert.equal(after.runs.length, 1);
+    assert.equal(after.runs[0]?.runId, runId);
+    assert.equal(after.runs[0]?.label, "Attempt A");
+    assert.equal(after.runs[0]?.costUsd, 2.1);
+  } finally {
+    await serverB.close();
+    await cleanup(root);
+  }
+});
+
+/**
  * Test 12. The host's bounds reach the attempts, not only the parent's runs.
  *
  * `buildForkRunner` constructed its `AgentRunner` with six arguments where the
