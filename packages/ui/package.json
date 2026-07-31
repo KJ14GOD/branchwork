@@ -11,7 +11,7 @@
   },
   "scripts": {
     "typecheck": "tsc --project tsconfig.json",
-    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'"
+    "test": "node --experimental-strip-types --import ../../scripts/tsx-hook.ts --test 'src/**/*.test.ts' 'src/**/*.test.tsx'"
   },
   "dependencies": {
     "@novus/contracts": "workspace:*"
@@ -21,6 +21,8 @@
   },
   "devDependencies": {
     "@types/react": "^19.2.0",
-    "react": "^19.2.0"
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.8"
   }
 }
