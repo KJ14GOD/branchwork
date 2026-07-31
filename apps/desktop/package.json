@@ -8,12 +8,13 @@
   "scripts": {
     "dev": "vite",
     "app": "vite",
-    "build": "vite build",
+    "build": "vite build && node ../../scripts/build-worker.mjs",
     "start": "electron .",
     "preview": "vite preview",
     "typecheck": "tsc --project tsconfig.json",
     "test": "node --experimental-strip-types --import ../../scripts/tsx-hook.ts --test 'electron/*.test.ts' 'src/**/*.test.tsx'",
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true",
+    "dist": "pnpm build && electron-builder --mac --publish never"
   },
   "dependencies": {
     "@novus/contracts": "workspace:*",
@@ -31,6 +32,38 @@
     "@vitejs/plugin-react": "^5.0.4",
     "electron": "^43.2.0",
     "vite": "^7.1.9",
-    "vite-plugin-electron": "^1.1.0"
+    "vite-plugin-electron": "^1.1.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "dev.novus.desktop",
+    "productName": "Novus",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "dist-worker/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "dist-worker/**",
+      "**/node-pty/**"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    }
   }
 }

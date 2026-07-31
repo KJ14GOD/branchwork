@@ -42,3 +42,7 @@ playwright-report/
 # TypeScript
 *.tsbuildinfo
 dist-electron/
+
+# The packaged worker bundle and the installer output.
+apps/desktop/dist-worker/
+apps/desktop/release/

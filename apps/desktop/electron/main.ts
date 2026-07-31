@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import * as pty from "node-pty";
@@ -14,6 +14,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(here, "../../..");
 const workerEntry = resolve(repositoryRoot, "apps/worker/src/worker.ts");
 const envFile = resolve(repositoryRoot, ".env");
+/**
+ * The pre-bundled worker a packaged app runs instead of the source above.
+ *
+ * Unpacked from the asar, not read out of it: the worker is spawned as a
+ * child process and Node cannot execute a file inside an archive, and
+ * ripgrep's binary beside it has to be a real file on disk to be executable
+ * at all. `asarUnpack` in the builder config is what puts it here.
+ */
+const bundledWorkerEntry = resolve(
+  process.resourcesPath ?? here,
+  "app.asar.unpacked/dist-worker/worker.mjs",
+);
 
 /**
  * Hosting or joining, decided by how the app was launched — see launch.ts.
@@ -72,17 +84,52 @@ let rendererOrigin: string | null = null;
  * in the agent loop takes the worker down, not the window.
  */
 const startWorker = (port: number): void => {
+  // Packaged, there is no repository to point at and no promise that the
+  // machine has a Node new enough to strip types. Electron ships its own Node
+  // 24, so the packaged app runs a pre-bundled JavaScript worker through
+  // ELECTRON_RUN_AS_NODE and needs no system Node at all. From a checkout the
+  // old path stays exactly as it was, so `pnpm dev` still runs the TypeScript
+  // source and a change to it still takes effect without a build step.
+  const packaged = app.isPackaged;
+  const command = packaged ? process.execPath : "node";
+  const args = packaged
+    ? [bundledWorkerEntry]
+    : [`--env-file=${envFile}`, "--experimental-strip-types", workerEntry];
+
   worker = spawn(
-    "node",
-    [`--env-file=${envFile}`, "--experimental-strip-types", workerEntry],
+    command,
+    args,
     {
-      cwd: resolve(repositoryRoot, "apps/worker"),
+      cwd: packaged
+        ? dirname(bundledWorkerEntry)
+        : resolve(repositoryRoot, "apps/worker"),
       env: {
         ...process.env,
         NOVUS_TOKEN: ACCESS_TOKEN,
         // Explicit even when it matches the default: when the default port
         // was taken, this is how the worker learns the free one main chose.
         NOVUS_PORT: String(port),
+        // Runs the child as plain Node rather than as a second Electron app.
+        // Only meaningful when `command` is this binary, and harmless
+        // otherwise — a system `node` ignores it.
+        ...(packaged
+          ? {
+              ELECTRON_RUN_AS_NODE: "1",
+              // The event log has to live outside the app bundle.
+              //
+              // The worker resolves .novus/events.db against its working
+              // directory, which packaged is inside Novus.app — writable
+              // while the app sits in a build folder, and read-only the
+              // moment somebody drags it to /Applications, which is the only
+              // place it will ever actually be. Every session would be lost
+              // on upgrade too, since a new build is a new bundle.
+              NOVUS_DB: join(app.getPath("userData"), "events.db"),
+            }
+          : {}),
+        // Packaged there is no repository .env, so the key comes from the
+        // environment the app was launched with. A packaged build that
+        // silently found no key must say so at the first turn rather than
+        // look like a broken model.
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
