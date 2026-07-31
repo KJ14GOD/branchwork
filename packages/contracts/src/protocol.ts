@@ -398,6 +398,32 @@ export type Authority = z.infer<typeof AuthorityResponseSchema>;
  * Durable history that nothing can reach is not really durable — the event log
  * held every session ever opened and there was no way to get back to one.
  */
+/**
+ * Why this mission is in front of you, ordered most-urgent first.
+ *
+ * The home screen was a list of repository paths and event counts, which
+ * answers "what exists" and never "what needs me" — and a count of 4 tells a
+ * person nothing at all. These are the states from STEERING's inbox, and they
+ * are derived rather than stored: the log already knows whether a run is in
+ * flight, whether a decision is outstanding, and whether somebody is waiting.
+ */
+export const MissionAttentionSchema = z.enum([
+  /** Approaches exist and nobody has decided between them. */
+  "needs-decision",
+  /** A tool is waiting on an approval that has not been given or refused. */
+  "needs-approval",
+  /** Somebody asked for control, or a handoff is in flight. */
+  "waiting-on-someone",
+  /** A run is in flight right now. */
+  "running",
+  /** Nothing is running and nothing is blocked — it is waiting for a person. */
+  "needs-direction",
+  /** A decision was recorded. Nothing is being asked of anyone. */
+  "settled",
+]);
+
+export type MissionAttention = z.infer<typeof MissionAttentionSchema>;
+
 export const RememberedSessionSchema = z.object({
   id: z.string().min(1),
   repositoryPath: z.string().min(1),
@@ -405,6 +431,28 @@ export const RememberedSessionSchema = z.object({
   /** How much happened, so an abandoned session is distinguishable from real work. */
   events: z.number().int().nonnegative(),
   lastActivityAt: z.string().datetime(),
+  /**
+   * What this mission is actually about — the first run's goal.
+   *
+   * The row led with the repository path, so five missions in one repository
+   * were five identical rows. The goal is the thing a person recognises; the
+   * repository is how they narrow down once they already know which one.
+   */
+  goal: z.string().min(1).nullable(),
+  attention: MissionAttentionSchema,
+  /** How many approaches exist, baseline included. */
+  approaches: z.number().int().nonnegative(),
+  /**
+   * Whether anything in this mission was actually verified.
+   *
+   * `unverified` is not a synonym for failing: it is a mission whose runs
+   * finished having tested nothing, which is precisely the state that reads as
+   * success everywhere it is not named.
+   */
+  evidence: z.enum(["verified", "failing", "unverified"]),
+  /** Who holds control, by display name, when anyone does. */
+  controller: z.string().min(1).nullable(),
+  participants: z.number().int().nonnegative(),
 });
 
 export type RememberedSession = z.infer<typeof RememberedSessionSchema>;

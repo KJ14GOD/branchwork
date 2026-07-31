@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import type {
   HostCapabilities,
+  MissionAttention,
   RememberedSession,
 } from "@novus/contracts/protocol";
 
@@ -9,6 +10,23 @@ import { bridge } from "../bridge.ts";
 
 const basename = (path: string): string =>
   path.split("/").filter(Boolean).at(-1) ?? path;
+
+/**
+ * The inbox's headings, most urgent first.
+ *
+ * Worded as what is being asked of the reader rather than as a status. "Needs
+ * your decision" is a request; "awaiting decision" is a description of a
+ * record, and a person scanning for what to do next reads straight past it.
+ * The worker sorts by this same order, so a group is always contiguous.
+ */
+const ATTENTION_GROUPS: { attention: MissionAttention; label: string }[] = [
+  { attention: "needs-decision", label: "Needs your decision" },
+  { attention: "needs-approval", label: "Needs your approval" },
+  { attention: "waiting-on-someone", label: "Waiting on someone" },
+  { attention: "running", label: "Running" },
+  { attention: "needs-direction", label: "Needs your direction" },
+  { attention: "settled", label: "Recently decided" },
+];
 
 /**
  * The first screen, and the "new tab" form — one component, two contexts.
@@ -147,29 +165,76 @@ export const OpenRepository = ({
 
       {remembered.length > 0 ? (
         <div className="open__recent">
-          <span className="eyebrow">Carry on with</span>
-          {remembered.slice(0, 6).map((entry) => (
-            <button
-              className="open__recent-row"
-              key={entry.id}
-              type="button"
-              // Resumes the id, which is what brings the old timeline back —
-              // a new one would start an empty stream beside a history nobody
-              // could reach. Permissions come from the checkboxes above, not
-              // from whatever the session had before.
-              onClick={() =>
-                onOpen(entry.repositoryPath, allowWrites, allowCommands, entry.id)
-              }
-              title={`${entry.repositoryPath} · ${entry.events} events · last active ${entry.lastActivityAt}`}
-            >
-              <span className="open__recent-path">
-                {basename(entry.repositoryPath)}
-              </span>
-              <span className="open__recent-meta">
-                {entry.events} event{entry.events === 1 ? "" : "s"}
-              </span>
-            </button>
-          ))}
+          {/*
+            Grouped by what each mission is asking for, not by repository and
+            not by recency. Recency is actively wrong here: a mission waiting
+            on a decision has by definition stopped moving, so sorting by last
+            activity buried exactly the rows that needed somebody.
+          */}
+          {ATTENTION_GROUPS.map(({ attention, label }) => {
+            const group = remembered.filter(
+              (entry) => entry.attention === attention,
+            );
+
+            if (group.length === 0) {
+              // No empty headings. A row of zeroes is the thing this screen
+              // was already criticised for.
+              return null;
+            }
+
+            return (
+              <div className="inbox__group" key={attention}>
+                <span className="eyebrow">{label}</span>
+                {group.slice(0, 6).map((entry) => (
+                  <button
+                    className="inbox__row"
+                    key={entry.id}
+                    type="button"
+                    // Resumes the id, which is what brings the old timeline
+                    // back — a new one would start an empty stream beside a
+                    // history nobody could reach. Permissions come from the
+                    // checkboxes above, not from whatever it had before.
+                    onClick={() =>
+                      onOpen(
+                        entry.repositoryPath,
+                        allowWrites,
+                        allowCommands,
+                        entry.id,
+                      )
+                    }
+                    title={`${entry.repositoryPath} · last active ${entry.lastActivityAt}`}
+                  >
+                    <span className="inbox__goal">
+                      {/* The goal leads. Five missions in one repository were
+                          five identical rows when the path did. */}
+                      {entry.goal ?? "Opened, nothing run yet"}
+                    </span>
+                    <span className="inbox__meta">
+                      <span className="inbox__repo">
+                        {basename(entry.repositoryPath)}
+                      </span>
+                      {entry.approaches > 1 ? (
+                        <span>{entry.approaches} approaches</span>
+                      ) : null}
+                      <span
+                        className={`inbox__evidence inbox__evidence--${entry.evidence}`}
+                      >
+                        {/* Never a tick for a mission that tested nothing. */}
+                        {entry.evidence === "verified"
+                          ? "Verified"
+                          : entry.evidence === "failing"
+                            ? "Tests failing"
+                            : "Unverified"}
+                      </span>
+                      {entry.controller ? (
+                        <span>{entry.controller} in control</span>
+                      ) : null}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </form>

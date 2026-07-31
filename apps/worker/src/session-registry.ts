@@ -4,6 +4,11 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { Fork, ToolCall } from "@novus/contracts";
+import type {
+  MissionAttention,
+  RememberedSession,
+} from "@novus/contracts/protocol";
+import type { SessionEvent } from "@novus/contracts";
 import type { SessionEventStore } from "@novus/session-service";
 
 import { AgentRunFailure, AgentRunner } from "./agent-runner.ts";
@@ -17,7 +22,7 @@ import { DEFAULT_RUN_BUDGET, type RunBudget } from "./budget.ts";
 import type { ModelSelection } from "@novus/contracts";
 import type { ModelAdapter, ModelRouter } from "./model.ts";
 import { DEFAULT_MODEL_PRICING, type PricingTable } from "./pricing.ts";
-import { projectSession } from "./projection.ts";
+import { projectSession, type SessionProjection } from "./projection.ts";
 import {
   AllowListApprovalGate,
   DenyAllApprovalGate,
@@ -176,6 +181,86 @@ export type Session = {
   queue: Promise<unknown>;
 };
 
+/** Most urgent first. The order the inbox groups by. */
+const ATTENTION_ORDER: MissionAttention[] = [
+  "needs-decision",
+  "needs-approval",
+  "waiting-on-someone",
+  "running",
+  "needs-direction",
+  "settled",
+];
+
+/**
+ * What this mission is asking of a person, if anything.
+ *
+ * Ordered by urgency and not by recency, because those disagree exactly where
+ * it matters: a mission waiting on a decision is by definition one that has
+ * stopped moving, so a list sorted by last activity buries it under every
+ * session still churning away on its own.
+ */
+const attentionFor = (
+  projected: SessionProjection,
+  events: readonly SessionEvent[],
+): MissionAttention => {
+  // An approval that was requested and never answered blocks a live run, so it
+  // outranks everything except a decision nobody made.
+  const answered = new Set(
+    events.flatMap((event) =>
+      event.type === "tool.approved" || event.type === "tool.denied"
+        ? [event.payload.toolCallId]
+        : [],
+    ),
+  );
+  const awaitingApproval = events.some(
+    (event) =>
+      event.type === "tool.approval_requested" &&
+      !answered.has(event.payload.call.id),
+  );
+
+  // More than one approach and nothing decided is the state this whole product
+  // exists for. It comes first even while a run is going, because the other
+  // approaches are finished and waiting on a person.
+  if (projected.runs.length > 1 && projected.decision === null) {
+    return "needs-decision";
+  }
+
+  if (awaitingApproval) {
+    return "needs-approval";
+  }
+
+  if (projected.controlOffer !== null || projected.controlRequests.length > 0) {
+    return "waiting-on-someone";
+  }
+
+  if (projected.runs.some((run) => run.status === "running")) {
+    return "running";
+  }
+
+  if (projected.decision !== null) {
+    return "settled";
+  }
+
+  return "needs-direction";
+};
+
+/**
+ * Whether anything here was actually verified.
+ *
+ * A mission whose runs finished having tested nothing is `unverified`, never
+ * settled and never clean. That is the same rule the compare screen enforces,
+ * applied at the level a person scans rather than reads.
+ */
+const evidenceFor = (projected: SessionProjection): RememberedSession["evidence"] => {
+  const tests = projected.runs.flatMap((run) => run.tests);
+
+  if (tests.length === 0) {
+    return "unverified";
+  }
+
+  return tests.every((test) => test.passed) ? "verified" : "failing";
+};
+
 /**
  * Command execution is opted into separately from writing.
  *
@@ -278,14 +363,8 @@ export class SessionRegistry {
    * what the current process opened. The point is to reach a session from
    * *before* the restart.
    */
-  remembered(): {
-    id: string;
-    repositoryPath: string;
-    createdAt: string;
-    events: number;
-    lastActivityAt: string;
-  }[] {
-    const remembered = [];
+  remembered(): RememberedSession[] {
+    const remembered: RememberedSession[] = [];
 
     for (const sessionId of this.eventStore.sessions()) {
       const events = this.eventStore.readable(sessionId).events;
@@ -298,18 +377,43 @@ export class SessionRegistry {
         continue;
       }
 
+      // Derived from the same projection the mission room reads, not from a
+      // second pass over the log. Two derivations of "is this running" would
+      // eventually disagree, and the one on the home screen would be the one
+      // nobody noticed was wrong.
+      const projected = projectSession(sessionId, events);
+
       remembered.push({
         id: sessionId,
         repositoryPath: created.payload.session.repositoryPath,
         createdAt: created.payload.session.createdAt,
         events: events.length,
         lastActivityAt: events.at(-1)?.occurredAt ?? created.occurredAt,
+        goal: projected.runs[0]?.goal ?? null,
+        attention: attentionFor(projected, events),
+        approaches: projected.runs.length,
+        evidence: evidenceFor(projected),
+        controller:
+          projected.participants.find(
+            (participant) => participant.id === projected.controlHeldBy,
+          )?.name ?? null,
+        participants: projected.participants.length,
       });
     }
 
-    return remembered.sort((first, second) =>
-      second.lastActivityAt.localeCompare(first.lastActivityAt),
-    );
+    // Most urgent first, then most recent within a bucket. Sorting by time
+    // alone is what made this a log rather than an inbox: the mission that
+    // needs a decision is the one that has *not* moved recently, so recency
+    // ordering buried it under everything still churning.
+    return remembered.sort((first, second) => {
+      const byAttention =
+        ATTENTION_ORDER.indexOf(first.attention) -
+        ATTENTION_ORDER.indexOf(second.attention);
+
+      return byAttention !== 0
+        ? byAttention
+        : second.lastActivityAt.localeCompare(first.lastActivityAt);
+    });
   }
 
   /** Called with each new session, so a publisher can attach to one it could not name. */
