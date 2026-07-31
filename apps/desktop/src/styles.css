@@ -1117,12 +1117,38 @@ kbd {
  * panel inside a body genuinely was three nested rectangles. The rail keeps
  * its right edge (a genuine region boundary); nothing inside it draws a box.
  */
+/* A column, so the meter can sit at the foot of it. The sections above
+   scroll; the meter does not, because telemetry that scrolls out of view is
+   telemetry you go looking for, which is more attention than it deserves. */
 .rail {
   border-right: 1px solid var(--border);
   background: var(--surface);
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  padding: var(--space-5) 0 var(--space-6);
+  padding: var(--space-5) 0 0;
+}
+
+.rail__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: var(--space-6);
+}
+
+.rail__meter {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-dim);
+  font-size: var(--text-eyebrow);
+}
+
+.rail__meter-item {
+  white-space: nowrap;
 }
 
 .rail__section {

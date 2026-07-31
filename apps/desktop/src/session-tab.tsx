@@ -600,6 +600,7 @@ export const SessionTab = ({
         }
       >
         <aside className="rail">
+          <div className="rail__scroll">
           <div className="rail__section">
             <div className="eyebrow">Goal</div>
             <div
@@ -741,53 +742,34 @@ export const SessionTab = ({
             )}
           </div>
 
-          <div className="rail__section">
-            <div className="eyebrow">Run</div>
-            <div className="stat">
-              <span>Events</span>
-              <span className="stat__value">{events.length}</span>
-            </div>
-            <div className="stat">
-              <span>Tool calls</span>
-              <span className="stat__value">{toolCalls.length}</span>
-            </div>
-            <div className="stat">
-              <span>Patches</span>
-              <span className="stat__value">{patches.length}</span>
-            </div>
-            <div className="stat">
-              <span>Lines</span>
-              <span className="stat__value">
-                <span className="stat__add">+{fileChanges.additions}</span>{" "}
-                <span className="stat__del">−{fileChanges.deletions}</span>
-              </span>
-            </div>
-            <div className="stat">
-              <span>Elapsed</span>
-              <span className="stat__value">{formatElapsed(events)}</span>
-            </div>
           </div>
 
-          {toolCalls.length > 0 ? (
-            <div className="rail__section rail__section--flush">
-              <div className="eyebrow">Tool calls</div>
-              {toolCalls.map((event) => (
-                <button
-                  key={event.eventId}
-                  type="button"
-                  className={`jump${highlighted === event.sequence ? " jump--active" : ""}`}
-                  onClick={() => jumpTo(event.sequence)}
-                >
-                  <span className="jump__seq">{event.sequence}</span>
-                  <span className="jump__name">
-                    {event.type === "tool.requested"
-                      ? event.payload.call.name
-                      : ""}
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : null}
+          {/*
+            Pinned to the foot of the rail rather than stacked in it.
+
+            These are telemetry: you read them, you never act on them, and
+            they were sitting in the column the eye returns to most while
+            the things you *do* act on — attempts, participants — got pushed
+            below the fold. Kept, because a run's size and elapsed time are
+            worth a glance; demoted, because glancing is all anyone does.
+          */}
+          <div className="rail__meter">
+            <span className="rail__meter-item" title="Events in this session's log">
+              {events.length} ev
+            </span>
+            <span className="rail__meter-item" title="Tool calls the agent has made">
+              {toolCalls.length} tools
+            </span>
+            <span className="rail__meter-item" title="Patches proposed">
+              {patches.length} patches
+            </span>
+            <span className="rail__meter-item">
+              <span className="stat__add">+{fileChanges.additions}</span>{" "}
+              <span className="stat__del">−{fileChanges.deletions}</span>
+            </span>
+            <span className="rail__meter-item">{formatElapsed(events)}</span>
+          </div>
+
         </aside>
 
         {mode === "compare" ? (
