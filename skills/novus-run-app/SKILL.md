@@ -12,7 +12,8 @@ rather than assuming it did.
 
 | you want | run |
 | --- | --- |
-| the desktop app | `pnpm --filter @novus/desktop dev` |
+| the desktop app (hosting) | `pnpm --filter @novus/desktop dev` |
+| the desktop app as a *joiner* — no worker, paste an invite | `NOVUS_JOIN=1 pnpm --filter @novus/desktop dev` |
 | the worker alone, waiting for a client | `pnpm --filter @novus/worker start` |
 | one headless run and its transcript | `pnpm --filter @novus/worker start "<goal>"` |
 | a browser guest (second window, or a teammate) | `pnpm --filter @novus/guest dev` |
@@ -20,11 +21,16 @@ rather than assuming it did.
 
 `electron .` on its own will not work. `dist-electron/` is produced by
 `vite-plugin-electron` during `vite`, so the desktop script is the only entry.
+(A built checkout can pass `--join` to `electron .` directly; under the dev
+script the env var is the way in, because extra args stop at vite.)
 
-The desktop app owns the worker: its main process spawns
+The desktop app owns the worker when hosting: its main process spawns
 `node --env-file=<root>/.env --experimental-strip-types` and waits up to 15s for
-`/health`. Do not start the worker yourself first — you will take port 4319 and
-the app will fail its health check.
+`/health`. If something already holds 4319 (usually another Novus), a default
+port falls back to a free one and says so on stdout; a pinned NOVUS_PORT that
+is taken refuses at launch. A join launch spawns no worker at all and needs no
+port. Hosting *and* a second joining instance on one machine is a supported
+pair now — that is what the fallback exists for.
 
 Full multiplayer testing is four terminals: worker, desktop, guest, and the
 relay if a teammate is off-machine. The relay prints the invite link itself —

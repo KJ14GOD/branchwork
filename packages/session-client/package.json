@@ -1,0 +1,24 @@
+{
+  "name": "@novus/session-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The client for watching and joining a Novus session — shared by the browser guest and the desktop app's join mode, so there is exactly one implementation of the transport rules.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json",
+    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@novus/contracts": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "react": "^19.2.0"
+  }
+}

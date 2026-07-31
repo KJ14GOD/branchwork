@@ -39,8 +39,15 @@ export type OpenSessionState = {
  * The worker's session catalog: what the host permits, and what the log
  * remembers. One instance for the whole app — capabilities and history are
  * not per-tab, they are what a tab is opened *from*.
+ *
+ * `enabled` is false in a joining window, which has no worker of its own:
+ * without it this hook would beacon the standard port and, when another
+ * Novus is hosting on this machine, read *that* worker's health as its own.
  */
-export const useSession = (endpoint: string): OpenSessionState => {
+export const useSession = (
+  endpoint: string,
+  enabled = true,
+): OpenSessionState => {
   const [capabilities, setCapabilities] = useState<HostCapabilities | null>(
     null,
   );
@@ -54,6 +61,10 @@ export const useSession = (endpoint: string): OpenSessionState => {
   // Asked once, on the way in. A worker that is not up yet simply leaves this
   // null, and the controls stay off — the safe direction to fail.
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     let cancelled = false;
 
     // /health needs no token — it is how a client learns the worker is up.
@@ -77,12 +88,16 @@ export const useSession = (endpoint: string): OpenSessionState => {
     return () => {
       cancelled = true;
     };
-  }, [endpoint]);
+  }, [endpoint, enabled]);
 
   // Asked on the way in, and again after every session this app opens. A list
   // of previous sessions is the only way back to work done before the last
   // restart, or in a tab this window has not opened yet.
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     let cancelled = false;
 
     void authorization()
@@ -105,7 +120,7 @@ export const useSession = (endpoint: string): OpenSessionState => {
     return () => {
       cancelled = true;
     };
-  }, [endpoint, historyTick]);
+  }, [endpoint, historyTick, enabled]);
 
   const open = useCallback(
     async (

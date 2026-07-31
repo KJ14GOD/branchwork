@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { SessionListing } from "../worker-api.ts";
+import type { SessionListing } from "@novus/session-client";
 
 /**
  * The way in.

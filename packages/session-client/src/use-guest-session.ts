@@ -33,6 +33,11 @@ export type GuestSession = {
  * is by sequence: the guest asks for everything after the last event it holds,
  * and de-duplicates on arrival, so a reconnect can neither lose an event nor
  * show one twice.
+ *
+ * "Guest" here means the watching side of a session, whichever window it is
+ * in: the browser guest was the first caller, and the desktop app's join
+ * mode is the second. Acting on the session — direction, steering — is
+ * layered on top by the caller; this hook only ever reads.
  */
 export const useGuestSession = (
   endpoint: string,

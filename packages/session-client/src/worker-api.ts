@@ -1,3 +1,4 @@
+import { ParticipantSchema, type Participant } from "@novus/contracts";
 import {
   SessionSummarySchema,
   type SessionSummary,
@@ -6,12 +7,14 @@ import {
 import { resolveEndpoint } from "./endpoint.ts";
 
 /**
- * The one request a guest is allowed to make.
+ * The reads a watching client is allowed to make.
  *
- * Reading the session index is how the guest tells "the worker is down" apart
+ * Reading the session index is how a client tells "the worker is down" apart
  * from "that session id is wrong" — two situations that look identical on an
- * empty timeline. Nothing else here posts, and nothing else here may: a guest
- * observes.
+ * empty timeline. Reading `/me` is how a joined desktop window learns which
+ * role its token actually carries, instead of guessing from the link.
+ * Nothing here posts, and nothing here may: acting on a session is the
+ * joined window's own affair, gated by the worker per capability.
  */
 export type SessionListing =
   | { kind: "ok"; sessions: SessionSummary[] }
@@ -94,4 +97,78 @@ export const fetchSessions = async (
   });
 
   return { kind: "ok", sessions };
+};
+
+/**
+ * Who this token is, according to the worker.
+ *
+ * The invite link carries a credential and nothing about the person it was
+ * minted for, so a joined window has no honest way to know its own role
+ * without asking — and the role can change under it, because a handoff is a
+ * role change. `absent` covers both a worker with no participant registry
+ * (single-player, nobody was ever invited) and a session it does not know.
+ */
+export type MembershipReport =
+  | { kind: "ok"; participant: Participant }
+  | { kind: "absent" }
+  | { kind: "refused"; reason: string }
+  | { kind: "unreachable"; detail: string };
+
+export const fetchMembership = async (
+  endpoint: string,
+  sessionId: string,
+  token: string,
+  signal: AbortSignal,
+): Promise<MembershipReport> => {
+  const address = resolveEndpoint(endpoint);
+
+  if (address.kind === "refused") {
+    return { kind: "refused", reason: address.reason };
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(
+      `${address.endpoint}/sessions/${encodeURIComponent(sessionId)}/me`,
+      { signal, headers: { authorization: `Bearer ${token}` } },
+    );
+  } catch (cause) {
+    return { kind: "unreachable", detail: (cause as Error).message };
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    return {
+      kind: "refused",
+      reason: "This invite token is no longer accepted by the worker.",
+    };
+  }
+
+  if (response.status === 404) {
+    return { kind: "absent" };
+  }
+
+  if (!response.ok) {
+    return { kind: "unreachable", detail: `HTTP ${response.status}` };
+  }
+
+  let body: unknown;
+
+  try {
+    body = await response.json();
+  } catch (cause) {
+    return { kind: "unreachable", detail: (cause as Error).message };
+  }
+
+  // The envelope is hand-shaped and the payload is the schema, the same split
+  // `fetchSessions` above already uses for `{ sessions }`.
+  const parsed = ParticipantSchema.safeParse(
+    (body as { participant?: unknown }).participant,
+  );
+
+  if (!parsed.success) {
+    return { kind: "unreachable", detail: "The membership answer was malformed." };
+  }
+
+  return { kind: "ok", participant: parsed.data };
 };

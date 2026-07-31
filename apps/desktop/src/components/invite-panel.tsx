@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { InviteResponse } from "@novus/contracts/protocol";
 
+import { bridge } from "../bridge.ts";
 import type { InviteRole } from "../use-session-actions.ts";
 
 // Same default the relay and the guest itself use, overridable the same way
@@ -15,6 +16,9 @@ const GUEST_PORT = import.meta.env.VITE_NOVUS_GUEST_PORT ?? "5274";
  * The token is returned exactly once by the worker and never stored — so the
  * only copy that will ever exist is the one on screen here, which is why this
  * stays open with a "shown once" notice rather than closing itself.
+ *
+ * One link serves both clients: pasted into another Novus app's Join screen
+ * it becomes a joined tab, opened in a browser it is the read-only guest.
  */
 export const InvitePanel = ({
   onInvite,
@@ -30,8 +34,22 @@ export const InvitePanel = ({
   const [minted, setMinted] = useState<InviteResponse | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // The worker's real address, which is not always the default port: when
+  // two Novus instances share a machine the second one's worker moves to a
+  // free port, and a link that omitted the endpoint would send its joiners
+  // to the *other* instance's worker to be refused.
+  const [workerEndpoint, setWorkerEndpoint] = useState<string | null>(null);
+
+  useEffect(() => {
+    void bridge()
+      ?.workerUrl()
+      .then(setWorkerEndpoint);
+  }, []);
+
   const link = minted
-    ? `http://127.0.0.1:${GUEST_PORT}/?session=${encodeURIComponent(minted.participant.sessionId)}&token=${encodeURIComponent(minted.token)}`
+    ? `http://127.0.0.1:${GUEST_PORT}/?session=${encodeURIComponent(minted.participant.sessionId)}&token=${encodeURIComponent(minted.token)}${
+        workerEndpoint ? `&endpoint=${encodeURIComponent(workerEndpoint)}` : ""
+      }`
     : null;
 
   const submit = async (event: React.FormEvent) => {
@@ -79,9 +97,11 @@ export const InvitePanel = ({
         {minted && link ? (
           <>
             <p className="open__subtitle">
-              {minted.participant.name} can watch this session live as{" "}
-              {minted.participant.role}. This token is shown once and is not
-              stored anywhere — copy it now.
+              {minted.participant.name} joins this session live as{" "}
+              {minted.participant.role} — pasted into their own Novus app
+              (Join, in the titlebar) or opened in a browser as the read-only
+              guest. This token is shown once and is not stored anywhere —
+              copy it now.
             </p>
             <div className="open__field">
               <span className="eyebrow">Their link</span>
@@ -112,9 +132,11 @@ export const InvitePanel = ({
         ) : (
           <>
             <p className="open__subtitle">
-              They join this session's live event log over loopback, with the
-              role you pick below — an Editor can steer and approve, not only
-              watch. Nothing about your machine is shared beyond the log.
+              They join this session's live event log with the role you pick
+              below — in their own Novus app or in a browser, on this machine
+              (a teammate elsewhere needs a relay). An Editor can steer and
+              direct, not only watch. Nothing about your machine is shared
+              beyond the log.
             </p>
             <div className="open__field">
               <span className="eyebrow">Name</span>

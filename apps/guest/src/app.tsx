@@ -1,10 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import {
+  describeConnection,
+  summarise,
+  useGuestSession,
+  usePresence,
+  useWorkerSessions,
+} from "@novus/session-client";
+
 import { EventRow } from "./components/guest-event-row.tsx";
 import { JoinSession } from "./components/join-session.tsx";
-import { describeConnection, summarise } from "./timeline.ts";
-import { useGuestSession, useWorkerSessions } from "./use-guest-session.ts";
-import { usePresence } from "./use-presence.ts";
 
 const DEFAULT_ENDPOINT =
   import.meta.env.VITE_NOVUS_ENDPOINT ?? "http://127.0.0.1:4319";
