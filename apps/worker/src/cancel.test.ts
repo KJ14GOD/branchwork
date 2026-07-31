@@ -174,7 +174,15 @@ test("a cancelled run still produces a receipt, distinct from failure", () => {
 
   const receipt = buildReceipt(eventStore.list("receipt-session"), "run-1", {
     base: { revision: null, dirty: null },
-    usage: { inputTokens: 0, outputTokens: 0, modelCalls: 1, callsMissingUsage: 0 },
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      modelCalls: 1,
+      callsMissingUsage: 0,
+      modelTimeMs: 0,
+      costUsd: null,
+      rates: null,
+    },
   });
 
   assert.equal(receipt?.status, "cancelled");

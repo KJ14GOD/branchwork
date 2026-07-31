@@ -799,6 +799,22 @@ export const RunReceiptSchema = z.object({
     // reports usage for the response it finally returned, not for the attempts
     // it made, so a retried call under-reports against what was billed.
     callsMissingUsage: z.number().int().nonnegative(),
+    /**
+     * What this run cost, in US dollars, when every model it called had a
+     * published rate.
+     *
+     * Null rather than zero when any call's model was unpriced — a run
+     * reported as costing $0.00 because nobody had a rate for its model is
+     * a worse answer than one that says it does not know. README asks a run
+     * to record cost per call; this is the total those calls add up to.
+     */
+    costUsd: z.number().nonnegative().nullable(),
+    /**
+     * Time spent inside model calls, as distinct from the run's wall clock.
+     * The gap between the two is what the harness itself spent — tools,
+     * approvals, waiting on a human.
+     */
+    modelTimeMs: z.number().int().nonnegative(),
   }),
   toolCalls: z.array(
     z.object({

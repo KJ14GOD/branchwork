@@ -12,6 +12,9 @@ const USAGE = {
   outputTokens: 45,
   modelCalls: 3,
   callsMissingUsage: 0,
+  modelTimeMs: 0,
+  costUsd: null,
+  rates: null,
 };
 const BASE: { revision: string | null; dirty: boolean | null } = {
   revision: null,
@@ -118,7 +121,20 @@ test("a receipt reports the files, tests, and usage of a completed run", () => {
   assert.equal(receipt.testsFollowedFinalChange, true);
   assert.equal(receipt.tests.length, 1);
   assert.equal(receipt.tests[0]?.passed, true);
-  assert.deepEqual(receipt.usage, USAGE);
+  // Cost and model time survive into the receipt now. They used to be
+  // computed on every call and then silently dropped: RunReceiptSchema
+  // carried only the token fields, so Zod stripped the rest on the way
+  // through and README's "records ... latency, and cost for every call"
+  // was unmet by a schema nobody had widened. deepEqual is deliberate —
+  // it is what catches the next field that gets computed and quietly lost.
+  assert.deepEqual(receipt.usage, {
+    inputTokens: USAGE.inputTokens,
+    outputTokens: USAGE.outputTokens,
+    modelCalls: USAGE.modelCalls,
+    callsMissingUsage: USAGE.callsMissingUsage,
+    costUsd: USAGE.costUsd,
+    modelTimeMs: USAGE.modelTimeMs,
+  });
   assert.equal(receipt.summary, "Fixed the locking behaviour.");
   assert.equal(receipt.failure, undefined);
 });

@@ -34,7 +34,7 @@ export const Composer = ({
 }: {
   busy: boolean;
   model: TurnModelState;
-  onAsk: (goal: string) => void;
+  onAsk: (goal: string, modelId?: string | null) => void;
   onDirect: (goal: string) => void;
 }) => {
   const [value, setValue] = useState("");
@@ -76,13 +76,15 @@ export const Composer = ({
       return;
     }
 
-    // TODO(model routing): once the worker accepts a per-turn model, pass
-    // `model.option.modelId` alongside the goal here. See use-turn-model.ts
-    // for the three steps and why this is not wired yet.
     if (busy) {
+      // Direction carries no model: it folds into a turn that is already
+      // running on a model the run has committed to, so offering a choice
+      // here would be a control that cannot be honoured.
       onDirect(trimmed);
     } else {
-      onAsk(trimmed);
+      // null for "Auto" — the worker routes when no model is named, and the
+      // pick wins outright when one is.
+      onAsk(trimmed, model.option.modelId);
     }
 
     setValue("");

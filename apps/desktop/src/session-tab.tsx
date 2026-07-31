@@ -856,7 +856,7 @@ export const SessionTab = ({
               <Composer
                 busy={busy}
                 model={turnModel}
-                onAsk={(goal) => void ask(goal)}
+                onAsk={(goal, modelId) => void ask(goal, modelId)}
                 onDirect={(goal) => void direct(goal)}
               />
             </main>

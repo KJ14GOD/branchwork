@@ -931,8 +931,30 @@ export const startEventServer = (
         return true;
       }
 
+      const chosen = parsed.data.model;
+
+      if (
+        chosen &&
+        !sessions
+          .models()
+          .some(
+            (available) =>
+              available.provider === chosen.provider &&
+              available.model === chosen.model,
+          )
+      ) {
+        // Refused here rather than at the model call. A turn that names a
+        // model this worker has no adapter for would otherwise start, reach
+        // the runner, and die with "No model adapter is configured" — a
+        // failed run in the log for what is really a bad request.
+        sendJson(response, 400, {
+          error: `This worker has no adapter for ${chosen.provider}/${chosen.model}.`,
+        });
+        return true;
+      }
+
       // Accepted, not completed: progress arrives on the event stream.
-      void sessions.submitTurn(session, parsed.data.goal);
+      void sessions.submitTurn(session, parsed.data.goal, chosen);
       sendJson(response, 202, { accepted: true });
       return true;
     }

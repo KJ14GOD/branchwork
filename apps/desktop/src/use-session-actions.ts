@@ -12,7 +12,7 @@ export type InviteRole = "editor" | "reviewer" | "viewer";
 
 export type SessionActions = {
   error: string | null;
-  ask: (goal: string) => Promise<void>;
+  ask: (goal: string, modelId?: string | null) => Promise<void>;
   /** Mints a token for a new participant. Null on failure — `error` says why. */
   invite: (name: string, role: InviteRole) => Promise<InviteResponse | null>;
   /** Recorded for the running turn to fold in, not applied immediately. */
@@ -51,7 +51,7 @@ export const useSessionActions = (
   const sessionId = session.id;
 
   const ask = useCallback(
-    async (goal: string) => {
+    async (goal: string, modelId?: string | null) => {
       const response = await fetch(
         `${endpoint}/sessions/${encodeURIComponent(sessionId)}/turns`,
         {
@@ -60,7 +60,9 @@ export const useSessionActions = (
             "content-type": "application/json",
             ...(await authorization()),
           },
-          body: JSON.stringify({ goal }),
+          body: JSON.stringify(
+            modelId ? { goal, model: { provider: "anthropic", model: modelId } } : { goal },
+          ),
         },
       );
 

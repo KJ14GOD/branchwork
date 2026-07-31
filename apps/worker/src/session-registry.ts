@@ -11,7 +11,10 @@ import {
   WorktreeManager,
   type ForkHandle,
 } from "./worktree-manager.ts";
+import { DEFAULT_RUN_BUDGET, type RunBudget } from "./budget.ts";
+import type { ModelSelection } from "@novus/contracts";
 import type { ModelAdapter, ModelRouter } from "./model.ts";
+import { DEFAULT_MODEL_PRICING, type PricingTable } from "./pricing.ts";
 import {
   AllowListApprovalGate,
   DenyAllApprovalGate,
@@ -232,21 +235,37 @@ export class SessionRegistry {
    * reasonable thing to be confused by.
    */
   private readonly defaults: HostDefaults;
+  /** Rates and bounds handed to every runner this registry builds. */
+  private readonly pricing: PricingTable;
+  private readonly budget: RunBudget;
 
   constructor(
     eventStore: SessionEventStore,
     router: ModelRouter,
     adapters: readonly ModelAdapter[],
     defaults: HostDefaults = { allowWrites: false, allowCommands: false },
+    economics: { pricing?: PricingTable; budget?: RunBudget } = {},
   ) {
     this.eventStore = eventStore;
     this.router = router;
     this.adapters = adapters;
     this.defaults = defaults;
+    this.pricing = economics.pricing ?? DEFAULT_MODEL_PRICING;
+    this.budget = economics.budget ?? DEFAULT_RUN_BUDGET;
   }
 
   hostDefaults(): HostDefaults {
     return this.defaults;
+  }
+
+  /**
+   * Every model this worker can actually run — the adapters that exist, not
+   * the models that exist. What the turns route validates an explicit choice
+   * against, and what /health reports so a picker can grey out the rest
+   * instead of offering a model that would 400.
+   */
+  models(): ModelSelection[] {
+    return this.adapters.map((adapter) => adapter.selection);
   }
 
   /**
@@ -326,7 +345,7 @@ export class SessionRegistry {
     // for..."), so an adapter without listModels used to turn this one
     // request into a dead session. Now it is an ordinary tool error the
     // model reads and moves on from.
-    const selection = this.router.select({ goal: "" });
+    const selection = this.router.select({ goal: "" }).selection;
     const adapter = this.adapters.find(
       (candidate) =>
         candidate.selection.provider === selection.provider &&
@@ -401,6 +420,9 @@ export class SessionRegistry {
         this.buildTools(repositoryPath),
         buildApprovalGate(allowWrites, allowCommands),
         () => readRepositoryBase(repositoryPath),
+        this.budget,
+        undefined,
+        this.pricing,
       ),
     };
 
@@ -466,14 +488,23 @@ export class SessionRegistry {
   /**
    * Runs one turn. Turns within a session are serialised: a submission made
    * while a run is in flight waits rather than racing it.
+   *
+   * `model` is an explicit human choice for this turn; absent means the
+   * router decides. Passed through untouched — precedence lives in the
+   * runner, in one place.
    */
-  submitTurn(session: Session, goal: string): Promise<void> {
+  submitTurn(
+    session: Session,
+    goal: string,
+    model?: ModelSelection,
+  ): Promise<void> {
     session.queue = session.queue
       .then(() =>
         session.runner.run({
           sessionId: session.id,
           actorId: "agent-1",
           goal,
+          ...(model ? { model } : {}),
         }),
       )
       .catch((error: unknown) => {

@@ -74,6 +74,23 @@ export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 
 export const SubmitTurnRequestSchema = z.object({
   goal: z.string().min(1).max(20_000),
+  /**
+   * An explicit model for this turn — the composer's picker, as opposed to
+   * its "Auto". Absent means route: the worker's router decides. Present, it
+   * wins outright and the router is not consulted, because a human choosing
+   * a model is an instruction rather than a hint.
+   *
+   * Validated against the adapters the worker actually has before the turn
+   * starts, so a model nobody can serve is a 400 the composer can show
+   * rather than a run that dies mid-flight with "No model adapter is
+   * configured".
+   */
+  model: z
+    .object({
+      provider: z.string().min(1),
+      model: z.string().min(1),
+    })
+    .optional(),
 });
 
 export type SubmitTurnRequest = z.infer<typeof SubmitTurnRequestSchema>;

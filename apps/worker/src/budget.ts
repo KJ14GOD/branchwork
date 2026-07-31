@@ -21,6 +21,18 @@
 export type RunBudget = {
   /** Provider tokens, in and out. Null lets a run cost whatever it costs. */
   totalTokens: number | null;
+  /**
+   * US dollars, computed per model call from the configured pricing table
+   * (pricing.ts). Null — the default — means uncapped: choosing a ceiling
+   * that kills runs mid-flight is the operator's decision, made with
+   * NOVUS_COST_BUDGET_USD, not a default sprung on them.
+   *
+   * This is the bound the token ceiling only approximates. 2M tokens is
+   * ~$7 on the fast tier and ~$29 on the max tier for the same mix, so a
+   * person capping spend with tokens has to assume the dearest model; a
+   * dollar ceiling means what it says on every tier.
+   */
+  costUsd: number | null;
   /** Wall-clock milliseconds from the first model call. */
   wallClockMs: number | null;
   /**
@@ -65,6 +77,7 @@ export type RunBudget = {
 
 export const DEFAULT_RUN_BUDGET: RunBudget = {
   totalTokens: 2_000_000,
+  costUsd: null,
   wallClockMs: 30 * 60 * 1000,
   consecutiveFailures: 3,
   maxModelCalls: 500,
@@ -74,6 +87,17 @@ export const DEFAULT_RUN_BUDGET: RunBudget = {
 export type BudgetUsage = {
   modelCalls: number;
   totalTokens: number;
+  /**
+   * USD spent so far, from per-call pricing. Null means "not being counted"
+   * — the run's model has no configured price — which is different from
+   * zero and must stay different: a cost ceiling checked against an
+   * uncounted spend would never trip, and a budget that silently is not
+   * counting is worse than one that says so.
+   *
+   * When some calls reported no usage the figure is a floor; a floor over
+   * the ceiling is still over the ceiling, so enforcement stays sound.
+   */
+  costUsd: number | null;
   consecutiveFailures: number;
   /** The highest count of one read-class call repeated with identical input. */
   identicalReads: number;
@@ -106,6 +130,21 @@ export const budgetExhausted = (
 
   if (budget.totalTokens !== null && usage.totalTokens >= budget.totalTokens) {
     return `stopped at ${usage.totalTokens} tokens, the limit for this run`;
+  }
+
+  if (budget.costUsd !== null) {
+    // A cost ceiling over a model nobody priced is unenforceable, and the
+    // checkpoint schema already states the house rule: a budget that lies
+    // about being enforced is worse than one that admits it is not counting.
+    // So this refuses before the first model call rather than letting the
+    // run spend unmetered money under a ceiling the operator believes in.
+    if (usage.costUsd === null) {
+      return `stopped before spending: a $${budget.costUsd} cost budget is set, but this run's model has no configured pricing, so spend cannot be counted — price it in NOVUS_MODEL_PRICING or unset NOVUS_COST_BUDGET_USD`;
+    }
+
+    if (usage.costUsd >= budget.costUsd) {
+      return `stopped at $${usage.costUsd.toFixed(4)}, the cost limit for this run`;
+    }
   }
 
   if (

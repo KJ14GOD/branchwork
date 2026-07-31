@@ -47,8 +47,65 @@ export type ModelRequest = {
   toolExchanges: readonly ModelToolExchange[];
 };
 
+/**
+ * What a router may consider when choosing a model for a turn.
+ *
+ * Every field here is something the harness can actually compute at the moment
+ * of selection, from data it already holds. README.md lists more signals
+ * routing should eventually weigh — historical success on similar work,
+ * measured latency, repository and organization policy, independent evaluation
+ * results — and they are deliberately NOT fields yet, because the data behind
+ * them does not exist: there is no outcome store keyed by model and task, no
+ * latency distribution per model (per-call model time only started being
+ * recorded alongside this router), no policy store, no eval corpus. A router
+ * that accepted a `historicalSuccessRate` nobody measures would be a stub
+ * dressed as intelligence. When one of those stores exists, its signal is
+ * added here, and this type is the seam it plugs into.
+ */
 export type ModelRoutingRequest = {
   goal: string;
+  /**
+   * Roughly how many characters of prior conversation the next model call
+   * will carry: earlier goals and summaries, plus the current goal. A coarse
+   * under-count — elided tool-result stubs are not included — used to
+   * estimate what a call costs, never to pick a context window (the routed
+   * models all share one). 0 or absent means "nothing yet".
+   */
+  contextChars?: number;
+  /**
+   * Whether this session's most recent finished run ended in run.failed.
+   *
+   * The one shard of "historical success" that needs no corpus: the history
+   * is this session's own log. A goal submitted right after a failure is
+   * usually the same problem coming back, and repeating the tier that just
+   * failed is how a run fails twice at the same price.
+   */
+  lastRunFailed?: boolean;
+  /**
+   * The run's configured cost ceiling in USD, when the operator set one.
+   * Null or absent means unbounded.
+   */
+  costBudgetUsd?: number | null;
+};
+
+/**
+ * A selection plus its provenance. The reason is recorded in the session log
+ * (run.progress today, and the run's own modelChoice once the contract
+ * carries it), because a run whose model choice cannot be explained from the
+ * log is exactly the black box this product exists to open.
+ */
+export type RoutedSelection = {
+  selection: ModelSelection;
+  /**
+   * Who decided. "host" — the operator pinned a model in the environment (or
+   * a fixed test/benchmark configuration did). "router" — a routing policy
+   * chose. The third source, "human" (an explicit per-turn choice in the
+   * composer), never comes from a router: the runner honors it before any
+   * router is consulted, which is what makes "a human's choice always wins"
+   * structural rather than a convention each router must remember.
+   */
+  source: "host" | "router";
+  reason: string;
 };
 
 /**
@@ -136,18 +193,31 @@ export interface ModelAdapter {
 }
 
 export interface ModelRouter {
-  select(request: ModelRoutingRequest): ModelSelection;
+  /**
+   * Pure and synchronous on purpose: this runs at the top of every turn, so
+   * it must cost nothing and must return the same answer for the same
+   * request — a selection that cannot be reproduced from its inputs cannot
+   * be explained from the log either.
+   */
+  select(request: ModelRoutingRequest): RoutedSelection;
 }
 
+/**
+ * The single-model case: NOVUS_MODEL / NOVUS_MODEL_PROVIDER pinned one model,
+ * or a test or benchmark wants a known configuration. Ignores every signal by
+ * design and says so in its reason.
+ */
 export class FixedModelRouter implements ModelRouter {
   private readonly selection: ModelSelection;
+  private readonly reason: string;
 
-  constructor(selection: ModelSelection) {
+  constructor(selection: ModelSelection, reason = "the host fixed this model") {
     this.selection = ModelSelectionSchema.parse(selection);
+    this.reason = reason;
   }
 
-  select(): ModelSelection {
-    return this.selection;
+  select(): RoutedSelection {
+    return { selection: this.selection, source: "host", reason: this.reason };
   }
 }
 

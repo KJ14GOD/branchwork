@@ -11,6 +11,12 @@ import { AnthropicModelAdapter } from "./anthropic-model.ts";
 import { OpenAIModelAdapter } from "./openai-model.ts";
 import { startEventServer } from "./event-server.ts";
 import { FixedModelRouter } from "./model.ts";
+import {
+  ANTHROPIC_ROUTING_TIERS,
+  SignalModelRouter,
+} from "./model-router.ts";
+import { loadPricing } from "./pricing.ts";
+import { DEFAULT_RUN_BUDGET } from "./budget.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { mintAccessToken } from "./access.ts";
 import { HOST_SESSION, ParticipantRegistry } from "./participants.ts";
@@ -53,14 +59,66 @@ const modelSelection = {
   model: modelName,
 };
 
+/**
+ * Route, unless someone pinned a model.
+ *
+ * NOVUS_MODEL set is an explicit instruction to use one model, and it still
+ * means exactly that. Unset, on Anthropic, the router picks a tier per turn
+ * from what it can actually observe about the request — see model-router.ts.
+ * OpenAI has no tier table, so it stays pinned either way.
+ */
+const pinnedModel = process.env.NOVUS_MODEL?.trim();
+const routingEnabled = !pinnedModel && modelProvider === "anthropic";
+
+const pricing = loadPricing();
+
+/**
+ * A dollar ceiling for a single run, off unless someone sets one.
+ *
+ * The other bounds in budget.ts — tokens, wall clock, model calls — are
+ * proxies for this one, and none of them stopped a real overnight session
+ * from spending $40. Off by default because a ceiling nobody chose is a run
+ * that dies for a reason its operator did not pick.
+ */
+const costBudgetRaw = process.env.NOVUS_COST_BUDGET_USD?.trim();
+const costBudgetUsd = costBudgetRaw ? Number(costBudgetRaw) : null;
+
+if (costBudgetRaw && (!Number.isFinite(costBudgetUsd) || costBudgetUsd! <= 0)) {
+  console.error(
+    `NOVUS_COST_BUDGET_USD must be a positive number of dollars — got "${costBudgetRaw}".`,
+  );
+  process.exit(1);
+}
+
+const modelRouter = routingEnabled
+  ? new SignalModelRouter(ANTHROPIC_ROUTING_TIERS, pricing)
+  : new FixedModelRouter(modelSelection);
+
 // Constructed for the selected provider only. Both SDKs throw at
 // construction when they cannot resolve an API key — constructing an
 // adapter nobody asked for would fail startup for an Anthropic session on a
 // host that has never set OPENAI_API_KEY, and the reverse.
+//
+// When routing, every tier the router can choose needs an adapter standing
+// by: the runner resolves an adapter by exact provider+model, so a routed
+// turn whose tier had none would die with "No model adapter is configured"
+// rather than falling back. They share one API key and construct lazily
+// enough that three cost nothing until one is called.
 const modelAdapters: ModelAdapter[] =
   modelSelection.provider === "openai"
     ? [new OpenAIModelAdapter(modelSelection)]
-    : [new AnthropicModelAdapter(modelSelection)];
+    : routingEnabled
+      ? [
+          ...new Set([
+            ANTHROPIC_ROUTING_TIERS.fast.model,
+            ANTHROPIC_ROUTING_TIERS.deep.model,
+            ANTHROPIC_ROUTING_TIERS.max.model,
+          ]),
+        ].map(
+          (model) =>
+            new AnthropicModelAdapter({ provider: "anthropic", model }),
+        )
+      : [new AnthropicModelAdapter(modelSelection)];
 
 // Writes are denied unless the operator opts in.
 const allowWrites = process.env.NOVUS_ALLOW_WRITES === "1";
@@ -189,9 +247,15 @@ eventStore.subscribe((event) => {
 
 const sessions = new SessionRegistry(
   eventStore,
-  new FixedModelRouter(modelSelection),
+  modelRouter,
   modelAdapters,
   { allowWrites, allowCommands },
+  {
+    pricing,
+    ...(costBudgetUsd === null
+      ? {}
+      : { budget: { ...DEFAULT_RUN_BUDGET, costUsd: costBudgetUsd } }),
+  },
 );
 
 let eventServer;
@@ -217,7 +281,9 @@ try {
 
 console.log(`novus worker · ${eventServer.url}`);
 console.log(
-  `model   ${modelSelection.provider}/${modelSelection.model} (override with NOVUS_MODEL_PROVIDER and NOVUS_MODEL)`,
+  routingEnabled
+    ? `model   routing ${ANTHROPIC_ROUTING_TIERS.fast.model} · ${ANTHROPIC_ROUTING_TIERS.deep.model} · ${ANTHROPIC_ROUTING_TIERS.max.model} (pin one with NOVUS_MODEL)`
+    : `model   ${modelSelection.provider}/${modelSelection.model} (override with NOVUS_MODEL_PROVIDER and NOVUS_MODEL)`,
 );
 console.log(`events ${databasePath} (override with NOVUS_DB)`);
 console.log(
