@@ -473,9 +473,18 @@ Each fork receives:
 
 - A unique run ID
 - Its own Git worktree
-- Its own process namespace
 - Its own development ports
 - Its own event stream under the parent session
+
+**Not its own process.** An attempt runs as an in-process `AgentRunner` inside
+the worker, sharing its process, environment, and lifetime. This line used to
+claim a process namespace per fork; that was vacuously true while nothing
+executed in a fork at all, and became plainly false once something did. What
+the isolation actually rests on is the worktree, a per-attempt runner with its
+own tools and approval gate, and per-run local state — not an OS boundary. The
+practical consequences: the worker exiting takes every running attempt with it,
+and an attempt cannot be resource-limited apart from the worker. Both are worth
+closing before this is trusted with long or untrusted runs.
 
 Forks never write to the same working directory.
 
@@ -731,8 +740,19 @@ just the happy path.
 
 - [x] Checkpoint creation
 - [x] Git worktree manager
-- [x] Isolated child runs — proven: writes in one fork are invisible in the
-      other and in the parent
+- [x] Isolated child runs — an attempt now genuinely executes: `POST /fork`
+      starts a child `AgentRunner` in the fork's own worktree, under the fork's
+      own run id, with its tools confined there and its approval gate the
+      intersection of the parent session's permissions and the ones the
+      checkpoint recorded. Two attempts run concurrently without touching each
+      other, proven by a rendezvous barrier that fails rather than hangs if the
+      runs are secretly serialised. Until 2026-07-30 this box was ticked for a
+      route that cut a worktree, recorded `fork.created`, and never ran
+      anything — the isolation tests passed because they tested the worktree
+      manager directly, not the product. Two live gaps remain, both recorded
+      below rather than hidden: an attempt interrupted by a worker exit stays
+      `running` on the record forever, and nothing ever tears a fork's worktree
+      down.
 - [x] Side-by-side comparison — `compare.ts` plus a real compare screen in the
       desktop UI, with a working "Fork an attempt" flow
 - [x] Human decision record — `POST /sessions/:id/decision` appends

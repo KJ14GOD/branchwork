@@ -143,6 +143,19 @@ export type Session = {
    * loops under one run id — and that is all this map does.
    */
   forkTurns: Map<string, Promise<unknown>>;
+  /**
+   * One runner per attempt, kept for the attempt's life, by run id.
+   *
+   * The parent session holds a single `runner` for its whole life; a fork
+   * used to get a freshly built one on every call, which quietly meant a
+   * fresh `ProposePatchTool` too. Proposals live in that tool's memory, so
+   * an attempt that proposed a patch, paused, and resumed came back to a
+   * runner that had never heard of its own proposal: `apply_patch` failed
+   * with "call propose_patch first", the run completed, and the attempt
+   * showed zero files changed. Caching here is what makes an attempt's
+   * pause/resume behave the same way the parent's already does.
+   */
+  forkRunners: Map<string, AgentRunner>;
   allowWrites: boolean;
   allowCommands: boolean;
   runner: AgentRunner;
@@ -347,6 +360,7 @@ export class SessionRegistry {
       repositoryState,
       worktrees: new WorktreeManager(repositoryPath),
       forkTurns: new Map(),
+      forkRunners: new Map(),
       allowWrites,
       allowCommands,
       createdAt: new Date().toISOString(),
@@ -537,12 +551,22 @@ export class SessionRegistry {
    * the host's defaults").
    */
   private buildForkRunner(session: Session, handle: ForkHandle): AgentRunner {
+    // Built once per attempt and kept. Rebuilding on every call also rebuilt
+    // the attempt's tools, and `ProposePatchTool` holds its proposals in
+    // memory — so a fork that proposed, paused, and resumed lost the patch it
+    // was about to apply. See `forkRunners` on Session for the full account.
+    const existing = session.forkRunners.get(handle.fork.runId);
+
+    if (existing) {
+      return existing;
+    }
+
     const recorded = this.checkpointToolPolicy(
       session.id,
       handle.fork.checkpointId,
     );
 
-    return new AgentRunner(
+    const runner = new AgentRunner(
       this.eventStore,
       this.router,
       this.adapters,
@@ -553,6 +577,10 @@ export class SessionRegistry {
       ),
       () => readRepositoryBase(handle.worktreePath),
     );
+
+    session.forkRunners.set(handle.fork.runId, runner);
+
+    return runner;
   }
 
   /**

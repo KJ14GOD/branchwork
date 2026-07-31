@@ -804,6 +804,171 @@ test("a paused fork resumes in its own worktree, not the parent's", async () => 
   }
 });
 
+/**
+ * Proposes, pauses once the proposal is on the record, then applies it after
+ * the resume. The pause deliberately lands *after* `propose_patch` has
+ * succeeded, because that is the only ordering that exercises the bug this
+ * covers: the proposal lives in `ProposePatchTool`'s memory, not in the log.
+ */
+const proposesPausesThenApplies =
+  (
+    store: InMemorySessionEventStore,
+    session: { id: string },
+    newText: string,
+    summary: string,
+  ): Script =>
+  (request) => {
+    const proposal = request.toolExchanges
+      .map((exchange) => okResult(exchange))
+      .find((result) => result?.name === "propose_patch");
+
+    if (!proposal) {
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "propose_patch",
+          input: {
+            path: "answer.txt",
+            intent: "Rewrite the answer for this attempt.",
+            edits: [{ oldText: "parent\n", newText }],
+          },
+        },
+      };
+    }
+
+    if (
+      request.toolExchanges.some(
+        (exchange) => okResult(exchange)?.name === "apply_patch",
+      )
+    ) {
+      return { type: "final", summary };
+    }
+
+    const paused = store
+      .list(session.id)
+      .some((event) => event.type === "run.pause_requested");
+
+    if (!paused) {
+      const started = store
+        .list(session.id)
+        .find(
+          (event) =>
+            event.type === "run.started" &&
+            event.payload.run.goal === request.goal,
+        );
+
+      if (started?.type === "run.started") {
+        store.append({
+          sessionId: session.id,
+          actorId: "teammate-1",
+          type: "run.pause_requested",
+          payload: { runId: started.payload.run.id },
+        });
+      }
+
+      // Something harmless to execute before the loop reaches its pause
+      // boundary, so the proposal is already recorded when it stops.
+      return {
+        type: "tool_call",
+        call: {
+          id: crypto.randomUUID(),
+          name: "read_file",
+          input: { path: "answer.txt" },
+        },
+      };
+    }
+
+    return {
+      type: "tool_call",
+      call: {
+        id: crypto.randomUUID(),
+        name: "apply_patch",
+        input: { patchId: proposal.output.patchId },
+      },
+    };
+  };
+
+test("a paused fork can still apply the patch it proposed before pausing", async () => {
+  // The fork used to get a freshly built AgentRunner on every resume, and a
+  // fresh runner means a fresh ProposePatchTool. The model saw its own
+  // proposal fine — rebuildToolExchanges replays it out of the log — but the
+  // tool that had to honour the patchId had never heard of it, so apply_patch
+  // came back "No patch proposal exists for …", the attempt completed, and
+  // the fork's file was never written. It presented as a successful run with
+  // zero files changed, which is the worst shape a bug can take on the
+  // compare screen: an attempt that looks finished and did nothing.
+  const root = await repository();
+  const store = new InMemorySessionEventStore();
+  const sessionBox = { id: "" };
+  const adapter = new GoalScriptedAdapter({
+    "Propose, pause, then apply": proposesPausesThenApplies(
+      store,
+      sessionBox,
+      "applied after the pause\n",
+      "Applied the patch proposed before pausing.",
+    ),
+  });
+  const server = await startWorker(store, [adapter]);
+
+  try {
+    const session = await openSession(server.url, {
+      repositoryPath: root,
+      allowWrites: true,
+    });
+
+    sessionBox.id = session.id;
+
+    const forked = await forkSession(
+      server.url,
+      session.id,
+      "P",
+      "Propose, pause, then apply",
+    );
+    const runId = forked.fork.runId;
+
+    await waitForEvent(store, session.id, `run ${runId} to pause`, (events) =>
+      events.some(
+        (event) =>
+          event.type === "run.paused" && event.payload.runId === runId,
+      ),
+    );
+
+    const resumed = await post(server.url, `/sessions/${session.id}/resume`, {
+      runId,
+    });
+
+    assert.equal(resumed.status, 202);
+
+    const failure = await waitForRunEnd(store, session.id, runId);
+    assert.equal(failure, null, `the resumed fork failed: ${failure}`);
+
+    // The whole point: the patch actually landed in the fork's worktree.
+    assert.equal(
+      await readFile(join(forked.fork.worktreePath, "answer.txt"), "utf8"),
+      "applied after the pause\n",
+    );
+
+    // And it landed by applying, not by some other path.
+    assert.ok(
+      store
+        .list(session.id)
+        .some(
+          (event) =>
+            event.type === "tool.completed" &&
+            event.payload.runId === runId &&
+            event.payload.result.name === "apply_patch",
+        ),
+      "the fork never completed an apply_patch",
+    );
+
+    assert.equal(await readFile(join(root, "answer.txt"), "utf8"), "parent\n");
+  } finally {
+    await server.close();
+    await cleanup(root);
+  }
+});
+
 test("a fork resumed after a restart does not regain writes the session no longer allows", async () => {
   const root = await repository();
   const store = new InMemorySessionEventStore();
