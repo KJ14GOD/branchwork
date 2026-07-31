@@ -12,7 +12,7 @@
     "start": "electron .",
     "preview": "vite preview",
     "typecheck": "tsc --project tsconfig.json",
-    "test": "node --experimental-strip-types --import ../../scripts/tsx-hook.ts --test 'electron/*.test.ts' 'src/**/*.test.tsx'",
+    "test": "node --experimental-strip-types --import ../../scripts/tsx-hook.ts --test 'electron/*.test.ts' 'src/**/*.test.ts' 'src/**/*.test.tsx'",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true",
     "dist": "pnpm build && electron-builder --mac --publish never"
   },

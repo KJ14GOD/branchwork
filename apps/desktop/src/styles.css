@@ -3565,3 +3565,103 @@ select.open__input {
 .inbox__evidence--unverified {
   color: var(--text-dim);
 }
+
+/* ---------- decision spine ---------- */
+
+.spine {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.spine__step {
+  position: relative;
+}
+
+/*
+ * The connecting line. Drawn between steps rather than on them, so the ladder
+ * reads as one run of work rather than five unrelated rows — that continuity
+ * is the part STEERING asks to become recognisable.
+ */
+.spine__step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 18px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--border);
+}
+
+.spine__action,
+.spine__static {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-1) 0;
+  text-align: left;
+  color: var(--text-muted);
+}
+
+.spine__action {
+  border-radius: var(--radius-s);
+}
+
+.spine__action:hover {
+  color: var(--text);
+}
+
+.spine__glyph {
+  flex: none;
+  width: 13px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: var(--text-small);
+  /* Over the connecting line, so the line appears to run between glyphs. */
+  position: relative;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.spine__glyph--complete {
+  color: var(--text-muted);
+}
+
+.spine__glyph--active {
+  color: var(--text);
+}
+
+/*
+ * The one status allowed to draw the eye, and the only accent in the ladder.
+ * If everything is highlighted then nothing is, and the whole point of this
+ * rail is to answer "what needs me" at a glance.
+ */
+.spine__glyph--needs-attention {
+  color: var(--add);
+}
+
+.spine__glyph--blocked {
+  color: var(--del);
+}
+
+.spine__step--not-started .spine__label {
+  color: var(--text-dim);
+}
+
+.spine__label {
+  color: var(--text);
+}
+
+.spine__step--not-started .spine__glyph {
+  color: var(--text-dim);
+}
+
+.spine__detail {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: var(--text-small);
+  text-align: right;
+}
