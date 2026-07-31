@@ -334,14 +334,21 @@ export const startEventServer = (
           label,
         });
 
-        session.forks.set(handle.fork.runId, handle);
-
         store.append({
           sessionId: session.id,
           actorId: caller?.participant.id ?? "host",
           type: "fork.created",
           payload: { fork: handle.fork },
         });
+
+        // The attempt actually runs. This call is what a fork *is* — a child
+        // run executing the goal in the isolated worktree just cut — and it
+        // was missing entirely: a fork used to be a directory with a label,
+        // and the compare screen compared work that never happened. Accepted
+        // rather than awaited, the same contract as /turns: the 201 says the
+        // attempt exists and has begun, and its progress arrives on the event
+        // stream under its own run id.
+        void sessions.startForkRun(session, handle, goal);
 
         sendJson(response, 201, { fork: handle.fork });
       } catch (error) {
@@ -667,12 +674,24 @@ export const startEventServer = (
         return true;
       }
 
-      const attempts = [...session.forks.values()].map((handle) => ({
-        runId: handle.fork.runId,
-        label: handle.fork.label,
-      }));
+      // Derived from the log, not from live fork handles, for the same
+      // reason the /files route already is: fork.created is durable and
+      // in-memory state is not, so a comparison built from handles forgot
+      // every attempt the moment the worker restarted — the log remembered
+      // them, and their evidence, the whole time.
+      const events = store.list(session.id);
+      const attempts = events.flatMap((event) =>
+        event.type === "fork.created"
+          ? [
+              {
+                runId: event.payload.fork.runId,
+                label: event.payload.fork.label,
+              },
+            ]
+          : [],
+      );
 
-      sendJson(response, 200, compareAttempts(session.id, store.list(session.id), attempts));
+      sendJson(response, 200, compareAttempts(session.id, events, attempts));
       return true;
     }
 
@@ -754,7 +773,12 @@ export const startEventServer = (
         return true;
       }
 
-      const handle = session.forks.get(parsed.data.runId);
+      // The worktree manager holds the live handles — populated at fork
+      // creation in this process, or re-adopted from the log when the
+      // session was resumed after a restart. A fork the log remembers but
+      // whose checkout is gone lands here as a 404 too, which the message
+      // already covers.
+      const handle = session.worktrees.get(parsed.data.runId);
 
       if (!handle) {
         sendJson(response, 404, {

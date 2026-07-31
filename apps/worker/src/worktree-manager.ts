@@ -439,6 +439,104 @@ export class WorktreeManager {
   }
 
   /**
+   * Re-attaches a fork this repository already has on disk, from its durable
+   * record in the log.
+   *
+   * This map is in-memory and empty in a fresh process, while `fork.created`
+   * — and the worktree itself, under the fork root — both survive a restart.
+   * Adoption is what turns the durable record back into an operable handle:
+   * without it a restarted worker could still *list* an attempt from the log
+   * but never diff it, apply it as a decision, or resume its paused run.
+   *
+   * Everything is re-verified rather than trusted. The record names a path,
+   * and between then and now the human may have deleted it, pruned the
+   * worktree, or pointed this worker at a different repository whose log
+   * happens to mention the same directory. A fork that fails a check is
+   * refused with the reason; the caller decides whether that is fatal — for
+   * a session resume it is not, because the attempt's evidence is still in
+   * the log even when its checkout is gone.
+   */
+  async adopt(fork: Fork): Promise<ForkHandle> {
+    const validated = ForkSchema.parse(fork);
+
+    assertSafeIdentifier(validated.runId, "A fork's run id");
+
+    const existing = this.forks.get(validated.runId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const repositoryRoot = await this.resolveRepositoryRoot();
+    const forkRoot = await this.resolveForkRoot(repositoryRoot);
+
+    let worktreePath: string;
+
+    try {
+      worktreePath = await realpath(validated.worktreePath);
+    } catch {
+      throw new Error(
+        `Fork ${validated.runId}'s worktree is gone: ${validated.worktreePath} no longer exists on disk.`,
+      );
+    }
+
+    // The same invariant createFork asserts — no fork escapes its root —
+    // applied to a path that came from a log this process did not write.
+    if (isOutside(forkRoot, worktreePath) || worktreePath === forkRoot) {
+      throw new Error(
+        `Fork ${validated.runId}'s recorded worktree is not under ${forkRoot}: refused ${worktreePath}`,
+      );
+    }
+
+    // It has to be a worktree of *this* repository. A stale log entry from a
+    // moved repository would otherwise hand out a handle whose diffs and
+    // applies read from a tree that has nothing to do with this session.
+    const commonDir = await this.git(worktreePath, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    ])
+      .then((stdout) => stdout.trim())
+      .catch(() => "");
+    const resolvedCommon = await realpath(commonDir).catch(() => "");
+    const expectedCommon = await realpath(join(repositoryRoot, ".git")).catch(
+      () => repositoryRoot,
+    );
+
+    if (resolvedCommon === "" || resolvedCommon !== expectedCommon) {
+      throw new Error(
+        `Fork ${validated.runId}'s directory at ${worktreePath} is not a worktree of ${repositoryRoot}.`,
+      );
+    }
+
+    // Reserved, not probed. The record says these ports belong to this fork;
+    // re-reserving them is what stops the next createFork from handing the
+    // same ports to a new attempt. Whether something else on the machine took
+    // them in the meantime is the same courtesy-probe caveat reservePorts
+    // already documents.
+    for (const port of validated.devPorts) {
+      this.reservedPorts.add(port);
+    }
+
+    const handle: ForkHandle = {
+      fork: { ...validated, worktreePath },
+      worktreePath,
+      branch: validated.branch,
+      environment: {
+        NOVUS_REPO: worktreePath,
+        NOVUS_SESSION: validated.sessionId,
+        NOVUS_RUN: validated.runId,
+        NOVUS_FORK_PORTS: validated.devPorts.join(","),
+        PORT: String(validated.devPorts[0]),
+      },
+    };
+
+    this.forks.set(validated.runId, handle);
+
+    return handle;
+  }
+
+  /**
    * Removes a fork's checkout and the branch that only it was using.
    *
    * The branch goes with the worktree deliberately. A fork's branch is not a

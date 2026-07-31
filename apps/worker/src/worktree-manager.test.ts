@@ -512,3 +512,89 @@ test("the checkpoint's base survives an aggressive prune in the parent", async (
   assert.equal(handle.fork.revision, checkpoint.base.revision);
   await manager.removeFork(handle.fork.runId);
 });
+
+test("a fresh manager re-adopts a recorded fork and keeps its ports reserved", async () => {
+  const root = await repository();
+  const before = managerFor(root);
+  const after = managerFor(root);
+
+  try {
+    const checkpoint = await before.createCheckpoint(checkpointInput());
+    const first = await before.createFork(checkpoint, {
+      runId: "adopt-a",
+      label: "A",
+    });
+
+    // A fresh manager, the way a restarted worker gets one: its own map is
+    // empty even though the worktree and the fork.created record survive.
+    const adopted = await after.adopt(first.fork);
+
+    assert.equal(adopted.worktreePath, first.worktreePath);
+    assert.equal(after.get("adopt-a")?.fork.runId, "adopt-a");
+
+    // The adopted fork's diff machinery works — this is what the decision
+    // apply needs after a restart.
+    await writeFile(join(adopted.worktreePath, "answer.txt"), "attempt a\n");
+    assert.deepEqual(await after.diffFork("adopt-a"), [
+      { path: "answer.txt", status: "modified" },
+    ]);
+
+    // And its ports are reserved again, so a new fork cannot be handed them.
+    const second = await after.createFork(checkpoint, {
+      runId: "adopt-b",
+      label: "B",
+    });
+    const overlap = second.fork.devPorts.filter((port) =>
+      first.fork.devPorts.includes(port),
+    );
+
+    assert.deepEqual(
+      overlap,
+      [],
+      "a new fork was handed ports the adopted fork already holds",
+    );
+  } finally {
+    await after.removeAll().catch(() => undefined);
+    await before.removeAll().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("adopt refuses a worktree that is gone, and one that belongs to another repository", async () => {
+  const rootA = await repository();
+  const rootB = await repository();
+  const managerA = managerFor(rootA);
+
+  try {
+    const checkpoint = await managerA.createCheckpoint(checkpointInput());
+    const handle = await managerA.createFork(checkpoint, {
+      runId: "adopt-check",
+      label: "A",
+    });
+
+    // The record names a real directory, but it is a worktree of rootA — a
+    // manager for rootB must not hand out a handle whose diffs and applies
+    // would read a tree that has nothing to do with its repository. rootB's
+    // manager is pointed at rootA's fork root on purpose, so the path check
+    // passes and what fails is repository identity — the deeper of the two
+    // checks, and the one a stale log entry would actually hit.
+    const forkRootOfA = join(handle.worktreePath, "..");
+
+    await assert.rejects(
+      () => managerFor(rootB, forkRootOfA).adopt(handle.fork),
+      /not a worktree of/,
+    );
+
+    // And once the directory is deleted, a fresh manager refuses by name
+    // instead of adopting a phantom.
+    await rm(handle.worktreePath, { recursive: true, force: true });
+    await assert.rejects(
+      () => managerFor(rootA).adopt(handle.fork),
+      /no longer exists/,
+    );
+  } finally {
+    await managerA.removeAll().catch(() => undefined);
+    await rm(rootA, { recursive: true, force: true });
+    await rm(rootB, { recursive: true, force: true });
+  }
+});
