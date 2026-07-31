@@ -29,6 +29,36 @@ const plural = (count: number, one: string, many = `${one}s`): string =>
  * an unverified attempt was verified, which is the one thing this screen must
  * never do — it is the screen a decision is made from.
  */
+/**
+ * What an approach is doing, in a person's words rather than the runtime's.
+ *
+ * STEERING.md is explicit that "Idle" is not a product state — it describes a
+ * process and answers none of the three questions a state has to: what is
+ * happening, does anyone need to act, what is next. It also rules out the
+ * tool-call total that used to sit beside these facts: tool calls are
+ * implementation telemetry, and presenting them as a headline fact invited
+ * reading an approach as "more calls, more work done", which is not true and
+ * is not a reason to choose one.
+ */
+const approachState = (attempt: AttemptComparison): string => {
+  if (attempt.status === "running") {
+    return "Working";
+  }
+
+  if (attempt.status === "failed") {
+    return "Failed";
+  }
+
+  if (attempt.status === "cancelled") {
+    return "Cancelled";
+  }
+
+  // Completed. Completion is not verification — an approach that ran no tests
+  // is finished and unproven, and saying only "Completed" would let the
+  // reader supply the wrong second half of that sentence themselves.
+  return attempt.green === null ? "Done · unverified" : "Done";
+};
+
 const Verdict = ({ attempt }: { attempt: AttemptComparison }) => {
   if (attempt.testsRun === 0) {
     return (
@@ -66,7 +96,7 @@ const Attempt = ({
   <section className="compare__attempt">
     <header className="compare__head">
       <span className="compare__label">{attempt.label}</span>
-      <span className="compare__status">{attempt.status}</span>
+      <span className="compare__status">{approachState(attempt)}</span>
     </header>
 
     <div className="compare__facts">
@@ -78,7 +108,6 @@ const Attempt = ({
         <span className="patch__count patch__count--add">+{attempt.additions}</span>{" "}
         <span className="patch__count patch__count--del">−{attempt.deletions}</span>
       </span>
-      <span className="compare__fact">{plural(attempt.toolCalls, "tool call")}</span>
     </div>
 
     {attempt.failure ? (

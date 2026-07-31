@@ -19,6 +19,32 @@ import type { ComparisonState } from "../use-comparison.ts";
  * bordered container on it, and the evidence scrolls under a pinned header
  * instead of the whole screen scrolling as one.
  */
+/**
+ * A short name for an approach, from the thing that makes it different.
+ *
+ * Asking for a label *and* a goal made a person invent an identifier before
+ * they had thought about the work, and the label they invented was almost
+ * always a worse restatement of the goal they were about to type. The
+ * differentiating instruction is the only thing genuinely required, so the
+ * name is derived from it and stays editable afterward.
+ */
+const labelFor = (differentiator: string): string => {
+  const words = differentiator
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter(
+      (word) =>
+        word.length > 2 &&
+        !["the", "and", "for", "with", "that", "this", "try", "use"].includes(
+          word,
+        ),
+    )
+    .slice(0, 3);
+
+  return words.length > 0 ? words.join("-") : "approach";
+};
+
 export const CompareScreen = ({
   state,
   repositoryState,
@@ -28,8 +54,7 @@ export const CompareScreen = ({
   repositoryState: RepositoryState;
   onClose: () => void;
 }) => {
-  const [label, setLabel] = useState("");
-  const [goal, setGoal] = useState("");
+  const [intent, setIntent] = useState("");
   const [forking, setForking] = useState(false);
 
   const count = state.comparison?.attempts.length ?? 0;
@@ -37,16 +62,17 @@ export const CompareScreen = ({
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
 
-    if (label.trim() === "" || goal.trim() === "") {
+    const differentiator = intent.trim();
+
+    if (differentiator === "") {
       return;
     }
 
     setForking(true);
 
     try {
-      await state.fork(label.trim(), goal.trim());
-      setLabel("");
-      setGoal("");
+      await state.fork(labelFor(differentiator), differentiator);
+      setIntent("");
     } finally {
       setForking(false);
     }
@@ -56,11 +82,11 @@ export const CompareScreen = ({
     <div className="compare-screen">
       <header className="compare-screen__bar">
         <div className="compare-screen__heading">
-          <span className="compare-screen__title">Attempts</span>
+          <span className="compare-screen__title">Approaches</span>
           <span className="compare-screen__subtitle">
             {count === 0
-              ? "Fork this session to run a competing approach in its own worktree."
-              : `${count} attempt${count === 1 ? "" : "s"} · choose one on the evidence, not the summary`}
+              ? "Every approach starts from the same recorded checkpoint and runs in its own worktree, so they cannot disturb each other."
+              : `${count} approach${count === 1 ? "" : "es"} · choose one on the evidence, not the summary`}
           </span>
         </div>
         <span className="titlebar__spacer" />
@@ -80,23 +106,16 @@ export const CompareScreen = ({
       <form className="compare-screen__fork" onSubmit={submit}>
         <input
           className="open__input"
-          value={label}
-          onChange={(event) => setLabel(event.target.value)}
-          placeholder="Label — how you will tell this attempt apart"
-          spellCheck={false}
-        />
-        <input
-          className="open__input"
-          value={goal}
-          onChange={(event) => setGoal(event.target.value)}
-          placeholder="What this attempt should try"
+          value={intent}
+          onChange={(event) => setIntent(event.target.value)}
+          placeholder="What should this approach do differently? — e.g. preserve backward compatibility"
         />
         <button
           className="button button--primary"
           type="submit"
-          disabled={forking}
+          disabled={forking || intent.trim() === ""}
         >
-          {forking ? "Forking…" : "Fork an attempt"}
+          {forking ? "Starting…" : "Try another approach"}
         </button>
       </form>
 
@@ -136,7 +155,7 @@ export const CompareScreen = ({
                     disabled={state.choosing}
                     onClick={() => state.choose(attempt.runId)}
                   >
-                    {state.choosing ? "Choosing…" : "Choose this attempt"}
+                    {state.choosing ? "Choosing…" : "Choose this approach"}
                   </button>
                 ),
               ]),

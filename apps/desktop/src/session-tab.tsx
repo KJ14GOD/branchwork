@@ -664,40 +664,37 @@ export const SessionTab = ({
             every tab, so this costs no extra request.
           */}
           <div className="rail__section rail__section--flush">
-            <div className="eyebrow">Attempts</div>
+            <div className="eyebrow">Approaches</div>
             {attempts.length === 0 ? (
-              <>
-                <div className="rail__empty rail__empty--inset">
-                  No forks yet. Fork this session to run a competing approach in
-                  its own worktree, then choose between them on the evidence.
-                </div>
-                <button
-                  className="button attempt__cta"
-                  type="button"
-                  onClick={() => setMode("compare")}
-                >
-                  Fork an attempt
-                </button>
-              </>
+              <div className="rail__empty rail__empty--inset">
+                One approach so far. A second one starts from the same recorded
+                checkpoint, so the two can be compared on evidence rather than
+                on which ran last.
+              </div>
             ) : (
-              <>
-                {attempts.map((attempt) => (
-                  <AttemptRow
-                    key={attempt.runId}
-                    attempt={attempt}
-                    chosen={comparison.decision?.runId === attempt.runId}
-                    onOpen={() => setMode("compare")}
-                  />
-                ))}
-                <button
-                  className="button attempt__cta"
-                  type="button"
-                  onClick={() => setMode("compare")}
-                >
-                  Compare attempts
-                </button>
-              </>
+              attempts.map((attempt) => (
+                <AttemptRow
+                  key={attempt.runId}
+                  attempt={attempt}
+                  chosen={comparison.decision?.runId === attempt.runId}
+                  onOpen={() => setMode("compare")}
+                />
+              ))
             )}
+            {/*
+              One primary action, on the Approaches screen where the form and
+              the evidence are. The rail used to carry its own "Fork an
+              attempt" button *and* a "Compare attempts" button, so the same
+              intention had two entry points that led to the same place and
+              read as two different features.
+            */}
+            <button
+              className="button attempt__cta"
+              type="button"
+              onClick={() => setMode("compare")}
+            >
+              {attempts.length === 0 ? "Try another approach" : "Compare approaches"}
+            </button>
           </div>
 
           {/*
