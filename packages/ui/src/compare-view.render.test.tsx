@@ -230,3 +230,110 @@ test("what a person had to do is shown, and a refusal is not styled as success",
   assert.match(html, /keep the public API stable/);
   assert.match(html, /compare__intervention-kind--denied/);
 });
+
+test("the diagram shows one shared checkpoint, not one per approach", () => {
+  const html = renderToStaticMarkup(
+    <CompareView
+      comparison={comparison({
+        attempts: [
+          attempt({ runId: "turn-1", label: "Baseline", baseline: true }),
+          attempt({ runId: "fork-b", label: "retries" }),
+        ],
+      })}
+    />,
+  );
+
+  // The whole point: both approaches branch from the *same* recorded point.
+  // Two checkpoints would say they answered different questions.
+  assert.equal(html.split("Shared checkpoint").length - 1, 1);
+  assert.match(html, /Current work/);
+  assert.match(html, /Alternative/);
+});
+
+test("a single approach draws a stem and no rail to nowhere", () => {
+  const html = renderToStaticMarkup(
+    <CompareView
+      comparison={comparison({
+        attempts: [attempt({ runId: "turn-1", label: "Baseline", baseline: true })],
+      })}
+    />,
+  );
+
+  // Nothing has branched, so there is nothing to span. Drawing a horizontal
+  // rail across one column would imply a fork that does not exist.
+  assert.match(html, /branch__connector--only/);
+  assert.match(html, /No alternative yet/);
+});
+
+test("the diagram asks for a decision only once nothing is still moving", () => {
+  const running = renderToStaticMarkup(
+    <CompareView
+      comparison={comparison({
+        attempts: [
+          attempt({ runId: "turn-1", baseline: true }),
+          attempt({ runId: "fork-b", status: "running" }),
+        ],
+      })}
+    />,
+  );
+  const settled = renderToStaticMarkup(
+    <CompareView
+      comparison={comparison({
+        attempts: [
+          attempt({ runId: "turn-1", baseline: true }),
+          attempt({ runId: "fork-b" }),
+        ],
+      })}
+    />,
+  );
+
+  // Asking somebody to choose while an approach is still writing files is
+  // asking them to decide on evidence that is still moving.
+  assert.match(running, /Waiting for approaches to finish/);
+  assert.doesNotMatch(running, /Decision required/);
+  assert.match(settled, /Decision required/);
+});
+
+test("the diagram states what is required and never what is preferred", () => {
+  const html = renderToStaticMarkup(
+    <CompareView
+      comparison={comparison({
+        attempts: [
+          attempt({ runId: "turn-1", label: "Baseline", baseline: true, green: true }),
+          attempt({ runId: "fork-b", label: "retries", green: false, testsPassed: 0 }),
+        ],
+      })}
+    />,
+  );
+
+  // One approach here has passing tests and the other does not. The diagram
+  // must not turn that into a recommendation — it is evidence for a person,
+  // and the convergence node says what is needed, not what to pick.
+  for (const forbidden of [/recommend/i, /winner/i, /\bbest\b/i, /preferred/i]) {
+    assert.doesNotMatch(html, forbidden);
+  }
+
+  assert.doesNotMatch(html, /branch__path--winner|branch__path--leading/);
+  assert.match(html, /Decision required/);
+});
+
+test("a recorded decision replaces the question rather than repeating it", () => {
+  const html = renderToStaticMarkup(
+    <CompareView
+      comparison={comparison({
+        attempts: [
+          attempt({ runId: "turn-1", baseline: true }),
+          attempt({ runId: "fork-b" }),
+        ],
+        decision: {
+          runId: "fork-b",
+          kind: "adopt",
+          outcome: { applied: true, files: ["src/lock.ts"] },
+        },
+      })}
+    />,
+  );
+
+  assert.match(html, /Adopted · applied/);
+  assert.doesNotMatch(html, /Decision required/);
+});

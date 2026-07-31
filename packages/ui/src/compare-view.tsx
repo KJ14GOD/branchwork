@@ -3,6 +3,8 @@ import type {
   Comparison,
 } from "@novus/contracts/protocol";
 
+import { BranchDiagram } from "./branch-diagram.tsx";
+
 /**
  * Two attempts, shown so a person can choose between them.
  *
@@ -213,6 +215,13 @@ export const CompareView = ({
 
   return (
     <div className="compare">
+      {/*
+        The shape first. Every fact below is already on the cards; what they
+        cannot show is that the approaches share one recorded starting point,
+        which is the thing that makes comparing them fair.
+      */}
+      <BranchDiagram comparison={comparison} />
+
       {comparison.contestedPaths.length > 0 ? (
         // First, because it is the question. Approaches that changed different
         // files are not really competing; the ones that changed the same file

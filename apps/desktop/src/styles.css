@@ -3467,3 +3467,154 @@ select.open__input {
   content: "◆ ";
   color: var(--text-dim);
 }
+
+/* ---------- branch diagram ---------- */
+
+/*
+ * The shape of the work: one checkpoint, the approaches taken from it, and the
+ * decision they converge into. The cards below carry every fact this draws;
+ * what they cannot show is that all of it started from the same recorded
+ * point, which is what makes comparing them fair.
+ */
+.branch {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+}
+
+.branch__node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  text-align: center;
+}
+
+.branch__node-label {
+  color: var(--text);
+  font-size: var(--text-small);
+}
+
+.branch__node-note {
+  color: var(--text-dim);
+  font-size: var(--text-eyebrow);
+}
+
+/*
+ * The one state that earns an accent, and only when a person genuinely has to
+ * act. "Waiting for approaches to finish" is not a call to action and must not
+ * look like one.
+ */
+.branch__node--pending .branch__node-label {
+  color: var(--add);
+}
+
+/*
+ * The split and the join. Each column owns a 1px drop at its centre; the
+ * horizontal rail is the same border, clipped to start and end at the outer
+ * two centres so it never overhangs the diagram.
+ */
+/*
+ * The checkpoint's stem to the rail, and the rail's stem to the decision.
+ * Owned by the diagram rather than by a column: a column only sits at the
+ * centre when the branch count is odd, so leaning on that left the checkpoint
+ * disconnected for the two-approach case, which is the common one.
+ */
+.branch__stem {
+  align-self: center;
+  width: 1px;
+  height: var(--space-3);
+  background: var(--border-strong);
+}
+
+.branch__connectors {
+  display: grid;
+  height: var(--space-5);
+}
+
+.branch__connector {
+  position: relative;
+}
+
+.branch__connector::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--border-strong);
+}
+
+.branch__connector--first::before {
+  left: 50%;
+}
+
+.branch__connector--last::before {
+  right: 50%;
+}
+
+/* One approach has nothing to span — a stem, and no rail. */
+.branch__connector--only::before {
+  display: none;
+}
+
+.branch__connector::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-strong);
+}
+
+/* Mirrored: the rail sits at the bottom so the paths converge into it. */
+.branch__connectors--up .branch__connector::before {
+  top: auto;
+  bottom: 0;
+}
+
+.branch__row {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.branch__path {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: var(--space-3) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--bg);
+  text-align: center;
+}
+
+/* Marked, not promoted — the same restraint the approach cards keep. */
+.branch__path--baseline {
+  border-color: var(--border-strong);
+}
+
+.branch__name {
+  color: var(--text);
+  font-size: var(--text-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.branch__origin,
+.branch__state {
+  color: var(--text-dim);
+  font-size: var(--text-eyebrow);
+}
