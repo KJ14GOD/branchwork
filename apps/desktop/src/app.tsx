@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { SessionSummarySchema, type SessionSummary } from "@novus/contracts/protocol";
+import type { ParsedInvite } from "@novus/session-client";
 
-import { bridge } from "./bridge.ts";
+import { bridge, type LaunchDescriptor } from "./bridge.ts";
 import { OpenRepository } from "./components/open-repository.tsx";
+import { JoinEntry } from "./join/join-entry.tsx";
+import { JoinedTab } from "./join/joined-tab.tsx";
 import { SessionTab, type TabStatus } from "./session-tab.tsx";
 import { useSession } from "./use-session.ts";
 import { useTheme } from "./use-theme.ts";
@@ -82,24 +85,64 @@ const dotClass = (status: string | undefined): string => {
   return "idle";
 };
 
+/**
+ * A session this window joined rather than hosts. Held only for the life of
+ * the window, deliberately: the invite token is a credential, and the rule
+ * everywhere else in this app is that credentials do not outlive the window
+ * — host tabs persist to localStorage, joined tabs do not.
+ */
+type JoinedEntry = {
+  key: string;
+  invite: ParsedInvite;
+  label: string;
+};
+
 export const App = () => {
+  // Hosting or joining, from the main process. Hosting is the default and
+  // the only mode a browser (no bridge) can be in; null for the frame or two
+  // before Electron answers, during which nothing worker-shaped runs — a
+  // join window hydrating host tabs against a worker it does not have would
+  // fail every resume and then persist the empty result over the stored one.
+  const [launch, setLaunch] = useState<LaunchDescriptor | null>(() =>
+    bridge() ? null : { mode: "host", invite: null },
+  );
+
+  useEffect(() => {
+    void bridge()
+      ?.launch()
+      .then(setLaunch);
+  }, []);
+
+  const hosting = launch?.mode === "host";
+
   // Inside the Electron shell the main process owns the worker and tells us
-  // where it is listening; in a browser we fall back to the default port.
+  // where it is listening; in a browser we fall back to the default port. A
+  // joining window is told null — it has no worker — and keeps the fallback,
+  // which nothing in join mode ever contacts.
   const [endpoint, setEndpoint] = useState(FALLBACK_ENDPOINT);
 
   useEffect(() => {
     void bridge()
       ?.workerUrl()
-      .then(setEndpoint);
+      .then((url) => {
+        if (url !== null) {
+          setEndpoint(url);
+        }
+      });
   }, []);
 
-  const { capabilities, remembered, opening, error, open } = useSession(endpoint);
+  const { capabilities, remembered, opening, error, open } = useSession(
+    endpoint,
+    hosting,
+  );
   const { theme, toggleTheme } = useTheme();
 
   const [tabs, setTabs] = useState<SessionSummary[]>([]);
+  const [joined, setJoined] = useState<JoinedEntry[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [tabStatuses, setTabStatuses] = useState<Record<string, TabStatus>>({});
   const [newTabOpen, setNewTabOpen] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
   const hydrated = useRef(false);
 
   // Hydrated once, from what this window had open last — but a relaunch
@@ -131,6 +174,13 @@ export const App = () => {
   // and the fallback-endpoint pass simply get superseded by the next
   // invocation, the way a cancelled fetch normally would.
   useEffect(() => {
+    // Not until this window knows it is hosting: a joining window has no
+    // worker to resume against, and must never reach the persistence effect
+    // below with a discarded-empty result to write over the host's tabs.
+    if (!hosting) {
+      return;
+    }
+
     if (hydrated.current) {
       return;
     }
@@ -190,7 +240,7 @@ export const App = () => {
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, hosting]);
 
   // Persisted after every change, once hydration has actually run — guarded,
   // or the empty initial state this component renders with for one tick
@@ -236,6 +286,60 @@ export const App = () => {
     [open],
   );
 
+  // Joining is what opening an invite means — no worker involved, so unlike
+  // openTab there is nothing to await: the tab exists immediately and its
+  // own connection state says how contacting the host is going.
+  const openJoined = useCallback((invite: ParsedInvite) => {
+    const entry: JoinedEntry = {
+      key: crypto.randomUUID(),
+      invite,
+      label: invite.kind === "relay" ? "relay" : "joining…",
+    };
+
+    setJoined((current) => [...current, entry]);
+    setActiveId(entry.key);
+    setJoinOpen(false);
+  }, []);
+
+  const labelJoined = useCallback((key: string, label: string) => {
+    setJoined((current) =>
+      current.map((entry) =>
+        entry.key === key && entry.label !== label ? { ...entry, label } : entry,
+      ),
+    );
+  }, []);
+
+  const closeJoined = useCallback(
+    (key: string) => {
+      const index = joined.findIndex((entry) => entry.key === key);
+
+      if (index === -1) {
+        return;
+      }
+
+      const next = joined.filter((entry) => entry.key !== key);
+
+      setJoined(next);
+
+      if (activeId === key) {
+        setActiveId(
+          next[index - 1]?.key ?? next[0]?.key ?? tabs.at(-1)?.id ?? null,
+        );
+      }
+
+      setTabStatuses((current) => {
+        if (!(key in current)) {
+          return current;
+        }
+
+        const nextStatuses = { ...current };
+        delete nextStatuses[key];
+        return nextStatuses;
+      });
+    },
+    [joined, activeId, tabs],
+  );
+
   // Reads tabs/activeId from the closure rather than setTabs's own updater
   // form, deliberately: calling setActiveId from inside setTabs's updater
   // typechecked and worked, but updaters are supposed to be pure, and
@@ -259,8 +363,11 @@ export const App = () => {
       if (activeId === id) {
         // The tab to its left, falling back to the one that took its place —
         // closing the active tab should land on a neighbour, not jump to
-        // whichever tab happens to be first.
-        setActiveId(next[index - 1]?.id ?? next[0]?.id ?? null);
+        // whichever tab happens to be first. Joined tabs are the neighbour
+        // of last resort.
+        setActiveId(
+          next[index - 1]?.id ?? next[0]?.id ?? joined.at(-1)?.key ?? null,
+        );
       }
 
       setTabStatuses((current) => {
@@ -273,7 +380,7 @@ export const App = () => {
         return nextStatuses;
       });
     },
-    [tabs, activeId],
+    [tabs, activeId, joined],
   );
 
   const reportStatus = useCallback((id: string, status: TabStatus) => {
@@ -304,21 +411,72 @@ export const App = () => {
     </button>
   );
 
-  if (tabs.length === 0) {
+  // A quiet secondary action, not a mode: hosting stays the default and the
+  // Open screen stays about repositories. Joining is one click for the
+  // person who was actually handed an invite.
+  const joinButton = (
+    <button
+      className="icon-button"
+      type="button"
+      onClick={() => setJoinOpen(true)}
+      title="Join another host's session with an invite link"
+    >
+      Join
+    </button>
+  );
+
+  const joinOverlay = joinOpen ? (
+    <div
+      className="overlay"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          setJoinOpen(false);
+        }
+      }}
+    >
+      <JoinEntry embedded onJoin={openJoined} prefill={launch?.invite ?? null} />
+    </div>
+  ) : null;
+
+  if (launch === null) {
+    // One frame or two while Electron answers which kind of window this is.
+    // Rendering the hosting UI here instead was wrong twice over: it flashes
+    // controls a join window must not have, and its effects start talking to
+    // a worker that may belong to a different Novus.
     return (
       <div className="shell">
         <header className="titlebar">
           <span className="titlebar__mark">Novus</span>
           <span className="titlebar__spacer" />
+        </header>
+      </div>
+    );
+  }
+
+  if (tabs.length === 0 && joined.length === 0) {
+    return (
+      <div className="shell">
+        <header className="titlebar">
+          <span className="titlebar__mark">Novus</span>
+          <span className="titlebar__spacer" />
+          {hosting ? joinButton : null}
           {themeToggle}
         </header>
-        <OpenRepository
-          onOpen={openTab}
-          opening={opening}
-          error={error}
-          capabilities={capabilities}
-          remembered={remembered}
-        />
+        {hosting ? (
+          <OpenRepository
+            onOpen={openTab}
+            opening={opening}
+            error={error}
+            capabilities={capabilities}
+            remembered={remembered}
+          />
+        ) : (
+          // A join launch: no worker exists here, so there is no repository
+          // to open and no history to carry on with — the one thing this
+          // window does is join, and the launch may already carry the link.
+          <JoinEntry onJoin={openJoined} prefill={launch.invite} />
+        )}
+        {joinOverlay}
       </div>
     );
   }
@@ -371,16 +529,59 @@ export const App = () => {
               </div>
             );
           })}
+          {joined.map((entry) => {
+            const entryStatus = tabStatuses[entry.key];
+
+            return (
+              <div
+                key={entry.key}
+                role="button"
+                tabIndex={0}
+                className={`tab${entry.key === activeId ? " tab--active" : ""}`}
+                onClick={() => setActiveId(entry.key)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setActiveId(entry.key);
+                  }
+                }}
+                title="A session this window joined — it lives on another host"
+              >
+                <span
+                  className={`tab__dot tab__dot--${dotClass(entryStatus?.runStatus)}`}
+                />
+                <span className="tab__label">⇅ {entry.label}</span>
+                <button
+                  className="tab__close"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeJoined(entry.key);
+                  }}
+                  title="Leave this session"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
           <button
             className="tab tab--new"
             type="button"
-            onClick={() => setNewTabOpen(true)}
-            title="Open another repository in a new tab"
+            onClick={() =>
+              hosting ? setNewTabOpen(true) : setJoinOpen(true)
+            }
+            title={
+              hosting
+                ? "Open another repository in a new tab"
+                : "Join another session"
+            }
           >
             +
           </button>
         </div>
         <span className="titlebar__spacer" />
+        {hosting ? joinButton : null}
         {themeToggle}
       </header>
 
@@ -396,7 +597,17 @@ export const App = () => {
         />
       ))}
 
-      {newTabOpen ? (
+      {joined.map((entry) => (
+        <JoinedTab
+          key={entry.key}
+          invite={entry.invite}
+          active={entry.key === activeId}
+          onStatus={(status) => reportStatus(entry.key, status)}
+          onLabel={(label) => labelJoined(entry.key, label)}
+        />
+      ))}
+
+      {newTabOpen && hosting ? (
         <div
           className="overlay"
           onMouseDown={(event) => {
@@ -415,6 +626,8 @@ export const App = () => {
           />
         </div>
       ) : null}
+
+      {joinOverlay}
     </div>
   );
 };

@@ -16,8 +16,18 @@ import type { FileContent, TreeEntry } from "./fs-browser.ts";
  * access, no Node globals in the renderer.
  */
 contextBridge.exposeInMainWorld("novus", {
-  workerUrl: (): Promise<string> => ipcRenderer.invoke("novus:worker-url"),
-  accessToken: (): Promise<string> => ipcRenderer.invoke("novus:access-token"),
+  /**
+   * Whether this window was launched to host or to join, and the invite a
+   * join launch may have carried. Hosting is the default; the renderer only
+   * ever changes shape on an explicit join launch.
+   */
+  launch: (): Promise<{ mode: "host" | "join"; invite: string | null }> =>
+    ipcRenderer.invoke("novus:launch"),
+  /** Null in a joining window, which has no worker of its own. */
+  workerUrl: (): Promise<string | null> => ipcRenderer.invoke("novus:worker-url"),
+  /** Null in a joining window — its credential is the pasted invite token. */
+  accessToken: (): Promise<string | null> =>
+    ipcRenderer.invoke("novus:access-token"),
   pickDirectory: (): Promise<string | null> =>
     ipcRenderer.invoke("novus:pick-directory"),
 

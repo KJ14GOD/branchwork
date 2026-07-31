@@ -7,6 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import * as pty from "node-pty";
 
 import { listDirectory, readFileForViewer } from "./fs-browser.ts";
+import { choosePort, launchPlan } from "./launch.ts";
 import { serveRenderer, type RendererHost } from "./renderer-host.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -14,17 +15,32 @@ const repositoryRoot = resolve(here, "../../..");
 const workerEntry = resolve(repositoryRoot, "apps/worker/src/worker.ts");
 const envFile = resolve(repositoryRoot, ".env");
 
-const WORKER_PORT = Number(process.env.NOVUS_PORT ?? 4319);
+/**
+ * Hosting or joining, decided by how the app was launched — see launch.ts.
+ *
+ * Everything host-shaped below (the worker, its token, the terminal, the
+ * file browser, the directory picker) is conditional on this. A joining
+ * window is a teammate's window onto someone else's session: it holds no
+ * repository, spawns no worker, and gets no host credential to leak.
+ */
+const plan = launchPlan(process.argv, process.env);
+
+const PREFERRED_WORKER_PORT = Number(process.env.NOVUS_PORT ?? 4319);
+const WORKER_PORT_PINNED = process.env.NOVUS_PORT !== undefined;
 /**
  * Minted here rather than read back from the worker's output.
  *
  * The main process is the only party that needs to know it before the worker
  * exists, and parsing a secret out of a child's stdout would mean it had been
- * printed. This way it is passed in and never logged.
+ * printed. This way it is passed in and never logged. Minted even when a
+ * join launch will never use it — minting is free and branching here would
+ * buy nothing — but a join launch never *hands it out*: the IPC below
+ * answers null, because there is no worker for it to be a credential to.
  */
 const ACCESS_TOKEN =
   process.env.NOVUS_TOKEN?.trim() || randomBytes(32).toString("base64url");
-const WORKER_URL = `http://127.0.0.1:${WORKER_PORT}`;
+/** Known once the worker's port is settled; stays null for a join launch. */
+let workerUrl: string | null = null;
 const HEALTH_TIMEOUT_MS = 15_000;
 
 // Opt-in only, and never touched by a normal launch: lets this exact app be
@@ -55,13 +71,19 @@ let rendererOrigin: string | null = null;
  * host only through this process and the worker's loopback HTTP API. A crash
  * in the agent loop takes the worker down, not the window.
  */
-const startWorker = (): void => {
+const startWorker = (port: number): void => {
   worker = spawn(
     "node",
     [`--env-file=${envFile}`, "--experimental-strip-types", workerEntry],
     {
       cwd: resolve(repositoryRoot, "apps/worker"),
-      env: { ...process.env, NOVUS_TOKEN: ACCESS_TOKEN },
+      env: {
+        ...process.env,
+        NOVUS_TOKEN: ACCESS_TOKEN,
+        // Explicit even when it matches the default: when the default port
+        // was taken, this is how the worker learns the free one main chose.
+        NOVUS_PORT: String(port),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -89,12 +111,12 @@ const startWorker = (): void => {
   });
 };
 
-const waitForWorker = async (): Promise<boolean> => {
+const waitForWorker = async (url: string): Promise<boolean> => {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${WORKER_URL}/health`);
+      const response = await fetch(`${url}/health`);
 
       if (response.ok) {
         return true;
@@ -152,13 +174,29 @@ const createWindow = (): void => {
   }
 };
 
-ipcMain.handle("novus:worker-url", () => WORKER_URL);
+// How the renderer learns which kind of window it is. Hosting is the default
+// and carries no invite; a join launch may carry the pasted link so the join
+// screen starts filled in.
+ipcMain.handle("novus:launch", () =>
+  plan.mode === "join"
+    ? { mode: "join", invite: plan.invite }
+    : { mode: "host", invite: null },
+);
+
+ipcMain.handle("novus:worker-url", () => workerUrl);
 // The renderer needs it to call the worker at all. It stays out of the page URL
-// and out of the DOM; the preload bridge is the only way across.
-ipcMain.handle("novus:access-token", () => ACCESS_TOKEN);
+// and out of the DOM; the preload bridge is the only way across. A joining
+// window gets null: there is no worker here, so there is nothing this would
+// be a credential to — a joined session's credential is the invite token,
+// which the person pastes and the renderer holds.
+ipcMain.handle("novus:access-token", () =>
+  plan.mode === "host" ? ACCESS_TOKEN : null,
+);
 
 ipcMain.handle("novus:pick-directory", async () => {
-  if (!window) {
+  // A joining window has no repository to choose. The join UI never shows
+  // the button; this is the backstop behind it.
+  if (!window || plan.mode === "join") {
     return null;
   }
 
@@ -189,6 +227,14 @@ const terminals = new Map<string, pty.IPty>();
 ipcMain.handle(
   "novus:terminal-create",
   (event, options: { cwd?: string; cols: number; rows: number }) => {
+    if (plan.mode === "join") {
+      // The widening above is argued for the *host's* window. A joining
+      // window is a teammate's view of someone else's session; nothing about
+      // joining entitles it to a shell on this machine, so the capability is
+      // refused at the boundary rather than merely not rendered.
+      throw new Error("A joining window has no host terminal.");
+    }
+
     const id = randomBytes(8).toString("hex");
     const shellPath = process.env.SHELL || "/bin/zsh";
 
@@ -276,6 +322,13 @@ const registeredRepositories = new Set<string>();
 ipcMain.on(
   "novus:fs-register-repository",
   (_event, repositoryPath: string) => {
+    // A joining window never legitimately opens a repository, so nothing it
+    // says can make one browsable — fs-list and fs-read then refuse every
+    // path, because the set stays empty.
+    if (plan.mode === "join") {
+      return;
+    }
+
     registeredRepositories.add(repositoryPath);
   },
 );
@@ -336,15 +389,41 @@ const prepareRenderer = async (): Promise<boolean> => {
 };
 
 void app.whenReady().then(async () => {
-  startWorker();
+  // The delineation, in one branch: hosting spawns the worker and waits for
+  // it, exactly as this app always has; joining spawns nothing, because a
+  // joining window has no repository and no business holding the standard
+  // worker port — it reads someone else's session over the invite's own
+  // transport instead.
+  if (plan.mode === "host") {
+    const chosen = await choosePort(PREFERRED_WORKER_PORT, WORKER_PORT_PINNED);
 
-  const healthy = await waitForWorker();
+    if (chosen.kind === "refused") {
+      dialog.showErrorBox("Novus could not start its worker", chosen.reason);
+      app.quit();
 
-  if (!healthy) {
-    dialog.showErrorBox(
-      "Novus could not reach its worker",
-      `The worker did not start listening on ${WORKER_URL} within ${HEALTH_TIMEOUT_MS / 1000}s.`,
-    );
+      return;
+    }
+
+    if (chosen.fallback) {
+      // Almost always another Novus already hosting on this machine. Moving
+      // is safe: the renderer learns the URL over IPC and every invite link
+      // this instance mints carries the real endpoint.
+      console.log(
+        `[novus] port ${PREFERRED_WORKER_PORT} is taken (another Novus?) — this worker will listen on ${chosen.port} instead`,
+      );
+    }
+
+    workerUrl = `http://127.0.0.1:${chosen.port}`;
+    startWorker(chosen.port);
+
+    const healthy = await waitForWorker(workerUrl);
+
+    if (!healthy) {
+      dialog.showErrorBox(
+        "Novus could not reach its worker",
+        `The worker did not start listening on ${workerUrl} within ${HEALTH_TIMEOUT_MS / 1000}s.`,
+      );
+    }
   }
 
   if (!(await prepareRenderer())) {
@@ -353,25 +432,37 @@ void app.whenReady().then(async () => {
     return;
   }
 
-  // Printed here rather than forwarded from the worker. The worker prints its
-  // own invite line, and main strips the token out of what it re-emits so the
-  // credential does not land in the launching shell's scrollback — which left
-  // the printed link carrying "[redacted]" where the token should be, and no
-  // way to invite anybody. Main holds the token, so main is the right place to
-  // compose the one usable line.
-  const guestPort = Number(process.env.NOVUS_GUEST_PORT ?? 5274);
+  if (plan.mode === "host" && workerUrl !== null) {
+    // Printed here rather than forwarded from the worker. The worker prints
+    // its own invite line, and main strips the token out of what it re-emits
+    // so the credential does not land in the launching shell's scrollback —
+    // which left the printed link carrying "[redacted]" where the token
+    // should be, and no way to invite anybody. Main holds the token, so main
+    // is the right place to compose the one usable line.
+    const guestPort = Number(process.env.NOVUS_GUEST_PORT ?? 5274);
 
-  console.log("");
-  console.log("Open a second, read-only viewer with:");
-  console.log("");
-  console.log(`  pnpm --filter @novus/guest dev`);
-  console.log("");
-  console.log("then open this, once you have opened a repository:");
-  console.log("");
-  console.log(
-    `  http://127.0.0.1:${guestPort}/?endpoint=${encodeURIComponent(WORKER_URL)}&token=${ACCESS_TOKEN}`,
-  );
-  console.log("");
+    console.log("");
+    console.log(
+      "A teammate on this machine joins from their own Novus app: they paste",
+    );
+    console.log(
+      "an invite from the session's Invite panel, or you can hand them this",
+    );
+    console.log("host-level link (full owner access — prefer a role-scoped invite):");
+    console.log("");
+    console.log(
+      `  http://127.0.0.1:${guestPort}/?endpoint=${encodeURIComponent(workerUrl)}&token=${ACCESS_TOKEN}`,
+    );
+    console.log("");
+    console.log(
+      "The same link opens in the read-only browser guest (pnpm --filter @novus/guest dev).",
+    );
+    console.log("");
+  } else {
+    console.log(
+      "[novus] join launch — no worker was started; this window joins another host's session",
+    );
+  }
 
   createWindow();
 
