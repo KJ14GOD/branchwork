@@ -165,19 +165,27 @@ export const describeConnection = (
 
 type ToolCompletedEvent = Extract<SessionEvent, { type: "tool.completed" }>;
 
-/** A completed `propose_patch`, narrowed so its diff counters are readable. */
+/**
+ * A completed proposal, narrowed so its diff counters are readable. All
+ * three proposal kinds — an edit, a new file, a deletion — share the same
+ * output shape (patchId, path, diff, additions, deletions), so the rail's
+ * counters treat them alike; counting only edits would show a teammate a
+ * rail that says nothing changed while a file was being created.
+ */
 export type PatchEvent = Omit<ToolCompletedEvent, "payload"> & {
   payload: Omit<ToolCompletedEvent["payload"], "result"> & {
     result: Extract<
       ToolCompletedEvent["payload"]["result"],
-      { name: "propose_patch" }
+      { name: "propose_patch" | "propose_new_file" | "propose_deletion" }
     >;
   };
 };
 
 export const isPatchEvent = (event: SessionEvent): event is PatchEvent =>
   event.type === "tool.completed" &&
-  event.payload.result.name === "propose_patch";
+  (event.payload.result.name === "propose_patch" ||
+    event.payload.result.name === "propose_new_file" ||
+    event.payload.result.name === "propose_deletion");
 
 export type TimelineSummary = {
   goal: string | null;

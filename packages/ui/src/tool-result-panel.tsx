@@ -129,5 +129,122 @@ export const ToolResultPanel = ({
     );
   }
 
+  // run_build shares run_command/run_tests's outcome shape, so it reads the
+  // same way — the verdict first, then whatever the command actually said.
+  if (result.name === "run_build") {
+    const streams = [result.output.stderr, result.output.stdout]
+      .filter(Boolean)
+      .join("\n");
+
+    return (
+      <div className="kv">
+        <span className="kv__key">command</span>
+        <span className="kv__value">{result.output.command}</span>
+        <span className="kv__key">outcome</span>
+        <span className="kv__value">
+          {result.output.succeeded ? "built · " : "failed · "}
+          {result.output.timedOut
+            ? "timed out"
+            : result.output.exitCode === null
+              ? "killed"
+              : `exit ${result.output.exitCode}`}
+          {" · "}
+          {Math.round(result.output.durationMs / 100) / 10}s
+        </span>
+        {streams && (
+          <>
+            <span className="kv__key">output</span>
+            <pre className="kv__value">
+              {streams}
+              {result.output.truncated ? "\n… truncated" : ""}
+            </pre>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  if (result.name === "run_diagnostics") {
+    return (
+      <div className="kv">
+        <span className="kv__key">{result.output.kind}</span>
+        <span className="kv__value">
+          {result.output.ok ? "clean" : "problems found"}
+          {" · "}
+          {Math.round(result.output.durationMs / 100) / 10}s
+        </span>
+        <span className="kv__key">command</span>
+        <span className="kv__value">{result.output.command}</span>
+        {result.output.diagnostics.length > 0 && (
+          <>
+            <span className="kv__key">found</span>
+            <ul className="matches">
+              {result.output.diagnostics.map((diagnostic, index) => (
+                <li
+                  className="matches__row"
+                  key={`${diagnostic.path}:${diagnostic.line ?? 0}:${index}`}
+                >
+                  <span className="matches__path">{diagnostic.path}</span>
+                  <span className="matches__line">{diagnostic.line ?? ""}</span>
+                  <span className="matches__text">{diagnostic.message}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  if (result.name === "dev_server") {
+    const { output } = result;
+
+    return (
+      <div className="kv">
+        <span className="kv__key">action</span>
+        <span className="kv__value">{output.action}</span>
+        {output.action === "start" ? (
+          <>
+            <span className="kv__key">command</span>
+            <span className="kv__value">{output.command}</span>
+            <span className="kv__key">port</span>
+            <span className="kv__value">
+              {output.port} · {output.state}
+            </span>
+          </>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (result.name === "git_branches") {
+    return (
+      <div className="kv">
+        <span className="kv__key">current</span>
+        <span className="kv__value">
+          {result.output.current ?? "detached HEAD"}
+        </span>
+        <span className="kv__key">branches</span>
+        <ul className="matches">
+          {result.output.branches.map((branch) => (
+            <li className="matches__row" key={branch.name}>
+              <span className="matches__path">
+                {branch.isCurrent ? "▸ " : ""}
+                {branch.name}
+              </span>
+              <span className="matches__line">
+                {branch.revision.slice(0, 8)}
+              </span>
+              <span className="matches__text">
+                {branch.subject}
+                {branch.upstream ? ` · ${branch.upstream}` : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
   return panels ? panels(result) : null;
 };

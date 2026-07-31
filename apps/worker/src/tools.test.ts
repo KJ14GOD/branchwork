@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
   ListProviderModelsTool,
+  RunBuildTool,
   RunCommandTool,
   RunTestsTool,
 } from "./tools.ts";
@@ -286,6 +287,67 @@ test("run_tests explains itself when there is no package.json at all", async () 
         input: { args: [] },
       }),
     /no package.json/,
+  );
+});
+
+test("run_build reports success and failure as verdicts, not throws", async () => {
+  const repository = await temporaryRepository();
+  await writeFile(
+    join(repository, "package.json"),
+    JSON.stringify({ name: "fixture", scripts: { build: "exit 0" } }),
+  );
+  await writeFile(join(repository, "package-lock.json"), "{}");
+
+  const tool = new RunBuildTool(repository);
+  const passing = await tool.execute({
+    id: "17",
+    name: "run_build",
+    input: { args: [] },
+  });
+
+  if (passing.name !== "run_build") return assert.fail("wrong result");
+
+  assert.equal(passing.output.succeeded, true);
+  assert.equal(passing.output.exitCode, 0);
+
+  // A failing build is an observation the model reads and reacts to — the
+  // same invariant run_tests holds, because a build that ends the run would
+  // hide the one piece of evidence the model needed.
+  await writeFile(
+    join(repository, "package.json"),
+    JSON.stringify({ name: "fixture", scripts: { build: "exit 2" } }),
+  );
+
+  const failing = await tool.execute({
+    id: "18",
+    name: "run_build",
+    input: { args: [] },
+  });
+
+  if (failing.name !== "run_build") return assert.fail("wrong result");
+
+  assert.equal(failing.output.succeeded, false);
+  assert.equal(failing.output.exitCode, 2);
+});
+
+test("run_build explains itself when the project declares no build script", async () => {
+  const repository = await temporaryRepository();
+  await writeFile(
+    join(repository, "package.json"),
+    JSON.stringify({ name: "fixture" }),
+  );
+
+  // The refusal names what is missing and what to do instead — the project
+  // declares how it builds, and the tool must not invent a compiler
+  // invocation on its behalf.
+  await assert.rejects(
+    () =>
+      new RunBuildTool(repository).execute({
+        id: "19",
+        name: "run_build",
+        input: { args: [] },
+      }),
+    /requires a "build" script/,
   );
 });
 

@@ -27,8 +27,12 @@ built next.
 
 **Both halves are now real, and the gap between them has closed almost all the
 way.** The harness half: a typed agent loop with a budget in place of a step
-ceiling, nine tools including command execution and Git, a propose-then-apply
-patch flow, path confinement that survives symlinks, deny-by-default
+ceiling, sixteen tools including command execution, Git branches and
+worktrees, structured typecheck/lint diagnostics, build execution,
+long-running dev-server management, and file creation and deletion through
+the same propose-then-apply gate as edits (2026-07-30 — before that an agent
+could not create a file at all without contorting run_command), path
+confinement that survives symlinks, deny-by-default
 permissions, and an event stream three surfaces render live (desktop, guest,
 and a relay in between). The multiplayer half: a real SQLite-backed event
 store behind an HTTP+SSE worker, a separate WebSocket relay process a teammate
@@ -368,7 +372,14 @@ data is available.
 Start with three classes:
 
 - **Read:** repository search and file reads; allowed automatically.
-- **Write:** patches inside the selected repository; session-owner configurable.
+- **Write:** patches inside the selected repository, including creating a file
+  and deleting one; session-owner configurable. Deletion is deliberately in
+  this class rather than Dangerous — an ordinary patch could already blank a
+  file's contents, so a separate class for removing it would be a distinction
+  the threat model does not actually make — but it does mean
+  `NOVUS_ALLOW_WRITES=1` authorises removal without a per-call prompt. Every
+  deletion still goes through propose-then-apply, so what is being authorised
+  is reviewable as a diff first.
 - **Dangerous:** arbitrary commands, network access, destructive Git operations,
   paths outside the repository, and secrets; explicit approval required or denied.
   One narrow exception: `list_provider_models` is network but classed Read — it
@@ -601,9 +612,20 @@ surviving a restart, not just its events — is now also true, fixed 2026-07-30.
 - [x] Repository selection
 - [x] Model adapter and BYOK credential storage
 - [~] Context assembly — goal plus prior turns; no repository context yet
-- [x] Native read/search/patch/command/Git/test tools — all nine exist and are
-      wired into every session. The live benchmark run below reached for five of
-      them unprompted.
+- [x] Native read/search/patch/command/Git/test tools — all nine of the
+      initial list exist and are wired into every session. The live benchmark
+      run below reached for five of them unprompted. Since 2026-07-30 the set
+      is sixteen: file creation and deletion joined the propose/apply flow
+      (`propose_new_file`, `propose_deletion` — before that "write a new
+      module" was only reachable through run_command, an unreviewable
+      dangerous-class write), and README's remaining "Native tools" bullets
+      landed as `run_diagnostics` (typecheck/lint with parsed
+      file/line/severity output), `run_build`, `dev_server`
+      (start/stop/status/logs for processes that outlive a call, killed with
+      the worker so nothing leaks a port), and `git_branches`. What none of
+      them are proven against yet: a live model turn — every one is
+      deterministic-tested only, the same standing the rest of this table had
+      before its benchmark run.
 - [x] State machine and permission checks
 - [x] Streaming execution timeline
 - [x] Final receipt

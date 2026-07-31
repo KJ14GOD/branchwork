@@ -535,7 +535,11 @@ export const createRedactor = (options: RedactorOptions = {}): Redactor => {
       // try/catch, propagate out of append, and end the run. Redaction must
       // never be able to do that, so it is read defensively rather than on the
       // strength of a schema in another package.
-      if (result.name === "run_command" || result.name === "run_tests") {
+      if (
+        result.name === "run_command" ||
+        result.name === "run_tests" ||
+        result.name === "run_build"
+      ) {
         const command = result.output?.command;
 
         if (typeof command === "string" && DOTENV_REFERENCE.test(command)) {
@@ -549,6 +553,55 @@ export const createRedactor = (options: RedactorOptions = {}): Redactor => {
                   ...result.output,
                   stdout: redactDotenvAssignments(result.output.stdout),
                   stderr: redactDotenvAssignments(result.output.stderr),
+                },
+              },
+            },
+          } as SessionEvent;
+        }
+      }
+
+      // The same rule for the other outputs a command's words can explain.
+      // run_diagnostics carries its transcript as `raw`; a dev server carries
+      // its output as `logs` on both the start and logs actions — and
+      // `dev_server start cat .env` is run_command's dotenv case wearing a
+      // different tool name, which is why the logs result repeats the command
+      // that produced it.
+      if (result.name === "run_diagnostics") {
+        const command = result.output?.command;
+
+        if (typeof command === "string" && DOTENV_REFERENCE.test(command)) {
+          source = {
+            ...event,
+            payload: {
+              ...event.payload,
+              result: {
+                ...result,
+                output: {
+                  ...result.output,
+                  raw: redactDotenvAssignments(result.output.raw),
+                },
+              },
+            },
+          } as SessionEvent;
+        }
+      }
+
+      if (
+        result.name === "dev_server" &&
+        (result.output.action === "start" || result.output.action === "logs")
+      ) {
+        const command = result.output.command;
+
+        if (typeof command === "string" && DOTENV_REFERENCE.test(command)) {
+          source = {
+            ...event,
+            payload: {
+              ...event.payload,
+              result: {
+                ...result,
+                output: {
+                  ...result.output,
+                  logs: redactDotenvAssignments(result.output.logs),
                 },
               },
             },

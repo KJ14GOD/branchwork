@@ -19,17 +19,23 @@ import {
 } from "./policy.ts";
 import {
   ApplyPatchTool,
+  GitBranchesTool,
   GitDiffTool,
   GitStatusTool,
   ListDirectoryTool,
   ListProviderModelsTool,
+  ProposeDeletionTool,
+  ProposeNewFileTool,
   ProposePatchTool,
   ReadFileTool,
+  RunBuildTool,
   RunCommandTool,
   RunTestsTool,
   SearchRepositoryTool,
   type AgentTool,
 } from "./tools.ts";
+import { RunDiagnosticsTool } from "./diagnostics.ts";
+import { DevServerTool } from "./dev-server.ts";
 
 const run = promisify(execFile);
 
@@ -185,7 +191,18 @@ const buildApprovalGate = (
   }
 
   if (allowCommands) {
-    allowed.push("run_command", "run_tests");
+    // Every dangerous-class tool this flag stands for, by name. This list and
+    // TOOL_CLASSES in policy.ts have to move together: a tool classified
+    // dangerous but missing here is not denied loudly — it is denied on every
+    // call of every session with commands enabled, which reads as a broken
+    // tool rather than a policy decision.
+    allowed.push(
+      "run_command",
+      "run_tests",
+      "run_build",
+      "run_diagnostics",
+      "dev_server",
+    );
   }
 
   return allowed.length > 0
@@ -302,36 +319,48 @@ export class SessionRegistry {
   private buildTools(repositoryPath: string): AgentTool[] {
     const proposePatchTool = new ProposePatchTool(repositoryPath);
 
-    // Only an adapter with a provider behind it can answer which model ids
-    // exist, so the tool appears exactly when the session's adapter can. A
-    // scripted session simply does not have it, rather than having a tool
-    // that fails.
+    // Registered whether or not the adapter can answer, because the tool is
+    // *described* to the model unconditionally — TOOL_DESCRIPTIONS is one
+    // static list every adapter shares. A described tool the runner cannot
+    // find does not fail the call, it fails the run ("No tool is configured
+    // for..."), so an adapter without listModels used to turn this one
+    // request into a dead session. Now it is an ordinary tool error the
+    // model reads and moves on from.
     const selection = this.router.select({ goal: "" });
     const adapter = this.adapters.find(
       (candidate) =>
         candidate.selection.provider === selection.provider &&
         candidate.selection.model === selection.model,
     );
-    const providerTools: AgentTool[] =
+    const listModels =
       adapter?.listModels !== undefined
-        ? [
-            new ListProviderModelsTool(selection.provider, () =>
-              adapter.listModels!(),
-            ),
-          ]
-        : [];
+        ? () => adapter.listModels!()
+        : async (): Promise<string[]> => {
+            throw new Error(
+              `The ${selection.provider} adapter does not expose a model list, so this question cannot be answered from here.`,
+            );
+          };
 
     return [
       new SearchRepositoryTool(repositoryPath),
       new ReadFileTool(repositoryPath),
       proposePatchTool,
+      // All three propose tools feed one store — proposePatchTool — so
+      // apply_patch resolves any patchId from one place regardless of
+      // which kind of change it names.
+      new ProposeNewFileTool(repositoryPath, proposePatchTool),
+      new ProposeDeletionTool(repositoryPath, proposePatchTool),
       new ApplyPatchTool(repositoryPath, proposePatchTool),
       new RunCommandTool(repositoryPath),
       new RunTestsTool(repositoryPath),
+      new RunBuildTool(repositoryPath),
+      new RunDiagnosticsTool(repositoryPath),
+      new DevServerTool(repositoryPath),
       new ListDirectoryTool(repositoryPath),
       new GitStatusTool(repositoryPath),
       new GitDiffTool(repositoryPath),
-      ...providerTools,
+      new GitBranchesTool(repositoryPath),
+      new ListProviderModelsTool(selection.provider, listModels),
     ];
   }
 

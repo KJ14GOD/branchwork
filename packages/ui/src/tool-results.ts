@@ -74,12 +74,38 @@ export const summariseCall = (call: ToolCall): string => {
     return `${call.input.path} · ${call.input.edits.length} edit${call.input.edits.length === 1 ? "" : "s"}`;
   }
 
+  if (call.name === "propose_new_file") {
+    return `${call.input.path} · new file`;
+  }
+
+  if (call.name === "propose_deletion") {
+    return `${call.input.path} · delete`;
+  }
+
   if (call.name === "run_command") {
     return [call.input.command, ...call.input.args].join(" ");
   }
 
   if (call.name === "run_tests") {
     return call.input.args.length > 0 ? call.input.args.join(" ") : "full suite";
+  }
+
+  if (call.name === "run_build") {
+    return call.input.args.length > 0 ? call.input.args.join(" ") : "full build";
+  }
+
+  if (call.name === "run_diagnostics") {
+    return call.input.kind;
+  }
+
+  if (call.name === "dev_server") {
+    const input = call.input;
+
+    return input.action === "start"
+      ? `start ${[input.command, ...input.args].join(" ")}`
+      : input.action === "status"
+        ? "status"
+        : `${input.action} ${input.serverId}`;
   }
 
   if (call.name === "list_directory") {
@@ -94,6 +120,10 @@ export const summariseCall = (call: ToolCall): string => {
     return [call.input.staged ? "staged" : "unstaged", call.input.path]
       .filter(Boolean)
       .join(" · ");
+  }
+
+  if (call.name === "git_branches") {
+    return "branches and worktrees";
   }
 
   // Its input is empty, so the summary has to say what the question is.
@@ -122,6 +152,24 @@ export type SummarisableToolResult = Exclude<
   { name: "propose_patch" | "apply_patch" }
 >;
 
+/** One dev_server result reduced to a line, per action. */
+const summariseDevServer = (
+  output: Extract<SummarisableToolResult, { name: "dev_server" }>["output"],
+): string =>
+  output.action === "start"
+    ? output.state === "listening"
+      ? `listening on :${output.port}`
+      : output.state === "starting"
+        ? `starting on :${output.port} — port not answering yet`
+        : `exited before listening${output.exitCode === null ? "" : ` (${output.exitCode})`}`
+    : output.action === "stop"
+      ? output.stopped
+        ? "stopped"
+        : "was already gone"
+      : output.action === "status"
+        ? `${output.servers.length} server${output.servers.length === 1 ? "" : "s"}`
+        : "recent output";
+
 /** The line beside a completed tool's name, before its panel is opened. */
 export const summariseToolResult = (result: SummarisableToolResult): string =>
   result.name === "read_file"
@@ -132,16 +180,34 @@ export const summariseToolResult = (result: SummarisableToolResult): string =>
         ? result.output.passed
           ? "tests passed"
           : "tests failed"
-        : result.name === "list_directory"
-          ? `${result.output.entries.length} entr${result.output.entries.length === 1 ? "y" : "ies"}`
-          : result.name === "git_status"
-            ? result.output.clean === null
-              ? "status unavailable"
-              : result.output.clean
-                ? "working tree clean"
-                : `${result.output.files.length} file${result.output.files.length === 1 ? "" : "s"} dirty`
-            : result.name === "git_diff"
-              ? `${result.output.filesChanged} file${result.output.filesChanged === 1 ? "" : "s"} in diff`
-              : result.name === "list_provider_models"
-                ? `${result.output.models.length} model id${result.output.models.length === 1 ? "" : "s"} from ${result.output.provider}`
-                : result.output.command;
+        : result.name === "run_build"
+          ? result.output.succeeded
+            ? "build succeeded"
+            : "build failed"
+          : result.name === "run_diagnostics"
+            ? result.output.ok && result.output.diagnostics.length === 0
+              ? `${result.output.kind} clean`
+              : result.output.diagnostics.length === 0
+                ? `${result.output.kind} failed — nothing parsed, see output`
+                : `${result.output.diagnostics.length}${result.output.diagnosticsTruncated ? "+" : ""} problem${result.output.diagnostics.length === 1 ? "" : "s"}`
+            : result.name === "dev_server"
+              ? summariseDevServer(result.output)
+              : result.name === "propose_new_file"
+                ? `${result.output.path} proposed · +${result.output.additions}`
+                : result.name === "propose_deletion"
+                  ? `${result.output.path} proposed · −${result.output.deletions}`
+                  : result.name === "list_directory"
+                    ? `${result.output.entries.length} entr${result.output.entries.length === 1 ? "y" : "ies"}`
+                    : result.name === "git_status"
+                      ? result.output.clean === null
+                        ? "status unavailable"
+                        : result.output.clean
+                          ? "working tree clean"
+                          : `${result.output.files.length} file${result.output.files.length === 1 ? "" : "s"} dirty`
+                      : result.name === "git_diff"
+                        ? `${result.output.filesChanged} file${result.output.filesChanged === 1 ? "" : "s"} in diff`
+                        : result.name === "git_branches"
+                          ? `${result.output.branches.length} branch${result.output.branches.length === 1 ? "" : "es"} · on ${result.output.current ?? "detached HEAD"}`
+                          : result.name === "list_provider_models"
+                            ? `${result.output.models.length} model id${result.output.models.length === 1 ? "" : "s"} from ${result.output.provider}`
+                            : result.output.command;

@@ -1,12 +1,11 @@
 import type { ToolCall } from "@novus/contracts";
 
 /**
- * What every model provider is told about the nine native tools, in one
- * place.
+ * What every model provider is told about the native tools, in one place.
  *
- * This used to be defined once per provider, as a full second copy of nine
- * JSON schemas — reasonable when there was one provider to write it for, and
- * the wrong shape the moment a second one needs the same nine tools described
+ * This used to be defined once per provider, as a full second copy of every
+ * JSON schema — reasonable when there was one provider to write it for, and
+ * the wrong shape the moment a second one needs the same tools described
  * the same way. Two adapters that drifted on a tool's description, or on the
  * system prompt that tells a model how to use them, would make any
  * comparison between the providers meaningless before either one wrote a
@@ -36,7 +35,7 @@ export type ToolDescription = {
 // verified. Shared across providers because the failure is the model's
 // behavior, not a property of one API.
 export const SYSTEM_PROMPT =
-  "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. Cite line numbers only when a tool result actually showed them: search results carry line numbers, plain file reads do not, and an estimated line number presented as a citation is an invention. When a conclusion depends on knowledge from outside this repository — a provider's model names, a library's behavior, version facts — say it is unverified instead of stating it as fact. When a change is needed, call propose_patch to produce a reviewable diff, then call apply_patch with the patchId it returns to write it. After applying a change, call run_tests to confirm it works, and report what the tests actually said rather than asserting success. apply_patch, run_command, and run_tests require human approval and may be denied — if one is, explain what you would have done rather than trying to work around the denial.";
+  "You are a coding agent working in a local repository. Search the repository to discover relevant files, then read files for exact evidence. Never invent file contents. Cite line numbers only when a tool result actually showed them: search results carry line numbers, plain file reads do not, and an estimated line number presented as a citation is an invention. When a conclusion depends on knowledge from outside this repository — a provider's model names, a library's behavior, version facts — say it is unverified instead of stating it as fact. When a change is needed, call propose_patch to produce a reviewable diff — or propose_new_file to create a file, or propose_deletion to remove one — then call apply_patch with the patchId it returns to write it. After applying a change, call run_tests to confirm it works, and run_diagnostics or run_build when the question is types, lint, or whether the project still compiles; report what they actually said rather than asserting success. apply_patch, run_command, run_tests, run_build, run_diagnostics, and dev_server require human approval and may be denied — if one is, explain what you would have done rather than trying to work around the denial.";
 
 export const TOOL_DESCRIPTIONS: readonly ToolDescription[] = [
   {
@@ -126,9 +125,54 @@ export const TOOL_DESCRIPTIONS: readonly ToolDescription[] = [
     },
   },
   {
+    name: "propose_new_file",
+    description:
+      "Propose creating a file that does not exist yet, with its complete content. Novus returns a patchId and a reviewable diff of the whole file; nothing is written until apply_patch is called with that patchId. Use this for new files only — propose_patch edits existing ones. Parent directories are created on apply.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description:
+            "Repository-relative path for the new file. It must not exist yet.",
+        },
+        intent: {
+          type: "string",
+          description: "One sentence describing why this file should exist.",
+        },
+        content: {
+          type: "string",
+          description: "The complete content of the new file.",
+        },
+      },
+      required: ["path", "intent", "content"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_deletion",
+    description:
+      "Propose deleting one existing file. Novus returns a patchId and a diff showing the removal; the file is only deleted when apply_patch is called with that patchId, and the apply fails if the file changed after this proposal. Directories are refused — propose their files individually.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Repository-relative path of the file to delete.",
+        },
+        intent: {
+          type: "string",
+          description: "One sentence describing why this file should go.",
+        },
+      },
+      required: ["path", "intent"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "apply_patch",
     description:
-      "Apply a patch you previously proposed, writing it to the working tree. Takes the patchId returned by propose_patch. This requires human approval and may be denied. It fails if the file changed since the patch was proposed.",
+      "Apply a proposal you previously made — an edit from propose_patch, a new file from propose_new_file, or a deletion from propose_deletion — writing it to the working tree. Takes the patchId the proposal returned. This requires human approval and may be denied. It fails if the file changed since the proposal was made.",
     parameters: {
       type: "object",
       properties: {
@@ -197,6 +241,102 @@ export const TOOL_DESCRIPTIONS: readonly ToolDescription[] = [
     },
   },
   {
+    name: "run_build",
+    description:
+      "Run the repository's own build script and report whether it succeeded. Use this when the question is 'does the project still compile/bundle' — it requires a \"build\" script in package.json and runs exactly that, so the verdict is the project's own. Requires human approval and may be denied.",
+    parameters: {
+      type: "object",
+      properties: {
+        args: {
+          type: "array",
+          maxItems: 32,
+          items: { type: "string" },
+          description: "Optional extra arguments passed to the build script.",
+        },
+        timeoutMs: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 600000,
+          description: "Kill the build after this long. Defaults to 120000.",
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "run_diagnostics",
+    description:
+      "Typecheck or lint the project and get back a structured list of problems — file, line, severity, message, rule — instead of raw checker output. Prefer this over run_command for 'are there type errors' and 'does lint pass': it finds the project's own typecheck/lint script (falling back to an installed tsc or eslint), and its diagnostics are parsed for you. Requires human approval and may be denied.",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          enum: ["typecheck", "lint"],
+          description:
+            "Which checker to run: 'typecheck' for the type system, 'lint' for style and correctness rules.",
+        },
+        timeoutMs: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 600000,
+          description: "Kill the checker after this long. Defaults to 120000.",
+        },
+      },
+      required: ["kind"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "dev_server",
+    description:
+      "Manage long-running development servers. Unlike run_command, a process started here is supposed to keep running after the call returns — use it for dev servers and watchers, never for one-shot commands. action 'start' needs command (a program name on PATH, no shell, no pipes) and args, and returns a serverId, the port (also given to the process as the PORT environment variable), and whether the port is answering yet. 'status' lists this session's servers, 'logs' returns one server's recent output, 'stop' terminates one by serverId. Servers die with the session's worker; they do not survive it. Requires human approval and may be denied.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["start", "stop", "status", "logs"],
+          description:
+            "What to do. 'start' requires command; 'stop' and 'logs' require serverId; 'status' takes nothing else.",
+        },
+        command: {
+          type: "string",
+          description:
+            "start only: program name resolved on PATH, such as 'node' or 'npx'. Not a path and not a shell line.",
+        },
+        args: {
+          type: "array",
+          maxItems: 64,
+          items: { type: "string" },
+          description: "start only: arguments, one array element each.",
+        },
+        port: {
+          type: "integer",
+          minimum: 1024,
+          maximum: 65535,
+          description:
+            "start only: a specific port to hold for this server. Omit to have a free one allocated — the chosen port is passed to the process as PORT either way.",
+        },
+        readyTimeoutMs: {
+          type: "integer",
+          minimum: 500,
+          maximum: 60000,
+          description:
+            "start only: how long to wait for the port to answer before reporting the server as still starting. Defaults to 5000.",
+        },
+        serverId: {
+          type: "string",
+          description:
+            "stop and logs only: the serverId a previous start returned.",
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "list_directory",
     description:
       "List the entries of a directory inside the selected repository. Use this to orient yourself before searching or reading.",
@@ -240,6 +380,17 @@ export const TOOL_DESCRIPTIONS: readonly ToolDescription[] = [
           description: "Optional repository-relative path to narrow the diff.",
         },
       },
+      required: [],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "git_branches",
+    description:
+      "List the repository's branches and worktrees: every local branch with its tip commit and upstream, which branch is checked out (or that HEAD is detached), and every linked worktree. Read-only — it cannot create or switch branches. Use it to orient before reasoning about where commits will land.",
+    parameters: {
+      type: "object",
+      properties: {},
       required: [],
       additionalProperties: false,
     },

@@ -30,11 +30,30 @@ export type PatchProposalView = {
   diff: string;
   additions: number;
   deletions: number;
+  /**
+   * What the proposal does to the file, when it is not an ordinary edit.
+   *
+   * A deletion's diff is every line prefixed `-`, which at a glance is
+   * indistinguishable from an edit that happens to remove a lot — and the
+   * person reading it is deciding whether to authorise it. Optional so
+   * existing callers keep meaning "edit".
+   */
+  kind?: "edit" | "create" | "delete";
 };
 
 export const DiffView = ({ patch }: { patch: PatchProposalView }) => (
   <div className="patch">
     <div className="patch__head">
+      {patch.kind === "delete" || patch.kind === "create" ? (
+        // Said in words, before the counts. A deletion renders as an
+        // all-red diff, which reads the same as a large edit right up
+        // until you have already approved it.
+        <span
+          className={`patch__badge patch__badge--${patch.kind === "delete" ? "delete" : "create"}`}
+        >
+          {patch.kind === "delete" ? "Delete file" : "New file"}
+        </span>
+      ) : null}
       <span className="patch__path">{patch.path}</span>
       <span className="patch__count patch__count--add">+{patch.additions}</span>
       <span className="patch__count patch__count--del">−{patch.deletions}</span>

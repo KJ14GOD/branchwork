@@ -277,3 +277,163 @@ test("the host's own filesystem path does not leave with the session", async () 
   assert.match(fake.sent[0] ?? "", /Fix the thing/);
   publisher.close();
 });
+
+test("a dev server's output does not leave the host; its lifecycle does", async () => {
+  const store = new InMemorySessionEventStore();
+  const fake = fakeSocket();
+  const publisher = publishToRelay(store, {
+    url: "ws://relay.test",
+    token: "publish-token",
+    sessionId: SESSION,
+    redactor: createRedactor({ environment: {} }),
+    connect: () => fake.socket,
+  });
+
+  fake.open();
+  store.append({
+    sessionId: SESSION,
+    actorId: "agent-1",
+    type: "tool.completed",
+    payload: {
+      runId: "run-1",
+      result: {
+        toolCallId: "c1",
+        name: "dev_server",
+        output: {
+          action: "start",
+          serverId: "server-1",
+          command: "node server.js",
+          port: 4950,
+          pid: 4242,
+          state: "listening",
+          exitCode: null,
+          logs: "Loaded fixture user secretCompanyCustomer from db\n",
+        },
+      },
+    },
+  });
+  await delay(10);
+
+  // Server logs are raw process output — repository content by another name,
+  // the same class of thing run_command's stdout is. The shareable boundary
+  // was a fallthrough for tool names it did not know, so a new tool's output
+  // crossed verbatim until it was decided here.
+  assert.doesNotMatch(fake.sent[0] ?? "", /secretCompanyCustomer/);
+  // The lifecycle is what a teammate follows: which server, whether it came
+  // up, on which port.
+  assert.match(fake.sent[0] ?? "", /listening/);
+  assert.match(fake.sent[0] ?? "", /4950/);
+  publisher.close();
+});
+
+test("diagnostics cross as structure; the checker's transcript stays home", async () => {
+  const store = new InMemorySessionEventStore();
+  const fake = fakeSocket();
+  const publisher = publishToRelay(store, {
+    url: "ws://relay.test",
+    token: "publish-token",
+    sessionId: SESSION,
+    redactor: createRedactor({ environment: {} }),
+    connect: () => fake.socket,
+  });
+
+  fake.open();
+  store.append({
+    sessionId: SESSION,
+    actorId: "agent-1",
+    type: "tool.completed",
+    payload: {
+      runId: "run-1",
+      result: {
+        toolCallId: "c1",
+        name: "run_diagnostics",
+        output: {
+          kind: "typecheck",
+          command: "npm run typecheck",
+          exitCode: 2,
+          timedOut: false,
+          durationMs: 900,
+          ok: false,
+          diagnostics: [
+            {
+              path: "src/auth.ts",
+              line: 41,
+              column: 7,
+              severity: "error",
+              message: "Type 'string' is not assignable to type 'number'.",
+              code: "TS2322",
+            },
+          ],
+          diagnosticsTruncated: false,
+          raw: "src/auth.ts(41,7): error TS2322 ... const internalRefreshSecretPath = ...",
+          rawTruncated: false,
+        },
+      },
+    },
+  });
+  await delay(10);
+
+  // V1's compare screen names diagnostics as evidence a reviewer needs, so
+  // the structured list crosses. The raw transcript is command output that
+  // can quote source — a checker echoing the offending line is normal — and
+  // stays on the host like every other transcript.
+  assert.match(fake.sent[0] ?? "", /TS2322/);
+  assert.match(fake.sent[0] ?? "", /src\/auth\.ts/);
+  assert.doesNotMatch(fake.sent[0] ?? "", /internalRefreshSecretPath/);
+  publisher.close();
+});
+
+test("git_branches shares branch names but not the host's worktree paths", async () => {
+  const store = new InMemorySessionEventStore();
+  const fake = fakeSocket();
+  const publisher = publishToRelay(store, {
+    url: "ws://relay.test",
+    token: "publish-token",
+    sessionId: SESSION,
+    redactor: createRedactor({ environment: {} }),
+    connect: () => fake.socket,
+  });
+
+  fake.open();
+  store.append({
+    sessionId: SESSION,
+    actorId: "agent-1",
+    type: "tool.completed",
+    payload: {
+      runId: "run-1",
+      result: {
+        toolCallId: "c1",
+        name: "git_branches",
+        output: {
+          current: "main",
+          branches: [
+            {
+              name: "main",
+              isCurrent: true,
+              revision: "abc1234",
+              subject: "initial",
+              upstream: null,
+            },
+          ],
+          worktrees: [
+            {
+              path: "/Users/someone/private/work",
+              branch: "main",
+              revision: "abc1234deadbeef",
+              isCurrent: true,
+            },
+          ],
+          truncated: false,
+        },
+      },
+    },
+  });
+  await delay(10);
+
+  // A worktree path is the host's filesystem — the same fact fork.created's
+  // worktreePath already withholds, and it must not re-enter through a
+  // different tool's output.
+  assert.doesNotMatch(fake.sent[0] ?? "", /Users\/someone/);
+  assert.match(fake.sent[0] ?? "", /main/);
+  publisher.close();
+});

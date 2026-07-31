@@ -20,6 +20,7 @@ import { FixedModelRouter } from "./model.ts";
 import type { ModelAdapter, ModelRequest, ModelResponse } from "./model.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { killRunningCommands } from "./tools.ts";
+import { stopAllDevServers } from "./dev-server.ts";
 
 /**
  * The three benchmarks from V1_README's *Evaluation* section, and their scorer.
@@ -857,6 +858,13 @@ export const runBenchmark = async (
     runError = (error as Error).message;
   } finally {
     killRunningCommands();
+    // The benchmark session runs with allowCommands, which now authorises
+    // dev_server too — and a dev server is deliberately built to outlive the
+    // tool call that started it. Without this, a benchmarked agent that
+    // starts one leaves a detached process holding a port for as long as this
+    // process lives, which also breaks the promise the tool description makes
+    // to the model ("servers die with the session's worker").
+    stopAllDevServers();
 
     if (inheritedTestContext !== undefined) {
       process.env.NODE_TEST_CONTEXT = inheritedTestContext;

@@ -447,3 +447,90 @@ test("SSH_AUTH_SOCK's path is not registered as a literal secret", () => {
   // SSH push failed.
   assert.match(redact.redactText(`socket at ${socket} is live`), /Listeners/);
 });
+
+test("a dev server started against a dotenv file gets the dotenv rule on its logs", () => {
+  const redactor = createRedactor({ environment: {} });
+
+  // `dev_server start cat .env` is run_command's dotenv case wearing a
+  // different tool name: the process exits immediately and its "logs" are the
+  // file. The context rule has to follow the output wherever the command's
+  // words explain what it is — which is why the logs result carries the
+  // command at all.
+  const shared = redactor.redactEvent(
+    SessionEventSchema.parse({
+      eventId: "event-2",
+      sessionId: "session-1",
+      sequence: 4,
+      actorId: "agent-1",
+      occurredAt: "2026-07-29T10:00:00.000Z",
+      type: "tool.completed",
+      payload: {
+        runId: "run-1",
+        result: {
+          toolCallId: "call-2",
+          name: "dev_server",
+          output: {
+            action: "logs",
+            serverId: "server-1",
+            command: "cat .env",
+            logs: "STRIPE=pk_live_notactuallyreal\nEMPTY=\n",
+            truncated: false,
+          },
+        },
+      },
+    }),
+  );
+
+  assert.equal(shared.type, "tool.completed");
+  assert.equal(shared.payload.result.name, "dev_server");
+
+  const output = shared.payload.result.output;
+
+  if (output.action !== "logs") return assert.fail("wrong action");
+
+  assert.equal(output.logs.includes("pk_live_notactuallyreal"), false);
+  assert.match(output.logs, /^STRIPE=\[redacted:env-file\]$/m);
+  assert.match(output.logs, /^EMPTY=$/m);
+});
+
+test("a build that named .env gets the dotenv rule on its streams", () => {
+  const redactor = createRedactor({ environment: {} });
+
+  const shared = redactor.redactEvent(
+    SessionEventSchema.parse({
+      eventId: "event-3",
+      sessionId: "session-1",
+      sequence: 5,
+      actorId: "agent-1",
+      occurredAt: "2026-07-29T10:00:00.000Z",
+      type: "tool.completed",
+      payload: {
+        runId: "run-1",
+        result: {
+          toolCallId: "call-3",
+          name: "run_build",
+          output: {
+            command: "npm run build -- --env-file .env",
+            exitCode: 0,
+            timedOut: false,
+            durationMs: 40,
+            stdout: "DATABASE_URL=postgres://novus:hunter2@localhost/novus\n",
+            stderr: "",
+            truncated: false,
+            succeeded: true,
+          },
+        },
+      },
+    }),
+  );
+
+  assert.equal(shared.type, "tool.completed");
+  assert.equal(shared.payload.result.name, "run_build");
+  // run_build takes model-controlled args, so it can reference .env exactly
+  // the way run_command can — the rule gating on the tool name alone would
+  // make the newest command runner the one that leaks.
+  assert.equal(
+    shared.payload.result.output.stdout.includes("hunter2"),
+    false,
+  );
+});
