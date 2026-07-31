@@ -195,12 +195,23 @@ test("what /authority sends validates against the contract", async () => {
     const editor = await invite("editor");
     const runId = await startRun(url, sessionId);
 
-    await post(`${url}/sessions/${sessionId}/control/request`, editor.token, {
-      reason: "I have context on this",
-    });
-    await post(`${url}/sessions/${sessionId}/direction`, TOKEN, {
+    // Statuses asserted, not discarded. All three of these were fire-and-
+    // forget, so a request that was refused looked exactly like a projection
+    // that came back empty — and the one intermittent failure this test has
+    // ever produced was an empty pendingDirection with no way to tell which
+    // of the two had happened.
+    const asked = await post(
+      `${url}/sessions/${sessionId}/control/request`,
+      editor.token,
+      { reason: "I have context on this" },
+    );
+    assert.equal(asked.status, 202, await asked.text());
+
+    const directed = await post(`${url}/sessions/${sessionId}/direction`, TOKEN, {
       goal: "prefer the smaller change",
     });
+    assert.equal(directed.status, 202, await directed.text());
+
     await offer(url, sessionId, TOKEN, editor.id);
 
     const body = await fetch(`${url}/sessions/${sessionId}/authority`, {

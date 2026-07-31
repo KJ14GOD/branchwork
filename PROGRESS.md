@@ -320,3 +320,10 @@ Numbered so other documents can point at them.
     a test-level flake with no matching product symptom found so far; if it
     turns out `direction.submitted` can be read back missing right after its
     POST returns, that is a real bug and this entry is wrong about its scope.
+    **Narrowed (2026-07-31.)** The test discarded the status of three POSTs, so
+    a request that was *refused* was indistinguishable from a projection that
+    came back empty — which is exactly the symptom seen. Those statuses are
+    asserted now and carry the response body in the failure message. That does
+    not prove the cause; it means the next occurrence names it instead of
+    reporting `undefined`. Still not reproducible: roughly 25 attempts,
+    including eight runs against six concurrent full suites.
