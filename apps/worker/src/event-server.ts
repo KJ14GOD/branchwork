@@ -276,8 +276,10 @@ export const startEventServer = (
    * is mid-flight makes them accountable for an execution they never watched
    * start. So a running attempt holds the transfer too.
    */
-  const anythingExecuting = (sessionId: string): boolean =>
-    projectionOf(sessionId).runs.some((run) => run.status === "running");
+  const executingRunIds = (sessionId: string): string[] =>
+    projectionOf(sessionId)
+      .runs.filter((run) => run.status === "running")
+      .map((run) => run.runId);
 
   /**
    * Moves control if an accepted handoff is waiting and nothing is executing.
@@ -302,7 +304,7 @@ export const startEventServer = (
       return null;
     }
 
-    if (anythingExecuting(sessionId)) {
+    if (executingRunIds(sessionId).length > 0) {
       return null;
     }
 
@@ -408,6 +410,30 @@ export const startEventServer = (
 
       try {
         const session = await sessions.create(parsed.data);
+
+        // The host joins their own session, in the log, like anybody else.
+        //
+        // Without this the host held control by implication — they were the
+        // owner in the registry and nobody else was, so every route behaved as
+        // though they were in charge while the log said control was held by
+        // nobody. That is precisely the silent inheritance the handoff
+        // lifecycle exists to end: the fold's rule is that the first owner to
+        // appear holds control, and the host never appeared. A baton that only
+        // becomes visible once it is handed away was never explicit to begin
+        // with.
+        //
+        // Guarded on the caller resolving to a membership so a worker with no
+        // participant registry — the single-user path, where there is nobody
+        // to attribute anything to — behaves exactly as it did.
+        if (participants && caller) {
+          store.append({
+            sessionId: session.id,
+            actorId: caller.participant.id,
+            type: "participant.joined",
+            payload: { participant: caller.participant },
+          });
+        }
+
         sendJson(response, 201, describe(session));
       } catch (error) {
         sendJson(response, 400, { error: (error as Error).message });
@@ -944,9 +970,11 @@ export const startEventServer = (
         controlOffer: projection.controlOffer,
         controlRequests: projection.controlRequests,
         pendingDirection: projection.pendingDirection,
-        // What the transfer is waiting on, when it is waiting. The offer's
-        // own state says "accepted"; this says why that is not yet "moved".
-        executing: anythingExecuting(session.id),
+        // What the transfer is waiting on, when it is waiting. The offer's own
+        // state says "accepted"; this says why that is not yet "moved" — and
+        // names the runs, so a client can say which execution is holding it up
+        // rather than only that something is.
+        executingRunIds: executingRunIds(session.id),
       });
       return true;
     }
