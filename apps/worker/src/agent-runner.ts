@@ -35,6 +35,17 @@ export type AgentRunInput = {
   sessionId: string;
   actorId: string;
   goal: string;
+  /**
+   * Reuse an id the log already knows instead of minting one.
+   *
+   * A forked attempt's run id is assigned when the fork is created — it is in
+   * the log (`fork.created`) and on disk (the worktree's directory name)
+   * before any run exists — so the run that executes the attempt has to come
+   * up under that id, or the attempt's own events would belong to a run
+   * nothing else has ever heard of and the compare screen would keep waiting
+   * for events that landed somewhere else.
+   */
+  runId?: string | undefined;
 };
 
 export type AgentRunResult = {
@@ -323,8 +334,28 @@ export class AgentRunner {
       );
     }
 
+    // A preassigned id must be genuinely new. A second run.started under an
+    // id the log already carries would reset that run's entire projection —
+    // exactly what resume()'s `continuing` flag exists to prevent — so a
+    // duplicate is refused here, before anything claims work began.
+    if (input.runId !== undefined) {
+      const already = this.eventStore
+        .list(input.sessionId)
+        .some(
+          (event) =>
+            event.type === "run.started" &&
+            event.payload.run.id === input.runId,
+        );
+
+      if (already) {
+        throw new Error(
+          `Run ${input.runId} already exists in this session's log and cannot be started again.`,
+        );
+      }
+    }
+
     const run = RunSchema.parse({
-      id: crypto.randomUUID(),
+      id: input.runId ?? crypto.randomUUID(),
       sessionId: input.sessionId,
       goal: input.goal,
       status: "running",
@@ -496,6 +527,25 @@ export class AgentRunner {
       dirty: null,
     }));
 
+    // Whether this run is a forked attempt. An attempt's goal is frozen at
+    // its checkpoint — V1's fork carries "goal and constraints" as a value —
+    // and direction submitted to the session steers the session's own run.
+    // Mechanically it has to be this way too: drainDirection marks a
+    // direction applied the moment any one run folds it in, so concurrent
+    // attempts draining the same queue would race one another (and the
+    // parent) for who swallows it, with the losers never seeing it and the
+    // parent losing it nondeterministically. Read from the log rather than
+    // passed as a flag, because fork.created precedes the attempt's
+    // run.started by construction and the log is what survives a restart —
+    // a resumed fork keeps this property without anyone re-telling it.
+    const forkAttempt = this.eventStore
+      .list(input.sessionId)
+      .some(
+        (event) =>
+          event.type === "fork.created" &&
+          event.payload.fork.runId === run.id,
+      );
+
     // Emitted after the terminal event, so the receipt can read it back and
     // report how the run actually ended rather than how it was expected to.
     const emitReceipt = (): void => {
@@ -626,7 +676,11 @@ export class AgentRunner {
       // The log is what says which direction is outstanding, rather than a
       // queue held beside it. Two places tracking the same thing is how a
       // direction gets applied twice or silently dropped.
-      const pending = this.drainDirection(input.sessionId, run.id, input.actorId);
+      //
+      // A forked attempt does not drain it at all — see forkAttempt above.
+      const pending = forkAttempt
+        ? []
+        : this.drainDirection(input.sessionId, run.id, input.actorId);
       const steered = pending.length === 0
         ? input.goal
         : `${input.goal}\n\nDirection from the session, applied at this turn:\n${pending.map((line) => `- ${line}`).join("\n")}`;

@@ -84,6 +84,38 @@ export const compareAttempts = (
 
     if (run) {
       compared.push(compareAttempt(run, attempt.label));
+      continue;
+    }
+
+    // No projected run means run.started never landed for this attempt — a
+    // fork whose run failed before it could begin (no model adapter, a
+    // worktree that vanished between creation and start). The failure is in
+    // the log as run.failed under the fork's preassigned id; the projection
+    // ignores a terminal event for a run it never saw start, so it has to be
+    // read directly here. Dropping the attempt instead would leave a
+    // reviewer looking at a fork they made that simply is not on the screen.
+    const failed = events.find(
+      (event) =>
+        event.sessionId === sessionId &&
+        event.type === "run.failed" &&
+        event.payload.runId === attempt.runId,
+    );
+
+    if (failed?.type === "run.failed") {
+      compared.push({
+        runId: attempt.runId,
+        label: attempt.label,
+        status: "failed",
+        summary: null,
+        failure: failed.payload.reason,
+        filesChanged: [],
+        additions: 0,
+        deletions: 0,
+        toolCalls: 0,
+        testsRun: 0,
+        testsPassed: 0,
+        green: null,
+      });
     }
   }
 

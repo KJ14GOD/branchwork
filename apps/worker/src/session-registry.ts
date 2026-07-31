@@ -3,7 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
-import type { ToolCall } from "@novus/contracts";
+import type { Fork, ToolCall } from "@novus/contracts";
 import type { SessionEventStore } from "@novus/session-service";
 
 import { AgentRunFailure, AgentRunner } from "./agent-runner.ts";
@@ -127,10 +127,35 @@ export type Session = {
    *
    * One per session rather than one per worker, because a fork's isolation is
    * defined against the repository it came from and each session has its own.
+   * Also the only holder of live fork handles: the log is where forks are
+   * *remembered* (`fork.created`), the manager is where their checkouts are
+   * *operable*, and a second map beside it held the same handles a second
+   * time until it was removed.
    */
   worktrees: WorktreeManager;
-  /** Forks made from this session, by their run id. */
-  forks: Map<string, ForkHandle>;
+  /**
+   * One promise chain per forked attempt, by run id.
+   *
+   * Deliberately not the session's own `queue`: concurrent attempts are the
+   * point of forking, so two forks must be able to run beside each other and
+   * beside the parent. What still has to be serialised is one attempt with
+   * itself — a resume racing another resume of the same fork would run two
+   * loops under one run id — and that is all this map does.
+   */
+  forkTurns: Map<string, Promise<unknown>>;
+  /**
+   * One runner per attempt, kept for the attempt's life, by run id.
+   *
+   * The parent session holds a single `runner` for its whole life; a fork
+   * used to get a freshly built one on every call, which quietly meant a
+   * fresh `ProposePatchTool` too. Proposals live in that tool's memory, so
+   * an attempt that proposed a patch, paused, and resumed came back to a
+   * runner that had never heard of its own proposal: `apply_patch` failed
+   * with "call propose_patch first", the run completed, and the attempt
+   * showed zero files changed. Caching here is what makes an attempt's
+   * pause/resume behave the same way the parent's already does.
+   */
+  forkRunners: Map<string, AgentRunner>;
   allowWrites: boolean;
   allowCommands: boolean;
   runner: AgentRunner;
@@ -265,25 +290,17 @@ export class SessionRegistry {
     return this.sessions.get(sessionId);
   }
 
-  async create(options: SessionOptions): Promise<Session> {
-    const requested = resolve(options.repositoryPath);
-
-    let repositoryPath: string;
-
-    try {
-      repositoryPath = await realpath(requested);
-    } catch {
-      throw new Error(`No such directory: ${requested}`);
-    }
-
-    if (!(await stat(repositoryPath)).isDirectory()) {
-      throw new Error(`Not a directory: ${repositoryPath}`);
-    }
-
-    const allowWrites = options.allowWrites ?? this.defaults.allowWrites;
-    const allowCommands = options.allowCommands ?? this.defaults.allowCommands;
+  /**
+   * The full tool set, bound to one directory.
+   *
+   * Used by the session's own runner against the selected repository, and by
+   * every forked attempt against its worktree. That the list is identical is
+   * the point: nothing about a fork's capabilities differs from its parent's
+   * except which tree the tools are confined to — isolation comes from the
+   * binding, not from a different tool set.
+   */
+  private buildTools(repositoryPath: string): AgentTool[] {
     const proposePatchTool = new ProposePatchTool(repositoryPath);
-    const repositoryState = await readRepositoryState(repositoryPath);
 
     // Only an adapter with a provider behind it can answer which model ids
     // exist, so the tool appears exactly when the session's adapter can. A
@@ -303,12 +320,47 @@ export class SessionRegistry {
             ),
           ]
         : [];
+
+    return [
+      new SearchRepositoryTool(repositoryPath),
+      new ReadFileTool(repositoryPath),
+      proposePatchTool,
+      new ApplyPatchTool(repositoryPath, proposePatchTool),
+      new RunCommandTool(repositoryPath),
+      new RunTestsTool(repositoryPath),
+      new ListDirectoryTool(repositoryPath),
+      new GitStatusTool(repositoryPath),
+      new GitDiffTool(repositoryPath),
+      ...providerTools,
+    ];
+  }
+
+  async create(options: SessionOptions): Promise<Session> {
+    const requested = resolve(options.repositoryPath);
+
+    let repositoryPath: string;
+
+    try {
+      repositoryPath = await realpath(requested);
+    } catch {
+      throw new Error(`No such directory: ${requested}`);
+    }
+
+    if (!(await stat(repositoryPath)).isDirectory()) {
+      throw new Error(`Not a directory: ${repositoryPath}`);
+    }
+
+    const allowWrites = options.allowWrites ?? this.defaults.allowWrites;
+    const allowCommands = options.allowCommands ?? this.defaults.allowCommands;
+    const repositoryState = await readRepositoryState(repositoryPath);
+
     const session: Session = {
       id: options.resume ?? crypto.randomUUID(),
       repositoryPath,
       repositoryState,
       worktrees: new WorktreeManager(repositoryPath),
-      forks: new Map(),
+      forkTurns: new Map(),
+      forkRunners: new Map(),
       allowWrites,
       allowCommands,
       createdAt: new Date().toISOString(),
@@ -317,18 +369,7 @@ export class SessionRegistry {
         this.eventStore,
         this.router,
         this.adapters,
-        [
-          new SearchRepositoryTool(repositoryPath),
-          new ReadFileTool(repositoryPath),
-          proposePatchTool,
-          new ApplyPatchTool(repositoryPath, proposePatchTool),
-          new RunCommandTool(repositoryPath),
-          new RunTestsTool(repositoryPath),
-          new ListDirectoryTool(repositoryPath),
-          new GitStatusTool(repositoryPath),
-          new GitDiffTool(repositoryPath),
-          ...providerTools,
-        ],
+        this.buildTools(repositoryPath),
         buildApprovalGate(allowWrites, allowCommands),
         () => readRepositoryBase(repositoryPath),
       ),
@@ -354,6 +395,34 @@ export class SessionRegistry {
     });
 
     this.sessions.set(session.id, session);
+
+    // Forks the log remembers are re-attached to their checkouts on disk.
+    // `fork.created` is durable; the worktree manager's handles are not — so
+    // without this, a restarted worker could still list an attempt on the
+    // compare screen (that reads the log) but never apply its decision or
+    // resume its paused run, because the handle to its worktree lived only in
+    // the process that forked it. A fresh session's log has nothing to adopt
+    // and this loop is a no-op.
+    for (const event of this.eventStore.list(session.id)) {
+      if (event.type !== "fork.created") {
+        continue;
+      }
+
+      try {
+        await session.worktrees.adopt(event.payload.fork);
+      } catch (error) {
+        // Not fatal to the resume: the attempt's evidence is still in the
+        // log even when its checkout is gone, and a session must not become
+        // unopenable because one fork's directory was deleted. Said on the
+        // host, and again — with the same words — by whatever operation
+        // actually needed the missing worktree.
+        console.warn(
+          `fork ${event.payload.fork.runId} could not be re-attached: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
 
     // Announced rather than returned only, because a session's id is a runtime
     // UUID: anything that has to be told which session exists — the relay
@@ -390,8 +459,20 @@ export class SessionRegistry {
    * same queue as `submitTurn`, for the same reason: a resume racing a fresh
    * turn on the same session is exactly the interleaving that queue exists
    * to prevent.
+   *
+   * A forked attempt's run takes the fork path instead: `session.runner` is
+   * bound to the parent's repository and the parent's approval gate, so
+   * resuming a fork's run through it would execute the attempt's remaining
+   * turns in the parent's working tree — the exact tree the fork exists to
+   * keep it out of.
    */
   resumeTurn(session: Session, runId: string): Promise<void> {
+    const fork = this.forkRecord(session.id, runId);
+
+    if (fork) {
+      return this.resumeForkRun(session, fork);
+    }
+
     session.queue = session.queue
       .then(() =>
         session.runner.resume({
@@ -405,6 +486,244 @@ export class SessionRegistry {
       });
 
     return session.queue as Promise<void>;
+  }
+
+  /**
+   * Executes a forked attempt's goal inside its own worktree.
+   *
+   * This is the half of forking that did not exist: a fork was a checkout
+   * with a label — created, recorded, and then nothing ever ran in it, so
+   * the compare screen compared silence. The attempt gets its own runner,
+   * with the same tool set as the parent bound to the fork's worktree, and
+   * its run starts under the fork's preassigned run id so its events land in
+   * the parent session's log where the timeline, /compare, and /files
+   * already look.
+   *
+   * Accepted, not completed — same contract as a turn: the returned promise
+   * settles when the attempt's run ends, and callers that answer a client
+   * first are expected to drop it.
+   */
+  startForkRun(session: Session, handle: ForkHandle, goal: string): Promise<void> {
+    return this.queueForkTurn(session, handle.fork.runId, () =>
+      this.buildForkRunner(session, handle).run({
+        sessionId: session.id,
+        actorId: "agent-1",
+        goal,
+        runId: handle.fork.runId,
+      }),
+    );
+  }
+
+  /**
+   * Continues a forked attempt's paused run, in the fork's own worktree.
+   *
+   * The handle is looked up rather than carried, because after a restart the
+   * only thing that survives is the log: `create` re-adopts every recorded
+   * fork at session open, and a fork it could not re-attach (its directory
+   * was deleted) fails here with the reason — recorded as the run's failure,
+   * since a paused run whose checkout is gone can never continue and leaving
+   * it "paused" forever would be a lie the timeline repeats indefinitely.
+   */
+  private resumeForkRun(session: Session, fork: Fork): Promise<void> {
+    return this.queueForkTurn(session, fork.runId, async () => {
+      const handle =
+        session.worktrees.get(fork.runId) ?? (await session.worktrees.adopt(fork));
+
+      return this.buildForkRunner(session, handle).resume({
+        sessionId: session.id,
+        actorId: "agent-1",
+        runId: fork.runId,
+      });
+    });
+  }
+
+  /**
+   * One runner per attempt, bound to the attempt's worktree.
+   *
+   * The approval gate is the security boundary here, and it is derived from
+   * two things intersected — the parent session's permissions as they stand
+   * now, and the tool policy the checkpoint recorded when the fork was cut —
+   * so an attempt can never hold an authority its parent session does not
+   * currently hold, and never one the run it continued from was not granted.
+   * Never `this.defaults`: a host whose environment permits writes does not
+   * thereby permit them for a session that was opened with them off, and the
+   * checkpoint schema itself says the same ("the parent's permissions, not
+   * the host's defaults").
+   */
+  private buildForkRunner(session: Session, handle: ForkHandle): AgentRunner {
+    // Built once per attempt and kept. Rebuilding on every call also rebuilt
+    // the attempt's tools, and `ProposePatchTool` holds its proposals in
+    // memory — so a fork that proposed, paused, and resumed lost the patch it
+    // was about to apply. See `forkRunners` on Session for the full account.
+    const existing = session.forkRunners.get(handle.fork.runId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const recorded = this.checkpointToolPolicy(
+      session.id,
+      handle.fork.checkpointId,
+    );
+
+    const runner = new AgentRunner(
+      this.eventStore,
+      this.router,
+      this.adapters,
+      this.buildTools(handle.worktreePath),
+      buildApprovalGate(
+        session.allowWrites && recorded.allowWrites,
+        session.allowCommands && recorded.allowCommands,
+      ),
+      () => readRepositoryBase(handle.worktreePath),
+    );
+
+    session.forkRunners.set(handle.fork.runId, runner);
+
+    return runner;
+  }
+
+  /**
+   * The tool policy a checkpoint recorded, from the log.
+   *
+   * Missing — a log written before checkpoints carried policy, or a
+   * checkpoint event that never landed — denies rather than allows, the same
+   * convention as the missing approval gate it feeds.
+   */
+  private checkpointToolPolicy(
+    sessionId: string,
+    checkpointId: string,
+  ): { allowWrites: boolean; allowCommands: boolean } {
+    const event = this.eventStore
+      .list(sessionId)
+      .find(
+        (candidate) =>
+          candidate.type === "checkpoint.created" &&
+          candidate.payload.checkpoint.id === checkpointId,
+      );
+
+    return event?.type === "checkpoint.created"
+      ? event.payload.checkpoint.toolPolicy
+      : { allowWrites: false, allowCommands: false };
+  }
+
+  /** The fork this run id belongs to, from the log, or null for a session's own run. */
+  private forkRecord(sessionId: string, runId: string): Fork | null {
+    const event = this.eventStore
+      .list(sessionId)
+      .find(
+        (candidate) =>
+          candidate.type === "fork.created" &&
+          candidate.payload.fork.runId === runId,
+      );
+
+    return event?.type === "fork.created" ? event.payload.fork : null;
+  }
+
+  /**
+   * Chains work onto one attempt's own queue.
+   *
+   * Parallel to `submitTurn`'s use of `session.queue`, per fork: attempts
+   * run concurrently with each other and with the parent, but one attempt
+   * is serialised with itself, so a resume racing another resume of the
+   * same fork queues instead of running two loops under one run id.
+   */
+  private queueForkTurn(
+    session: Session,
+    runId: string,
+    work: () => Promise<unknown>,
+  ): Promise<void> {
+    const next = (session.forkTurns.get(runId) ?? Promise.resolve())
+      .then(work)
+      .catch((error: unknown) => {
+        this.reportForkFailure(session, runId, error);
+      });
+
+    session.forkTurns.set(runId, next);
+
+    return next as Promise<void>;
+  }
+
+  /**
+   * Tells the log about a fork attempt that ended by throwing.
+   *
+   * Unlike `reportTurnFailure`, a fork's run id is known before any run
+   * exists — it was minted at fork creation and recorded by `fork.created` —
+   * so even a failure *before* `run.started` (no adapter configured, a
+   * worktree that no longer exists) can be attributed instead of only said
+   * on stderr. An attempt that never managed to start is an attempt that
+   * failed, and a compare screen listing it as forever pending would be
+   * hiding exactly the evidence it exists to show.
+   *
+   * What must never happen here is ending a run some live loop still owns:
+   * a duplicate start is refused by the runner while the first loop keeps
+   * going, and appending `run.failed` for that refusal would falsely
+   * terminate the survivor. So the append happens only when the log says no
+   * loop can be live — the run never started, it is currently paused (the
+   * loop exits on pause), or the error is an AgentRunFailure thrown by the
+   * loop itself as it died.
+   */
+  private reportForkFailure(
+    session: Session,
+    runId: string,
+    error: unknown,
+  ): void {
+    const message =
+      (error instanceof Error ? error.message : String(error)) ||
+      "The fork's run ended without a message.";
+
+    console.error(`fork attempt ${runId} failed: ${message}`);
+
+    const events = this.eventStore.list(session.id);
+    const started = events.some(
+      (event) =>
+        event.type === "run.started" && event.payload.run.id === runId,
+    );
+    const ended = events.some(
+      (event) =>
+        (event.type === "run.completed" ||
+          event.type === "run.failed" ||
+          event.type === "run.cancelled") &&
+        event.payload.runId === runId,
+    );
+    const latestPause = events
+      .filter(
+        (event) =>
+          (event.type === "run.pause_requested" ||
+            event.type === "run.paused" ||
+            event.type === "run.resumed") &&
+          event.payload.runId === runId,
+      )
+      .sort((first, second) => first.sequence - second.sequence)
+      .at(-1);
+    const pausedNow = latestPause?.type === "run.paused";
+
+    if (ended) {
+      return;
+    }
+
+    if (!(error instanceof AgentRunFailure) && started && !pausedNow) {
+      // A loop may still be live under this id; the refusal was the report.
+      return;
+    }
+
+    try {
+      this.eventStore.append({
+        sessionId: session.id,
+        actorId: "agent-1",
+        type: "run.failed",
+        payload: { runId, reason: message },
+      });
+    } catch (reportError) {
+      const reason =
+        reportError instanceof Error
+          ? reportError.message
+          : String(reportError);
+
+      console.error(
+        `fork attempt ${runId} failed and the log could not be told: ${reason}`,
+      );
+    }
   }
 
   /**
