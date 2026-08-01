@@ -247,7 +247,9 @@ async function run() {
     allowInternetAccess: true,
     network: {
       allowOut: resolvedDestinations.allowOut,
-      denyOut: ["0.0.0.0/0", "::/0"],
+      // E2B rejects IPv6 CIDRs in denyOut ("400: invalid denied CIDR ::/0", observed 2026-08-01);
+      // IPv4 default-deny only — IPv6 reachability is asserted separately by deniedDefaultRoute.
+      denyOut: ["0.0.0.0/0"],
     },
   });
   const networkSandbox = networkMeasured.value;

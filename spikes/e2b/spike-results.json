@@ -1,0 +1,192 @@
+{
+  "startedAt": "2026-08-01T23:44:08.700Z",
+  "plan": {
+    "provider": "E2B",
+    "sdkVersion": "2.14.0",
+    "template": "base",
+    "coldStartSamples": 3,
+    "liveCredentialPolicy": {
+      "e2bApiKeyPresent": true,
+      "openAiKeyWillBeSent": false,
+      "anthropicKeyWillBeSent": false
+    },
+    "checks": [
+      "cold-start distribution",
+      "base Linux/tool inventory",
+      "filesystem persistence across pause/resume",
+      "background-process persistence across pause/resume",
+      "resume latency",
+      "outbound allowlist and denied destination",
+      "Claude Code and Codex installation/version",
+      "optional real Codex authentication and structured event stream",
+      "optional real Claude Code authentication and structured event stream",
+      "terminal cleanup"
+    ],
+    "requiredDestinations": [
+      "github.com",
+      "api.github.com",
+      "registry.npmjs.org",
+      "api.anthropic.com",
+      "api.openai.com"
+    ],
+    "providerApiObservations": {
+      "egressRuleUnit": "IPv4/IPv6 address or CIDR block, not a domain name",
+      "testStrategy": "Resolve required domains inside an unrestricted E2B sandbox, then create a second default-deny sandbox allowing only those observed IPs.",
+      "productionCaveat": "Resolved IPs can change. Passing this experiment does not by itself make IP pinning a safe production policy."
+    },
+    "credentialWarning": "Optional harness keys are injected only for this disposable spike after an explicit NOVUS_SPIKE_SEND_* opt-in. This is not the production supervisor design."
+  },
+  "coldStartsMs": [
+    1561,
+    146,
+    189
+  ],
+  "lifecycle": {
+    "createMs": 125,
+    "pauseMs": 134,
+    "resumeMs": 238
+  },
+  "baseEnvironment": {
+    "exitCode": 0,
+    "stdout": "Linux e2b.local 6.1.158+ #1 SMP PREEMPT_DYNAMIC Fri Jul  3 14:02:15 UTC 2026 x86_64 GNU/Linux\n\nnode=v20.9.0\n\nnpm=10.1.0\n\ngit=git version 2.39.5",
+    "stderr": ""
+  },
+  "persistence": {
+    "beforePause": {
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "afterResume": {
+      "exitCode": 0,
+      "stdout": "heartbeat_lines=3",
+      "stderr": ""
+    }
+  },
+  "network": {
+    "resolution": {
+      "command": {
+        "exitCode": 0,
+        "stdout": "github.com 140.82.116.3\ngithub.com 140.82.116.3\ngithub.com 140.82.116.3\napi.github.com 140.82.116.6\napi.github.com 140.82.116.6\napi.github.com 140.82.116.6\nregistry.npmjs.org 104.16.0.34\nregistry.npmjs.org 104.16.0.34\nregistry.npmjs.org 104.16.0.34\nregistry.npmjs.org 104.16.7.34\nregistry.npmjs.org 104.16.7.34\nregistry.npmjs.org 104.16.7.34\nregistry.npmjs.org 104.16.6.34\nregistry.npmjs.org 104.16.6.34\nregistry.npmjs.org 104.16.6.34\nregistry.npmjs.org 104.16.4.34\nregistry.npmjs.org 104.16.4.34\nregistry.npmjs.org 104.16.4.34\nregistry.npmjs.org 104.16.3.34\nregistry.npmjs.org 104.16.3.34\nregistry.npmjs.org 104.16.3.34\nregistry.npmjs.org 104.16.2.34\nregistry.npmjs.org 104.16.2.34\nregistry.npmjs.org 104.16.2.34\nregistry.npmjs.org 104.16.11.34\nregistry.npmjs.org 104.16.11.34\nregistry.npmjs.org 104.16.11.34\nregistry.npmjs.org 104.16.10.34\nregistry.npmjs.org 104.16.10.34\nregistry.npmjs.org 104.16.10.34\nregistry.npmjs.org 104.16.8.34\nregistry.npmjs.org 104.16.8.34\nregistry.npmjs.org 104.16.8.34\nregistry.npmjs.org 104.16.5.34\nregistry.npmjs.org 104.16.5.34\nregistry.npmjs.org 104.16.5.34\nregistry.npmjs.org 104.16.1.34\nregistry.npmjs.org 104.16.1.34\nregistry.npmjs.org 104.16.1.34\nregistry.npmjs.org 104.16.9.34\nregistry.npmjs.org 104.16.9.34\nregistry.npmjs.org 104.16.9.34\napi.anthropic.com 160.79.104.10\napi.anthropic.com 160.79.104.10\napi.anthropic.com 160.79.104.10\napi.openai.com 162.159.140.245\napi.openai.com 162.159.140.245\napi.openai.com 162.159.140.245\napi.openai.com 172.66.0.243\napi.openai.com 172.66.0.243\napi.openai.com 172.66.0.243",
+        "stderr": ""
+      },
+      "byHost": {
+        "github.com": [
+          "140.82.116.3"
+        ],
+        "api.github.com": [
+          "140.82.116.6"
+        ],
+        "registry.npmjs.org": [
+          "104.16.0.34",
+          "104.16.7.34",
+          "104.16.6.34",
+          "104.16.4.34",
+          "104.16.3.34",
+          "104.16.2.34",
+          "104.16.11.34",
+          "104.16.10.34",
+          "104.16.8.34",
+          "104.16.5.34",
+          "104.16.1.34",
+          "104.16.9.34"
+        ],
+        "api.anthropic.com": [
+          "160.79.104.10"
+        ],
+        "api.openai.com": [
+          "162.159.140.245",
+          "172.66.0.243"
+        ]
+      },
+      "allowOut": [
+        "140.82.116.3",
+        "140.82.116.6",
+        "104.16.0.34",
+        "104.16.7.34",
+        "104.16.6.34",
+        "104.16.4.34",
+        "104.16.3.34",
+        "104.16.2.34",
+        "104.16.11.34",
+        "104.16.10.34",
+        "104.16.8.34",
+        "104.16.5.34",
+        "104.16.1.34",
+        "104.16.9.34",
+        "160.79.104.10",
+        "162.159.140.245",
+        "172.66.0.243"
+      ]
+    },
+    "createMs": 147,
+    "allowed": {
+      "exitCode": 0,
+      "stdout": "github.com=000\napi.github.com=000\nregistry.npmjs.org=000\napi.anthropic.com=000\napi.openai.com=000",
+      "stderr": "curl: (28) Resolving timed out after 10000 milliseconds\ncurl: (28) Resolving timed out after 10000 milliseconds\ncurl: (28) Resolving timed out after 10000 milliseconds\ncurl: (28) Resolving timed out after 10000 milliseconds\ncurl: (28) Resolving timed out after 10000 milliseconds"
+    },
+    "deniedIpv4": {
+      "exitCode": 0,
+      "stdout": "DENIED_AS_EXPECTED_IPV4",
+      "stderr": ""
+    },
+    "deniedDefaultRoute": {
+      "exitCode": 0,
+      "stdout": "DENIED_AS_EXPECTED_DEFAULT_ROUTE",
+      "stderr": ""
+    }
+  },
+  "harnesses": {
+    "installation": {
+      "install": {
+        "exitCode": 0,
+        "stdout": "added 5 packages in 11s",
+        "stderr": "npm WARN EBADENGINE Unsupported engine {\nnpm WARN EBADENGINE   package: '@anthropic-ai/claude-code@2.1.220',\nnpm WARN EBADENGINE   required: { node: '>=22.0.0' },\nnpm WARN EBADENGINE   current: { node: 'v20.9.0', npm: '10.1.0' }\nnpm WARN EBADENGINE }\nnpm notice \nnpm notice New major version of npm available! 10.1.0 -> 12.0.2\nnpm notice Changelog: <https://github.com/npm/cli/releases/tag/v12.0.2>\nnpm notice Run `npm install -g npm@12.0.2` to update!\nnpm notice"
+      },
+      "versions": {
+        "exitCode": 0,
+        "stdout": "2.1.220 (Claude Code)\ncodex-cli 0.146.0",
+        "stderr": ""
+      }
+    },
+    "authentication": {
+      "codex": {
+        "skipped": true,
+        "reason": "Set NOVUS_SPIKE_SEND_OPENAI_KEY=1 with OPENAI_API_KEY to authorize transmission."
+      },
+      "claude": {
+        "skipped": true,
+        "reason": "Set NOVUS_SPIKE_SEND_ANTHROPIC_KEY=1 with ANTHROPIC_API_KEY to authorize transmission."
+      }
+    }
+  },
+  "cleanup": [
+    {
+      "label": "cold-start-1",
+      "sandboxId": "i9apz7upectpvkx81gjpy",
+      "killed": true
+    },
+    {
+      "label": "cold-start-2",
+      "sandboxId": "ixihvoi05b8e3t9kogruz",
+      "killed": true
+    },
+    {
+      "label": "cold-start-3",
+      "sandboxId": "ios92iq1bllmmnl5ak8nw",
+      "killed": true
+    },
+    {
+      "label": "lifecycle",
+      "sandboxId": "i34gawjwa7ahkzga801ee",
+      "killed": true
+    },
+    {
+      "label": "network-policy",
+      "sandboxId": "iwc6n2uunrzy7j80bhfc7",
+      "killed": true
+    }
+  ],
+  "limitations": [],
+  "finishedAt": "2026-08-01T23:45:38.630Z"
+}

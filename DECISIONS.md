@@ -193,3 +193,11 @@ Format per entry: Context · Decision · Alternatives · Consequences · Revisit
 **Alternatives.** Modal, Fly Machines, Daytona, Vercel Sandbox (Conductor's substrate) — all viable; E2B chosen for purpose-built agent-sandbox lifecycle and pause/resume matching our workspace state machine.
 **Consequences.** Workspace lifecycle states map onto provider primitives in one adapter; the feasibility spike (D-017) runs on this substrate.
 **Revisit when.** The spike surfaces provider limits (network policy granularity, cold-start, cost) — the interface makes the swap an adapter rewrite, not a redesign.
+
+## D-024 — E2B confirmed by live spike; egress default-deny will use a proxy, not IP allowlists
+
+**Context.** The live E2B spike ran 2026-08-01 (`spikes/e2b/spike-results.json`). Confirmed: sandbox create 125–190ms, pause 134ms, resume 238ms; files and running background processes survive pause/resume (frozen, not killed); both harness CLIs install and run in the sandbox. Also observed: E2B egress rules are IPv4 address/CIDR only (`::/0` rejected with a 400), and a default-deny policy built from resolved-IP allowlists blocks DNS itself — every allowlisted host became unreachable (HTTP 000) while denial of other destinations worked. Raw IP pinning is not a workable default-deny mechanism.
+**Decision.** Keep E2B (D-023 stands; lifecycle and persistence results are excellent). Egress default-deny (D-015's M2 goal) will be implemented via an egress proxy in the workspace path — DNS and HTTP(S) routed through a Novus-controlled proxy that enforces a domain allowlist — not via provider IP rules. Provider IP rules remain as an outer coarse layer only. V0 continues under D-015's logged-egress floor.
+**Alternatives.** Resolved-IP pinning with in-sandbox DNS override (rejected: brittle against CDN rotation, proven broken in the spike); switching providers for domain-level egress rules (not now: no evidence another provider's lifecycle matches E2B's, and the proxy is provider-agnostic anyway).
+**Consequences.** The runner image gains a proxy component at M2; egress policy becomes testable independently of the provider; the spike script and results stay in `spikes/e2b/` as the reference experiment.
+**Revisit when.** E2B ships domain-based egress rules, or the proxy proves incompatible with a harness's network expectations.
