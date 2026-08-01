@@ -22,10 +22,11 @@ with no meaningful shared control is also not V1.
 
 ## Where we actually are
 
-Updated 2026-07-30. Keep this honest; it is the section that decides what gets
-built next. The at-a-glance version — per-capability status with the evidence
-for each claim, and the known-gaps register — is [PROGRESS.md](./PROGRESS.md);
-this section carries the narrative.
+Updated 2026-08-01, audited against commit `a83dff9`. Keep this honest; it is
+the section that decides what gets built next. The at-a-glance version —
+per-capability status with the evidence for each claim, and the known-gaps
+register — is [PROGRESS.md](./PROGRESS.md); this section carries the
+narrative.
 
 **Both halves are now real, and the gap between them has closed almost all the
 way.** The harness half: a typed agent loop with a budget in place of a step
@@ -70,13 +71,27 @@ reason), per-run cache-aware cost in USD with pricing as configuration
 human override that beats the router and 400s on a model this worker has no
 adapter for.
 
+Three things landed on 2026-08-01 that change what the gaps below say. The
+comparison's **baseline became a decision target**: keeping the current work is
+now a real `decision.recorded` with its own rationale, reported as *not needed*
+rather than as applied or blocked, and `decide` became its own capability
+rather than a shade of `steer`. A decision's **rationale is enforced at the
+route**, not only in React, so a rationale-less decision is refused with a
+sentence a person can act on. And the **handoff protocol became the two-step
+accept this document always described** — offer, then accept or decline, with
+withdrawal and with the transfer landing at the run's next safe boundary — with
+the whole lifecycle reachable from the joined window as well as the hosting
+one. All three are deterministic proof only; see below.
+
 The caveat that spans all of it: **nothing landed after 2026-07-29 has been
 exercised by a live model call.** The benchmark runs that day are the last
 live provider calls this project has made; everything since — the six new
 tools, fork execution, the router, the override, the multiplayer controls —
-is deterministically tested against scripted adapters and unproven live.
-PROGRESS.md carries this as its standing caveat; it is the single largest
-unknown here.
+and the three paragraphs above — is deterministically tested against scripted
+adapters and unproven live. PROGRESS.md carries this as its standing caveat; it
+is the single largest unknown here. Nothing in this document may be read as
+"works" when what is meant is "passes deterministically"; where the two differ
+the wording says so.
 
 What is still missing, plainly — the full numbered register is
 [PROGRESS.md § Known gaps](./PROGRESS.md#known-gaps); these are the ones that
@@ -84,29 +99,54 @@ shape what gets built next:
 
 - **Nothing recent has run live** (above). Deterministic proof is real proof
   of the harness, and no proof at all of what a model does with it.
-- **Attempt lifecycle has two holes.** Nothing ever tears a fork's worktree
-  down (they accumulate a full checkout each), and an attempt interrupted by
-  a worker exit stays `running` on the record forever with nothing to
-  reconcile it. Dev servers likewise die with the worker, not with the
-  session that started them — there is no session-close path at all.
-- **The renderer has no test coverage.** Every hook in `apps/desktop/src` and
-  `apps/guest/src` is unverified by anything but hand-testing — worker logic is
-  extensively tested, the React layer that calls it is not. That gap is exactly
-  how a real bug (the Open screen's session history silently failing because
-  its fetch carried no auth token) shipped and sat unnoticed.
-- **No packaging.** There is no signed macOS build, so "the complete demo works
-  repeatedly on a clean machine" — Milestone 5's exit condition — has not been
-  attempted on a machine that isn't a developer's.
-- **Requesting control has no UI trigger.** `control.requested` is a real
-  event with a real route (`POST /sessions/:id/control/request`) any
-  participant can call, and it renders in the timeline like anything else, but
-  no button calls it. The natural place used to be argued away — the guest is
-  structurally read-only and has never issued a POST — but that argument
-  expired on 2026-07-30: the desktop's joined tab (below) is a
-  lower-privilege participant surface that already POSTs direction, and the
-  button has not been added there either. Handoff itself does not depend on
-  it: the owner can hand off to anyone in the presence list from the desktop
-  UI without a request ever being made.
+- **Attempt lifecycle has one hole left, and it is deliberate.** The two that
+  used to be here are mostly shut: `SessionRegistry.reclaimResolvedForks`
+  reclaims a fork's worktree at session open once an applied decision resolves
+  it, and `reconcileInterruptedRuns` fails a run the worker died inside at the
+  next open rather than leaving it `running` forever. What remains: a mission
+  nobody ever decides in accumulates a full checkout per attempt, because the
+  sweep has no trigger other than an applied decision and deleting an undecided
+  attempt would destroy the only copy of its work — conservative on purpose.
+  Cross-process liveness is still unknowable without a heartbeat, and
+  reconciliation only runs at session *open*, so a session nobody reopens keeps
+  its stale `running`. Dev servers are now reaped on every worker exit path and
+  before a worktree is deleted, but there is still no session-close path at all
+  (no `DELETE /sessions/:id`, no registry `close()`), so a server a session
+  started holds its port until the worker exits. PROGRESS.md gaps 1–3.
+- **The renderer's coverage is now uneven rather than absent.**
+  `scripts/tsx-hook.ts` made `.tsx` loadable by `node --test`, and there are
+  now 104 tests under `apps/desktop/src`, 37 under `apps/desktop/electron`, 66
+  in `packages/ui`, and 41 in `packages/session-client` — components rendered
+  to static markup, and the pure decision modules behind them. What is still
+  unverified by anything but hand-testing is every `use-*.ts` hook in
+  `apps/desktop/src`, `app.tsx` itself, and the whole of `apps/guest/src`,
+  which has no test files and no `test` script at all. That is still the exact
+  shape of the bug this gap was opened for — the Open screen's session history
+  silently failing because its fetch carried no auth token lived in that layer.
+  `packages/contracts` also still has no `test` script, so `pnpm -r
+  --if-present test` skips the one package everything trusts. PROGRESS.md gap
+  8.
+- **Packaging is configured but not reproducible, and nothing is signed.**
+  `apps/desktop/package.json` carries an `electron-builder` block with a
+  hardened runtime and a DMG target, and `scripts/build-worker.mjs` bundles the
+  worker so the packaged app runs it under Electron's own Node. A DMG was built
+  and launch-verified on the machine that built it. But the
+  `build/entitlements.mac.plist` that config names is not tracked by Git — it
+  is caught by `.gitignore`'s blanket `build/` rule — so a fresh clone cannot
+  reproduce that build at all. And it is unsigned and un-notarized, which needs
+  an Apple Developer certificate. Milestone 5's exit condition, "the complete
+  demo works repeatedly on a clean machine", has still not been attempted on a
+  machine that isn't a developer's. PROGRESS.md gap 16.
+- **Requesting control has a UI trigger in both desktop surfaces, and none in
+  the browser guest.** `control.requested` has a route
+  (`POST /sessions/:id/control/request`) any participant can call. The hosting
+  window's `components/control-panel.tsx` calls it, and since 2026-08-01 the
+  joined window carries the whole lifecycle — who holds control, standing
+  requests, an offer it can accept or decline, an accepted transfer waiting on
+  the run holding it, and direction queued versus merely recorded — with every
+  action absent rather than disabled where the role does not carry it. The
+  browser guest still has none, and that is structural rather than an omission:
+  it is read-only and has never issued a POST. PROGRESS.md gap 10.
 - **A teammate now joins in the Novus app itself, with honest limits.**
   Since 2026-07-30 the desktop app has a join mode beside its hosting
   default: a plain launch hosts exactly as before (no mode picker anywhere on
@@ -117,7 +157,9 @@ shape what gets built next:
   rather than a third implementation — shows presence, and offers exactly
   what `GET /sessions/:id/me` says the invite's role allows: direction for
   editors, pause/resume/cancel for steer-holders, watch-only otherwise,
-  updating live across a handoff. The worker, not the UI, is the authority:
+  updating live across a handoff — and since 2026-08-01 the full control
+  lifecycle too: requesting control, and accepting or declining an offer of it.
+  The worker, not the UI, is the authority:
   it newly refuses any invited caller `POST /sessions` and
   `GET /sessions/history`, so an invite is a key to one session and nothing
   else on the host. What this does not give you yet: joined tabs do not
@@ -130,29 +172,52 @@ shape what gets built next:
   actually proven (over real processes: a real worker, real invites, a real
   `--join` Electron launch asserted to spawn nothing, and a second hosting
   instance beside a live one landing on a fallback port without touching
-  it). The joined tab's own React code shares the renderer test-coverage gap
-  above; everything under it — launch plan, port choice, invite parsing,
-  transport, and the worker's enforcement — is tested.
-- **A handoff is atomic, not a two-step accept.** The protocol document below
-  describes the recipient explicitly accepting a handoff; what is built
-  transfers ownership the moment the owner clicks, the same way an invite
-  mints a role without a confirmation round-trip. `acceptedAt` on
-  `control.transferred` is stamped at that moment rather than won by a
-  separate acceptance event.
-- **A resumed run's token usage undercounts.** Usage is reported by the model
-  adapter per call and was never logged, so pausing and resuming has nothing to
-  rebuild it from — a resumed run's usage counters restart at zero, and its
-  eventual receipt reports only the tokens spent after the most recent resume,
-  not the full run. The same is true of the run's budget clock: it also resets
-  on resume, so neither a long pause nor the turns before it count against the
-  continuation's own budget. Neither is surfaced to whoever is watching — it
-  is written down here and in `agent-runner.ts`'s own comments, not in the
-  timeline. What *is* carried forward correctly is the harder part: the
-  model's tool-exchange context from before the pause, rebuilt from the event
-  log rather than lost, so a resumed run does not have amnesia about what it
-  already tried.
+  it). The joined tab's own React is now the best-covered part of the
+  renderer — `join/joined-surface.render.test.tsx` (16 tests) for who may see
+  which control, `join/joined-api.test.ts` (11) for what those calls do against
+  a real event server — while its hooks share the coverage gap above.
+  Everything under it — launch plan, port choice, invite parsing, transport,
+  and the worker's enforcement — is tested.
+- **A resumed run's wall clock restarts; its tokens and cost no longer do.**
+  This bullet used to say usage undercounted, and that is fixed: `run.paused`
+  carries a `usage` snapshot, and `AgentRunner`'s `execute()` seeds tokens,
+  model calls, calls-missing-usage, model time and cost from the newest pause
+  before the first model call — so the receipt reports the whole run, and the
+  token and cost ceilings are checked against the whole run rather than the leg
+  since the last resume. An unpriced leg makes the whole run read unpriced
+  rather than resuming at a confident zero. What still resets is the *wall
+  clock*: `execute()` stamps `startedAt` unconditionally, so
+  `budget.wallClockMs` (30 minutes by default) starts over on each resume and
+  neither the pause nor the turns before it count against it. Not surfaced to
+  whoever is watching. PROGRESS.md gap 4. What *is* carried forward correctly,
+  and is the harder part: the model's tool-exchange context from before the
+  pause, rebuilt from the event log rather than lost, so a resumed run does not
+  have amnesia about what it already tried.
+- **Remote operational multiplayer is not proven.** Everything above is
+  same-machine. A relay join is watch-only in both directions, no `wss://`
+  relay has ever been stood up, and no two people on separate devices have run
+  a mission together. Milestone 3's exit condition says "a remote teammate";
+  what is met is the local equivalent of it. This is the gap between *Definition
+  of done* and what exists.
+- **Enterprise readiness is not in scope and is not approached.** SSO, billing,
+  and org-level anything are on the exclusion list below and nothing here
+  changes that.
 
-Seven earlier failure modes, closed:
+Eight earlier failure modes, closed:
+
+- ~~**A handoff is atomic, not a two-step accept.**~~ Fixed 2026-08-01, and the
+  protocol section below was right all along. `POST /sessions/:id/handoff`
+  offers control and records `control.offered`; `POST
+  /sessions/:id/handoff/(accept|decline|withdraw)` answers it with
+  `control.accepted` / `control.declined` / `control.withdrawn`, and only an
+  acceptance produces `control.transferred`. A second offer is refused while
+  one is in flight, an answer naming a superseded offer is refused, and only
+  the participant an offer names may answer it — but because authority is the
+  offer and not the rank, a viewer offered control may accept it. Acceptance
+  during a live run waits for that run's next safe boundary before control
+  actually moves. A departure voids an open offer and withdraws a standing
+  request; a mere disconnect does neither. `control-lifecycle.test.ts`, 18
+  tests, deterministic.
 
 - ~~**Pause, resume, and handoff do not exist.**~~ Fixed 2026-07-30: `POST
   /sessions/:id/pause` records `run.pause_requested`; the run loop honours it
@@ -235,12 +300,16 @@ runs to 2026-08-31, so the fast tier's cost figure reads high until then.
 
 Before starting anything else from the roadmap in `README.md`, check it
 against this section. Multiplayer is no longer the thin half — apply, cancel,
-pause, resume, handoff, and live presence all closed on 2026-07-30, which was
-the risk this document used to guard against. What is thin now is narrower:
-the renderer's own test coverage, and packaging. Everything under *V1
-architecture* and *Multiplayer protocol* below is built; what remains is
-proving it on a machine nobody developed it on, and proving the UI layer the
-way the worker's own logic already is.
+pause, resume, handoff, and live presence all closed on 2026-07-30, and the
+handoff became a proper two-step accept on 2026-08-01, which was the risk this
+document used to guard against. What is thin now is narrower, and it is four
+things: the desktop hooks and the guest's React, which no test reaches; a
+packaged build that cannot be reproduced from a clone and is unsigned; a second
+machine, which nothing has ever run on; and a live model, which nothing since
+2026-07-29 has been near. Everything under *V1 architecture* and *Multiplayer
+protocol* below is built; what remains is proving it on a machine nobody
+developed it on, proving the UI layer the way the worker's own logic already
+is, and pointing a real provider at any of it.
 
 ## Benchmark results
 
@@ -511,12 +580,24 @@ run.failed
 ```
 
 Where the built contract diverges from this list, the contract won:
-`model.requested` and `model.responded` do not exist as events — per-call
-model activity is not evented, usage accumulates into per-run totals that the
-receipt carries (which is also why a resumed run's counters restart; see
-PROGRESS.md gap 4). The authoritative union is `SessionEventSchema` in
-`packages/contracts`, and `skills/novus-extend-event-contract` is the
-procedure for widening it without desyncing its five consumers.
+four families above were never built. `model.requested` and `model.responded`
+do not exist — per-call model activity is not evented, and usage accumulates
+into per-run totals the receipt carries, plus the snapshot `run.paused` now
+carries so a resumed run's counters do not restart (PROGRESS.md gap 4).
+`run.state_changed` does not exist either; the specific transitions are their
+own events (`run.progress`, `run.cancel_requested`, `run.cancelled`,
+`run.pause_requested`, `run.paused`, `run.resumed`, `run.completed`,
+`run.failed`). Neither `artifact.created` nor `evaluation.completed` exists at
+all: artifacts are carried inside `tool.completed` payloads and evaluation
+lives in the receipt and the comparison rather than in the log.
+
+The contract has also grown families this list never named — `control.offered`
+/ `control.accepted` / `control.declined` / `control.withdrawn` for the handoff
+lifecycle, `direction.queued` beside `submitted` and `applied`, `tool.denied`
+and `tool.failed` beside `completed`, and `receipt.created`. The authoritative
+union is `SessionEventSchema` in `packages/contracts`, and
+`skills/novus-extend-event-contract` is the procedure for widening it without
+desyncing its five consumers.
 
 Every event includes:
 
@@ -560,7 +641,14 @@ The receiving participant inherits:
 - Artifacts and evaluation evidence
 - Remaining budget
 
-The handoff is an explicit event accepted by the recipient.
+The handoff is an explicit event accepted by the recipient. **Built, since
+2026-08-01** — for a while this line described something the product did not
+do, and the correction ran the other way: the product was changed to match this
+paragraph rather than this paragraph softened to match the product. `POST
+/sessions/:id/handoff` offers, `POST /sessions/:id/handoff/accept` (or
+`/decline`, or `/withdraw` for the offerer) answers, and only an acceptance
+appends `control.transferred` — at the run's next safe boundary when a run is
+live. `control-lifecycle.test.ts`, deterministic.
 
 ## Forking
 
@@ -825,34 +913,42 @@ now.
       than starting a new one — it rebuilds the paused turn's tool exchanges
       from the event log the same way `direction` and `cancel` already read
       state from the log instead of memory, so the model does not lose
-      context it had already built up. What resume does *not* carry forward:
-      token usage, never logged per call so there is nothing to rebuild it
-      from, and the run's budget clock, which also resets — both are
-      disclosed in `agent-runner.ts`'s own comments and in *Where we actually
-      are* above, not surfaced in the timeline. **Handoff**, through `POST
+      context it had already built up. Since 2026-07-31 it also carries the
+      run's spend forward, from the `usage` snapshot on `run.paused`. What
+      resume still does *not* carry forward is the run's wall clock, which
+      resets — disclosed in *Where we actually are* above and PROGRESS.md gap
+      4, not surfaced in the timeline. **Handoff**, through `POST
       /sessions/:id/handoff`, actually moves execution authority rather than
       only recording that it happened — it drives `participants.ts`'s
       `transferOwnership`, which existed before this but was never wired to a
-      route. Only the current owner can call it, checked twice: once by the
-      route's own capability table, once by the registry. It is atomic rather
-      than a two-step accept — see *Where we actually are* for that gap
-      against this document's own description of handoff below.
-      `control.requested` also has a real route now
-      (`POST /sessions/:id/control/request`), open to any participant, but no
-      UI calls it yet — see *Where we actually are*.
+      route. Since 2026-08-01 it is the two-step accept the *Handoff* section
+      below describes rather than a one-click transfer: the offer is
+      `control.offered`, the answer is `POST
+      /sessions/:id/handoff/(accept|decline|withdraw)`, and only an acceptance
+      produces `control.transferred` — at the run's next safe boundary if a run
+      is live. Who may offer and who may answer are checked twice, once by the
+      route's own capability table and once by the registry; the recipient
+      check is an identity check rather than a rank one, because control is
+      routinely offered to people who do not yet have it.
+      `control.requested` has a real route (`POST
+      /sessions/:id/control/request`), open to any participant, and both the
+      hosting window and the joined window call it.
 
 Exit condition: a remote teammate joins an active run, supplies direction, and
-reviews the resulting evidence. **Met**, and now for the whole milestone
-rather than one path through it — join, direct, review, cancel, pause,
-resume, and handoff all work end to end, proven in
+reviews the resulting evidence. **Met for a teammate on this machine; not met
+for a remote one.** Join, direct, review, cancel, pause, resume, request
+control, and offer/accept a handoff all work end to end, proven in
 `pause-resume.test.ts` (the run-loop level, including that a resumed run
 actually replays its prior tool exchange to the model), `pause-resume-route.test.ts`
 and `handoff-route.test.ts` (the HTTP level, including that a handoff which
-demotes the caller is refused a second time), and `presence.test.ts` (a real
-SSE connection flipping presence live and back). What is not covered by any
-of that: the desktop and guest UI code that calls these routes, which is the
-renderer test-coverage gap named above and applies here as much as anywhere
-else in this milestone.
+demotes the caller is refused a second time), `control-lifecycle.test.ts` (the
+offer/accept lifecycle, 18 tests), and `presence.test.ts` (a real SSE
+connection flipping presence live and back). Two things that word "remote"
+should not be read to cover: a relay join is watch-only in both directions, and
+no `wss://` relay has ever been stood up, so nothing has been proven across two
+machines. And the desktop hooks and the guest's React that call these routes
+are still uncovered — the renderer test-coverage gap named above applies here
+as much as anywhere else in this milestone.
 
 ### Milestone 4 — fork and compare
 
@@ -875,10 +971,14 @@ just the happy path.
       runs are secretly serialised. Until 2026-07-30 this box was ticked for a
       route that cut a worktree, recorded `fork.created`, and never ran
       anything — the isolation tests passed because they tested the worktree
-      manager directly, not the product. Two live gaps remain, both recorded
-      below rather than hidden: an attempt interrupted by a worker exit stays
-      `running` on the record forever, and nothing ever tears a fork's worktree
-      down.
+      manager directly, not the product. The two live gaps this entry used to
+      name are mostly shut as of 2026-07-31: an attempt the worker died inside
+      is now failed at the next session open by `reconcileInterruptedRuns`
+      rather than staying `running` forever, and a fork's worktree is reclaimed
+      by `reclaimResolvedForks` once an applied decision resolves it. What is
+      left is recorded below rather than hidden: a mission nobody decides in
+      still accumulates checkouts, and cross-process liveness needs a heartbeat
+      nothing has yet.
 - [x] Side-by-side comparison — `compare.ts` plus a real compare screen in the
       desktop UI, with a working "Fork an attempt" flow
 - [x] Human decision record — `POST /sessions/:id/decision` appends
@@ -887,7 +987,16 @@ just the happy path.
       worth keeping, so this is not gated on the apply below succeeding. The
       compare screen reads it back from `/compare` on refresh rather than
       holding it as throwaway local state, so a second window or a reload
-      agrees with what was actually chosen.
+      agrees with what was actually chosen. Since 2026-08-01 the *baseline* is
+      a decision target too — keeping the current work records a real decision
+      with its own rationale, writes nothing, and is reported as *not needed*
+      rather than as applied or blocked — and a rationale of at least twelve
+      characters is required by the route, not merely by React, so a decision
+      recorded through curl carries the same "why" a decision recorded through
+      the UI does. `decision-route.test.ts`, 13 tests. Settling a comparison
+      needs the `decide` capability, which is owner-only; see PROGRESS.md gap
+      17 for why that is deliberately narrower than the roles table suggests,
+      and the condition for widening it.
 - [x] Apply selected patch — `apply-decision.ts` writes the chosen attempt's
       changes into the parent's working tree, gated on the session having
       writes enabled. It reuses `propose_patch`/`apply_patch` verbatim per
@@ -919,8 +1028,22 @@ rather than only the case where nothing else changed.
 - [x] Event replay tests — `replay.test.ts`
 - [x] Multi-client end-to-end tests — also `reconnect.test.ts`; it drives two
       clients against one real store over one real socket
-- [ ] Packaging and signed macOS build — not started. No `electron-builder` or
-      `electron-forge` config exists yet, no entitlements, no notarization.
+- [~] Packaging and signed macOS build — packaging configured and built once,
+      signing not started. This entry read "not started, no `electron-builder`
+      config exists yet" long after one did. What exists: an
+      `electron-builder` block in `apps/desktop/package.json` (appId, arm64 DMG
+      target, `hardenedRuntime`, `asarUnpack` for the bundled worker and
+      node-pty) and `scripts/build-worker.mjs`, which esbuilds the worker to
+      plain JS so the packaged app runs it under Electron's own Node with no
+      system Node and no type-stripping. `pnpm --filter @novus/desktop dist`
+      produced a DMG, and the installed app was verified to start its bundled
+      worker, answer `/health`, and write its database to userData rather than
+      inside its own bundle. What does not exist: the
+      `build/entitlements.mac.plist` that block names is untracked — caught by
+      `.gitignore`'s blanket `build/` rule, and no commit has ever touched
+      `apps/desktop/build` — so that build is not reproducible from a clone.
+      Nor is anything signed or notarized, which needs an Apple Developer
+      certificate.
 
 Exit condition: the complete demo works repeatedly on a clean machine and survives
 a host UI restart without losing session history. **Not met** — every item
@@ -928,7 +1051,8 @@ above is unit- and integration-tested on a developer machine, but until
 2026-07-30 the actual restart-and-resume path was silently broken in the
 desktop UI (see *Where we actually are*), so the exit condition as stated —
 tested on a clean machine, repeatedly — has not been attempted even now that
-the bug is fixed. Packaging alone blocks "a clean machine" outright.
+the bug is fixed. Packaging still blocks "a clean machine": the build cannot be
+reproduced from a clone, and Gatekeeper warns on the artifact that was built.
 
 ## Fast implementation timeline
 
@@ -964,6 +1088,12 @@ model-and-tool loop. This prevents the agent runtime and multiplayer system from
 developing as two incompatible products.
 
 ## Definition of done
+
+**Not met**, and the unmet part is the first three words. Every bullet below is
+built and deterministically proven for two participants on *one* machine; none
+of it has been done by two real people on separate devices, because a relay
+join is watch-only in both directions and no `wss://` relay has been stood up.
+Nor has any of it been done against a live model since 2026-07-29.
 
 V1 is complete when two real people on separate devices can:
 

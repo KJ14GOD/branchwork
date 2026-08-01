@@ -6,7 +6,7 @@ defines the scope and carries the narrative; this file is the index you read
 in two minutes. If the two disagree, one of them is wrong — fix the wrong one
 in the same commit you notice it.
 
-Updated 2026-07-31, audited against commit `6b91b04`.
+Updated 2026-08-01, audited against commit `a83dff9`.
 
 ## The rules this file follows
 
@@ -55,6 +55,9 @@ genuinely unproven live:
 - the model router, run pricing, and the per-turn model override
 - direction, cancel, pause, resume, and handoff folding into a live run
 - the model's-own-words-preserved path (text alongside a tool call)
+- everything this batch added (2026-08-01): the offer/accept control
+  lifecycle, the joined window's authority surface, the baseline as a
+  decision target, and route-level rationale enforcement
 
 The OpenAI adapter has sent exactly one request that OpenAI's API validated
 (no usable key was available); it has never completed a live round-trip.
@@ -72,9 +75,9 @@ Statuses against the exit conditions in V1_README's build order.
 | --- | --- | --- |
 | 1 — Foundation | **Met** | `apps/worker/src/reconnect.test.ts` drives one store to host and guest over a real SSE socket; SQLite store at `.novus/events.db`, replayed by `replay.test.ts` |
 | 2 — Single-agent harness | **Met**, live once per task (2026-07-29) | `benchmarks/{bug-fix,small-feature,repo-reasoning}/` via `./scripts/benchmark.sh`; scorer re-runs suites itself and applies a hidden test. Context assembly is the one Partial inside: goal + prior turns only, no repository context (`buildMessages`, `apps/worker/src/anthropic-model.ts`) |
-| 3 — Multiplayer control | **Met**, deterministic only | `pause-resume.test.ts`, `pause-resume-route.test.ts`, `handoff-route.test.ts`, `presence.test.ts`, `cancel-route.test.ts`; the routes table below. Never run against a live model; the shared leg of the evaluation grid is still unrun |
-| 4 — Fork and compare | **Met**, deterministic only (2026-07-31) | `fork-run.test.ts` (13 tests, incl. a rendezvous barrier that fails loudly if attempts secretly serialise), `apply-decision.test.ts`, `decision-route.test.ts`, `compare.test.ts`. Gaps 1–2 are now mostly closed — worktrees are reclaimed when a decision resolves them, and an attempt the worker died inside is failed at the next open — with the residue recorded on each |
-| 5 — Hardening | **Partial** | Reconnect, crash recovery, redaction, authorization, replay, multi-client: met (`reconnect.test.ts`, `replay.test.ts`, `session-registry.test.ts`, `redaction.test.ts`, `access.test.ts`). Packaging: **met, unsigned** (2026-07-31) — builder config and entitlements exist, `pnpm --filter @novus/desktop dist` produces a launch-verified DMG. Exit condition (repeatable demo on a genuinely clean machine) still not attempted, and the build is unsigned so Gatekeeper warns |
+| 3 — Multiplayer control | **Met**, deterministic only, same machine only | `pause-resume.test.ts`, `pause-resume-route.test.ts`, `handoff-route.test.ts`, `control-lifecycle.test.ts`, `presence.test.ts`, `cancel-route.test.ts`; the routes table below. Never run against a live model; the shared leg of the evaluation grid is still unrun. The exit condition names a *remote* teammate: what is proven is same-machine joining over real processes, since a relay join is watch-only and no `wss://` relay has been stood up (gap 10) |
+| 4 — Fork and compare | **Met**, deterministic only (2026-08-01) | `fork-run.test.ts` (14 tests, incl. a rendezvous barrier that fails loudly if attempts secretly serialise), `apply-decision.test.ts`, `decision-route.test.ts` (13 tests), `compare.test.ts`. Gaps 1–2 are now mostly closed — worktrees are reclaimed when a decision resolves them, and an attempt the worker died inside is failed at the next open — with the residue recorded on each |
+| 5 — Hardening | **Partial** | Reconnect, crash recovery, redaction, authorization, replay, multi-client: met (`reconnect.test.ts`, `replay.test.ts`, `session-registry.test.ts`, `redaction.test.ts`, `access.test.ts`). Packaging: **partial, unsigned** (2026-07-31) — `apps/desktop/package.json`'s `build` block configures `electron-builder` and `scripts/build-worker.mjs` bundles the worker, and a DMG was produced and launch-verified on the machine that built it; but the `build/entitlements.mac.plist` that block points at is not in the repository and `.gitignore`'s `build/` rule excludes it, so a fresh clone cannot reproduce that build (gap 16). Exit condition (repeatable demo on a genuinely clean machine) not attempted |
 
 ## Steering brief slices
 
@@ -87,9 +90,9 @@ direction laid on top of it.
 | 1 — Approach surface | **Met** (2026-07-31) | Baseline derived in `apps/worker/src/compare.ts` from `fork.created.parentRunId` and rendered as "Current work"; human status language; single-prompt fork form with derived label. `compare.test.ts`, `compare-view.render.test.tsx` |
 | 2 — First Decision Room | **Met** (2026-08-01) | Three decision kinds (`adopt` / `revision` / `exploration`), interventions as evidence above the agent's summary, summary last and labelled "Unverified claim" when nothing was tested. Requesting a revision cuts a new approach from the same checkpoint carrying the feedback. Exportable Markdown receipt at `GET /sessions/:id/receipt`. **Since 2026-08-01** the baseline is a decision target: keeping the current work records a real `decision.recorded` with its rationale, applies nothing, and is reported as *not needed* rather than as applied or blocked. Rationale is enforced at the route rather than only in React. `compare.test.ts`, `replay.test.ts`, `decision-route.test.ts`, `decision-authority.test.ts`, `receipt-export.test.ts`, `compare-view.render.test.tsx` |
 | 3 — Multiplayer authority | **Met**, deterministic only (2026-08-01) | `control-lifecycle.test.ts` (18 tests): offer/accept/decline/withdraw, superseded offers, disconnect vs departure, cross-session refusal, direction queued vs recorded. UI in `control-panel.tsx`, `control-panel.render.test.tsx`. The *joined* window now uses the same protocol rather than only the hosting one: authority state, requesting control, and answering a handoff, in `join/joined-surface.tsx` and `join/joined-api.ts` — `joined-surface.render.test.tsx` (16 tests) for who may see which control, `joined-api.test.ts` (11 tests) for what those calls do against a real event server. A relay join stays watch-only and says so |
-| 4 — Reliability before pilot | **Met**, unsigned (2026-07-31) | Worktree reclamation, interrupted-run reconciliation, dev-server reaping, receipt checks, visible cost. Spend now survives a pause: `run.paused` carries a usage snapshot and `execute()` seeds from it (`pause-resume.test.ts`). Packaged and launch-verified — bundled worker under Electron's own Node, database in userData. **Open:** the DMG is unsigned; that needs an Apple Developer certificate |
+| 4 — Reliability before pilot | **Partial** (2026-07-31) | Worktree reclamation, interrupted-run reconciliation, dev-server reaping, receipt checks, visible cost: met. Spend survives a pause — `run.paused.usage` carries a snapshot and `AgentRunner`'s `execute()` seeds tokens, calls, cost and model time from it (`pause-resume.test.ts`, "a resumed run continues its spend rather than restarting it"). Packaged and launch-verified on the build machine — bundled worker under Electron's own Node, database in userData. **Open:** the DMG is unsigned (needs an Apple Developer certificate), the entitlements file the builder config names is not committed (gap 16), and the run's *wall-clock* budget still restarts on resume (gap 4) |
 | 5 — Mission Inbox | **Met** (2026-08-01) | Attention grouping derived in `session-registry.ts:attentionFor`, ordered by urgency not recency; goal leads the row. Now its own surface (`mission-inbox.tsx`) rather than a list appended under the open-a-repository form — the window's first screen, and an overlay from the titlebar's Missions once tabs exist; opening a repository is a separate bounded modal. `mission-inbox.test.ts` (worker), `mission-inbox.test.tsx` (renderer: grouping, no empty headings, resume keeps the id, permissions come from the host's current defaults) |
-| 6 — Team pilot surface | **Partial** (2026-07-31) | Exportable receipt (`receipt-export.ts`), installable build (unsigned), and GitHub connection with PR status and required checks (`github.ts`, `github.test.ts` — nine tests, one against the real `gh`) all done. Durable shared sessions, role-aware invitations and the usage/cost view came from earlier slices. **Not started:** team grouping and update delivery. **Blocked on a credential, not on code:** code signing needs an Apple Developer ID certificate |
+| 6 — Team pilot surface | **Partial** (2026-07-31) | Exportable receipt (`receipt-export.ts`, `GET /sessions/:id/receipt`), installable build (unsigned, and not reproducible from a clone — gap 16), and GitHub connection with PR status and required checks (`github.ts`, `github.test.ts` — eleven tests, one against the real `gh`) all done. Durable shared sessions, role-aware invitations and the usage/cost view came from earlier slices. **Not started:** team grouping and update delivery. **Blocked on a credential, not on code:** code signing needs an Apple Developer ID certificate. **Not blocked on a credential:** committing the entitlements file |
 
 ### Steering brief: presentation
 
@@ -100,7 +103,7 @@ direction laid on top of it.
 | Mission Room — active canvas | **Met** (2026-08-01) | The centre column switches between timeline, approaches and browse, and the branching picture is drawn above the approach cards: one shared checkpoint, the branches, and the decision they converge into. Which surfaces each view shows, and when the Decision Room opens itself, are pure functions the screen renders from rather than inline effects: `decision-room.ts`, `decision-room.test.ts` (once per arrival, browse never interrupted, a later decision re-opens, composer and evidence inspector stay). `branch-diagram.tsx`, `compare-view.render.test.tsx` |
 | Activity as milestones | **Met** (2026-07-31) | Collapsed groups read "Read 2 files · Ran the tests" rather than `read_file ×2`; machinery and the call total sit under Technical details. `timeline-summary.test.tsx` |
 | Vocabulary | **Met** (2026-07-31) | Attempt → Approach and Session → Mission in customer-facing text; event types and URL parameters deliberately keep the contract's spelling |
-| Guest parity | **Met** (2026-07-31) | Shared tokens in `packages/ui/src/tokens.css`, imported by both apps; guest literals snapped onto the scale; labels capitalised; header leads with the goal |
+| Guest parity | **Partial** (2026-07-31) | Shared tokens in `packages/ui/src/tokens.css`, imported by both apps (`apps/guest/src/styles.css:13`); guest literals snapped onto the scale; labels capitalised; header leads with the goal. **Open:** the guest never stamps `data-theme`, so it is dark-only against the desktop's two themes (gap 9) |
 
 ## Capabilities
 
@@ -111,7 +114,7 @@ direction laid on top of it.
 | Typed tool loop, budget-bounded (tokens, wall clock, cost, identical-read livelock check) | Met | `apps/worker/src/agent-runner.ts`, `agent-runner.test.ts`, `budget.test.ts` |
 | Tool failure returns as `is_error`, never ends a run | Met | `model-response.test.ts` (malformed calls, truncation), `tools.test.ts` |
 | Context assembly | Partial | Goal + prior turns + tool exchanges with elision budgets (`context-size.test.ts`). No repository-derived context: the model discovers the repo through its own tools |
-| Run receipts | Partial | `receipt.test.ts` (16 tests). Now records every check — tests, build, typecheck, lint — and carries `verification`, so a run that finished having checked nothing reads as `unverified` rather than as a pass (gap 12). A resumed *run's* budget clock still restarts (gap 4); `rates` are computed but stripped from the emitted receipt (gap 6) |
+| Run receipts | Partial | `receipt.test.ts` (16 tests). Now records every check — tests, build, typecheck, lint — and carries `verification`, so a run that finished having checked nothing reads as `unverified` rather than as a pass (gap 12). A resumed run's *token and cost* counters now carry across the pause; its *wall-clock* budget still restarts (gap 4). `rates` are computed in `receipt.ts:ReceiptUsage` but absent from `RunUsageSchema`, so they are stripped from the emitted receipt (gap 6) |
 
 ### Native tools — sixteen
 
@@ -137,8 +140,9 @@ direction laid on top of it.
 | Live presence distinct from membership | Met | `presence.test.ts` over a real socket |
 | Direction folded in at turn boundaries | Met (deterministic) | `POST /sessions/:id/direction`; `agent-runner.test.ts` |
 | Cancel / pause / resume / handoff | Met (deterministic) | `cancel-route.test.ts`, `pause-resume-route.test.ts`, `handoff-route.test.ts` |
-| Off-machine viewing through the relay | Met | `apps/session-service/src/*.test.ts`, guest `relay-client.test.ts` |
-| Requesting control from a joined window | Met (deterministic) | `join/joined-surface.render.test.tsx`, `join/joined-api.test.ts`. **Still not the browser guest**, which is structurally read-only (gap 10) |
+| Handoff is offer → accept, not a one-click transfer | Met (deterministic, 2026-08-01) | `POST /sessions/:id/handoff` offers; `POST /sessions/:id/handoff/(accept\|decline\|withdraw)` answers it. Events `control.offered` / `control.accepted` / `control.declined` / `control.withdrawn` / `control.transferred` in `packages/contracts`. `control-lifecycle.test.ts` (18 tests) covers superseded offers, an offer only its named recipient may answer, a viewer accepting (authority is the offer, not the rank), and acceptance during a live run waiting for the boundary before control moves |
+| Off-machine viewing through the relay | Met, watch-only | `apps/session-service/src/*.test.ts`, `packages/session-client/src/relay-client.test.ts`. Watch-only in both directions: the transport carries the log outbound and nothing back, and nobody has stood up a `wss://` relay, so cross-machine multiplayer is **not** proven (gap 10) |
+| Requesting control from a joined window | Met (deterministic) | `join/joined-surface.render.test.tsx` (16 tests), `join/joined-api.test.ts` (11 tests). The hosting window has the same trigger in `components/control-panel.tsx`. **Still not the browser guest**, which is structurally read-only (gap 10) |
 
 ### Fork and compare
 
@@ -150,7 +154,8 @@ direction laid on top of it.
 | Forks survive worker restart; decision still applies | Met | `WorktreeManager.adopt`; `fork-run.test.ts` |
 | Decision recorded and applied, conflicts refuse the whole apply | Met | `decision-route.test.ts`, `apply-decision.test.ts` |
 | Compare surfaces (rail, view switcher, screen) | Met | `apps/desktop/src/components/compare-screen.tsx`, `packages/ui/src/compare-view.tsx` |
-| Fork worktree teardown | **Mostly met** (2026-07-31) | `reclaimResolvedForks` sweeps at session open when an applied decision resolves an attempt; `collectableForks` is the policy, `assertUnderForkRoot` the deletion boundary. `fork-run.test.ts` test 11, `worktree-manager.test.ts` (policy, crafted paths, unowned forks). Undecided sessions still accumulate (gap 1) |
+| Fork worktree teardown | **Mostly met** (2026-07-31) | `SessionRegistry.reclaimResolvedForks` sweeps at session open when an applied decision resolves an attempt; `worktree-manager.ts:collectableForks` is the policy, `assertUnderForkRoot` the deletion boundary. `fork-run.test.ts` "attempts a decision resolved are reclaimed at the next open; undecided and paused ones are not", `worktree-manager.test.ts` (policy, crafted paths, unowned forks). Undecided sessions still accumulate (gap 1) |
+| The baseline is a decision target, not an absence of one | Met (deterministic, 2026-08-01) | Keeping the current work records a real `decision.recorded` with its rationale, writes no files, and is reported as *not needed* rather than applied or blocked. `decision-route.test.ts` — "the baseline can be selected", "selecting the baseline writes no files, and is not reported as a failed application", "rejected alternatives stay in the event history after the baseline is chosen". A rationale under 12 characters is refused by the route, not only by React (`event-server.ts`, and the last two tests in `decision-route.test.ts`) |
 
 ### Models, routing, and cost
 
@@ -160,30 +165,42 @@ direction laid on top of it.
 | Signal-based router across three Anthropic tiers (fast `claude-sonnet-5`, deep `claude-opus-5`, max `claude-fable-5`) | Met (deterministic) | `SignalModelRouter` in `model-router.ts`; `model-router.test.ts` (13 tests). Signals: goal shape, context size, failure escalation, cost-budget step-down. Each decision is logged with its reason as `run.progress` |
 | Per-turn model override beats the router; unknown model is a 400 before the run starts | Met (deterministic) | `POST /sessions/:id/turns` with `model`; `turn-model-route.test.ts` |
 | Per-run cost and model time, cache-aware | Met (deterministic) | `pricing.test.ts` proves the full-price-equivalent identity; `budget.test.ts` enforces the cost ceiling. Unpriced models read as unknown, never zero (`ratesFor` returns null) |
-| Cost visible to a person | **Not started** | `costUsd` is computed, budgeted, and rendered nowhere (gap 6) |
+| Cost visible to a person | **Mostly met** | The receipt row renders spend and the rail meter shows the session total from `GET /sessions/:id/usage`; null reads as "Cost not counted", never `$0.00`. `packages/ui/src/receipt-summary.ts` with `receipt-summary.test.ts` (7 tests). **Open:** `rates` and `modelTimeMs` reach no screen, and the compare screen does not draw per-attempt spend (gap 6). This row said "Not started" while gap 6 said "mostly closed"; the gap was right |
 | Learned routing (historical success, eval results) | Not started, deliberately | Marked extension points in `model-router.ts`; excluded from V1 scope |
 
 ### Desktop app
 
-All hand-tested via CDP against scripted adapters; **zero renderer tests
-exist** (gap 8).
+The renderer is no longer untested. `scripts/tsx-hook.ts` registers an esbuild
+transform so `node --test` can load `.tsx` at all, and `apps/desktop`'s test
+script globs `src/**/*.test.ts(x)` alongside `electron/*.test.ts`: 104 tests
+across ten files under `src/`, 37 more across three under `electron/`. What is
+covered is components rendered to static markup and pure decision modules; what
+is not covered is every `use-*.ts` hook, `app.tsx` itself, and the whole of
+`apps/guest/src` — the narrowed version of gap 8.
+
+Rows below marked *hand-tested* were driven via CDP against scripted adapters,
+not by any test. Visual verification was done at 1280×800 and 1440×900 and at
+no other size: this display clamps to 1470 logical points, so nothing wider has
+ever been looked at, and no document should say otherwise.
 
 | Capability | Status | Evidence |
 | --- | --- | --- |
-| Multi-session tabs; background tabs stay mounted with live streams | Met (hand-tested) | `apps/desktop/src/app.tsx`, `use-session.ts` (catalog) + `use-session-actions.ts` (per tab) |
+| Multi-session tabs; background tabs stay mounted with live streams | Met (hand-tested) | `apps/desktop/src/app.tsx`, `use-session.ts` (catalog) + `use-session-actions.ts` (per tab). None of the three has a test |
 | Embedded terminal (node-pty + xterm), repo cwd, human-side only | Met (hand-tested) | `apps/desktop/electron/main.ts`, `src/components/terminal-panel.tsx` |
-| Read-only file browser, host-side confinement | Met | `electron/fs-browser.ts` with `fs-browser.test.ts` — the one desktop area with tests |
-| Persistent composer with model picker, wired end-to-end to the turns route | Met (hand-tested) | `composer.tsx` → `use-session-actions.ts` → `POST /sessions/:id/turns`; worker side pinned by `turn-model-route.test.ts` |
-| Spacing/type design system (`--space-1..8`, `--text-*`, radii, control heights) | Met | `apps/desktop/src/styles.css` token block; `skills/novus-ui/SKILL.md` documents it |
-| Light/dark theme | Met (hand-tested) | `styles.css` `[data-theme="light"]` |
+| Read-only file browser, host-side confinement | Met | `electron/fs-browser.ts` with `fs-browser.test.ts` (11 tests: absolute paths, `..`, symlinks, `.git`/`.env`, binary, oversize) |
+| Hosting-vs-joining launch, and the renderer's own asset boundary | Met | `electron/launch.test.ts` (10 tests), `electron/renderer-host.test.ts` (16 tests: `resolveAsset` climbs, loopback host check) |
+| Persistent composer with model picker, wired end-to-end to the turns route | Met (hand-tested) | `composer.tsx` → `use-session-actions.ts` → `POST /sessions/:id/turns`; worker side pinned by `turn-model-route.test.ts`, renderer side untested |
+| Open-a-repository modal, separate from the Mission Inbox | Met | `components/open-repository.tsx` with `open-repository.render.test.tsx` (7 tests); `components/modal.tsx` with `modal.test.tsx` (11 tests) |
+| Spacing/type design system (`--space-1..8`, `--text-*`, radii, control heights) | Met | `packages/ui/src/tokens.css`, imported by `apps/desktop/src/styles.css`; `styles.test.ts` (6 tests) pins it; `skills/novus-ui/SKILL.md` documents it |
+| Light/dark theme | Met (hand-tested) | `packages/ui/src/tokens.css` `:root[data-theme="light"]`, stamped before first paint by `main.tsx` from `use-theme.ts:initialTheme` |
 
 ### Guest app
 
 | Capability | Status | Evidence |
 | --- | --- | --- |
-| Live timeline, presence, run stats, reconnect-with-resume | Met | `apps/guest/src/*.test.ts` (endpoint, relay-client, timeline) |
-| Reads via relay or worker, token-gated either way | Met | `relay-client.test.ts`; CLAUDE.md's guest facts |
-| Desktop's design system | **Not started** | Guest stylesheet shares zero tokens with the desktop's (gap 9) |
+| Live timeline, presence, run stats, reconnect-with-resume | Met, below the React layer | `packages/session-client/src/*.test.ts` (41 tests: endpoint, invite, relay-client, roles, timeline) — the shared client the guest and the desktop's joined tab both use. The guest's own React is untested (gap 8) |
+| Reads via relay or worker, token-gated either way | Met | `packages/session-client/src/relay-client.test.ts`, `endpoint.test.ts`; CLAUDE.md's guest facts |
+| Desktop's design system | **Partial** | `apps/guest/src/styles.css` imports `@novus/ui/tokens.css` and draws on it in 176 places, so the scales and palette are genuinely shared. Still missing: the guest never stamps `data-theme`, so it takes the `:root` default and is dark-only while the desktop has both (gap 9) |
 | Compare/attempts surface | Not started | The guest renders the timeline only; it never imports `CompareView` |
 
 ### Persistence, security, evaluation
@@ -199,15 +216,20 @@ exist** (gap 8).
 ## Known gaps
 
 The single register. Each entry says what breaks and where the detail lives.
-Numbered so other documents can point at them.
+Numbered so other documents can point at them, which is why a closed gap keeps
+its number and is marked *Closed* instead of being deleted and the rest
+renumbered. Checked 2026-08-01: 1–18, contiguous, no duplicates, and every
+cross-reference in this file and in V1_README resolves to a number that
+exists.
 
 1. **Fork worktrees are torn down when a decision resolves them — and only
    then.** *Mostly closed (2026-07-31.)* `SessionRegistry.reclaimResolvedForks`
    sweeps at session open, using `collectableForks`: an attempt is collectable
    when an applied `decision.recorded` follows it in the log and its run is
    not paused or running. `pruneRecords` clears Git registrations whose
-   directories are already gone. `fork-run.test.ts` test 11 drives it through
-   the real routes; `worktree-manager.test.ts` covers the policy and the
+   directories are already gone. `fork-run.test.ts` — "attempts a decision
+   resolved are reclaimed at the next open; undecided and paused ones are not"
+   — drives it through the real routes; `worktree-manager.test.ts` covers the
    deletion boundary (crafted paths, and a fork the manager does not own).
    **Still open:** a session nobody ever decides in accumulates attempts
    forever — the sweep has no trigger other than an applied decision, and
@@ -218,8 +240,10 @@ Numbered so other documents can point at them.
    open.** *Mostly closed (2026-07-31.)*
    `SessionRegistry.reconcileInterruptedRuns` reads the projection at open and
    appends `run.failed` for any run still `running`, with a reason naming the
-   interruption. Paused runs are untouched. `fork-run.test.ts` test 10 asserts
-   both directions in one log. **Still open:** liveness is only knowable
+   interruption. Paused runs are untouched. `fork-run.test.ts` — "an attempt
+   the worker died inside is failed at session open, while a paused one
+   survives" — asserts both directions in one log. **Still open:** liveness is
+   only knowable
    in-process. Two workers sharing one `NOVUS_DB` and one session id would let
    one end a run the other is driving — guarded against for a session this
    process already has open, and not otherwise. Proving it across processes
@@ -235,18 +259,33 @@ Numbered so other documents can point at them.
    session-close path at all (no `DELETE /sessions/:id`, no registry
    `close()`), so a server a *session* started still holds its port until the
    worker exits.
-4. **A single run's budget clock restarts on resume; a session's spend no
-   longer does.** *Partially closed (2026-07-31.)* `projectSession` folds
-   `receipt.created` into a session total, served by `GET /sessions/:id/usage`
-   and shown in the rail, so a resumed session reports what it has actually
-   spent instead of zero (`fork-run.test.ts` test 13 asserts this across a
-   real restart). **Still open, and this is the honest limit:** the per-*run*
-   budget that actually stops a runaway is still in-memory and still restarts
-   at zero on resume. No receipt is written at pause and per-call usage never
-   enters the log, so a paused-and-resumed run has nothing to rebuild its
-   counter from and can spend up to the full ceiling again per resume. Closing
-   it needs usage in the log at pause — an event-payload change, so read
-   `novus-extend-event-contract` first.
+4. **A resumed run's wall clock restarts; its tokens and cost no longer do.**
+   *Mostly closed (2026-07-31.)* Two of its three parts are shut. A
+   *session's* spend: `projectSession` folds `receipt.created` into a total,
+   served by `GET /sessions/:id/usage` and shown in the rail, so a resumed
+   session reports what it has actually spent instead of zero (`fork-run.test.ts`,
+   "a session's spend is read from the log, so a restart does not reset it",
+   across a real restart). A *run's* spend: `run.paused` now carries a
+   `usage` snapshot, and `AgentRunner`'s `execute()` seeds `inputTokens`,
+   `outputTokens`, `modelCalls`, `callsMissingUsage`, `modelTimeMs` and
+   `costUsd` from the newest pause for that run before the first model call —
+   so the token, call and cost ceilings in `budget.ts` are checked against the
+   whole run, not the leg since the last resume. An unpriced leg makes the
+   whole run unpriced rather than resuming at zero. `pause-resume.test.ts`
+   covers both the carry ("a resumed run continues its spend rather than
+   restarting it") and the back-compatible case, where a pause recorded before
+   the snapshot existed resumes from zero. **Still open:** `execute()` sets
+   `startedAt = this.now()` unconditionally, so `budget.wallClockMs` (30
+   minutes by default) restarts on every resume — neither the pause itself nor
+   the turns before it count against the continuation's clock. That is the one
+   bound a long pause can still evade, and closing it needs the paused-at
+   elapsed time on the event too.
+
+   The `resume()` docstring in `agent-runner.ts` still says token usage is
+   deliberately not carried forward "because it is only ever reported per model
+   call and never logged". That was true when written and is now contradicted
+   by `execute()`, which `resume()` delegates to with `continuing = true` and
+   which does the seeding — see gap 13.
 5. **`claude-sonnet-5` is priced at its sticker rate** ($3/$15 per MTok)
    while an introductory rate ($2/$10) runs through 2026-08-31, so the fast
    tier's cost reads roughly 1.5x high until then. Deliberate — the default
@@ -266,31 +305,72 @@ Numbered so other documents can point at them.
    compare screen does not yet draw it (that file belongs to another slice).
 7. **Nothing after 2026-07-29 has seen a live model call.** The standing
    caveat above; the single largest unknown in the project.
-8. **The renderer has no tests.** Zero test files under `apps/desktop/src`
-   and none covering React anywhere; the desktop test glob only reaches
-   `electron/*.test.ts`. This is how the token-less Open-screen fetch
-   shipped broken. `packages/contracts` also has **no test script at all**
-   — `pnpm -r --if-present test` silently skips the one package everything
-   trusts.
-9. **The guest has none of the desktop's design system.** 747 lines of
-   hand-picked literals, dark-only, zero shared tokens — and its header
-   comment still claims "same tokens, same spacing" as the desktop, which
-   stopped being true when the desktop moved to scales.
-10. **Requesting control has no UI trigger.** *Mostly closed (2026-08-01.)*
+8. **The renderer is tested where it is a component and untested where it is
+   a hook — and the guest's React is untested entirely.** *Mostly closed
+   (2026-08-01.)* `scripts/tsx-hook.ts` registers a synchronous esbuild
+   transform so `node --test` can parse `.tsx` at all, and `apps/desktop`'s
+   test script globs `src/**/*.test.ts` and `src/**/*.test.tsx` beside
+   `electron/*.test.ts`. What exists now: 104 tests over ten files under
+   `apps/desktop/src` (`control-panel.render`, `mission-inbox`, `modal`,
+   `open-repository.render`, `timeline-summary`, `join/joined-surface.render`
+   rendered to static markup; `decision-room`, `mission-phase`,
+   `join/joined-api`, `styles` as logic), 37 over three under
+   `apps/desktop/electron`, 66 in `packages/ui`, and 41 in
+   `packages/session-client`. That last package is what actually closed the
+   guest's transport coverage — `endpoint`, `invite`, `relay-client`, `roles`
+   and `timeline` moved there and are shared with the desktop's joined tab.
+
+   **Still open, and this is what "narrow" means here:** every `use-*.ts` hook
+   under `apps/desktop/src` is untested (`use-session`, `use-session-actions`,
+   `use-session-events`, `use-presence`, `use-comparison`, `use-file-changes`,
+   `use-file-tree`, `use-github`, `use-theme`, `use-turn-model`,
+   `use-session-usage`, and the three under `join/`), as is `app.tsx` itself —
+   which is where the token-less Open-screen fetch lived, so the exact class of
+   bug this gap was opened for is still uncovered. `apps/guest/src` has no test
+   files **and no `test` script**, so `pnpm -r --if-present test` skips it in
+   silence; `packages/contracts` has no `test` script either, which silently
+   skips the one package everything trusts.
+9. **The guest shares the desktop's tokens but not its theme.** *Mostly
+   closed.* `apps/guest/src/styles.css` imports `@novus/ui/tokens.css` and
+   reads from it in 176 places, so the scales and palette really are the
+   desktop's, and the header comment's "same tokens, same spacing" is true
+   again. **Still open:** the guest's `main.tsx` never stamps `data-theme`, so
+   it always takes the `:root` (dark) branch of the shared tokens while the
+   desktop stamps light or dark before first paint. A guest cannot be in light
+   mode, and nothing on screen says why.
+10. **Requesting control has a UI trigger everywhere except the browser
+    guest.** *Mostly closed (2026-08-01.)* The hosting window has had one for
+    a while — `components/control-panel.tsx`'s "Request control" calls
+    `use-session-actions.ts:requestControl`, which POSTs
+    `/sessions/:id/control/request`.
     A joined desktop window now reads `/authority` with its invite token and
     renders the whole lifecycle — who holds control, standing requests,
     an offer it can accept or decline, an accepted transfer waiting on the
     run that is holding it, and direction queued versus merely recorded —
     with every action absent rather than disabled where the role does not
-    carry it. `join/joined-api.test.ts` drives those calls through a real
-    event server; `join/joined-surface.render.test.tsx` pins who sees what.
-    **Still open:** the browser guest, which remains structurally read-only,
-    and a relay join, which is watch-only in both directions because the
-    transport carries the log outbound and nothing back — the joined window
-    says so on screen rather than hiding it.
-11. **Handoff is atomic, not a two-step accept** — the protocol section in
-    V1_README describes recipient acceptance; what is built transfers
-    ownership on the owner's click.
+    carry it. `join/joined-api.test.ts` (11 tests) drives those calls through a
+    real event server; `join/joined-surface.render.test.tsx` (16 tests) pins
+    who sees what.
+    **Still open:** the browser guest, which remains structurally read-only and
+    has never issued a POST, and a relay join, which is watch-only in both
+    directions because the transport carries the log outbound and nothing back
+    — `joined-surface.tsx` says so on screen ("this connection cannot send
+    anything back") rather than hiding it. Nobody has stood up a `wss://`
+    relay, so remote operational multiplayer is unproven, not merely
+    unpolished.
+11. **Handoff is an offer the recipient accepts.** *Closed (2026-08-01.)*
+    This entry used to say the opposite, and V1_README's protocol section was
+    right all along. `POST /sessions/:id/handoff` offers control and records
+    `control.offered`; `POST /sessions/:id/handoff/(accept|decline|withdraw)`
+    answers it with `control.accepted` / `control.declined` /
+    `control.withdrawn`, and only an acceptance produces `control.transferred`.
+    A second offer is refused while one is in flight, an answer naming a
+    superseded offer is refused, only the participant an offer names may
+    answer it — and because authority is the offer rather than the rank, a
+    viewer may accept. Acceptance during a live run waits for the run's next
+    safe boundary before control actually moves. `control-lifecycle.test.ts`
+    (18 tests) covers each of those, plus what a departure versus a mere
+    disconnect does to a standing request or an open offer.
 12. **Receipts record every check, and separate finishing from being
     verified.** *Closed (2026-07-31.)* `RunReceiptSchema` gained `checks`
     (tests, build, typecheck, lint, with the structured problem count where a
@@ -306,26 +386,44 @@ Numbered so other documents can point at them.
     `run_tests` only, so the compare screen's per-attempt verdict does not yet
     reflect a build or a typecheck. `compare.ts` belongs to another slice.
 13. **Stale in-code doc claims** (owners notified rather than fixed here,
-    since those files belong to active slices): `use-turn-model.ts`'s seam
-    comment says the turns route "does not exist yet" — it exists and is
-    tested; the guest stylesheet header (gap 9); the `contracts.ts` cost
-    comment (gap 6).
-14. **`search_repository` silently skips files over ripgrep's 1M cap**, and
-    the event log stores oversized tool results whole — the model boundary
-    elides them, renderers and the relay still carry the full payload.
+    since those files belong to active slices, and this slice is documentation
+    only): `use-turn-model.ts:10`'s seam comment says the turns route "does not
+    exist yet" — it exists, is routed, and is pinned by
+    `turn-model-route.test.ts`; `agent-runner.ts`'s `resume()` docstring says
+    token usage is deliberately not carried across a resume "because it is only
+    ever reported per model call and never logged", which the `execute()` it
+    delegates to now contradicts (gap 4); the `contracts.ts` cost comment (gap
+    6). The guest stylesheet header, previously listed here, is accurate again
+    (gap 9).
+14. **`search_repository` silently skips files over ripgrep's 1M cap**
+    (`tools.ts`, `--max-filesize 1M`), and the event log stores oversized tool
+    results whole — the model boundary elides them to a stub that names what it
+    dropped (`context-size.test.ts`), renderers and the relay still carry the
+    full payload.
 15. **StrictMode hydration still issues N+1 resume POSTs** per dev-mode
-    launch (harmless duplicate `session.created` rows; the timeline hides
-    them since `3dbb664`, the log keeps them).
-16. **Packaging exists; signing does not.** *Mostly closed (2026-07-31.)*
-    `electron-builder` config, entitlements, and a hardened-runtime setup are
-    in `apps/desktop/package.json` and `apps/desktop/build/`. `pnpm --filter
-    @novus/desktop dist` produces a DMG; the built app was launched and
-    verified to start its bundled worker, answer `/health`, and write its
-    database to userData rather than inside its own bundle. **Still open:**
-    the build is unsigned and un-notarized, so Gatekeeper warns on another
-    machine — that needs an Apple Developer certificate. Milestone 5's "clean
-    machine" exit is reachable but has not been run on a genuinely clean
-    machine.
+    launch: `app.tsx`'s hydration effect checks its `cancelled` flag before
+    each resume, so a double-invoked pass breaks out after the first — but the
+    first `open()` is called before any await, so one spurious `POST /sessions`
+    per launch survives. Harmless duplicate `session.created` rows; the
+    timeline hides them since `3dbb664`, the log keeps them.
+16. **Packaging is configured; the entitlements are not committed and
+    nothing is signed.** *Partially closed (2026-07-31.)*
+    `apps/desktop/package.json`'s `build` block sets the appId, the DMG target,
+    `hardenedRuntime`, and `asarUnpack` for the bundled worker and node-pty;
+    `scripts/build-worker.mjs` esbuilds the worker to plain JS so the packaged
+    app runs it under Electron's own Node with no system Node at all. `pnpm
+    --filter @novus/desktop dist` produced a DMG on the machine that built it,
+    and that app was launched and verified to start its bundled worker, answer
+    `/health`, and write its database to userData rather than inside its own
+    bundle. **Still open, and the first of these is new:** the
+    `build/entitlements.mac.plist` that `build.mac.entitlements` and
+    `entitlementsInherit` both point at is not tracked by Git, is matched by
+    `.gitignore`'s blanket `build/` rule, and no commit has ever touched
+    `apps/desktop/build` — so the verified build is not reproducible from a
+    clone, and `dist` on a fresh checkout will not find the file it names.
+    Beyond that the build is unsigned and un-notarized, so Gatekeeper warns on
+    another machine; that part needs an Apple Developer certificate. Milestone
+    5's "clean machine" exit has not been run on a genuinely clean machine.
 17. **Deciding is the controller's alone, deliberately.** *Open by choice
     (2026-08-01.)* `decide` is its own capability rather than a shade of
     `steer`, so an editor can direct a run and cannot settle a comparison, and
@@ -333,9 +431,16 @@ Numbered so other documents can point at them.
     decide-and-apply route. That is narrower than the roles table implies a
     reviewer should get. It is narrow on purpose: selection and application are
     one permissioned operation today, so granting a reviewer the power to
-    select would grant them the power to write. Widen it when the two become
-    separately permissioned — not before. `decision-authority.test.ts` pins
-    every refusal.
+    select would grant them the power to write. **The condition for widening
+    it:** split `POST /sessions/:id/decision` so that recording a decision and
+    applying its files are separately permissioned. Until then, not before.
+    `apps/worker/src/participants.ts:CAPABILITIES` is the authoritative table
+    (`decide` on owner only), mirrored client-side in
+    `packages/session-client/src/roles.ts` so a joined window hides what would
+    403 rather than offering a control that fails on click; if the two
+    disagree the worker wins. `decision-authority.test.ts` (5 tests) pins every
+    refusal — editor, reviewer, viewer, and an owner of one session acting on
+    another.
 18. **The flaky `/authority` test was a race, not contention.** *Closed
     (2026-08-01.)* It was never about load. The run loop drains pending
     direction at the top of each iteration, and the top of the *first*
@@ -346,8 +451,11 @@ Numbered so other documents can point at them.
     as soon as the run was executing, which is inside that window. Load only
     widened it, which is why it read as contention for so long.
 
-    The adapter now signals when the loop is parked inside the model call, and
-    `startRun` waits for that rather than for `run.started`. Verified ten
+    The test's own adapter now signals when the loop is parked inside the
+    model call, and its `startRun` helper waits for that rather than for
+    `run.started` — `control-lifecycle.test.ts`, the `noopAdapter` /
+    `entered` block at the top of the file, with the reasoning written beside
+    it. Verified ten
     consecutive times, four of them against three concurrent full suites. No
     product behaviour changed: folding a direction in at the first boundary is
     correct, and the test was asserting against a window the product never
