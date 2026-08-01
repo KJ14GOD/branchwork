@@ -37,6 +37,13 @@ import {
   type ReceiptUsage,
   type RepositoryBase,
 } from "./receipt.ts";
+import {
+  NOVUS_BUILTIN_CAPABILITIES,
+  type Harness,
+  type HarnessCapabilities,
+  type HarnessDescriptor,
+  type HarnessKind,
+} from "./harness.ts";
 import type { AgentTool } from "./tools.ts";
 
 export type AgentRunInput = {
@@ -201,7 +208,32 @@ export class AgentRunFailure extends Error {
   }
 }
 
-export class AgentRunner {
+export class AgentRunner implements Harness {
+  /**
+   * The built-in loop, now named as one harness among several.
+   *
+   * Nothing below this line moved. Novus's own loop is still the reference
+   * implementation — it is the only one where Novus mediates approvals, sees
+   * typed tool calls, and can fold direction into a live turn — but it is no
+   * longer the only way an agent can run, and the three members added here are
+   * what let a subprocess-driven harness sit beside it.
+   */
+  readonly kind: HarnessKind = "novus-builtin";
+  readonly capabilities: HarnessCapabilities = NOVUS_BUILTIN_CAPABILITIES;
+
+  async describe(): Promise<HarnessDescriptor> {
+    return {
+      kind: "novus-builtin",
+      id: "novus-builtin",
+      // No binary to ask. Null rather than this package's version, which would
+      // answer a different question than the one being asked.
+      version: null,
+      // In-process: there is no subprocess to name.
+      command: null,
+      capabilities: this.capabilities,
+    };
+  }
+
   private readonly eventStore: SessionEventStore;
   private readonly router: ModelRouter;
   private readonly adapters: readonly ModelAdapter[];

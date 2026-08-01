@@ -10,6 +10,112 @@ export const ModelSelectionSchema = z.object({
 
 export type ModelSelection = z.infer<typeof ModelSelectionSchema>;
 
+/* ============================================================
+   Harnesses
+   ============================================================
+ *
+ * A *model* is the intelligence. A *harness* is the whole program around it —
+ * its own loop, its own tools, its own context handling, its own permissions.
+ * Claude Code is a harness that runs Claude models. Novus has one of its own,
+ * and for most of this repository's life it was the only way an agent ran, so
+ * "a run" and "the harness" were the same thing and neither needed a name.
+ *
+ * They are not the same thing. Novus's job is the layer above: which people
+ * and which agents are on one mission, who holds control, what changed, and
+ * what was actually verified. The loop inside any one agent belongs to
+ * whoever wrote it.
+ */
+
+/**
+ * Which harness executed a run.
+ *
+ * A closed enum rather than a free string, so adding one is a compile error at
+ * every exhaustive switch instead of a row nobody renders. `external` is the
+ * operator-configured escape hatch; the descriptor's `id` says what actually
+ * ran.
+ */
+export const HarnessKindSchema = z.enum([
+  "novus-builtin",
+  "claude-code",
+  "codex",
+  "external",
+]);
+
+export type HarnessKind = z.infer<typeof HarnessKindSchema>;
+
+/**
+ * What a harness declares it can do — never what Novus wishes it could.
+ *
+ * Every field defaults to its LEAST capable value. An adapter whose author
+ * forgets one gets a harness Novus will not try to pause, will not offer
+ * steering for, and will not credit with having reported anything. That
+ * direction is deliberate: the failure mode of a forgotten field has to be a
+ * disabled button, never a Pause that silently does nothing. To the person
+ * pressing it, silence and success look identical, and that is the whole
+ * reason these are declared rather than assumed.
+ */
+export const HarnessCapabilitiesSchema = z.object({
+  /**
+   * `boundary` suspends and resumes carrying state. `immediate` stops now and
+   * loses it. `none` cannot be paused at all — killing is not pausing.
+   */
+  pause: z.enum(["none", "boundary", "immediate"]).default("none"),
+  /**
+   * Where a human's direction can land. `mid-turn` is the built-in loop's
+   * promise: folded into a live run at its next safe boundary. `next-run`
+   * means the words are kept and become the next thing asked — a weaker
+   * promise, and one that must never be dressed as the stronger one.
+   */
+  steer: z
+    .enum(["none", "next-run", "between-turns", "mid-turn"])
+    .default("none"),
+  /**
+   * Only `typed` may emit `tool.requested` / `tool.completed`. Those carry
+   * Novus's own tool union, whose `apply_patch` arm means "this crossed the
+   * approval gate". A harness whose tool names are its own gets the
+   * `harness.activity` family instead, which promises nothing about review.
+   */
+  toolVisibility: z.enum(["none", "named", "typed"]).default("none"),
+  /**
+   * `proposed` means writes cross a review gate before they land. `reported`
+   * means the harness says what it touched. `observed` means Novus finds out
+   * by diffing afterwards. Only `proposed` supports propose-then-approve, and
+   * only Novus's own loop offers it.
+   */
+  fileChanges: z
+    .enum(["none", "observed", "reported", "proposed"])
+    .default("none"),
+  approvals: z
+    .enum(["none", "harness-internal", "novus-mediated"])
+    .default("none"),
+  usage: z.enum(["none", "totals", "per-call"]).default("none"),
+  cost: z.enum(["none", "reported"]).default("none"),
+  /** `graceful` stops at a turn boundary. `kill` sends a signal. */
+  cancel: z.enum(["kill", "graceful"]).default("kill"),
+  reportsModel: z.boolean().default(false),
+});
+
+export type HarnessCapabilities = z.infer<typeof HarnessCapabilitiesSchema>;
+
+/**
+ * Which harness ran, and what it could do while it did.
+ *
+ * `version` is discovered by asking the binary; `capabilities` are declared by
+ * the adapter's author. Separate fields because they are different kinds of
+ * claim — and a version that could not be read is null rather than guessed.
+ */
+export const HarnessDescriptorSchema = z.object({
+  kind: HarnessKindSchema,
+  /** The adapter's stable id, distinct from the version that ran. */
+  id: z.string().min(1),
+  version: z.string().min(1).nullable(),
+  /** The program, never a shell line. Null for the in-process loop. */
+  command: z.string().min(1).nullable(),
+  capabilities: HarnessCapabilitiesSchema,
+});
+
+export type HarnessDescriptor = z.infer<typeof HarnessDescriptorSchema>;
+
 export const ReadFileToolCallSchema = z.object({
   id: IdSchema,
   name: z.literal("read_file"),
@@ -654,6 +760,14 @@ export const RunSchema = z.object({
   ]),
   startedBy: IdSchema,
   model: ModelSelectionSchema,
+  /**
+   * Which harness ran this.
+   *
+   * Optional because absent is not a missing value — it is the fact about
+   * every run recorded before harnesses had names: they all went through the
+   * built-in loop. A required field would have rewritten history.
+   */
+  harness: HarnessDescriptorSchema.optional(),
   createdAt: TimestampSchema,
 });
 
@@ -1271,6 +1385,104 @@ export const ForkCreatedEventSchema = EventEnvelopeSchema.extend({
   }),
 });
 
+/* ============================================================
+   What an external harness did
+   ============================================================
+ *
+ * Deliberately NOT new arms on `ToolCallSchema`. That union discriminates on a
+ * literal `name`, and every renderer switches on it exhaustively — a
+ * passthrough arm would let an unreviewed external write inherit
+ * `apply_patch`'s propose-then-approve guarantee at every one of those
+ * switches. These events promise nothing about review, which is the honest
+ * thing to promise about a program whose permissions are its own.
+ */
+
+/**
+ * One action a harness took, at the only granularity it gives.
+ *
+ * An action appears twice under the same `callId`: once `started`, once with
+ * its outcome. Last status wins. That is cheaper than a second event family
+ * and it survives a stream that never reports the second half — which is
+ * exactly what a killed subprocess produces.
+ */
+export const HarnessActivityEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("harness.activity"),
+  payload: z.object({
+    runId: IdSchema,
+    callId: z.string().min(1),
+    /**
+     * The harness's own word — "Bash", "Edit", "shell". Never mapped onto a
+     * Novus tool name: a mapping would be a claim about review that did not
+     * happen.
+     */
+    name: z.string().min(1),
+    /** For an icon and a filter. Nothing may gate a write on this. */
+    class: z
+      .enum(["unknown", "read", "search", "edit", "execute", "network", "other"])
+      .default("unknown"),
+    summary: z.string().min(1).nullable().default(null),
+    status: z
+      .enum(["started", "completed", "failed", "denied", "unknown"])
+      .default("unknown"),
+    /** Paths the harness SAYS it touched. Claimed, never verified. */
+    claimedPaths: z.array(z.string().min(1)).max(64).default([]),
+  }),
+});
+
+/** Prose from a harness whose tool detail Novus does not own. */
+export const HarnessOutputEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("harness.output"),
+  payload: z.object({
+    runId: IdSchema,
+    text: z.string().min(1),
+    truncated: z.boolean().default(false),
+  }),
+});
+
+/**
+ * What a diff actually shows — the observed counterpart to a receipt's
+ * patch-derived file list, which is empty for every external harness because
+ * no patch ever crossed Novus.
+ */
+export const HarnessChangesObservedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("harness.changes_observed"),
+  payload: z.object({
+    runId: IdSchema,
+    files: z
+      .array(
+        z.object({
+          path: z.string().min(1),
+          additions: z.number().int().nonnegative(),
+          deletions: z.number().int().nonnegative(),
+        }),
+      )
+      .max(500),
+    truncated: z.boolean().default(false),
+    /**
+     * False when the run shared the session's own tree. Then these paths are
+     * everything that differs, a human's own edits included, and attributing
+     * them to the harness would be a fabricated citation. Required, with no
+     * default: a wrong guess here credits an agent with somebody's work.
+     */
+    attributable: z.boolean(),
+  }),
+});
+
+/**
+ * A control Novus asked for that this harness cannot perform.
+ *
+ * Without this, pressing Pause on a harness that cannot pause is silence — and
+ * silence is indistinguishable from a pause that worked.
+ */
+export const HarnessUnsupportedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("harness.unsupported"),
+  payload: z.object({
+    runId: IdSchema,
+    requested: z.enum(["pause", "resume", "steer", "approve", "fork"]),
+    reason: z.string().min(1),
+  }),
+});
+
 export const RunFailedEventSchema = EventEnvelopeSchema.extend({
   type: z.literal("run.failed"),
   payload: z.object({
@@ -1544,6 +1756,10 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   ToolFailedEventSchema,
   RunCompletedEventSchema,
   RunFailedEventSchema,
+  HarnessActivityEventSchema,
+  HarnessOutputEventSchema,
+  HarnessChangesObservedEventSchema,
+  HarnessUnsupportedEventSchema,
   ReceiptCreatedEventSchema,
   CheckpointCreatedEventSchema,
   ForkCreatedEventSchema,
@@ -1664,6 +1880,26 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   RunFailedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  HarnessActivityEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  HarnessOutputEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  HarnessChangesObservedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  HarnessUnsupportedEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,

@@ -54,6 +54,13 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "run.pause_requested": "◑",
   "run.paused": "‖",
   "run.resumed": "▹",
+  // What a harness Novus does not own reported about itself. Deliberately not
+  // the glyphs above: `→` and `✓` belong to tool calls that crossed Novus's
+  // approval gate, and nothing in this family did.
+  "harness.activity": "▪",
+  "harness.output": "❝",
+  "harness.changes_observed": "±",
+  "harness.unsupported": "⊗",
 };
 
 export type EventRowProps = {

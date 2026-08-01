@@ -1,5 +1,0 @@
-`npm test` fails in this repository. The failing case is "a caller that polls faster than the interval still earns its full rate": a client that retries every 100ms against a bucket configured for one token per second is let through once and then starved forever, while a client that retries once a second is served normally. The rate is meant to be a property of the bucket, not of how often the caller asks.
-
-Find the cause in src/rate-limiter.js and fix it, then run the tests and report what they actually said.
-
-Constraints. Do not edit anything under tests/ — the failing test describes the symptom correctly and is not the bug. Do not change the public API: src/rate-limiter.js must keep exporting a class named TokenBucket taking the same constructor options, with the same available() and tryRemove() methods. Refill must stay discrete, as README.md and the passing tests describe: a partly elapsed interval earns nothing until it completes. A hidden regression test you cannot see will be run against src/rate-limiter.js after you finish, so special-casing the numbers in the visible test will not count as a fix.

@@ -1,9 +1,0 @@
-`npm test` fails in this repository. The activity chart adds up to more than the number of entries in the log: an entry stamped exactly midnight is counted on the day that just ended as well as on the day that is starting. The failing cases are "an entry stamped exactly midnight belongs to the day that is starting" and "the chart's total is the number of entries, not more".
-
-A day is the half-open span from its midnight up to but not including the next midnight, so every entry belongs to exactly one day and a rollup over consecutive days should count each entry exactly once. That is what README.md says and it is the behaviour to arrive at.
-
-Find the cause and fix it, then run the tests and report what they actually said.
-
-Constraints. Do not edit anything under tests/ — the failing tests describe the intended behaviour correctly and are not the bug. Do not change the module paths or the names those modules export.
-
-A hidden regression test you cannot see will be run against this package after you finish. It covers the behaviour this repository already documents — all of it, not only the case in the failing test, and not only the module the failing test names. It is written against what the package does, not against how any particular function is written, so more than one correct fix passes it. Read enough of the repository to know what depends on whatever you are about to change.
