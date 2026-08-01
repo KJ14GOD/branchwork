@@ -5,6 +5,13 @@ import type { AttemptComparison, SessionSummary } from "@novus/contracts/protoco
 import { formatSpend } from "@novus/ui";
 
 import { bridge } from "./bridge.ts";
+import {
+  approachKey,
+  decideDecisionRoom,
+  missionLayout,
+  openDecisionRoom,
+  type ViewMode,
+} from "./decision-room.ts";
 import { FileTree, FileViewer } from "./components/browse-panel.tsx";
 import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
 import { CompareScreen } from "./components/compare-screen.tsx";
@@ -34,8 +41,6 @@ import type { Theme } from "./use-theme.ts";
 import { useTurnModel } from "./use-turn-model.ts";
 
 type Filter = "all" | "tools" | "patches";
-/** Which of the body's three mutually exclusive views is showing. */
-type ViewMode = "timeline" | "compare" | "browse";
 
 const MIN_TERMINAL_HEIGHT = 140;
 const MAX_TERMINAL_HEIGHT = 640;
@@ -237,40 +242,28 @@ export const SessionTab = ({
   /**
    * Opens the Decision Room when a decision is what the mission is waiting on.
    *
-   * The spine said "Approaches are waiting on you" in eleven-pixel type in the
-   * narrowest column on screen, while the largest area showed a scrolling list
-   * of tool calls. The work waiting for a person should not be something they
-   * have to click a tab to discover.
-   *
-   * Fires once per arrival at that state, not continuously: a host who looks
-   * at the decision and deliberately switches to Activity must be allowed to
-   * stay there. `answered` tracks the state rather than the click, so a second
-   * decision later in the same mission opens the room again.
+   * The rules — once per arrival, browse is never interrupted, a later
+   * decision opens it again — live in `decision-room.ts` as pure functions,
+   * with the tests that hold them. This is only the wiring: read the state,
+   * remember what it answered, move the view.
    */
   const answeredDecision = useRef<string | null>(null);
   const decisionPhase = phases.find((phase) => phase.key === "decision");
   const needsDecision = decisionPhase?.status === "needs-attention";
 
   useEffect(() => {
-    if (!needsDecision) {
-      answeredDecision.current = null;
+    const outcome = decideDecisionRoom({
+      needsDecision,
+      approaches: approachKey(comparison.comparison?.attempts ?? []),
+      answered: answeredDecision.current,
+    });
 
-      return;
+    // Written outside the state updater below, which React may call twice.
+    answeredDecision.current = outcome.answered;
+
+    if (outcome.open) {
+      setMode(openDecisionRoom);
     }
-
-    // Keyed on the approaches in play, so adopting one and forking again
-    // re-opens rather than staying quiet forever.
-    const key = (comparison.comparison?.attempts ?? [])
-      .map((attempt) => attempt.runId)
-      .join(",");
-
-    if (answeredDecision.current === key) {
-      return;
-    }
-
-    answeredDecision.current = key;
-    // Never yanks somebody out of the file browser mid-read.
-    setMode((current) => (current === "browse" ? current : "compare"));
   }, [needsDecision, comparison.comparison]);
 
   const evidenceVerdict = useMemo(() => {
@@ -373,6 +366,11 @@ export const SessionTab = ({
       : visible.length === 0;
 
   const attempts = comparison.comparison?.attempts ?? [];
+  // Which surfaces this view shows. Read from one function rather than from
+  // three separate `mode === …` checks in the markup, so that the Decision
+  // Room keeping the composer and the evidence panel is a rule with a test
+  // rather than an accident of where the JSX brackets happen to sit.
+  const layout = missionLayout(mode);
 
   const jumpTo = (sequence: number) => {
     setHighlighted(sequence);
@@ -699,7 +697,7 @@ export const SessionTab = ({
       <div
         // Compare no longer needs a grid of its own: it is a canvas inside the
         // same three columns as everything else.
-        className={mode === "browse" ? "body body--browse" : "body"}
+        className={layout.tree ? "body body--browse" : "body"}
       >
         <aside className="rail">
           <div className="rail__scroll">
@@ -928,7 +926,7 @@ export const SessionTab = ({
 
         </aside>
 
-        {mode === "browse" ? (
+        {layout.tree ? (
           <>
             <FileTree state={fileTree} />
             <FileViewer state={fileTree} />
@@ -945,7 +943,7 @@ export const SessionTab = ({
             */}
             <main className="canvas">
               <div className="canvas__view">
-                {mode === "compare" ? (
+                {layout.canvas === "decision-room" ? (
                   <CompareScreen
                     state={comparison}
                     repositoryState={session.repositoryState}
@@ -1013,19 +1011,23 @@ export const SessionTab = ({
               </div>
                 )}
               </div>
-              <Composer
-                busy={busy}
-                model={turnModel}
-                onAsk={(goal, modelId) => void ask(goal, modelId)}
-                onDirect={(goal) => void direct(goal)}
-              />
+              {layout.composer ? (
+                <Composer
+                  busy={busy}
+                  model={turnModel}
+                  onAsk={(goal, modelId) => void ask(goal, modelId)}
+                  onDirect={(goal) => void direct(goal)}
+                />
+              ) : null}
             </main>
-            <FileChangesPanel
-              state={fileChanges}
-              diffs={appliedDiffs}
-              verdict={evidenceVerdict}
-              github={github}
-            />
+            {layout.evidence ? (
+              <FileChangesPanel
+                state={fileChanges}
+                diffs={appliedDiffs}
+                verdict={evidenceVerdict}
+                github={github}
+              />
+            ) : null}
           </>
         )}
       </div>
