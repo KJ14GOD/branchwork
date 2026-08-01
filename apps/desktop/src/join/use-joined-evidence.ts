@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
-import type { EvidenceFacts } from "../components/workroom/evidence-inspector.tsx";
-import { readComparison, readFiles } from "./joined-api.ts";
+import type { SessionFilesResponse } from "@novus/contracts/protocol";
+
+import { readEvidence, readFiles, type MissionEvidence } from "./joined-api.ts";
 
 /**
  * What a joined window can honestly say about the work, read as the joiner.
@@ -12,12 +13,18 @@ import { readComparison, readFiles } from "./joined-api.ts";
  * changed in total, and could not see whether anything had verified it. Being
  * asked to settle a mission on that is being asked to guess.
  *
- * Two reads, both the host's own: `/files` is the worker's projection of this
- * session's applied patches (the same numbers the changed-files panel and the
- * receipts use) and `/compare` carries the test counts per approach. Neither
- * is recomputed here — a renderer that derives its own evidence is a second
- * opinion that drifts, and the whole point of this panel is that everyone in
- * the room is looking at one set of facts.
+ * Two reads, both the host's own, and neither of them recomputed here.
+ * `/files` is the worker's projection of this session's applied patches — the
+ * same numbers the changed-files panel and the receipts use. `/evidence` is
+ * the *same function* `POST /complete` freezes onto the log, so the panel a
+ * person finishes from and the record of their finishing cannot disagree: not
+ * because two computations are kept in step, but because there is one.
+ *
+ * That guarantee is why this hook stopped summing `/compare`'s test counts.
+ * Those attempts are the baseline plus every fork, they carry no sequence to
+ * notice a green check that predates the last edit, and they count tests where
+ * the receipt counts build, typecheck and lint as well. The panel and the
+ * record disagreed in both directions, and nothing on screen said so.
  *
  * Refetched when `version` moves rather than on a timer, matching the hosting
  * window's `useFileChanges`: the caller passes something that changes when the
@@ -27,22 +34,21 @@ import { readComparison, readFiles } from "./joined-api.ts";
  * and authorises nothing else, so there is no endpoint to ask.
  */
 
-const NOTHING: EvidenceFacts = {
-  verified: null,
-  testsRun: 0,
-  testsPassed: 0,
+const NO_FILES: SessionFilesResponse = {
   files: [],
-  contested: [],
-  risks: [],
+  additions: 0,
+  deletions: 0,
 };
 
 export type JoinedEvidence = {
-  facts: EvidenceFacts;
+  files: SessionFilesResponse;
+  /** Null until the worker has answered, and when it refused. */
+  verdict: MissionEvidence | null;
   /**
    * Whether there is anything worth drawing a panel for.
    *
    * False on a mission that has changed nothing and run nothing, where an
-   * evidence panel would be three headings over empty space — the placeholder
+   * evidence panel would be two headings over empty space — the placeholder
    * this app has already been told to stop drawing.
    */
   any: boolean;
@@ -56,11 +62,13 @@ export const useJoinedEvidence = (
   /** Anything that moves when the log does; the caller passes the event count. */
   version: number,
 ): JoinedEvidence => {
-  const [facts, setFacts] = useState<EvidenceFacts>(NOTHING);
+  const [files, setFiles] = useState<SessionFilesResponse>(NO_FILES);
+  const [verdict, setVerdict] = useState<MissionEvidence | null>(null);
 
   useEffect(() => {
     if (!endpoint || !sessionId || !token || relay !== null) {
-      setFacts(NOTHING);
+      setFiles(NO_FILES);
+      setVerdict(null);
 
       return;
     }
@@ -69,37 +77,17 @@ export const useJoinedEvidence = (
     const target = { endpoint, sessionId, token };
 
     void (async () => {
-      const [files, comparison] = await Promise.all([
+      const [changed, evidence] = await Promise.all([
         readFiles(target, controller.signal),
-        readComparison(target, controller.signal),
+        readEvidence(target, controller.signal),
       ]);
 
       if (controller.signal.aborted) {
         return;
       }
 
-      const attempts = comparison?.attempts ?? [];
-      const testsRun = attempts.reduce(
-        (total, attempt) => total + attempt.testsRun,
-        0,
-      );
-      const testsPassed = attempts.reduce(
-        (total, attempt) => total + attempt.testsPassed,
-        0,
-      );
-
-      setFacts({
-        // Null when nothing ran anywhere. Not false, which reads as failing,
-        // and emphatically not true. The same three-way rule the worker
-        // freezes onto `mission.completed`, so the panel a person finishes
-        // from and the record of their finishing cannot disagree.
-        verified: testsRun === 0 ? null : testsPassed === testsRun,
-        testsRun,
-        testsPassed,
-        files: files?.files ?? [],
-        contested: comparison?.contestedPaths ?? [],
-        risks: [],
-      });
+      setFiles(changed ?? NO_FILES);
+      setVerdict(evidence);
     })();
 
     return () => {
@@ -108,7 +96,8 @@ export const useJoinedEvidence = (
   }, [endpoint, sessionId, token, relay, version]);
 
   return {
-    facts,
-    any: facts.files.length > 0 || facts.testsRun > 0,
+    files,
+    verdict,
+    any: files.files.length > 0 || (verdict?.checksRun ?? 0) > 0,
   };
 };

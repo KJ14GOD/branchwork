@@ -1,10 +1,8 @@
 import type { MissionOutcome } from "@novus/contracts";
 import {
   AuthorityResponseSchema,
-  ComparisonSchema,
   SessionFilesResponseSchema,
   type Authority,
-  type Comparison,
   type SessionFilesResponse,
 } from "@novus/contracts/protocol";
 
@@ -181,19 +179,66 @@ export const readFiles = (
   );
 
 /**
- * The approaches and what each of them proved.
+ * What the worker says this mission has changed and what has verified it.
  *
- * The same read the host's compare screen makes. A joined window renders no
- * decision surface — choosing between attempts is owner-only and stays
- * host-side — but the test counts on it are the only session-wide statement of
- * what was actually verified, and a teammate asked to agree a mission is
- * finished needs exactly that.
+ * Read rather than computed. This window could add up `/compare`'s test counts
+ * itself — it did — and the number it produced was a different number from the
+ * one `POST /complete` freezes onto the log: `/compare` includes every fork,
+ * carries no sequence to notice that a green check predates the last edit, and
+ * counts only tests where the receipt counts build, typecheck and lint too. A
+ * panel that disagrees with the record is worse than no panel, because it is
+ * the thing somebody reads before deciding the mission is done.
+ *
+ * The shape belongs beside `SessionFilesResponseSchema` in `protocol.ts`, and
+ * the guard below exists in its place only because this slice cannot edit that
+ * file — the desktop does not depend on zod directly, so this is a hand
+ * written check rather than a schema, and it should become one. What matters
+ * either way is that it is checked at all: an unvalidated read draws a panel
+ * that is silently wrong instead of a request that visibly did not parse.
  */
-export const readComparison = (
+export type MissionEvidence = {
+  verification: "verified" | "failing" | "unverified";
+  filesChanged: number;
+  /** Zero and stale are different reasons to be unverified, and read differently. */
+  checksRun: number;
+  checksPassed: number;
+};
+
+const parseEvidence = (
+  value: unknown,
+): { success: true; data: MissionEvidence } | { success: false } => {
+  if (typeof value !== "object" || value === null) {
+    return { success: false };
+  }
+
+  const body = value as Record<string, unknown>;
+  const counted = ["filesChanged", "checksRun", "checksPassed"] as const;
+
+  if (
+    !["verified", "failing", "unverified"].includes(
+      body["verification"] as string,
+    ) ||
+    counted.some((field) => typeof body[field] !== "number")
+  ) {
+    return { success: false };
+  }
+
+  return {
+    success: true,
+    data: {
+      verification: body["verification"] as MissionEvidence["verification"],
+      filesChanged: body["filesChanged"] as number,
+      checksRun: body["checksRun"] as number,
+      checksPassed: body["checksPassed"] as number,
+    },
+  };
+};
+
+export const readEvidence = (
   target: JoinedTarget,
   signal?: AbortSignal,
-): Promise<Comparison | null> =>
-  read(target, "compare", (value) => ComparisonSchema.safeParse(value), signal);
+): Promise<MissionEvidence | null> =>
+  read(target, "evidence", parseEvidence, signal);
 
 /**
  * Who holds control, who is asking, and what direction is waiting.

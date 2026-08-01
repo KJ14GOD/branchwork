@@ -193,6 +193,37 @@ const ranTests = (sessionId: string, runId: string, passed: boolean) => ({
   },
 });
 
+/** A typecheck or lint run, which verifies a tree exactly as a test suite does. */
+const ranDiagnostics = (
+  sessionId: string,
+  runId: string,
+  ok: boolean,
+  id = "call-diagnostics",
+) => ({
+  sessionId,
+  actorId: "agent-1",
+  type: "tool.completed" as const,
+  payload: {
+    runId,
+    result: {
+      toolCallId: id,
+      name: "run_diagnostics" as const,
+      output: {
+        kind: "typecheck" as const,
+        command: "pnpm typecheck",
+        exitCode: ok ? 0 : 1,
+        timedOut: false,
+        durationMs: 20,
+        ok,
+        diagnostics: [],
+        diagnosticsTruncated: false,
+        raw: "",
+        rawTruncated: false,
+      },
+    },
+  },
+});
+
 const completions = (
   store: InMemorySessionEventStore,
   sessionId: string,
@@ -279,6 +310,138 @@ test("the evidence frozen onto the event is the worker's, not the caller's", asy
   });
 });
 
+test("a check that went green before the last change does not freeze as verified", async () => {
+  await withSession(async ({ url, sessionId, store }) => {
+    store.append(startedRun(sessionId, "run-1"));
+    store.append(appliedPatch(sessionId, "run-1", "src/tax.ts"));
+    store.append(ranTests(sessionId, "run-1", true));
+    // The edit that outdates the green suite. `receipt.ts` refuses to call
+    // this verified — "a check that ran before the final edit describes a tree
+    // that no longer exists" — and the mission's own verdict has to agree, or
+    // the receipt and the completion describe one session and disagree.
+    store.append(appliedPatch(sessionId, "run-1", "src/refund.ts"));
+
+    await finish(url, sessionId, TOKEN, {
+      outcome: "resolved",
+      summary: "Shipping it with the suite one edit out of date.",
+    });
+
+    const [event] = completions(store, sessionId);
+
+    assert.equal(event?.payload.verification, "unverified");
+    assert.equal(event?.payload.filesChanged, 2);
+  });
+});
+
+test("a check that ran after the last change is what verified means", async () => {
+  await withSession(async ({ url, sessionId, store }) => {
+    store.append(startedRun(sessionId, "run-1"));
+    store.append(appliedPatch(sessionId, "run-1", "src/tax.ts"));
+    store.append(ranTests(sessionId, "run-1", true));
+
+    await finish(url, sessionId, TOKEN);
+
+    assert.equal(completions(store, sessionId)[0]?.payload.verification, "verified");
+  });
+});
+
+test("a mission verified by a typecheck is verified, not unchecked", async () => {
+  await withSession(async ({ url, sessionId, store }) => {
+    store.append(startedRun(sessionId, "run-1"));
+    store.append(appliedPatch(sessionId, "run-1", "src/tax.ts"));
+    // Build, typecheck and lint verify a tree as much as a suite does, and the
+    // receipt has always counted them. Counting only `run_tests` reported a
+    // mission checked by `pnpm typecheck` as checked by nothing.
+    store.append(ranDiagnostics(sessionId, "run-1", true));
+
+    await finish(url, sessionId, TOKEN);
+
+    assert.equal(completions(store, sessionId)[0]?.payload.verification, "verified");
+  });
+});
+
+test("a failing check outranks a missing one", async () => {
+  await withSession(async ({ url, sessionId, store }) => {
+    store.append(startedRun(sessionId, "run-1"));
+    store.append(appliedPatch(sessionId, "run-1", "src/tax.ts"));
+    store.append(ranDiagnostics(sessionId, "run-1", false));
+    // A later green test does not bury the earlier failure: `failing` is a
+    // fact and `unverified` is the absence of one, so the fact wins.
+    store.append(ranTests(sessionId, "run-1", true));
+
+    await finish(url, sessionId, TOKEN);
+
+    assert.equal(completions(store, sessionId)[0]?.payload.verification, "failing");
+  });
+});
+
+test("a fork's green checks do not verify the mission they were cut from", async () => {
+  await withSession(async ({ url, sessionId, store }) => {
+    store.append(startedRun(sessionId, "run-1"));
+    store.append(appliedPatch(sessionId, "run-1", "src/tax.ts"));
+    store.append(startedRun(sessionId, "run-fork"));
+    store.append({
+      sessionId,
+      actorId: "host",
+      type: "fork.created",
+      payload: {
+        fork: {
+          runId: "run-fork",
+          sessionId,
+          parentRunId: "run-1",
+          checkpointId: "cp-1",
+          label: "Attempt A",
+          worktreePath: "/tmp/novus-fork",
+          branch: "novus/attempt-a",
+          revision: "abc1234",
+          devPorts: [5301],
+          createdAt: new Date().toISOString(),
+        },
+      },
+    });
+    store.append(ranTests(sessionId, "run-fork", true));
+
+    await finish(url, sessionId, TOKEN);
+
+    // A fork's checks are about its own worktree. The parent took neither the
+    // changes nor the proof.
+    assert.equal(
+      completions(store, sessionId)[0]?.payload.verification,
+      "unverified",
+    );
+    assert.equal(completions(store, sessionId)[0]?.payload.filesChanged, 1);
+  });
+});
+
+test("the verdict a window reads is the verdict the record freezes", async () => {
+  await withSession(async ({ url, sessionId, store }) => {
+    store.append(startedRun(sessionId, "run-1"));
+    store.append(appliedPatch(sessionId, "run-1", "src/tax.ts"));
+    store.append(ranTests(sessionId, "run-1", true));
+    store.append(appliedPatch(sessionId, "run-1", "src/refund.ts"));
+
+    const read = (await fetch(`${url}/sessions/${sessionId}/evidence`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    }).then((response) => response.json())) as {
+      verification: string;
+      filesChanged: number;
+      checksRun: number;
+      checksPassed: number;
+    };
+
+    await finish(url, sessionId, TOKEN);
+
+    const [event] = completions(store, sessionId);
+
+    // One function, two callers. Not two computations that agree today.
+    assert.equal(read.verification, "unverified");
+    assert.equal(read.checksRun, 1);
+    assert.equal(read.checksPassed, 1);
+    assert.equal(event?.payload.verification, read.verification);
+    assert.equal(event?.payload.filesChanged, read.filesChanged);
+  });
+});
+
 test("a summary shorter than a sentence is refused with a message about the summary", async () => {
   await withSession(async ({ url, sessionId, store }) => {
     const response = await finish(url, sessionId, TOKEN, {
@@ -292,6 +455,25 @@ test("a summary shorter than a sentence is refused with a message about the summ
       /summary needs at least 12 characters/,
     );
     assert.equal(completions(store, sessionId).length, 0);
+  });
+});
+
+test("a summary past the ceiling is told about the ceiling, not about the floor", async () => {
+  await withSession(async ({ url, sessionId }) => {
+    const response = await finish(url, sessionId, TOKEN, {
+      outcome: "resolved",
+      summary: "x".repeat(2_001),
+    });
+
+    assert.equal(response.status, 400);
+
+    const { error } = (await response.json()) as { error: string };
+
+    // "Needs at least 12 characters — string must contain at most 2000" is a
+    // message that argues with itself, which is what one branch for every
+    // non-type failure produced.
+    assert.match(error, /longer than 2,000 characters/);
+    assert.doesNotMatch(error, /at least 12/);
   });
 });
 

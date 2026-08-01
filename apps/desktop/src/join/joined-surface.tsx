@@ -16,7 +16,6 @@ import {
   ControlPanel,
   PendingDirection,
 } from "../components/control-panel.tsx";
-import { EvidenceInspector } from "../components/workroom/evidence-inspector.tsx";
 import { TimelineView } from "../components/timeline-view.tsx";
 import type { JoinedActions } from "./use-joined-actions.ts";
 import type { JoinedEvidence } from "./use-joined-evidence.ts";
@@ -48,6 +47,16 @@ const sentenceCase = (value: string): string =>
 /** The floor `DecisionRationaleSchema` puts on a summary, mirrored so the form can. */
 const RATIONALE_FLOOR = 12;
 
+const toneFor = (verification: "verified" | "failing" | "unverified"): string =>
+  verification === "verified"
+    ? "evidence__line evidence__line--pass"
+    : verification === "failing"
+      ? "evidence__line evidence__line--fail"
+      : "evidence__line evidence__line--unknown";
+
+const plural = (count: number, word: string): string =>
+  `${count} ${word}${count === 1 ? "" : "s"}`;
+
 /**
  * How the frozen evidence on a completed mission reads.
  *
@@ -55,28 +64,69 @@ const RATIONALE_FLOOR = 12;
  * different facts. The one that matters most is the middle case: a mission
  * that was finished having verified nothing says so, in the same place it says
  * it was resolved, or the screen has quietly turned finishing into proof.
+ *
+ * The frozen payload carries the verdict and the file count and no check
+ * counts, so this says less than the live panel below and never more.
  */
 const verificationLine = (
   verification: "verified" | "failing" | "unverified",
   filesChanged: number,
 ): { text: string; tone: string } => {
-  const files = `${filesChanged} file${filesChanged === 1 ? "" : "s"} changed`;
+  const files = `${plural(filesChanged, "file")} changed`;
 
   switch (verification) {
     case "verified":
       return {
         text: `${files}, and the checks that ran passed.`,
-        tone: "evidence__line evidence__line--pass",
+        tone: toneFor(verification),
       };
     case "failing":
       return {
         text: `${files}, and the checks that ran did not pass.`,
-        tone: "evidence__line evidence__line--fail",
+        tone: toneFor(verification),
       };
     case "unverified":
       return {
         text: `${files}, and nothing verified them.`,
-        tone: "evidence__line evidence__line--unknown",
+        tone: toneFor(verification),
+      };
+  }
+};
+
+/**
+ * How the live verdict reads, including the state a boolean cannot hold.
+ *
+ * `unverified` has two causes and they are not the same news. Nothing ran at
+ * all is an absence. Something ran and then the tree moved under it is a
+ * *stale* result — checks exist, they are green, and they describe a version
+ * of these files that no longer exists. The worker's rule (from `receipt.ts`)
+ * calls both unverified, and a panel that rendered them with one sentence
+ * would tell somebody "no checks have run" about a mission whose suite they
+ * personally watched go green ten minutes ago.
+ */
+const liveVerdict = (verdict: {
+  verification: "verified" | "failing" | "unverified";
+  checksRun: number;
+  checksPassed: number;
+}): { text: string; tone: string } => {
+  switch (verdict.verification) {
+    case "verified":
+      return {
+        text: `${plural(verdict.checksRun, "check")} passed against these changes.`,
+        tone: toneFor("verified"),
+      };
+    case "failing":
+      return {
+        text: `${verdict.checksPassed} of ${plural(verdict.checksRun, "check")} passed.`,
+        tone: toneFor("failing"),
+      };
+    case "unverified":
+      return {
+        text:
+          verdict.checksRun === 0
+            ? "Nothing has verified these changes. No checks have run."
+            : `${plural(verdict.checksRun, "check")} ran before the last change, so nothing has verified the files as they stand.`,
+        tone: toneFor("unverified"),
       };
   }
 };
@@ -467,18 +517,56 @@ export const JoinedSurface = ({
         </main>
 
         {/*
-          The host's own evidence panel, not a joined copy of it. Same
-          component, same three-way verification rule, fed from the same two
-          worker reads — a teammate asked to agree a mission is done is looking
-          at the host's facts rather than at a second rendering of them.
+          The mission's evidence, in the host's visual language and on the
+          host's numbers — `/files` and `/evidence`, the latter being the same
+          function `POST /complete` freezes onto the log.
+
+          Drawn here rather than by reusing `EvidenceInspector` for one
+          specific reason: that component's copy has two verification states,
+          and the worker's rule has three. Its `verified === null` branch says
+          "No checks have run", which is exactly wrong for the stale case — a
+          suite that ran and went green before the last edit. A joined window
+          that says "no checks have run" about checks the person watched run is
+          the class of confident wrongness this panel exists to remove. The
+          markup and every class name are the inspector's, so the two screens
+          look like one product; only the sentence differs, and it differs
+          because it has to.
 
           GitHub's checks are deliberately not read here: `/github` shells out
-          to `gh` on the host and a joined window has no standing to make the
-          host run a command. What is drawn is what the session's own log
-          already knows.
+          to `gh` on the host, and a joined window has no standing to make the
+          host run a command. What is drawn is what the session's own log knows.
         */}
         {evidence.any ? (
-          <EvidenceInspector facts={evidence.facts} github={null} />
+          <aside className="evidence evidence--panel">
+            <h2 className="rail__eyebrow">Evidence</h2>
+
+            {evidence.verdict ? (
+              <section className="evidence__block">
+                <h3 className="evidence__heading">Verification</h3>
+                <p className={liveVerdict(evidence.verdict).tone}>
+                  {liveVerdict(evidence.verdict).text}
+                </p>
+              </section>
+            ) : null}
+
+            {evidence.files.files.length > 0 ? (
+              <section className="evidence__block">
+                <h3 className="evidence__heading">Changes</h3>
+                <p className="evidence__meta">
+                  {plural(evidence.files.files.length, "file")} changed
+                </p>
+                <ul className="evidence__files">
+                  {evidence.files.files.map((file) => (
+                    <li className="evidence__file" key={file.path}>
+                      <span className="evidence__path">{file.path}</span>
+                      <span className="evidence__add">+{file.additions}</span>
+                      <span className="evidence__del">−{file.deletions}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </aside>
         ) : null}
       </div>
 

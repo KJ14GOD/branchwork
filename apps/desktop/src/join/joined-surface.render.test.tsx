@@ -91,26 +91,43 @@ const actions: JoinedActions = {
 };
 
 const nothingProven: JoinedEvidence = {
-  facts: {
-    verified: null,
-    testsRun: 0,
-    testsPassed: 0,
-    files: [],
-    contested: [],
-    risks: [],
-  },
+  files: { files: [], additions: 0, deletions: 0 },
+  verdict: null,
   any: false,
 };
 
-/** A mission that changed something and proved nothing — the ordinary state. */
+const changed = {
+  files: [{ path: "src/tax.ts", additions: 12, deletions: 3 }],
+  additions: 12,
+  deletions: 3,
+};
+
+/** A mission that changed something and ran nothing — the ordinary state. */
 const changedNothingProven: JoinedEvidence = {
-  facts: {
-    verified: null,
-    testsRun: 0,
-    testsPassed: 0,
-    files: [{ path: "src/tax.ts", additions: 12, deletions: 3 }],
-    contested: [],
-    risks: [],
+  files: changed,
+  verdict: {
+    verification: "unverified",
+    filesChanged: 1,
+    checksRun: 0,
+    checksPassed: 0,
+  },
+  any: true,
+};
+
+/**
+ * Checks ran, went green, and then the tree moved under them.
+ *
+ * The worker calls this `unverified` — `receipt.ts`'s rule, that a check
+ * predating the last edit describes a tree that no longer exists — and it is
+ * the state a two-valued panel cannot say out loud.
+ */
+const staleGreen: JoinedEvidence = {
+  files: changed,
+  verdict: {
+    verification: "unverified",
+    filesChanged: 1,
+    checksRun: 2,
+    checksPassed: 2,
   },
   any: true,
 };
@@ -447,6 +464,44 @@ test("an evidence panel is absent on a mission that has changed nothing", () => 
   // app has been told to stop drawing, and it teaches people not to look.
   assert.doesNotMatch(html, /Nothing has verified these changes/);
   assert.doesNotMatch(html, /file changed/);
+});
+
+test("checks that went green before the last change are not reported as green", () => {
+  const html = surface({ role: "editor", evidence: staleGreen });
+
+  // The verdict the worker freezes, said in the words the case deserves: the
+  // checks are real, the person may have watched them pass, and they no longer
+  // describe these files.
+  assert.match(html, /2 checks ran before the last change/);
+  assert.match(html, /nothing has verified the files as they stand/);
+
+  // Neither of the two lies a two-valued panel would tell here.
+  assert.doesNotMatch(html, /checks passed against these changes/);
+  assert.doesNotMatch(html, /No checks have run/);
+});
+
+test("the panel says what the worker says, in every one of the three states", () => {
+  const verdicts = [
+    { verification: "verified" as const, checksRun: 3, checksPassed: 3 },
+    { verification: "failing" as const, checksRun: 3, checksPassed: 1 },
+    { verification: "unverified" as const, checksRun: 0, checksPassed: 0 },
+  ];
+
+  const [verified, failing, unverified] = verdicts.map((verdict) =>
+    surface({
+      role: "editor",
+      evidence: { files: changed, verdict: { ...verdict, filesChanged: 1 }, any: true },
+    }),
+  );
+
+  assert.match(verified!, /3 checks passed against these changes/);
+  assert.match(failing!, /1 of 3 checks passed/);
+  assert.match(unverified!, /No checks have run/);
+
+  // Three states, three sentences. A panel that collapsed any two of them
+  // would be the one this window had before /evidence existed.
+  assert.notEqual(verified, failing);
+  assert.notEqual(failing, unverified);
 });
 
 test("a reviewer may finish the mission; a viewer may not, and cannot see that they cannot", () => {

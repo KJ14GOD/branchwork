@@ -187,11 +187,22 @@ const missionRequestRefusal = (
   const issue = error.issues.find((candidate) => candidate.path[0] === prose);
 
   if (issue) {
-    return issue.code === "invalid_type"
-      ? prose === "summary"
-        ? "Finishing a mission needs a summary: what happened, in a sentence somebody who was not here can read."
-        : "Reopening a mission needs a reason: why it is not finished after all."
-      : `That ${prose} needs at least 12 characters — ${issue.message.toLowerCase()}.`;
+    // Named per violation, not per field. `DecisionRationaleSchema` has a
+    // ceiling as well as a floor, and answering "needs at least 12 characters
+    // — string must contain at most 2000 character(s)" to somebody who wrote
+    // an essay is a message that argues with itself.
+    switch (issue.code) {
+      case "invalid_type":
+        return prose === "summary"
+          ? "Finishing a mission needs a summary: what happened, in a sentence somebody who was not here can read."
+          : "Reopening a mission needs a reason: why it is not finished after all.";
+      case "too_small":
+        return `That ${prose} needs at least 12 characters — a sentence somebody who was not here can read.`;
+      case "too_big":
+        return `That ${prose} is longer than 2,000 characters. Put the detail where it belongs and leave the sentence.`;
+      default:
+        return `That ${prose} could not be read: ${issue.message.toLowerCase()}.`;
+    }
   }
 
   const outcome = error.issues.find((candidate) => candidate.path[0] === "outcome");
@@ -442,36 +453,103 @@ export const startEventServer = (
    * What the log says about this mission's work, at this instant.
    *
    * Frozen onto `mission.completed` rather than re-derived when the event is
-   * read back — see the payload's own comment. Two rules, both of which exist
-   * elsewhere in this file and are kept identical here on purpose:
+   * read back — see the payload's own comment — and served to every surface
+   * that shows a verdict, so the panel a person finishes from and the record of
+   * their finishing are one computation rather than two that agree by luck.
    *
-   * - Forks are excluded, exactly as `/files` excludes them. A fork's changes
-   *   live in its own worktree, and a mission finished in the parent has not
-   *   taken them.
-   * - Nothing verified is `unverified`, never `verified`. Completion is not
-   *   verification: a mission whose runs tested nothing is finished and
-   *   unproven, and those are two facts that must survive as two.
+   * **The rule is `receipt.ts`'s, not a new one.** `buildReceipt` decides what
+   * `verified` means for a run, and it cannot be called here: it is per-run and
+   * returns null until that run has ended, while a mission spans runs and is
+   * routinely finished with one still going. So the two rules it enforces are
+   * restated here, and `receipt.ts:227-242` is the source they must be kept
+   * identical to. A mission-level receipt would let this be a call instead;
+   * until there is one, this comment is the seam.
+   *
+   * 1. **Every kind of check, not just tests.** Build, typecheck and lint
+   *    verify a tree as much as a test suite does, and counting only
+   *    `run_tests` reported a mission checked by `pnpm typecheck` as having
+   *    been checked by nothing.
+   * 2. **Stale-and-green is not verified.** A check that ran before the last
+   *    edit describes a tree that no longer exists. Without this, a mission
+   *    whose first run went green and whose second run changed five files and
+   *    ran nothing froze `verified` permanently, while the receipt for the same
+   *    session said `unverified` — two artifacts describing one session,
+   *    disagreeing about the only thing that matters.
+   *
+   * A known failure outranks a missing check, again as the receipt orders it:
+   * `failing` is a fact and `unverified` is the absence of one, so reporting
+   * the absence would hide the fact.
+   *
+   * Forks are excluded, exactly as `/files` excludes them: a fork's changes and
+   * a fork's checks are about its own worktree, and a mission finished in the
+   * parent has taken neither.
    */
   const missionEvidence = (
     sessionId: string,
-  ): { verification: "verified" | "failing" | "unverified"; filesChanged: number } => {
+  ): {
+    verification: "verified" | "failing" | "unverified";
+    filesChanged: number;
+    /** How many checks ran at all, so a surface can tell stale from absent. */
+    checksRun: number;
+    checksPassed: number;
+  } => {
     const forks = forkRunIds(sessionId);
-    const own = projectionOf(sessionId).runs.filter(
-      (run) => !forks.has(run.runId),
-    );
-    const paths = new Set(
-      own.flatMap((run) => run.filesChanged.map((file) => file.path)),
-    );
-    const tests = own.flatMap((run) => run.tests);
+    const paths = new Set<string>();
+    let lastChange: number | undefined;
+    let lastCheck: number | undefined;
+    let checksRun = 0;
+    let checksPassed = 0;
+
+    // Walked in sequence order over the session's own events rather than read
+    // off the projection, because the projection keeps no sequence for a change
+    // or a check and the staleness rule is entirely a question of order.
+    for (const event of store.list(sessionId)) {
+      if (event.type !== "tool.completed" || forks.has(event.payload.runId)) {
+        continue;
+      }
+
+      const { result } = event.payload;
+
+      // Only an applied patch changed the tree. A proposal is a preview.
+      if (result.name === "apply_patch") {
+        paths.add(result.output.path);
+        lastChange = event.sequence;
+      }
+
+      // Each checker's own word for passing, mapped onto one vocabulary the
+      // way the receipt maps them: `passed`, `succeeded`, `ok`.
+      const passed =
+        result.name === "run_tests"
+          ? result.output.passed
+          : result.name === "run_build"
+            ? result.output.succeeded
+            : result.name === "run_diagnostics"
+              ? result.output.ok
+              : null;
+
+      if (passed !== null) {
+        checksRun += 1;
+        checksPassed += passed ? 1 : 0;
+        lastCheck = event.sequence;
+      }
+    }
+
+    // Nothing changed means nothing can have gone stale, and a passing check
+    // still counts — the receipt's own carve-out, for the same reason.
+    const checksAreCurrent =
+      lastCheck !== undefined &&
+      (lastChange === undefined || lastCheck > lastChange);
 
     return {
       verification:
-        tests.length === 0
-          ? "unverified"
-          : tests.every((test) => test.passed)
+        checksPassed < checksRun
+          ? "failing"
+          : checksAreCurrent
             ? "verified"
-            : "failing",
+            : "unverified",
       filesChanged: paths.size,
+      checksRun,
+      checksPassed,
     };
   };
 
@@ -1444,6 +1522,35 @@ export const startEventServer = (
         additions: files.reduce((total, file) => total + file.additions, 0),
         deletions: files.reduce((total, file) => total + file.deletions, 0),
       });
+      return true;
+    }
+
+    /**
+     * What this mission has changed and what has verified it — the verdict.
+     *
+     * The same function `POST /complete` freezes onto the event, served rather
+     * than re-derived by whoever is looking. A renderer computing its own
+     * verdict from `/compare` is how the panel a person finishes from comes to
+     * disagree with the record of their finishing: `/compare`'s attempts are
+     * the baseline *plus every fork*, it carries no sequence to apply the
+     * staleness rule with, and it counts only tests. All three make it the
+     * wrong input for this question, and none of them is visible in the number
+     * it produces.
+     *
+     * `watch`, like every other GET: this is what the session's own log says,
+     * to anybody who may read the log.
+     */
+    const evidenceMatch = /^\/sessions\/([^/]+)\/evidence$/.exec(pathname);
+
+    if (evidenceMatch && request.method === "GET") {
+      const session = sessions.get(decodeURIComponent(evidenceMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      sendJson(response, 200, missionEvidence(session.id));
       return true;
     }
 

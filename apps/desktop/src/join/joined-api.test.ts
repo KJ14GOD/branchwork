@@ -24,7 +24,7 @@ import {
   completeMission,
   offerControl,
   readAuthority,
-  readComparison,
+  readEvidence,
   readFiles,
   reopenMission,
   requestControl,
@@ -98,6 +98,14 @@ type Context = {
   pauseInLog: (runId: string) => void;
   /** The host's log, for asserting what a joined window's call actually wrote. */
   log: (sessionId: string) => SessionEvent[];
+  /**
+   * A run that changed a file, checked it, and then changed it again.
+   *
+   * The stale-green shape, written straight into the log: a check followed by
+   * an edit is the case where a screen computing its own verdict says green
+   * and the receipt says unverified.
+   */
+  patchAndCheck: () => void;
 };
 
 const withSession = async (
@@ -235,6 +243,75 @@ const withSession = async (
         });
       },
       log: (of) => store.list(of),
+      patchAndCheck: () => {
+        const runId = "run-evidence";
+
+        store.append({
+          sessionId,
+          actorId: "agent-1",
+          type: "run.started",
+          payload: {
+            run: {
+              id: runId,
+              sessionId,
+              goal: "Fix the rounding bug.",
+              status: "running",
+              startedBy: "agent-1",
+              model: { provider: "anthropic", model: "test" },
+              createdAt: new Date().toISOString(),
+            },
+          },
+        });
+
+        const patch = (path: string, id: string) =>
+          store.append({
+            sessionId,
+            actorId: "agent-1",
+            type: "tool.completed",
+            payload: {
+              runId,
+              result: {
+                toolCallId: id,
+                name: "apply_patch",
+                output: {
+                  patchId: `patch-${id}`,
+                  path,
+                  status: "applied",
+                  additions: 2,
+                  deletions: 1,
+                },
+              },
+            },
+          });
+
+        patch("src/tax.ts", "c1");
+
+        store.append({
+          sessionId,
+          actorId: "agent-1",
+          type: "tool.completed",
+          payload: {
+            runId,
+            result: {
+              toolCallId: "c2",
+              name: "run_tests",
+              output: {
+                command: "pnpm test",
+                exitCode: 0,
+                timedOut: false,
+                durationMs: 10,
+                stdout: "",
+                stderr: "",
+                truncated: false,
+                passed: true,
+              },
+            },
+          },
+        });
+
+        // The edit that makes the green check describe a tree that is gone.
+        patch("src/refund.ts", "c3");
+      },
     });
   } finally {
     await server.close();
@@ -503,7 +580,7 @@ test("an invite for one session cannot read or act on another", async () => {
   });
 });
 
-test("a joined window can read the mission's changes and comparison", async () => {
+test("a joined window can read the mission's changes and its verdict", async () => {
   await withSession(async ({ join }) => {
     const reviewer = await join("reviewer");
 
@@ -511,12 +588,42 @@ test("a joined window can read the mission's changes and comparison", async () =
     // evidence a teammate is being asked to agree a mission on, and a joined
     // window could reach none of it before.
     const files = await readFiles(reviewer.target);
-    const comparison = await readComparison(reviewer.target);
+    const evidence = await readEvidence(reviewer.target);
 
     assert.ok(files, "a reviewer could not read the changed files");
     assert.deepEqual(files.files, []);
-    assert.ok(comparison, "a reviewer could not read the comparison");
-    assert.deepEqual(comparison.attempts, []);
+    assert.ok(evidence, "a reviewer could not read the verdict");
+    assert.equal(evidence.verification, "unverified");
+    assert.equal(evidence.checksRun, 0);
+  });
+});
+
+test("the panel's verdict is the one the record would freeze", async () => {
+  await withSession(async ({ join, sessionId, log, patchAndCheck }) => {
+    const editor = await join("editor");
+
+    // Green checks, then a later change: the case where a panel computing its
+    // own numbers said verified and the record said unverified.
+    patchAndCheck();
+
+    const panel = await readEvidence(editor.target);
+
+    assert.equal(panel?.verification, "unverified");
+
+    await completeMission(
+      editor.target,
+      "resolved",
+      "Calling it done with the suite out of date.",
+    );
+
+    const frozen = log(sessionId).find(
+      (event) => event.type === "mission.completed",
+    );
+
+    assert.ok(frozen && frozen.type === "mission.completed");
+    // One computation, not two that agree. This assertion is the guarantee.
+    assert.equal(frozen.payload.verification, panel?.verification);
+    assert.equal(frozen.payload.filesChanged, panel?.filesChanged);
   });
 });
 
@@ -530,7 +637,7 @@ test("an invite for one session reads no evidence from another", async () => {
     };
 
     assert.equal(await readFiles(crossed), null);
-    assert.equal(await readComparison(crossed), null);
+    assert.equal(await readEvidence(crossed), null);
   });
 });
 
