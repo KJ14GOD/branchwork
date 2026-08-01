@@ -11,14 +11,18 @@ import {
   type StreamContext,
 } from "./claude-code-stream.ts";
 import { claudeCodeArgs, type ClaudeCodePermissions } from "./claude-code-args.ts";
-import type {
-  Harness,
-  HarnessCapabilities,
-  HarnessDescriptor,
-  HarnessKind,
-  HarnessRunRequest,
-  HarnessResumeRequest,
-  HarnessRunResult,
+import {
+  appendExternalReceipt,
+  appendObservedChanges,
+  readRepositoryBase,
+  unknownExternalUsage,
+  type Harness,
+  type HarnessCapabilities,
+  type HarnessDescriptor,
+  type HarnessKind,
+  type HarnessRunRequest,
+  type HarnessResumeRequest,
+  type HarnessRunResult,
 } from "./harness.ts";
 
 const run = promisify(execFile);
@@ -99,6 +103,16 @@ export class ClaudeCodeHarness implements Harness {
   private readonly command: string;
   private cachedDescriptor: HarnessDescriptor | null = null;
   private child: ChildProcess | null = null;
+  /**
+   * Whether a human asked for this run to stop.
+   *
+   * Kept apart from "the child is gone", because the two produce different
+   * terminal events and telling them apart is the whole point: a killed child
+   * with no result looks exactly like a crashed one, and reporting a
+   * cancellation as a failure tells a reviewer the agent broke when somebody
+   * simply pressed stop.
+   */
+  private cancelled = false;
 
   constructor(options: ClaudeCodeHarnessOptions) {
     this.eventStore = options.eventStore;
@@ -158,6 +172,14 @@ export class ClaudeCodeHarness implements Harness {
         `Claude Code is not installed, or \`${this.command}\` is not on the PATH.`,
       );
     }
+
+    this.cancelled = false;
+
+    // Before the child exists, so `dirty` describes the tree the run opened on
+    // and the revision below is genuinely the commit it started from. Both are
+    // read once: the diff at the end is taken against this same base, and a
+    // base re-read afterwards would be a base the run had already moved.
+    const base = await readRepositoryBase(this.cwd);
 
     const args = claudeCodeArgs(this.permissions, request.model?.model ?? null);
     const child = spawn(this.command, args, {
@@ -318,11 +340,58 @@ export class ClaudeCodeHarness implements Harness {
       });
     });
 
-    this.stop();
+    this.closeChild();
 
     const outcome = turn.ended;
 
-    if (outcome === null) {
+    // Nothing crossed Novus while this ran — no proposal, no approval, no
+    // typed result — so the only evidence available is what the tree now says.
+    // Emitted before the terminal event so a reader meets the diff as part of
+    // the run rather than as an afterthought, and so the receipt below can
+    // read it back.
+    await appendObservedChanges({
+      eventStore: this.eventStore,
+      sessionId: request.sessionId,
+      actorId: request.actorId,
+      runId,
+      cwd: this.cwd,
+      baseRevision: base.revision,
+      // False, and this is the fact the whole event turns on. Claude Code runs
+      // in the *session's own* working tree, not an isolated worktree, so this
+      // diff is everything that differs from the base commit — including the
+      // human's own uncommitted edits, including whatever an earlier turn left
+      // behind. Novus cannot separate those, so it does not claim to.
+      attributable: false,
+    });
+
+    if (outcome !== null && outcome.ok) {
+      this.eventStore.append({
+        sessionId: request.sessionId,
+        actorId: request.actorId,
+        type: "run.completed",
+        payload: { runId, summary: outcome.message ?? "Finished." },
+      });
+    } else if (outcome !== null) {
+      this.eventStore.append({
+        sessionId: request.sessionId,
+        actorId: request.actorId,
+        type: "run.failed",
+        payload: {
+          runId,
+          reason: outcome.message ?? stderr.trim().slice(-1_000) ?? "Failed.",
+        },
+      });
+    } else if (this.cancelled) {
+      // A run somebody stopped is not a run that broke. Distinguished here for
+      // the same reason the built-in loop distinguishes them: reporting a
+      // cancellation as a failure tells a reviewer the agent went wrong.
+      this.eventStore.append({
+        sessionId: request.sessionId,
+        actorId: request.actorId,
+        type: "run.cancelled",
+        payload: { runId },
+      });
+    } else {
       this.eventStore.append({
         sessionId: request.sessionId,
         actorId: request.actorId,
@@ -335,24 +404,22 @@ export class ClaudeCodeHarness implements Harness {
               : "Claude Code exited without reporting a result.",
         },
       });
-    } else if (outcome.ok) {
-      this.eventStore.append({
-        sessionId: request.sessionId,
-        actorId: request.actorId,
-        type: "run.completed",
-        payload: { runId, summary: outcome.message ?? "Finished." },
-      });
-    } else {
-      this.eventStore.append({
-        sessionId: request.sessionId,
-        actorId: request.actorId,
-        type: "run.failed",
-        payload: {
-          runId,
-          reason: outcome.message ?? stderr.trim().slice(-1_000) ?? "Failed.",
-        },
-      });
     }
+
+    appendExternalReceipt({
+      eventStore: this.eventStore,
+      sessionId: request.sessionId,
+      actorId: request.actorId,
+      runId,
+      base,
+      usage: {
+        ...unknownExternalUsage(),
+        // The one figure this harness does report. `cost: "reported"` is its
+        // declaration and `total_cost_usd` is the number behind it; a run that
+        // never reached a result line reports null rather than zero.
+        costUsd: outcome?.costUsd ?? null,
+      },
+    });
 
     return {
       runId,
@@ -360,8 +427,21 @@ export class ClaudeCodeHarness implements Harness {
     };
   }
 
-  /** Closes the child down, in escalating order. Safe to call twice. */
+  /**
+   * Asks this run to stop, from outside its own loop.
+   *
+   * The flag is set before the signal, so the close handler that follows
+   * already knows why the child went away. `run.cancelled` is appended by
+   * `run` itself when it unwinds — this method only asks, because only the
+   * run knows whether the turn had already finished when the request landed.
+   */
   stop(): void {
+    this.cancelled = true;
+    this.closeChild();
+  }
+
+  /** Closes the child down, in escalating order. Safe to call twice. */
+  private closeChild(): void {
     const child = this.child;
 
     if (!child) {

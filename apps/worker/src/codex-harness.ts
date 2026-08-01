@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 
 import type { SessionEvent, SessionEventDraft } from "@novus/contracts";
@@ -6,14 +6,18 @@ import type { SessionEventStore } from "@novus/session-service";
 
 import { AgentRunFailure } from "./agent-runner.ts";
 import { LineReader } from "./claude-code-stream.ts";
-import type {
-  Harness,
-  HarnessCapabilities,
-  HarnessDescriptor,
-  HarnessKind,
-  HarnessRunRequest,
-  HarnessResumeRequest,
-  HarnessRunResult,
+import {
+  appendExternalReceipt,
+  appendObservedChanges,
+  readRepositoryBase,
+  unknownExternalUsage,
+  type Harness,
+  type HarnessCapabilities,
+  type HarnessDescriptor,
+  type HarnessKind,
+  type HarnessRunRequest,
+  type HarnessResumeRequest,
+  type HarnessRunResult,
 } from "./harness.ts";
 
 const run = promisify(execFile);
@@ -102,10 +106,39 @@ export const detectCodex = async (
  *   {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ok"}}
  *   {"type":"turn.completed","usage":{…}}
  */
+/**
+ * What a finished Codex turn says it spent.
+ *
+ * Tokens only — `cost: "none"` is the declaration, and the stream carries no
+ * money. Null when the turn's `usage` was absent or unreadable, so an adapter
+ * downstream can tell "not reported" from "reported as nothing".
+ */
+export type CodexTurnUsage = { inputTokens: number; outputTokens: number };
+
+const readCodexUsage = (value: unknown): CodexTurnUsage | null => {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+
+  const usage = value as Record<string, unknown>;
+  const input = usage["input_tokens"];
+  const output = usage["output_tokens"];
+
+  return typeof input === "number" && typeof output === "number"
+    ? {
+        inputTokens: Math.max(0, Math.trunc(input)),
+        outputTokens: Math.max(0, Math.trunc(output)),
+      }
+    : null;
+};
+
 export const mapCodexLine = (
   line: unknown,
   context: { sessionId: string; actorId: string; runId: string },
-): { events: SessionEventDraft[]; ended: { ok: boolean } | null } => {
+): {
+  events: SessionEventDraft[];
+  ended: { ok: boolean; usage: CodexTurnUsage | null } | null;
+} => {
   const none = { events: [], ended: null };
 
   if (typeof line !== "object" || line === null || !("type" in line)) {
@@ -182,11 +215,17 @@ export const mapCodexLine = (
     }
 
     case "turn.completed":
-      return { events: [], ended: { ok: true } };
+      return {
+        events: [],
+        ended: { ok: true, usage: readCodexUsage(event["usage"]) },
+      };
 
     case "turn.failed":
     case "error":
-      return { events: [], ended: { ok: false } };
+      return {
+        events: [],
+        ended: { ok: false, usage: readCodexUsage(event["usage"]) },
+      };
 
     default:
       return none;
@@ -202,6 +241,9 @@ export class CodexHarness implements Harness {
   private readonly permissions: { allowWrites: boolean; allowCommands: boolean };
   private readonly command: string;
   private cached: HarnessDescriptor | null = null;
+  private child: ChildProcess | null = null;
+  /** Whether a human asked for this run to stop. See the Claude Code adapter. */
+  private cancelled = false;
 
   constructor(options: {
     eventStore: SessionEventStore;
@@ -258,7 +300,12 @@ export class CodexHarness implements Harness {
       );
     }
 
+    this.cancelled = false;
+
     const runId = request.runId ?? crypto.randomUUID();
+    // Before the run exists in the log, so it describes the tree this turn
+    // opened on rather than the one it leaves behind.
+    const base = await readRepositoryBase(this.cwd);
 
     this.eventStore.append({
       sessionId: request.sessionId,
@@ -287,8 +334,19 @@ export class CodexHarness implements Harness {
       { cwd: this.cwd, stdio: ["ignore", "pipe", "pipe"] },
     );
 
+    this.child = child;
+
+    // A cancellation that landed between `run.started` and the spawn above
+    // has nothing to signal yet. Re-asking here is what stops it arriving as
+    // a request against a process that did not exist when it was made.
+    if (this.cancelled) {
+      this.closeChild();
+    }
+
     const reader = new LineReader();
-    const state: { ended: { ok: boolean } | null } = { ended: null };
+    const state: { ended: { ok: boolean; usage: CodexTurnUsage | null } | null } = {
+      ended: null,
+    };
     let stderr = "";
 
     child.stderr?.on("data", (chunk: Buffer) => {
@@ -317,12 +375,37 @@ export class CodexHarness implements Harness {
       child.on("close", settle);
     });
 
+    this.child = null;
+
+    // Codex proposed nothing and Novus approved nothing, so the tree is the
+    // only witness to what this turn did. Same ordering as the Claude Code
+    // adapter: observation, then the terminal event, then the receipt that
+    // reads both back.
+    await appendObservedChanges({
+      eventStore: this.eventStore,
+      sessionId: request.sessionId,
+      actorId: request.actorId,
+      runId,
+      cwd: this.cwd,
+      baseRevision: base.revision,
+      // False. Codex runs in the session's own tree, so this diff is what
+      // differs — not what the agent did. See the Claude Code adapter.
+      attributable: false,
+    });
+
     if (state.ended?.ok) {
       this.eventStore.append({
         sessionId: request.sessionId,
         actorId: request.actorId,
         type: "run.completed",
         payload: { runId, summary: "Codex finished the turn." },
+      });
+    } else if (state.ended === null && this.cancelled) {
+      this.eventStore.append({
+        sessionId: request.sessionId,
+        actorId: request.actorId,
+        type: "run.cancelled",
+        payload: { runId },
       });
     } else {
       this.eventStore.append({
@@ -339,9 +422,58 @@ export class CodexHarness implements Harness {
       });
     }
 
+    appendExternalReceipt({
+      eventStore: this.eventStore,
+      sessionId: request.sessionId,
+      actorId: request.actorId,
+      runId,
+      base,
+      usage: {
+        ...unknownExternalUsage(),
+        // Tokens, and only tokens. `cost: "none"` means costUsd stays null
+        // however many tokens the turn reports — Novus has no rate card for a
+        // model Codex never names, and a dollar figure invented from one it
+        // guessed at would be worse than admitting it does not know.
+        inputTokens: state.ended?.usage?.inputTokens ?? 0,
+        outputTokens: state.ended?.usage?.outputTokens ?? 0,
+      },
+    });
+
     return {
       runId,
       events: this.eventStore.list(request.sessionId) as SessionEvent[],
     };
+  }
+
+  /** Asks this turn to stop. See `ClaudeCodeHarness.stop`. */
+  stop(): void {
+    this.cancelled = true;
+    this.closeChild();
+  }
+
+  /**
+   * Closes the child down, in escalating order. Safe to call twice.
+   *
+   * `codex exec` reads nothing from stdin — it is one-shot per invocation and
+   * was spawned with stdin ignored — so unlike the Claude Code adapter there
+   * is no stream to end first, only a signal to send.
+   */
+  private closeChild(): void {
+    const child = this.child;
+
+    if (!child) {
+      return;
+    }
+
+    this.child = null;
+
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+      setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, 3_000).unref();
+    }
   }
 }
