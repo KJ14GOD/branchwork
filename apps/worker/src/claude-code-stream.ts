@@ -33,7 +33,22 @@ export type StreamContext = {
 /** Anything the mapper wants to tell the caller besides an event to append. */
 export type StreamSignal =
   | { kind: "init"; model: string | null; tools: readonly string[] }
-  | { kind: "turn-ended"; ok: boolean; message: string | null; costUsd: number | null };
+  | {
+      kind: "turn-ended";
+      ok: boolean;
+      message: string | null;
+      costUsd: number | null;
+      /**
+       * What the CLI says the turn cost in tokens, when it says anything.
+       *
+       * Null rather than zero when the `result` line carries no usage, and the
+       * two are not interchangeable: a receipt reporting a confident 0 tokens
+       * is a claim that nothing was spent, which is never what "the adapter
+       * told us nothing" means. The receipt turns a null into
+       * `callsMissingUsage` and a cost floor instead.
+       */
+      usage: { inputTokens: number; outputTokens: number } | null;
+    };
 
 export type StreamEmission = {
   events: SessionEventDraft[];
@@ -281,6 +296,26 @@ export const mapStreamLine = (
       const ok = event["subtype"] === "success" && event["is_error"] !== true;
       const message = event["result"];
       const cost = event["total_cost_usd"];
+      // Cache reads and writes are input tokens that were genuinely paid for,
+      // so they are summed in rather than dropped — a turn served mostly from
+      // cache otherwise reports a fraction of what it used. Absent fields
+      // count as zero *within* a usage block that exists; a missing block
+      // stays null, which is a different claim entirely.
+      const reported = event["usage"] as Record<string, unknown> | undefined;
+      const count = (value: unknown): number =>
+        typeof value === "number" && Number.isFinite(value) && value > 0
+          ? value
+          : 0;
+      const usage =
+        reported && typeof reported === "object"
+          ? {
+              inputTokens:
+                count(reported["input_tokens"]) +
+                count(reported["cache_read_input_tokens"]) +
+                count(reported["cache_creation_input_tokens"]),
+              outputTokens: count(reported["output_tokens"]),
+            }
+          : null;
 
       return {
         events: [],
@@ -292,6 +327,7 @@ export const mapStreamLine = (
               ? cap(message).text
               : null,
             costUsd: typeof cost === "number" ? cost : null,
+            usage,
           },
         ],
       };

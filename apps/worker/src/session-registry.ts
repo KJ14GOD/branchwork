@@ -407,19 +407,17 @@ export class SessionRegistry {
       // that field does, since it is `kill | graceful` with no `none` — and
       // which then has no `stop` to call. Said out loud rather than dropped:
       // silence is indistinguishable from a control that worked, which is the
-      // whole reason `harness.unsupported` exists. It is not what is appended
-      // here only because its `requested` enum has no `cancel` member —
-      // adding one is a contract change this slice does not own — and
-      // `run.progress` reaches the same timeline without misnaming which
-      // control was refused.
+      // whole reason `harness.unsupported` exists. It now names the control it
+      // is refusing, rather than describing it in the prose of a progress line.
       try {
         this.eventStore.append({
           sessionId,
           actorId: "agent-1",
-          type: "run.progress",
+          type: "harness.unsupported",
           payload: {
             runId,
-            message: `${live.harness.kind} cannot be stopped once it has started, so the cancellation was recorded but not applied.`,
+            requested: "cancel",
+            reason: `${live.harness.kind} cannot be stopped once it has started, so the cancellation was recorded but not applied.`,
           },
         });
       } catch (error) {

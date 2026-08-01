@@ -9,6 +9,7 @@ import {
   LineReader,
   mapStreamLine,
   type StreamContext,
+  type StreamSignal,
 } from "./claude-code-stream.ts";
 import { claudeCodeArgs, type ClaudeCodePermissions } from "./claude-code-args.ts";
 import {
@@ -209,7 +210,10 @@ export class ClaudeCodeHarness implements Harness {
     // variable that is only ever assigned inside a callback to `never` at
     // every read after the await, which is not a real fact about this code.
     const turn: {
-      ended: { ok: boolean; message: string | null; costUsd: number | null } | null;
+      // Derived from the signal rather than restated, so a field added to the
+      // stream mapper cannot be silently dropped on the way to the receipt —
+      // which is exactly how the token totals went missing the first time.
+      ended: Extract<StreamSignal, { kind: "turn-ended" }> | null;
     } = { ended: null };
     let runId = request.runId ?? crypto.randomUUID();
     let started = false;
@@ -443,10 +447,24 @@ export class ClaudeCodeHarness implements Harness {
       base,
       usage: {
         ...unknownExternalUsage(),
-        // The one figure this harness does report. `cost: "reported"` is its
-        // declaration and `total_cost_usd` is the number behind it; a run that
+        // The two figures this harness does report. `cost: "reported"` and
+        // `usage: "totals"` are its declarations; `total_cost_usd` and the
+        // result line's usage block are the numbers behind them. A run that
         // never reached a result line reports null rather than zero.
         costUsd: outcome?.costUsd ?? null,
+        ...(outcome?.usage
+          ? {
+              inputTokens: outcome.usage.inputTokens,
+              outputTokens: outcome.usage.outputTokens,
+              // Totals for the whole turn, not per call: the CLI does not say
+              // how many model calls it made, so claiming a count here would
+              // be inventing one. `callsMissingUsage` stays 1 so the receipt
+              // still reports its cost as a floor rather than a total —
+              // knowing the tokens is not the same as knowing every call was
+              // counted.
+              modelCalls: 0,
+            }
+          : {}),
       },
     });
 

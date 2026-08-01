@@ -1478,7 +1478,12 @@ export const HarnessUnsupportedEventSchema = EventEnvelopeSchema.extend({
   type: z.literal("harness.unsupported"),
   payload: z.object({
     runId: IdSchema,
-    requested: z.enum(["pause", "resume", "steer", "approve", "fork"]),
+    // `cancel` joined the list once external harnesses were actually run.
+    // Every value of `HarnessCapabilities.cancel` promises cancellation — it is
+    // `kill | graceful` with no `none` — so an adapter that declares one and
+    // then cannot stop was reporting the refusal as a `run.progress` line,
+    // which reaches the timeline but misnames which control was refused.
+    requested: z.enum(["pause", "resume", "steer", "approve", "fork", "cancel"]),
     reason: z.string().min(1),
   }),
 });

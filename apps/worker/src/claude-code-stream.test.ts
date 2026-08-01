@@ -135,8 +135,62 @@ test("a result signals the turn ended, with its cost", () => {
   );
 
   assert.deepEqual(out.signals, [
-    { kind: "turn-ended", ok: true, message: "Done.", costUsd: 0.0641865 },
+    {
+      kind: "turn-ended",
+      ok: true,
+      message: "Done.",
+      costUsd: 0.0641865,
+      // No usage block on this line, so null — never a confident zero. The
+      // receipt turns this into `callsMissingUsage` and a cost floor.
+      usage: null,
+    },
   ]);
+});
+
+test("a result's token usage is captured, cache included", () => {
+  const out = mapStreamLine(
+    {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "Done.",
+      total_cost_usd: 0.0125,
+      usage: {
+        input_tokens: 120,
+        cache_read_input_tokens: 8_000,
+        cache_creation_input_tokens: 1_500,
+        output_tokens: 640,
+      },
+    },
+    context,
+  );
+
+  // Cache reads and writes are input tokens that were genuinely paid for. A
+  // turn served mostly from cache reported 120 input tokens before they were
+  // summed in, which understates a real spend by two orders of magnitude.
+  assert.deepEqual(out.signals[0], {
+    kind: "turn-ended",
+    ok: true,
+    message: "Done.",
+    costUsd: 0.0125,
+    usage: { inputTokens: 9_620, outputTokens: 640 },
+  });
+});
+
+test("a usage block that exists but is empty is zero, not unknown", () => {
+  // The distinction the receipt depends on: an adapter that reported a usage
+  // block saying nothing was used is a different claim from one that reported
+  // no usage block at all, and collapsing them makes a free turn and an
+  // uncounted turn indistinguishable.
+  const out = mapStreamLine(
+    { type: "result", subtype: "success", is_error: false, result: "Done.", usage: {} },
+    context,
+  );
+
+  assert.deepEqual(
+    (out.signals[0] as { usage: unknown }).usage,
+    { inputTokens: 0, outputTokens: 0 },
+  );
 });
 
 test("an errored result is reported as not ok", () => {
