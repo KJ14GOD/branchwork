@@ -104,7 +104,7 @@ pre,
 .compare__verdict,
 .compare__path,
 .open__input,
-.open__recent-path,
+.inbox__repo,
 .tree__name,
 .viewer__path,
 .viewer__dir,
@@ -166,7 +166,7 @@ button {
 .icon-button,
 .button,
 .open__input,
-.open__recent-row,
+.inbox__row,
 .open__toggle,
 .jump,
 .tool__head,
@@ -2656,16 +2656,28 @@ pre.kv__value {
 
 /* ---------- overlays ---------- */
 
+/*
+ * The overlay is a viewport, not a scroller.
+ *
+ * It used to be `overflow-y: auto` with a 14vh top pad, which meant anything
+ * taller than the window simply grew and the *overlay* scrolled — so the
+ * open-a-repository panel, which appended one row per remembered mission,
+ * ran off the bottom of the screen with its own Open button below the fold.
+ * Nothing on the overlay may exceed it now: the panel bounds itself and its
+ * body scrolls instead (see `.sheet`).
+ */
 .overlay {
   position: fixed;
   inset: 0;
+  z-index: 10; /* geometry: above the shell, below nothing */
   display: flex;
+  align-items: flex-start;
   justify-content: center;
-  padding-top: 14vh;
+  padding: 10vh var(--space-6) var(--space-6);
   background: rgba(6, 6, 7, 0.7);
   backdrop-filter: blur(3px);
   animation: overlay-in var(--t-overlay) var(--ease);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 /* Anything on the overlay floats: it arrives from slightly behind the plane
@@ -2683,16 +2695,111 @@ pre.kv__value {
   }
 }
 
+/*
+ * A sheet: head, scrolling body, foot. The bounded panel primitive.
+ *
+ * The rule it exists to keep is that **the title and the primary action do
+ * not move and do not scroll** — only the body does. A panel that grows with
+ * its content pushes its own submit button off the bottom of the window, and
+ * that is exactly what the open-a-repository panel did once it was also
+ * rendering every remembered mission.
+ *
+ * Used on the overlay (`.sheet.modal`) and in flow (`.inbox__panel`), which
+ * is why the bounding lives on `.modal` rather than here: in flow the parent
+ * gives it a height, on the overlay the viewport does.
+ */
+.sheet {
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* geometry: a flex item's automatic minimum is its content */
+  width: min(560px, 100%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+}
+
+.sheet__head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-6) var(--space-5);
+}
+
+.sheet__title {
+  margin: 0;
+  font-size: var(--text-screen);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.sheet__subtitle {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  line-height: var(--leading-prose);
+}
+
+.sheet__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 0; /* geometry: without this the body never scrolls, it grows */
+  padding: 0 var(--space-6) var(--space-5);
+  overflow-y: auto;
+}
+
+/* A body that is a list rather than a form sinks: output below chrome, the
+   same rule the timeline follows, and it gives the pinned head and foot an
+   edge without spending a border on one. */
+.sheet__body--well {
+  padding: var(--space-4) var(--space-5);
+  background: var(--inset);
+}
+
+.sheet__foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+}
+
+/* Pushes the primary action to the trailing edge, so an error message sits
+   beside it rather than displacing it. */
+.sheet__spacer {
+  flex: 1 1 auto;
+}
+
 .modal {
-  height: fit-content;
+  max-width: 100%;
+  /* Never taller than the overlay it sits on. This single declaration is
+     what stops a modal running under the bottom of the window; the body's
+     `overflow-y` above is what makes that survivable. */
+  max-height: 100%;
   border-radius: var(--radius-l);
   box-shadow: var(--shadow-modal);
   animation: float-in var(--t-overlay) var(--ease);
 }
 
+/* The panels that predate `.sheet` and are not this pass's to restructure —
+   invite, join. They are one undivided box, so bounding them means scrolling
+   the whole box; still strictly better than growing past the viewport. */
+.open__panel.modal {
+  overflow-y: auto;
+}
+
 .palette {
   width: min(560px, calc(100vw - var(--space-8)));
   height: fit-content;
+  /* `.overlay` stopped scrolling when it became the modal's backdrop, and the
+     palette is the one user of it that is not a `.modal` — so on a short
+     window its list was clipped rather than reachable. It carries its own
+     bound now instead of relying on the shared primitive. */
+  max-height: calc(100vh - 10vh - var(--space-6) * 2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-l);
   background: var(--surface);
@@ -2732,7 +2839,9 @@ pre.kv__value {
   margin: 0;
   padding: var(--space-2);
   list-style: none;
-  max-height: 360px; /* geometry: about nine rows before it scrolls */
+  /* Shrinks on a short window rather than overflowing the sheet that now
+     bounds it. Nine rows when there is room for nine rows. */
+  max-height: min(360px, 50vh);
   overflow-y: auto;
 }
 
@@ -3304,56 +3413,6 @@ select.open__input {
   line-height: var(--leading-prose);
 }
 
-/* Previous sessions. Quiet, because opening a repository is the primary
-   action and this is the shortcut for coming back to one. */
-.open__recent {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.open__recent > .eyebrow {
-  margin-bottom: var(--space-2);
-}
-
-.open__recent-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  margin: 0 calc(var(--space-4) * -1);
-  background: transparent;
-  border-radius: var(--radius-m);
-  color: var(--text-muted);
-  font: inherit;
-  font-size: var(--text-small);
-  text-align: left;
-  cursor: pointer;
-}
-
-.open__recent-row:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
-.open__recent-row:active {
-  background: var(--pressed);
-}
-
-.open__recent-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.open__recent-meta {
-  flex-shrink: 0;
-  color: var(--text-dim);
-  font-size: var(--text-micro);
-  font-variant-numeric: tabular-nums;
-}
-
 /* ---------- invite ---------- */
 
 .invite__link {
@@ -3363,11 +3422,36 @@ select.open__input {
 
 /* ---------- mission inbox ---------- */
 
+/*
+ * The window's first screen. A page that holds one sheet and gives it a
+ * height — the sheet's own body is what scrolls, so a hundred remembered
+ * missions cannot make this page taller than the window.
+ */
+.inbox {
+  display: flex;
+  /* Sized to its content, capped by the viewport — not stretched to it. One
+     remembered mission in a full-height panel is the giant empty centred
+     state this app has already been told to stop drawing. */
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 0;
+  padding: var(--space-7) var(--space-6);
+  overflow: hidden;
+}
+
+.inbox__panel {
+  max-height: 100%;
+}
+
 .inbox__group {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  margin-bottom: var(--space-4);
+}
+
+.inbox__group + .inbox__group {
+  /* Space, not a rule: the groups are already inside a bordered sheet. */
+  margin-top: var(--space-5);
 }
 
 .inbox__row {
@@ -3381,9 +3465,43 @@ select.open__input {
   text-align: left;
 }
 
-.inbox__row:hover {
+.inbox__row:hover:not(:disabled) {
   border-color: var(--border-strong);
   background: var(--surface-raised);
+}
+
+.inbox__row:active:not(:disabled) {
+  background: var(--pressed);
+}
+
+.inbox__row:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* An empty inbox is a normal first launch. It says what will appear here and
+   then gets out of the way — no billboard, no placeholder rows. */
+.inbox__empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-3);
+}
+
+.inbox__empty-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-title);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+}
+
+.inbox__empty-hint {
+  margin: 0;
+  max-width: 46ch; /* geometry: a readable measure */
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  line-height: var(--leading-prose);
 }
 
 .inbox__goal {
@@ -3405,6 +3523,9 @@ select.open__input {
   gap: var(--space-1) var(--space-3);
   color: var(--text-dim);
   font-size: var(--text-small);
+  /* A repository name long enough to be one unbreakable token would otherwise
+     push the row wider than the sheet instead of wrapping. */
+  overflow-wrap: anywhere;
 }
 
 .inbox__repo {

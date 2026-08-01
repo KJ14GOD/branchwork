@@ -20,6 +20,8 @@ export type OpenSessionState = {
   remembered: RememberedSession[];
   opening: boolean;
   error: string | null;
+  /** Dismisses `error` — called when the surface showing it goes away. */
+  clearError: () => void;
   /**
    * Opens or resumes a session and returns its summary. Returns null on
    * failure — `error` says why. Deliberately does not hold the result as
@@ -172,5 +174,14 @@ export const useSession = (
     [endpoint],
   );
 
-  return { capabilities, remembered, opening, error, open };
+  // Dismissed by whichever surface raised it. One `error` is shared by the
+  // open-a-repository modal and the Mission Inbox behind it, so without this
+  // a failed open stayed on the inbox's foot after the modal that caused it
+  // had been dismissed — an error about something the person had already
+  // walked away from.
+  const clearError = useCallback(() => {
+    setError(null);
+  }, []);
+
+  return { capabilities, remembered, opening, error, open, clearError };
 };

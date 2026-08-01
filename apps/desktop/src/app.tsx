@@ -4,6 +4,10 @@ import { SessionSummarySchema, type SessionSummary } from "@novus/contracts/prot
 import type { ParsedInvite } from "@novus/session-client";
 
 import { bridge, type LaunchDescriptor } from "./bridge.ts";
+import {
+  MissionInbox,
+  type ResumeRequest,
+} from "./components/mission-inbox.tsx";
 import { OpenRepository } from "./components/open-repository.tsx";
 import { JoinEntry } from "./join/join-entry.tsx";
 import { JoinedTab } from "./join/joined-tab.tsx";
@@ -131,19 +135,25 @@ export const App = () => {
       });
   }, []);
 
-  const { capabilities, remembered, opening, error, open } = useSession(
-    endpoint,
-    hosting,
-  );
+  const { capabilities, remembered, opening, error, clearError, open } =
+    useSession(endpoint, hosting);
   const { theme, toggleTheme } = useTheme();
 
   const [tabs, setTabs] = useState<SessionSummary[]>([]);
   const [joined, setJoined] = useState<JoinedEntry[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [tabStatuses, setTabStatuses] = useState<Record<string, TabStatus>>({});
+  // Two separate surfaces, deliberately: `newTabOpen` is the compact
+  // open-a-repository modal (creation), `inboxOpen` is the Mission Inbox
+  // (navigation). They were one panel — the form with every remembered
+  // mission appended under it — which is what grew past the bottom of the
+  // window and pushed its own Open button off screen.
   const [newTabOpen, setNewTabOpen] = useState(false);
+  const [inboxOpen, setInboxOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const hydrated = useRef(false);
+  /** Whether the open-a-repository modal was reached from the inbox overlay. */
+  const fromInbox = useRef(false);
 
   // Hydrated once, from what this window had open last — but a relaunch
   // starts a fresh worker with an empty in-memory session registry, even
@@ -282,8 +292,29 @@ export const App = () => {
       });
       setActiveId(summary.id);
       setNewTabOpen(false);
+      setInboxOpen(false);
+      // Cleared here, not only on cancel. A successful open closes both
+      // surfaces without going through the cancel branch, so the flag
+      // survived — and the *next* "+" that was cancelled reopened the Mission
+      // Inbox for somebody who had never come from it.
+      fromInbox.current = false;
     },
     [open],
+  );
+
+  // Resuming a mission from the inbox is the same call with the mission's own
+  // id — the request is built by `resumeRequest`, which is where the two
+  // rules that matter live (the id comes from the mission, the permissions
+  // come from the host's current defaults and never from its history).
+  const resumeMission = useCallback(
+    (request: ResumeRequest) =>
+      void openTab(
+        request.repositoryPath,
+        request.allowWrites,
+        request.allowCommands,
+        request.resume,
+      ),
+    [openTab],
   );
 
   // Joining is what opening an invite means — no worker involved, so unlike
@@ -411,6 +442,21 @@ export const App = () => {
     </button>
   );
 
+  // How the inbox stays reachable once tabs exist. Without it the only way
+  // back to a mission you were not already in was to close every tab, which
+  // is how the list ended up glued to the new-repository form in the first
+  // place.
+  const missionsButton = (
+    <button
+      className="icon-button"
+      type="button"
+      onClick={() => setInboxOpen(true)}
+      title="Every mission this machine remembers"
+    >
+      Missions
+    </button>
+  );
+
   // A quiet secondary action, not a mode: hosting stays the default and the
   // Open screen stays about repositories. Joining is one click for the
   // person who was actually handed an invite.
@@ -424,6 +470,50 @@ export const App = () => {
       Join
     </button>
   );
+
+  // Reached from the tab strip's "+", and from either Mission Inbox. Renders
+  // its own overlay (the modal owns Escape, the focus return and the scroll
+  // lock), so unlike the join panel below it is not wrapped here.
+  const openRepositoryModal =
+    newTabOpen && hosting ? (
+      <OpenRepository
+        onOpen={openTab}
+        opening={opening}
+        error={error}
+        capabilities={capabilities}
+        onClose={() => {
+          setNewTabOpen(false);
+          // Dismissing the modal dismisses its error with it, rather than
+          // leaving it on the inbox underneath.
+          clearError();
+
+          // Came from the inbox overlay, which had to close to make room:
+          // cancelling should land back where it was opened from rather
+          // than on the mission you happened to have in front.
+          if (fromInbox.current) {
+            fromInbox.current = false;
+            setInboxOpen(true);
+          }
+        }}
+      />
+    ) : null;
+
+  const inboxOverlay =
+    inboxOpen && hosting ? (
+      <MissionInbox
+        missions={remembered}
+        capabilities={capabilities}
+        opening={opening}
+        error={newTabOpen ? null : error}
+        onResume={resumeMission}
+        onOpenRepository={() => {
+          fromInbox.current = true;
+          setInboxOpen(false);
+          setNewTabOpen(true);
+        }}
+        onClose={() => setInboxOpen(false)}
+      />
+    ) : null;
 
   const joinOverlay = joinOpen ? (
     <div
@@ -463,12 +553,20 @@ export const App = () => {
           {themeToggle}
         </header>
         {hosting ? (
-          <OpenRepository
-            onOpen={openTab}
-            opening={opening}
-            error={error}
+          // The first screen is the inbox — what is already in flight —
+          // with opening a repository as its one primary action. Coming
+          // back to work is the common case; starting something new is the
+          // deliberate one, and it gets its own modal rather than being the
+          // top half of this screen with the missions dangling underneath.
+          <MissionInbox
+            missions={remembered}
             capabilities={capabilities}
-            remembered={remembered}
+            opening={opening}
+            // One message, on whichever surface is in front — the modal owns
+            // it while it is open, and clears it on the way out.
+            error={newTabOpen ? null : error}
+            onResume={resumeMission}
+            onOpenRepository={() => setNewTabOpen(true)}
           />
         ) : (
           // A join launch: no worker exists here, so there is no repository
@@ -476,6 +574,7 @@ export const App = () => {
           // window does is join, and the launch may already carry the link.
           <JoinEntry onJoin={openJoined} prefill={launch.invite} />
         )}
+        {openRepositoryModal}
         {joinOverlay}
       </div>
     );
@@ -581,6 +680,7 @@ export const App = () => {
           </button>
         </div>
         <span className="titlebar__spacer" />
+        {hosting ? missionsButton : null}
         {hosting ? joinButton : null}
         {themeToggle}
       </header>
@@ -607,26 +707,8 @@ export const App = () => {
         />
       ))}
 
-      {newTabOpen && hosting ? (
-        <div
-          className="overlay"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setNewTabOpen(false);
-            }
-          }}
-        >
-          <OpenRepository
-            embedded
-            onOpen={openTab}
-            opening={opening}
-            error={error}
-            capabilities={capabilities}
-            remembered={remembered}
-          />
-        </div>
-      ) : null}
-
+      {inboxOverlay}
+      {openRepositoryModal}
       {joinOverlay}
     </div>
   );
