@@ -8,7 +8,7 @@ Last reviewed: 2026-08-01
 
 ## Current milestone
 
-**Documentation foundation.** Establish the canonical documents and decision record so implementation can begin against stable contracts. This milestone contains no application functionality by definition.
+**Pre-implementation feasibility.** The canonical documentation foundation is complete. The current milestone is to test the chosen cloud workspace and both official harness CLIs before their adapter contracts shape application code. This milestone still contains no application functionality.
 
 ## Status rules
 
@@ -53,14 +53,19 @@ All application capabilities are **Not started**. The previous prototype was rem
 | Executable repository gate | Implemented | `scripts/gate.sh` exits non-zero on seeded violations and 0 on the current tree (run 2026-08-01; D-016) |
 | Decision record | Implemented | [DECISIONS.md](DECISIONS.md) entries D-001 through D-023, including vendor selections D-019–D-023 |
 | Harness feasibility — documentation-level | Implemented | Official-docs verification for Claude Code (headless, streaming, resume, permissions, auth) and Codex (exec/app-server, approvals, interrupt, auth), recorded with sources in D-017 |
+| Harness feasibility — hands-on, local + clean-Linux container | Partial | Run 2026-08-01. Verified live: Claude Code 2.1.220 `-p --output-format stream-json` (init event with capability flags, session id, per-model cost), `--resume` with correct recall, SIGTERM → exit 143 with child tasks marked killed, allowlist enforcement; Codex 0.145.0 `exec --json` (thread.started/turn/item events, usage), `exec resume --last` with correct recall, `app-server` JSON-RPC initialize handshake with server-initiated notifications. Clean Ubuntu 24.04 (aarch64 Docker): Claude Code installs via official script and returns structured JSON `is_error` when unauthenticated; Codex 0.146.0 musl binary from GitHub releases runs and requires a trusted git directory or `--skip-git-repo-check`. Adapter notes: `codex exec` consumes stdin; both CLIs emit stderr noise the supervisor must tolerate. |
+| E2B provider spike runner | Partial | Pinned E2B SDK `2.14.0` installs with zero audit findings; `npm run check` and `npm run dry-run` under `spikes/e2b` validate the local entry point. A live E2B run is still required. |
 
 ## Known gaps
 
-- No application code, tests, build system, or dependencies exist.
-- Harness feasibility is proven at documentation level only (D-017). The hands-on spike — install, authenticate, stream, steer, approve, and interrupt both CLIs in a real clean Linux workspace on the chosen sandbox provider (D-023) — has not run. The adapter contract is not frozen until it does.
+- No application code, application tests, product build system, or production dependencies exist. The disposable feasibility runner and its pinned SDK under `spikes/e2b` are not application functionality.
+- The harness spike (D-017) has run locally and in a clean-Linux container but not yet on E2B (D-023). Still unproven: workspace lifecycle, egress policy, and suspend/resume on E2B itself; authenticated operation in a clean environment under org-provisioned API keys; and structured approval surfacing end to end (Claude Code `--permission-prompt-tool`, Codex app-server `requestApproval` round-trip) — a forced `--disallowedTools` denial returned no structured denial record in `-p` mode, so approval routing must be proven at the adapter level. The adapter contract is not frozen until the E2B leg runs.
+- Static inspection of E2B SDK `2.14.0` shows outbound rules accept IP addresses/CIDRs rather than domain names. The live runner resolves required service domains in one sandbox and pins the observed IPv4 addresses in a second default-deny sandbox, but this is only an experiment: changing CDN/service addresses may make the policy too brittle for the eventual default-deny goal in D-015.
 - The design token values in [DESIGN.md](DESIGN.md#tokens) have not been proven on a rendered screen; contrast ratios are calculated, not observed.
 - The gate's source-code checks (gradients, raw colors, PROGRESS staleness) are dormant until application code exists.
 
 ## Blocked
 
-Nothing is blocked. The next step is the harness feasibility spike, then the first implementation slice: a thin vertical skeleton — authenticate one user, create one mission, persist it, reconstruct it after refresh — with no agents and no visual flourish.
+- The E2B leg of the harness spike is blocked on an E2B account and API key, plus an Anthropic API key for org-credential auth testing (only the account holder can provide these). No E2B sandbox has been created, and the existing OpenAI credential has not been transmitted anywhere.
+
+Next step after unblocking: finish the E2B spike leg, then the first implementation slice — a thin vertical skeleton: authenticate one user, create one mission, persist it, reconstruct it after refresh — with no agents and no visual flourish.

@@ -1,0 +1,13 @@
+{
+  "name": "@novus/e2b-feasibility-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check spike.mjs",
+    "dry-run": "node spike.mjs --dry-run",
+    "run": "node spike.mjs"
+  },
+  "dependencies": {
+    "e2b": "2.14.0"
+  }
+}
