@@ -327,24 +327,19 @@ Numbered so other documents can point at them.
     select would grant them the power to write. Widen it when the two become
     separately permissioned — not before. `decision-authority.test.ts` pins
     every refusal.
-18. **One flaky test under heavy machine contention.** *Open (2026-07-31.)*
-    `control-lifecycle.test.ts`, "what /authority sends validates against the
-    contract", failed twice in three full-suite runs while a second agent's
-    test suite was saturating the CPU: `pendingDirection` came back empty when
-    the direction had just been posted against a run `startRun` had already
-    confirmed was executing. It has not reproduced in nine runs since that load
-    went away, and 12 isolated runs of the test alone are clean — so the cause
-    is not established and the test is instrumented rather than fixed. Its
-    assertion message now prints the `pendingDirection` and `executingRunIds`
-    it actually saw, so the next occurrence says what happened instead of only
-    `undefined`. **Do not treat a green suite as evidence this is gone.** It is
-    a test-level flake with no matching product symptom found so far; if it
-    turns out `direction.submitted` can be read back missing right after its
-    POST returns, that is a real bug and this entry is wrong about its scope.
-    **Narrowed (2026-07-31.)** The test discarded the status of three POSTs, so
-    a request that was *refused* was indistinguishable from a projection that
-    came back empty — which is exactly the symptom seen. Those statuses are
-    asserted now and carry the response body in the failure message. That does
-    not prove the cause; it means the next occurrence names it instead of
-    reporting `undefined`. Still not reproducible: roughly 25 attempts,
-    including eight runs against six concurrent full suites.
+18. **The flaky `/authority` test was a race, not contention.** *Closed
+    (2026-08-01.)* It was never about load. The run loop drains pending
+    direction at the top of each iteration, and the top of the *first*
+    iteration is a boundary like any other — so a direction posted between
+    `run.started` and the first model call was folded in immediately and
+    correctly, leaving `pendingDirection` empty, which is not the state a test
+    of "queued but not yet applied" is trying to observe. `startRun` returned
+    as soon as the run was executing, which is inside that window. Load only
+    widened it, which is why it read as contention for so long.
+
+    The adapter now signals when the loop is parked inside the model call, and
+    `startRun` waits for that rather than for `run.started`. Verified ten
+    consecutive times, four of them against three concurrent full suites. No
+    product behaviour changed: folding a direction in at the first boundary is
+    correct, and the test was asserting against a window the product never
+    promised.

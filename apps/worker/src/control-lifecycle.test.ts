@@ -23,9 +23,43 @@ import { startEventServer } from "./event-server.ts";
 
 const TOKEN = "control-lifecycle-token-abcdefghijklmnop";
 
+/**
+ * A model call that never returns, and a way to know it has been entered.
+ *
+ * The run loop drains pending direction at the top of each iteration, and the
+ * top of the *first* iteration is a boundary like any other. A direction
+ * posted between `run.started` and the first model call is therefore folded
+ * in immediately and correctly — it just leaves `pendingDirection` empty,
+ * which is not the state a test of "queued but not yet applied" is trying to
+ * observe. That window is narrow on an idle machine and wide under load,
+ * which is why this read as a contention flake for so long rather than as the
+ * race it is.
+ *
+ * `entered` resolves once the loop is parked inside `complete`, past that
+ * first boundary, where a direction can only be queued.
+ */
+let enterModel: (() => void) | null = null;
+let entered = Promise.resolve();
+let releaseModel: (() => void) | null = null;
+
 const noopAdapter: ModelAdapter = {
   selection: { provider: "anthropic", model: "test" },
-  complete: () => new Promise(() => undefined),
+  complete: () =>
+    new Promise((settle) => {
+      // Parked, not finished. `releaseModel` is what lets a test move the run
+      // to its next boundary — a call that can never return also means cancel
+      // and pause can never be observed, because both are checked at the top
+      // of the loop the call is blocking.
+      releaseModel = () => settle({ type: "final", summary: "Released." });
+      enterModel?.();
+    }),
+};
+
+/** Lets the parked model call return, so the loop reaches its next boundary. */
+const releaseRun = async (): Promise<void> => {
+  releaseModel?.();
+  releaseModel = null;
+  await delay(0);
 };
 
 type Guest = { token: string; id: string };
@@ -169,6 +203,12 @@ const offer = async (
  * the response arrived would be racing the queue.
  */
 const startRun = async (url: string, sessionId: string): Promise<string> => {
+  // Armed before the turn is submitted, so the signal cannot be missed by a
+  // run that reaches the model faster than this function does.
+  entered = new Promise<void>((settle) => {
+    enterModel = settle;
+  });
+
   const accepted = await post(`${url}/sessions/${sessionId}/turns`, TOKEN, {
     goal: "a goal whose model call never returns",
   });
@@ -179,6 +219,12 @@ const startRun = async (url: string, sessionId: string): Promise<string> => {
     const running = (await authority(url, sessionId)).executingRunIds[0];
 
     if (running !== undefined) {
+      // Wait for the loop to be parked inside the model call rather than
+      // merely started. `run.started` is appended before the first boundary,
+      // so returning here would hand back a run that is about to drain
+      // anything submitted in the next few milliseconds.
+      await entered;
+
       return running;
     }
 
@@ -460,6 +506,12 @@ test("acceptance during a live run waits for the boundary, then transfers", asyn
     });
 
     assert.equal(cancelled.status, 202);
+
+    // The run is parked inside its model call, and cancel is read at the top
+    // of the loop that call is blocking. Letting it return is what carries the
+    // run to the boundary where both the cancel and the accepted handoff are
+    // acted on — without it the loop never iterates again and nothing moves.
+    await releaseRun();
 
     for (let attempt = 0; attempt < 200; attempt += 1) {
       const now = await authority(url, sessionId);
