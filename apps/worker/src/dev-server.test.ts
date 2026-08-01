@@ -43,6 +43,44 @@ server.listen(Number(process.env.PORT), "127.0.0.1", () => {
 });
 `;
 
+/**
+ * Waits for a server's log tail to contain something.
+ *
+ * `state: "listening"` comes from probing the port; the log line comes from
+ * the child's stdout. Those settle independently, and asserting on the logs
+ * the instant after start was reading a buffer that had not necessarily been
+ * written to yet — it failed intermittently across back-to-back gate runs.
+ *
+ * Polling here is not papering over a race: the guarantee the tool actually
+ * makes is that the line *arrives*, not that it has arrived by the time the
+ * start call returns. This asserts the guarantee that exists.
+ */
+const logsContaining = async (
+  tool: DevServerTool,
+  serverId: string,
+  pattern: RegExp,
+): Promise<string> => {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const result = await tool.execute({
+      id: `log-probe-${attempt}`,
+      name: "dev_server",
+      input: { action: "logs", serverId },
+    });
+
+    if (
+      result.name === "dev_server" &&
+      result.output.action === "logs" &&
+      pattern.test(result.output.logs)
+    ) {
+      return result.output.logs;
+    }
+
+    await new Promise((settle) => setTimeout(settle, 20));
+  }
+
+  return "";
+};
+
 test("dev_server starts a real listener, reports it, and stop takes it down", async () => {
   const repository = await temporaryRepository();
   const tool = new DevServerTool(repository);
@@ -58,7 +96,14 @@ test("dev_server starts a real listener, reports it, and stop takes it down", as
   assert.equal(await canConnect(started.output.port), true);
   // The log tail proves the child actually received PORT, which is what makes
   // the reported port the real one rather than a number passed into the void.
-  assert.match(started.output.logs, new RegExp(`listening on ${started.output.port}`));
+  assert.match(
+    await logsContaining(
+      tool,
+      started.output.serverId,
+      new RegExp(`listening on ${started.output.port}`),
+    ),
+    new RegExp(`listening on ${started.output.port}`),
+  );
 
   const stopped = await tool.execute({
     id: "2",
@@ -165,7 +210,10 @@ test("status and logs report the session's servers by id", async () => {
   if (logs.name !== "dev_server") return assert.fail("wrong result");
   if (logs.output.action !== "logs") return assert.fail("wrong action");
 
-  assert.match(logs.output.logs, /listening on/);
+  assert.match(
+    await logsContaining(tool, started.output.serverId, /listening on/),
+    /listening on/,
+  );
   // The command rides along so anything reading these logs later — redaction,
   // most concretely — can tell what produced them without holding state.
   assert.match(logs.output.command, /^node /);
