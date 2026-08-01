@@ -129,3 +129,67 @@ Format per entry: Context · Decision · Alternatives · Consequences · Revisit
 **Alternatives.** Unrestricted egress silently (rejected: invisible risk); hard default-deny in V0 (rejected only as sequencing — it remains the goal).
 **Consequences.** Egress activity is observable per workspace; enterprise conversations have an honest answer; a known gap is documented rather than hidden.
 **Revisit when.** M2 (trust hardening) — default-deny becomes the requirement.
+
+## D-016 — The repository gate is one executable script
+
+**Context.** The first gate was an illustrative shell block in AGENTS.md that printed warnings without reliably failing, and could not check anchors, staleness, or raw design values.
+**Decision.** The gate is `scripts/gate.sh`: a single command that exits non-zero on any violation and zero only when everything passes. It checks frontmatter presence and order, the CLAUDE.md symlink, a root-Markdown allowlist, file links, anchors, banned language, domain-term definitions outside PRODUCT.md, product truth in skills, gradients and raw color values in source, staged source changes without a PROGRESS.md update, and untracked files. Build/test/lint commands are added to it when application code exists.
+**Alternatives.** Documentation-only checklist (rejected: that is what just failed review); a full lint toolchain now (rejected: no code exists to lint).
+**Consequences.** "Run the gate" has one unambiguous meaning; CI can call the same script; false-positive greps were restructured so empty matches pass.
+**Revisit when.** Application code arrives — the gate grows real build/test steps then.
+
+## D-017 — Harness integration: wrap the official CLIs; auth follows machine ownership
+
+**Context.** Feasibility was verified against official documentation on 2026-08-01. Claude Code: clean-Linux install, headless `claude -p` with `--output-format stream-json`, `--resume`, programmatic permission handling (`--permission-mode`, `--permission-prompt-tool`, hooks), SIGTERM semantics, and API-key/Bedrock/Vertex auth are all documented (code.claude.com/docs); Anthropic explicitly prohibits third-party products offering claude.ai subscription login. Codex: clean-Linux install, `codex exec --json` event stream, `codex app-server` JSON-RPC with mid-turn `turn/steer`, server-initiated approval requests, `turn/interrupt`, resume, and `CODEX_API_KEY` auth are documented (developers.openai.com/codex); API-key mode has documented feature limits vs ChatGPT sign-in, account sharing is prohibited, and no pause exists.
+**Decision.** Novus adapters wrap the official CLIs as supervised child processes — Claude Code via headless stream-json, Codex via app-server JSON-RPC — with git as the authoritative diff source and worktree/branch isolation per workstream. Authentication follows machine ownership: on a user's own machine (future local runner), the user's personal harness login is inherited, Conductor-style; in Novus-managed cloud workspaces, only org-provisioned API credentials are used (D-013), never personal subscription logins — this is now vendor-mandated, not just our policy.
+**Alternatives.** Harness SDKs as libraries (viable for Claude Code's Agent SDK; kept open as an adapter implementation detail); proxying personal subscriptions into the cloud (rejected: prohibited by both vendors' terms).
+**Consequences.** Codex "pause" degrades to interrupt-and-resume per the adapter manifest; a hands-on spike (install, auth, stream, steer, approve, interrupt in a real clean Linux workspace) is still required before the adapter contract is frozen — documentation feasibility is not live proof.
+**Revisit when.** The spike contradicts the documentation, or either vendor ships a first-party embedding API.
+
+## D-018 — V0 client: a downloadable desktop app, one web-architecture client
+
+**Context.** Cloud-first execution means the client is a window onto server state, but the product should feel like the tools teams already run agents in — a desktop app you download, as Conductor is. Shipping desktop and browser simultaneously doubles packaging work without proving product value.
+**Decision.** V0 ships one client: an Electron shell around a single web-architecture client. Browser access later is a delivery change of the same client, not a second codebase. "Two real clients" in the Golden V0 workflow means two people's desktop apps.
+**Alternatives.** Browser-first (rejected: the user decided desktop; a downloadable app also matches the local-runner future where the app supervises local CLIs); native (Swift/Tauri) shell (rejected for V0: team velocity and the web client requirement).
+**Consequences.** Project structure is a web client + thin Electron shell from day one; nothing may depend on Electron-only APIs except the shell layer.
+**Revisit when.** M2+, when browser delivery is scheduled.
+
+## D-019 — Identity: GitHub OAuth plus first-party sessions
+
+**Context.** V0 needs real authentication (D-007) without an IdP integration project. Every V0 user necessarily has a GitHub identity, and repository authorization already runs through GitHub.
+**Decision.** V0 signs users in with GitHub OAuth; the control plane issues its own server-side revocable sessions. GitHub OAuth is identity only; repository access remains the GitHub App installation (never conflated, per ARCHITECTURE.md).
+**Alternatives.** Email/password (rejected: credential storage burden for zero benefit); a hosted IdP like WorkOS/Auth0 (deferred: buys SSO we declared a non-goal).
+**Consequences.** One "Sign in with GitHub" path; org SSO remains an extension point.
+**Revisit when.** Enterprise SSO demand becomes real (currently a non-goal).
+
+## D-020 — Database: PostgreSQL
+
+**Context.** The control plane needs one relational store for durable state and append-only event tables with partial unique indexes and per-mission serialization (ARCHITECTURE.md).
+**Decision.** PostgreSQL. Managed hosting choice is an operational detail, not a schema dependency.
+**Alternatives.** SQLite (rejected: multi-node control plane); a separate event-store product (rejected: one database until proven insufficient).
+**Consequences.** Event log, CAS invariants, and projections all use one engine's guarantees.
+**Revisit when.** Event volume outgrows a single relational store.
+
+## D-021 — Realtime: control-plane WebSockets, no vendor
+
+**Context.** Clients need live room updates; runners need a persistent bidirectional command/event stream. The runner protocol already requires an outbound persistent connection.
+**Decision.** The control plane terminates its own WebSocket connections for both clients and runners. No third-party realtime service.
+**Alternatives.** Hosted pub/sub (Ably/Pusher) (rejected: a second source of delivery truth beside the event log, for money).
+**Consequences.** Presence and event fan-out are control-plane code; horizontal scaling of socket termination is our problem, accepted at V0 scale.
+**Revisit when.** Connection counts make self-managed fan-out the bottleneck.
+
+## D-022 — Artifact storage: S3-compatible object storage (AWS S3 in V0)
+
+**Context.** Transcripts, logs, screenshots, and receipt exports are blobs referenced by rows (ARCHITECTURE.md), with mission scoping and retention.
+**Decision.** The artifact store is an S3-compatible interface; V0 uses AWS S3.
+**Alternatives.** Database blobs (rejected: retention and size economics); Cloudflare R2 (viable; interface-compatible swap if egress costs matter).
+**Consequences.** Signed, expiring URLs for client access; deletion/redaction cascades reach blobs.
+**Revisit when.** Egress cost or region requirements favor another S3-compatible provider.
+
+## D-023 — Cloud sandbox provider: E2B behind the execution-provider interface
+
+**Context.** V0 needs one managed substrate for isolated workspaces that can install and run harness CLIs, hold a repo checkout, restrict egress, and suspend/resume — without Novus building a microVM platform (D-003).
+**Decision.** The first execution provider targets E2B (Firecracker microVM sandboxes with persistence, pause/resume, and a supervisor-friendly API). It is an adapter behind the execution-provider interface; nothing outside the adapter may reference it.
+**Alternatives.** Modal, Fly Machines, Daytona, Vercel Sandbox (Conductor's substrate) — all viable; E2B chosen for purpose-built agent-sandbox lifecycle and pause/resume matching our workspace state machine.
+**Consequences.** Workspace lifecycle states map onto provider primitives in one adapter; the feasibility spike (D-017) runs on this substrate.
+**Revisit when.** The spike surfaces provider limits (network policy granularity, cold-start, cost) — the interface makes the swap an adapter rewrite, not a redesign.

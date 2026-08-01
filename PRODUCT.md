@@ -51,7 +51,9 @@ Explicitly not the wedge: dozens of parallel agents, generic task boards, dispos
 **Novus is the multiplayer control plane for cloud coding agents.**
 Emotional promise: *Enter the same mission. Operate the work together.*
 
-The word doing the work is **responsible**. Conductor (conductor.build) is parallel agents for one person, with workspace sharing arriving via its cloud tier. Factory/Droid (factory.ai) is enterprise agent delegation — one user's session continuous across surfaces, with an org-clamped autonomy model, and no documented model for multiple humans steering one session. Hoplite (hoplite.sh) is a keyboard-driven cloud harness with team workspaces but no simultaneous-control model. (Observed as of 2026-08-01; these are facts about their public surfaces, not claims about their roadmaps.) None of them makes *several people responsible for the same agent-driven change* the center of the product. Novus does.
+The word doing the work is **responsible** — not "together." Observed as of 2026-08-01 (facts about public surfaces, not claims about roadmaps): Conductor (conductor.build) has made cloud agent workspaces collaborative — shareable workspace links, presence, following other participants, prompting agents together in real time. Factory/Droid (factory.ai) is enterprise agent delegation: one user's session continuous across surfaces, an org-clamped autonomy model, no documented model for multiple humans steering one session. Hoplite (hoplite.sh) is a keyboard-driven cloud harness with team workspaces but no simultaneous-control model.
+
+So the differentiation is **not** "they are single-player; Novus is multiplayer." It is: others make shared *access* to agent workspaces; Novus specializes in explicit team *authority* — attributed direction, a control lease with transfer at safe boundaries, verification evidence in one durable format, and reconstructable responsibility for consequential changes. A narrower wedge, and a defensible one: none of them makes authority, evidence, and responsibility the product.
 
 Language rules for all Novus copy and documentation: never "seamless," "single pane of glass," "AI-powered," "supercharge," "orchestrate your agents," or "full visibility." Say the mechanism instead: a controller, a lease, a visible handoff; an attributed event log you can replay; a receipt.
 
@@ -76,7 +78,7 @@ Conceptual definitions. Each term has exactly one meaning, defined here; data re
 - **Mission** (V0) — the shared objective and collaboration boundary: a goal, success criteria, a repository, participants, control policy, an event history, and at completion a receipt. Missions are the unit of attention, invitation, and record.
 - **Participant** (V0) — a (User, Mission) pair with a Role. In V0, participants must be members of the mission's organization; cross-org guests are an extension point.
 - **Invitation** (V0) — a mission-scoped, expiring, single-use grant that makes a User a Participant with a stated Role.
-- **Role** (V0) — a named bundle of capabilities: Owner, Operator, Contributor, Viewer (see [Roles and capabilities](#roles-and-capabilities)). Fixed archetypes in V0; no custom roles.
+- **Role** (V0) — a named bundle of capabilities within one authority scope. Organization roles: org owner, org member. Mission roles: Mission Admin, Operator, Contributor, Viewer (see [Roles and capabilities](#roles-and-capabilities)). Fixed archetypes in V0; no custom roles. "Controller" is not a role — it names whoever currently holds a workstream's ControlLease.
 - **Capability** (V0) — a single verb a participant may perform, enforced by the server on every mutating command. The interface renders from capabilities; it never grants them.
 - **Workstream** (V0) — a named lane of responsibility inside a mission. A workstream owns its control lease, direction queue, and workspace. Every mission has at least one; most have exactly one. A workstream may carry the **approach flag**, marking it as a deliberately created competing implementation for comparison. *Approach is a workstream attribute, not a separate object.* A new execution in the same workstream is a continuation — a retry, follow-up, or harness switch — never an approach. Approaches exist only when a participant explicitly creates one.
 - **Execution** (V0) — one harness working a workstream, from start to a terminal state. At most one active execution per workstream. An execution owns its turns, events, and changes.
@@ -99,17 +101,30 @@ Conceptual definitions. Each term has exactly one meaning, defined here; data re
 
 ## Roles and capabilities
 
-Capabilities are the enforcement unit. A participant's effective capabilities are **role capabilities ∪ lease-granted capabilities**: holding a workstream's control lease temporarily grants the steering verbs for that workstream, whatever the holder's role. This formula is the crux of server-enforced multiplayer; enforcement mechanics are in [ARCHITECTURE.md](ARCHITECTURE.md#authorization).
+Capabilities are the enforcement unit, and they live in two scopes that never mix: **organization capabilities** (held through org roles, exercised before and around missions) and **mission capabilities** (held through mission roles and the lease, exercised inside a mission). This resolves the bootstrap question cleanly: creating a mission is an org act — there are no participants yet — and the creator becomes that mission's Mission Admin.
 
-| Capability | Owner | Operator | Contributor | Viewer | Lease holder |
+**Organization capabilities** (org roles: org owner, org member):
+
+| Capability | Org owner | Org member |
+| --- | :-: | :-: |
+| `org.mission.create` (creator becomes Mission Admin) | ✓ | ✓ |
+| `org.repo.connect` | ✓ | — |
+| `org.harness.credentials` (configure provider/harness credentials) | ✓ | — |
+| `org.members.manage` | ✓ | — |
+| `org.policy.configure` (execution policy, retention) | ✓ | — |
+
+**Mission capabilities.** A participant's effective mission capabilities are **role capabilities ∪ lease-granted capabilities**: holding a workstream's control lease temporarily grants the operating verbs for that workstream, whatever the holder's role. This formula is the crux of server-enforced multiplayer; enforcement mechanics are in [ARCHITECTURE.md](ARCHITECTURE.md#authorization). Each capability is one separately enforceable verb — steering, pausing, and resuming are distinct actions with distinct server routes, never bundled.
+
+| Capability | Mission Admin | Operator | Contributor | Viewer | Lease holder |
 | --- | :-: | :-: | :-: | :-: | :-: |
 | `mission.view`, `receipt.view` | ✓ | ✓ | ✓ | ✓ | — |
-| `mission.create`, `mission.invite`, `mission.close` | ✓ | — | — | — | — |
+| `mission.invite`, `mission.close` | ✓ | — | — | — | — |
 | `direction.submit` | ✓ | ✓ | ✓ | — | — |
-| `direction.apply` (steer, pause, resume) | — | — | — | — | ✓ |
-| `approval.respond` (approve or deny a harness approval request) | — | — | — | — | ✓ |
+| `direction.apply` (apply, supersede, or reject queued direction) | — | — | — | — | ✓ |
 | `execution.start` | ✓ | ✓ | — | — | — |
+| `execution.pause`, `execution.resume` | — | — | — | — | ✓ |
 | `execution.stop` | ✓ | ✓ | ✓ | — | ✓ |
+| `approval.respond` (approve or deny a harness approval request) | — | — | — | — | ✓ |
 | `control.request` | ✓ | ✓ | ✓ | — | — |
 | `control.offer` (and withdraw) | — | — | — | — | ✓ |
 | `control.accept` | ✓ | ✓ | ✓ | — | — |
@@ -119,7 +134,7 @@ Capabilities are the enforcement unit. A participant's effective capabilities ar
 | `pr.manage` | ✓ | ✓ | — | — | — |
 
 Deliberate choices:
-- **Stopping is broad, steering is narrow.** Any non-viewer participant may stop a running execution (`execution.stop`); a wrong or dangerous direction must not be able to run until a handoff completes. Only the lease holder steers.
+- **Stopping is broad, operating is narrow.** Any non-viewer participant may stop a running execution (`execution.stop`); a wrong or dangerous direction must not be able to run until a handoff completes. Only the lease holder steers, pauses, resumes, and answers approvals.
 - **Non-controllers are not spectators.** Contributor verbs — submit direction to the queue, request control, comment on evidence, stop the work — are real, server-enforced operations, not chat.
 - Direction submitted by a non-controller queues automatically; only the controller applies, supersedes, or rejects it. Submission is never silently dropped.
 
@@ -134,7 +149,7 @@ The interface must always answer: Who is here? Who is in control? What is the ag
 Control is modeled as three cooperating machines, not one. Mixing them was a source of contradictions in the prototype.
 
 **ControlLease** — one per workstream; exactly one holder at a time; the holder is "the controller." Mission-level "controller" is a derived display defined for the single-workstream case; a room with several workstreams answers "who is in control?" per lane.
-States: `held` → `releasing` (transfer accepted, waiting for a safe boundary) → `transferred` (new lease issued to the recipient) or `released` (no recipient; workstream has no controller until claimed). Also: `expired` (holder's heartbeat lapsed past the lease TTL) and `revoked` (Owner force-take; always available, always logged, never silent).
+States: `held` → `releasing` (transfer accepted, waiting for a safe boundary) → `transferred` (new lease issued to the recipient) or `released` (no recipient; workstream has no controller until claimed). Also: `expired` (holder's heartbeat lapsed past the lease TTL) and `revoked` (Mission Admin force-take; always available, always logged, never silent).
 
 **ControlRequest** — a non-controller asks for control.
 States: `open` → `fulfilled` (a transfer to the requester completed) | `declined` (controller said no) | `withdrawn` (requester cancelled) | `expired` (TTL) | `superseded` (control transferred to someone else; all other open requests close with this reason).
@@ -142,11 +157,11 @@ States: `open` → `fulfilled` (a transfer to the requester completed) | `declin
 **HandoffOffer** — the controller offers control to a named participant. An offer may exist without a prior request; a request never auto-creates an offer. A **handoff** is the completed transfer of control that a HandoffOffer initiates.
 States: `open` → `accepted` → `waiting_for_boundary` → `completed`. Also: `declined` (recipient), `withdrawn` (controller, before acceptance), `expired` (TTL), `failed` (the execution errored or stopped before a boundary was reached; the lease stays with the original holder and the failure is visible).
 
-**Safe execution boundary** — a point where the harness is awaiting input: turn complete, permission prompt pending, paused, or execution terminal. The runner, not the control plane, declares boundaries, because only the runner knows harness state. A paused execution and an idle workstream are always at a boundary, so those transfers complete immediately. If no boundary arrives within the transfer timeout, both parties see the stall and the controller (or Owner) may force-interrupt — an explicit, logged action that ends the current turn. Transfer is never silent and never mid-tool-call.
+**Safe execution boundary** — a point where the harness is awaiting input: turn complete, permission prompt pending, paused, or execution terminal. The runner, not the control plane, declares boundaries, because only the runner knows harness state. A paused execution and an idle workstream are always at a boundary, so those transfers complete immediately. If no boundary arrives within the transfer timeout, both parties see the stall and the controller (or Mission Admin) may force-interrupt — an explicit, logged action that ends the current turn. Transfer is never silent and never mid-tool-call.
 
 Rules that prevent deadlock and races:
 - The server validates every lease transition against current durable state (mechanics in [ARCHITECTURE.md](ARCHITECTURE.md#authorization)); two clients can never both believe they hold control.
-- The lease is a durable grant, not a connection. A disconnected controller still holds the lease until TTL expiry. On expiry the workstream has no controller: the execution pauses at its next boundary, every participant sees "no controller," and any participant with `control.request` may claim the lease: a claim is a ControlRequest made against an unheld lease, which the server fulfills immediately — first accepted wins. The Owner may revoke and reassign at any time.
+- The lease is a durable grant, not a connection. A disconnected controller still holds the lease until TTL expiry. On expiry the workstream has no controller: the execution pauses at its next boundary, every participant sees "no controller," and any participant with `control.request` may claim the lease: a claim is a ControlRequest made against an unheld lease, which the server fulfills immediately — first accepted wins. The Mission Admin may revoke and reassign at any time.
 - An accepted offer survives the recipient's disconnection; control is granted at the boundary regardless, because the grant is durable.
 - Simultaneous requests both stay open and visible; the controller chooses. A completed transfer closes all other open requests as `superseded`.
 
@@ -195,8 +210,13 @@ The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-prese
 | Pull request open | PR created/adopted; tracking checks, reviews, mergeability. |
 | Completed | Result accepted, PR resolved, receipt snapshotted. Terminal. |
 | Cancelled | Deliberately ended without acceptance; receipt records what happened and what was abandoned. Terminal. |
+| Execution interrupted | The runner or harness died mid-execution; last events preserved. Resume-or-restart is a human choice — a new execution in the same workstream continues the work. |
+| Execution stalled *(overlay)* | Watchdog timeout: the harness has made no progress and reached no boundary; force-interrupt is available and logged. |
+| Repository sync error *(overlay)* | The workspace cannot sync with GitHub — token expiry or revocation, force-push, or branch conflict with base. Human-visible remediation; never silent retries. |
 | Reconnecting *(overlay)* | This client lost its connection; room is stale until restored. |
 | Runner offline *(overlay)* | The runner's connection dropped; execution state is last-known; events will backfill on reconnect. |
+
+A harness that fails to start is not a separate state: it surfaces inside *Agent starting* as that state's error recovery.
 
 Every state presents at most one primary action — never two — defined per state in [DESIGN.md](DESIGN.md#state-presentation); states of unattended progress deliberately present none, and their next action arrives with the next state. Reopening a mission in a terminal state opens its history and receipt; terminal states never resume.
 
@@ -204,7 +224,7 @@ Every state presents at most one primary action — never two — defined per st
 
 The canonical 20-step narrative lives in [README.md](README.md#the-golden-v0-workflow). Elaboration by phase:
 
-1. **Open** (steps 1–4): Kartik authenticates, connects a repository through the org's GitHub App installation, creates a mission with a goal and success criteria, picks a harness. Mission: *New mission*. Kartik is Owner and holds the first workstream's lease by default.
+1. **Open** (steps 1–4): Kartik authenticates, connects a repository through the org's GitHub App installation (`org.repo.connect`), creates a mission with a goal and success criteria (`org.mission.create`), picks a harness. Mission: *New mission*. Kartik becomes the Mission Admin and holds the first workstream's lease by default.
 2. **Provision** (steps 5–6): the execution provider prepares a workspace (*Provisioning workspace* → *Ready for instruction*); Kartik's initial direction starts the first execution (*Agent starting* → *Agent running*).
 3. **Join** (steps 7–9): Maya redeems a mission invitation as Contributor. She sees the identical room state, reads the activity, and submits direction — which queues, visibly, attributed to her.
 4. **Handoff** (steps 10–13): Maya opens a ControlRequest; Kartik responds with a HandoffOffer; Maya accepts; the transfer completes at the next safe boundary. The room shows every step of that handshake.
@@ -222,7 +242,7 @@ The canonical 20-step narrative lives in [README.md](README.md#the-golden-v0-wor
 - Cloud execution via one Novus-managed execution provider is the default and the demo. The runner protocol is the conformance target that keeps local and enterprise runners possible; V0 does not ship them.
 - One workstream per mission created by default; additional workstreams and the approach flag exist in the data model, and creating them is possible but plain — the UI never pushes parallelism.
 - Three surfaces: Missions, Mission Room, Review ([DESIGN.md](DESIGN.md#information-architecture)).
-- Desktop and browser clients sharing one client architecture.
+- One client: a downloadable desktop application — an Electron shell over a single web-architecture client — like the tools teams already run agents in. Browser access is a later delivery of the same client, not a second codebase (D-018). "Two real clients" in the Golden V0 workflow means two people's desktop apps.
 
 ### Non-goals (hard lines, not priorities)
 

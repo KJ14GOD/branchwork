@@ -49,16 +49,18 @@ All application capabilities are **Not started**. The previous prototype was rem
 
 | Item | Status | Evidence |
 | --- | --- | --- |
-| Canonical documents (README, PRODUCT, DESIGN, ARCHITECTURE, PROGRESS, DECISIONS, AGENTS, CLAUDE symlink) | Implemented | Files exist at repository root; `CLAUDE.md` is a symlink (`ls -la CLAUDE.md`); link check in [AGENTS.md](AGENTS.md#the-repository-gate) passes |
-| Seed decision record | Implemented | [DECISIONS.md](DECISIONS.md) entries D-001 through D-015 |
+| Canonical documents (README, PRODUCT, DESIGN, ARCHITECTURE, PROGRESS, DECISIONS, AGENTS, CLAUDE symlink) | Implemented | Files exist at repository root; `CLAUDE.md` is a symlink (`ls -la CLAUDE.md`); `scripts/gate.sh` exits 0 (run 2026-08-01) |
+| Executable repository gate | Implemented | `scripts/gate.sh` exits non-zero on seeded violations and 0 on the current tree (run 2026-08-01; D-016) |
+| Decision record | Implemented | [DECISIONS.md](DECISIONS.md) entries D-001 through D-023, including vendor selections D-019–D-023 |
+| Harness feasibility — documentation-level | Implemented | Official-docs verification for Claude Code (headless, streaming, resume, permissions, auth) and Codex (exec/app-server, approvals, interrupt, auth), recorded with sources in D-017 |
 
 ## Known gaps
 
 - No application code, tests, build system, or dependencies exist.
-- No vendor has been selected for database, cloud sandbox provider, or realtime transport; interfaces are defined in [ARCHITECTURE.md](ARCHITECTURE.md), vendor picks are pending [DECISIONS.md](DECISIONS.md) entries.
-- The harness adapter contract is defined at the protocol level only; it has not been validated against the current CLI surfaces of Claude Code or Codex.
+- Harness feasibility is proven at documentation level only (D-017). The hands-on spike — install, authenticate, stream, steer, approve, and interrupt both CLIs in a real clean Linux workspace on the chosen sandbox provider (D-023) — has not run. The adapter contract is not frozen until it does.
 - The design token values in [DESIGN.md](DESIGN.md#tokens) have not been proven on a rendered screen; contrast ratios are calculated, not observed.
+- The gate's source-code checks (gradients, raw colors, PROGRESS staleness) are dormant until application code exists.
 
 ## Blocked
 
-Nothing is blocked. The next step is human review of this foundation, then scaffolding per [ARCHITECTURE.md](ARCHITECTURE.md).
+Nothing is blocked. The next step is the harness feasibility spike, then the first implementation slice: a thin vertical skeleton — authenticate one user, create one mission, persist it, reconstruct it after refresh — with no agents and no visual flourish.

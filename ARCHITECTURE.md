@@ -12,7 +12,7 @@ Novus is three planes with three trust levels. The planes are an isolation contr
 
 - **Control plane** — the durable collaborative product state: identity, organizations, missions, participants, capabilities, leases, direction, events, receipts, PR state. It is the only party trusted with org-wide state. It stores, relays, and authorizes. It **never executes**: no repository code, no harness binaries, no user-supplied commands, no git operations against customer code. If the control plane ever runs customer code, the isolation story is dead.
 - **Runner plane** — repositories, harnesses, commands, tests, and execution. A runner is **semi-trusted at best**: it executes model-generated code, so every runner is treated as potentially compromised from the moment an execution starts. Runners receive only short-lived, mission-scoped credentials and see nothing beyond their mission.
-- **Client plane** — desktop and browser experiences. Untrusted input, period. Clients render from server state and submit commands; they decide nothing privileged.
+- **Client plane** — the desktop application (and, later, browser delivery of the same client). Untrusted input, period. Clients render from server state and submit commands; they decide nothing privileged.
 
 ## Trust and security boundaries
 
@@ -121,7 +121,7 @@ Workspace contents at `ready`: repository checkout on a mission branch, dependen
 
 ### Control-transfer mechanics
 
-[PRODUCT.md](PRODUCT.md#control) defines the states; the mechanics are: the control plane marks the lease `releasing` and sends `report_boundary_request`; the runner acks at the next safe boundary (`boundary_reached`); the control plane completes the transfer by compare-and-swap and emits the events. When the workstream has no non-terminal execution it is already at a boundary: the transfer completes control-plane-side with no runner round-trip. Timeout without a boundary → the stall is visible, `force_interrupt` becomes available to the lease holder or Owner, and its use is a logged event. An un-acked transfer past its timeout reverts visibly; it never half-applies.
+[PRODUCT.md](PRODUCT.md#control) defines the states; the mechanics are: the control plane marks the lease `releasing` and sends `report_boundary_request`; the runner acks at the next safe boundary (`boundary_reached`); the control plane completes the transfer by compare-and-swap and emits the events. When the workstream has no non-terminal execution it is already at a boundary: the transfer completes control-plane-side with no runner round-trip. Timeout without a boundary → the stall is visible, `force_interrupt` becomes available to the lease holder or Mission Admin, and its use is a logged event. An un-acked transfer past its timeout reverts visibly; it never half-applies.
 
 ## Harness protocol
 
@@ -179,7 +179,7 @@ Named failure modes with defined behavior — these are contracts, not aspiratio
 
 ## Deployment modes
 
-- **V0**: Novus-hosted control plane; Novus-managed cloud runners on one sandbox provider; desktop and browser clients.
+- **V0**: Novus-hosted control plane; Novus-managed cloud runners on one sandbox provider; a downloadable desktop client (D-018).
 - **Kept-possible by the protocol (not shipped in V0)**: local runner (user's machine dials out — same protocol), enterprise runner (customer infrastructure dials out), third-party sandbox providers behind the execution-provider interface. The conformance suite ([Testing strategy](#testing-strategy)) is what keeps these honest.
 
 ## Observability

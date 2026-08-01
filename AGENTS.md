@@ -30,31 +30,11 @@ Last reviewed: 2026-08-01
 
 ## The repository gate
 
-Run from the repository root. All checks must pass. When application code exists, its build/test/lint commands are added here (and only here).
-
 ```bash
-# 1. Frontmatter present in every canonical doc
-for f in README.md PRODUCT.md DESIGN.md ARCHITECTURE.md PROGRESS.md DECISIONS.md AGENTS.md; do
-  for field in "Purpose:" "Authoritative for:" "Not authoritative for:" "Update when:" "Last reviewed:"; do
-    grep -q "^$field" "$f" || echo "MISSING $field in $f"
-  done
-done
-
-# 2. CLAUDE.md is a symlink to AGENTS.md
-[ -L CLAUDE.md ] && [ "$(readlink CLAUDE.md)" = "AGENTS.md" ] || echo "CLAUDE.md symlink broken"
-
-# 3. Internal links resolve
-grep -RhoE '\]\(([A-Za-z0-9._/-]+\.md)' *.md | sed -E 's/.*\(//' | sort -u \
-  | while read -r f; do [ -f "$f" ] || echo "BROKEN LINK: $f"; done
-
-# 4. No product truth outside canonical docs
-grep -rlE '^(Mission|Workstream|Execution|Direction|ControlLease|Receipt):' .claude/ skills/ 2>/dev/null \
-  && echo "Product definitions found outside canonical docs"
-
-# 5. No gradients (once source code exists)
-grep -rn 'linear-gradient\|radial-gradient\|conic-gradient' --include='*.css' --include='*.tsx' --include='*.ts' . 2>/dev/null \
-  && echo "Gradient found"
+scripts/gate.sh
 ```
+
+One command; it exits non-zero on any violation and `GATE PASS` / zero only when everything passes (D-016). It checks: frontmatter presence and order in every canonical doc; the CLAUDE.md symlink; a root-Markdown allowlist; internal file links and anchors; banned language; domain terms defined outside PRODUCT.md; product truth in skills or agent config; gradients and raw color values in application source; staged source changes lacking a PROGRESS.md update; and untracked files. When application code exists, its build, test, and lint commands are added to this script (and only there). A change is not complete until the gate passes.
 
 ## Reading order for common tasks
 

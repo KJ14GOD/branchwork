@@ -51,7 +51,7 @@ The first implementation is not complete until two real clients can execute this
 
 ## Repository map
 
-The repository currently contains only the documentation foundation. No application code exists yet; see [PROGRESS.md](PROGRESS.md).
+The repository currently contains the documentation foundation and its gate. No application code exists yet; see [PROGRESS.md](PROGRESS.md).
 
 | File | Owns |
 | --- | --- |
@@ -62,5 +62,6 @@ The repository currently contains only the documentation foundation. No applicat
 | [PROGRESS.md](PROGRESS.md) | Current status only, with evidence |
 | [DECISIONS.md](DECISIONS.md) | Append-only decision record |
 | [AGENTS.md](AGENTS.md) | Working rules for every implementation agent; `CLAUDE.md` is a symlink to it |
+| `scripts/gate.sh` | The executable repository gate ([AGENTS.md](AGENTS.md#the-repository-gate)) |
 
 Do not add root Markdown files without a recorded decision; see [AGENTS.md](AGENTS.md#rules).

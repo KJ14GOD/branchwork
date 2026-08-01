@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# The repository gate. Exits 0 only when every check passes.
+# Usage: scripts/gate.sh          (full check)
+# See AGENTS.md — this script is the required gate for every change.
+set -u
+cd "$(dirname "$0")/.."
+
+FAIL=0
+fail() { echo "GATE FAIL: $1"; FAIL=1; }
+
+CANON="README.md PRODUCT.md DESIGN.md ARCHITECTURE.md PROGRESS.md DECISIONS.md AGENTS.md"
+
+# 1. Frontmatter: five fields, present and in order, in every canonical doc.
+for f in $CANON; do
+  [ -f "$f" ] || { fail "missing canonical doc: $f"; continue; }
+  order=$(grep -nE '^(Purpose|Authoritative for|Not authoritative for|Update when|Last reviewed):' "$f" | head -5 | cut -d: -f2 | paste -sd'|' -)
+  [ "$order" = "Purpose|Authoritative for|Not authoritative for|Update when|Last reviewed" ] \
+    || fail "$f frontmatter fields missing or out of order"
+done
+
+# 2. CLAUDE.md is a symlink to AGENTS.md.
+{ [ -L CLAUDE.md ] && [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]; } || fail "CLAUDE.md is not a symlink to AGENTS.md"
+
+# 3. Root Markdown allowlist: no undecided root docs.
+for f in *.md; do
+  case " $CANON CLAUDE.md " in
+    *" $f "*) ;;
+    *) fail "root Markdown file not in canon: $f (requires a DECISIONS.md entry)";;
+  esac
+done
+
+# 4. Internal file links resolve.
+grep -RhoE '\]\([A-Za-z0-9._/-]+\.md' $CANON | sed -E 's/.*\(//' | sort -u | while read -r t; do
+  [ -f "$t" ] || echo "$t"
+done | while read -r broken; do fail "broken file link: $broken"; done
+# (subshell can't set FAIL; re-check)
+missing_links=$(grep -RhoE '\]\([A-Za-z0-9._/-]+\.md' $CANON | sed -E 's/.*\(//' | sort -u | while read -r t; do [ -f "$t" ] || echo "$t"; done)
+[ -z "$missing_links" ] || { echo "$missing_links" | sed 's/^/GATE FAIL: broken file link: /'; FAIL=1; }
+
+# 5. Internal anchors resolve (GitHub style: lowercase, spaces->hyphens, punctuation stripped).
+broken_anchors=$(grep -RnoE '\]\([A-Za-z0-9._/-]+\.md#[a-z0-9-]+\)' $CANON | sed -E 's/\]\(/ /; s/\)$//' | awk '{print $1, $2}' | \
+while read -r src target; do
+  file="${target%%#*}"; anchor="${target##*#}"
+  [ -f "$file" ] || continue
+  n=$(grep -iE '^#+ ' "$file" | sed -E 's/^#+ +//; s/[^a-zA-Z0-9 -]//g; s/ /-/g' | tr '[:upper:]' '[:lower:]' | grep -cx "$anchor")
+  [ "$n" -ge 1 ] || echo "$src -> $target"
+done)
+[ -z "$broken_anchors" ] || { echo "$broken_anchors" | sed 's/^/GATE FAIL: broken anchor: /'; FAIL=1; }
+
+# 6. Banned language (outside the lines that state the ban).
+banned=$(grep -rniE 'seamless|single pane of glass|ai-powered|supercharge your' $CANON | grep -viE 'language rules|banned|never "seamless"' || true)
+[ -z "$banned" ] || { echo "$banned" | sed 's/^/GATE FAIL: banned language: /'; FAIL=1; }
+
+# 7. Canonical terms defined only in PRODUCT.md (definition = bolded domain-model bullet).
+term_dups=$(grep -rlE '^- \*\*(Mission|Workstream|Execution|Direction|ControlLease|ControlRequest|HandoffOffer|Receipt|Participant|Capability|Harness|Runner|Workspace|Evidence|Artifact|Event)\*\*' \
+  $CANON .claude/ skills/ 2>/dev/null | grep -v '^PRODUCT.md$' || true)
+[ -z "$term_dups" ] || { echo "$term_dups" | sed 's/^/GATE FAIL: domain term defined outside PRODUCT.md: /'; FAIL=1; }
+
+# 8. No product truth in skills/agent config.
+truth_leak=$(grep -rlE '^(Mission|Workstream|Execution|Direction|ControlLease|Receipt):' .claude/ skills/ 2>/dev/null || true)
+[ -z "$truth_leak" ] || { echo "$truth_leak" | sed 's/^/GATE FAIL: product definitions outside canonical docs: /'; FAIL=1; }
+
+# 9. No gradients in source code (once it exists).
+grads=$(grep -rln 'linear-gradient\|radial-gradient\|conic-gradient' --include='*.css' --include='*.tsx' --include='*.ts' apps/ packages/ src/ 2>/dev/null || true)
+[ -z "$grads" ] || { echo "$grads" | sed 's/^/GATE FAIL: gradient in source: /'; FAIL=1; }
+
+# 10. No raw color values in component source (tokens only; token definition files exempt via 'tokens' in path).
+rawhex=$(grep -rlnE '#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(' --include='*.tsx' --include='*.ts' apps/ packages/ src/ 2>/dev/null | grep -v tokens || true)
+[ -z "$rawhex" ] || { echo "$rawhex" | sed 's/^/GATE FAIL: raw color value in component source: /'; FAIL=1; }
+
+# 11. Staged source changes require a PROGRESS.md update in the same change.
+staged=$(git diff --cached --name-only 2>/dev/null || true)
+if echo "$staged" | grep -qE '^(apps|packages|src)/'; then
+  echo "$staged" | grep -q '^PROGRESS.md$' || fail "staged source changes without a PROGRESS.md update"
+fi
+
+# 12. Untracked files: nothing sits in the repo undecided.
+untracked=$(git status --porcelain 2>/dev/null | grep '^??' | awk '{print $2}' || true)
+[ -z "$untracked" ] || { echo "$untracked" | sed 's/^/GATE FAIL: untracked file (track it or ignore it deliberately): /'; FAIL=1; }
+
+# 13. Build/test/lint hook: added here when application code exists (AGENTS.md owns this list).
+
+if [ "$FAIL" -eq 0 ]; then
+  echo "GATE PASS"
+  exit 0
+else
+  exit 1
+fi

@@ -44,7 +44,7 @@ Dark, restrained system. No decorative gradients, no neon, no glow, no glassmorp
 | `--edge` | `#FFFFFF` at 8% | Default border; 12% hover; 16% max, never above |
 | `--text-1` | `#ECEAE6` | Primary text (warm off-white) |
 | `--text-2` | `#A8A49D` | Secondary text (warm gray): metadata and labels only |
-| `--text-3` | `#7E7A73` | Faint: timestamps, disabled — never the sole carrier of information |
+| `--text-3` | `#918C84` | Faint: timestamps, disabled — never the sole carrier of information |
 | `--accent` | `#7A9BBF` | Dusty blue: active state, focus, control/baton. Pressed: `#6688AB` |
 | `--ok` | `#8FAE8B` | Muted sage: **verified evidence only** |
 | `--warn` | `#D9A47E` | Soft apricot: attention, incomplete verification |
@@ -150,11 +150,11 @@ The app shell never scrolls. Every surface declares which region owns overflow; 
 
 ### Responsive
 
-- Desktop app and browser share one layout system. ≥1200px: full shell. 900–1200px: sidebar collapses to an overlay. <900px (browser only): single-column room — state line, activity, composer; Changes and Verification become full-screen views. Nothing hides that answers the eight room questions ([PRODUCT.md](PRODUCT.md#multiplayer-behavior)); things reflow, they do not vanish.
+- One layout system for the desktop app's resizable window (the same client later ships in the browser). ≥1200px: full shell. 900–1200px: sidebar collapses to an overlay. <900px: single-column room — state line, activity, composer; Changes and Verification become full-screen views. Nothing hides that answers the eight room questions ([PRODUCT.md](PRODUCT.md#multiplayer-behavior)); things reflow, they do not vanish.
 
 ### Accessibility
 
-- Text contrast ≥4.5:1 against its surface for `--text-1` and `--text-2`; `--text-3` sits at the 4.5:1 floor and is restricted to timestamps and disabled labels, never the sole carrier of information. Status never conveyed by color alone (dot + text always); full keyboard operability; visible focus everywhere; `prefers-reduced-motion` honored; all interactive elements labeled for assistive tech; live-region announcements for state-line changes, control transfers, and approval requests.
+- Text contrast ≥4.5:1 for every text token on every surface it may appear on, including `--text-3` (`#918C84` ≈4.6:1 on `--surface-2`, higher on darker surfaces); `--text-3` additionally stays restricted to timestamps and disabled labels and is never the sole carrier of information. Token changes must re-verify these ratios. Status never conveyed by color alone (dot + text always); full keyboard operability; visible focus everywhere; `prefers-reduced-motion` honored; all interactive elements labeled for assistive tech; live-region announcements for state-line changes, control transfers, and approval requests.
 
 ### Keyboard
 
@@ -226,7 +226,7 @@ Keyed verbatim to [PRODUCT.md](PRODUCT.md#the-mission-state-model). Fields per s
 
 **Handoff offered** *(overlay)* — offer row addressed to recipient, Accept/Decline primary for them; expiry countdown as text.
 
-**Handoff waiting for boundary** *(overlay)* — state line appends "Handing control to {name} at the next safe point"; if the timeout passes: stall notice + Force interrupt (controller/Owner) with consequence stated.
+**Handoff waiting for boundary** *(overlay)* — state line appends "Handing control to {name} at the next safe point"; if the timeout passes: stall notice + Force interrupt (controller / Mission Admin) with consequence stated.
 
 **Paused** — "Paused by {name}." · Primary: Resume (controller) · Secondary: Stop · Canvas: feed frozen at pause point, marked · Composer: enabled (queues) · Evidence: current · Color: `--warn` dot, calm · Recovery: n/a.
 
@@ -242,9 +242,15 @@ Keyed verbatim to [PRODUCT.md](PRODUCT.md#the-mission-state-model). Fields per s
 
 **Pull request open** — "PR #{n} open — {checks/review summary}." · Primary: Open PR on GitHub · Secondary: Sync now · Canvas: PR readiness CheckRows + review state · Evidence: ledger + CI claims, attributed · Color: state-dependent per row · Recovery: sync failures inline with re-auth path.
 
-**Completed** — "Completed {date}. Receipt saved." · Primary: View receipt · Secondary: Reopen mission · Canvas: receipt · Composer: hidden · Color: neutral; `--ok` only inside the ledger · Recovery: n/a.
+**Completed** — "Completed {date}. Receipt saved." · Primary: View receipt · Secondary: View history · Canvas: receipt · Composer: hidden · Color: neutral; `--ok` only inside the ledger · Recovery: n/a. Terminal states never resume; every action here is read-only.
 
 **Cancelled** — "Cancelled by {name} {date}." · Primary: View receipt · Secondary: none · Canvas: receipt including what was abandoned · Color: neutral, not red — cancellation is an outcome, not a failure · Recovery: n/a.
+
+**Execution interrupted** — "{Harness} was interrupted." · Primary: Restart execution (a continuation in the same workstream) · Secondary: View last activity · Canvas: feed ending at a marked interruption point · Composer: enabled — direction queues for the next execution · Evidence: current, honestly partial · Color: `--warn` · Recovery: restart consumes the queue; nothing is lost. Missions surface: Needs you.
+
+**Execution stalled** *(overlay)* — state line appends "No progress for {duration}"; Force interrupt available to the lease holder / Mission Admin with consequence stated; `--warn` dot; every use logged to the feed.
+
+**Repository sync error** *(overlay)* — a notice row in Changes and the state line names the cause ("GitHub token expired", "branch conflicts with main"); primary for capability holders: View remediation (inspector with the error verbatim, mono); direction still queues; `--danger` on the sync row only, chrome stays calm.
 
 **Reconnecting** *(overlay)* — the notice bar (see Transient states): "Reconnecting — current as of {time}." Room read-only; composer disabled preserving draft; on restore, bar resolves and backfilled events land marked.
 
