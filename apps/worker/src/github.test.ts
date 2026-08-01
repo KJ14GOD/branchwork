@@ -222,3 +222,81 @@ test("only the newest run of each workflow counts", async () => {
   assert.equal(status.connected && status.verdict, "passing");
   assert.equal(status.connected && status.checks.length, 1);
 });
+
+test("a run against a different commit is stale, not the branch's verdict", async () => {
+  const status = await readGithubStatus(
+    "/tmp/repo",
+    // git rev-parse answers "current-head"; the run tested something else.
+    // This is the real shape found on this very repository: the workflow was
+    // deleted weeks ago and its last runs lingered, so the panel reported
+    // "CI failing" for code nothing had ever tested.
+    (command, args) => {
+      if (command === "git") {
+        return Promise.resolve({
+          stdout: args.includes("--abbrev-ref") ? "main\n" : "current-head\n",
+        });
+      }
+
+      const key = args.join(" ");
+
+      if (key.startsWith("repo view")) {
+        return Promise.resolve({ stdout: JSON.stringify({ nameWithOwner: "acme/widget" }) });
+      }
+
+      if (key.startsWith("run list")) {
+        return Promise.resolve({
+          stdout: JSON.stringify([
+            {
+              displayTitle: "two weeks ago",
+              status: "completed",
+              conclusion: "failure",
+              workflowName: "CI",
+              url: "u",
+              headSha: "an-old-commit",
+            },
+          ]),
+        });
+      }
+
+      return Promise.reject(new Error("no pr"));
+    },
+  );
+
+  // Not "failing". That verdict belongs to a commit nobody is looking at.
+  assert.equal(status.connected && status.verdict, "stale");
+});
+
+test("a run against the current commit is not stale", async () => {
+  const status = await readGithubStatus("/tmp/repo", (command, args) => {
+    if (command === "git") {
+      return Promise.resolve({
+        stdout: args.includes("--abbrev-ref") ? "main\n" : "current-head\n",
+      });
+    }
+
+    const key = args.join(" ");
+
+    if (key.startsWith("repo view")) {
+      return Promise.resolve({ stdout: JSON.stringify({ nameWithOwner: "acme/widget" }) });
+    }
+
+    if (key.startsWith("run list")) {
+      return Promise.resolve({
+        stdout: JSON.stringify([
+          {
+            displayTitle: "just now",
+            status: "completed",
+            conclusion: "success",
+            workflowName: "CI",
+            url: "u",
+            headSha: "current-head",
+          },
+        ]),
+      });
+    }
+
+    return Promise.reject(new Error("no pr"));
+  });
+
+  assert.equal(status.connected && status.verdict, "passing");
+});

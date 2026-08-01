@@ -91,13 +91,15 @@ const Verification = ({
               checks for has been verified by nothing — exactly as unproven as
               a run that skipped its tests.
             */}
-            {github.verdict === "none"
-              ? "No checks configured for this branch"
-              : github.verdict === "running"
-                ? `${github.checks.length} check(s) still running`
-                : github.verdict === "passing"
-                  ? `${github.checks.length} check(s) passed on GitHub`
-                  : `${github.checks.filter((check) => !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.state.toUpperCase())).length} of ${github.checks.length} check(s) not passing`}
+            {github.verdict === "stale"
+              ? "Checks last ran on a different commit — nothing has tested this code"
+              : github.verdict === "none"
+                ? "No checks configured for this branch"
+                : github.verdict === "running"
+                  ? `${github.checks.length} check(s) still running`
+                  : github.verdict === "passing"
+                    ? `${github.checks.length} check(s) passed on GitHub`
+                    : `${github.checks.filter((check) => !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.state.toUpperCase())).length} of ${github.checks.length} check(s) not passing`}
           </span>
           {github.pullRequest ? (
             <span className="evidence__meta">

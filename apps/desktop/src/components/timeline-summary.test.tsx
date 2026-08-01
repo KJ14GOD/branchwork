@@ -210,3 +210,27 @@ test("GitHub checks show before the agent has run anything", () => {
   assert.match(html, /not passing/);
   assert.doesNotMatch(html, /Tests not run/);
 });
+
+test("a stale check is never drawn as a failure or a pass", () => {
+  const html = renderToStaticMarkup(
+    <FileChangesPanel
+      state={{ files: [], additions: 0, deletions: 0, error: null, loading: false }}
+      diffs={new Map()}
+      verdict={null}
+      github={{
+        connected: true,
+        repository: "acme/widget",
+        pullRequest: null,
+        checks: [{ name: "CI", state: "FAILURE" }],
+        verdict: "stale",
+      }}
+    />,
+  );
+
+  // The real case: a workflow deleted weeks ago whose last runs linger. Its
+  // result belongs to a commit nobody is looking at, so it is an absence of
+  // evidence — dim, never red and never green.
+  assert.match(html, /different commit/);
+  assert.doesNotMatch(html, /evidence__line--fail/);
+  assert.doesNotMatch(html, /evidence__line--pass/);
+});

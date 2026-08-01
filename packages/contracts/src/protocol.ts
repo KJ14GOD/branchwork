@@ -501,8 +501,15 @@ export const GithubStatusSchema = z.union([
      * `none` is its own answer and is never folded into `passing`. A branch
      * nobody configured checks for has been verified by nothing, which is
      * exactly as unproven as a run that skipped its tests.
+     *
+     * `stale` is the trap this exists to name. Checks ran, but against a
+     * different commit than the branch is on now — including the case where
+     * the workflow has since been deleted and its last runs simply linger.
+     * A green run from two weeks ago says nothing about the code in front of
+     * you, and reporting it as the branch's state is the same lie as a tick
+     * on a suite that passed before the final edit.
      */
-    verdict: z.enum(["passing", "failing", "running", "none"]),
+    verdict: z.enum(["passing", "failing", "running", "none", "stale"]),
   }),
 ]);
 

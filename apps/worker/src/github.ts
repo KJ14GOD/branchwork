@@ -76,6 +76,11 @@ type CheckRun = {
   name: string;
   state: string;
   link?: string;
+  /**
+   * The commit a workflow run tested. Absent on a pull request's checks,
+   * which GitHub reports against the PR's head by construction.
+   */
+  headSha?: string;
 };
 
 type WorkflowRun = {
@@ -84,6 +89,8 @@ type WorkflowRun = {
   conclusion: string;
   workflowName: string;
   url: string;
+  /** The commit the run actually tested — not necessarily the branch's tip. */
+  headSha: string;
 };
 
 /**
@@ -119,6 +126,33 @@ const verdictOf = (checks: readonly CheckRun[]): Connected["verdict"] => {
       "failing";
 };
 
+/**
+ * Whether these checks describe the commit the branch is actually on.
+ *
+ * A run's result belongs to the commit it tested. When the newest run tested
+ * something else — an older commit, or a workflow that has since been deleted
+ * and whose last runs simply linger — its verdict says nothing about the code
+ * in front of you, and presenting it as the branch's state is the same lie as
+ * a tick on a suite that passed before the final edit.
+ *
+ * Only applies to workflow runs. A pull request's checks are reported by
+ * GitHub against the PR's head by construction, so they cannot drift this way.
+ */
+const staleness = (
+  checks: readonly { headSha?: string }[],
+  head: string,
+): Connected["verdict"] | null => {
+  if (head === "" || checks.length === 0) {
+    return null;
+  }
+
+  const tested = checks.filter((check) => check.headSha !== undefined);
+
+  return tested.length > 0 && tested.every((check) => check.headSha !== head)
+    ? "stale"
+    : null;
+};
+
 export const readGithubStatus = async (
   repositoryPath: string,
   runner: CommandRunner = ghRunner,
@@ -145,6 +179,10 @@ export const readGithubStatus = async (
     .then(({ stdout }) => stdout.trim())
     .catch(() => "");
 
+  const head = await runner("git", ["rev-parse", "HEAD"], repositoryPath)
+    .then(({ stdout }) => stdout.trim())
+    .catch(() => "");
+
   const pullRequest = await jsonOrNull<PullRequest>(
     runner,
     ["pr", "view", "--json", "number,title,url,state,isDraft"],
@@ -164,8 +202,8 @@ export const readGithubStatus = async (
       : ((await jsonOrNull<WorkflowRun[]>(
           runner,
           branch === ""
-            ? ["run", "list", "--limit", "10", "--json", "displayTitle,status,conclusion,workflowName,url"]
-            : ["run", "list", "--branch", branch, "--limit", "10", "--json", "displayTitle,status,conclusion,workflowName,url"],
+            ? ["run", "list", "--limit", "10", "--json", "displayTitle,status,conclusion,workflowName,url,headSha"]
+            : ["run", "list", "--branch", branch, "--limit", "10", "--json", "displayTitle,status,conclusion,workflowName,url,headSha"],
           repositoryPath,
         )) ?? [])
           // Newest run per workflow, not every run in the window. gh returns
@@ -185,6 +223,10 @@ export const readGithubStatus = async (
                 ? entry.conclusion.toUpperCase()
                 : "IN_PROGRESS",
             link: entry.url,
+            // Kept so a run against a different commit can be told apart from
+            // one against this one. Without it a workflow deleted weeks ago
+            // still reported its last result as the branch's current state.
+            headSha: entry.headSha,
           }));
 
   return {
@@ -205,6 +247,6 @@ export const readGithubStatus = async (
       state: check.state,
       ...(check.link ? { url: check.link } : {}),
     })),
-    verdict: verdictOf(checks),
+    verdict: staleness(checks, head) ?? verdictOf(checks),
   };
 };
