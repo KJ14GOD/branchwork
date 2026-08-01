@@ -36,6 +36,12 @@ html,
 body,
 #root {
   height: 100%;
+  /* The app is a fixed shell, not a document. Every pane that can overflow
+     scrolls on its own, so a scrollbar at the document level means something
+     has escaped its pane — and the composer, which must always be reachable,
+     is the first thing it pushes off the bottom. Clipping here turns that
+     from a silent layout leak into a visibly clipped pane, which is findable. */
+  overflow: hidden;
 }
 
 body {
@@ -246,6 +252,25 @@ button {
   border-color: var(--border-subtle);
   color: var(--text-dim);
   cursor: default;
+}
+
+/*
+ * The third tier: present, reachable, and visibly not the point.
+ *
+ * Refresh and Export sat in the same outlined button as Adopt, so a screen
+ * whose whole job is "there is one thing to do here" offered four things that
+ * looked equally like it. A quiet button keeps its hit area and loses its box.
+ */
+.button--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0 var(--space-3);
+}
+
+.button--quiet:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-raised);
 }
 
 .button--large {
@@ -609,11 +634,28 @@ kbd {
   min-width: 0;
 }
 
+/*
+ * The mission title over the repository it lives in.
+ *
+ * `align-items: stretch` is load-bearing, not a default left in by accident.
+ * This rule used to end with `align-items: center`, which in a column flex
+ * sizes each child to its own content and centres it — so at 1280 a 466px
+ * title inside a 148px column was centred and hung 147px off the left edge of
+ * the window, with the first third of the mission unreadable. Stretched, the
+ * title takes the column's width and its own overflow rule ellipsizes it.
+ */
 .session-bar__identity {
   display: flex;
-  align-items: center;
-  gap: var(--space-3);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  /* Both required: a flex item refuses to shrink below its content width
+     without min-width, and flex: 1 is what gives it a width to shrink to. */
   min-width: 0;
+  /* Three, not one. The flexible spacer after this also grows, so an even
+     split truncated the mission title at about 28 characters while a third of
+     the bar sat empty — the strongest text on the screen, cut for no reason. */
+  flex: 3;
 }
 
 .session-bar__repo {
@@ -828,22 +870,56 @@ kbd {
 
 .body {
   display: grid;
-  grid-template-columns: var(--rail-w) 1fr var(--files-w);
+  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--files-w);
   min-height: 0;
   min-width: 0;
+  /* Each column owns its own scrolling. Without this the tallest one sets the
+     row height and the whole body grows past the viewport, taking the
+     composer with it. */
+  overflow: hidden;
+}
+
+/*
+ * The canvas keeps the width; the inspector yields.
+ *
+ * Two fixed side columns against a 1fr middle means the canvas is whatever is
+ * left, and at 1280 that left it narrower than either rail — the decision, in
+ * the smallest space on screen. The inspector goes first because its content
+ * is a summary that survives being read later; the canvas is the thing being
+ * decided on.
+ */
+@media (max-width: 1400px) {
+  .body {
+    grid-template-columns: var(--rail-w) minmax(0, 1fr) 200px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .body {
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  }
+
+  .body > .files {
+    display: none;
+  }
 }
 
 /* Attempts replaces the timeline and the files panel both — a fork's changed
    files belong to CompareView's own per-attempt columns, not this session's
    panel, so the third column drops rather than sitting empty beside it. */
+/*
+ * Deliberately no longer a different grid. The Decision Room used to replace
+ * the body and drop the evidence inspector with it, which meant the screen
+ * showing the decision was the one screen without the evidence panel.
+ */
 .body--compare {
-  grid-template-columns: var(--rail-w) 1fr;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--files-w);
 }
 
 /* Rail | tree | viewer. The rail stays — goal, attempts and participants are
    still useful context while looking at a file. */
 .body--browse {
-  grid-template-columns: var(--rail-w) var(--tree-w) 1fr;
+  grid-template-columns: var(--rail-w) var(--tree-w) minmax(0, 1fr);
 }
 
 /* ---------- rail ----------
@@ -1362,6 +1438,32 @@ kbd {
 
 /* The grid's middle column in timeline mode: a scrollable event list plus a
    pinned composer below it, never both scrolling together. */
+/*
+ * The middle column: whichever view is active, plus the composer under it.
+ *
+ * The composer is a sibling of the view rather than part of it, which is what
+ * makes it survive a change of canvas. It used to live inside the timeline, so
+ * opening the Decision Room took direction away at the exact moment somebody
+ * most wants to say something about what they are looking at.
+ */
+.canvas {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* The scrolling half. Bounded so the composer below it is never pushed out. */
+.canvas__view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .timeline-column {
   display: flex;
   flex-direction: column;
@@ -3397,7 +3499,7 @@ select.open__input {
  * rail is to answer "what needs me" at a glance.
  */
 .spine__glyph--needs-attention {
-  color: var(--add);
+  color: var(--alert);
 }
 
 .spine__glyph--blocked {
@@ -3509,8 +3611,14 @@ select.open__input {
  * act. "Waiting for approaches to finish" is not a call to action and must not
  * look like one.
  */
+/*
+ * Amber, not green. Green is reserved for verified or recorded outcomes, and
+ * a decision waiting on a person is neither — it is the mission's unfinished
+ * business, and colouring it like a pass told the opposite story on the one
+ * screen that must not.
+ */
 .branch__node--pending .branch__node-label {
-  color: var(--add);
+  color: var(--alert);
 }
 
 /*
@@ -3627,4 +3735,161 @@ select.open__input {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+
+/* ---------- decision room ---------- */
+
+/*
+ * What this screen is, before anything you can click on it.
+ *
+ * The decision used to be announced by eleven-pixel type in the spine while
+ * the canvas showed a scrolling list of tool calls. This is the first thing
+ * the eye reaches, and when a decision is genuinely waiting it is the only
+ * accented thing on the screen.
+ */
+.decision-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex: none;
+  padding: var(--space-5) var(--space-6) var(--space-4);
+}
+
+.decision-head__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+
+.decision-head__state {
+  color: var(--text);
+  font-size: var(--text-screen);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
+}
+
+/*
+ * Amber, not green. Attention is not success — a decision waiting on somebody
+ * is unfinished business, and green here would read as "this went well" on a
+ * screen whose most common state is "nothing was verified".
+ */
+.decision-head--awaiting .decision-head__state {
+  color: var(--alert);
+}
+
+.decision-head__detail {
+  color: var(--text-muted);
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
+}
+
+.decision-head__utilities {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+}
+
+/* ---------- mission header ---------- */
+
+/*
+ * The strongest text on the screen. The bar opened with a filesystem path,
+ * so what the mission *is* was never stated and five missions in one
+ * repository opened identically.
+ */
+.mission-title {
+  color: var(--text);
+  font-size: var(--text-title);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 52ch;
+  min-width: 0;
+}
+
+/*
+ * Who is here and who holds the baton, said once.
+ *
+ * Replaces a "You in control" pill sitting beside a separate row of initial
+ * circles — control identity twice in the same 200 pixels, and neither half
+ * saying which of the faces was the controller.
+ */
+.authority {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.authority__faces {
+  display: flex;
+  align-items: center;
+}
+
+.authority__face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: -6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--surface);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+}
+
+/* The controller is the marked face, which is what makes the sentence beside
+   it redundant rather than contradictory. */
+.authority__face--holder {
+  background: var(--text-muted);
+  color: var(--bg);
+}
+
+.authority__face--away {
+  opacity: 0.45;
+}
+
+.authority__holder {
+  margin-left: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  white-space: nowrap;
+}
+
+/* Amber: somebody is waiting on a person, which is attention rather than
+   success. */
+.authority__waiting {
+  color: var(--alert);
+  font-size: var(--text-eyebrow);
+  white-space: nowrap;
+}
+
+/*
+ * A statement, not a heading over an empty region.
+ *
+ * The inspector drew an eleven-pixel eyebrow above each section, so a panel
+ * whose real content was one sentence carried two labels, two rules, and two
+ * mostly-empty regions. The title now *is* the answer — "Verification
+ * incomplete" — and the line under it says why.
+ */
+.evidence__title {
+  color: var(--text);
+  font-size: var(--text-small);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
+}
+
+.evidence__block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }

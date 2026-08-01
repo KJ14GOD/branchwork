@@ -91,6 +91,83 @@ export const ControlBaton = ({
   );
 };
 
+/**
+ * Who is here and who is holding the baton — one component, not two.
+ *
+ * The header carried a "You in control" pill *and* a separate row of initial
+ * circles, so control identity appeared twice in the same 200 pixels and
+ * neither told you which of the faces was the controller. Merged: the holder
+ * is the avatar that is marked, and the sentence beside it names them once.
+ */
+export const MissionAuthority = ({
+  authority,
+  participants,
+}: Pick<ControlProps, "authority" | "participants">) => {
+  const { you, controlHeldBy, controlOffer, controlRequests } = authority;
+
+  if (you === null && participants.length === 0) {
+    return null;
+  }
+
+  const holder =
+    controlHeldBy === null
+      ? "Nobody in control"
+      : controlHeldBy === you
+        ? "You have control"
+        : `${nameOf(participants, controlHeldBy)} has control`;
+
+  // Only one thing can be waiting, and an offer outranks a queue of requests:
+  // an offer names a person and expects an answer now.
+  const waiting =
+    controlOffer !== null
+      ? controlOffer.state === "accepted"
+        ? "handoff pending"
+        : "handoff offered"
+      : controlRequests.length > 0
+        ? `${controlRequests.length} asking`
+        : null;
+
+  return (
+    <div
+      className="authority"
+      title={
+        waiting
+          ? `${holder} · ${waiting} — see Control in the rail`
+          : "Who holds execution authority for this mission"
+      }
+    >
+      {participants.length > 0 ? (
+        <div className="authority__faces">
+          {participants.slice(0, 4).map((participant) => (
+            <span
+              key={participant.id}
+              className={[
+                "authority__face",
+                participant.id === controlHeldBy ? "authority__face--holder" : "",
+                participant.connected ? "" : "authority__face--away",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              title={`${participant.name} · ${participant.role}${
+                participant.id === controlHeldBy ? " · in control" : ""
+              }${participant.connected ? "" : " · not connected"}`}
+            >
+              {participant.name
+                .split(/\s+/)
+                .filter(Boolean)
+                .slice(0, 2)
+                .map((part) => part[0] ?? "")
+                .join("") || "?"}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <span className="authority__holder">{holder}</span>
+      {waiting ? <span className="authority__waiting">{waiting}</span> : null}
+    </div>
+  );
+};
+
 /** The rail section: the lifecycle, and whatever the viewer may do about it. */
 export const ControlPanel = ({
   authority,
@@ -117,14 +194,6 @@ export const ControlPanel = ({
   return (
     <div className="rail__section">
       <div className="eyebrow">Control</div>
-
-      <div className="control__held">
-        {controlHeldBy === null
-          ? "Nobody holds control."
-          : yoursToGive
-            ? "You are in control."
-            : `${nameOf(participants, controlHeldBy)} is in control.`}
-      </div>
 
       {controlOffer !== null ? (
         <div className="control__offer">

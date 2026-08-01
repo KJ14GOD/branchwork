@@ -11,8 +11,8 @@ import { CompareScreen } from "./components/compare-screen.tsx";
 import { DecisionSpine } from "./components/decision-spine.tsx";
 import { Composer } from "./components/composer.tsx";
 import {
-  ControlBaton,
   ControlPanel,
+  MissionAuthority,
   PendingDirection,
 } from "./components/control-panel.tsx";
 import { FileChangesPanel } from "./components/file-changes-panel.tsx";
@@ -234,6 +234,45 @@ export const SessionTab = ({
    * no verification state, and drawing an empty block for it is the
    * placeholder row this app has already been told to stop showing.
    */
+  /**
+   * Opens the Decision Room when a decision is what the mission is waiting on.
+   *
+   * The spine said "Approaches are waiting on you" in eleven-pixel type in the
+   * narrowest column on screen, while the largest area showed a scrolling list
+   * of tool calls. The work waiting for a person should not be something they
+   * have to click a tab to discover.
+   *
+   * Fires once per arrival at that state, not continuously: a host who looks
+   * at the decision and deliberately switches to Activity must be allowed to
+   * stay there. `answered` tracks the state rather than the click, so a second
+   * decision later in the same mission opens the room again.
+   */
+  const answeredDecision = useRef<string | null>(null);
+  const decisionPhase = phases.find((phase) => phase.key === "decision");
+  const needsDecision = decisionPhase?.status === "needs-attention";
+
+  useEffect(() => {
+    if (!needsDecision) {
+      answeredDecision.current = null;
+
+      return;
+    }
+
+    // Keyed on the approaches in play, so adopting one and forking again
+    // re-opens rather than staying quiet forever.
+    const key = (comparison.comparison?.attempts ?? [])
+      .map((attempt) => attempt.runId)
+      .join(",");
+
+    if (answeredDecision.current === key) {
+      return;
+    }
+
+    answeredDecision.current = key;
+    // Never yanks somebody out of the file browser mid-read.
+    setMode((current) => (current === "browse" ? current : "compare"));
+  }, [needsDecision, comparison.comparison]);
+
   const evidenceVerdict = useMemo(() => {
     const attempts = comparison.comparison?.attempts ?? [];
 
@@ -253,6 +292,7 @@ export const SessionTab = ({
       tests: testsRun === 0 ? null : testsPassed === testsRun,
       testsRun,
       testsPassed,
+      approaches: attempts.length,
       contested: comparison.comparison?.contestedPaths ?? [],
     };
   }, [comparison.comparison]);
@@ -291,6 +331,9 @@ export const SessionTab = ({
   const usage = useSessionUsage(endpoint, session.id, receiptCount);
 
   const run = events.find((event) => event.type === "run.started");
+  /** What this mission is about — the first run's goal, and the header's title. */
+  const missionGoal =
+    run?.type === "run.started" ? run.payload.run.goal : null;
   const completed = events.findLast((event) => event.type === "run.completed");
   const failed = events.findLast((event) => event.type === "run.failed");
   const cancelled = events.findLast((event) => event.type === "run.cancelled");
@@ -499,10 +542,15 @@ export const SessionTab = ({
             : failed
               ? "failed"
               : completed
-                ? "idle"
+                // STEERING is explicit that "Idle" is not a product state: it
+                // describes a process and answers none of the three questions
+                // a state has to — what is happening, does anyone need to act,
+                // what is next. A finished run is waiting on a person, and the
+                // decision spine beside this says which person and for what.
+                ? "waiting on you"
                 : run
                   ? "running"
-                  : "idle";
+                  : "ready";
 
   // Reports up to the tab strip. Deliberately keyed on the computed values,
   // not on `onStatus`'s identity — that is a fresh closure every render of
@@ -557,7 +605,16 @@ export const SessionTab = ({
   return (
     <div className="tab-content" style={{ display: active ? "grid" : "none" }}>
       <div className="session-bar">
+        {/*
+          The mission leads. This bar used to open with a filesystem path and
+          three permission chips, so the strongest thing on screen was where
+          the work lives rather than what it is — and five missions in one
+          repository opened identically.
+        */}
         <div className="session-bar__identity">
+          <span className="mission-title" title={missionGoal ?? undefined}>
+            {missionGoal ?? "Nothing asked yet"}
+          </span>
           <button
             className="session-bar__repo"
             type="button"
@@ -567,20 +624,7 @@ export const SessionTab = ({
             <span className="session-bar__repo-name">
               {basename(session.repositoryPath)}
             </span>
-            <span className="session-bar__repo-dir">
-              {dirname(session.repositoryPath)}
-            </span>
           </button>
-          {session.allowWrites ? (
-            <span className="chip chip--allow" title="The agent may apply patches">
-              Writes
-            </span>
-          ) : null}
-          {session.allowCommands ? (
-            <span className="chip chip--allow" title="The agent may run programs">
-              Commands
-            </span>
-          ) : null}
           {session.repositoryState !== "ready" ? (
             // Said at the top of the window, while there is still time to act
             // on it. This used to surface as a failure when you pressed Fork,
@@ -611,29 +655,21 @@ export const SessionTab = ({
               {run.payload.run.model.model}
             </span>
           ) : null}
-          <ControlBaton
+          {/* One component. Control identity used to appear twice here — a
+              pill saying who held it and a separate row of faces that did
+              not say which face that was. */}
+          <MissionAuthority
             authority={authority}
             participants={presence.participants}
           />
-          {presence.participants.length > 0 ? (
-            <div className="presence" title="Who has this session open right now">
-              {presence.participants.slice(0, 4).map((participant) => (
-                <span
-                  key={participant.id}
-                  className={`presence__avatar${participant.connected ? " presence__avatar--live" : ""}`}
-                  title={`${participant.name} · ${participant.role}${participant.connected ? " · watching now" : " · not connected"}`}
-                >
-                  {initials(participant.name)}
-                </span>
-              ))}
-            </div>
-          ) : null}
         </div>
 
         <div className="session-bar__actions">
           <div className="viewswitch" role="group" aria-label="View">
-            {viewOption("timeline", "Timeline")}
-            {viewOption("compare", "Attempts", attempts.length)}
+            {/* Decision first: it is the product, and it is what the mission is
+                usually waiting on. Activity is the record you consult. */}
+            {viewOption("compare", "Approaches", attempts.length)}
+            {viewOption("timeline", "Activity")}
             {/* "Browse", not "Files": the right-hand panel is already "Files changed",
                 and two things called Files in one bar is a puzzle, not a label. */}
             {host ? viewOption("browse", "Browse") : null}
@@ -661,13 +697,9 @@ export const SessionTab = ({
       </div>
 
       <div
-        className={
-          mode === "compare"
-            ? "body body--compare"
-            : mode === "browse"
-              ? "body body--browse"
-              : "body"
-        }
+        // Compare no longer needs a grid of its own: it is a canvas inside the
+        // same three columns as everything else.
+        className={mode === "browse" ? "body body--browse" : "body"}
       >
         <aside className="rail">
           <div className="rail__scroll">
@@ -684,19 +716,6 @@ export const SessionTab = ({
               phases={phases}
               onOpenApproaches={() => setMode("compare")}
             />
-          </div>
-
-          <div className="rail__section">
-            <div className="eyebrow">Goal</div>
-            <div
-              className={
-                run?.type === "run.started" ? "rail__goal" : "rail__goal rail__goal--empty"
-              }
-            >
-              {run?.type === "run.started"
-                ? run.payload.run.goal
-                : "Nothing asked yet. Use the composer below the timeline to begin."}
-            </div>
           </div>
 
           {busy && lastStarted?.type === "run.started" ? (
@@ -742,8 +761,8 @@ export const SessionTab = ({
           ) : null}
 
           {/*
-            Attempts, permanently. Branching a session, running competing
-            attempts and choosing between them on evidence is the product
+            Approaches, permanently. Branching a mission, running competing
+            approaches and choosing between them on evidence is the product
             thesis, and it used to be one word in the corner of this bar.
             Drawn from the /compare data useComparison already fetches for
             every tab, so this costs no extra request.
@@ -773,13 +792,18 @@ export const SessionTab = ({
               intention had two entry points that led to the same place and
               read as two different features.
             */}
-            <button
-              className="button attempt__cta"
-              type="button"
-              onClick={() => setMode("compare")}
-            >
-              {attempts.length === 0 ? "Try another approach" : "Compare approaches"}
-            </button>
+            {/* Hidden while that screen is already open: on the decision room
+                it was a third route to the view you are looking at, competing
+                with the one action the screen is asking for. */}
+            {mode === "compare" ? null : (
+              <button
+                className="button attempt__cta"
+                type="button"
+                onClick={() => setMode("compare")}
+              >
+                {attempts.length === 0 ? "Try another approach" : "Compare approaches"}
+              </button>
+            )}
           </div>
 
           {/*
@@ -904,24 +928,32 @@ export const SessionTab = ({
 
         </aside>
 
-        {mode === "compare" ? (
-          <main className="timeline timeline--compare">
-            <CompareScreen
-              state={comparison}
-              repositoryState={session.repositoryState}
-              endpoint={endpoint}
-              sessionId={session.id}
-              onClose={() => setMode("timeline")}
-            />
-          </main>
-        ) : mode === "browse" ? (
+        {mode === "browse" ? (
           <>
             <FileTree state={fileTree} />
             <FileViewer state={fileTree} />
           </>
         ) : (
           <>
-            <main className="timeline-column">
+            {/*
+              One canvas, two contents. The Decision Room used to replace the
+              whole body — composer and evidence inspector included — which
+              meant reaching a decision cost you the ability to say anything
+              and the panel showing what was verified. Swapping only the
+              middle keeps direction always available and the evidence beside
+              the thing it is evidence for.
+            */}
+            <main className="canvas">
+              <div className="canvas__view">
+                {mode === "compare" ? (
+                  <CompareScreen
+                    state={comparison}
+                    repositoryState={session.repositoryState}
+                    endpoint={endpoint}
+                    sessionId={session.id}
+                    onClose={() => setMode("timeline")}
+                  />
+                ) : (
               <div className="timeline">
                 {trulyEmpty ? (
                   <div className="empty empty--page">
@@ -977,6 +1009,8 @@ export const SessionTab = ({
                     onToggleGroup={toggleGroup}
                     group={filter === "all"}
                   />
+                )}
+              </div>
                 )}
               </div>
               <Composer

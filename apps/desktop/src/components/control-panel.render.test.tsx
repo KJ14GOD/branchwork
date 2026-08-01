@@ -5,7 +5,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { Authority } from "@novus/contracts/protocol";
 
-import { ControlBaton, ControlPanel, PendingDirection } from "./control-panel.tsx";
+import {
+  ControlBaton,
+  ControlPanel,
+  MissionAuthority,
+  PendingDirection,
+} from "./control-panel.tsx";
 import type { PresenceEntry } from "../use-presence.ts";
 
 /**
@@ -64,7 +69,10 @@ test("someone who does not hold control gets no handoff controls at all", () => 
 
   // What they can do is ask, and that is present.
   assert.match(html, /Request control/);
-  assert.match(html, /Kartik is in control/);
+
+  // Who holds it is *not* here any more: the header's MissionAuthority states
+  // it once, and the rail repeating it put control identity on screen twice.
+  assert.doesNotMatch(html, /is in control/);
 });
 
 test("a handoff is three states, and the middle one is said out loud", () => {
@@ -191,4 +199,45 @@ test("pending direction distinguishes queued from merely recorded", () => {
     queued.replace(/prefer the smaller change/, ""),
     recorded.replace(/and add a test/, ""),
   );
+});
+
+
+test("control identity is stated once, by the component that owns it", () => {
+  const html = renderToStaticMarkup(
+    <MissionAuthority
+      authority={authority({ you: GUEST, controlHeldBy: HOST })}
+      participants={people}
+    />,
+  );
+
+  // The header used to carry a "You in control" pill beside a separate row of
+  // initial circles: identity twice in the same 200 pixels, and neither half
+  // saying which face was the controller. One component, and the holder is the
+  // marked face.
+  assert.match(html, /Kartik has control/);
+  assert.match(html, /authority__face--holder/);
+  assert.equal(html.split("authority__face--holder").length - 1, 1);
+});
+
+test("a mission waiting on somebody says so in amber, not green", () => {
+  const html = renderToStaticMarkup(
+    <MissionAuthority
+      authority={authority({
+        controlRequests: [
+          {
+            eventId: "r-1",
+            participantId: GUEST,
+            reason: null,
+            requestedAt: "2026-07-31T00:00:00.000Z",
+          },
+        ],
+      })}
+      participants={people}
+    />,
+  );
+
+  // Attention is not success. Green here would read as "this went well" about
+  // a mission that is blocked on a person.
+  assert.match(html, /authority__waiting/);
+  assert.match(html, /1 asking/);
 });

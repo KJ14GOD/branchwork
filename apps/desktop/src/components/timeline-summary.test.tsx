@@ -119,13 +119,17 @@ test("the evidence panel never draws a tick for a run that tested nothing", () =
     <FileChangesPanel
       state={{ files: [], additions: 0, deletions: 0, error: null, loading: false }}
       diffs={new Map()}
-      verdict={{ tests: null, testsRun: 0, testsPassed: 0, contested: [] }}
+      verdict={{ approaches: 1, tests: null, testsRun: 0, testsPassed: 0, contested: [] }}
     />,
   );
 
   // The third place this rule has to hold, after the compare screen and the
   // exported receipt. "Finished" must never be readable as "verified".
-  assert.match(html, /Tests not run/);
+  // Asserting the rule rather than the sentence: what must never happen is a
+  // pass treatment on a run that verified nothing. The wording is allowed to
+  // improve; the treatment is not.
+  assert.match(html, /Verification incomplete/);
+  assert.match(html, /without running any tests/);
   assert.doesNotMatch(html, /evidence__line--pass/);
 });
 
@@ -134,7 +138,7 @@ test("a branch with no checks configured is never drawn as passing", () => {
     <FileChangesPanel
       state={{ files: [], additions: 0, deletions: 0, error: null, loading: false }}
       diffs={new Map()}
-      verdict={{ tests: true, testsRun: 3, testsPassed: 3, contested: [] }}
+      verdict={{ approaches: 1, tests: true, testsRun: 3, testsPassed: 3, contested: [] }}
       github={{
         connected: true,
         repository: "acme/widget",
@@ -156,7 +160,7 @@ test("checks passing on a branch is not the same as anyone agreeing to merge", (
     <FileChangesPanel
       state={{ files: [], additions: 0, deletions: 0, error: null, loading: false }}
       diffs={new Map()}
-      verdict={{ tests: null, testsRun: 0, testsPassed: 0, contested: [] }}
+      verdict={{ approaches: 1, tests: null, testsRun: 0, testsPassed: 0, contested: [] }}
       github={{
         connected: true,
         repository: "acme/widget",
@@ -177,7 +181,7 @@ test("a repository with no GitHub remote shows no check section at all", () => {
     <FileChangesPanel
       state={{ files: [], additions: 0, deletions: 0, error: null, loading: false }}
       diffs={new Map()}
-      verdict={{ tests: null, testsRun: 0, testsPassed: 0, contested: [] }}
+      verdict={{ approaches: 1, tests: null, testsRun: 0, testsPassed: 0, contested: [] }}
       github={{ connected: false, reason: "No GitHub connection." }}
     />,
   );
@@ -208,7 +212,6 @@ test("GitHub checks show before the agent has run anything", () => {
   // hid it until the first run, which read as the feature not working.
   assert.match(html, /Required checks/);
   assert.match(html, /not passing/);
-  assert.doesNotMatch(html, /Tests not run/);
 });
 
 test("a stale check is never drawn as a failure or a pass", () => {

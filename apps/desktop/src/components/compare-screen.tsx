@@ -124,6 +124,74 @@ export const CompareScreen = ({
   // with something on the screen, not the empty screen it used to be.
   const alternatives = count === 0 ? 0 : count - 1;
 
+  const attempts = state.comparison?.attempts ?? [];
+  const alternativeList = attempts.filter((attempt) => !attempt.baseline);
+  const firstAlternative = alternativeList[0];
+  const settled = alternativeList.every(
+    (attempt) => attempt.status !== "running" && attempt.status !== "paused",
+  );
+  /** A decision is genuinely waiting when alternatives exist and none is moving. */
+  const awaiting =
+    state.decision === null && alternativeList.length > 0 && settled;
+
+  /**
+   * What this screen is, said in two lines.
+   *
+   * The reader should get "two approaches ran, neither is verified, I have to
+   * decide" without reading a card. Verification leads the detail because it
+   * is the thing most likely to be assumed and least likely to be true — an
+   * approach that finished having tested nothing is the state every other
+   * surface renders as success.
+   */
+  const unverified = alternativeList.filter(
+    (attempt) => attempt.status === "completed" && attempt.green === null,
+  ).length;
+  const failed = alternativeList.filter(
+    (attempt) => attempt.status === "failed",
+  ).length;
+
+  const headline = awaiting
+    ? {
+        state: "Decision required",
+        detail:
+          failed === alternativeList.length && failed > 0
+            ? `${alternativeList.length === 1 ? "The approach" : `All ${alternativeList.length} approaches`} failed. Read why, then decide what happens next.`
+            : unverified === alternativeList.length
+              ? `${alternativeList.length === 1 ? "One approach" : `${alternativeList.length} approaches`} finished without running any tests. Nothing here is verified.`
+              : unverified > 0
+                ? `${alternativeList.length} approaches ran · ${unverified} of them verified nothing.`
+                : `${alternativeList.length} approaches ran. Compare the evidence, not the summaries.`,
+      }
+    : state.decision !== null
+      ? {
+          state:
+            state.decision.kind === "revision"
+              ? "Revision requested"
+              : state.decision.kind === "exploration"
+                ? "Still exploring"
+                : "Decision recorded",
+          detail:
+            state.decision.outcome.applied
+              ? "Applied to the working tree."
+              : "Recorded. Nothing was written.",
+        }
+      : alternativeList.some((attempt) => attempt.status === "running")
+        ? {
+            state: "Approaches running",
+            detail: "Nothing to decide until they finish.",
+          }
+        : count === 0
+          ? {
+              state: "Nothing has run yet",
+              detail:
+                "Ask for something in the composer below, then branch it to compare approaches.",
+            }
+          : {
+              state: "One approach",
+              detail:
+                "The current work, with no alternative beside it yet. Another one starts from the same recorded checkpoint.",
+            };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
 
@@ -145,59 +213,60 @@ export const CompareScreen = ({
 
   return (
     <div className="compare-screen">
-      <header className="compare-screen__bar">
-        <div className="compare-screen__heading">
-          <span className="compare-screen__title">Approaches</span>
-          <span className="compare-screen__subtitle">
-            {count === 0
-              ? "Nothing has run yet. Every approach starts from the same recorded checkpoint and runs in its own worktree, so they cannot disturb each other."
-              : alternatives === 0
-                ? "The current work, with no alternative beside it yet. An approach starts from the same recorded checkpoint and runs in its own worktree, so it cannot disturb this one."
-                : `${count} approaches · decide on the evidence, not the summary`}
-          </span>
+      {/*
+        The state of the decision, in the first thing the eye reaches.
+        Everything that is not the decision — refreshing, exporting, starting
+        another approach — is a utility and reads like one. There is one
+        dominant action on this screen at a time.
+      */}
+      <header
+        className={
+          awaiting
+            ? "decision-head decision-head--awaiting"
+            : "decision-head"
+        }
+      >
+        <div className="decision-head__main">
+          <span className="decision-head__state">{headline.state}</span>
+          <span className="decision-head__detail">{headline.detail}</span>
         </div>
-        <span className="titlebar__spacer" />
-        <button
-          className="button"
-          type="button"
-          onClick={state.refresh}
-          disabled={state.loading}
-        >
-          {state.loading ? "Reading…" : "Refresh"}
-        </button>
-        {/*
-          The evidence outlives the window. Everything on this screen used to
-          vanish with the tab, leaving a diff in somebody's tree with no record
-          of what it was chosen over or why.
-        */}
-        <button
-          className="button"
-          type="button"
-          disabled={exporting || count === 0}
-          onClick={() => void exportReceipt()}
-        >
-          {exporting ? "Exporting…" : "Export receipt"}
-        </button>
-        <button className="button" type="button" onClick={onClose}>
-          Back to timeline
-        </button>
-      </header>
 
-      <form className="compare-screen__fork" onSubmit={submit}>
-        <input
-          className="open__input"
-          value={intent}
-          onChange={(event) => setIntent(event.target.value)}
-          placeholder="What should this approach do differently? — e.g. preserve backward compatibility"
-        />
-        <button
-          className="button button--primary"
-          type="submit"
-          disabled={forking || intent.trim() === ""}
-        >
-          {forking ? "Starting…" : "Try another approach"}
-        </button>
-      </form>
+        {awaiting && firstAlternative ? (
+          <button
+            className="button button--primary button--large"
+            type="button"
+            onClick={() =>
+              setDeciding({ runId: firstAlternative.runId, kind: "adopt" })
+            }
+          >
+            Record a decision
+          </button>
+        ) : null}
+
+        <div className="decision-head__utilities">
+          <button
+            className="button button--quiet"
+            type="button"
+            onClick={state.refresh}
+            disabled={state.loading}
+          >
+            {state.loading ? "Reading…" : "Refresh"}
+          </button>
+          {/*
+            The evidence outlives the window. Everything on this screen used to
+            vanish with the tab, leaving a diff in somebody's tree with no
+            record of what it was chosen over or why.
+          */}
+          <button
+            className="button button--quiet"
+            type="button"
+            disabled={exporting || count === 0}
+            onClick={() => void exportReceipt()}
+          >
+            {exporting ? "Exporting…" : "Export receipt"}
+          </button>
+        </div>
+      </header>
 
       {repositoryState !== "ready" ? (
         // Concrete, because the remedy is two commands and Novus deliberately
@@ -370,6 +439,28 @@ export const CompareScreen = ({
             </button>
           </div>
         ) : null}
+
+        {/*
+          Below the evidence on purpose. Starting another approach is a real
+          answer, but it is the answer you reach after reading what the
+          current ones did — at the top of the screen it competed with the
+          decision for the same attention and won by being first.
+        */}
+        <form className="compare-screen__fork" onSubmit={submit}>
+          <input
+            className="open__input"
+            value={intent}
+            onChange={(event) => setIntent(event.target.value)}
+            placeholder="What should another approach do differently? — e.g. preserve backward compatibility"
+          />
+          <button
+            className="button"
+            type="submit"
+            disabled={forking || intent.trim() === ""}
+          >
+            {forking ? "Starting…" : "Try another approach"}
+          </button>
+        </form>
 
         {state.decision ? (
           // Says exactly what the apply step did, since choosing and applying

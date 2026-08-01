@@ -179,9 +179,20 @@ const waitForWorker = async (url: string): Promise<boolean> => {
 };
 
 const createWindow = (): void => {
+  // Dev-only, and it exists because there was no other way to check the
+  // layout at a size other than this default: Electron does not expose CDP's
+  // Browser.setWindowBounds, and Emulation metric overrides resize the
+  // screenshot without resizing the layout — so "verified at three viewports"
+  // silently meant one viewport measured three times.
+  const forced = (process.env.NOVUS_WINDOW_SIZE ?? "")
+    .split("x")
+    .map((value) => Number.parseInt(value, 10));
+  const forcedWidth = forced[0] ?? Number.NaN;
+  const forcedHeight = forced[1] ?? Number.NaN;
+
   window = new BrowserWindow({
-    width: 1280,
-    height: 840,
+    width: forcedWidth > 0 ? forcedWidth : 1280,
+    height: forcedHeight > 0 ? forcedHeight : 840,
     minWidth: 900,
     minHeight: 600,
     backgroundColor: "#0a0a0b",

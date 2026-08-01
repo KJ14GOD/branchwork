@@ -49,34 +49,49 @@ const Verification = ({
   return (
     <div className="evidence">
       {verdict === null ? null : (
-        <>
-      <span className="eyebrow">Verification</span>
-      <span
-        className={
-          verdict.tests === null
-            ? "evidence__line evidence__line--unknown"
-            : verdict.tests
-              ? "evidence__line evidence__line--pass"
-              : "evidence__line evidence__line--fail"
-        }
-      >
-        {/*
-          Never a tick for a run that tested nothing. This is the same rule the
-          compare screen and the exported receipt keep, in the third place a
-          person could otherwise read "finished" as "verified".
-        */}
-        {verdict.tests === null
-          ? "Tests not run — nothing here is verified"
-          : verdict.tests
-            ? `Tests passed (${verdict.testsRun})`
-            : `Tests failing (${verdict.testsPassed} of ${verdict.testsRun})`}
-      </span>
-        </>
+        <div className="evidence__block">
+          <span className="evidence__title">
+            {/*
+              One statement, not a heading over an empty region. The panel used
+              to draw a "Verification" eyebrow and a "Files changed" eyebrow
+              over two mostly-empty sections, which is more chrome than
+              content — and the most common real answer, "nothing was
+              verified", was the one it stated least clearly.
+            */}
+            {verdict.tests === null
+              ? "Verification incomplete"
+              : verdict.tests
+                ? "Verified"
+                : "Verification failing"}
+          </span>
+          <span
+            className={
+              verdict.tests === null
+                ? "evidence__line evidence__line--unknown"
+                : verdict.tests
+                  ? "evidence__line evidence__line--pass"
+                  : "evidence__line evidence__line--fail"
+            }
+          >
+            {/*
+              Never a tick for a run that tested nothing. The same rule the
+              decision room and the exported receipt keep, in the third place
+              a person could otherwise read "finished" as "verified".
+            */}
+            {verdict.tests === null
+              ? verdict.approaches > 1
+                ? `All ${verdict.approaches} approaches finished without running any tests.`
+                : "This approach finished without running any tests."
+              : verdict.tests
+                ? `${verdict.testsRun} test run(s) passed.`
+                : `${verdict.testsPassed} of ${verdict.testsRun} test run(s) passed.`}
+          </span>
+        </div>
       )}
 
       {github?.connected ? (
         <>
-          <span className="eyebrow">Required checks</span>
+          <span className="evidence__title">Required checks</span>
           <span
             className={`evidence__line evidence__line--${
               github.verdict === "passing"
@@ -118,7 +133,7 @@ const Verification = ({
 
       {verdict !== null && verdict.contested.length > 0 ? (
         <>
-          <span className="eyebrow">Contested files</span>
+          <span className="evidence__title">Contested changes</span>
           {verdict.contested.map((path) => (
             <span className="evidence__path" key={path}>
               {path}
@@ -131,6 +146,8 @@ const Verification = ({
 };
 
 export type EvidenceVerdict = {
+  /** How many approaches this summarises, so the copy can say "all of them". */
+  approaches: number;
   /** Null when nothing ran — not the same as failing, and never the same as passing. */
   tests: boolean | null;
   testsRun: number;
@@ -160,7 +177,7 @@ export const FileChangesPanel = ({
       <Verification verdict={verdict} github={github} />
 
       <div className="files__head">
-        <span className="eyebrow">Files changed</span>
+        <span className="evidence__title">Changed files</span>
         {state.files.length > 0 ? (
           <span className="files__totals">
             <span className="stat__add">+{state.additions}</span>{" "}
