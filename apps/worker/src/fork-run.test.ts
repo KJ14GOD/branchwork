@@ -733,7 +733,10 @@ test("forks and their evidence survive a worker restart, and the decision still 
     // list it.
     const decision = await postJson<{
       decision: { runId: string; outcome: { applied: boolean } };
-    }>(serverB.url, `/sessions/${sessionId}/decision`, { runId });
+    }>(serverB.url, `/sessions/${sessionId}/decision`, {
+      runId,
+      rationale: "It rebuilt the index in place, which is what the parent needed.",
+    });
 
     assert.equal(decision.decision.runId, runId);
     assert.equal(decision.decision.outcome.applied, true);
@@ -1158,6 +1161,7 @@ test("a fork whose worktree was deleted keeps its evidence, and the decision ref
     // parent's tree is untouched.
     const decision = await post(serverB.url, `/sessions/${sessionId}/decision`, {
       runId,
+      rationale: "Chosen on its diff, before the checkout went missing.",
     });
 
     assert.equal(decision.status, 404);
@@ -1461,7 +1465,10 @@ test("attempts a decision resolved are reclaimed at the next open; undecided and
 
     const decision = await postJson<{
       decision: { outcome: { applied: boolean } };
-    }>(serverA.url, `/sessions/${session.id}/decision`, { runId: chosenId });
+    }>(serverA.url, `/sessions/${session.id}/decision`, {
+      runId: chosenId,
+      rationale: "This one keeps the parser's error positions intact.",
+    });
 
     assert.equal(decision.decision.outcome.applied, true);
 
@@ -1538,6 +1545,117 @@ test("attempts a decision resolved are reclaimed at the next open; undecided and
         ?.filesChanged.length,
       1,
     );
+  } finally {
+    await serverB.close();
+    await cleanup(root);
+  }
+});
+
+/**
+ * Test 11b. Keeping the baseline collects nothing.
+ *
+ * The reclamation policy deletes attempts that an *applied* decision resolved,
+ * because their work exists only in their checkouts and an applied decision is
+ * the one event that proves somebody looked and moved on. Selecting the
+ * baseline writes nothing — that is the whole point of it — so it must not
+ * trip the sweep. Getting this wrong is not a rendering bug: it destroys every
+ * alternative's only copy of its work on a decision that touched no files.
+ *
+ * The outcome shape is what makes it easy to get wrong. `applied` is no longer
+ * a boolean, and `"unnecessary"` is truthy, so a policy that had kept reading
+ * the value directly would have swept the whole round.
+ */
+test("choosing the baseline resolves the comparison without collecting any attempt", async () => {
+  const root = await repository();
+  const store = new InMemorySessionEventStore();
+  const forkRoot = join(dirname(root), ".novus-forks", basename(root));
+  const sessionBox = { id: "" };
+  let losingId = "";
+
+  const serverA = await startWorker(store, [
+    new GoalScriptedAdapter({
+      "Change it differently": editsAnswer("not chosen\n", "The other way."),
+    }),
+  ]);
+
+  try {
+    const session = await openSession(serverA.url, {
+      repositoryPath: root,
+      allowWrites: true,
+    });
+
+    sessionBox.id = session.id;
+
+    // The parent turn the attempt is an alternative to. Driven into the store
+    // rather than scripted: what the baseline run *did* is irrelevant here,
+    // only that the comparison has one to call the baseline.
+    store.append({
+      sessionId: session.id,
+      actorId: "agent-1",
+      type: "run.started",
+      payload: {
+        run: {
+          id: "run-parent",
+          sessionId: session.id,
+          goal: "The work already in the tree",
+          status: "running",
+          startedBy: "agent-1",
+          model: SELECTION,
+          createdAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    losingId = (
+      await forkSession(
+        serverA.url,
+        session.id,
+        "Losing",
+        "Change it differently",
+      )
+    ).fork.runId;
+
+    assert.equal(await waitForRunEnd(store, session.id, losingId), null);
+
+    const decision = await postJson<{
+      decision: { target: string; outcome: { applied: boolean | string } };
+    }>(serverA.url, `/sessions/${session.id}/decision`, {
+      runId: "run-parent",
+      rationale: "The alternative changed more than the problem warranted.",
+    });
+
+    assert.equal(decision.decision.target, "baseline");
+    assert.equal(decision.decision.outcome.applied, "unnecessary");
+  } finally {
+    await serverA.close();
+  }
+
+  const serverB = await startWorker(store, [new GoalScriptedAdapter({})]);
+
+  try {
+    await openSession(serverB.url, {
+      repositoryPath: root,
+      resume: sessionBox.id,
+      allowWrites: true,
+    });
+
+    // The sweep ran at this open. The rejected alternative's checkout is the
+    // only place its work exists, and no decision applied anything, so the
+    // conservative policy leaves it exactly where it was.
+    assert.ok(
+      await stat(join(forkRoot, losingId)).then(
+        () => true,
+        () => false,
+      ),
+      "keeping the baseline deleted an alternative's only copy of its work",
+    );
+
+    const list = await git(root, ["worktree", "list", "--porcelain"]);
+    assert.ok(list.stdout.includes(`/${losingId}`));
+
+    // And the parent's tree was never written to, which is what "already in
+    // the working tree" claims.
+    assert.equal(await readFile(join(root, "answer.txt"), "utf8"), "parent\n");
   } finally {
     await serverB.close();
     await cleanup(root);

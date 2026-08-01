@@ -5,6 +5,8 @@ import {
   type ServerResponse,
 } from "node:http";
 
+import { z } from "zod";
+
 import type { SessionEvent } from "@novus/contracts";
 import type { Authority } from "@novus/contracts/protocol";
 import {
@@ -31,7 +33,7 @@ import {
   type ParticipantRegistry,
 } from "./participants.ts";
 import { applyDecision } from "./apply-decision.ts";
-import { compareAttempts } from "./compare.ts";
+import { compareAttempts, forksFromLog } from "./compare.ts";
 import { projectSession } from "./projection.ts";
 import { readGithubStatus } from "./github.ts";
 import { exportReceipt } from "./receipt-export.ts";
@@ -102,6 +104,28 @@ const sendJson = (
   response
     .writeHead(status, { "content-type": "application/json" })
     .end(JSON.stringify(payload));
+};
+
+/**
+ * Why a decision was refused at the boundary, in words the sender can act on.
+ *
+ * The route answered every malformed body with "A runId is required", which was
+ * the only way it could be malformed when it had one field. Now that the
+ * rationale is enforced here rather than in React, that message would tell
+ * somebody who wrote three words that their run id was wrong.
+ */
+const decisionRequestRefusal = (error: z.ZodError): string => {
+  const rationale = error.issues.find(
+    (issue) => issue.path[0] === "rationale",
+  );
+
+  if (rationale) {
+    return rationale.code === "invalid_type"
+      ? "A decision needs a rationale: why this, in a sentence somebody who was not here can read."
+      : `A decision needs a rationale of at least 12 characters — ${rationale.message.toLowerCase()}.`;
+  }
+
+  return "A runId is required.";
 };
 
 export type EventServer = {
@@ -1119,19 +1143,11 @@ export const startEventServer = (
       // parentRunId comes along now: it is what lets the comparison include the
       // execution the forks branched from, rather than showing alternatives
       // with nothing to be alternatives to.
-      const forks = events.flatMap((event) =>
-        event.type === "fork.created"
-          ? [
-              {
-                runId: event.payload.fork.runId,
-                label: event.payload.fork.label,
-                parentRunId: event.payload.fork.parentRunId,
-              },
-            ]
-          : [],
+      sendJson(
+        response,
+        200,
+        compareAttempts(session.id, events, forksFromLog(events)),
       );
-
-      sendJson(response, 200, compareAttempts(session.id, events, forks));
       return true;
     }
 
@@ -1314,9 +1330,30 @@ export const startEventServer = (
       const parsed = DecisionRequestSchema.safeParse(await readJsonBody(request));
 
       if (!parsed.success) {
-        sendJson(response, 400, { error: "A runId is required." });
+        // Named per field rather than "A runId is required", which was the
+        // answer to every rejection and is now wrong for most of them. A
+        // rationale refused at the boundary has to say so, or the person
+        // typing one gets told their run id is bad.
+        sendJson(response, 400, {
+          error: decisionRequestRefusal(parsed.error),
+        });
         return true;
       }
+
+      // The comparison, not just the fork handles. Which run is the baseline is
+      // derived here and nowhere else, so asking it the same question the
+      // compare screen asked is what keeps the two from disagreeing about what
+      // the person was looking at when they decided.
+      const decisionEvents = store.list(session.id);
+      const decisionForks = forksFromLog(decisionEvents);
+      const comparison = compareAttempts(
+        session.id,
+        decisionEvents,
+        decisionForks,
+      );
+      const chosen = comparison.attempts.find(
+        (attempt) => attempt.runId === parsed.data.runId,
+      );
 
       // The worktree manager holds the live handles — populated at fork
       // creation in this process, or re-adopted from the log when the
@@ -1325,12 +1362,42 @@ export const startEventServer = (
       // already covers.
       const handle = session.worktrees.get(parsed.data.runId);
 
-      if (!handle) {
+      /**
+       * Choosing the work that is already in the parent's tree.
+       *
+       * This route resolved every decision through the worktree manager, so
+       * the one approach with no worktree — the baseline — could not be
+       * chosen at all, and the screen said as much: "keeping it needs no
+       * decision". That was true of the plumbing and false of the product.
+       * Deciding that the current work is the right answer is a decision, and
+       * a mission whose history cannot say a human made it is missing the
+       * only part that mattered.
+       *
+       * A fork is never the baseline — `compareAttempts` flags the baseline
+       * only for a run that is not among the forks — so these two cannot both
+       * be true and there is no precedence to get wrong.
+       */
+      const baseline = handle === undefined && chosen?.baseline === true;
+
+      if (!handle && !baseline) {
         sendJson(response, 404, {
           error: "That attempt is not a fork of this session, or it was already removed.",
         });
         return true;
       }
+
+      const decidedRunId = handle?.fork.runId ?? parsed.data.runId;
+      /**
+       * What made this the baseline: the checkpoint its alternatives were cut
+       * from. Undefined only when nothing was ever forked, where there is no
+       * shared starting point to name and inventing one would be a worse
+       * record than an absent field.
+       */
+      const decidedCheckpointId =
+        handle?.fork.checkpointId ?? decisionForks.at(-1)?.checkpointId;
+      const alternatives = comparison.attempts
+        .filter((attempt) => attempt.runId !== decidedRunId)
+        .map((attempt) => attempt.runId);
 
       const kind = parsed.data.kind ?? "adopt";
 
@@ -1353,34 +1420,51 @@ export const startEventServer = (
                   : "Further exploration requested — no approach was applied.",
               conflicts: [],
             }
-          : !session.allowWrites
-            ? {
-                applied: false as const,
+          : baseline
+            ? // Not a write, not a failed write. The baseline's changes are
+              // already in the parent's working tree — that is what makes it
+              // the baseline — so there is nothing to apply and nothing went
+              // wrong. Reporting `applied: true` with an empty file list would
+              // claim a write that never happened; reporting `applied: false`
+              // is drawn as a refusal everywhere it lands.
+              {
+                applied: "unnecessary" as const,
                 reason:
-                  "Writes are not enabled for this session, so the chosen attempt was recorded but not applied.",
-                conflicts: [],
+                  "The current work is already in the working tree, so nothing needed to be written.",
               }
-            : await applyDecision(
-                session.repositoryPath,
-                session.worktrees,
-                parsed.data.runId,
-              ).catch((error: unknown) => ({
-                applied: false as const,
-                reason: (error as Error).message,
-                conflicts: [],
-              }));
+            : !session.allowWrites
+              ? {
+                  applied: false as const,
+                  reason:
+                    "Writes are not enabled for this session, so the chosen attempt was recorded but not applied.",
+                  conflicts: [],
+                }
+              : await applyDecision(
+                  session.repositoryPath,
+                  session.worktrees,
+                  parsed.data.runId,
+                ).catch((error: unknown) => ({
+                  applied: false as const,
+                  reason: (error as Error).message,
+                  conflicts: [],
+                }));
 
       const event = store.append({
         sessionId: session.id,
+        // The decider. Already the envelope's job, so it is not repeated in the
+        // payload: a second copy is a second thing that can disagree with the
+        // log about who acted.
         actorId: caller?.participant.id ?? "host",
         type: "decision.recorded",
         payload: {
-          runId: handle.fork.runId,
-          checkpointId: handle.fork.checkpointId,
-          kind,
-          ...(parsed.data.rationale
-            ? { rationale: parsed.data.rationale }
+          runId: decidedRunId,
+          target: baseline ? ("baseline" as const) : ("attempt" as const),
+          ...(decidedCheckpointId
+            ? { checkpointId: decidedCheckpointId }
             : {}),
+          alternatives,
+          kind,
+          rationale: parsed.data.rationale,
           outcome,
         },
       });
@@ -1401,21 +1485,25 @@ export const startEventServer = (
 
       if (kind === "revision") {
         try {
-          const original = store.list(session.id).findLast(
+          const original = decisionEvents.findLast(
             (candidate) =>
               candidate.type === "checkpoint.created" &&
-              candidate.payload.checkpoint.id === handle.fork.checkpointId,
+              candidate.payload.checkpoint.id === decidedCheckpointId,
           );
+          const label = handle?.fork.label ?? chosen?.label ?? "Current work";
           const previousGoal =
             original?.type === "checkpoint.created"
               ? original.payload.checkpoint.goal
-              : handle.fork.label;
-          const feedback = parsed.data.rationale ?? "Revise this approach.";
+              : label;
+          // The baseline is its own parent: a revision of the current work
+          // branches from the current work, exactly as a revision of an
+          // attempt branches from that attempt's parent.
+          const parentRunId = handle?.fork.parentRunId ?? decidedRunId;
 
           revision = await startRevision(session, {
-            parentRunId: handle.fork.parentRunId,
-            label: `${handle.fork.label} revised`,
-            goal: `${previousGoal}\n\nA reviewer asked for a revision of the previous attempt: ${feedback}`,
+            parentRunId,
+            label: `${label} revised`,
+            goal: `${previousGoal}\n\nA reviewer asked for a revision of the previous attempt: ${parsed.data.rationale}`,
             actorId: caller?.participant.id ?? "host",
           });
         } catch (error) {
@@ -1723,7 +1811,14 @@ export const startEventServer = (
           ? "direct"
           : /^\/sessions\/[^/]+\/invite$/.test(url.pathname)
             ? "invite"
-            : // Named explicitly rather than left to the trailing default:
+            : // The reason this table exists, in one line. Settling the
+              // comparison used to fall through to the trailing "steer",
+              // which handed the last word on every mission to anyone who
+              // could pause a run — and, because selection and application
+              // are one route today, handed them the write too.
+              /^\/sessions\/[^/]+\/decision$/.test(url.pathname)
+              ? "decide"
+              : // Named explicitly rather than left to the trailing default:
               // stopping, pausing, or resuming a run in flight is exactly the
               // kind of action participants.ts warns about a reviewer
               // inheriting by accident when a route is not listed here.

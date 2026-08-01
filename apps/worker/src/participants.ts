@@ -48,10 +48,27 @@ export const HOST_SESSION = "host";
  * Granting it to the role defined as approving *without executing* handed that
  * role the power the definition withholds, through a text field.
  *
+ * `decide` is its own capability and not a shade of `steer`, which is what
+ * `/decision` used to inherit by being unlisted in the route table. Steering is
+ * telling a run in flight what to do next — pause it, cancel it, resume it —
+ * and it is reversible by the next instruction. Deciding ends the comparison:
+ * it is the one act this product exists for, it is the last word on which work
+ * survives, and while selection and application share a route it also writes
+ * the chosen files into the repository. An editor can steer, so an editor was
+ * silently the final authority on every mission they were invited to.
+ *
+ * Owner only, for V1, and that is a floor rather than a judgement about
+ * reviewers: a reviewer is defined as approving *without directly executing*,
+ * and this route both selects and applies. Widening it is a real question, and
+ * the honest time to answer it is when selecting and applying are separately
+ * permissioned — see the gaps register in PROGRESS.md. Control handoff moves
+ * the owner role itself (`transferOwnership`), so "the owner" and "whoever
+ * holds control" are the same person here by construction.
+ *
  * Read down: every role can do everything the one below it can.
  */
 const CAPABILITIES = {
-  owner: ["watch", "direct", "approve", "steer", "invite", "transfer"],
+  owner: ["watch", "direct", "approve", "steer", "decide", "invite", "transfer"],
   editor: ["watch", "direct", "approve", "steer"],
   reviewer: ["watch", "approve"],
   viewer: ["watch"],

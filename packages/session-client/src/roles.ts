@@ -12,6 +12,12 @@
  * listed for parity with the server's table, but no HTTP surface exists for
  * it yet — approvals are policy-level on the host — so a client should not
  * render an approve control off the back of it.
+ *
+ * `decide` is `POST /sessions/:id/decision`, and it is owner-only for V1
+ * because that route both settles the comparison and writes the chosen files.
+ * A joined window renders no decision surface at all today, so this is here to
+ * keep the mirror honest before one does, rather than to hide a control that
+ * exists.
  */
 
 export type ParticipantRole = "owner" | "editor" | "reviewer" | "viewer";
@@ -21,11 +27,12 @@ export type ParticipantCapability =
   | "direct"
   | "approve"
   | "steer"
+  | "decide"
   | "invite"
   | "transfer";
 
 const ROLE_CAPABILITIES = {
-  owner: ["watch", "direct", "approve", "steer", "invite", "transfer"],
+  owner: ["watch", "direct", "approve", "steer", "decide", "invite", "transfer"],
   editor: ["watch", "direct", "approve", "steer"],
   reviewer: ["watch", "approve"],
   viewer: ["watch"],

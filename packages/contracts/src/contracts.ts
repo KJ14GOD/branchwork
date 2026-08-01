@@ -1381,6 +1381,26 @@ export const DecisionOutcomeSchema = z.discriminatedUnion("applied", [
       }),
     ),
   }),
+  /**
+   * Nothing was written and nothing needed to be.
+   *
+   * Choosing the baseline — the work already in the parent's tree — is a real
+   * decision whose application is a no-op. Both of the shapes above were wrong
+   * for it: `applied: true` with an empty file list claims a write that never
+   * happened, and `applied: false` is rendered as a refusal everywhere it
+   * appears ("not applied — …", in red), which would tell a reader the
+   * mechanics failed when there were no mechanics to fail.
+   *
+   * A third arm of the discriminated union rather than a flag beside
+   * `applied: false`, deliberately: every consumer narrows on `applied`, so
+   * this one does not typecheck until each of them has been made to say what
+   * it means. A flag would have compiled everywhere and been read as a failure
+   * in four places.
+   */
+  z.object({
+    applied: z.literal("unnecessary"),
+    reason: z.string().min(1),
+  }),
 ]);
 
 export type DecisionOutcome = z.infer<typeof DecisionOutcomeSchema>;
@@ -1412,6 +1432,23 @@ export type DecisionKind = z.infer<typeof DecisionKindSchema>;
  */
 export const DecisionRationaleSchema = z.string().trim().min(12).max(2_000);
 
+/**
+ * Which approach a decision names.
+ *
+ * `attempt` is a fork: a run with a worktree of its own whose changes may still
+ * have to be written into the parent. `baseline` is the work already in the
+ * parent's tree — the execution the alternatives were alternatives *to*.
+ *
+ * The distinction is on the event because it cannot be recovered later. Which
+ * run is the baseline is derived from the forks that exist *now*; fork again
+ * tomorrow and the same log re-derives a different one, so a decision that only
+ * stored a run id would silently change what it meant. Optional because every
+ * decision recorded before baselines could be chosen named an attempt.
+ */
+export const DecisionTargetSchema = z.enum(["attempt", "baseline"]);
+
+export type DecisionTarget = z.infer<typeof DecisionTargetSchema>;
+
 // A human choosing between attempts, recorded whether or not the patch that
 // followed actually landed. V1 says the merge is always a human decision —
 // this is that decision's evidence, separate from the mechanics of applying
@@ -1419,21 +1456,69 @@ export const DecisionRationaleSchema = z.string().trim().min(12).max(2_000);
 // the runtime could fold it in.
 export const DecisionRecordedEventSchema = EventEnvelopeSchema.extend({
   type: z.literal("decision.recorded"),
-  payload: z.object({
-    /** The attempt's run id — the fork that was chosen. */
-    runId: IdSchema,
-    checkpointId: IdSchema,
-    /**
-     * Which of the three ways a review ends. Optional so that decisions
-     * recorded before this field existed still parse — the log is durable and
-     * a schema that refused its own history would make every old session
-     * unreadable. Absent means `adopt`, which is what those decisions were.
-     */
-    kind: DecisionKindSchema.optional(),
-    /** Optional for the same reason. Nothing recorded before this asked for one. */
-    rationale: DecisionRationaleSchema.optional(),
-    outcome: DecisionOutcomeSchema,
-  }),
+  payload: z
+    .object({
+      /** The run that was chosen — a fork's run id, or the baseline's. */
+      runId: IdSchema,
+      /**
+       * Which kind of approach `runId` names. Absent means `attempt`, which is
+       * the only thing a decision could name before the baseline was
+       * selectable.
+       */
+      target: DecisionTargetSchema.optional(),
+      /**
+       * The checkpoint this decision was made across.
+       *
+       * For an attempt it is the checkpoint the fork was cut from. For the
+       * baseline it is the checkpoint the alternatives were cut from — the
+       * shared starting point that is the reason the comparison was fair, and
+       * therefore the reason this run is the baseline at all. Absent only when
+       * the baseline was chosen with no fork ever having been made, where
+       * there is no shared checkpoint to name and saying so beats inventing
+       * one; `requireCheckpointForAttempt` below keeps it mandatory everywhere
+       * else, including on every event already in the log.
+       */
+      checkpointId: IdSchema.optional(),
+      /**
+       * The other approaches that were on the table, by run id.
+       *
+       * The comparison context, frozen. A rejected alternative stays in the
+       * event history on its own `fork.created`, but *which* alternatives this
+       * particular decision was made against is derived state that moves — the
+       * next fork changes it. Recording it is what lets a receipt say what was
+       * turned down rather than what happens to exist now. Optional: decisions
+       * recorded before this field did not carry it, and an absent list means
+       * "not recorded", never "there were none".
+       */
+      alternatives: z.array(IdSchema).optional(),
+      /**
+       * Which of the three ways a review ends. Optional so that decisions
+       * recorded before this field existed still parse — the log is durable and
+       * a schema that refused its own history would make every old session
+       * unreadable. Absent means `adopt`, which is what those decisions were.
+       */
+      kind: DecisionKindSchema.optional(),
+      /**
+       * Optional here and required at the route.
+       *
+       * The two are not in tension: the route refuses a *new* decision without
+       * one, and this schema has to keep reading the decisions recorded before
+       * rationales were asked for. Tightening the stored shape instead would
+       * make old sessions unreplayable, which this repository has already
+       * shipped once.
+       */
+      rationale: DecisionRationaleSchema.optional(),
+      outcome: DecisionOutcomeSchema,
+    })
+    .refine(
+      (payload) =>
+        payload.target === "baseline" || payload.checkpointId !== undefined,
+      {
+        message:
+          "A decision on an attempt must name the checkpoint it was cut from.",
+        path: ["checkpointId"],
+      },
+    ),
 });
 
 export const SessionEventSchema = z.discriminatedUnion("type", [

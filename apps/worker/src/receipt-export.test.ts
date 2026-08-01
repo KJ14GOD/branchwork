@@ -106,6 +106,76 @@ test("the decision and its reasoning survive the export", () => {
   assert.match(markdown, /keeps the public API stable/);
 });
 
+test("keeping the baseline is exported as a decision, with what it was chosen over", () => {
+  const store = new InMemorySessionEventStore();
+  startRun(store, "run-parent", "Fix the reconnect backoff");
+  startRun(store, "fork-a", "Fix it differently");
+  finish(store, "fork-a", "Rewrote the backoff from scratch.");
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "fork.created",
+    payload: {
+      fork: {
+        runId: "fork-a",
+        sessionId: SESSION,
+        checkpointId: "cp-1",
+        parentRunId: "run-parent",
+        label: "Rewrite",
+        branch: "novus/fork/fork-a",
+        worktreePath: "/tmp/forks/fork-a",
+        revision: "0".repeat(40),
+        devPorts: [47_200, 47_201],
+        createdAt: new Date().toISOString(),
+      },
+    },
+  });
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "decision.recorded",
+    payload: {
+      runId: "run-parent",
+      target: "baseline",
+      checkpointId: "cp-1",
+      alternatives: ["fork-a"],
+      kind: "adopt",
+      rationale: "The rewrite bought nothing the current code was not already doing.",
+      outcome: {
+        applied: "unnecessary",
+        reason:
+          "The current work is already in the working tree, so nothing needed to be written.",
+      },
+    },
+  });
+
+  const markdown = receipt(store);
+
+  // Said as what it is. Before the baseline could be chosen this payload was
+  // unreachable; the nearest thing the export would have printed for it was
+  // "further exploration requested", which claims the opposite — that nothing
+  // had been settled.
+  assert.match(markdown, /\*\*Kept the current work\*\*/);
+  assert.match(markdown, /nothing needed to be written/);
+  assert.match(markdown, /bought nothing the current code/);
+
+  // Neither an application nor a refusal, in the artefact most likely to be
+  // read as official.
+  assert.doesNotMatch(markdown, /applied to the working tree/);
+  assert.doesNotMatch(markdown, /failed/i);
+  assert.doesNotMatch(markdown, /further exploration/i);
+
+  // What lost is named, and its evidence is still in the file. A receipt that
+  // listed only the winner reads as though it were the only candidate — which
+  // is exactly the claim a comparison exists to refuse.
+  assert.match(markdown, /Considered and not chosen: \*Rewrite\*/);
+  assert.match(markdown, /### Rewrite/);
+  assert.match(markdown, /Rewrote the backoff from scratch/);
+
+  // And the decider is on the record, not just the decision.
+  assert.match(markdown, /Decided by `host`/);
+});
+
 test("a revision request is exported as a decision that wrote nothing", () => {
   const store = new InMemorySessionEventStore();
   startRun(store, "run-1", "Fix it");

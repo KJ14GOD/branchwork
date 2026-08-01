@@ -307,12 +307,23 @@ export const EventRow = ({
       }
 
       case "decision.recorded": {
-        const { outcome } = event.payload;
+        const { outcome, target } = event.payload;
+        // "Chose" was the only verb this row knew, so a revision request and a
+        // decision to keep exploring both read as somebody choosing the run
+        // they had just declined to adopt.
+        const chose =
+          event.payload.kind === "revision"
+            ? "Asked for a revision of"
+            : event.payload.kind === "exploration"
+              ? "Kept exploring past"
+              : "Chose";
+        const what =
+          target === "baseline" ? "the current work" : event.payload.runId;
 
-        if (outcome.applied) {
+        if (outcome.applied === true) {
           return (
             <span className="event__text event__text--approved">
-              Chose {event.payload.runId}
+              {chose} {what}
               <span className="event__type">
                 {" "}
                 · applied {outcome.files.length} file
@@ -322,9 +333,21 @@ export const EventRow = ({
           );
         }
 
+        // Not an error tone. Nothing failed: the chosen work is already in the
+        // tree, or the decision was one that never writes. Painting these red
+        // told a reader an application had been refused when none was owed.
+        if (outcome.applied === "unnecessary") {
+          return (
+            <span className="event__text event__text--approved">
+              {chose} {what}
+              <span className="event__type"> · already in the working tree</span>
+            </span>
+          );
+        }
+
         return (
           <span className="event__text event__text--error">
-            Chose {event.payload.runId}
+            {chose} {what}
             <span className="event__type"> · not applied — {outcome.reason}</span>
           </span>
         );

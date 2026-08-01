@@ -150,3 +150,46 @@ test("a recorded decision carries the chosen run and what happened when it appli
 
   assert.equal(conflicted.decision?.outcome.applied, false);
 });
+
+test("a decision can name the baseline, and says its application was not needed", () => {
+  const kept = ComparisonSchema.parse({
+    attempts: [attempt({ runId: "turn-1", baseline: true, label: "Baseline" })],
+    contestedPaths: [],
+    uniquePaths: { "turn-1": [] },
+    decision: {
+      runId: "turn-1",
+      target: "baseline",
+      checkpointId: "cp-1",
+      alternatives: ["fork-a"],
+      kind: "adopt",
+      rationale: "The alternative changed more than the problem warranted.",
+      decidedBy: "host",
+      outcome: {
+        applied: "unnecessary",
+        reason:
+          "The current work is already in the working tree, so nothing needed to be written.",
+      },
+    },
+  });
+
+  assert.equal(kept.decision?.target, "baseline");
+  assert.equal(kept.decision?.outcome.applied, "unnecessary");
+  assert.deepEqual(kept.decision?.alternatives, ["fork-a"]);
+  assert.equal(kept.decision?.decidedBy, "host");
+});
+
+test("a decision recorded before any of these fields existed still parses", () => {
+  // The renderer refuses a comparison it cannot parse, so a schema that got
+  // stricter would blank the screen for every past session rather than
+  // erroring somewhere a developer would see it.
+  const old = ComparisonSchema.parse({
+    attempts: [attempt()],
+    contestedPaths: [],
+    uniquePaths: { "fork-a": [] },
+    decision: { runId: "fork-a", outcome: { applied: true, files: [] } },
+  });
+
+  assert.equal(old.decision?.target, undefined);
+  assert.equal(old.decision?.rationale, undefined);
+  assert.equal(old.decision?.alternatives, undefined);
+});

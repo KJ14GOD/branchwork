@@ -169,11 +169,15 @@ export const CompareScreen = ({
               ? "Revision requested"
               : state.decision.kind === "exploration"
                 ? "Still exploring"
-                : "Decision recorded",
+                : state.decision.target === "baseline"
+                  ? "Kept the current work"
+                  : "Decision recorded",
           detail:
-            state.decision.outcome.applied
+            state.decision.outcome.applied === true
               ? "Applied to the working tree."
-              : "Recorded. Nothing was written.",
+              : state.decision.outcome.applied === "unnecessary"
+                ? "Already in the working tree. Nothing needed writing."
+                : "Recorded. Nothing was written.",
         }
       : alternativeList.some((attempt) => attempt.status === "running")
         ? {
@@ -295,24 +299,34 @@ export const CompareScreen = ({
                 attempt.runId,
                 state.decision?.runId === attempt.runId ? (
                   <span className="compare__chosen">
-                    {state.decision.outcome.applied
+                    {state.decision.outcome.applied === true
                       ? "Adopted · applied"
                       : state.decision.kind === "revision"
                         ? "Revision requested"
                         : state.decision.kind === "exploration"
                           ? "Exploring further"
-                          : "Adopted · not applied"}
+                          : state.decision.outcome.applied === "unnecessary"
+                            ? "Kept · already in the tree"
+                            : "Adopted · not applied"}
                   </span>
                 ) : attempt.baseline ? (
-                  // No button, and not because one is missing. Deciding means
-                  // adopting an alternative: the baseline's changes are already
-                  // in the working tree, so keeping it is what happens when you
-                  // decide nothing. A "choose" here would also have 404'd —
-                  // /decision resolves a run through the worktree manager, and
-                  // the baseline has no fork worktree to resolve.
-                  <span className="compare__foot-note">
-                    Already in the working tree. Keeping it needs no decision.
-                  </span>
+                  // A button, and the same button the alternatives get. This
+                  // said "keeping it needs no decision", which was true of the
+                  // plumbing — /decision resolved every run through the
+                  // worktree manager and the baseline has no worktree — and
+                  // false of the product. Deciding the current work is the
+                  // right answer is a decision somebody makes, and a mission
+                  // whose history cannot say who made it or why has lost the
+                  // only part worth keeping. Nothing is written when it is
+                  // taken; the work is already here.
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={state.choosing}
+                    onClick={() => setDeciding({ runId: attempt.runId, kind: "adopt" })}
+                  >
+                    Keep the current work
+                  </button>
                 ) : (
                   <button
                     className="button"
@@ -349,14 +363,22 @@ export const CompareScreen = ({
             <div className="decision__head">
               <span className="decision__title">
                 {deciding.kind === "adopt"
-                  ? `Adopt ${decidingAttempt?.label ?? "this approach"}`
+                  ? decidingAttempt?.baseline
+                    ? "Keep the current work"
+                    : `Adopt ${decidingAttempt?.label ?? "this approach"}`
                   : deciding.kind === "revision"
                     ? `Request a revision of ${decidingAttempt?.label ?? "this approach"}`
                     : "Keep exploring"}
               </span>
               <span className="decision__note">
                 {deciding.kind === "adopt"
-                  ? "Its changes are written into the working tree. The other approaches stay on the record."
+                  ? decidingAttempt?.baseline
+                    ? // Said plainly rather than dressed up as an apply. The
+                      // files are already here; what this records is that a
+                      // person looked at the alternatives and chose not to
+                      // take one.
+                      "Nothing is written — this work is already in the working tree. The alternatives stay on the record as considered and not chosen."
+                    : "Its changes are written into the working tree. The other approaches stay on the record."
                   : deciding.kind === "revision"
                     ? "Nothing is written. Your reasoning is the feedback, and it stays on the record."
                     : "Nothing is written and nothing is discarded. This records that neither was enough yet."}
@@ -469,16 +491,23 @@ export const CompareScreen = ({
           // have.
           <p
             className={
-              state.decision.outcome.applied
-                ? "compare-screen__note"
-                : "compare-screen__note compare-screen__note--error"
+              // `applied: false` keeps the tone it had — a write that was
+              // owed and did not happen. `"unnecessary"` joins `true` on the
+              // quiet side: no write was owed, so there is nothing to flag.
+              state.decision.outcome.applied === false
+                ? "compare-screen__note compare-screen__note--error"
+                : "compare-screen__note"
             }
           >
-            {state.decision.outcome.applied ? (
+            {state.decision.outcome.applied === true ? (
               <>
                 Decision recorded and applied:{" "}
                 {state.decision.outcome.files.join(", ") || "no files"}.
               </>
+            ) : state.decision.outcome.applied === "unnecessary" ? (
+              // Neither an apply nor a refusal. Nothing was written because
+              // nothing was owed, and the note says which.
+              <>Decision recorded. {state.decision.outcome.reason}</>
             ) : state.decision.kind === "revision" ? (
               <>Revision requested. Nothing was written.</>
             ) : state.decision.kind === "exploration" ? (

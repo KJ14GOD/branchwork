@@ -4,6 +4,7 @@ import {
   DecisionKindSchema,
   DecisionOutcomeSchema,
   DecisionRationaleSchema,
+  DecisionTargetSchema,
   ParticipantSchema,
 } from "./contracts.ts";
 
@@ -199,9 +200,25 @@ export type AttemptComparison = z.infer<typeof AttemptComparisonSchema>;
  */
 export const DecisionSummarySchema = z.object({
   runId: z.string().min(1),
+  /**
+   * Whether `runId` names an alternative or the baseline.
+   *
+   * Carried rather than re-derived. A client could ask whether `runId` matches
+   * the attempt currently flagged `baseline`, but that flag moves the moment
+   * somebody forks again — the screen would then say a past decision had been
+   * about an alternative. Absent on decisions recorded before the baseline
+   * could be chosen; those all named an attempt.
+   */
+  target: DecisionTargetSchema.optional(),
+  /** The checkpoint the comparison was made across, when the decision named one. */
+  checkpointId: z.string().min(1).optional(),
+  /** The approaches this was decided against, by run id. Absent means unrecorded. */
+  alternatives: z.array(z.string().min(1)).optional(),
   /** Absent on decisions recorded before the kind existed; those were adoptions. */
   kind: DecisionKindSchema.optional(),
   rationale: z.string().min(1).optional(),
+  /** Who recorded it. The event's actor, carried through so a reload still names them. */
+  decidedBy: z.string().min(1).optional(),
   outcome: DecisionOutcomeSchema,
 });
 
@@ -209,7 +226,7 @@ export type DecisionSummary = z.infer<typeof DecisionSummarySchema>;
 
 // Re-exported so a renderer importing the HTTP contract does not also have to
 // import the domain contract for the one enum it needs alongside it.
-export type { DecisionKind } from "./contracts.ts";
+export type { DecisionKind, DecisionTarget } from "./contracts.ts";
 
 export const ComparisonSchema = z.object({
   attempts: z.array(AttemptComparisonSchema),
@@ -223,7 +240,7 @@ export const ComparisonSchema = z.object({
 
 export type Comparison = z.infer<typeof ComparisonSchema>;
 
-/** What a host submits to choose between attempts. */
+/** What a host submits to choose between attempts, or to keep the baseline. */
 export const DecisionRequestSchema = z.object({
   runId: z.string().min(1),
   /**
@@ -233,14 +250,24 @@ export const DecisionRequestSchema = z.object({
    */
   kind: DecisionKindSchema.optional(),
   /**
-   * Required by the *screen*, not by the schema.
+   * Required, here, at the boundary — not only in the form.
    *
-   * Enforcing it here would make every decision recorded before rationales
-   * existed unreplayable, and would refuse a decision at the boundary rather
-   * than in the form where a person can actually fix it. The compare screen
-   * will not submit without one; this validates the shape of what arrives.
+   * This used to be optional with the argument that enforcing it would make
+   * decisions recorded before rationales existed unreplayable. That argument
+   * confused two schemas. This one describes what a client is *submitting
+   * now*, and there is no such thing as a historical submission; the durable
+   * shape is `DecisionRecordedEventSchema`, which stays lenient precisely so
+   * the old rows keep parsing. Leaving the rule in React meant the rule was a
+   * property of one build of one renderer: curl, a stale desktop, a future
+   * joined client or a relay replaying a hand-written body all wrote
+   * rationale-free decisions into a log whose whole purpose is to say why.
+   *
+   * The floor is `DecisionRationaleSchema`'s 12 characters — the same number
+   * the compare screen already disables its button below, so the form stays
+   * the courtesy and this is the backstop, and neither can drift from the
+   * other because both read this one schema.
    */
-  rationale: DecisionRationaleSchema.optional(),
+  rationale: DecisionRationaleSchema,
 });
 
 export type DecisionRequest = z.infer<typeof DecisionRequestSchema>;

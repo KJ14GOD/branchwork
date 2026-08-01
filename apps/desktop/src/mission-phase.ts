@@ -141,7 +141,9 @@ export const missionPhases = (
               ? "Revision requested"
               : decision.kind === "exploration"
                 ? "Still exploring"
-                : "Adopted",
+                : decision.target === "baseline"
+                  ? "Kept the current work"
+                  : "Adopted",
         }
       : alternatives.length === 0
         ? { key: "decision", label: "Decision", status: "not-started", detail: null }
@@ -160,16 +162,27 @@ export const missionPhases = (
   const receipt: MissionPhase =
     decision === null
       ? { key: "receipt", label: "Receipt", status: "not-started", detail: null }
-      : decision.outcome.applied
+      : decision.outcome.applied === true
         ? { key: "receipt", label: "Receipt", status: "complete", detail: "Applied" }
-        : decision.kind === "adopt"
+        : // Complete, not blocked. Keeping the current work has no application
+          // step to be waiting on — its files are already where a reader would
+          // go looking for them — so a spine that drew it as an unfinished
+          // tail would be inventing work nobody owes.
+          decision.outcome.applied === "unnecessary"
           ? {
               key: "receipt",
               label: "Receipt",
-              status: "blocked",
-              detail: "Recorded, not applied",
+              status: "complete",
+              detail: "Already in the working tree",
             }
-          : { key: "receipt", label: "Receipt", status: "complete", detail: "Nothing applied" };
+          : decision.kind === "adopt"
+            ? {
+                key: "receipt",
+                label: "Receipt",
+                status: "blocked",
+                detail: "Recorded, not applied",
+              }
+            : { key: "receipt", label: "Receipt", status: "complete", detail: "Nothing applied" };
 
   return [brief, execution, approaches, decisionPhase, receipt];
 };

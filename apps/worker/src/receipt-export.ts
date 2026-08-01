@@ -1,6 +1,6 @@
 import type { SessionEvent } from "@novus/contracts";
 
-import { compareAttempts } from "./compare.ts";
+import { compareAttempts, forksFromLog } from "./compare.ts";
 import { projectSession } from "./projection.ts";
 
 /**
@@ -51,18 +51,7 @@ export const exportReceipt = (
   events: readonly SessionEvent[],
 ): string => {
   const projected = projectSession(sessionId, events);
-  const forks = events.flatMap((event) =>
-    event.type === "fork.created"
-      ? [
-          {
-            runId: event.payload.fork.runId,
-            label: event.payload.fork.label,
-            parentRunId: event.payload.fork.parentRunId,
-          },
-        ]
-      : [],
-  );
-  const comparison = compareAttempts(sessionId, events, forks);
+  const comparison = compareAttempts(sessionId, events, forksFromLog(events));
   const lines: string[] = [];
 
   lines.push(heading(projected.runs[0]?.goal ?? null));
@@ -89,17 +78,24 @@ export const exportReceipt = (
       (attempt) => attempt.runId === projected.decision?.runId,
     );
 
+    const named = chosen?.label ?? projected.decision.runId;
+
     lines.push(
       projected.decision.kind === "adopt"
-        ? projected.decision.outcome.applied
-          ? `**Adopted** ${chosen?.label ?? projected.decision.runId} — applied to the working tree.`
-          : `**Adopted** ${chosen?.label ?? projected.decision.runId} — recorded, not applied.`
+        ? projected.decision.target === "baseline"
+          ? // Said as what it is. This used to fall through to "further
+            // exploration requested", which is the opposite claim: that
+            // nothing had been settled.
+            `**Kept the current work** (${named}) — it was already in the working tree, so nothing needed to be written.`
+          : projected.decision.outcome.applied === true
+            ? `**Adopted** ${named} — applied to the working tree.`
+            : `**Adopted** ${named} — recorded, not applied.`
         : projected.decision.kind === "revision"
-          ? `**Revision requested** on ${chosen?.label ?? projected.decision.runId}. Nothing was written.`
+          ? `**Revision requested** on ${named}. Nothing was written.`
           : "**Further exploration requested.** Nothing was written or discarded.",
     );
 
-    if (!projected.decision.outcome.applied) {
+    if (projected.decision.outcome.applied === false) {
       lines.push("");
       // Selection and application stay distinct here too. A conflict means the
       // judgement stands and the write did not happen.
@@ -110,11 +106,34 @@ export const exportReceipt = (
       }
     }
 
+    if (projected.decision.decidedBy !== "") {
+      lines.push("");
+      lines.push(`Decided by \`${projected.decision.decidedBy}\`.`);
+    }
+
     if (projected.decision.rationale !== null) {
       lines.push("");
       lines.push("**Why:**");
       lines.push("");
       lines.push(`> ${projected.decision.rationale.replace(/\n/g, "\n> ")}`);
+    }
+
+    // What was turned down, by name, in the artefact that outlives the screen.
+    // A receipt that named only the winner reads as though it were the only
+    // candidate — which is exactly the claim the comparison exists to refuse.
+    const rejected = projected.decision.alternatives
+      .map(
+        (runId) =>
+          comparison.attempts.find((attempt) => attempt.runId === runId)?.label ??
+          runId,
+      )
+      .filter((label) => label !== named);
+
+    if (rejected.length > 0) {
+      lines.push("");
+      lines.push(
+        `Considered and not chosen: ${rejected.map((label) => `*${label}*`).join(", ")}. Their evidence is below.`,
+      );
     }
   }
 

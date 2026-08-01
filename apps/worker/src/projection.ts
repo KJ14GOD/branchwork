@@ -1,6 +1,7 @@
 import type {
   DecisionKind,
   DecisionOutcome,
+  DecisionTarget,
   Participant,
   SessionEvent,
 } from "@novus/contracts";
@@ -102,7 +103,16 @@ export type SessionProjection = {
    */
   decision: {
     runId: string;
-    checkpointId: string;
+    /**
+     * Defaulted to `attempt` on the same reasoning as `kind` below: every
+     * decision recorded before the baseline was selectable named a fork,
+     * because a fork was the only thing the route could resolve.
+     */
+    target: DecisionTarget;
+    /** Null only for a baseline chosen with no fork to share a checkpoint with. */
+    checkpointId: string | null;
+    /** What it was decided against. Empty means the log did not record them. */
+    alternatives: string[];
     /**
      * Defaulted to `adopt` rather than left optional. Every decision recorded
      * before the kind existed was an adoption, so filling it in here is what
@@ -111,6 +121,8 @@ export type SessionProjection = {
      */
     kind: DecisionKind;
     rationale: string | null;
+    /** The event's actor: the person the log says made this call. */
+    decidedBy: string;
     outcome: DecisionOutcome;
   } | null;
   /**
@@ -474,9 +486,12 @@ export const projectSession = (
         // order says which one is current.
         decision = {
           runId: event.payload.runId,
-          checkpointId: event.payload.checkpointId,
+          target: event.payload.target ?? "attempt",
+          checkpointId: event.payload.checkpointId ?? null,
+          alternatives: event.payload.alternatives ?? [],
           kind: event.payload.kind ?? "adopt",
           rationale: event.payload.rationale ?? null,
+          decidedBy: event.actorId,
           outcome: event.payload.outcome,
         };
         break;
