@@ -9,6 +9,7 @@ import { summarise, type PresenceEntry } from "@novus/session-client";
 
 import { JoinedSurface, type JoinedSurfaceProps } from "./joined-surface.tsx";
 import type { JoinedActions } from "./use-joined-actions.ts";
+import type { JoinedEvidence } from "./use-joined-evidence.ts";
 
 /**
  * What a joined window offers, and to whom.
@@ -85,6 +86,64 @@ const actions: JoinedActions = {
   requestControl: async () => undefined,
   offerControl: async () => undefined,
   answerHandoff: async () => undefined,
+  finish: async () => true,
+  reopen: async () => true,
+};
+
+const nothingProven: JoinedEvidence = {
+  facts: {
+    verified: null,
+    testsRun: 0,
+    testsPassed: 0,
+    files: [],
+    contested: [],
+    risks: [],
+  },
+  any: false,
+};
+
+/** A mission that changed something and proved nothing — the ordinary state. */
+const changedNothingProven: JoinedEvidence = {
+  facts: {
+    verified: null,
+    testsRun: 0,
+    testsPassed: 0,
+    files: [{ path: "src/tax.ts", additions: 12, deletions: 3 }],
+    contested: [],
+    risks: [],
+  },
+  any: true,
+};
+
+const completed = (
+  verification: "verified" | "failing" | "unverified",
+): SessionEvent => ({
+  eventId: "e2",
+  sessionId: "s",
+  sequence: 2,
+  occurredAt: "2026-07-31T00:05:00.000Z",
+  actorId: HOST,
+  type: "mission.completed",
+  payload: {
+    outcome: "resolved",
+    summary: "The tax rounding is fixed and the checkout flow works again.",
+    verification,
+    filesChanged: 2,
+    actorId: HOST,
+  },
+});
+
+const reopened: SessionEvent = {
+  eventId: "e3",
+  sessionId: "s",
+  sequence: 3,
+  occurredAt: "2026-07-31T00:06:00.000Z",
+  actorId: YOU,
+  type: "mission.reopened",
+  payload: {
+    actorId: YOU,
+    reason: "The refund path regressed, so this is not finished after all.",
+  },
 };
 
 const base: JoinedSurfaceProps = {
@@ -101,6 +160,7 @@ const base: JoinedSurfaceProps = {
   participants: people,
   authority: authority(),
   actions,
+  evidence: nothingProven,
 };
 
 const surface = (over: Partial<JoinedSurfaceProps> = {}) =>
@@ -365,6 +425,138 @@ test("a relay join offers nothing to send and says why", () => {
   // can see the run deserves to know which reason applies to them.
   assert.match(html, /cannot be sent back yet/);
   assert.match(html, /Relay — watch only/);
+});
+
+test("a joined window shows the changes and what verified them", () => {
+  const html = surface({ role: "editor", evidence: changedNothingProven });
+
+  // The panel a teammate is being asked to agree a mission on. Before this
+  // the joined window read /events and nothing else — it could see that a
+  // patch tool completed and could not see what the session had changed.
+  assert.match(html, /src\/tax\.ts/);
+  assert.match(html, /1 file changed/);
+
+  // And the state most easily misread as success is stated, not omitted.
+  assert.match(html, /Nothing has verified these changes/);
+});
+
+test("an evidence panel is absent on a mission that has changed nothing", () => {
+  const html = surface({ role: "editor", evidence: nothingProven });
+
+  // A permanent panel reading "no files changed" is the placeholder row this
+  // app has been told to stop drawing, and it teaches people not to look.
+  assert.doesNotMatch(html, /Nothing has verified these changes/);
+  assert.doesNotMatch(html, /file changed/);
+});
+
+test("a reviewer may finish the mission; a viewer may not, and cannot see that they cannot", () => {
+  const reviewer = surface({ role: "reviewer" });
+  const viewer = surface({ role: "viewer" });
+
+  // Ending a mission is `approve` — the judgement the reviewer role exists
+  // for, and the worker's own gate on /complete.
+  assert.match(reviewer, /Finish mission/);
+  assert.match(reviewer, /Resolved/);
+  assert.match(reviewer, /Abandoned/);
+
+  // Absent, not disabled. A greyed-out "Resolved" tells a viewer this screen
+  // ends missions and they are being refused.
+  assert.doesNotMatch(viewer, /Finish mission|Resolved|Abandoned/);
+});
+
+test("finishing never claims the work is proven", () => {
+  const html = surface({ role: "editor" });
+
+  // The sentence beside the button. Completion is not verification, and the
+  // one place that is easiest to forget it is the button that completes.
+  assert.match(html, /does not make it green/);
+});
+
+/**
+ * The rail's own heading, not the timeline row for the same event.
+ *
+ * `EventRow` already draws "Mission resolved" when the completion scrolls
+ * past, and a bare match would pass on that alone — which would leave the
+ * standing statement of where the mission stands untested.
+ */
+const railHeading = (outcome: string) =>
+  new RegExp(`class="eyebrow">Mission ${outcome}<`);
+
+test("a finished mission shows its outcome and the evidence it was finished on", () => {
+  const html = surface({
+    role: "editor",
+    events: [started, completed("unverified")],
+    summary: summarise([started, completed("unverified")]),
+  });
+
+  assert.match(html, railHeading("resolved"));
+  assert.match(html, /tax rounding is fixed/);
+
+  // The frozen copy, and the whole reason it is frozen: a mission finished
+  // having verified nothing goes on saying so.
+  assert.match(html, /2 files changed, and nothing verified them/);
+
+  // Finishing it again is not on offer while it is finished — the worker 409s
+  // and the screen agrees.
+  assert.doesNotMatch(html, /Finish mission/);
+  assert.match(html, /Reopen mission/);
+});
+
+test("a finished mission that was verified says so, and one that failed says that", () => {
+  const green = surface({
+    role: "editor",
+    events: [started, completed("verified")],
+    summary: summarise([started, completed("verified")]),
+  });
+  const red = surface({
+    role: "editor",
+    events: [started, completed("failing")],
+    summary: summarise([started, completed("failing")]),
+  });
+
+  // Three states, never a boolean: "nothing ran" and "something ran and
+  // failed" are different facts about the same finished mission.
+  assert.match(green, /the checks that ran passed/);
+  assert.match(red, /did not pass/);
+  assert.notEqual(green, red);
+});
+
+test("a reopened mission is live again, and can be finished again", () => {
+  const events = [started, completed("verified"), reopened];
+  const html = surface({ role: "editor", events, summary: summarise(events) });
+
+  // Completing is a trapdoor if this fails.
+  assert.match(html, /Finish mission/);
+  // The completion is still in the timeline, as history — what is gone is the
+  // rail's claim that this is where the mission stands.
+  assert.doesNotMatch(html, railHeading("resolved"));
+  assert.doesNotMatch(html, /Reopen mission/);
+});
+
+test("a viewer sees how the mission ended without being offered the way back", () => {
+  const events = [started, completed("unverified")];
+  const html = surface({ role: "viewer", events, summary: summarise(events) });
+
+  // Seeing the outcome is watching; changing it is not.
+  assert.match(html, railHeading("resolved"));
+  assert.match(html, /nothing verified them/);
+  assert.doesNotMatch(html, /Reopen mission/);
+});
+
+test("a relay join is offered no ending and no evidence to end on", () => {
+  const html = surface({
+    relay: true,
+    role: "owner",
+    youId: null,
+    participants: [],
+    authority: authority({ you: null, controlHeldBy: null }),
+    // What the hook returns for a relay: the transport carries the log
+    // outbound and has no endpoint to ask for anything else.
+    evidence: nothingProven,
+  });
+
+  assert.doesNotMatch(html, /Finish mission|Reopen mission/);
+  assert.doesNotMatch(html, /disabled/);
 });
 
 test("host-only capabilities are absent from every joined view", () => {

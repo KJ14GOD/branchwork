@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
+import type { SessionEvent } from "@novus/contracts";
 import { fetchMembership } from "@novus/session-client";
 
 // Reached by path rather than by dependency, deliberately. A joined window
@@ -20,8 +21,12 @@ import { InMemorySessionEventStore } from "../../../session-service/src/session-
 
 import {
   answerHandoff,
+  completeMission,
   offerControl,
   readAuthority,
+  readComparison,
+  readFiles,
+  reopenMission,
   requestControl,
   steerRun,
   submitDirection,
@@ -91,6 +96,8 @@ type Context = {
    * authority rather than timing.
    */
   pauseInLog: (runId: string) => void;
+  /** The host's log, for asserting what a joined window's call actually wrote. */
+  log: (sessionId: string) => SessionEvent[];
 };
 
 const withSession = async (
@@ -227,6 +234,7 @@ const withSession = async (
           payload: { runId },
         });
       },
+      log: (of) => store.list(of),
     });
   } finally {
     await server.close();
@@ -492,5 +500,135 @@ test("an invite for one session cannot read or act on another", async () => {
 
     assert.equal(asked.ok, false);
     assert.equal(directed.ok, false);
+  });
+});
+
+test("a joined window can read the mission's changes and comparison", async () => {
+  await withSession(async ({ join }) => {
+    const reviewer = await join("reviewer");
+
+    // Both reads are `watch`, which every participant has — this is the
+    // evidence a teammate is being asked to agree a mission on, and a joined
+    // window could reach none of it before.
+    const files = await readFiles(reviewer.target);
+    const comparison = await readComparison(reviewer.target);
+
+    assert.ok(files, "a reviewer could not read the changed files");
+    assert.deepEqual(files.files, []);
+    assert.ok(comparison, "a reviewer could not read the comparison");
+    assert.deepEqual(comparison.attempts, []);
+  });
+});
+
+test("an invite for one session reads no evidence from another", async () => {
+  await withSession(async ({ join, otherSession, url }) => {
+    const editor = await join("editor");
+    const crossed: JoinedTarget = {
+      endpoint: url,
+      sessionId: await otherSession(),
+      token: editor.token,
+    };
+
+    assert.equal(await readFiles(crossed), null);
+    assert.equal(await readComparison(crossed), null);
+  });
+});
+
+test("a reviewer can finish the mission, and the worker states the evidence", async () => {
+  await withSession(async ({ join, sessionId, log }) => {
+    const reviewer = await join("reviewer");
+
+    const finished = await completeMission(
+      reviewer.target,
+      "resolved",
+      "The rounding is fixed and we walked the checkout by hand.",
+    );
+
+    assert.equal(finished.ok, true, finished.ok ? "" : finished.error);
+
+    const completed = log(sessionId).find(
+      (event) => event.type === "mission.completed",
+    );
+
+    assert.ok(completed && completed.type === "mission.completed");
+    assert.equal(completed.payload.outcome, "resolved");
+    assert.equal(completed.actorId, reviewer.id);
+    // The joined window sent an outcome and a sentence. It did not send this,
+    // and could not have: nothing ran, so nothing is claimed.
+    assert.equal(completed.payload.verification, "unverified");
+    assert.equal(completed.payload.filesChanged, 0);
+  });
+});
+
+test("a viewer cannot finish a mission, and is told so in the worker's words", async () => {
+  await withSession(async ({ join }) => {
+    const viewer = await join("viewer");
+
+    const finished = await completeMission(
+      viewer.target,
+      "abandoned",
+      "A viewer trying to close somebody else's mission.",
+    );
+
+    assert.equal(finished.ok, false);
+    assert.match(finished.ok ? "" : finished.error, /viewer cannot approve/);
+  });
+});
+
+test("a summary that says nothing is refused at the boundary, not in React", async () => {
+  await withSession(async ({ join }) => {
+    const editor = await join("editor");
+
+    const finished = await completeMission(editor.target, "resolved", "done");
+
+    assert.equal(finished.ok, false);
+    // The message the joined window shows verbatim. A client-side length check
+    // is a courtesy; this is the rule.
+    assert.match(
+      finished.ok ? "" : finished.error,
+      /at least 12 characters/,
+    );
+  });
+});
+
+test("finishing twice is refused, and reopening is the way to change an ending", async () => {
+  await withSession(async ({ join }) => {
+    const editor = await join("editor");
+    const summary = "The tax rounding is fixed and checkout works again.";
+
+    assert.equal((await completeMission(editor.target, "resolved", summary)).ok, true);
+
+    const again = await completeMission(editor.target, "abandoned", summary);
+
+    assert.equal(again.ok, false);
+    assert.match(again.ok ? "" : again.error, /Reopen it before finishing/);
+
+    const reopened = await reopenMission(
+      editor.target,
+      "The refund path regressed, so this is not finished after all.",
+    );
+
+    assert.equal(reopened.ok, true, reopened.ok ? "" : reopened.error);
+
+    // Completing is a trapdoor if this fails: the second ending is the whole
+    // point of being able to reopen.
+    assert.equal(
+      (await completeMission(editor.target, "abandoned", summary)).ok,
+      true,
+    );
+  });
+});
+
+test("a live mission cannot be reopened", async () => {
+  await withSession(async ({ join }) => {
+    const editor = await join("editor");
+
+    const reopened = await reopenMission(
+      editor.target,
+      "Reopening a mission that was never finished.",
+    );
+
+    assert.equal(reopened.ok, false);
+    assert.match(reopened.ok ? "" : reopened.error, /nothing to reopen/);
   });
 });

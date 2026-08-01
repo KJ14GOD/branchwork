@@ -1,6 +1,11 @@
+import type { MissionOutcome } from "@novus/contracts";
 import {
   AuthorityResponseSchema,
+  ComparisonSchema,
+  SessionFilesResponseSchema,
   type Authority,
+  type Comparison,
+  type SessionFilesResponse,
 } from "@novus/contracts/protocol";
 
 import { readError } from "../http.ts";
@@ -103,6 +108,92 @@ export const answerHandoff = (
   answer: HandoffAnswer,
 ): Promise<JoinedResult> =>
   send(target, `handoff/${answer}`, { offerEventId });
+
+/**
+ * Declaring the mission over, and taking that back.
+ *
+ * The judgement travels; the evidence does not. `verification` and
+ * `filesChanged` are computed by the worker from the session's own projection
+ * and frozen onto the event, so there is deliberately nothing here for a
+ * joined window to state about what was proven — a client that could say
+ * "verified" could finish a mission green having run nothing.
+ */
+export const completeMission = (
+  target: JoinedTarget,
+  outcome: MissionOutcome,
+  summary: string,
+): Promise<JoinedResult> =>
+  send(target, "complete", { outcome, summary });
+
+export const reopenMission = (
+  target: JoinedTarget,
+  reason: string,
+): Promise<JoinedResult> => send(target, "reopen", { reason });
+
+/**
+ * One validated GET, for the reads that are evidence rather than authority.
+ *
+ * Same judgement `readAuthority` makes and for the same reason: this is an
+ * overlay on a session that works without it, so a refusal or an unreachable
+ * host sets it empty rather than raising an error over the timeline. Null
+ * means "nothing to show", never "there are no changes" — the caller draws
+ * the panel only when it has something.
+ */
+const read = async <T>(
+  target: JoinedTarget,
+  path: string,
+  parse: (value: unknown) => { success: true; data: T } | { success: false },
+  signal?: AbortSignal,
+): Promise<T | null> => {
+  const { endpoint, sessionId, token } = target;
+
+  try {
+    const response = await fetch(
+      `${endpoint}/sessions/${encodeURIComponent(sessionId)}/${path}`,
+      {
+        ...(signal ? { signal } : {}),
+        headers: { authorization: `Bearer ${token}` },
+      },
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const parsed = parse(await response.json());
+
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+};
+
+/** What this mission changed: the worker's own projection, not a second tally. */
+export const readFiles = (
+  target: JoinedTarget,
+  signal?: AbortSignal,
+): Promise<SessionFilesResponse | null> =>
+  read(
+    target,
+    "files",
+    (value) => SessionFilesResponseSchema.safeParse(value),
+    signal,
+  );
+
+/**
+ * The approaches and what each of them proved.
+ *
+ * The same read the host's compare screen makes. A joined window renders no
+ * decision surface — choosing between attempts is owner-only and stays
+ * host-side — but the test counts on it are the only session-wide statement of
+ * what was actually verified, and a teammate asked to agree a mission is
+ * finished needs exactly that.
+ */
+export const readComparison = (
+  target: JoinedTarget,
+  signal?: AbortSignal,
+): Promise<Comparison | null> =>
+  read(target, "compare", (value) => ComparisonSchema.safeParse(value), signal);
 
 /**
  * Who holds control, who is asking, and what direction is waiting.

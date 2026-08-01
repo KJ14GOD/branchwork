@@ -8,6 +8,7 @@ import {
 import { z } from "zod";
 
 import type { SessionEvent } from "@novus/contracts";
+import { DecisionRationaleSchema, MissionOutcomeSchema } from "@novus/contracts";
 import type { Authority } from "@novus/contracts/protocol";
 import {
   CancelRunRequestSchema,
@@ -145,6 +146,65 @@ const decisionRequestRefusal = (error: z.ZodError): string => {
   return field === ""
     ? `This decision could not be read: ${first.message.toLowerCase()}.`
     : `${field}: ${first.message.toLowerCase()}.`;
+};
+
+/**
+ * What finishing and reopening a mission take, as a body.
+ *
+ * Composed here from the contract's own field schemas rather than added beside
+ * `DecisionRequestSchema` in `protocol.ts`, which is where a request shape
+ * belongs and where these should move the next time that file is open. What
+ * matters is not where the `z.object` lives but that the *fields* are the
+ * shared ones: `summary` and `reason` are `DecisionRationaleSchema`, so the
+ * twelve-character floor a decision has to clear is the same floor a mission's
+ * ending has to clear, and it moves in one place if it ever moves.
+ *
+ * `verification` and `filesChanged` are deliberately not here. They are the
+ * evidence, and a client does not get to state its own — see the payload's
+ * comment in contracts.ts and `missionEvidence` below.
+ */
+const MissionCompleteRequestSchema = z.object({
+  outcome: MissionOutcomeSchema,
+  summary: DecisionRationaleSchema,
+});
+
+const MissionReopenRequestSchema = z.object({
+  reason: DecisionRationaleSchema,
+});
+
+/**
+ * Why a mission's ending was refused, in words the sender can act on.
+ *
+ * The same shape as `decisionRequestRefusal` and for the same reason: the
+ * prose field is the one a person actually gets wrong, and answering "this
+ * could not be read" to somebody who typed "done" tells them nothing about
+ * the floor they missed.
+ */
+const missionRequestRefusal = (
+  error: z.ZodError,
+  prose: "summary" | "reason",
+): string => {
+  const issue = error.issues.find((candidate) => candidate.path[0] === prose);
+
+  if (issue) {
+    return issue.code === "invalid_type"
+      ? prose === "summary"
+        ? "Finishing a mission needs a summary: what happened, in a sentence somebody who was not here can read."
+        : "Reopening a mission needs a reason: why it is not finished after all."
+      : `That ${prose} needs at least 12 characters — ${issue.message.toLowerCase()}.`;
+  }
+
+  const outcome = error.issues.find((candidate) => candidate.path[0] === "outcome");
+
+  if (outcome) {
+    return "A mission ends as resolved or abandoned. Nothing else is an outcome.";
+  }
+
+  const first = error.issues[0];
+
+  return first === undefined
+    ? "This request could not be read."
+    : `${first.path.join(".") || "request"}: ${first.message.toLowerCase()}.`;
 };
 
 export type EventServer = {
@@ -310,6 +370,109 @@ export const startEventServer = (
     );
 
     return running?.runId ?? null;
+  };
+
+  /**
+   * The run a direction belongs to, whether or not anything is executing.
+   *
+   * This used to be the *session* id, which is not a run id and never was —
+   * every `direction.submitted` in every log claims a run that does not exist,
+   * and nothing noticed because `drainDirection` matches on the event id and
+   * ignores this field. A record nobody reads is still a record, and one that
+   * is wrong is worse than one that is missing.
+   *
+   * The session's latest own run, forks excluded: while something is executing
+   * that is the run in flight (a running run is by definition the newest one),
+   * and while nothing is that is the run this direction follows on from. Which
+   * run *consumes* it is a different question, answered by `direction.queued`
+   * and then by `direction.applied` — neither of which has to guess.
+   *
+   * Null for a session that has never started a run, where there is no run to
+   * name; the caller decides what to do with that rather than being handed an
+   * invented id.
+   */
+  const directionRunId = (sessionId: string): string | null => {
+    const forks = forkRunIds(sessionId);
+    const own = projectionOf(sessionId).runs.filter(
+      (run) => !forks.has(run.runId),
+    );
+
+    return own.at(-1)?.runId ?? null;
+  };
+
+  /**
+   * Whether the run in flight can fold a direction into itself.
+   *
+   * `direction.queued` is a promise that *this execution* will read the words
+   * at its next turn boundary, and only Novus's own loop keeps it —
+   * `AgentRunner.drainDirection` is the sole emitter of `direction.applied`.
+   * Claude Code and Codex declare `steer: "next-run"` and contain no direction
+   * code at all, so queueing against one left the submitter watching a
+   * direction sit "queued" forever on a run that would never look at it. That
+   * is the exact failure the queued/submitted split exists to prevent, so the
+   * route asks the log what the running harness declared instead of assuming.
+   *
+   * `mid-turn` only, deliberately. `between-turns` is a value no adapter
+   * claims today, and admitting it here would re-open the same gap the moment
+   * one did without also draining direction.
+   *
+   * A run with no harness descriptor is the built-in loop: only `AgentRunner`
+   * appends `run.started` without one (both external adapters attach theirs),
+   * and `AgentRunner` is the thing that drains. So an absent descriptor is
+   * read as the loop's own `mid-turn` rather than as an unknown.
+   */
+  const runFoldsDirection = (sessionId: string, runId: string): boolean => {
+    const started = store
+      .list(sessionId)
+      .findLast(
+        (event) =>
+          event.type === "run.started" && event.payload.run.id === runId,
+      );
+
+    if (started?.type !== "run.started") {
+      return false;
+    }
+
+    const steer = started.payload.run.harness?.capabilities.steer;
+
+    return steer === undefined || steer === "mid-turn";
+  };
+
+  /**
+   * What the log says about this mission's work, at this instant.
+   *
+   * Frozen onto `mission.completed` rather than re-derived when the event is
+   * read back — see the payload's own comment. Two rules, both of which exist
+   * elsewhere in this file and are kept identical here on purpose:
+   *
+   * - Forks are excluded, exactly as `/files` excludes them. A fork's changes
+   *   live in its own worktree, and a mission finished in the parent has not
+   *   taken them.
+   * - Nothing verified is `unverified`, never `verified`. Completion is not
+   *   verification: a mission whose runs tested nothing is finished and
+   *   unproven, and those are two facts that must survive as two.
+   */
+  const missionEvidence = (
+    sessionId: string,
+  ): { verification: "verified" | "failing" | "unverified"; filesChanged: number } => {
+    const forks = forkRunIds(sessionId);
+    const own = projectionOf(sessionId).runs.filter(
+      (run) => !forks.has(run.runId),
+    );
+    const paths = new Set(
+      own.flatMap((run) => run.filesChanged.map((file) => file.path)),
+    );
+    const tests = own.flatMap((run) => run.tests);
+
+    return {
+      verification:
+        tests.length === 0
+          ? "unverified"
+          : tests.every((test) => test.passed)
+            ? "verified"
+            : "failing",
+      filesChanged: paths.size,
+    };
   };
 
   /**
@@ -1546,6 +1709,134 @@ export const startEventServer = (
       return true;
     }
 
+    /**
+     * A person declaring the mission over.
+     *
+     * The exit this product did not have. Every mission's only ending was
+     * `POST /decision`, which settles *which of several approaches won* — so a
+     * mission with one workstream and nothing to compare had to invent a
+     * comparison in order to stop, and a mission that was simply abandoned had
+     * no way to say so at all.
+     *
+     * What the caller supplies is the judgement: resolved or abandoned, and
+     * why. What the caller does not supply is the evidence — `verification`
+     * and `filesChanged` are read here, from this session's own projection,
+     * and frozen onto the event. A client that could state them could complete
+     * a mission as "verified" having run nothing, which is the single thing
+     * STEERING says this product does not do.
+     */
+    const completeMatch = /^\/sessions\/([^/]+)\/complete$/.exec(pathname);
+
+    if (completeMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(completeMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = MissionCompleteRequestSchema.safeParse(
+        await readJsonBody(request),
+      );
+
+      if (!parsed.success) {
+        sendJson(response, 400, {
+          error: missionRequestRefusal(parsed.error, "summary"),
+        });
+        return true;
+      }
+
+      // Finishing twice is refused rather than being idempotent, for the
+      // reason accepting a handoff twice is: the second 201 would read as
+      // "this time it went through", and the two summaries would both be on
+      // the log with nothing saying which one the team meant. Reopening first
+      // is the way to change an ending, and it leaves the change of mind
+      // visible.
+      if (projectionOf(session.id).completion !== null) {
+        sendJson(response, 409, {
+          error:
+            "This mission is already finished. Reopen it before finishing it again.",
+        });
+        return true;
+      }
+
+      const evidence = missionEvidence(session.id);
+
+      const event = store.append({
+        sessionId: session.id,
+        actorId: caller?.participant.id ?? "host",
+        type: "mission.completed",
+        payload: {
+          outcome: parsed.data.outcome,
+          summary: parsed.data.summary,
+          verification: evidence.verification,
+          filesChanged: evidence.filesChanged,
+          actorId: caller?.participant.id ?? "host",
+        },
+      });
+
+      sendJson(response, 201, {
+        completion: event.payload,
+        eventId: event.eventId,
+      });
+      return true;
+    }
+
+    /**
+     * The way back. Completing a mission is not a trapdoor.
+     *
+     * A mission abandoned at 2am and picked up the next morning is the
+     * ordinary case; without this the only route back was a second mission on
+     * the same repository, which loses the thread that made the first one
+     * worth reading.
+     */
+    const reopenMatch = /^\/sessions\/([^/]+)\/reopen$/.exec(pathname);
+
+    if (reopenMatch && request.method === "POST") {
+      const session = sessions.get(decodeURIComponent(reopenMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      const parsed = MissionReopenRequestSchema.safeParse(
+        await readJsonBody(request),
+      );
+
+      if (!parsed.success) {
+        sendJson(response, 400, {
+          error: missionRequestRefusal(parsed.error, "reason"),
+        });
+        return true;
+      }
+
+      // A live mission cannot be reopened, because it was never closed. The
+      // refusal is a 409 rather than a silent success: a client that thinks it
+      // just reopened something is about to tell a person the mission is back
+      // when nothing changed, and `mission.reopened` on a log that has no
+      // completion to undo is a fact about nothing.
+      if (projectionOf(session.id).completion === null) {
+        sendJson(response, 409, {
+          error: "This mission is not finished, so there is nothing to reopen.",
+        });
+        return true;
+      }
+
+      const event = store.append({
+        sessionId: session.id,
+        actorId: caller?.participant.id ?? "host",
+        type: "mission.reopened",
+        payload: {
+          actorId: caller?.participant.id ?? "host",
+          reason: parsed.data.reason,
+        },
+      });
+
+      sendJson(response, 201, { eventId: event.eventId });
+      return true;
+    }
+
     const directionMatch = /^\/sessions\/([^/]+)\/direction$/.exec(pathname);
 
     if (directionMatch && request.method === "POST") {
@@ -1569,11 +1860,18 @@ export const startEventServer = (
       // prompt that is already executing: this enters the log now so everyone
       // sees it was received, and the runtime folds it into the next model turn
       // at a boundary of its own choosing.
+      //
+      // `runId` names a run, or names the session only when this session has
+      // never started one — see `directionRunId`. It was the session id
+      // unconditionally, which is a session id wearing a run id's field.
       const event = store.append({
         sessionId: session.id,
         actorId: caller?.participant.id ?? "host",
         type: "direction.submitted",
-        payload: { runId: session.id, direction: parsed.data.goal },
+        payload: {
+          runId: directionRunId(session.id) ?? session.id,
+          direction: parsed.data.goal,
+        },
       });
 
       // Whether a run is live decides what the submitter is actually promised,
@@ -1589,17 +1887,47 @@ export const startEventServer = (
       // by that boundary the direction is being applied in the same instant, so
       // an event emitted there would describe a state that never lasted long
       // enough for anyone to see it.
+      //
+      // And a run being live is not on its own enough to promise it, which is
+      // where this was lying. Queuing was decided by "is something running",
+      // and the running thing might be Claude Code — a harness that declares
+      // `steer: "next-run"`, contains no direction code, and will never emit
+      // `direction.applied`. A direction submitted into the golden scenario
+      // therefore showed as permanently queued against a run that was never
+      // going to read it. Now the *harness* decides, from what it declared on
+      // `run.started`, and a harness that cannot fold direction says so on the
+      // log rather than leaving a promise standing.
       const targetRun = directionTargetRun(session.id);
+      const queuedFor =
+        targetRun !== null && runFoldsDirection(session.id, targetRun)
+          ? targetRun
+          : null;
 
-      if (targetRun !== null) {
+      if (queuedFor !== null) {
         store.append({
           sessionId: session.id,
           actorId: caller?.participant.id ?? "host",
           type: "direction.queued",
           payload: {
-            runId: targetRun,
+            runId: queuedFor,
             directionEventId: event.eventId,
             direction: parsed.data.goal,
+          },
+        });
+      } else if (targetRun !== null) {
+        // The direction is kept — `direction.submitted` is already on the log
+        // above and the next run will read it. What is refused is the *stronger*
+        // promise, and `harness.unsupported` is the signal for exactly this:
+        // silence here is indistinguishable from a steer that worked.
+        store.append({
+          sessionId: session.id,
+          actorId: caller?.participant.id ?? "host",
+          type: "harness.unsupported",
+          payload: {
+            runId: targetRun,
+            requested: "steer",
+            reason:
+              "This harness cannot take direction while it is running. Your words are recorded and become the next thing it is asked.",
           },
         });
       }
@@ -1607,7 +1935,7 @@ export const startEventServer = (
       sendJson(response, 202, {
         accepted: true,
         eventId: event.eventId,
-        queuedForRunId: targetRun,
+        queuedForRunId: queuedFor,
       });
       return true;
     }
@@ -1880,7 +2208,40 @@ export const startEventServer = (
               // are one route today, handed them the write too.
               /^\/sessions\/[^/]+\/decision$/.test(url.pathname)
               ? "decide"
-              : // Named explicitly rather than left to the trailing default:
+              : /**
+                 * Ending a mission, and undoing that ending.
+                 *
+                 * `approve`, not `decide` and not `steer`, and the choice is
+                 * worth arguing rather than inheriting.
+                 *
+                 * Not `decide`: that capability is owner-only because
+                 * `/decision` both settles the comparison *and writes the
+                 * chosen files* — it is a write gate as much as a verdict
+                 * gate. Finishing a mission writes nothing. Borrowing the
+                 * owner-only gate would mean that in a product whose thesis
+                 * is deciding together, the one act that says "we are done"
+                 * is the host's alone, and everyone else's evidence is
+                 * advisory. Gap 17 already records that owner-only is awkward
+                 * where it exists; extending it here would widen a shape we
+                 * are unhappy with.
+                 *
+                 * Not `steer`: steering is authority over an execution in
+                 * flight. Saying the work is over is a judgement about the
+                 * work, and `steer` would exclude the reviewer — the one role
+                 * defined as judging without executing — from the only
+                 * judgement the role is named for.
+                 *
+                 * `approve` is that judgement, and it is the first HTTP
+                 * surface the capability has had. A viewer still cannot: the
+                 * floor for ending somebody's mission is being able to say
+                 * yes to something. Every refusal is a 403 the route states,
+                 * and reopening carries the same capability because being
+                 * able to end a mission and not to undo it is the trapdoor
+                 * `mission.reopened` exists to remove.
+                 */
+                /^\/sessions\/[^/]+\/(complete|reopen)$/.test(url.pathname)
+                ? "approve"
+                : // Named explicitly rather than left to the trailing default:
               // stopping, pausing, or resuming a run in flight is exactly the
               // kind of action participants.ts warns about a reviewer
               // inheriting by accident when a route is not listed here.

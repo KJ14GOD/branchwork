@@ -1,8 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
 
+import type { MissionOutcome } from "@novus/contracts";
+
 import {
   answerHandoff,
+  completeMission,
   offerControl,
+  reopenMission,
   requestControl,
   steerRun,
   submitDirection,
@@ -36,6 +40,16 @@ export type JoinedActions = {
   /** Only meaningful for a joiner who holds control — the worker checks. */
   offerControl: (toParticipantId: string) => Promise<void>;
   answerHandoff: (offerEventId: string, answer: HandoffAnswer) => Promise<void>;
+  /**
+   * Declaring the mission over, and undoing that.
+   *
+   * Both return whether the worker took it, because both are typed into a
+   * form that should only clear when it landed — a summary silently discarded
+   * on a 403 is worse than one still sitting on screen with the refusal
+   * beside it.
+   */
+  finish: (outcome: MissionOutcome, summary: string) => Promise<boolean>;
+  reopen: (reason: string) => Promise<boolean>;
 };
 
 export const useJoinedActions = (
@@ -123,6 +137,17 @@ export const useJoinedActions = (
     [attempt, onAuthorityChanged],
   );
 
+  const finish = useCallback(
+    (outcome: MissionOutcome, summary: string) =>
+      attempt((into) => completeMission(into, outcome, summary)),
+    [attempt],
+  );
+
+  const reopen = useCallback(
+    (reason: string) => attempt((into) => reopenMission(into, reason)),
+    [attempt],
+  );
+
   return {
     error,
     direct,
@@ -132,5 +157,7 @@ export const useJoinedActions = (
     requestControl: ask,
     offerControl: offer,
     answerHandoff: answer,
+    finish,
+    reopen,
   };
 };
