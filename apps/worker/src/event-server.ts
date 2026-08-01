@@ -113,6 +113,10 @@ const sendJson = (
  * the only way it could be malformed when it had one field. Now that the
  * rationale is enforced here rather than in React, that message would tell
  * somebody who wrote three words that their run id was wrong.
+ *
+ * Rationale gets its own sentence because it is the field a person is most
+ * likely to get wrong and the one whose Zod message reads worst; everything
+ * else is named rather than guessed at.
  */
 const decisionRequestRefusal = (error: z.ZodError): string => {
   const rationale = error.issues.find(
@@ -125,7 +129,21 @@ const decisionRequestRefusal = (error: z.ZodError): string => {
       : `A decision needs a rationale of at least 12 characters — ${rationale.message.toLowerCase()}.`;
   }
 
-  return "A runId is required.";
+  // Everything else names the field it actually failed on. Falling back to
+  // "A runId is required" for, say, an unrecognised `kind` reintroduces exactly
+  // the misleading answer this function exists to remove — it would just be
+  // wrong about a different field.
+  const first = error.issues[0];
+
+  if (first === undefined) {
+    return "This decision could not be read.";
+  }
+
+  const field = first.path.join(".");
+
+  return field === ""
+    ? `This decision could not be read: ${first.message.toLowerCase()}.`
+    : `${field}: ${first.message.toLowerCase()}.`;
 };
 
 export type EventServer = {
@@ -1392,6 +1410,13 @@ export const startEventServer = (
        * from. Undefined only when nothing was ever forked, where there is no
        * shared starting point to name and inventing one would be a worse
        * record than an absent field.
+       *
+       * The *most recent* fork's checkpoint, not a checkpoint every
+       * alternative provably shares. Alternatives cut from different points
+       * are possible, and this names only the last — deliberately the same
+       * derivation `baselineRunId` in compare.ts already uses, so the record
+       * and the screen agree. Naming it precisely would mean recording a set,
+       * which is a contract change and not this slice's.
        */
       const decidedCheckpointId =
         handle?.fork.checkpointId ?? decisionForks.at(-1)?.checkpointId;

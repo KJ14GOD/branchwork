@@ -319,14 +319,25 @@ export const CompareScreen = ({
                   // whose history cannot say who made it or why has lost the
                   // only part worth keeping. Nothing is written when it is
                   // taken; the work is already here.
-                  <button
-                    className="button"
-                    type="button"
-                    disabled={state.choosing}
-                    onClick={() => setDeciding({ runId: attempt.runId, kind: "adopt" })}
-                  >
-                    Keep the current work
-                  </button>
+                  // Absent while the run it would settle is still going.
+                  // Recording "keep the current work" on a run that has not
+                  // finished settles a comparison against evidence that is
+                  // still moving, and the spine then reads "Receipt complete"
+                  // for a run mid-flight — a claim the screen cannot support.
+                  attempt.status === "running" || attempt.status === "paused" ? (
+                    <span className="compare__foot-note">
+                      Still working. There is nothing settled to keep yet.
+                    </span>
+                  ) : (
+                    <button
+                      className="button"
+                      type="button"
+                      disabled={state.choosing}
+                      onClick={() => setDeciding({ runId: attempt.runId, kind: "adopt" })}
+                    >
+                      Keep the current work
+                    </button>
+                  )
                 ) : (
                   <button
                     className="button"
