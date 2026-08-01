@@ -1,6 +1,9 @@
+import type { MissionOutcome } from "@novus/contracts";
 import {
   AuthorityResponseSchema,
+  SessionFilesResponseSchema,
   type Authority,
+  type SessionFilesResponse,
 } from "@novus/contracts/protocol";
 
 import { readError } from "../http.ts";
@@ -103,6 +106,139 @@ export const answerHandoff = (
   answer: HandoffAnswer,
 ): Promise<JoinedResult> =>
   send(target, `handoff/${answer}`, { offerEventId });
+
+/**
+ * Declaring the mission over, and taking that back.
+ *
+ * The judgement travels; the evidence does not. `verification` and
+ * `filesChanged` are computed by the worker from the session's own projection
+ * and frozen onto the event, so there is deliberately nothing here for a
+ * joined window to state about what was proven — a client that could say
+ * "verified" could finish a mission green having run nothing.
+ */
+export const completeMission = (
+  target: JoinedTarget,
+  outcome: MissionOutcome,
+  summary: string,
+): Promise<JoinedResult> =>
+  send(target, "complete", { outcome, summary });
+
+export const reopenMission = (
+  target: JoinedTarget,
+  reason: string,
+): Promise<JoinedResult> => send(target, "reopen", { reason });
+
+/**
+ * One validated GET, for the reads that are evidence rather than authority.
+ *
+ * Same judgement `readAuthority` makes and for the same reason: this is an
+ * overlay on a session that works without it, so a refusal or an unreachable
+ * host sets it empty rather than raising an error over the timeline. Null
+ * means "nothing to show", never "there are no changes" — the caller draws
+ * the panel only when it has something.
+ */
+const read = async <T>(
+  target: JoinedTarget,
+  path: string,
+  parse: (value: unknown) => { success: true; data: T } | { success: false },
+  signal?: AbortSignal,
+): Promise<T | null> => {
+  const { endpoint, sessionId, token } = target;
+
+  try {
+    const response = await fetch(
+      `${endpoint}/sessions/${encodeURIComponent(sessionId)}/${path}`,
+      {
+        ...(signal ? { signal } : {}),
+        headers: { authorization: `Bearer ${token}` },
+      },
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const parsed = parse(await response.json());
+
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+};
+
+/** What this mission changed: the worker's own projection, not a second tally. */
+export const readFiles = (
+  target: JoinedTarget,
+  signal?: AbortSignal,
+): Promise<SessionFilesResponse | null> =>
+  read(
+    target,
+    "files",
+    (value) => SessionFilesResponseSchema.safeParse(value),
+    signal,
+  );
+
+/**
+ * What the worker says this mission has changed and what has verified it.
+ *
+ * Read rather than computed. This window could add up `/compare`'s test counts
+ * itself — it did — and the number it produced was a different number from the
+ * one `POST /complete` freezes onto the log: `/compare` includes every fork,
+ * carries no sequence to notice that a green check predates the last edit, and
+ * counts only tests where the receipt counts build, typecheck and lint too. A
+ * panel that disagrees with the record is worse than no panel, because it is
+ * the thing somebody reads before deciding the mission is done.
+ *
+ * The shape belongs beside `SessionFilesResponseSchema` in `protocol.ts`, and
+ * the guard below exists in its place only because this slice cannot edit that
+ * file — the desktop does not depend on zod directly, so this is a hand
+ * written check rather than a schema, and it should become one. What matters
+ * either way is that it is checked at all: an unvalidated read draws a panel
+ * that is silently wrong instead of a request that visibly did not parse.
+ */
+export type MissionEvidence = {
+  verification: "verified" | "failing" | "unverified";
+  filesChanged: number;
+  /** Zero and stale are different reasons to be unverified, and read differently. */
+  checksRun: number;
+  checksPassed: number;
+};
+
+const parseEvidence = (
+  value: unknown,
+): { success: true; data: MissionEvidence } | { success: false } => {
+  if (typeof value !== "object" || value === null) {
+    return { success: false };
+  }
+
+  const body = value as Record<string, unknown>;
+  const counted = ["filesChanged", "checksRun", "checksPassed"] as const;
+
+  if (
+    !["verified", "failing", "unverified"].includes(
+      body["verification"] as string,
+    ) ||
+    counted.some((field) => typeof body[field] !== "number")
+  ) {
+    return { success: false };
+  }
+
+  return {
+    success: true,
+    data: {
+      verification: body["verification"] as MissionEvidence["verification"],
+      filesChanged: body["filesChanged"] as number,
+      checksRun: body["checksRun"] as number,
+      checksPassed: body["checksPassed"] as number,
+    },
+  };
+};
+
+export const readEvidence = (
+  target: JoinedTarget,
+  signal?: AbortSignal,
+): Promise<MissionEvidence | null> =>
+  read(target, "evidence", parseEvidence, signal);
 
 /**
  * Who holds control, who is asking, and what direction is waiting.

@@ -12,6 +12,7 @@ import type { TabStatus } from "../session-tab.tsx";
 import { JoinedSurface } from "./joined-surface.tsx";
 import { useJoinedActions } from "./use-joined-actions.ts";
 import { useJoinedAuthority } from "./use-joined-authority.ts";
+import { useJoinedEvidence } from "./use-joined-evidence.ts";
 import { useMembership } from "./use-membership.ts";
 
 const basename = (path: string): string =>
@@ -74,6 +75,16 @@ export const JoinedTab = ({
     invite.token,
     authority.refresh,
   );
+  // Keyed on the event count rather than polled: the log moving is the only
+  // thing that can change what the evidence says, and this window is already
+  // subscribed to that.
+  const evidence = useJoinedEvidence(
+    endpoint,
+    sessionId,
+    invite.token,
+    relay,
+    events.length,
+  );
 
   const summary = useMemo(() => summarise(events), [events]);
   const report = describeConnection(
@@ -125,6 +136,7 @@ export const JoinedTab = ({
       participants={presence}
       authority={authority}
       actions={actions}
+      evidence={evidence}
     />
   );
 };

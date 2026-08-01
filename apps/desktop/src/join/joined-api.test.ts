@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
+import type { SessionEvent } from "@novus/contracts";
 import { fetchMembership } from "@novus/session-client";
 
 // Reached by path rather than by dependency, deliberately. A joined window
@@ -20,8 +21,12 @@ import { InMemorySessionEventStore } from "../../../session-service/src/session-
 
 import {
   answerHandoff,
+  completeMission,
   offerControl,
   readAuthority,
+  readEvidence,
+  readFiles,
+  reopenMission,
   requestControl,
   steerRun,
   submitDirection,
@@ -91,6 +96,16 @@ type Context = {
    * authority rather than timing.
    */
   pauseInLog: (runId: string) => void;
+  /** The host's log, for asserting what a joined window's call actually wrote. */
+  log: (sessionId: string) => SessionEvent[];
+  /**
+   * A run that changed a file, checked it, and then changed it again.
+   *
+   * The stale-green shape, written straight into the log: a check followed by
+   * an edit is the case where a screen computing its own verdict says green
+   * and the receipt says unverified.
+   */
+  patchAndCheck: () => void;
 };
 
 const withSession = async (
@@ -226,6 +241,76 @@ const withSession = async (
           type: "run.paused",
           payload: { runId },
         });
+      },
+      log: (of) => store.list(of),
+      patchAndCheck: () => {
+        const runId = "run-evidence";
+
+        store.append({
+          sessionId,
+          actorId: "agent-1",
+          type: "run.started",
+          payload: {
+            run: {
+              id: runId,
+              sessionId,
+              goal: "Fix the rounding bug.",
+              status: "running",
+              startedBy: "agent-1",
+              model: { provider: "anthropic", model: "test" },
+              createdAt: new Date().toISOString(),
+            },
+          },
+        });
+
+        const patch = (path: string, id: string) =>
+          store.append({
+            sessionId,
+            actorId: "agent-1",
+            type: "tool.completed",
+            payload: {
+              runId,
+              result: {
+                toolCallId: id,
+                name: "apply_patch",
+                output: {
+                  patchId: `patch-${id}`,
+                  path,
+                  status: "applied",
+                  additions: 2,
+                  deletions: 1,
+                },
+              },
+            },
+          });
+
+        patch("src/tax.ts", "c1");
+
+        store.append({
+          sessionId,
+          actorId: "agent-1",
+          type: "tool.completed",
+          payload: {
+            runId,
+            result: {
+              toolCallId: "c2",
+              name: "run_tests",
+              output: {
+                command: "pnpm test",
+                exitCode: 0,
+                timedOut: false,
+                durationMs: 10,
+                stdout: "",
+                stderr: "",
+                truncated: false,
+                passed: true,
+              },
+            },
+          },
+        });
+
+        // The edit that makes the green check describe a tree that is gone.
+        patch("src/refund.ts", "c3");
       },
     });
   } finally {
@@ -492,5 +577,165 @@ test("an invite for one session cannot read or act on another", async () => {
 
     assert.equal(asked.ok, false);
     assert.equal(directed.ok, false);
+  });
+});
+
+test("a joined window can read the mission's changes and its verdict", async () => {
+  await withSession(async ({ join }) => {
+    const reviewer = await join("reviewer");
+
+    // Both reads are `watch`, which every participant has — this is the
+    // evidence a teammate is being asked to agree a mission on, and a joined
+    // window could reach none of it before.
+    const files = await readFiles(reviewer.target);
+    const evidence = await readEvidence(reviewer.target);
+
+    assert.ok(files, "a reviewer could not read the changed files");
+    assert.deepEqual(files.files, []);
+    assert.ok(evidence, "a reviewer could not read the verdict");
+    assert.equal(evidence.verification, "unverified");
+    assert.equal(evidence.checksRun, 0);
+  });
+});
+
+test("the panel's verdict is the one the record would freeze", async () => {
+  await withSession(async ({ join, sessionId, log, patchAndCheck }) => {
+    const editor = await join("editor");
+
+    // Green checks, then a later change: the case where a panel computing its
+    // own numbers said verified and the record said unverified.
+    patchAndCheck();
+
+    const panel = await readEvidence(editor.target);
+
+    assert.equal(panel?.verification, "unverified");
+
+    await completeMission(
+      editor.target,
+      "resolved",
+      "Calling it done with the suite out of date.",
+    );
+
+    const frozen = log(sessionId).find(
+      (event) => event.type === "mission.completed",
+    );
+
+    assert.ok(frozen && frozen.type === "mission.completed");
+    // One computation, not two that agree. This assertion is the guarantee.
+    assert.equal(frozen.payload.verification, panel?.verification);
+    assert.equal(frozen.payload.filesChanged, panel?.filesChanged);
+  });
+});
+
+test("an invite for one session reads no evidence from another", async () => {
+  await withSession(async ({ join, otherSession, url }) => {
+    const editor = await join("editor");
+    const crossed: JoinedTarget = {
+      endpoint: url,
+      sessionId: await otherSession(),
+      token: editor.token,
+    };
+
+    assert.equal(await readFiles(crossed), null);
+    assert.equal(await readEvidence(crossed), null);
+  });
+});
+
+test("a reviewer can finish the mission, and the worker states the evidence", async () => {
+  await withSession(async ({ join, sessionId, log }) => {
+    const reviewer = await join("reviewer");
+
+    const finished = await completeMission(
+      reviewer.target,
+      "resolved",
+      "The rounding is fixed and we walked the checkout by hand.",
+    );
+
+    assert.equal(finished.ok, true, finished.ok ? "" : finished.error);
+
+    const completed = log(sessionId).find(
+      (event) => event.type === "mission.completed",
+    );
+
+    assert.ok(completed && completed.type === "mission.completed");
+    assert.equal(completed.payload.outcome, "resolved");
+    assert.equal(completed.actorId, reviewer.id);
+    // The joined window sent an outcome and a sentence. It did not send this,
+    // and could not have: nothing ran, so nothing is claimed.
+    assert.equal(completed.payload.verification, "unverified");
+    assert.equal(completed.payload.filesChanged, 0);
+  });
+});
+
+test("a viewer cannot finish a mission, and is told so in the worker's words", async () => {
+  await withSession(async ({ join }) => {
+    const viewer = await join("viewer");
+
+    const finished = await completeMission(
+      viewer.target,
+      "abandoned",
+      "A viewer trying to close somebody else's mission.",
+    );
+
+    assert.equal(finished.ok, false);
+    assert.match(finished.ok ? "" : finished.error, /viewer cannot approve/);
+  });
+});
+
+test("a summary that says nothing is refused at the boundary, not in React", async () => {
+  await withSession(async ({ join }) => {
+    const editor = await join("editor");
+
+    const finished = await completeMission(editor.target, "resolved", "done");
+
+    assert.equal(finished.ok, false);
+    // The message the joined window shows verbatim. A client-side length check
+    // is a courtesy; this is the rule.
+    assert.match(
+      finished.ok ? "" : finished.error,
+      /at least 12 characters/,
+    );
+  });
+});
+
+test("finishing twice is refused, and reopening is the way to change an ending", async () => {
+  await withSession(async ({ join }) => {
+    const editor = await join("editor");
+    const summary = "The tax rounding is fixed and checkout works again.";
+
+    assert.equal((await completeMission(editor.target, "resolved", summary)).ok, true);
+
+    const again = await completeMission(editor.target, "abandoned", summary);
+
+    assert.equal(again.ok, false);
+    assert.match(again.ok ? "" : again.error, /Reopen it before finishing/);
+
+    const reopened = await reopenMission(
+      editor.target,
+      "The refund path regressed, so this is not finished after all.",
+    );
+
+    assert.equal(reopened.ok, true, reopened.ok ? "" : reopened.error);
+
+    // Completing is a trapdoor if this fails: the second ending is the whole
+    // point of being able to reopen.
+    assert.equal(
+      (await completeMission(editor.target, "abandoned", summary)).ok,
+      true,
+    );
+  });
+});
+
+test("a live mission cannot be reopened", async () => {
+  await withSession(async ({ join }) => {
+    const editor = await join("editor");
+
+    const reopened = await reopenMission(
+      editor.target,
+      "Reopening a mission that was never finished.",
+    );
+
+    assert.equal(reopened.ok, false);
+    assert.match(reopened.ok ? "" : reopened.error, /nothing to reopen/);
   });
 });

@@ -18,6 +18,7 @@ import {
 } from "../components/control-panel.tsx";
 import { TimelineView } from "../components/timeline-view.tsx";
 import type { JoinedActions } from "./use-joined-actions.ts";
+import type { JoinedEvidence } from "./use-joined-evidence.ts";
 
 /**
  * Everything a joined window draws, given state rather than fetching it.
@@ -43,6 +44,93 @@ import type { JoinedActions } from "./use-joined-actions.ts";
 const sentenceCase = (value: string): string =>
   value.length === 0 ? value : value[0]!.toUpperCase() + value.slice(1);
 
+/** The floor `DecisionRationaleSchema` puts on a summary, mirrored so the form can. */
+const RATIONALE_FLOOR = 12;
+
+const toneFor = (verification: "verified" | "failing" | "unverified"): string =>
+  verification === "verified"
+    ? "evidence__line evidence__line--pass"
+    : verification === "failing"
+      ? "evidence__line evidence__line--fail"
+      : "evidence__line evidence__line--unknown";
+
+const plural = (count: number, word: string): string =>
+  `${count} ${word}${count === 1 ? "" : "s"}`;
+
+/**
+ * How the frozen evidence on a completed mission reads.
+ *
+ * Three values because "nothing ran" and "something ran and failed" are
+ * different facts. The one that matters most is the middle case: a mission
+ * that was finished having verified nothing says so, in the same place it says
+ * it was resolved, or the screen has quietly turned finishing into proof.
+ *
+ * The frozen payload carries the verdict and the file count and no check
+ * counts, so this says less than the live panel below and never more.
+ */
+const verificationLine = (
+  verification: "verified" | "failing" | "unverified",
+  filesChanged: number,
+): { text: string; tone: string } => {
+  const files = `${plural(filesChanged, "file")} changed`;
+
+  switch (verification) {
+    case "verified":
+      return {
+        text: `${files}, and the checks that ran passed.`,
+        tone: toneFor(verification),
+      };
+    case "failing":
+      return {
+        text: `${files}, and the checks that ran did not pass.`,
+        tone: toneFor(verification),
+      };
+    case "unverified":
+      return {
+        text: `${files}, and nothing verified them.`,
+        tone: toneFor(verification),
+      };
+  }
+};
+
+/**
+ * How the live verdict reads, including the state a boolean cannot hold.
+ *
+ * `unverified` has two causes and they are not the same news. Nothing ran at
+ * all is an absence. Something ran and then the tree moved under it is a
+ * *stale* result — checks exist, they are green, and they describe a version
+ * of these files that no longer exists. The worker's rule (from `receipt.ts`)
+ * calls both unverified, and a panel that rendered them with one sentence
+ * would tell somebody "no checks have run" about a mission whose suite they
+ * personally watched go green ten minutes ago.
+ */
+const liveVerdict = (verdict: {
+  verification: "verified" | "failing" | "unverified";
+  checksRun: number;
+  checksPassed: number;
+}): { text: string; tone: string } => {
+  switch (verdict.verification) {
+    case "verified":
+      return {
+        text: `${plural(verdict.checksRun, "check")} passed against these changes.`,
+        tone: toneFor("verified"),
+      };
+    case "failing":
+      return {
+        text: `${verdict.checksPassed} of ${plural(verdict.checksRun, "check")} passed.`,
+        tone: toneFor("failing"),
+      };
+    case "unverified":
+      return {
+        text:
+          verdict.checksRun === 0
+            ? "Nothing has verified these changes. No checks have run."
+            : `${plural(verdict.checksRun, "check")} ran before the last change, so nothing has verified the files as they stand.`,
+        tone: toneFor("unverified"),
+      };
+  }
+};
+
 export type JoinedSurfaceProps = {
   active: boolean;
   /** A relay join: the log arrives, nothing can be sent back. */
@@ -63,6 +151,8 @@ export type JoinedSurfaceProps = {
   participants: readonly PresenceEntry[];
   authority: Authority;
   actions: JoinedActions;
+  /** The changes and verification this window may show. Empty for a relay join. */
+  evidence: JoinedEvidence;
 };
 
 export const JoinedSurface = ({
@@ -79,9 +169,12 @@ export const JoinedSurface = ({
   participants,
   authority,
   actions,
+  evidence,
 }: JoinedSurfaceProps) => {
   const [direction, setDirection] = useState("");
   const [sent, setSent] = useState(false);
+  const [ending, setEnding] = useState("");
+  const [reopening, setReopening] = useState("");
   const [groupOverrides, setGroupOverrides] = useState(
     () => new Map<number, boolean>(),
   );
@@ -90,6 +183,26 @@ export const JoinedSurface = ({
   // both directions regardless of what the invite said.
   const canDirect = !relay && role !== null && roleAllows(role, "direct");
   const canSteer = !relay && role !== null && roleAllows(role, "steer");
+  /**
+   * Ending the mission is `approve`, which is the worker's own gate for
+   * `/complete` and `/reopen` — a reviewer can, a viewer cannot.
+   *
+   * Mirrored here only to decide what to offer. The worker re-decides on every
+   * request, so a table that drifts makes this screen wrong about what to
+   * show and never wrong about what happens.
+   */
+  const canFinish = !relay && role !== null && roleAllows(role, "approve");
+
+  // Guarded by `missionOutcome`, which is `summarise`'s fold — last event
+  // wins and a reopening beats the completion before it. Reading the event
+  // for its prose rather than re-deciding whether the mission is over keeps
+  // one rule in one place.
+  const finished =
+    summary.missionOutcome === null
+      ? null
+      : (events.findLast((event) => event.type === "mission.completed") ?? null);
+  const completion =
+    finished?.type === "mission.completed" ? finished.payload : null;
 
   const latestRun = events.findLast((event) => event.type === "run.started");
   const runId =
@@ -110,6 +223,20 @@ export const JoinedSurface = ({
     }
   };
 
+  // Cleared only when the worker took it. A summary discarded on a refusal is
+  // a person's sentence thrown away for them.
+  const end = async (outcome: "resolved" | "abandoned") => {
+    if (await actions.finish(outcome, ending.trim())) {
+      setEnding("");
+    }
+  };
+
+  const reopen = async () => {
+    if (await actions.reopen(reopening.trim())) {
+      setReopening("");
+    }
+  };
+
   return (
     <div className="tab-content" style={{ display: active ? "grid" : "none" }}>
       <div className="session-bar">
@@ -120,6 +247,17 @@ export const JoinedSurface = ({
           {report.label}
         </span>
         <span>{sentenceCase(summary.runStatus)}</span>
+        {/*
+          Beside the run's status, never instead of it. A mission resolved
+          after a failed run is an ordinary ending — the team fixed it by hand
+          and said so — and one chip that replaced the other could only tell
+          that story by suppressing half of it.
+        */}
+        {summary.missionOutcome ? (
+          <span className="chip">
+            Mission {summary.missionOutcome}
+          </span>
+        ) : null}
         <span className="titlebar__spacer" />
         {/* Renders nothing when this window is nobody — a relay join, or a
             worker with no participant registry. */}
@@ -133,7 +271,20 @@ export const JoinedSurface = ({
         </span>
       </div>
 
-      <div className="body" style={{ gridTemplateColumns: "var(--rail-w) 1fr" }}>
+      {/*
+        The evidence column is mounted only when there is evidence. A panel
+        reading "no files changed" and "no checks configured" on a mission that
+        has not started teaches people not to look at it, which is the opposite
+        of what an evidence panel is for — and the centre takes the width back.
+      */}
+      <div
+        className="body"
+        style={{
+          gridTemplateColumns: evidence.any
+            ? "var(--rail-w) 1fr var(--rail-w)"
+            : "var(--rail-w) 1fr",
+        }}
+      >
         <aside className="rail">
           <div className="rail__section">
             <div className="eyebrow">Goal</div>
@@ -190,6 +341,95 @@ export const JoinedSurface = ({
                   Cancel
                 </button>
               </div>
+            </div>
+          ) : null}
+
+          {/*
+            How this mission ended, for everybody, and the way back for
+            whoever may take it.
+
+            The outcome and the evidence are shown together on purpose. The
+            evidence is the frozen copy from the event, not a fresh reading of
+            the repository: a mission finished with nothing verified must go on
+            saying so, or the next unrelated test run silently upgrades it to
+            green.
+          */}
+          {completion ? (
+            <div className="rail__section">
+              <div className="eyebrow">Mission {completion.outcome}</div>
+              <div>{completion.summary}</div>
+              <span
+                className={
+                  verificationLine(
+                    completion.verification,
+                    completion.filesChanged,
+                  ).tone
+                }
+              >
+                {
+                  verificationLine(
+                    completion.verification,
+                    completion.filesChanged,
+                  ).text
+                }
+              </span>
+              {canFinish ? (
+                <>
+                  <input
+                    className="open__input"
+                    value={reopening}
+                    onChange={(event) => setReopening(event.target.value)}
+                    placeholder="Why it is not finished after all"
+                    spellCheck={false}
+                  />
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={reopening.trim().length < RATIONALE_FLOOR}
+                    onClick={() => void reopen()}
+                  >
+                    Reopen mission
+                  </button>
+                </>
+              ) : null}
+            </div>
+          ) : canFinish ? (
+            <div className="rail__section">
+              <div className="eyebrow">Finish mission</div>
+              <input
+                className="open__input"
+                value={ending}
+                onChange={(event) => setEnding(event.target.value)}
+                placeholder="What happened, in a sentence"
+                spellCheck={false}
+              />
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  className="button button--primary"
+                  type="button"
+                  disabled={ending.trim().length < RATIONALE_FLOOR}
+                  onClick={() => void end("resolved")}
+                >
+                  Resolved
+                </button>
+                <button
+                  className="button"
+                  type="button"
+                  disabled={ending.trim().length < RATIONALE_FLOOR}
+                  onClick={() => void end("abandoned")}
+                >
+                  Abandoned
+                </button>
+              </div>
+              {/*
+                Said before anybody presses it. Finishing records what the
+                evidence says at this moment; it is not a claim that the work
+                is proven, and the button must not be read as one.
+              */}
+              <span className="eyebrow">
+                This records what the evidence says right now. It does not make
+                it green.
+              </span>
             </div>
           ) : null}
 
@@ -275,6 +515,59 @@ export const JoinedSurface = ({
             />
           )}
         </main>
+
+        {/*
+          The mission's evidence, in the host's visual language and on the
+          host's numbers — `/files` and `/evidence`, the latter being the same
+          function `POST /complete` freezes onto the log.
+
+          Drawn here rather than by reusing `EvidenceInspector` for one
+          specific reason: that component's copy has two verification states,
+          and the worker's rule has three. Its `verified === null` branch says
+          "No checks have run", which is exactly wrong for the stale case — a
+          suite that ran and went green before the last edit. A joined window
+          that says "no checks have run" about checks the person watched run is
+          the class of confident wrongness this panel exists to remove. The
+          markup and every class name are the inspector's, so the two screens
+          look like one product; only the sentence differs, and it differs
+          because it has to.
+
+          GitHub's checks are deliberately not read here: `/github` shells out
+          to `gh` on the host, and a joined window has no standing to make the
+          host run a command. What is drawn is what the session's own log knows.
+        */}
+        {evidence.any ? (
+          <aside className="evidence evidence--panel">
+            <h2 className="rail__eyebrow">Evidence</h2>
+
+            {evidence.verdict ? (
+              <section className="evidence__block">
+                <h3 className="evidence__heading">Verification</h3>
+                <p className={liveVerdict(evidence.verdict).tone}>
+                  {liveVerdict(evidence.verdict).text}
+                </p>
+              </section>
+            ) : null}
+
+            {evidence.files.files.length > 0 ? (
+              <section className="evidence__block">
+                <h3 className="evidence__heading">Changes</h3>
+                <p className="evidence__meta">
+                  {plural(evidence.files.files.length, "file")} changed
+                </p>
+                <ul className="evidence__files">
+                  {evidence.files.files.map((file) => (
+                    <li className="evidence__file" key={file.path}>
+                      <span className="evidence__path">{file.path}</span>
+                      <span className="evidence__add">+{file.additions}</span>
+                      <span className="evidence__del">−{file.deletions}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </aside>
+        ) : null}
       </div>
 
       {canDirect ? (

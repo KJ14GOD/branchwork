@@ -220,6 +220,18 @@ export const App = () => {
           </button>
           {summary.model ? <span>{summary.model}</span> : null}
           <span>{sentenceCase(summary.runStatus)}</span>
+          {/*
+            Beside the run's status, never instead of it. A guest watching a
+            mission that a person has since declared over was shown a stopped
+            run and no way to tell "finished" from "quiet" — which is the exact
+            pair `mission.completed` exists to separate. Null again after a
+            reopening, which is what `summarise` already folds.
+          */}
+          {summary.missionOutcome ? (
+            <span title="A person declared this mission over. Finishing is not verifying — the timeline says what was actually checked.">
+              Mission {summary.missionOutcome}
+            </span>
+          ) : null}
         </div>
         {presence.length > 0 ? (
           <div className="presence" title="Who has this mission open right now">
