@@ -34,7 +34,7 @@ export const Composer = ({
 }: {
   busy: boolean;
   model: TurnModelState;
-  onAsk: (goal: string, modelId?: string | null) => void;
+  onAsk: (goal: string, choice?: { modelId: string | null } | null) => void;
   onDirect: (goal: string) => void;
 }) => {
   const [value, setValue] = useState("");
@@ -84,7 +84,7 @@ export const Composer = ({
     } else {
       // null for "Auto" — the worker routes when no model is named, and the
       // pick wins outright when one is.
-      onAsk(trimmed, model.option.modelId);
+      onAsk(trimmed, model.option);
     }
 
     setValue("");

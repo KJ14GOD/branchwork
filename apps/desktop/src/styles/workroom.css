@@ -361,6 +361,20 @@
   cursor: default;
 }
 
+/* Amber, because it is something waiting on a person, and directly under the
+   control that failed rather than in a strip at the foot of the window. */
+.start__error {
+  max-width: 100%;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-s);
+  background: var(--alert-bg);
+  color: var(--alert);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  text-align: center;
+}
+
 .start__later {
   display: flex;
   align-items: center;

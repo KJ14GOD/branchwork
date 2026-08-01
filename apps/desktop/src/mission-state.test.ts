@@ -257,3 +257,38 @@ test("evidence is mounted only where there is something to say", () => {
   assert.equal(withChanges.showEvidence, true);
   assert.match(withChanges.detail, /3 files changed/);
 });
+
+test("a run that failed reads as failed before /compare has answered", () => {
+  // The regression this exists for, seen on screen: a mission whose only run
+  // died on a 401 showed "Working" in its header while its own rail said
+  // "Failed" directly beside it. The header was waiting on a fetch; the log
+  // had known since the moment it happened.
+  const state = missionState({
+    events: [
+      started("r1"),
+      event("run.failed", { runId: "r1", reason: "401 invalid x-api-key" }),
+    ],
+    comparison: null,
+    filesChanged: 0,
+    busy: false,
+    awaitingPerson: false,
+  });
+
+  assert.equal(state, "failed");
+});
+
+test("one failed run beside one still going is not a failed mission", () => {
+  const state = missionState({
+    events: [
+      started("r1"),
+      event("run.failed", { runId: "r1", reason: "boom" }),
+      started("r2"),
+    ],
+    comparison: null,
+    filesChanged: 0,
+    busy: true,
+    awaitingPerson: false,
+  });
+
+  assert.notEqual(state, "failed");
+});

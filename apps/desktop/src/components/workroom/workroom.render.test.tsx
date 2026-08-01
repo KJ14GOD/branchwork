@@ -99,7 +99,7 @@ const workroom = (
   );
 };
 
-const startCanvas = (): string =>
+const startCanvas = (error: string | null = null): string =>
   renderToStaticMarkup(
     <EmptyMission
       repository="novus"
@@ -107,6 +107,7 @@ const startCanvas = (): string =>
       repositoryState="ready"
       allowWrites={false}
       busy={false}
+      error={error}
       onStart={() => {}}
       onInvite={() => {}}
     />,
@@ -144,6 +145,21 @@ test("the start canvas has exactly one primary action", () => {
 
   assert.equal((html.match(/button--primary/g) ?? []).length, 1);
   assert.match(html, /Start mission/);
+});
+
+test("a mission that fails to start says so on the screen that failed", () => {
+  // The screen does not change when a start is refused — same question, same
+  // text still in the field — so a message in the window's footer strip reads
+  // as "nothing happened" rather than as "this failed, and here is why".
+  const html = startCanvas("This worker has no adapter for anthropic/auto.");
+
+  assert.match(html, /no adapter for anthropic\/auto/);
+  assert.match(html, /start__error/);
+  assert.match(html, /role="alert"/);
+});
+
+test("a start canvas with nothing wrong shows no error region", () => {
+  assert.doesNotMatch(startCanvas(), /start__error/);
 });
 
 /* ---------- 2. mission submitted, agent starting ---------- */

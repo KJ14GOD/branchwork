@@ -23,6 +23,7 @@ export const EmptyMission = ({
   repositoryState,
   allowWrites,
   busy,
+  error,
   onStart,
   onInvite,
 }: {
@@ -37,6 +38,15 @@ export const EmptyMission = ({
    */
   allowWrites: boolean;
   busy: boolean;
+  /**
+   * Why the last attempt to start did not start.
+   *
+   * Shown here rather than only in the window's footer strip. A mission that
+   * fails to begin leaves this screen exactly as it was — same question, same
+   * text still in the field — so a message forty lines below the button reads
+   * as "nothing happened" rather than as "this failed, and here is why".
+   */
+  error: string | null;
   onStart: (goal: string) => void;
   onInvite: () => void;
 }) => {
@@ -130,6 +140,12 @@ export const EmptyMission = ({
             </button>
           </div>
         </form>
+
+        {error ? (
+          <p className="start__error" role="alert">
+            {error}
+          </p>
+        ) : null}
 
         <div className="start__later">
           {/*

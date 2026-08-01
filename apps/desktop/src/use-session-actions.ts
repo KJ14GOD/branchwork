@@ -12,7 +12,17 @@ export type InviteRole = "editor" | "reviewer" | "viewer";
 
 export type SessionActions = {
   error: string | null;
-  ask: (goal: string, modelId?: string | null) => Promise<void>;
+  /**
+   * `choice` is the picker's *option*, not its id.
+   *
+   * Deliberately an object rather than a `string | null`. A `TurnModelId` is
+   * a string too, so a call site that reached for `turnModel.selected` when it
+   * meant `turnModel.option.modelId` typechecked perfectly and sent the
+   * provider the literal word "auto" — the worker refused it, correctly, and
+   * every mission on that screen simply failed to start. Taking the object
+   * makes that mistake a compile error instead of a runtime one.
+   */
+  ask: (goal: string, choice?: { modelId: string | null } | null) => Promise<void>;
   /** Mints a token for a new participant. Null on failure — `error` says why. */
   invite: (name: string, role: InviteRole) => Promise<InviteResponse | null>;
   /** Recorded for the running turn to fold in, not applied immediately. */
@@ -62,7 +72,7 @@ export const useSessionActions = (
   const sessionId = session.id;
 
   const ask = useCallback(
-    async (goal: string, modelId?: string | null) => {
+    async (goal: string, choice?: { modelId: string | null } | null) => {
       const response = await fetch(
         `${endpoint}/sessions/${encodeURIComponent(sessionId)}/turns`,
         {
@@ -72,7 +82,13 @@ export const useSessionActions = (
             ...(await authorization()),
           },
           body: JSON.stringify(
-            modelId ? { goal, model: { provider: "anthropic", model: modelId } } : { goal },
+            choice?.modelId
+              ? { goal, model: { provider: "anthropic", model: choice.modelId } }
+              : // No model named is a request to let the worker's own router
+                // decide, which is what "Auto" means. It must send no `model`
+                // key at all — the turns route validates any model it is given
+                // against the adapters that exist.
+                { goal },
           ),
         },
       );

@@ -712,7 +712,8 @@ export const SessionTab = ({
           repositoryState={session.repositoryState}
           allowWrites={session.allowWrites}
           busy={busy}
-          onStart={(goal) => void ask(goal, turnModel.selected)}
+          error={actionError}
+          onStart={(goal) => void ask(goal, turnModel.option)}
           onInvite={() => setInviting(true)}
         />
 
@@ -784,7 +785,7 @@ export const SessionTab = ({
             if (busy) {
               void direct(text);
             } else {
-              void ask(text, turnModel.selected);
+              void ask(text, turnModel.option);
             }
           }}
           // Only once there is genuinely something to compare. One baseline

@@ -63,6 +63,39 @@ const hasEvidence = (
   );
 };
 
+/**
+ * Which runs ended badly, from the log itself.
+ *
+ * Read here and not only from the comparison, because the comparison is a
+ * fetch and the log is already in hand. A mission whose only run died on a 401
+ * used to read "Working" in its header while its own rail said "Failed" beside
+ * it — the header waited on `/compare`, and if that request was slow, absent,
+ * or refused, it waited forever. The log knows immediately, and a screen that
+ * claims work is in flight when it has stopped is the worst thing this
+ * derivation can say.
+ */
+const runOutcomes = (
+  events: readonly SessionEvent[],
+): Map<string, "failed" | "cancelled" | "completed"> => {
+  const outcomes = new Map<string, "failed" | "cancelled" | "completed">();
+
+  for (const event of events) {
+    if (event.type === "run.failed") {
+      outcomes.set(event.payload.runId, "failed");
+    }
+
+    if (event.type === "run.cancelled") {
+      outcomes.set(event.payload.runId, "cancelled");
+    }
+
+    if (event.type === "run.completed") {
+      outcomes.set(event.payload.runId, "completed");
+    }
+  }
+
+  return outcomes;
+};
+
 export const missionState = (input: {
   events: readonly SessionEvent[];
   comparison: Comparison | null;
@@ -79,8 +112,20 @@ export const missionState = (input: {
   }
 
   const attempts = input.comparison?.attempts ?? [];
+  const outcomes = runOutcomes(input.events);
+  // Every run this session started has ended, and every one of them failed.
+  // Answered from whichever source has an answer: the log always does, the
+  // comparison sometimes does, and they must not be able to disagree.
+  const everyRunFailedOnLog =
+    runs.length > 0 &&
+    runs.every(
+      (event) =>
+        event.type === "run.started" &&
+        outcomes.get(event.payload.run.id) === "failed",
+    );
   const everyRunFailed =
-    attempts.length > 0 && attempts.every((attempt) => attempt.status === "failed");
+    everyRunFailedOnLog ||
+    (attempts.length > 0 && attempts.every((attempt) => attempt.status === "failed"));
   const changed = input.filesChanged > 0;
 
   // Failure first, and only when it produced nothing. A run that failed after
