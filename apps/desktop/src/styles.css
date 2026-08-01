@@ -3618,3 +3618,13 @@ select.open__input {
   color: var(--text-dim);
   font-size: var(--text-eyebrow);
 }
+
+/* The pull request or branch a check verdict belongs to. Quiet: it qualifies
+   the line above rather than competing with it. */
+.evidence__meta {
+  color: var(--text-dim);
+  font-size: var(--text-eyebrow);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

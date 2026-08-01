@@ -33,6 +33,7 @@ import {
 import { applyDecision } from "./apply-decision.ts";
 import { compareAttempts } from "./compare.ts";
 import { projectSession } from "./projection.ts";
+import { readGithubStatus } from "./github.ts";
 import { exportReceipt } from "./receipt-export.ts";
 import { createRedactor, type Redactor } from "./redaction.ts";
 import type { Session, SessionRegistry } from "./session-registry.ts";
@@ -1131,6 +1132,31 @@ export const startEventServer = (
       );
 
       sendJson(response, 200, compareAttempts(session.id, events, forks));
+      return true;
+    }
+
+    const githubMatch = /^\/sessions\/([^/]+)\/github$/.exec(pathname);
+
+    if (githubMatch && request.method === "GET") {
+      const session = sessions.get(decodeURIComponent(githubMatch[1]!));
+
+      if (!session) {
+        sendJson(response, 404, { error: "No such session." });
+        return true;
+      }
+
+      // A host capability, not a tool: nothing the model emits reaches these
+      // arguments, and every command behind it reports rather than mutates.
+      // Failure is an answer, not a 500 — most repositories have no GitHub
+      // remote, and that is a fact about the repository.
+      sendJson(
+        response,
+        200,
+        await readGithubStatus(session.repositoryPath).catch(() => ({
+          connected: false as const,
+          reason: "Could not reach GitHub.",
+        })),
+      );
       return true;
     }
 

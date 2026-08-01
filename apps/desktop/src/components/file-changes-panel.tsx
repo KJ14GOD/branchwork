@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import type { GithubStatus } from "@novus/contracts/protocol";
 import { DiffView, type PatchProposalView } from "@novus/ui";
 
 import type { FileChangesState } from "../use-file-changes.ts";
@@ -30,7 +31,13 @@ import type { FileChangesState } from "../use-file-changes.ts";
  * session that has not run anything is the kind of placeholder row this
  * project has already been told to stop drawing.
  */
-const Verification = ({ verdict }: { verdict: EvidenceVerdict | null }) => {
+const Verification = ({
+  verdict,
+  github,
+}: {
+  verdict: EvidenceVerdict | null;
+  github: GithubStatus | null;
+}) => {
   if (verdict === null) {
     return null;
   }
@@ -59,6 +66,46 @@ const Verification = ({ verdict }: { verdict: EvidenceVerdict | null }) => {
             : `Tests failing (${verdict.testsPassed} of ${verdict.testsRun})`}
       </span>
 
+      {github?.connected ? (
+        <>
+          <span className="eyebrow">Required checks</span>
+          <span
+            className={`evidence__line evidence__line--${
+              github.verdict === "passing"
+                ? "pass"
+                : github.verdict === "failing"
+                  ? "fail"
+                  : "unknown"
+            }`}
+          >
+            {/*
+              "None" is never folded into passing. A branch nobody configured
+              checks for has been verified by nothing — exactly as unproven as
+              a run that skipped its tests.
+            */}
+            {github.verdict === "none"
+              ? "No checks configured for this branch"
+              : github.verdict === "running"
+                ? `${github.checks.length} check(s) still running`
+                : github.verdict === "passing"
+                  ? `${github.checks.length} check(s) passed on GitHub`
+                  : `${github.checks.filter((check) => !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.state.toUpperCase())).length} of ${github.checks.length} check(s) not passing`}
+          </span>
+          {github.pullRequest ? (
+            <span className="evidence__meta">
+              #{github.pullRequest.number} {github.pullRequest.title}
+            </span>
+          ) : (
+            // Said out loud. CI passing on a branch is not the same as anyone
+            // agreeing to merge it, and a panel that showed only a green tick
+            // would let the two be read as one thing.
+            <span className="evidence__meta">
+              No pull request open — these are the branch's own runs
+            </span>
+          )}
+        </>
+      ) : null}
+
       {verdict.contested.length > 0 ? (
         <>
           <span className="eyebrow">Contested files</span>
@@ -86,18 +133,21 @@ export const FileChangesPanel = ({
   state,
   diffs,
   verdict = null,
+  github = null,
 }: {
   state: FileChangesState;
   /** Applied diffs by path. A file with no entry stays a flat row. */
   diffs: Map<string, PatchProposalView>;
   /** Omitted by any caller that has no comparison to draw one from. */
   verdict?: EvidenceVerdict | null;
+  /** Null when this repository has no GitHub remote, which is most of them. */
+  github?: GithubStatus | null;
 }) => {
   const [open, setOpen] = useState<string | null>(null);
 
   return (
     <aside className="files">
-      <Verification verdict={verdict} />
+      <Verification verdict={verdict} github={github} />
 
       <div className="files__head">
         <span className="eyebrow">Files changed</span>

@@ -457,6 +457,57 @@ export const RememberedSessionSchema = z.object({
 
 export type RememberedSession = z.infer<typeof RememberedSessionSchema>;
 
+/**
+ * What GitHub says about the branch this repository is on.
+ *
+ * Local tests prove a change works on this machine. Required checks prove it
+ * works somewhere that is not yours, against a configuration you did not set
+ * up for yourself — a different and usually stronger claim, and the one a
+ * reviewer wants before adopting anything.
+ *
+ * Read through the operator's own `gh` CLI, so Novus never sees a token and
+ * never stores one. Not connected is a first-class answer rather than an
+ * error: most repositories this runs against will have no GitHub remote, and
+ * that is a fact about the repository, not a failure.
+ */
+export const GithubStatusSchema = z.union([
+  z.object({
+    connected: z.literal(false),
+    reason: z.string().min(1),
+  }),
+  z.object({
+    connected: z.literal(true),
+    repository: z.string().min(1),
+    /** Null when this branch has no pull request open. */
+    pullRequest: z
+      .object({
+        number: z.number().int().positive(),
+        title: z.string().min(1),
+        url: z.string().min(1),
+        state: z.string().min(1),
+        draft: z.boolean(),
+      })
+      .nullable(),
+    checks: z.array(
+      z.object({
+        name: z.string().min(1),
+        state: z.string().min(1),
+        url: z.string().min(1).optional(),
+      }),
+    ),
+    /**
+     * The checks taken together.
+     *
+     * `none` is its own answer and is never folded into `passing`. A branch
+     * nobody configured checks for has been verified by nothing, which is
+     * exactly as unproven as a run that skipped its tests.
+     */
+    verdict: z.enum(["passing", "failing", "running", "none"]),
+  }),
+]);
+
+export type GithubStatus = z.infer<typeof GithubStatusSchema>;
+
 export const SessionHistorySchema = z.object({
   sessions: z.array(RememberedSessionSchema),
 });

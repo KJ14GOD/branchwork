@@ -24,6 +24,7 @@ import { useComparison } from "./use-comparison.ts";
 import { missionPhases } from "./mission-phase.ts";
 import { useFileChanges } from "./use-file-changes.ts";
 import { useAuthority } from "./use-authority.ts";
+import { useGithub } from "./use-github.ts";
 import { useSessionUsage } from "./use-session-usage.ts";
 import { useFileTree } from "./use-file-tree.ts";
 import { usePresence } from "./use-presence.ts";
@@ -217,6 +218,7 @@ export const SessionTab = ({
   const comparison = useComparison(endpoint, session.id);
   const presence = usePresence(endpoint, session.id);
   const authority = useAuthority(endpoint, session.id);
+  const github = useGithub(endpoint, session.id);
   const { events, status, reconnect } = useSessionEvents(endpoint, session.id);
   // Recomputed only when the log or the comparison moves, not on every
   // keystroke in the composer — this sits above a list that can run to
@@ -988,6 +990,7 @@ export const SessionTab = ({
               state={fileChanges}
               diffs={appliedDiffs}
               verdict={evidenceVerdict}
+              github={github}
             />
           </>
         )}

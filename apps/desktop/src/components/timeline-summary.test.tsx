@@ -128,3 +128,61 @@ test("the evidence panel never draws a tick for a run that tested nothing", () =
   assert.match(html, /Tests not run/);
   assert.doesNotMatch(html, /evidence__line--pass/);
 });
+
+test("a branch with no checks configured is never drawn as passing", () => {
+  const html = renderToStaticMarkup(
+    <FileChangesPanel
+      state={{ files: [], additions: 0, deletions: 0, error: null, loading: false }}
+      diffs={new Map()}
+      verdict={{ tests: true, testsRun: 3, testsPassed: 3, contested: [] }}
+      github={{
+        connected: true,
+        repository: "acme/widget",
+        pullRequest: null,
+        checks: [],
+        verdict: "none",
+      }}
+    />,
+  );
+
+  // Local tests passing says nothing about CI. Folding "no checks" into the
+  // green above it would let one claim borrow the other's credibility.
+  assert.match(html, /No checks configured/);
+  assert.doesNotMatch(html, /checks\(s\) passed|check\(s\) passed/);
+});
+
+test("checks passing on a branch is not the same as anyone agreeing to merge", () => {
+  const html = renderToStaticMarkup(
+    <FileChangesPanel
+      state={{ files: [], additions: 0, deletions: 0, error: null, loading: false }}
+      diffs={new Map()}
+      verdict={{ tests: null, testsRun: 0, testsPassed: 0, contested: [] }}
+      github={{
+        connected: true,
+        repository: "acme/widget",
+        pullRequest: null,
+        checks: [{ name: "CI", state: "SUCCESS" }],
+        verdict: "passing",
+      }}
+    />,
+  );
+
+  assert.match(html, /check\(s\) passed on GitHub/);
+  // Said out loud, so a green tick cannot be read as review approval.
+  assert.match(html, /No pull request open/);
+});
+
+test("a repository with no GitHub remote shows no check section at all", () => {
+  const html = renderToStaticMarkup(
+    <FileChangesPanel
+      state={{ files: [], additions: 0, deletions: 0, error: null, loading: false }}
+      diffs={new Map()}
+      verdict={{ tests: null, testsRun: 0, testsPassed: 0, contested: [] }}
+      github={{ connected: false, reason: "No GitHub connection." }}
+    />,
+  );
+
+  // Most repositories this opens have no GitHub remote. An empty "Required
+  // checks" heading for them is the placeholder row this app keeps deleting.
+  assert.doesNotMatch(html, /Required checks/);
+});
