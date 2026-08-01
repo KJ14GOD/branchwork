@@ -345,6 +345,44 @@ export const projectSession = (
         break;
       }
 
+      // What an external harness changed, measured rather than proposed.
+      //
+      // `apply_patch` above is the built-in loop's evidence and this is the
+      // only evidence a Claude Code or Codex run leaves: nothing crossed
+      // Novus, so the tree is the witness. Without this fold a run that
+      // rewrote nine files projected `filesChanged: []`, and `/files` — which
+      // reads exactly this — showed a mission with no changes in it.
+      //
+      // Read the event's own `attributable` before treating any of these as
+      // the agent's work. When it is false these paths are simply what
+      // differs from the run's base commit, a human's own edits included.
+      case "harness.changes_observed": {
+        const run = runFor(event.payload.runId);
+
+        if (!run) {
+          break;
+        }
+
+        for (const file of event.payload.files) {
+          const existing = run.filesChanged.find(
+            (candidate) => candidate.path === file.path,
+          );
+
+          if (existing) {
+            // Replaced, never summed. This is a net diff against the run's
+            // base, so it already contains anything a patch to the same file
+            // recorded — adding them would report the same lines twice. The
+            // two families do not co-occur today; this is what keeps that
+            // from becoming a silent double count if they ever do.
+            existing.additions = file.additions;
+            existing.deletions = file.deletions;
+          } else {
+            run.filesChanged.push({ ...file });
+          }
+        }
+        break;
+      }
+
       case "tool.failed": {
         const run = runFor(event.payload.runId);
 

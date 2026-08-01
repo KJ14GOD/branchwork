@@ -1217,7 +1217,10 @@ const GIT_TIMEOUT_MS = 15_000;
 // that file and run whatever it names. Classifying run_tests as dangerous to
 // avoid trusting a repository to be benign, and then trusting it here, was the
 // mistake; these overrides are what make the read classification true.
-const GIT_CONFIG_OVERRIDES = [
+// Exported so the harness adapters' own git calls run under the same
+// overrides. A second copy of this list would be a security-relevant list free
+// to drift, and the one that drifted would be the one nobody exercises daily.
+export const GIT_CONFIG_OVERRIDES = [
   "-c", "diff.external=",
   "-c", "diff.textconv=",
   "-c", "core.fsmonitor=",
@@ -1231,7 +1234,7 @@ const GIT_CONFIG_OVERRIDES = [
 // GIT_EXTERNAL_DIFF is the environment's version of the config above. The
 // secret scrub is inherited too, so anything git does spawn cannot read the
 // provider key out of its environment.
-const gitEnvironment = (): NodeJS.ProcessEnv => {
+export const gitEnvironment = (): NodeJS.ProcessEnv => {
   const environment = scrubbedEnvironment();
 
   for (const name of Object.keys(environment)) {

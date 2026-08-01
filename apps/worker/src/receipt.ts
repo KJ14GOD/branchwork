@@ -179,6 +179,32 @@ export const buildReceipt = (
       }
     }
 
+    // The observed counterpart to the patch list above, and the only file
+    // evidence an external harness produces. Without it every Claude Code and
+    // Codex receipt reported zero files changed — an under-claim that reads
+    // as "the agent wrote nothing", which is the more misleading of the two
+    // ways to be wrong here.
+    if (event.type === "harness.changes_observed") {
+      for (const file of event.payload.files) {
+        const existing = changedByPath.get(file.path);
+
+        changedByPath.set(file.path, {
+          path: file.path,
+          // Replaced, not summed: a diff against the run's base already
+          // contains whatever a patch to the same file added.
+          additions: file.additions,
+          deletions: file.deletions,
+          // One *observation*, not one reviewed patch — no patch crossed
+          // Novus for any of these. The contract requires a positive count
+          // here and cannot say "observed" instead, so the honest reading
+          // lives on `harness.changes_observed` itself, whose `attributable`
+          // flag is what a reader has to consult before crediting anyone.
+          patches: existing?.patches ?? 1,
+          sequence: event.sequence,
+        });
+      }
+    }
+
     if (event.type === "tool.failed") {
       toolCalls.push({
         toolCallId: event.payload.toolCallId,

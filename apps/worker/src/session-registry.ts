@@ -12,7 +12,7 @@ import type { SessionEvent } from "@novus/contracts";
 import type { SessionEventStore } from "@novus/session-service";
 
 import { AgentRunFailure, AgentRunner } from "./agent-runner.ts";
-import type { Harness } from "./harness.ts";
+import { readRepositoryBase, type Harness } from "./harness.ts";
 import { ClaudeCodeHarness } from "./claude-code-harness.ts";
 import { CodexHarness } from "./codex-harness.ts";
 import {
@@ -52,44 +52,6 @@ import { RunDiagnosticsTool } from "./diagnostics.ts";
 import { DevServerTool, stopDevServersUnder } from "./dev-server.ts";
 
 const run = promisify(execFile);
-
-/**
- * The commit a run starts from, and whether the tree already differs from it.
- *
- * Read per run rather than per session, because a second turn opens on top of
- * the first turn's writes. Null revision when the directory is not a Git
- * checkout, which is allowed — the repository still works, the receipt just
- * cannot cite a base. A dirty tree is reported rather than hidden: the base is
- * then that commit *plus* changes nobody recorded, and a reviewer has to be
- * able to tell those apart.
- */
-const readRepositoryBase = async (
-  repositoryPath: string,
-): Promise<{ revision: string | null; dirty: boolean | null }> => {
-  // Bounded and separately caught. This runs after run.started is emitted, in
-  // the critical path of every run, so a git call that stalls on a large repo
-  // or a network filesystem would leave the UI showing a run that never
-  // continues — and a rejection here would end a run that had already begun.
-  const git = (args: string[]) =>
-    run("git", args, {
-      cwd: repositoryPath,
-      timeout: 5_000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-
-  const revision = await git(["rev-parse", "HEAD"])
-    .then(({ stdout }) => stdout.trim() || null)
-    .catch(() => null);
-
-  // Null, not false. A failed check reported as clean would make the maximally
-  // dirty repository — the one whose status output was too large to read — look
-  // like the tidiest one.
-  const dirty = await git(["status", "--porcelain"])
-    .then(({ stdout }) => stdout.trim().length > 0)
-    .catch(() => null);
-
-  return { revision, dirty };
-};
 
 /**
  * Which of Novus's features this directory supports.
@@ -383,6 +345,21 @@ export class SessionRegistry {
   /** Rates and bounds handed to every runner this registry builds. */
   private readonly pricing: PricingTable;
   private readonly budget: RunBudget;
+  /**
+   * External harnesses with a subprocess in flight, by run id.
+   *
+   * The built-in loop is deliberately not in here. It cancels by reading
+   * `run.cancel_requested` back off the log at its next turn boundary, which
+   * is what lets a tool call already running finish — a graceful stop this map
+   * would only get in the way of. An external harness has no boundary Novus
+   * can see, so a handle is the only thing a cancellation can reach, and
+   * without one `POST /cancel` appended its event into the void: the log said
+   * a human asked, and nothing on the machine ever heard.
+   */
+  private readonly liveHarnesses = new Map<
+    string,
+    { sessionId: string; harness: Harness }
+  >();
 
   constructor(
     eventStore: SessionEventStore,
@@ -397,6 +374,77 @@ export class SessionRegistry {
     this.defaults = defaults;
     this.pricing = economics.pricing ?? DEFAULT_MODEL_PRICING;
     this.budget = economics.budget ?? DEFAULT_RUN_BUDGET;
+
+    // The log is the channel, not a direct call from the route. `POST
+    // /cancel` records the request and nothing else — deliberately, because a
+    // human has to see that the request was received before it takes effect —
+    // so this is where a recorded request becomes an actual signal. Reading it
+    // back rather than being told also means a cancellation entered by any
+    // other writer of this log arrives here just the same.
+    this.eventStore.subscribe((event) => {
+      if (event.type === "run.cancel_requested") {
+        this.stopLiveHarness(event.sessionId, event.payload.runId);
+      }
+    });
+  }
+
+  /**
+   * Delivers a recorded cancellation to the harness that can act on it.
+   *
+   * Silent for a run this map does not hold, which is the correct answer twice
+   * over: a built-in run is cancelled by its own loop, and a run that already
+   * ended has nothing left to stop.
+   */
+  private stopLiveHarness(sessionId: string, runId: string): void {
+    const live = this.liveHarnesses.get(runId);
+
+    if (!live || live.sessionId !== sessionId) {
+      return;
+    }
+
+    if (!live.harness.stop) {
+      // A harness whose capabilities promise cancellation — every value of
+      // that field does, since it is `kill | graceful` with no `none` — and
+      // which then has no `stop` to call. Said out loud rather than dropped:
+      // silence is indistinguishable from a control that worked, which is the
+      // whole reason `harness.unsupported` exists. It is not what is appended
+      // here only because its `requested` enum has no `cancel` member —
+      // adding one is a contract change this slice does not own — and
+      // `run.progress` reaches the same timeline without misnaming which
+      // control was refused.
+      try {
+        this.eventStore.append({
+          sessionId,
+          actorId: "agent-1",
+          type: "run.progress",
+          payload: {
+            runId,
+            message: `${live.harness.kind} cannot be stopped once it has started, so the cancellation was recorded but not applied.`,
+          },
+        });
+      } catch (error) {
+        console.error(
+          `run ${runId} could not be cancelled and the log could not be told: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+
+      return;
+    }
+
+    try {
+      live.harness.stop();
+    } catch (error) {
+      // A cancellation that throws must not take the append that carried it
+      // down with it — this runs inside the store's subscriber list, and the
+      // route on the other end is waiting on that append to return.
+      console.error(
+        `run ${runId} could not be stopped: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   hostDefaults(): HostDefaults {
@@ -728,14 +776,43 @@ export class SessionRegistry {
     harness?: HarnessKind,
   ): Promise<void> {
     session.queue = session.queue
-      .then(() =>
-        this.harnessFor(session, harness).run({
-          sessionId: session.id,
-          actorId: "agent-1",
-          goal,
-          ...(model ? { model } : {}),
-        }),
-      )
+      .then(() => {
+        const adapter = this.harnessFor(session, harness);
+
+        if (adapter === session.runner) {
+          return adapter.run({
+            sessionId: session.id,
+            actorId: "agent-1",
+            goal,
+            ...(model ? { model } : {}),
+          });
+        }
+
+        // Minted here rather than inside the adapter, because a handle is only
+        // useful if it can be found by the id a human's cancellation names.
+        // The adapter used to mint its own, so the run id first became known
+        // when `run.started` landed — by which point the registry had nothing
+        // to associate with it. Preassignment is already how a forked attempt
+        // comes up under `fork.created`'s id, so the request carries it.
+        const runId = crypto.randomUUID();
+
+        this.liveHarnesses.set(runId, { sessionId: session.id, harness: adapter });
+
+        return adapter
+          .run({
+            sessionId: session.id,
+            actorId: "agent-1",
+            goal,
+            runId,
+            ...(model ? { model } : {}),
+          })
+          .finally(() => {
+            // Released however the run ended, including by throwing. A stale
+            // handle would let a later cancellation kill a subprocess that a
+            // *different* run had since been given.
+            this.liveHarnesses.delete(runId);
+          });
+      })
       .catch((error: unknown) => {
         this.reportTurnFailure(session, error);
       });
