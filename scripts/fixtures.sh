@@ -49,10 +49,14 @@ Fixture missions seeded. In the app: Missions (top right) → pick one.
   Add rate limiting…               verified — the only green
   Upgrade the payment SDK…         stopped before it changed anything
   Add a health endpoint            two turns, which is still one agent
-  Split the billing worker…        two approaches, opens the Decision Room
+  Split the billing worker…        two approaches, side by side
+  Fix the failing checkout total…  finished: resolved, and verified
+  Rewrite the billing worker…      finished: abandoned, nothing verified
 
-A mission that needs a decision opens the Decision Room, not the Workroom.
-That is deliberate and predates this pass.
+Nothing routes you off the Workroom any more. A mission with two approaches
+shows them in the rail; Approaches opens as a focus pane over the same screen,
+and only when you ask for it. The Decision Room that used to take the whole
+window on arrival is gone.
 
 NOTE
 

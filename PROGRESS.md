@@ -199,7 +199,7 @@ pixels, so the three-column grid at 1728 remains unlooked-at.)
 | **Start canvas — a repository opened with nothing asked** | Met (2026-08-01, hand-tested at 1280 and 1440) | `components/workroom/empty-mission.tsx`. One question, one composer, one primary action; no rail, no evidence, no lifecycle. Replaces a screen that rendered every region the app has against no data |
 | **Workstream rail — agents, people, and who may act** | Met (2026-08-01) | `workstreams.ts` with `workstreams.test.ts` (8 tests). A workstream is an approach (baseline + forks), read from `/compare` with a log-only fallback that never overstates liveness. Identity colours are provenance only and none of them is green. The rail also carries the control lifecycle, pending direction, pause/resume/cancel, and what the mission has spent. Nothing routes away from it any more (gap 19 closed), so the multi-workstream composition is reachable on screen |
 | **Control, handoff and pending direction on the default screen** | Met (2026-08-01) | `components/control-panel.tsx`, unchanged, rendered by `components/workroom/workstream-rail.tsx`. It previously rendered only in the shell a host was routed *away* from, so an incoming offer showed "Waiting on you" with no way to answer. `control-panel.render.test.tsx` (10 tests) still holds the three-state handoff lifecycle, that only the named participant may answer, and that a single-user session renders no authority chrome; `workroom.render.test.tsx` now holds the same properties against the screen that has to keep them |
-| **A mission can end without inventing a decision** | Partial (2026-08-01) | `mission-completion.ts` with `mission-completion.test.ts` (5 tests) folds `mission.completed` / `mission.reopened` from the log; `components/workroom/completion-state.tsx` renders the outcome, the *frozen* verification, the files changed, and a reopen action. **The routes do not exist**: nothing in `event-server.ts` appends either event, so `onReopen` is inert and carries a `TODO(mission lifecycle)` (gap 20) |
+| **A mission can end without inventing a decision** | Partial (2026-08-01) | `mission-completion.ts` with `mission-completion.test.ts` (5 tests) folds `mission.completed` / `mission.reopened` from the log; `components/workroom/completion-state.tsx` renders the outcome, the *frozen* verification, the files changed, and a reopen action. `POST /sessions/:id/complete` and `/reopen` exist (`mission-route.test.ts`, 16 tests over real HTTP), gated on a `finish` capability of their own; `components/workroom/finish-mission.tsx` is the host's surface and the joined window has its own. **Driven end to end on 2026-08-01** against the fixture log: finished, reopened, and finished again, with the reopen reason landing in the durable log |
 | **Verification read from the log, not only from `/compare`** | Met (2026-08-01) | `verification.ts` with `verification.test.ts` (6 tests). The verdict was computed from `comparison.attempts` alone, so a one-workstream mission that ran its suite reported "Nothing has verified these changes" three inches from a feed reading "Tests passed". Log and comparison are reconciled by taking the larger, never summed — fork runs append to the same log, so adding them would double-count |
 | **Activity as attributed milestones rather than an event list** | Met (2026-08-01) | `components/workroom/activity-feed.tsx` with `activity-feed.test.tsx` (6 tests). Consecutive reads fold into one line counted by file; a person's direction is attributed to the person; `run.completed` is never told as verified |
 | **Evidence inspector mounted only when it has something to say** | Met (2026-08-01) | `components/workroom/evidence-inspector.tsx`. `verified: null` renders "Nothing has verified these changes", muted — never green, never red |
@@ -223,6 +223,25 @@ pixels, so the three-column grid at 1728 remains unlooked-at.)
 | Secret redaction before events leave the worker | Met | `redaction.test.ts` |
 | Benchmarks: three tasks, hidden regression tests, cheat-detection | Met, live once each (2026-07-29) | `benchmarks/*/`, `benchmark.test.ts`; scorer catches a test-neutering agent |
 | Evaluation grid (3 tasks × 3 configurations) | 3 of 9 cells | Private leg only. The shared and forked legs are no longer blocked on missing capability — they are blocked on nobody having run them, which is live spend |
+
+## One definition of green (2026-08-01)
+
+"Verified" had been written four times — `receipt.ts` (tests, build,
+typecheck and lint, with a staleness rule), `session-registry.ts`'s inbox
+evidence (tests only, no staleness), the frozen mission record, and the host
+Workroom (tests only, no staleness, and a fork's passing suite summed into its
+parent). One mission could read verified in the header, unverified in the
+inbox, and freeze as unverified the instant somebody finished it.
+
+The rule is now `packages/contracts/src/verification.ts` and all four call it.
+The property that was missing before is that this is now checkable: deleting
+the staleness clause fails **three worker tests and three desktop tests**. Four
+copies could only ever be compared by reading them.
+
+Two things the move fixed on the way past — changes observed from an external
+harness now count for staleness, and the panels say "checks" rather than
+"tests", because they had been counting builds and typechecks under a name
+that promised neither.
 
 ## Known gaps
 
@@ -486,18 +505,46 @@ exists.
     complementary workstreams as competing approaches, which is the one thing
     STEERING says the decision surface must never do.
 
-    **Still not measured on screen.** The composition is proven by
-    `workroom.render.test.tsx` and `workstreams.test.ts`, and the gate does
-    not see pixels. A session with two approaches should be looked at at 1280
-    and 1440 before this is called finished.
-20. **A mission has a finished state and no way to reach it.** *Open
-    (2026-08-01.)* `mission.completed` and `mission.reopened` are in the
-    contract, `projectSession` folds them into `SessionProjection.completion`,
-    `session-registry.ts` reports a completed mission as `finished` in the
-    inbox, and the desktop now renders the ending — outcome, the frozen
-    verification, files changed, and a Reopen action. Nothing appends either
-    event: there is no `POST /sessions/:id/complete` and no
-    `POST /sessions/:id/reopen`, so the state is reachable only by a log that
-    already contains one. `session-tab.tsx`'s `onReopen` is a no-op carrying
-    `TODO(mission lifecycle)`; the slice that adds the routes wires it and
-    nothing else on this side has to change.
+    **Measured on screen 2026-08-01.** The fixture session with two
+    approaches was opened in the running app over CDP: `focus` pane not
+    opened, Workroom visible, composer present, and the rail carrying both
+    workstreams (`Claude · claude-sonnet-5` and `Codex · gpt-5-codex`) beside
+    the host. The rail had never been seen before that. Still only measured at
+    the default window size and in dark mode.
+20. **A mission has a finished state and no way to reach it.** *Closed
+    (2026-08-01.)* `POST /sessions/:id/complete` and `POST /sessions/:id/reopen`
+    exist, gated on `finish` — its own capability rather than `approve`, which
+    already means "say yes to a tool call the agent proposed" and would have
+    been impossible to separate later. Owner, editor and reviewer may finish; a
+    viewer may not. `verification` and `filesChanged` are computed at the route
+    from the log and frozen onto the event, so a client cannot declare its own
+    work verified: driven live, a mission finished as `resolved` with nothing
+    verifying it froze `verification: "unverified"` and the screen said both.
+
+21. **A test fixture outlives its own test run and reddens the next one.**
+    *Open (2026-08-01.)* `dev-server.test.ts:140` spawns a child that
+    deliberately traps SIGTERM, to prove the group kill works. When the suite
+    is interrupted — or on at least one ordinary run observed this pass — the
+    process survives, holds its port, and every subsequent `dev-server` run
+    fails 5/8 on a clean checkout with no local change to blame. Killing the
+    orphan restores 8/8. It reads exactly like flakiness and is not; it is
+    adjacent to gap 3 (nothing reclaims session-started dev servers). The
+    fixture should register itself for teardown in an `after` hook that runs
+    even on failure.
+
+22. **`receipt.filesChanged[].patches` over-claims an observed diff.** *Open
+    (2026-08-01.)* An external harness's changes reach the receipt through
+    `harness.changes_observed`, where no patch ever crossed Novus — but the
+    contract requires a positive integer and `1` was the only legal value, so
+    a net diff is labelled as one reviewed patch. `contracts.ts` documents that
+    field as existing precisely "so the numbers cannot be mistaken for a net
+    diff against base". Needs a contract change to say `observed`.
+
+23. **Provenance of an observed change is recorded and rendered nowhere.**
+    *Open (2026-08-01.)* `harness.changes_observed.attributable` is required,
+    correctly `false` for an external harness sharing the session's own tree,
+    and read by nothing: no renderer mentions it, and `projection.ts` folds
+    observed files in beside applied patches with no marker. So a file a human
+    edited by hand during a Claude Code run is counted, and shown, as the
+    mission's change. The flag exists to prevent a fabricated citation; today
+    it prevents nothing.

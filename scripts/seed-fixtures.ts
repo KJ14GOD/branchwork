@@ -336,4 +336,63 @@ store.append({
   payload: { runId: forkRun, summary: "Kept the queue in process." },
 });
 
+/* ---------- 8. finished, and finished on honest evidence ---------- */
+// Two of them, because the pair is the point. A mission ends because a person
+// says so, and what the evidence said at that moment is recorded separately —
+// so "resolved" and "nothing verified it" have to be able to appear together
+// without the screen resolving the tension in either direction.
+const finished = session(crypto.randomUUID(), "checkout-service");
+const finishedRun = crypto.randomUUID();
+run(finished, finishedRun, "Fix the failing checkout total test");
+reads(finished, finishedRun, ["src/billing/index.ts"]);
+patch(finished, finishedRun, "src/billing/index.ts", 12, 4);
+tests(finished, finishedRun, true);
+store.append({
+  sessionId: finished,
+  actorId: HOST,
+  type: "run.completed",
+  payload: { runId: finishedRun, summary: "Corrected the tax rounding." },
+});
+store.append({
+  sessionId: finished,
+  actorId: HOST,
+  type: "mission.completed",
+  payload: {
+    outcome: "resolved",
+    summary:
+      "The checkout total test passes again — the tax was rounding per line instead of per order.",
+    verification: "verified",
+    filesChanged: 1,
+    actorId: HOST,
+  },
+});
+
+const abandoned = session(crypto.randomUUID(), "checkout-service");
+const abandonedRun = crypto.randomUUID();
+run(abandoned, abandonedRun, "Rewrite the billing worker in Rust");
+reads(abandoned, abandonedRun, ["src/billing/index.ts"]);
+patch(abandoned, abandonedRun, "src/billing/index.ts", 210, 180);
+store.append({
+  sessionId: abandoned,
+  actorId: HOST,
+  type: "run.completed",
+  payload: { runId: abandonedRun, summary: "Ported the queue." },
+});
+store.append({
+  sessionId: abandoned,
+  actorId: HOST,
+  type: "mission.completed",
+  payload: {
+    outcome: "abandoned",
+    // Abandoned with real changes on the tree and nothing having verified
+    // them: the state most likely to be drawn wrong, since every instinct in
+    // a UI is to paint an ending as either success or failure.
+    summary:
+      "Not worth the rewrite — the hot path is the database, not the worker.",
+    verification: "unverified",
+    filesChanged: 1,
+    actorId: HOST,
+  },
+});
+
 process.stdout.write(`forked ${forked}\n`);
