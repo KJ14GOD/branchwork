@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { RunReceiptSchema } from "@novus/contracts";
 import { execFile } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -418,4 +419,105 @@ for (let index = 0; index < 500; index += 1) {
     "a torn event survived the kill",
   );
   store.close();
+});
+
+/**
+ * A receipt written before `checks` and `verification` existed.
+ *
+ * Reproduces a real failure: opening an older session threw a Zod error
+ * naming exactly these two fields. The log is durable and the schema is not
+ * as old as the log, so a field added later cannot be required — the whole
+ * point of an event log is that yesterday's rows still parse today.
+ */
+test("a receipt from before checks existed still parses, and claims nothing", () => {
+  const parsed = RunReceiptSchema.safeParse({
+    runId: "run-1",
+    sessionId: SESSION,
+    goal: "Fix the locking",
+    status: "completed",
+    model: { provider: "anthropic", model: "test" },
+    base: { revision: "abc123", dirty: false },
+    startedAt: "2026-07-30T00:00:00.000Z",
+    finishedAt: "2026-07-30T00:01:00.000Z",
+    elapsedMs: 60_000,
+    usage: {
+      inputTokens: 10,
+      outputTokens: 5,
+      modelCalls: 1,
+      callsMissingUsage: 0,
+      costUsd: null,
+      modelTimeMs: 500,
+    },
+    toolCalls: [],
+    filesChanged: [],
+    tests: [],
+    approvals: [],
+    summary: "Done.",
+  });
+
+  // Written out rather than spread from a helper: this is a *historical*
+  // shape, and the value of the test is that it stays frozen while the schema
+  // moves. A fixture that tracked the current schema would pass forever and
+  // catch nothing.
+
+
+  assert.equal(
+    parsed.success,
+    true,
+    parsed.success ? "" : JSON.stringify(parsed.error.issues, null, 2),
+  );
+
+  if (parsed.success) {
+    assert.deepEqual(parsed.data.checks, []);
+    // Unverified, and the direction is the point. This receipt carries no
+    // evidence anything was checked, so the only safe reading is the one that
+    // claims nothing — defaulting to "verified" would retroactively mark
+    // every historical run as proven.
+    assert.equal(parsed.data.verification, "unverified");
+  }
+});
+
+test("every field added to the receipt since is defaulted, not required", () => {
+  // The failure this pins was reported from the app: opening an older session
+  // threw a Zod error naming payload.receipt.checks and .verification, and
+  // three more fields were missing behind them. Five in total had been added
+  // as required to a schema that has to read years of its own history.
+  //
+  // Asserting on the *shape of the rule* rather than on today's field list, so
+  // this keeps working as the receipt grows.
+  const minimal = {
+    runId: "run-1",
+    sessionId: SESSION,
+    goal: "Something old",
+    status: "completed",
+    model: { provider: "anthropic", model: "test" },
+    base: { revision: null, dirty: null },
+    startedAt: "2026-07-01T00:00:00.000Z",
+    finishedAt: "2026-07-01T00:00:01.000Z",
+    elapsedMs: 1_000,
+    usage: { inputTokens: 0, outputTokens: 0, modelCalls: 0, callsMissingUsage: 0 },
+    toolCalls: [],
+    filesChanged: [],
+    tests: [],
+    approvals: [],
+  };
+
+  const parsed = RunReceiptSchema.safeParse(minimal);
+
+  assert.equal(
+    parsed.success,
+    true,
+    parsed.success
+      ? ""
+      : `a receipt from before these fields existed no longer parses:\n${JSON.stringify(parsed.error.issues, null, 2)}`,
+  );
+
+  if (parsed.success) {
+    // Every default has to claim less, never more. A field that filled itself
+    // in optimistically would retroactively mark historical runs as proven.
+    assert.equal(parsed.data.verification, "unverified");
+    assert.deepEqual(parsed.data.checks, []);
+    assert.equal(parsed.data.testsFollowedFinalChange, null);
+    assert.equal(parsed.data.usage.costUsd, null);
+  }
 });

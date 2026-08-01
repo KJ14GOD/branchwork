@@ -810,13 +810,28 @@ export const RunUsageSchema = z.object({
    * a worse answer than one that says it does not know. README asks a run
    * to record cost per call; this is the total those calls add up to.
    */
-  costUsd: z.number().nonnegative().nullable(),
+  costUsd: z
+    .number()
+    .nonnegative()
+    .nullable()
+    // Null on receipts written before cost was recorded, which is the same
+    // value it takes for an unpriced model: "not counted". Never zero — a run
+    // reported as free because nobody counted is a worse answer than one that
+    // says it does not know.
+    .default(null),
   /**
    * Time spent inside model calls, as distinct from the run's wall clock.
    * The gap between the two is what the harness itself spent — tools,
    * approvals, waiting on a human.
    */
-  modelTimeMs: z.number().int().nonnegative(),
+  modelTimeMs: z
+    .number()
+    .int()
+    .nonnegative()
+    // Zero on receipts written before this was measured. Unlike cost, this is
+    // a secondary figure nothing is decided on, so a missing measurement
+    // reading as none is acceptable where a missing *price* would not be.
+    .default(0),
 });
 
 export type RunUsage = z.infer<typeof RunUsageSchema>;
@@ -897,7 +912,13 @@ export const RunReceiptSchema = z.object({
    * Inherits the limit above: it compares against the last *patch*, so a file
    * written by run_command after the tests ran will not make this false.
    */
-  testsFollowedFinalChange: z.boolean().nullable(),
+  testsFollowedFinalChange: z
+    .boolean()
+    .nullable()
+    // Null on receipts written before this existed, which is the same value
+    // it takes when the question does not arise — no tests, or no changes.
+    // A receipt that never recorded the ordering cannot answer it either.
+    .default(null),
   /**
    * Every check the run actually ran, of every kind, in the order it ran them.
    *
@@ -923,7 +944,13 @@ export const RunReceiptSchema = z.object({
       problems: z.number().int().nonnegative().nullable(),
       sequence: z.number().int().nonnegative(),
     }),
-  ),
+  )
+    // Defaulted, because the log is durable and this field is not as old as
+    // it is. Every receipt written before checks existed has none, and a
+    // required field made those sessions unreadable — the error surfaced as a
+    // Zod failure when simply opening one. An empty list is the honest
+    // reading: that run recorded no structured checks.
+    .default([]),
   /**
    * What the checks say about the changes — never what the agent says about
    * itself.
@@ -945,7 +972,14 @@ export const RunReceiptSchema = z.object({
    *
    * There is deliberately no fourth value meaning "probably fine".
    */
-  verification: z.enum(["verified", "failing", "unverified"]),
+  verification: z
+    .enum(["verified", "failing", "unverified"])
+    // Defaults to `unverified`, and the direction matters more than the
+    // default. A receipt from before this field existed carries no evidence
+    // that anything was checked, so the only safe reading is the one that
+    // claims nothing. Defaulting to `verified` would have retroactively
+    // marked every historical run as proven.
+    .default("unverified"),
   approvals: z.array(
     z.object({
       toolCallId: IdSchema,
