@@ -257,17 +257,23 @@ test("a chosen attempt survives into the projection, not only the live event str
 
   const withDecision = projectSession(SESSION, store.list(SESSION));
 
-  // The event above carries no `kind` and no `rationale`, exactly like every
-  // decision recorded before those fields existed. The projection fills the
-  // kind in as `adopt` — which is what those decisions were, since adopting
-  // was the only decision the product could record — and leaves the rationale
-  // null rather than inventing one. A log that could not be replayed after a
-  // schema addition would make every past session unreadable.
+  // The event above carries no `kind`, no `rationale`, no `target` and no
+  // `alternatives` — exactly like every decision recorded before each of those
+  // fields existed. The projection fills the kind in as `adopt` and the target
+  // as `attempt`, which is what those decisions were: adopting a fork was the
+  // only decision the product could record. It leaves the rationale null
+  // rather than inventing one, and the alternatives empty rather than guessing
+  // from forks that exist now. A log that could not be replayed after a schema
+  // addition would make every past session unreadable — and this repository
+  // has shipped that break once already.
   assert.deepEqual(withDecision.decision, {
     runId: "run-1",
+    target: "attempt",
     checkpointId: "checkpoint-1",
+    alternatives: [],
     kind: "adopt",
     rationale: null,
+    decidedBy: "host",
     outcome: { applied: true, files: ["src/lock.ts"] },
   });
 
@@ -296,6 +302,120 @@ test("a chosen attempt survives into the projection, not only the live event str
   assert.equal(revised.decision?.kind, "revision");
   assert.match(revised.decision?.rationale ?? "", /retry budget/);
   assert.equal(revised.decision?.outcome.applied, false);
+});
+
+test("keeping the baseline survives replay, with its rationale and its context", () => {
+  // The baseline is the approach with no worktree, which is why it could not
+  // be chosen at all until now. Replay is where that matters most: which run a
+  // rebuilt projection calls "the baseline" is derived from the forks that
+  // exist at the time of asking, so a decision that stored only a run id would
+  // quietly change meaning the next time somebody forked. The event says
+  // `target: "baseline"` and names the checkpoint, so the replay does not have
+  // to guess.
+  const store = new InMemorySessionEventStore();
+
+  store.append({
+    sessionId: SESSION,
+    actorId: "agent-1",
+    type: "run.started",
+    payload: {
+      run: {
+        id: "run-parent",
+        sessionId: SESSION,
+        goal: "Fix the locking behavior",
+        status: "running",
+        startedBy: "agent-1",
+        model: { provider: "anthropic", model: "test" },
+        createdAt: new Date().toISOString(),
+      },
+    },
+  });
+
+  store.append({
+    sessionId: SESSION,
+    actorId: "participant-7",
+    type: "decision.recorded",
+    payload: {
+      runId: "run-parent",
+      target: "baseline",
+      checkpointId: "checkpoint-1",
+      alternatives: ["run-attempt-a", "run-attempt-b"],
+      kind: "adopt",
+      rationale: "Neither attempt beat what the parent already had on tests.",
+      outcome: {
+        applied: "unnecessary",
+        reason:
+          "The current work is already in the working tree, so nothing needed to be written.",
+      },
+    },
+  });
+
+  const replayed = projectSession(SESSION, store.list(SESSION));
+
+  assert.equal(replayed.decision?.runId, "run-parent");
+  assert.equal(replayed.decision?.target, "baseline");
+  assert.equal(replayed.decision?.checkpointId, "checkpoint-1");
+  assert.deepEqual(replayed.decision?.alternatives, [
+    "run-attempt-a",
+    "run-attempt-b",
+  ]);
+  assert.match(replayed.decision?.rationale ?? "", /beat what the parent/);
+  // The decider, from the envelope. The projection is the only place a reader
+  // downstream of the raw log gets to learn who made the call.
+  assert.equal(replayed.decision?.decidedBy, "participant-7");
+
+  // A no-op, not a refusal. A replay that turned this into `applied: false`
+  // would tell a reader an application had been blocked when none was owed.
+  assert.equal(replayed.decision?.outcome.applied, "unnecessary");
+});
+
+test("a baseline chosen before any fork existed replays without a checkpoint", () => {
+  // The only case where a decision legitimately names no checkpoint: nothing
+  // was ever forked, so there is no shared starting point the alternatives
+  // were cut from. Recording an invented one would be a worse record than an
+  // absent field, and the projection has to keep reading it either way.
+  const store = new InMemorySessionEventStore();
+
+  store.append({
+    sessionId: SESSION,
+    actorId: "host",
+    type: "decision.recorded",
+    payload: {
+      runId: "run-parent",
+      target: "baseline",
+      alternatives: [],
+      kind: "adopt",
+      rationale: "One approach, and it is the one we are keeping.",
+      outcome: { applied: "unnecessary", reason: "Already in the working tree." },
+    },
+  });
+
+  const replayed = projectSession(SESSION, store.list(SESSION));
+
+  assert.equal(replayed.decision?.checkpointId, null);
+  assert.equal(replayed.decision?.target, "baseline");
+});
+
+test("a decision on an attempt cannot be recorded without the checkpoint it was cut from", () => {
+  // The other side of making `checkpointId` optional. It was relaxed for the
+  // baseline alone, and the schema still refuses an attempt decision that
+  // omits it — including every one already in the log, which all carry one.
+  const store = new InMemorySessionEventStore();
+
+  assert.throws(() =>
+    store.append({
+      sessionId: SESSION,
+      actorId: "host",
+      type: "decision.recorded",
+      payload: {
+        runId: "run-attempt-a",
+        target: "attempt",
+        kind: "adopt",
+        rationale: "Adopting an attempt without saying what it branched from.",
+        outcome: { applied: true, files: ["src/lock.ts"] },
+      },
+    }),
+  );
 });
 
 test("pending direction survives into the projection, applied direction does not", () => {

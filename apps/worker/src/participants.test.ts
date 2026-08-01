@@ -37,6 +37,23 @@ test("every role can watch, and only the owner can invite or transfer", () => {
   assert.ok(roleCan("owner", "transfer"));
 });
 
+test("deciding is the controller's alone, and is not a shade of steering", () => {
+  // `/decision` used to be unlisted in the route table and inherited `steer`,
+  // which handed the last word on every mission — and, while selection and
+  // application share one route, a write into the host's repository — to
+  // anyone who could pause a run.
+  assert.ok(roleCan("owner", "decide"));
+
+  // The editor is the one that matters. It holds `steer`, so if deciding were
+  // still a shade of steering this assertion would be the thing that fails.
+  assert.ok(roleCan("editor", "steer"));
+  assert.ok(!roleCan("editor", "decide"));
+
+  // A reviewer approves without directly executing, and this route executes.
+  assert.ok(!roleCan("reviewer", "decide"));
+  assert.ok(!roleCan("viewer", "decide"));
+});
+
 test("a token resolves to exactly one participant", () => {
   const registry = new ParticipantRegistry();
   const host = owner(registry);

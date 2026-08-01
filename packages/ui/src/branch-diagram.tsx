@@ -56,9 +56,14 @@ const convergence = (comparison: Comparison): { label: string; pending: boolean 
           ? "Revision requested"
           : decision.kind === "exploration"
             ? "Still exploring"
-            : decision.outcome.applied
+            : decision.outcome.applied === true
               ? "Adopted · applied"
-              : "Adopted · not applied",
+              : // Keeping the current work is settled, not stalled. "Adopted ·
+                // not applied" would draw the convergence as an unfinished
+                // tail on a decision that has no tail to finish.
+                decision.outcome.applied === "unnecessary"
+                ? "Kept the current work"
+                : "Adopted · not applied",
       pending: false,
     };
   }

@@ -886,7 +886,14 @@ export class SessionRegistry {
         decisions.push({
           sequence: event.sequence,
           runId: event.payload.runId,
-          applied: event.payload.outcome.applied,
+          // `=== true` rather than the value itself, and deliberately narrow.
+          // A baseline decision's outcome is `"unnecessary"` — truthy — and
+          // letting it through here would reclaim every alternative's
+          // worktree, which is the only copy of that alternative's work, on a
+          // decision that wrote nothing. The policy stays exactly what it was:
+          // an attempt is collectable when a decision *applied* files after
+          // it. Nothing about baseline selection widens it.
+          applied: event.payload.outcome.applied === true,
         });
       }
     }

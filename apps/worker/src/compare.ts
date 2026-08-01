@@ -1,4 +1,9 @@
-import type { DecisionKind, DecisionOutcome, SessionEvent } from "@novus/contracts";
+import type {
+  DecisionKind,
+  DecisionOutcome,
+  DecisionTarget,
+  SessionEvent,
+} from "@novus/contracts";
 
 import { projectSession, type RunProjection } from "./projection.ts";
 
@@ -55,12 +60,25 @@ export type Comparison = {
   contestedPaths: string[];
   /** Paths only one attempt changed, by run id. */
   uniquePaths: Record<string, string[]>;
-  /** The most recent choice recorded for this session, or null if none yet. */
+  /**
+   * The most recent choice recorded for this session, or null if none yet.
+   *
+   * Hand-written, and it must stay field-for-field with `DecisionSummarySchema`
+   * in `packages/contracts/src/protocol.ts`. Nothing derives one from the
+   * other, so a field added there and forgotten here typechecks perfectly and
+   * fails at `use-comparison.ts`, where the renderer refuses the whole
+   * comparison it cannot parse.
+   */
   decision: {
     runId: string;
+    /** Absent on decisions recorded before the baseline was selectable. */
+    target?: DecisionTarget;
+    checkpointId?: string;
+    alternatives?: string[];
     /** Absent on decisions recorded before the kind existed; those were adoptions. */
     kind?: DecisionKind;
     rationale?: string;
+    decidedBy?: string;
     outcome: DecisionOutcome;
   } | null;
 };
@@ -126,6 +144,32 @@ const interventionsFor = (
       return [];
     });
 };
+
+/**
+ * Every approach this session ever cut, read from the log.
+ *
+ * From `fork.created` rather than from the live worktree handles, because the
+ * log is durable and the handles are not: a comparison built from handles
+ * forgot every attempt the moment the worker restarted. Shared by the compare
+ * route, the decision route and the receipt export so all three agree on what
+ * the alternatives are — three copies of this flatMap is three chances for one
+ * of them to disagree about which run is the baseline.
+ */
+export const forksFromLog = (
+  events: readonly SessionEvent[],
+): { runId: string; label: string; parentRunId: string; checkpointId: string }[] =>
+  events.flatMap((event) =>
+    event.type === "fork.created"
+      ? [
+          {
+            runId: event.payload.fork.runId,
+            label: event.payload.fork.label,
+            parentRunId: event.payload.fork.parentRunId,
+            checkpointId: event.payload.fork.checkpointId,
+          },
+        ]
+      : [],
+  );
 
 const compareAttempt = (
   run: RunProjection,
@@ -298,10 +342,18 @@ export const compareAttempts = (
   const decision = decided
     ? {
         runId: decided.payload.runId,
+        ...(decided.payload.target ? { target: decided.payload.target } : {}),
+        ...(decided.payload.checkpointId
+          ? { checkpointId: decided.payload.checkpointId }
+          : {}),
+        ...(decided.payload.alternatives
+          ? { alternatives: decided.payload.alternatives }
+          : {}),
         ...(decided.payload.kind ? { kind: decided.payload.kind } : {}),
         ...(decided.payload.rationale
           ? { rationale: decided.payload.rationale }
           : {}),
+        decidedBy: decided.actorId,
         outcome: decided.payload.outcome,
       }
     : null;
