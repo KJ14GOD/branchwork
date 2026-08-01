@@ -422,9 +422,31 @@ export const SessionTab = ({
     },
     {
       id: "attempts",
-      label: "Compare attempts",
+      label: "Compare approaches",
       hint: `${attempts.length}`,
       run: () => setMode("compare"),
+    },
+    // The utilities that used to sit in the session bar. Still here, still
+    // one keystroke away — just not competing with the decision for space.
+    ...(host
+      ? [
+          {
+            id: "browse",
+            label: "Browse the repository",
+            run: () => setMode("browse"),
+          },
+          {
+            id: "terminal",
+            label: terminalOpen ? "Hide the terminal" : "Open a terminal",
+            hint: "your shell, not the agent's",
+            run: () => setTerminalOpen((value) => !value),
+          },
+        ]
+      : []),
+    {
+      id: "invite",
+      label: "Invite a teammate",
+      run: () => setInviting(true),
     },
     {
       id: "raw",
@@ -668,26 +690,13 @@ export const SessionTab = ({
                 usually waiting on. Activity is the record you consult. */}
             {viewOption("compare", "Approaches", attempts.length)}
             {viewOption("timeline", "Activity")}
-            {/* "Browse", not "Files": the right-hand panel is already "Files changed",
-                and two things called Files in one bar is a puzzle, not a label. */}
-            {host ? viewOption("browse", "Browse") : null}
           </div>
-          <button
-            className="icon-button"
-            type="button"
-            onClick={() => setTerminalOpen((value) => !value)}
-            title="A real shell, opened in this repository — yours, not the agent's"
-          >
-            {terminalOpen ? "Hide terminal" : "Terminal"}
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            onClick={() => setInviting(true)}
-            title="Invite a teammate into this session"
-          >
-            Invite
-          </button>
+          {/*
+            Terminal and Invite moved into the command palette. Neither is part
+            of deciding, and a bar that offers five ways to leave the decision
+            and two ways to use it is not a decision surface. They are one
+            keystroke away and nothing was removed.
+          */}
           <span className="kbd-hint">
             <kbd>/</kbd> Commands
           </span>
@@ -835,6 +844,15 @@ export const SessionTab = ({
             beside every name whether or not the person reading held anything
             to hand.
           */}
+          {/*
+            Hidden while you are the only one here. A section headed
+            Participants listing one person, with a badge saying that person
+            holds control, is a whole region of the rail spent telling you
+            something you knew before you opened the app — and it appears on
+            every mission, because most missions have one person in them.
+            Invite is in the command palette when there is somebody to invite.
+          */}
+          {presence.participants.length < 2 ? null : (
           <div className="rail__section">
             <div className="eyebrow">Participants</div>
             {presence.participants.length === 0 ? (
@@ -869,6 +887,7 @@ export const SessionTab = ({
               </div>
             )}
           </div>
+          )}
 
           </div>
 

@@ -50,9 +50,22 @@ process.env.ANTHROPIC_API_KEY = "placeholder-not-a-real-key";
 
 const TOKEN = "joined-api-test-token-abcdefghijklmnop";
 
+let enterModel: (() => void) | null = null;
+let entered: Promise<void> = Promise.resolve();
+
 const stalledAdapter: ModelAdapter = {
   selection: { provider: "anthropic", model: "test" },
-  complete: () => new Promise(() => undefined),
+  // Parked, and it says when. The run loop drains pending direction at the top
+  // of each iteration, and the top of the *first* iteration is a boundary like
+  // any other — so a direction posted between `run.started` and the first model
+  // call is folded in immediately and correctly, leaving `pendingDirection`
+  // empty. That is not the state a test of "queued but not yet applied" is
+  // trying to observe, and the window is wide enough under load to fail the
+  // gate. Same race, and same fix, as control-lifecycle.test.ts.
+  complete: () =>
+    new Promise(() => {
+      enterModel?.();
+    }),
 };
 
 type Guest = { target: JoinedTarget; id: string; token: string };
@@ -159,6 +172,12 @@ const withSession = async (
      * live the moment the response arrived would be racing the queue.
      */
     const startRun = async (): Promise<string> => {
+      // Armed before the turn is submitted, so a run that reaches the model
+      // faster than this function does cannot slip past the signal.
+      entered = new Promise<void>((settle) => {
+        enterModel = settle;
+      });
+
       const accepted = await fetch(
         `${server.url}/sessions/${sessionId}/turns`,
         {
@@ -175,6 +194,12 @@ const withSession = async (
 
       for (let attempt = 0; attempt < 200; attempt += 1) {
         const running = (await readAuthority(hostTarget))?.executingRunIds[0];
+
+        if (running !== undefined) {
+          // Parked inside the model call, past the first boundary, where a
+          // direction can only be queued rather than immediately drained.
+          await entered;
+        }
 
         if (running !== undefined) {
           return running;

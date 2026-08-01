@@ -105,7 +105,18 @@ export const MissionAuthority = ({
 }: Pick<ControlProps, "authority" | "participants">) => {
   const { you, controlHeldBy, controlOffer, controlRequests } = authority;
 
-  if (you === null && participants.length === 0) {
+  // Nothing to negotiate alone. One participant means every control here is
+  // about handing work to somebody who is not there — "You have control" is
+  // not information when there is nobody who could have it instead, and
+  // asking yourself for control is not a thing.
+  //
+  // It also removes a lie: participant ids in the durable log outlive the
+  // in-memory presence registry, so after a worker restart `controlHeldBy`
+  // can point at an id that no longer resolves, and a solo host was told
+  // "Someone who has left has control" about themselves. That mismatch is
+  // still real and is recorded as a gap; this stops it being the first thing
+  // a single user reads.
+  if (you === null || participants.length < 2) {
     return null;
   }
 
@@ -180,7 +191,9 @@ export const ControlPanel = ({
     authority;
   const [reason, setReason] = useState("");
 
-  if (you === null) {
+  // Same rule as the header's: a control lifecycle with one participant in it
+  // is a section of the rail spent on a negotiation that cannot happen.
+  if (you === null || participants.length < 2) {
     return null;
   }
 

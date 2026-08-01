@@ -235,17 +235,6 @@ export const CompareScreen = ({
           <span className="decision-head__detail">{headline.detail}</span>
         </div>
 
-        {awaiting && firstAlternative ? (
-          <button
-            className="button button--primary button--large"
-            type="button"
-            onClick={() =>
-              setDeciding({ runId: firstAlternative.runId, kind: "adopt" })
-            }
-          >
-            Record a decision
-          </button>
-        ) : null}
 
         <div className="decision-head__utilities">
           <button
@@ -442,8 +431,11 @@ export const CompareScreen = ({
           // without them the honest answer is taken outside the product, which
           // is exactly where it stops being reviewable.
           <div className="decision__alternatives">
+            <span className="decision__alternatives-label">
+              Neither?
+            </span>
             <button
-              className="button"
+              className="button button--quiet"
               type="button"
               onClick={() =>
                 setDeciding({
@@ -457,7 +449,7 @@ export const CompareScreen = ({
               Request a revision
             </button>
             <button
-              className="button"
+              className="button button--quiet"
               type="button"
               onClick={() =>
                 setDeciding({
@@ -473,27 +465,6 @@ export const CompareScreen = ({
           </div>
         ) : null}
 
-        {/*
-          Below the evidence on purpose. Starting another approach is a real
-          answer, but it is the answer you reach after reading what the
-          current ones did — at the top of the screen it competed with the
-          decision for the same attention and won by being first.
-        */}
-        <form className="compare-screen__fork" onSubmit={submit}>
-          <input
-            className="open__input"
-            value={intent}
-            onChange={(event) => setIntent(event.target.value)}
-            placeholder="What should another approach do differently? — e.g. preserve backward compatibility"
-          />
-          <button
-            className="button"
-            type="submit"
-            disabled={forking || intent.trim() === ""}
-          >
-            {forking ? "Starting…" : "Try another approach"}
-          </button>
-        </form>
 
         {state.decision ? (
           // Says exactly what the apply step did, since choosing and applying

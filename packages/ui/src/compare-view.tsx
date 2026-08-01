@@ -239,8 +239,17 @@ export const CompareView = ({
       ) : comparison.attempts.length > 1 ? (
         <div className="compare__contested">
           <span className="compare__contested-label">
-            These approaches changed different files — they are not competing
-            for the same lines.
+            {/*
+              "They changed different files" is only true if they changed
+              files. Both approaches changing nothing is a different and more
+              important fact, and saying they were not competing implied there
+              was something to compete over.
+            */}
+            {comparison.attempts.every(
+              (attempt) => attempt.filesChanged.length === 0,
+            )
+              ? "Neither approach changed anything. There is nothing here to compare."
+              : "These approaches changed different files — they are not competing for the same lines."}
           </span>
         </div>
       ) : null}

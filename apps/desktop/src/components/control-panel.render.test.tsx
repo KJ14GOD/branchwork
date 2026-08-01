@@ -241,3 +241,50 @@ test("a mission waiting on somebody says so in amber, not green", () => {
   assert.match(html, /authority__waiting/);
   assert.match(html, /1 asking/);
 });
+
+test("a mission with one person in it shows no authority chrome at all", () => {
+  const alone: PresenceEntry[] = [
+    { id: HOST, name: "Kartik", role: "owner", connected: true },
+  ];
+
+  // Every control here is about handing work to somebody who is not there.
+  // "You have control" is not information when nobody could have it instead,
+  // and a Request control button pointed at yourself is a puzzle.
+  assert.equal(
+    renderToStaticMarkup(
+      <MissionAuthority authority={authority()} participants={alone} />,
+    ),
+    "",
+  );
+  assert.equal(
+    renderToStaticMarkup(
+      <ControlPanel
+        authority={authority()}
+        participants={alone}
+        onOffer={noop}
+        onRequest={noop}
+        onAnswer={noop}
+      />,
+    ),
+    "",
+  );
+});
+
+test("a control holder the roster cannot resolve is never announced to a lone host", () => {
+  // The real shape from a restarted worker: participant ids in the durable log
+  // outlive the in-memory presence registry, so `controlHeldBy` points at an id
+  // nobody carries any more. A solo host was told "Someone who has left has
+  // control" about themselves.
+  const alone: PresenceEntry[] = [
+    { id: HOST, name: "Kartik", role: "owner", connected: true },
+  ];
+  const html = renderToStaticMarkup(
+    <MissionAuthority
+      authority={authority({ controlHeldBy: "an-id-from-a-previous-process" })}
+      participants={alone}
+    />,
+  );
+
+  assert.equal(html, "");
+  assert.doesNotMatch(html, /has left/);
+});

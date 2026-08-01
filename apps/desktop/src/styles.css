@@ -4014,3 +4014,18 @@ select.open__input {
   flex-direction: column;
   gap: var(--space-1);
 }
+
+/*
+ * The two ways a review ends that are not "one of these wins".
+ *
+ * They were the same weight as the card actions, so a screen asking one
+ * question offered five equal answers. Quiet and labelled: the choice is
+ * still on the cards, and these are what you reach for when neither card is
+ * the answer.
+ */
+.decision__alternatives-label {
+  color: var(--text-dim);
+  font-size: var(--text-small);
+  align-self: center;
+  margin-right: var(--space-1);
+}

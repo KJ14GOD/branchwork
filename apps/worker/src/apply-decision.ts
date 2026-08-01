@@ -71,10 +71,20 @@ export const applyDecision = async (
       const alreadyExists = await readOrNull(targetPath);
 
       if (alreadyExists !== null) {
+        // Identical is not a conflict. Both trees running the same build
+        // produce the same artifact, and the parent already having a
+        // byte-for-byte copy of what this attempt would write means there is
+        // nothing to write and nothing in dispute — refusing here failed a
+        // whole decision over files that already agreed. Adopting an approach
+        // whose repository generates output was effectively impossible.
+        if (alreadyExists === forkContent) {
+          continue;
+        }
+
         conflicts.push({
           path: file.path,
           reason:
-            "This attempt added a file that now also exists in the parent repository.",
+            "This attempt added a file that the parent also created, with different contents.",
         });
         continue;
       }

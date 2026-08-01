@@ -227,3 +227,71 @@ test("applying twice is a conflict the second time, not a silent double-write", 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a file both trees generated identically is not a conflict", async () => {
+  const root = await repository();
+  const manager = managerFor(root);
+
+  try {
+    const checkpoint = await manager.createCheckpoint(checkpointInput());
+    const fork = await manager.createFork(checkpoint, { runId: "fork-a", label: "A" });
+
+    // The shape that made adopting impossible in a real repository: the
+    // attempt runs a build and so does the parent, so both trees end up
+    // holding the same generated artifact. Refusing here failed a whole
+    // decision over files that already agreed — one real session reported
+    // "11 of 12 changed files no longer applies cleanly" entirely from
+    // build output.
+    await writeFile(join(fork.worktreePath, "build.out"), "generated\n");
+    await writeFile(join(root, "build.out"), "generated\n");
+
+    // And one genuine change, so there is something left to apply.
+    await writeFile(join(fork.worktreePath, "answer.txt"), "attempt a\n");
+
+    const outcome = await applyDecision(root, manager, "fork-a");
+
+    assert.equal(
+      outcome.applied,
+      true,
+      outcome.applied ? "" : `refused: ${outcome.reason}`,
+    );
+    assert.equal(await readFile(join(root, "answer.txt"), "utf8"), "attempt a\n");
+    // Untouched rather than rewritten: there was nothing to write.
+    assert.equal(await readFile(join(root, "build.out"), "utf8"), "generated\n");
+    assert.equal(outcome.applied && outcome.files.includes("build.out"), false);
+  } finally {
+    await manager.removeAll().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a file both trees created with different contents is still a conflict", async () => {
+  const root = await repository();
+  const manager = managerFor(root);
+
+  try {
+    const checkpoint = await manager.createCheckpoint(checkpointInput());
+    const fork = await manager.createFork(checkpoint, { runId: "fork-a", label: "A" });
+
+    await writeFile(join(fork.worktreePath, "notes.md"), "the attempt's version\n");
+    await writeFile(join(root, "notes.md"), "somebody else's version\n");
+
+    const outcome = await applyDecision(root, manager, "fork-a");
+
+    // Identical is agreement; different is a real disagreement about the same
+    // path, and overwriting somebody's file is not something an apply may do
+    // quietly.
+    assert.equal(outcome.applied, false);
+    assert.equal(
+      outcome.applied === false && outcome.conflicts[0]?.path,
+      "notes.md",
+    );
+    assert.equal(
+      await readFile(join(root, "notes.md"), "utf8"),
+      "somebody else's version\n",
+    );
+  } finally {
+    await manager.removeAll().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
