@@ -85,7 +85,7 @@ direction laid on top of it.
 | Slice | Status | Evidence |
 | --- | --- | --- |
 | 1 — Approach surface | **Met** (2026-07-31) | Baseline derived in `apps/worker/src/compare.ts` from `fork.created.parentRunId` and rendered as "Current work"; human status language; single-prompt fork form with derived label. `compare.test.ts`, `compare-view.render.test.tsx` |
-| 2 — First Decision Room | **Met** (2026-07-31) | Three decision kinds (`adopt` / `revision` / `exploration`), required rationale, interventions as evidence above the agent's summary, summary last and labelled "Unverified claim" when nothing was tested. Requesting a revision cuts a new approach from the same checkpoint carrying the feedback, so the revision and what it revises can be compared. Exportable Markdown receipt at `GET /sessions/:id/receipt`. `compare.test.ts`, `replay.test.ts`, `decision-route.test.ts`, `receipt-export.test.ts`, `compare-view.render.test.tsx` |
+| 2 — First Decision Room | **Met** (2026-08-01) | Three decision kinds (`adopt` / `revision` / `exploration`), interventions as evidence above the agent's summary, summary last and labelled "Unverified claim" when nothing was tested. Requesting a revision cuts a new approach from the same checkpoint carrying the feedback. Exportable Markdown receipt at `GET /sessions/:id/receipt`. **Since 2026-08-01** the baseline is a decision target: keeping the current work records a real `decision.recorded` with its rationale, applies nothing, and is reported as *not needed* rather than as applied or blocked. Rationale is enforced at the route rather than only in React. `compare.test.ts`, `replay.test.ts`, `decision-route.test.ts`, `decision-authority.test.ts`, `receipt-export.test.ts`, `compare-view.render.test.tsx` |
 | 3 — Multiplayer authority | **Met**, deterministic only (2026-07-31) | `control-lifecycle.test.ts` (18 tests): offer/accept/decline/withdraw, superseded offers, disconnect vs departure, cross-session refusal, direction queued vs recorded. UI in `control-panel.tsx`, `control-panel.render.test.tsx` |
 | 4 — Reliability before pilot | **Met**, unsigned (2026-07-31) | Worktree reclamation, interrupted-run reconciliation, dev-server reaping, receipt checks, visible cost. Spend now survives a pause: `run.paused` carries a usage snapshot and `execute()` seeds from it (`pause-resume.test.ts`). Packaged and launch-verified — bundled worker under Electron's own Node, database in userData. **Open:** the DMG is unsigned; that needs an Apple Developer certificate |
 | 5 — Mission Inbox | **Met** (2026-07-31) | Attention grouping derived in `session-registry.ts:attentionFor`, ordered by urgency not recency; goal leads the row. `mission-inbox.test.ts` |
@@ -317,7 +317,17 @@ Numbered so other documents can point at them.
     machine — that needs an Apple Developer certificate. Milestone 5's "clean
     machine" exit is reachable but has not been run on a genuinely clean
     machine.
-17. **One flaky test under heavy machine contention.** *Open (2026-07-31.)*
+17. **Deciding is the controller's alone, deliberately.** *Open by choice
+    (2026-08-01.)* `decide` is its own capability rather than a shade of
+    `steer`, so an editor can direct a run and cannot settle a comparison, and
+    a reviewer cannot apply code indirectly through the combined
+    decide-and-apply route. That is narrower than the roles table implies a
+    reviewer should get. It is narrow on purpose: selection and application are
+    one permissioned operation today, so granting a reviewer the power to
+    select would grant them the power to write. Widen it when the two become
+    separately permissioned — not before. `decision-authority.test.ts` pins
+    every refusal.
+18. **One flaky test under heavy machine contention.** *Open (2026-07-31.)*
     `control-lifecycle.test.ts`, "what /authority sends validates against the
     contract", failed twice in three full-suite runs while a second agent's
     test suite was saturating the CPU: `pendingDirection` came back empty when
