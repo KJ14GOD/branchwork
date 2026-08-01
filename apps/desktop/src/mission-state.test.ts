@@ -4,10 +4,10 @@ import test from "node:test";
 import type { SessionEvent } from "@novus/contracts";
 import type { AttemptComparison, Comparison } from "@novus/contracts/protocol";
 
-import { composeMission, missionState } from "./mission-state.ts";
+import { composeMission, dominantAction, missionState } from "./mission-state.ts";
 
 /**
- * The seven states the shell has to be able to tell apart.
+ * The eight states the shell has to be able to tell apart.
  *
  * These are not cosmetic. Each one names a different screen, and two of them —
  * "changed but nothing verified it" and "verified" — are the distinction the
@@ -275,6 +275,125 @@ test("a run that failed reads as failed before /compare has answered", () => {
   });
 
   assert.equal(state, "failed");
+});
+
+test("a mission somebody declared over reads as over, whatever its runs did", () => {
+  // A run ending is the machine stopping; a mission ending is a person saying
+  // so. Before `mission.completed` existed the product could not tell those
+  // apart, and a finished mission with two approaches was reported as needing a
+  // decision forever — the fake-decision-as-only-exit shape this removes.
+  const state = missionState({
+    events: [
+      started("r1"),
+      event("mission.completed", {
+        outcome: "resolved",
+        summary: "The checkout test passes again.",
+        verification: "unverified",
+        filesChanged: 2,
+        actorId: "a1",
+      }),
+    ],
+    comparison: comparison([attempt({ paths: ["a.ts"] })]),
+    filesChanged: 2,
+    busy: true,
+    awaitingPerson: true,
+  });
+
+  assert.equal(state, "completed");
+});
+
+test("reopening a mission puts it back in flight rather than leaving an ending on it", () => {
+  const state = missionState({
+    events: [
+      started("r1"),
+      event("mission.completed", {
+        outcome: "abandoned",
+        summary: "Parking this until the migration lands.",
+        verification: "unverified",
+        filesChanged: 0,
+        actorId: "a1",
+      }),
+      event("mission.reopened", { actorId: "a1", reason: "The migration landed." }),
+    ],
+    comparison: null,
+    filesChanged: 0,
+    busy: true,
+    awaitingPerson: false,
+  });
+
+  assert.notEqual(state, "completed");
+});
+
+test("a completed mission shows the frozen ending, not a live evidence panel", () => {
+  const composition = composeMission("completed", {
+    agents: 1,
+    changed: 4,
+    verified: false,
+    completion: {
+      outcome: "abandoned",
+      summary: "Not worth the blast radius.",
+      verification: "failing",
+      filesChanged: 4,
+      completedBy: "p-1",
+      completedAt: "2026-08-01T00:00:00.000Z",
+    },
+  });
+
+  assert.equal(composition.showCompletion, true);
+  assert.equal(composition.showEvidence, false);
+  assert.equal(composition.headline, "Abandoned");
+  // Never the resolved wording for an abandoned mission, and never green.
+  assert.doesNotMatch(composition.detail, /finished\b/);
+});
+
+test("tests on the log count, even when the comparison knows nothing about them", () => {
+  // The evidence lie this fixes: the verdict was computed from
+  // `comparison.attempts` alone, so a one-workstream mission that ran its suite
+  // reported "nothing has verified these changes" underneath its own feed
+  // saying the tests passed.
+  const state = missionState({
+    events: [
+      started("r1"),
+      event("tool.completed", {
+        runId: "r1",
+        result: {
+          toolCallId: "t1",
+          name: "run_tests",
+          output: { command: "pnpm test", exitCode: 0, stdout: "", stderr: "", passed: true },
+        },
+      }),
+    ],
+    comparison: null,
+    filesChanged: 1,
+    busy: false,
+    awaitingPerson: false,
+  });
+
+  assert.equal(state, "verified");
+});
+
+test("one control on the screen is the inverted one, and obligation decides which", () => {
+  // `.button--primary` is the app's only inversion. Three surfaces can each
+  // honestly claim it, so the claim is settled once rather than by whichever
+  // component renders first.
+  assert.equal(
+    dominantAction({ offeredToYou: true, decisionWaiting: true, focused: true }),
+    "handoff",
+    "a person waiting on your answer outranks everything",
+  );
+  assert.equal(
+    dominantAction({ offeredToYou: false, decisionWaiting: true, focused: true }),
+    "focus",
+    "a surface you opened brings its own primary action",
+  );
+  assert.equal(
+    dominantAction({ offeredToYou: false, decisionWaiting: true, focused: false }),
+    "decision",
+  );
+  assert.equal(
+    dominantAction({ offeredToYou: false, decisionWaiting: false, focused: false }),
+    "direction",
+  );
 });
 
 test("one failed run beside one still going is not a failed mission", () => {

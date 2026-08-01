@@ -1,3 +1,8 @@
+import {
+  ControlPanel,
+  PendingDirection,
+  type ControlProps,
+} from "../control-panel.tsx";
 import type { Person, Workstream } from "../../workstreams.ts";
 import { workstreamStatus } from "../../workstreams.ts";
 
@@ -16,6 +21,38 @@ import { workstreamStatus } from "../../workstreams.ts";
  * because a colour that read as a verdict would be ranking the approaches on
  * the one surface that must not.
  */
+
+/**
+ * Pause, resume and cancel, while something is actually running.
+ *
+ * Kept from the shell this replaces rather than dropped with it. A controller
+ * who cannot stop a run they can see is not a controller, and burying the only
+ * way to halt a mission in a command palette would be exactly the "hidden, not
+ * restrained" failure the composer's own history records.
+ */
+export type RunControl = {
+  paused: boolean;
+  pausing: boolean;
+  cancelling: boolean;
+  onPause: () => void;
+  onCancel: () => void;
+};
+
+/**
+ * What the mission has cost and how long it has been going.
+ *
+ * Telemetry: read, never acted on, and pinned to the foot of the rail for that
+ * reason. Spend earns its place — it was computed on every model call, stored on
+ * every receipt, and shown nowhere, so the person whose money it is had to read
+ * a log line to find out. Counts of events, tool calls and patches did not earn
+ * theirs and are not here; they are the "passive tool-call counts in the prime
+ * part of the rail" STEERING refuses, and the raw log still has them.
+ */
+export type RailMeter = {
+  spend: string;
+  spendTitle: string;
+  elapsed: string;
+};
 
 const initials = (name: string): string =>
   name
@@ -98,16 +135,42 @@ export const WorkstreamRail = ({
   selected,
   onSelect,
   onAdd,
+  control,
+  runControl,
+  meter,
 }: {
   workstreams: readonly Workstream[];
   people: readonly Person[];
   selected: string | null;
   onSelect: (runId: string) => void;
   onAdd: () => void;
+  runControl?: RunControl | undefined;
+  meter: RailMeter;
+  /**
+   * The authority lifecycle, on the screen a host actually looks at.
+   *
+   * It used to render only in a shell reachable by switching views, so an
+   * incoming handoff offer showed a banner reading "Waiting on you" with
+   * nothing on screen to accept, decline or request with. Nothing about the
+   * component changed — every affordance is still rendered only for the
+   * participant who may take it, and it still renders nothing at all in a
+   * session with one person in it.
+   */
+  control: ControlProps;
 }) => (
   <aside className="rail rail--workroom">
     <div className="rail__scroll">
       <h2 className="rail__eyebrow">Workroom</h2>
+
+      {/*
+        Above the room, because "who may act" is the thing a person needs
+        before "who is here", and because an offer expecting an answer must not
+        sit below a scroll. Absent — not empty — whenever there is nothing to
+        negotiate, which is most missions.
+      */}
+      <ControlPanel {...control} />
+
+      <PendingDirection pending={control.authority.pendingDirection} />
 
       {workstreams.map((stream) => (
         <WorkstreamRow
@@ -127,6 +190,54 @@ export const WorkstreamRail = ({
       {people.map((person) => (
         <PersonRow key={person.id} person={person} />
       ))}
+
+      {/*
+        Only while something is running. Two quiet buttons, never a primary
+        one: stopping a run is a correction, and the dominant control on this
+        screen belongs to whatever the mission is actually waiting for.
+      */}
+      {runControl ? (
+        <div className="rail__section rail__section--run">
+          <div className="eyebrow">Run control</div>
+          <div className="rail__buttons">
+            <button
+              className="button"
+              type="button"
+              disabled={runControl.pausing}
+              onClick={runControl.onPause}
+              title={
+                runControl.paused
+                  ? "Continue this run where it left off"
+                  : "Suspend this run at its next safe boundary, to resume later"
+              }
+            >
+              {runControl.pausing
+                ? "Pausing…"
+                : runControl.paused
+                  ? "Resume"
+                  : "Pause"}
+            </button>
+            <button
+              className="button"
+              type="button"
+              disabled={runControl.cancelling}
+              onClick={runControl.onCancel}
+              title="Stop this run at its next safe boundary"
+            >
+              {runControl.cancelling ? "Stopping…" : "Cancel"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+
+    <div className="rail__meter">
+      <span className="rail__meter-item" title={meter.spendTitle}>
+        {meter.spend}
+      </span>
+      <span className="rail__meter-item" title="Since this mission opened">
+        {meter.elapsed}
+      </span>
     </div>
 
     <button className="rail__add" type="button" onClick={onAdd}>

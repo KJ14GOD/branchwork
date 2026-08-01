@@ -644,6 +644,210 @@
   line-height: 1;
 }
 
+/* ---------- authority, run control and the meter, in the rail ---------- */
+
+/*
+ * `.rail__section`, `.rail__meter` and `.rail__buttons` are the legacy rail's
+ * blocks in styles.css, which sits later in the cascade — so every rule here is
+ * scoped under `.rail--workroom` to win the tie. The components themselves
+ * (ControlPanel, PendingDirection) moved without being rewritten; only their
+ * geometry inside this narrower rail is restated.
+ */
+.rail--workroom .rail__section {
+  padding: 0 var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.rail--workroom .rail__section .eyebrow {
+  margin-bottom: var(--space-2);
+}
+
+.rail--workroom .rail__buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.rail--workroom .rail__buttons .button {
+  flex: 1;
+}
+
+/* A run appearing must not pop the rows below it into a new layout unannounced.
+   Same treatment the legacy rail's run-control box had, kept with it. */
+.rail--workroom .rail__section--run {
+  margin-top: var(--space-4);
+  animation: overlay-in var(--t-overlay) var(--ease);
+}
+
+.rail--workroom .rail__meter {
+  flex: none;
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-dim);
+  font-size: var(--text-eyebrow);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   Focus panes
+   ============================================================
+ *
+ * Approaches, the repository browser and the raw event log. Each was, at some
+ * point, a permanent region of a shell that drew every region on every screen;
+ * each is genuinely useful; none of them is what a person opened the app to
+ * look at. They take the work column and leave the header, the room and the
+ * composer exactly where they were, so opening one is never a change of place.
+ */
+
+.workroom__work--focus {
+  display: flex;
+  flex-direction: column;
+  /* The pane scrolls, not this. Without it the column's own scrollbar and the
+     pane's stack up as two vertical rules a few pixels apart. */
+  overflow: hidden;
+  min-height: 0;
+}
+
+.focus {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.focus__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex: none;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.focus__label {
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/*
+ * The body does not scroll — each pane already does.
+ *
+ * `.compare-screen`, `.timeline`, `.tree`, `.viewer` and `.files` all carry
+ * their own `overflow` and their own `min-height: 0`, because every one of them
+ * used to be a grid column of a shell that gave it a definite height. Dropping
+ * them into a scrolling container instead gives two scrollbars a few pixels
+ * apart and a pinned header that scrolls away with its content. So this is the
+ * container that has a height, and the child takes it.
+ */
+.focus__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.focus__body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* The changed-files panel was the body grid's third column and brings that
+   column's own left edge with it. Here it is the whole pane. */
+.focus__body > .files {
+  border-left: none;
+}
+
+/* The file browser is two panes, not one. The tree keeps its own width; the
+   viewer takes the rest and both scroll independently. */
+.focus__split {
+  display: grid;
+  grid-template-columns: var(--tree-w) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ============================================================
+   A mission somebody declared over
+   ============================================================
+ *
+ * Deliberately shaped like the recovery state rather than like a banner: an
+ * ending is a thing to read, not a status to glance at. The outcome does not
+ * colour the evidence — a resolved mission nothing verified and an abandoned
+ * one whose tests were green are both ordinary, and this block has to be able
+ * to say either.
+ */
+
+.finished {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  max-width: 640px;
+  margin: var(--space-8) auto;
+  padding: 0 var(--space-6);
+}
+
+.finished__title {
+  margin: 0;
+  font-size: var(--text-screen);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
+  color: var(--text);
+}
+
+.finished__summary {
+  margin: 0;
+  font-size: var(--text-body);
+  line-height: var(--leading-prose);
+  color: var(--text-muted);
+}
+
+.finished__proof {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-m);
+  background: var(--inset);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+}
+
+.finished__glyph {
+  flex: none;
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
+}
+
+/* The only green here, and it means one thing: something ran against these
+   changes and passed. Completing a mission never earns it. */
+.finished__proof--pass {
+  color: var(--add);
+}
+
+.finished__proof--fail {
+  color: var(--del);
+}
+
+/* Neither colour. An absence of evidence is not a result. */
+.finished__proof--unknown {
+  color: var(--text-muted);
+}
+
+.finished__meta {
+  margin: 0;
+  font-size: var(--text-micro);
+  color: var(--text-dim);
+}
+
 /* ============================================================
    Activity feed
    ============================================================ */

@@ -20,10 +20,17 @@ import test from "node:test";
  * anything else in the repository fail.
  */
 
-const CSS = readFileSync(
-  fileURLToPath(new URL("./styles.css", import.meta.url)),
-  "utf8",
-).replace(/\/\*[\s\S]*?\*\//g, "");
+const read = (path: string): string =>
+  readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+
+// `styles.css` @imports the feature files rather than containing them, so a
+// rule that lives in `styles/` is invisible to a scan of the entry sheet. Both
+// are read here for that reason; the Workroom is the default screen and its
+// scroll containment is exactly the class of rule this file exists to hold.
+const CSS = `${read("./styles.css")}\n${read("./styles/workroom.css")}`;
 
 /** Every declaration block whose selector list contains exactly `selector`. */
 const declarationsFor = (selector: string): string[] =>
@@ -73,6 +80,26 @@ test("a sheet's body is what scrolls, and it can", () => {
 test("the head and the foot do not scroll with it", () => {
   assert.ok(declares(".sheet__head", "flex: none"));
   assert.ok(declares(".sheet__foot", "flex: none"));
+});
+
+test("a focused surface scrolls inside the work column, not the column inside it", () => {
+  // Same failure the sheet rule above holds, in the place it now matters most:
+  // the Workroom is the only host mission screen, and Approaches, the file
+  // browser and the raw log all open inside its centre column. Without the
+  // containment here the column and the pane both scroll — two vertical rules
+  // a few pixels apart, which is the "broken double divider" the Workroom's own
+  // stylesheet already records having fixed once.
+  assert.ok(declares(".workroom__work--focus", "overflow: hidden"));
+  assert.ok(declares(".workroom__work--focus", "min-height: 0"));
+  assert.ok(declares(".focus", "min-height: 0"));
+  // The pane scrolls, not the container around it: every surface that opens in
+  // here already carries its own `overflow` and its own `min-height: 0`,
+  // because each was a grid column of a shell that gave it a definite height.
+  assert.ok(declares(".focus__body", "overflow: hidden"));
+  assert.ok(declares(".focus__body", "min-height: 0"));
+  assert.ok(declares(".focus__body > *", "min-height: 0"));
+  // The bar names the pane and carries the way out; it must not scroll away.
+  assert.ok(declares(".focus__bar", "flex: none"));
 });
 
 test("the first screen cannot be made taller by remembering more", () => {

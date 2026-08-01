@@ -485,10 +485,17 @@ a platform" complaint the rest of this pass answers. Do not revert to
 governs decoration, not discoverability, and a control nobody can find is not
 restrained, it is hidden.
 
-**`ask-bar.tsx` is superseded by `components/composer.tsx`.** The ask bar was
-a one-line textarea and a button on a bar with a rule above it — three nested
-rectangles to type one sentence into — and the feedback was that it "feels
-empty" and needs to actually hold things.
+**`ask-bar.tsx` was superseded by `components/composer.tsx`, which is itself
+superseded by `components/workroom/composer-dock.tsx`.** Both earlier files are
+deleted. The reasoning below is kept because it is why the dock is shaped the
+way it is; read `composer` in it as `.dock`. The ask bar was a one-line
+textarea and a button on a bar with a rule above it — three nested rectangles
+to type one sentence into — and the feedback was that it "feels empty" and
+needs to actually hold things. The dock's own departure from it: it is compact
+at rest and grows with what you write, because an always-tall field on an empty
+mission is the same "mostly an empty box" failure at a different size. Its Send
+is `.button--primary` only while nothing else on the screen holds that claim —
+see `dominantAction` in `mission-state.ts`.
 
 The composer is a persistent, always-visible control at the bottom of the
 timeline column, not a modal and not conditional on any mode. What changed:
@@ -884,12 +891,16 @@ quoted here, which is how this paragraph went stale once already.
   exactly like a broken inbox and is not. Clear `localStorage["novus.tabs"]` and
   reload before blaming anything you changed. Found while screenshotting
   fixtures; cost most of an hour.
-- **A mission that needs a decision does not open into the Workroom.**
-  `decideDecisionRoom` routes it straight to the Decision Room, which is a
-  different shell entirely. If you are trying to see a multi-workstream rail on
-  screen, a forked session will not show you one — it will show you the compare
-  screen. Use a session with more than one approach that is *not* awaiting a
-  decision, or drive the components directly in a render test.
+- **There is one host mission screen, and nothing routes you off it.** This
+  used to say the opposite: `decideDecisionRoom` sent a mission awaiting a
+  decision straight into a second, three-column shell, so the multi-workstream
+  rail could not be seen on screen and complementary work was framed as
+  competing approaches. `decision-room.ts` and that shell are deleted.
+  Approaches, the repository browser, the changed-files panel and the raw event
+  log now open as **focus panes** (`Focus` in `workroom.tsx`) over the same
+  Workroom — header, rail and composer stay put — and only when somebody asks,
+  from the header action or `/`. If you add another such surface, add a focus
+  mode; do not add a shell.
 - **The gate does not see pixels.** `pnpm typecheck && pnpm test` passes on any
   CSS. Every bug in this section was found by *measuring the running app*, not
   by reading the stylesheet — and two of them (the xterm blowout, the centred

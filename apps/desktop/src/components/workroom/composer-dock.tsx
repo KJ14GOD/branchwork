@@ -20,6 +20,7 @@ export const ComposerDock = ({
   onTarget,
   busy,
   placeholder = "Give direction…",
+  primary = true,
   onSend,
 }: {
   workstreams: readonly Workstream[];
@@ -27,6 +28,17 @@ export const ComposerDock = ({
   onTarget: (runId: string) => void;
   busy: boolean;
   placeholder?: string;
+  /**
+   * Whether Send is *this screen's* dominant action.
+   *
+   * True on the Workroom itself, where directing the work is the thing a person
+   * is there to do. False while a focused surface is open over the work — the
+   * Decision Room's own Record decision is the dominant action then, and two
+   * inverted buttons on one screen destroys the mechanism that makes either of
+   * them mean anything. The composer stays fully usable either way: reaching a
+   * decision must not cost the ability to say something.
+   */
+  primary?: boolean;
   onSend: (text: string) => void;
 }) => {
   const [text, setText] = useState("");
@@ -89,7 +101,7 @@ export const ComposerDock = ({
         />
 
         <button
-          className="button button--primary dock__send"
+          className={primary ? "button button--primary dock__send" : "button dock__send"}
           type="submit"
           disabled={!ready || busy}
         >

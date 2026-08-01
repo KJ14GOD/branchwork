@@ -90,8 +90,17 @@ export const MissionHeader = ({
   branch: string | null;
   people: readonly Person[];
   onInvite: () => void;
-  /** The single primary action for this mission state, when there is one. */
-  action?: { label: string; onClick: () => void } | undefined;
+  /**
+   * The mission-level action, when there is one.
+   *
+   * `primary` is not the action's own opinion of itself — it is granted by
+   * `dominantAction`, which settles which single control on the whole screen is
+   * inverted. An action offered while the composer or a handoff holds that
+   * claim renders quiet, and is no less clickable for it.
+   */
+  action?:
+    | { label: string; onClick: () => void; primary?: boolean }
+    | undefined;
 }) => (
   <header className="mission">
     <div className="mission__main">
@@ -121,7 +130,7 @@ export const MissionHeader = ({
       <Presence people={people} onInvite={onInvite} />
       {action ? (
         <button
-          className="button button--primary"
+          className={action.primary ? "button button--primary" : "button"}
           type="button"
           onClick={action.onClick}
         >

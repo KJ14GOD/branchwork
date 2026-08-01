@@ -130,9 +130,7 @@ pre,
 .terminal-dock__prompt,
 .tool-group__count,
 .tool-group__summary,
-.palette__hint,
-.attempt__stats,
-.composer__model-note {
+.palette__hint {
   font-family: var(--mono);
 }
 
@@ -193,13 +191,7 @@ button {
 .tab,
 .tab__close,
 .tab--new,
-.composer__field,
-.composer__send,
-.composer__model,
-.composer__model-option,
-.viewswitch__option,
 .tree__row,
-.attempt,
 .control__reason,
 .terminal-dock__resize {
   transition:
@@ -804,62 +796,6 @@ kbd {
   font-size: var(--text-small);
 }
 
-/* ---------- view switcher ----------
-   The body has exactly three mutually exclusive views, so it gets a segmented
-   control that shows all three and which one is active — not three separate
-   buttons that swap their own labels ("attempts" becoming "timeline"), which
-   is what was there and which never told you what the other states were. */
-.viewswitch {
-  display: flex;
-  align-items: center;
-  flex: none;
-  gap: 2px; /* geometry: the seam between segments, not a spacing step */
-  padding: 2px;
-  border-radius: var(--radius-m);
-  background: var(--inset);
-}
-
-.viewswitch__option {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: calc(var(--control-m) - var(--space-1) * 2);
-  padding: 0 var(--space-3);
-  border-radius: calc(var(--radius-m) - 2px);
-  color: var(--text-muted);
-  font-size: var(--text-small);
-  font-weight: var(--weight-medium);
-  line-height: var(--leading-flat);
-  white-space: nowrap;
-}
-
-.viewswitch__option:hover {
-  color: var(--text);
-}
-
-.viewswitch__option--active,
-.viewswitch__option--active:hover {
-  background: var(--surface-raised);
-  color: var(--text);
-}
-
-/* Attempts carries a live count when there are any — the cheapest way to make
-   forking visible from anywhere in the app. */
-.viewswitch__count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px; /* geometry: fits two digits without the pill going oval */
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-pill);
-  background: var(--selected);
-  color: var(--text);
-  font-size: var(--text-eyebrow);
-  font-weight: var(--weight-strong);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.5;
-}
-
 /* ---------- status and presence ---------- */
 
 .status {
@@ -897,10 +833,10 @@ kbd {
   }
 }
 
-/* The at-a-glance presence stack in the session bar. The legible version —
-   names, roles, who holds control, and the handoff action — is a rail section
-   (.party) rather than this; multiplayer is the product thesis and a
-   four-pixel chip was not carrying it. */
+/* The at-a-glance presence stack. The legible version — names, roles, who
+   holds control, and the whole handoff lifecycle — lives in the Workroom's own
+   rail (.rail--workroom, styles/workroom.css); multiplayer is the product
+   thesis and a four-pixel chip was not carrying it. */
 .presence {
   display: inline-flex;
   align-items: center;
@@ -971,24 +907,6 @@ kbd {
   }
 }
 
-/* Attempts replaces the timeline and the files panel both — a fork's changed
-   files belong to CompareView's own per-attempt columns, not this session's
-   panel, so the third column drops rather than sitting empty beside it. */
-/*
- * Deliberately no longer a different grid. The Decision Room used to replace
- * the body and drop the evidence inspector with it, which meant the screen
- * showing the decision was the one screen without the evidence panel.
- */
-.body--compare {
-  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--files-w);
-}
-
-/* Rail | tree | viewer. The rail stays — goal, attempts and participants are
-   still useful context while looking at a file. */
-.body--browse {
-  grid-template-columns: var(--rail-w) var(--tree-w) minmax(0, 1fr);
-}
-
 /* ---------- rail ----------
  *
  * THE NESTING RULE, stated once and applied everywhere below:
@@ -1057,22 +975,6 @@ kbd {
   padding-right: var(--space-5);
 }
 
-.rail__goal {
-  color: var(--text);
-  font-size: var(--text-small);
-  line-height: var(--leading-prose);
-}
-
-.rail__goal--empty {
-  color: var(--text-dim);
-}
-
-/* The run-control box appears when a run starts; it fades in rather than
-   popping the sections below it into a new layout unannounced. */
-.rail__section--live {
-  animation: overlay-in var(--t-overlay) var(--ease);
-}
-
 .rail__buttons {
   display: flex;
   gap: var(--space-2);
@@ -1118,166 +1020,6 @@ kbd {
 
 .stat__del {
   color: var(--del);
-}
-
-/* ---------- attempts (the fork surface) ----------
- *
- * Branching a session, running competing attempts, and choosing between them
- * on evidence is the product thesis (README, "Starting wedge"). It used to be
- * one lowercase word in a corner of the session bar. It is now three things
- * at once: a permanent rail section listing live attempts at a glance, a
- * labelled segment in the view switcher carrying a count, and the compare
- * screen itself. This is the rail section.
- *
- * It draws data useComparison already fetches for every tab, so it costs no
- * new request and no new poll.
- */
-.attempt {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  width: 100%;
-  padding: var(--space-3) var(--space-5);
-  border-left: 2px solid transparent; /* geometry: a selection marker */
-  color: var(--text-muted);
-  text-align: left;
-}
-
-.attempt:hover {
-  background: var(--hover);
-}
-
-.attempt:active {
-  background: var(--pressed);
-}
-
-.attempt__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.attempt__dot {
-  flex: none;
-  width: 6px; /* geometry */
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-dim);
-}
-
-.attempt__dot--running {
-  background: var(--live);
-  animation: pulse 1.6s ease-in-out infinite;
-}
-
-.attempt__dot--failed {
-  background: var(--alert);
-}
-
-/* The chosen attempt is marked, not congratulated. */
-.attempt__dot--chosen {
-  background: var(--text);
-}
-
-.attempt__label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-  font-size: var(--text-small);
-  font-weight: var(--weight-medium);
-}
-
-.attempt__stats {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  /* geometry: aligns the stats under the label, past the dot and its gap */
-  padding-left: calc(6px + var(--space-2));
-  color: var(--text-dim);
-  font-size: var(--text-micro);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Passing is the expected outcome and takes no colour; failing is the one that
-   needs a person, and gets the app's only attention hue. */
-.attempt__stat--pass {
-  color: var(--text-muted);
-}
-
-.attempt__stat--fail {
-  color: var(--alert);
-}
-
-.attempt__cta {
-  width: calc(100% - var(--space-5) * 2);
-  margin: var(--space-3) var(--space-5) 0;
-}
-
-/* ---------- participants ----------
-   Presence and roles were a chip. Who is here and who holds control is
-   multiplayer state, so it reads as a list with names, roles and the handoff
-   action in place. */
-.party {
-  display: flex;
-  flex-direction: column;
-}
-
-.party__row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) 0;
-  min-width: 0;
-}
-
-.party__dot {
-  flex: none;
-  width: 6px; /* geometry */
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-dim);
-}
-
-.party__row--live .party__dot {
-  background: var(--live);
-  animation: pulse 1.6s ease-in-out infinite;
-}
-
-.party__who {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
-}
-
-.party__name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-  font-size: var(--text-small);
-}
-
-.party__role {
-  color: var(--text-dim);
-  font-size: var(--text-micro);
-  line-height: var(--leading-normal);
-}
-
-/* Who holds the baton, stated on the roster row rather than only in Control,
-   because a reader scanning names should not have to correlate two lists. */
-.party__baton {
-  flex: none;
-  padding: 0 var(--space-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
-  color: var(--text);
-  font-size: var(--text-eyebrow);
-  font-weight: var(--weight-medium);
-  letter-spacing: 0.02em;
 }
 
 /* ---------- control ---------- */
@@ -1551,240 +1293,6 @@ kbd {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-}
-
-/* ---------- composer ----------
- *
- * "The composer feels empty", and asking should feel like the primary way you
- * talk to this product. It was a one-line textarea and a button, on a bar
- * with a rule above it — three nested rectangles to type one sentence into.
- *
- * Now: no bar, no rule. The composer sits on the same canvas as the timeline
- * (so the column reads as one continuous thing) and the *field* is the only
- * bordered element in it. The field is a container with a real minimum height
- * and a toolbar inside it — the shape Cursor, Zed's agent panel and Claude's
- * own composer all converge on, because it is the only one that can host
- * controls without pushing them out into a second toolbar somewhere else.
- */
-.composer {
-  flex: none;
-  /* Opaque and on the canvas, so scrolled timeline content disappears behind
-     it without needing a border to say so. */
-  background: var(--bg);
-  padding: var(--space-3) var(--space-6) var(--space-5);
-}
-
-.composer__field {
-  position: relative; /* the model menu anchors to this */
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-l);
-  background: var(--surface);
-}
-
-.composer__field:focus-within {
-  border-color: var(--border-strong);
-  box-shadow: var(--focus-halo);
-}
-
-/*
- * Auto-grow with no JavaScript measurement.
- *
- * The obvious implementation reads scrollHeight and writes style.height on
- * every keystroke, which forces a synchronous layout per character —
- * performance was explicitly called out, so this uses the CSS-only technique
- * instead: a grid with the textarea and an invisible ::after replica stacked
- * in the same cell, the replica fed the same text through a data attribute.
- * The grid row is sized by the replica; the textarea stretches to it. No
- * measurement, no thrash, no layout read from script at all.
- */
-.composer__grow {
-  display: grid;
-  /* geometry: three lines at rest, about nine before it scrolls. The minimum
-     is the point — a one-line box is what made this read as an afterthought
-     rather than as the primary way you talk to the product. */
-  min-height: 76px;
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.composer__grow::after {
-  /* The trailing space keeps a newline-terminated value one line taller, so
-     Shift+Enter grows the box before anything is typed on the new line. */
-  content: attr(data-value) " ";
-  visibility: hidden;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.composer__grow > textarea,
-.composer__grow::after {
-  /* Both occupy the one cell, and must share every metric that affects text
-     layout or the replica will not predict the textarea's height. */
-  grid-area: 1 / 1 / 2 / 2;
-  padding: var(--space-4) var(--space-4) var(--space-2);
-  border: none;
-  font: inherit;
-  font-size: var(--text-body);
-  line-height: var(--leading-prose);
-  letter-spacing: inherit;
-}
-
-.composer__input {
-  resize: none;
-  overflow: hidden;
-  background: transparent;
-  color: var(--text);
-}
-
-.composer__input:focus {
-  outline: none;
-}
-
-/* The field shows focus for it — a second ring inside the first reads as two
-   controls. */
-.composer__input:focus-visible {
-  box-shadow: none;
-}
-
-.composer__input::placeholder {
-  color: var(--text-dim);
-}
-
-.composer__toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3) var(--space-3);
-}
-
-.composer__spacer {
-  flex: 1;
-}
-
-.composer__send {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: var(--control-m);
-  padding: 0 var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-m);
-  background: var(--surface-raised);
-  color: var(--text);
-  font-size: var(--text-small);
-  font-weight: var(--weight-strong);
-  line-height: var(--leading-flat);
-}
-
-.composer__send:hover:not(:disabled) {
-  background: var(--surface-raised-hover);
-  border-color: rgb(var(--fg) / 0.24);
-}
-
-.composer__send:active:not(:disabled) {
-  border-color: rgb(var(--fg) / 0.3);
-}
-
-.composer__send:disabled {
-  background: transparent;
-  border-color: var(--border-subtle);
-  color: var(--text-dim);
-  cursor: default;
-}
-
-/* ---------- model picker ----------
-   Which model handles the next turn. The control and its state are real; the
-   routing behind it is a documented seam — see use-turn-model.ts. */
-/* The menu anchors to the button, not to the whole field, so it opens above
-   the control a person just pressed rather than above the toolbar. */
-.composer__model-wrap {
-  position: relative;
-  flex: none;
-}
-
-.composer__model {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: none;
-  height: var(--control-m);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-m);
-  color: var(--text-muted);
-  font-size: var(--text-small);
-  line-height: var(--leading-flat);
-  white-space: nowrap;
-}
-
-.composer__model:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
-.composer__model[aria-expanded="true"] {
-  background: var(--selected);
-  color: var(--text);
-}
-
-.composer__model-name {
-  font-weight: var(--weight-medium);
-}
-
-.composer__model-caret {
-  color: var(--text-dim);
-  font-size: var(--text-eyebrow);
-}
-
-.composer__menu {
-  position: absolute;
-  bottom: calc(100% + var(--space-2));
-  left: 0;
-  z-index: 2;
-  width: 280px; /* geometry: fits the longest label beside its note */
-  padding: var(--space-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-l);
-  background: var(--surface);
-  box-shadow: var(--shadow-popover);
-  transform-origin: bottom left;
-  animation: float-in var(--t-overlay) var(--ease);
-}
-
-.composer__model-option {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  width: 100%;
-  padding: var(--space-3);
-  border-radius: var(--radius-m);
-  color: var(--text-muted);
-  text-align: left;
-}
-
-.composer__model-option:hover {
-  background: var(--hover);
-}
-
-.composer__model-option--active,
-.composer__model-option--active:hover {
-  background: var(--selected);
-}
-
-.composer__model-label {
-  flex: none;
-  color: var(--text);
-  font-size: var(--text-small);
-  font-weight: var(--weight-medium);
-}
-
-.composer__model-note {
-  flex: 1;
-  color: var(--text-dim);
-  font-size: var(--text-micro);
-  text-align: right;
 }
 
 /* ---------- tool groups ---------- */
@@ -3611,106 +3119,6 @@ select.open__input {
    not a result. */
 .inbox__evidence--unverified {
   color: var(--text-dim);
-}
-
-/* ---------- decision spine ---------- */
-
-.spine {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-}
-
-.spine__step {
-  position: relative;
-}
-
-/*
- * The connecting line. Drawn between steps rather than on them, so the ladder
- * reads as one run of work rather than five unrelated rows — that continuity
- * is the part STEERING asks to become recognisable.
- */
-.spine__step:not(:last-child)::before {
-  content: "";
-  position: absolute;
-  left: 6px;
-  top: 18px;
-  bottom: -2px;
-  width: 1px;
-  background: var(--border);
-}
-
-.spine__action,
-.spine__static {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  width: 100%;
-  padding: var(--space-1) 0;
-  text-align: left;
-  color: var(--text-muted);
-}
-
-.spine__action {
-  border-radius: var(--radius-s);
-}
-
-.spine__action:hover {
-  color: var(--text);
-}
-
-.spine__glyph {
-  flex: none;
-  width: 13px;
-  text-align: center;
-  color: var(--text-dim);
-  font-size: var(--text-small);
-  /* Over the connecting line, so the line appears to run between glyphs. */
-  position: relative;
-  z-index: 1;
-  background: var(--surface);
-}
-
-.spine__glyph--complete {
-  color: var(--text-muted);
-}
-
-.spine__glyph--active {
-  color: var(--text);
-}
-
-/*
- * The one status allowed to draw the eye, and the only accent in the ladder.
- * If everything is highlighted then nothing is, and the whole point of this
- * rail is to answer "what needs me" at a glance.
- */
-.spine__glyph--needs-attention {
-  color: var(--alert);
-}
-
-.spine__glyph--blocked {
-  color: var(--del);
-}
-
-.spine__step--not-started .spine__label {
-  color: var(--text-dim);
-}
-
-.spine__label {
-  color: var(--text);
-}
-
-.spine__step--not-started .spine__glyph {
-  color: var(--text-dim);
-}
-
-.spine__detail {
-  margin-left: auto;
-  color: var(--text-dim);
-  font-size: var(--text-small);
-  text-align: right;
 }
 
 /* ---------- evidence inspector ---------- */
