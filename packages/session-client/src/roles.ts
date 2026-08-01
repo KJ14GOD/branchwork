@@ -13,6 +13,12 @@
  * it yet — approvals are policy-level on the host — so a client should not
  * render an approve control off the back of it.
  *
+ * `finish` is `POST /sessions/:id/complete` and `/reopen`, and a client may
+ * render off it: it is the one judgement bit with a route behind it. It is
+ * separate from `approve` even though the same three roles hold both, because
+ * `approve` means saying yes to a tool call and fusing the two would make them
+ * impossible to separate once the approval route exists.
+ *
  * `decide` is `POST /sessions/:id/decision`, and it is owner-only for V1
  * because that route both settles the comparison and writes the chosen files.
  * A joined window renders no decision surface at all today, so this is here to
@@ -26,15 +32,25 @@ export type ParticipantCapability =
   | "watch"
   | "direct"
   | "approve"
+  | "finish"
   | "steer"
   | "decide"
   | "invite"
   | "transfer";
 
 const ROLE_CAPABILITIES = {
-  owner: ["watch", "direct", "approve", "steer", "decide", "invite", "transfer"],
-  editor: ["watch", "direct", "approve", "steer"],
-  reviewer: ["watch", "approve"],
+  owner: [
+    "watch",
+    "direct",
+    "approve",
+    "finish",
+    "steer",
+    "decide",
+    "invite",
+    "transfer",
+  ],
+  editor: ["watch", "direct", "approve", "finish", "steer"],
+  reviewer: ["watch", "approve", "finish"],
   viewer: ["watch"],
 } as const satisfies Record<ParticipantRole, readonly ParticipantCapability[]>;
 

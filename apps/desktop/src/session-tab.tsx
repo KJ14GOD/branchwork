@@ -15,6 +15,7 @@ import { groupKeyFor } from "./components/timeline-view.tsx";
 import { harnessChoices } from "./components/harness-picker.tsx";
 import { useProviders } from "./use-providers.ts";
 import { EmptyMission } from "./components/workroom/empty-mission.tsx";
+import { FinishMission } from "./components/workroom/finish-mission.tsx";
 import {
   EventLogPane,
   RepositoryPane,
@@ -165,11 +166,14 @@ export const SessionTab = ({
     resume,
     handoff,
     requestControl,
+    complete,
+    reopen,
     answerHandoff,
   } = useSessionActions(endpoint, session);
   const host = bridge();
   const [focusMode, setFocusMode] = useState<FocusMode>(null);
   const [inviting, setInviting] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const comparison = useComparison(endpoint, session.id);
@@ -396,6 +400,20 @@ export const SessionTab = ({
       label: "Invite a teammate",
       run: () => setInviting(true),
     },
+    // Only while there is a mission to end, and only while it is not already
+    // ended — the palette listing "Finish mission" on a finished one is the
+    // dead affordance this app keeps deleting.
+    ...(completion === null &&
+    events.some((event) => event.type === "run.started")
+      ? [
+          {
+            id: "finish",
+            label: "Finish this mission",
+            hint: "records an outcome and freezes the evidence",
+            run: () => setFinishing(true),
+          },
+        ]
+      : []),
     {
       id: "raw",
       label: raw ? "Hide raw event payloads" : "Show raw event payloads",
@@ -657,6 +675,21 @@ export const SessionTab = ({
 
       {inviting ? (
         <InvitePanel onInvite={invite} onClose={() => setInviting(false)} />
+      ) : null}
+
+      {finishing ? (
+        <FinishMission
+          verification={
+            verification.verified === true
+              ? "verified"
+              : verification.verified === false
+                ? "failing"
+                : "unverified"
+          }
+          filesChanged={fileChanges.files.length}
+          onFinish={complete}
+          onClose={() => setFinishing(false)}
+        />
       ) : null}
     </>
   );
@@ -926,13 +959,11 @@ export const SessionTab = ({
                 (participant) => participant.id === completion.completedBy,
               )?.name ?? "a participant")
         }
-        // TODO(mission lifecycle): there is no route to reopen a mission yet.
-        // `mission.reopened` exists in the contract and `projectSession` already
-        // folds it, but nothing in `event-server.ts` appends one, so this is
-        // deliberately inert rather than a button that fails. The slice that
-        // adds POST /sessions/:id/reopen wires this to it; nothing else here
-        // has to change.
-        onReopen={() => undefined}
+        // The route exists now, so this is live. A reason is required by the
+        // same 12-character floor a completion summary is held to: reopening
+        // is a reversal, and "oops" tells the next reader nothing about why
+        // the mission everyone was told was finished is open again.
+        onReopen={(reason) => void reopen(reason)}
         focus={focus}
         dominant={dominant}
         {...(approachAction ? { action: approachAction } : {})}

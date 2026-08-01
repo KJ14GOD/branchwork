@@ -21,8 +21,9 @@ import { startEventServer } from "./event-server.ts";
  * 1. The evidence on the event is the worker's, never the caller's. A client
  *    that could state `verification` could finish a mission as verified having
  *    run nothing, which is the one thing STEERING says this product does not do.
- * 2. Ending a mission is `approve`, so a reviewer can and a viewer cannot, and
- *    an invite to one session cannot end another.
+ * 2. Ending a mission is `finish` — its own capability, not `approve` — so a
+ *    reviewer can and a viewer cannot, and an invite to one session cannot end
+ *    another.
  * 3. Finishing twice and reopening a live mission are refused rather than
  *    quietly succeeding.
  *
@@ -532,7 +533,9 @@ test("a viewer cannot end a mission, and nothing lands when they try", async () 
     assert.equal(response.status, 403);
     assert.match(
       ((await response.json()) as { error: string }).error,
-      /viewer cannot approve/,
+      // `finish`, not `approve` — see the note above CAPABILITIES in
+      // participants.ts for why those are separate bits.
+      /viewer cannot finish/,
     );
     assert.equal(completions(store, sessionId).length, 0);
   });

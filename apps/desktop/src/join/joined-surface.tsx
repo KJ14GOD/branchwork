@@ -191,7 +191,7 @@ export const JoinedSurface = ({
    * request, so a table that drifts makes this screen wrong about what to
    * show and never wrong about what happens.
    */
-  const canFinish = !relay && role !== null && roleAllows(role, "approve");
+  const canFinish = !relay && role !== null && roleAllows(role, "finish");
 
   // Guarded by `missionOutcome`, which is `summarise`'s fold — last event
   // wins and a reopening beats the completion before it. Reading the event

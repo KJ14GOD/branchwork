@@ -67,10 +67,34 @@ export const HOST_SESSION = "host";
  *
  * Read down: every role can do everything the one below it can.
  */
+/**
+ * `finish` is its own bit rather than a second job for `approve`.
+ *
+ * They are held by the same three roles today, which is exactly why it is
+ * worth separating them now: `approve` already has a reserved meaning — saying
+ * yes to a tool call the agent proposed — and it simply has no HTTP surface
+ * yet, because approvals are still a static allow-list built at session
+ * creation. Ending a mission was the first route that needed a judgement bit,
+ * and spending `approve` on it would have permanently fused "you may approve
+ * my agent's writes" to "you may declare my mission over". Those come apart
+ * the moment the approval route lands, and a fused bit cannot be split without
+ * a breaking change to every role.
+ *
+ * Read down: every role can do everything the one below it can.
+ */
 const CAPABILITIES = {
-  owner: ["watch", "direct", "approve", "steer", "decide", "invite", "transfer"],
-  editor: ["watch", "direct", "approve", "steer"],
-  reviewer: ["watch", "approve"],
+  owner: [
+    "watch",
+    "direct",
+    "approve",
+    "finish",
+    "steer",
+    "decide",
+    "invite",
+    "transfer",
+  ],
+  editor: ["watch", "direct", "approve", "finish", "steer"],
+  reviewer: ["watch", "approve", "finish"],
   viewer: ["watch"],
 } as const satisfies Record<Role, readonly string[]>;
 

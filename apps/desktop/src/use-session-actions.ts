@@ -54,6 +54,17 @@ export type SessionActions = {
   handoff: (toParticipantId: string) => Promise<void>;
   /** Asks whoever holds control for it. Standing until answered or you leave. */
   requestControl: (reason?: string) => Promise<void>;
+  /**
+   * Declares the mission over. Resolves true when the log actually recorded
+   * it, so a surface can close its form on success and keep what the person
+   * typed on failure.
+   */
+  complete: (
+    outcome: "resolved" | "abandoned",
+    summary: string,
+  ) => Promise<boolean>;
+  /** Undoes a completion, because finishing must not be a trapdoor. */
+  reopen: (reason: string) => Promise<boolean>;
   /** Answers an offer made to you, or takes back one you made. */
   answerHandoff: (
     offerEventId: string,
@@ -243,6 +254,65 @@ export const useSessionActions = (
     [endpoint, sessionId],
   );
 
+  /**
+   * Declares the mission over, from the host's own window.
+   *
+   * This existed only in the joined window for a while, which meant the owner
+   * could not end their own mission while an invited teammate could — the one
+   * ordering nobody would have chosen on purpose.
+   *
+   * `verification` and `filesChanged` are not sent. The route computes them
+   * from the log and freezes them onto the event, so a client cannot state its
+   * own verdict about its own work.
+   */
+  const complete = useCallback(
+    async (outcome: "resolved" | "abandoned", summary: string) => {
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(sessionId)}/complete`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
+          body: JSON.stringify({ outcome, summary }),
+        },
+      );
+
+      if (!response.ok) {
+        setError(await readError(response));
+        return false;
+      }
+
+      return true;
+    },
+    [endpoint, sessionId],
+  );
+
+  const reopen = useCallback(
+    async (reason: string) => {
+      const response = await fetch(
+        `${endpoint}/sessions/${encodeURIComponent(sessionId)}/reopen`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(await authorization()),
+          },
+          body: JSON.stringify({ reason }),
+        },
+      );
+
+      if (!response.ok) {
+        setError(await readError(response));
+        return false;
+      }
+
+      return true;
+    },
+    [endpoint, sessionId],
+  );
+
   const requestControl = useCallback(
     async (reason?: string) => {
       const response = await fetch(
@@ -299,6 +369,8 @@ export const useSessionActions = (
     resume,
     handoff,
     requestControl,
+    complete,
+    reopen,
     answerHandoff,
   };
 };

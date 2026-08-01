@@ -2296,16 +2296,25 @@ export const startEventServer = (
                  * defined as judging without executing — from the only
                  * judgement the role is named for.
                  *
-                 * `approve` is that judgement, and it is the first HTTP
-                 * surface the capability has had. A viewer still cannot: the
-                 * floor for ending somebody's mission is being able to say
-                 * yes to something. Every refusal is a 403 the route states,
-                 * and reopening carries the same capability because being
-                 * able to end a mission and not to undo it is the trapdoor
-                 * `mission.reopened` exists to remove.
+                 * So: `finish`, held by owner, editor and reviewer — the same
+                 * three that hold `approve`, and deliberately a separate bit
+                 * anyway. `approve` means saying yes to a tool call the agent
+                 * proposed, and it has no HTTP surface only because approvals
+                 * are still a static allow-list. Spending it here would fuse
+                 * "you may approve my agent's writes" to "you may declare my
+                 * mission over", and those come apart the moment the approval
+                 * route lands. See the note above CAPABILITIES in
+                 * participants.ts.
+                 *
+                 * A viewer still cannot: the floor for ending somebody's
+                 * mission is being able to say yes to something. Every
+                 * refusal is a 403 the route states, and reopening carries the
+                 * same capability because being able to end a mission and not
+                 * to undo it is the trapdoor `mission.reopened` exists to
+                 * remove.
                  */
                 /^\/sessions\/[^/]+\/(complete|reopen)$/.test(url.pathname)
-                ? "approve"
+                ? "finish"
                 : // Named explicitly rather than left to the trailing default:
               // stopping, pausing, or resuming a run in flight is exactly the
               // kind of action participants.ts warns about a reviewer

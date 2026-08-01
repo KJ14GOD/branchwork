@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import type { MissionCompletion } from "../../mission-completion.ts";
 
 /**
@@ -65,9 +67,14 @@ export const CompletionState = ({
   completion: MissionCompletion;
   /** The person who called it, named rather than identified by id. */
   who: string;
-  onReopen: () => void;
+  onReopen: (reason: string) => void;
 }) => {
   const proof = VERIFICATION[completion.verification];
+  const [reopening, setReopening] = useState(false);
+  const [reason, setReason] = useState("");
+  // The same floor the route enforces, checked here so the button is simply
+  // not available yet rather than available and then refused.
+  const reasonReady = reason.trim().length >= 12;
 
   return (
     <div className="finished">
@@ -101,9 +108,60 @@ export const CompletionState = ({
         every Workroom screen is the composer's Send — a second filled button
         here would spend the one inversion this app has.
       */}
-      <button className="button" type="button" onClick={onReopen}>
-        Reopen mission
-      </button>
+      {reopening ? (
+        <form
+          className="finished__reopen"
+          onSubmit={(event) => {
+            event.preventDefault();
+
+            if (reasonReady) {
+              onReopen(reason.trim());
+            }
+          }}
+        >
+          <label className="finished__label" htmlFor="reopen-reason">
+            Why is this not finished after all?
+          </label>
+          <textarea
+            id="reopen-reason"
+            className="finished__reason"
+            value={reason}
+            rows={2}
+            autoFocus
+            placeholder="The fix regressed the refund path."
+            onChange={(event) => setReason(event.target.value)}
+          />
+          <div className="finished__actions">
+            {/*
+              A plain button, not `--primary`. The composer's Send is the one
+              inversion on every Workroom screen, and a second filled control
+              here would spend the mechanism that makes it unmistakable — the
+              same reason the recovery state's button is quiet.
+            */}
+            <button className="button" type="submit" disabled={!reasonReady}>
+              Reopen mission
+            </button>
+            <button
+              className="button button--quiet"
+              type="button"
+              onClick={() => {
+                setReopening(false);
+                setReason("");
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : (
+        <button
+          className="button"
+          type="button"
+          onClick={() => setReopening(true)}
+        >
+          Reopen mission
+        </button>
+      )}
     </div>
   );
 };

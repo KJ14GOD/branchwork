@@ -678,7 +678,11 @@ test("a viewer cannot finish a mission, and is told so in the worker's words", a
     );
 
     assert.equal(finished.ok, false);
-    assert.match(finished.ok ? "" : finished.error, /viewer cannot approve/);
+    // Names `finish`, not `approve`. The two were briefly the same capability
+    // and are deliberately not: `approve` means saying yes to a tool call the
+    // agent proposed, and fusing them would have made them impossible to
+    // separate once the approval route exists.
+    assert.match(finished.ok ? "" : finished.error, /viewer cannot finish/);
   });
 });
 

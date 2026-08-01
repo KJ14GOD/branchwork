@@ -1458,3 +1458,163 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ============================================================
+   Reopening a finished mission
+   ============================================================ */
+
+.finished__reopen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: flex-start;
+  width: 100%;
+  max-width: 44ch; /* a reason is one sentence, not a paragraph */
+}
+
+.finished__label {
+  font-size: var(--text-small);
+  color: var(--text-dim);
+}
+
+.finished__reason {
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--inset);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
+  resize: vertical;
+}
+
+.finished__reason:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.finished__actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+/* ============================================================
+   Finishing a mission — the modal's own body
+   ============================================================ */
+
+.finish__evidence {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
+}
+
+/* Only a check that ran after the last change earns the pass colour. The
+   modal states the evidence before the fields precisely so nobody writes
+   "shipped the fix" under a line that says nothing verified it. */
+.finish__evidence--pass {
+  color: var(--add);
+}
+
+.finish__evidence--fail {
+  color: var(--del);
+}
+
+.finish__evidence--unknown {
+  color: var(--text-dim);
+}
+
+.finish__meta {
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-micro);
+  color: var(--text-dim);
+}
+
+.finish__outcome {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin: 0 0 var(--space-5);
+  padding: 0;
+  border: 0;
+}
+
+.finish__outcome .finish__label {
+  margin-right: var(--space-3);
+}
+
+.finish__label {
+  display: block;
+  margin-bottom: var(--space-3);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.finish__summary {
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--inset);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
+  resize: vertical;
+}
+
+.finish__summary:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.finish__hint {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-micro);
+  color: var(--text-dim);
+}
+
+/* ============================================================
+   Segmented choice — two answers, neither of them a default
+   ============================================================ */
+
+.segment {
+  height: var(--control-m);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--text-small);
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.segment:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+
+.segment:active {
+  background: var(--pressed);
+}
+
+/* Selected, not "good". Abandoning a mission is a decision and gets exactly
+   the same treatment resolving it does — a form that made one of them the
+   awkward option would push people into calling dead work resolved. */
+.segment--active {
+  background: var(--selected);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.segment:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}

@@ -198,7 +198,7 @@ export const Workroom = ({
   completion: MissionCompletion | null;
   /** Who called it, named rather than left as a participant id. */
   completedBy: string;
-  onReopen: () => void;
+  onReopen: (reason: string) => void;
   /** Approaches, the repository, the raw log — never opened automatically. */
   focus?: Focus | undefined;
   /**
