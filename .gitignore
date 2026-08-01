@@ -46,3 +46,6 @@ dist-electron/
 # The packaged worker bundle and the installer output.
 apps/desktop/dist-worker/
 apps/desktop/release/
+
+# Disposable fixture repositories and event log — see scripts/fixtures.sh
+.fixtures/
