@@ -1,6 +1,9 @@
 import type { SessionEvent } from "@novus/contracts";
 import type { Comparison } from "@novus/contracts/protocol";
 
+import { readCompletion, type MissionCompletion } from "./mission-completion.ts";
+import { readVerification } from "./verification.ts";
+
 /**
  * What the mission is, and therefore what the screen is.
  *
@@ -30,7 +33,16 @@ export type MissionState =
   /** Changed and verified. The only state green may appear in. */
   | "verified"
   /** It stopped before producing anything. Needs recovery, not a decision. */
-  | "failed";
+  | "failed"
+  /**
+   * A person declared it over — resolved or abandoned.
+   *
+   * Outranks every state above it, because somebody saying the mission is
+   * finished settles every question the rest of this derivation asks. It is
+   * also the only state nothing can derive: a run ending is the machine
+   * stopping, a mission ending is a person saying so.
+   */
+  | "completed";
 
 export type MissionComposition = {
   state: MissionState;
@@ -42,6 +54,8 @@ export type MissionComposition = {
   showEvidence: boolean;
   /** A recovery affordance rather than a decision surface. */
   showRecovery: boolean;
+  /** The frozen outcome, the frozen evidence, and a way back in. */
+  showCompletion: boolean;
   /** One line naming what is true and what happens next. */
   headline: string;
   detail: string;
@@ -105,6 +119,13 @@ export const missionState = (input: {
   /** An approval, control request, or handoff is waiting on somebody. */
   awaitingPerson: boolean;
 }): MissionState => {
+  // Above everything, including "empty": a mission can be abandoned before it
+  // ever ran, and asking somebody "what are we building?" on a mission they
+  // closed yesterday is the app forgetting a decision a person made.
+  if (readCompletion(input.events) !== null) {
+    return "completed";
+  }
+
   const runs = input.events.filter((event) => event.type === "run.started");
 
   if (runs.length === 0) {
@@ -152,20 +173,63 @@ export const missionState = (input: {
     return "working";
   }
 
-  const tested = attempts.filter((attempt) => attempt.testsRun > 0);
-
   // Verified means something ran and passed. Finishing is not verifying, and
   // this is the boundary that decides whether green may appear at all.
-  return tested.length > 0 && tested.every((attempt) => attempt.green === true)
-    ? "verified"
-    : "changed-unverified";
+  //
+  // From the log as well as from the comparison — see verification.ts. Reading
+  // the comparison alone is what made a one-workstream mission that ran its
+  // suite sit in "Changed, not verified" forever, while its own activity feed
+  // three inches away said the tests had passed.
+  const proven = readVerification(input.events, input.comparison);
+
+  return proven.verified === true ? "verified" : "changed-unverified";
+};
+
+/**
+ * Which single control on the mission screen is the dominant one.
+ *
+ * `.button--primary` is the only inversion in the whole app, which is what
+ * makes it unmistakable without spending a hue — and what makes two of them on
+ * one screen destroy the mechanism for both. Three surfaces can each honestly
+ * claim it, so the claim is settled once, here, instead of by whichever
+ * component happens to render first.
+ *
+ * The order is an order of obligation, not of importance. A handoff offered to
+ * you is a person waiting on an answer; a decision waiting is work waiting on a
+ * judgement; direction is what you do when neither is true. A focused surface
+ * opened over the work brings its own primary action and takes it from the
+ * composer for as long as it is open.
+ */
+export const dominantAction = (input: {
+  /** An offer names you and has not been answered. */
+  offeredToYou: boolean;
+  /** Approaches have stopped and nothing has been recorded about them. */
+  decisionWaiting: boolean;
+  /** Approaches, the repository or the raw log is open over the work. */
+  focused: boolean;
+}): "handoff" | "decision" | "focus" | "direction" => {
+  if (input.offeredToYou) {
+    return "handoff";
+  }
+
+  if (input.focused) {
+    return "focus";
+  }
+
+  return input.decisionWaiting ? "decision" : "direction";
 };
 
 export const composeMission = (
   state: MissionState,
-  facts: { agents: number; changed: number; verified: boolean },
+  facts: {
+    agents: number;
+    changed: number;
+    verified: boolean;
+    /** Present only in the `completed` state, and frozen when it is. */
+    completion?: MissionCompletion | null;
+  },
 ): MissionComposition => {
-  const base = { state, showRecovery: false };
+  const base = { state, showRecovery: false, showCompletion: false };
 
   switch (state) {
     case "empty":
@@ -239,8 +303,34 @@ export const composeMission = (
         showWorkstreams: true,
         showEvidence: false,
         showRecovery: true,
+        showCompletion: false,
         headline: "Stopped before it changed anything",
         detail: "Read why, then send it back in with more to go on.",
       };
+
+    case "completed": {
+      // Resolved and abandoned are both endings and they are not the same
+      // ending, so neither borrows the other's words. Neither borrows green
+      // either: what was verified is a separate fact, frozen on the event and
+      // stated by the completion state itself.
+      const outcome = facts.completion?.outcome ?? "resolved";
+
+      return {
+        state,
+        showStartCanvas: false,
+        showWorkstreams: true,
+        // The frozen record is what a finished mission shows. A live inspector
+        // beside it would re-derive verification from the repository as it is
+        // now and could contradict the evidence the ending was called on.
+        showEvidence: false,
+        showRecovery: false,
+        showCompletion: true,
+        headline: outcome === "resolved" ? "Resolved" : "Abandoned",
+        detail:
+          outcome === "resolved"
+            ? "A person called this mission finished. Reopen it to carry on."
+            : "A person closed this mission without resolving it. Reopen it to carry on.",
+      };
+    }
   }
 };

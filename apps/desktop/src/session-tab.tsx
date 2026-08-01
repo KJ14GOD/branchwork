@@ -1,38 +1,29 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { HarnessKind, SessionEvent } from "@novus/contracts";
-import type { AttemptComparison, SessionSummary } from "@novus/contracts/protocol";
+import type { SessionSummary } from "@novus/contracts/protocol";
 import { formatSpend } from "@novus/ui";
 
 import { bridge } from "./bridge.ts";
-import {
-  approachKey,
-  decideDecisionRoom,
-  missionLayout,
-  openDecisionRoom,
-  type ViewMode,
-} from "./decision-room.ts";
-import { FileTree, FileViewer } from "./components/browse-panel.tsx";
 import { CommandOverlay, type Command } from "./components/command-overlay.tsx";
 import { CompareScreen } from "./components/compare-screen.tsx";
-import { DecisionSpine } from "./components/decision-spine.tsx";
-import { Composer } from "./components/composer.tsx";
-import {
-  ControlPanel,
-  MissionAuthority,
-  PendingDirection,
-} from "./components/control-panel.tsx";
 import { FileChangesPanel } from "./components/file-changes-panel.tsx";
 import { appliedDiffsByPath } from "./applied-diffs.ts";
 import { InvitePanel } from "./components/invite-panel.tsx";
 import { TerminalPanel } from "./components/terminal-panel.tsx";
-import { groupKeyFor, TimelineView } from "./components/timeline-view.tsx";
+import { groupKeyFor } from "./components/timeline-view.tsx";
 import { harnessChoices } from "./components/harness-picker.tsx";
 import { useProviders } from "./use-providers.ts";
 import { EmptyMission } from "./components/workroom/empty-mission.tsx";
-import { Workroom } from "./components/workroom/workroom.tsx";
+import {
+  EventLogPane,
+  RepositoryPane,
+} from "./components/workroom/focus-panes.tsx";
+import { Workroom, type Focus } from "./components/workroom/workroom.tsx";
 import { readMilestones } from "./components/workroom/activity-feed.tsx";
-import { composeMission, missionState } from "./mission-state.ts";
+import { composeMission, dominantAction, missionState } from "./mission-state.ts";
+import { readCompletion } from "./mission-completion.ts";
+import { readVerification } from "./verification.ts";
 import { readPeople, readWorkstreams } from "./workstreams.ts";
 import { useComparison } from "./use-comparison.ts";
 import { missionPhases } from "./mission-phase.ts";
@@ -48,6 +39,17 @@ import type { Theme } from "./use-theme.ts";
 import { useTurnModel } from "./use-turn-model.ts";
 
 type Filter = "all" | "tools" | "patches";
+
+/**
+ * Which deliberately-opened surface is over the work, if any.
+ *
+ * `null` is the Workroom itself and is the only state anything can arrive at
+ * without a person asking. There is no code path that sets any of the others
+ * on its own — that is the point of this slice. A mission reaching a decision
+ * used to route the host into a different shell entirely, which is how
+ * complementary workstreams came to be presented as competing approaches.
+ */
+type FocusMode = "approaches" | "changes" | "browse" | "log" | null;
 
 const MIN_TERMINAL_HEIGHT = 140;
 const MAX_TERMINAL_HEIGHT = 640;
@@ -119,80 +121,6 @@ const sentenceCase = (value: string): string =>
 const basename = (path: string): string =>
   path.split("/").filter(Boolean).at(-1) ?? path;
 
-/** Everything before that, shown quieter and dropped first when space is tight. */
-const dirname = (path: string): string => {
-  const cut = path.lastIndexOf("/");
-
-  return cut <= 0 ? "" : path.slice(0, cut);
-};
-
-const initials = (name: string): string =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0] ?? "")
-    .join("") || "?";
-
-/**
- * One attempt, in the rail.
- *
- * Deliberately not a link to anything new: it opens the compare screen, which
- * is where a decision is actually made from. This exists so a session with
- * live forks *reads as one at a glance*, which was the gap — the evidence
- * still lives in one place.
- */
-const AttemptRow = ({
-  attempt,
-  chosen,
-  onOpen,
-}: {
-  attempt: AttemptComparison;
-  chosen: boolean;
-  onOpen: () => void;
-}) => {
-  const dot = chosen
-    ? "attempt__dot attempt__dot--chosen"
-    : attempt.status === "running"
-      ? "attempt__dot attempt__dot--running"
-      : attempt.status === "failed"
-        ? "attempt__dot attempt__dot--failed"
-        : "attempt__dot";
-
-  return (
-    <button
-      className="attempt"
-      type="button"
-      onClick={onOpen}
-      title={`${attempt.label} — ${attempt.status}`}
-    >
-      <span className="attempt__head">
-        <span className={dot} />
-        <span className="attempt__label">{attempt.label}</span>
-      </span>
-      <span className="attempt__stats">
-        <span>
-          <span className="stat__add">+{attempt.additions}</span>{" "}
-          <span className="stat__del">−{attempt.deletions}</span>
-        </span>
-        <span>
-          {attempt.filesChanged.length} file
-          {attempt.filesChanged.length === 1 ? "" : "s"}
-        </span>
-        {attempt.testsRun === 0 ? (
-          <span>No tests</span>
-        ) : attempt.green === true ? (
-          <span className="attempt__stat--pass">Tests pass</span>
-        ) : (
-          <span className="attempt__stat--fail">
-            {attempt.testsPassed}/{attempt.testsRun} pass
-          </span>
-        )}
-      </span>
-    </button>
-  );
-};
-
 /**
  * One open session, rendered in full.
  *
@@ -202,6 +130,14 @@ const AttemptRow = ({
  * running rather than being torn down and rebuilt on every switch. `session`
  * is fixed for the component's whole life: it is the summary the tab was
  * opened with, not state this component manages.
+ *
+ * This file used to hold *two* complete mission shells — the Workroom, and a
+ * three-column shell with its own session bar, spine, attempt list, control
+ * panel, roster, telemetry meter, composer and timeline — with a `mode` value
+ * deciding which one a person got, and a `useEffect` that could change `mode`
+ * without anybody acting. That is gone. What is left is a container: it derives
+ * the mission's state and renders one screen, plus the surfaces a person can
+ * deliberately open over it.
  */
 export const SessionTab = ({
   session,
@@ -232,7 +168,7 @@ export const SessionTab = ({
     answerHandoff,
   } = useSessionActions(endpoint, session);
   const host = bridge();
-  const [mode, setMode] = useState<ViewMode>("timeline");
+  const [focusMode, setFocusMode] = useState<FocusMode>(null);
   const [inviting, setInviting] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
@@ -248,64 +184,31 @@ export const SessionTab = ({
     () => missionPhases(events, comparison.comparison),
     [events, comparison.comparison],
   );
-  /**
-   * What the evidence panel can honestly claim, from the comparison.
-   *
-   * Null until there is something to say — a session that has run nothing has
-   * no verification state, and drawing an empty block for it is the
-   * placeholder row this app has already been told to stop showing.
-   */
-  /**
-   * Opens the Decision Room when a decision is what the mission is waiting on.
-   *
-   * The rules — once per arrival, browse is never interrupted, a later
-   * decision opens it again — live in `decision-room.ts` as pure functions,
-   * with the tests that hold them. This is only the wiring: read the state,
-   * remember what it answered, move the view.
-   */
-  const answeredDecision = useRef<string | null>(null);
   const decisionPhase = phases.find((phase) => phase.key === "decision");
-  const needsDecision = decisionPhase?.status === "needs-attention";
+  /**
+   * Alternatives have all stopped and nothing has been recorded about them.
+   *
+   * Used to *offer* the Decision Room, never to open it. The effect that used
+   * to sit here called `setMode("compare")` the moment this went true, so a
+   * host watching two agents work complementary parts of one change was moved,
+   * without acting, onto a screen framing those two agents as rivals. Nothing
+   * moves the view now; this only decides which action the header carries.
+   */
+  const decisionWaiting = decisionPhase?.status === "needs-attention";
 
-  useEffect(() => {
-    const outcome = decideDecisionRoom({
-      needsDecision,
-      approaches: approachKey(comparison.comparison?.attempts ?? []),
-      answered: answeredDecision.current,
-    });
-
-    // Written outside the state updater below, which React may call twice.
-    answeredDecision.current = outcome.answered;
-
-    if (outcome.open) {
-      setMode(openDecisionRoom);
-    }
-  }, [needsDecision, comparison.comparison]);
-
-  const evidenceVerdict = useMemo(() => {
-    const attempts = comparison.comparison?.attempts ?? [];
-
-    if (attempts.length === 0) {
-      return null;
-    }
-
-    const testsRun = attempts.reduce((total, attempt) => total + attempt.testsRun, 0);
-    const testsPassed = attempts.reduce(
-      (total, attempt) => total + attempt.testsPassed,
-      0,
-    );
-
-    return {
-      // Null when nothing ran anywhere. Not false, which would read as
-      // failing, and emphatically not true.
-      tests: testsRun === 0 ? null : testsPassed === testsRun,
-      testsRun,
-      testsPassed,
-      approaches: attempts.length,
-      contested: comparison.comparison?.contestedPaths ?? [],
-    };
-  }, [comparison.comparison]);
-  const fileTree = useFileTree(mode === "browse" ? session.repositoryPath : null);
+  /**
+   * What the evidence panel can honestly claim — from the log, not only from
+   * the comparison. See verification.ts for why that distinction is the
+   * difference between a true and a false verdict on most missions.
+   */
+  const verification = useMemo(
+    () => readVerification(events, comparison.comparison),
+    [events, comparison.comparison],
+  );
+  const completion = useMemo(() => readCompletion(events), [events]);
+  const fileTree = useFileTree(
+    focusMode === "browse" ? session.repositoryPath : null,
+  );
   const turnModel = useTurnModel();
   /**
    * Which agent this mission runs on.
@@ -394,13 +297,9 @@ export const SessionTab = ({
       : visible.length === 0;
 
   const attempts = comparison.comparison?.attempts ?? [];
-  // Which surfaces this view shows. Read from one function rather than from
-  // three separate `mode === …` checks in the markup, so that the Decision
-  // Room keeping the composer and the evidence panel is a rule with a test
-  // rather than an accident of where the JSX brackets happen to sit.
-  const layout = missionLayout(mode);
 
   const jumpTo = (sequence: number) => {
+    setFocusMode("log");
     setHighlighted(sequence);
 
     // Grouping is only ever rendered for the unfiltered timeline (see the
@@ -429,39 +328,60 @@ export const SessionTab = ({
     setGroupOverrides((current) => new Map(current).set(key, !currentlyOpen));
   };
 
+  /**
+   * Everything that is not the mission itself.
+   *
+   * The escape hatches live here and only here. Each of them was, at some
+   * point, a permanent region of a shell that drew every region on every
+   * screen; each is genuinely useful and none of them is what a person opened
+   * the app to look at.
+   */
   const commands: Command[] = [
     {
-      id: "filter-all",
-      label: "Show all events",
+      id: "approaches",
+      label: "Compare approaches",
+      hint: `${attempts.length}`,
+      run: () => setFocusMode("approaches"),
+    },
+    {
+      id: "changes",
+      label: "Review changes and diffs",
+      hint: `${fileChanges.files.length}`,
+      run: () => setFocusMode("changes"),
+    },
+    {
+      id: "log",
+      label: "Open the raw event log",
       hint: `${events.length}`,
-      run: () => setFilter("all"),
+      run: () => {
+        setFilter("all");
+        setFocusMode("log");
+      },
     },
     {
       id: "filter-tools",
-      label: "Show tool activity only",
+      label: "Raw log — tool activity only",
       hint: `${toolCalls.length}`,
-      run: () => setFilter("tools"),
+      run: () => {
+        setFilter("tools");
+        setFocusMode("log");
+      },
     },
     {
       id: "filter-patches",
-      label: "Show proposed patches only",
+      label: "Raw log — proposed patches only",
       hint: `${patches.length}`,
-      run: () => setFilter("patches"),
+      run: () => {
+        setFilter("patches");
+        setFocusMode("log");
+      },
     },
-    {
-      id: "attempts",
-      label: "Compare approaches",
-      hint: `${attempts.length}`,
-      run: () => setMode("compare"),
-    },
-    // The utilities that used to sit in the session bar. Still here, still
-    // one keystroke away — just not competing with the decision for space.
     ...(host
       ? [
           {
             id: "browse",
             label: "Browse the repository",
-            run: () => setMode("browse"),
+            run: () => setFocusMode("browse"),
           },
           {
             id: "terminal",
@@ -486,6 +406,12 @@ export const SessionTab = ({
       label: "Reconnect event stream",
       hint: sentenceCase(status),
       run: reconnect,
+    },
+    {
+      id: "close-tab",
+      label: "Close this mission tab",
+      hint: "the mission is kept",
+      run: onCloseTab,
     },
   ];
 
@@ -594,7 +520,8 @@ export const SessionTab = ({
                 // describes a process and answers none of the three questions
                 // a state has to — what is happening, does anyone need to act,
                 // what is next. A finished run is waiting on a person, and the
-                // decision spine beside this says which person and for what.
+                // Workroom's own headline beside this says which person and
+                // for what.
                 ? "waiting on you"
                 : run
                   ? "running"
@@ -605,9 +532,9 @@ export const SessionTab = ({
    * and what has happened — each from a module with its own tests.
    *
    * This component composes those; it does not compute them. That split is the
-   * point of the pass: the surfaces below read one `composition` object rather
-   * than each re-deciding from `busy && attempts.length && …` in the markup,
-   * which is how the old shell ended up rendering every region on every state.
+   * point: the surfaces below read one `composition` object rather than each
+   * re-deciding from `busy && attempts.length && …` in the markup, which is how
+   * the old shell ended up rendering every region on every state.
    */
   const awaitingPerson = Boolean(
     authority.controlOffer || authority.controlRequests.length > 0 || paused,
@@ -639,6 +566,7 @@ export const SessionTab = ({
     agents: workstreams.length,
     changed: fileChanges.files.length,
     verified: mission === "verified",
+    completion,
   });
   // Which workstream the composer is addressing. Defaults to the first, and
   // follows the rail's selection — a room with two agents must never leave
@@ -683,29 +611,65 @@ export const SessionTab = ({
     window.addEventListener("mouseup", onUp);
   };
 
-  const viewOption = (target: ViewMode, label: string, count?: number) => (
-    <button
-      className={`viewswitch__option${mode === target ? " viewswitch__option--active" : ""}`}
-      type="button"
-      aria-pressed={mode === target}
-      onClick={() => setMode(target)}
-    >
-      {label}
-      {count !== undefined && count > 0 ? (
-        <span className="viewswitch__count">{count}</span>
+  const terminalDock = terminalOpen ? (
+    <div className="terminal-dock" style={{ height: terminalHeight }}>
+      <div
+        className="terminal-dock__resize"
+        onMouseDown={startTerminalResize}
+        title="Drag to resize"
+      />
+      <div className="terminal-dock__head">
+        <span className="terminal-dock__prompt" aria-hidden="true">
+          ❯
+        </span>
+        <span className="terminal-dock__title">Terminal</span>
+        <span className="terminal-dock__path">{session.repositoryPath}</span>
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => setTerminalOpen(false)}
+          title="Close this shell"
+        >
+          Close
+        </button>
+      </div>
+      <TerminalPanel cwd={session.repositoryPath} theme={theme} />
+    </div>
+  ) : null;
+
+  const overlays = (
+    <>
+      {actionError ? <div className="session-bar__error">{actionError}</div> : null}
+
+      {paletteOpen ? (
+        <CommandOverlay
+          commands={commands}
+          onAsk={(goal) => {
+            if (busy) {
+              void direct(goal);
+            } else {
+              void ask(goal, turnModel.option);
+            }
+          }}
+          onClose={() => setPaletteOpen(false)}
+        />
       ) : null}
-    </button>
+
+      {inviting ? (
+        <InvitePanel onInvite={invite} onClose={() => setInviting(false)} />
+      ) : null}
+    </>
   );
 
   /**
    * A repository is open and nobody has asked for anything.
    *
    * Returned early and whole, because this state is a genuinely different
-   * screen and not the working shell with empty panels in it. Everything below
-   * — rail, evidence, view switch, run controls, telemetry — describes work
-   * that does not exist yet.
+   * screen and not the working shell with empty panels in it. Everything the
+   * Workroom draws — the room, evidence, the mission header's state line —
+   * describes work that does not exist yet.
    */
-  if (mission === "empty" && layout.canvas !== "decision-room" && !layout.tree) {
+  if (mission === "empty" && focusMode === null) {
     return (
       <div
         className="tab-content tab-content--start"
@@ -746,614 +710,235 @@ export const SessionTab = ({
           onInvite={() => setInviting(true)}
         />
 
-        {actionError ? <div className="session-bar__error">{actionError}</div> : null}
-
-        {paletteOpen ? (
-          <CommandOverlay
-            commands={commands}
-            onAsk={(goal) => void ask(goal)}
-            onClose={() => setPaletteOpen(false)}
-          />
-        ) : null}
-
-        {inviting ? (
-          <InvitePanel onInvite={invite} onClose={() => setInviting(false)} />
-        ) : null}
+        {overlays}
       </div>
     );
   }
 
   /**
-   * A mission with work in it, and neither the decision room nor the file
-   * browser open. The Workroom is the default screen of the product.
+   * Which single control on this screen is the dominant one.
+   *
+   * `.button--primary` is the app's only inversion, so two of them destroy the
+   * mechanism that makes either mean anything. Three surfaces can each claim
+   * it — the handoff offer, the header's decision action, and the composer's
+   * Send — so the claim is settled once, here, from the mission's state rather
+   * than by whichever component happens to render first.
    */
-  if (layout.canvas !== "decision-room" && !layout.tree) {
-    return (
-      <div
-        className="tab-content tab-content--workroom"
-        style={{ display: active ? "grid" : "none" }}
-      >
-        <Workroom
-          composition={composition}
-          goal={missionGoal ?? basename(session.repositoryPath)}
-          // The composition's own headline, not `runStatus`. Two derivations
-          // of "where is this mission" put "Failed" in the header directly
-          // above a banner reading "Changed, not verified" — the same screen
-          // asserting two different things about the same run.
-          state={composition.headline}
-          repository={basename(session.repositoryPath)}
-          branch={null}
-          workstreams={workstreams}
-          people={people}
-          selected={target}
-          onSelect={setAddressed}
-          onAdd={() => setMode("compare")}
-          onInvite={() => setInviting(true)}
-          milestones={milestones}
-          evidence={{
-            verified: evidenceVerdict?.tests ?? null,
-            testsRun: evidenceVerdict?.testsRun ?? 0,
-            testsPassed: evidenceVerdict?.testsPassed ?? 0,
-            files: fileChanges.files,
-            contested: evidenceVerdict?.contested ?? [],
-            risks: [],
-          }}
-          github={github}
-          failureReason={
-            failed?.type === "run.failed" ? failed.payload.reason : null
-          }
-          onRetry={() => {
-            document
-              .querySelector<HTMLTextAreaElement>(".dock__input")
-              ?.focus();
-          }}
-          target={target}
-          onTarget={setAddressed}
-          busy={busy}
-          onSend={(text) => {
-            if (busy) {
-              void direct(text);
-            } else {
-              void ask(text, turnModel.option);
-            }
-          }}
-          // Only once there is genuinely something to compare. One baseline
-          // attempt is not a comparison, and a filled button offering one drew
-          // the eye harder than the mission goal did — on a screen whose
-          // dominant action is directing the work in the dock below.
-          {...(attempts.length > 1
-            ? {
-                action: {
-                  label: "Compare approaches",
-                  onClick: () => setMode("compare"),
-                },
-              }
-            : {})}
-        />
+  const dominant = dominantAction({
+    offeredToYou:
+      authority.controlOffer?.toParticipantId === authority.you &&
+      authority.controlOffer?.state === "offered",
+    decisionWaiting,
+    focused: focusMode !== null,
+  });
 
-        {actionError ? <div className="session-bar__error">{actionError}</div> : null}
+  /**
+   * The way into the Decision Room, offered and never taken on a person's
+   * behalf. Present once there is genuinely more than one approach — a single
+   * baseline is not a comparison — and primary only when the approaches have
+   * stopped and are actually waiting on a decision.
+   */
+  const approachAction =
+    attempts.length > 1
+      ? {
+          label: decisionWaiting ? "Review approaches" : "Compare approaches",
+          onClick: () => setFocusMode("approaches"),
+          primary: dominant === "decision",
+        }
+      : undefined;
 
-        {terminalOpen ? (
-          <div className="terminal-dock" style={{ height: terminalHeight }}>
-            <div
-              className="terminal-dock__resize"
-              onMouseDown={startTerminalResize}
-              title="Drag to resize"
+  const focus: Focus | undefined =
+    focusMode === "approaches"
+      ? {
+          label: "Approaches",
+          onClose: () => setFocusMode(null),
+          node: (
+            <CompareScreen
+              state={comparison}
+              repositoryState={session.repositoryState}
+              endpoint={endpoint}
+              sessionId={session.id}
+              onClose={() => setFocusMode(null)}
             />
-            <div className="terminal-dock__head">
-              <span className="terminal-dock__prompt" aria-hidden="true">
-                ❯
-              </span>
-              <span className="terminal-dock__title">Terminal</span>
-              <span className="terminal-dock__path">{session.repositoryPath}</span>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => setTerminalOpen(false)}
-                title="Close this shell"
-              >
-                Close
-              </button>
-            </div>
-            <TerminalPanel cwd={session.repositoryPath} theme={theme} />
-          </div>
-        ) : null}
-
-        {paletteOpen ? (
-          <CommandOverlay
-            commands={commands}
-            onAsk={(goal) => {
-              if (busy) {
-                void direct(goal);
-              } else {
-                void ask(goal);
-              }
-            }}
-            onClose={() => setPaletteOpen(false)}
-          />
-        ) : null}
-
-        {inviting ? (
-          <InvitePanel onInvite={invite} onClose={() => setInviting(false)} />
-        ) : null}
-      </div>
-    );
-  }
-
-  return (
-    <div className="tab-content" style={{ display: active ? "grid" : "none" }}>
-      <div className="session-bar">
-        {/*
-          The mission leads. This bar used to open with a filesystem path and
-          three permission chips, so the strongest thing on screen was where
-          the work lives rather than what it is — and five missions in one
-          repository opened identically.
-        */}
-        <div className="session-bar__identity">
-          <span className="mission-title" title={missionGoal ?? undefined}>
-            {missionGoal ?? "Nothing asked yet"}
-          </span>
-          <button
-            className="session-bar__repo"
-            type="button"
-            onClick={onCloseTab}
-            title={`${session.repositoryPath} — click to close this tab`}
-          >
-            <span className="session-bar__repo-name">
-              {basename(session.repositoryPath)}
-            </span>
-          </button>
-          {session.repositoryState !== "ready" ? (
-            // Said at the top of the window, while there is still time to act
-            // on it. This used to surface as a failure when you pressed Fork,
-            // which is after the work rather than before it.
-            <span
-              className="chip chip--warn"
-              title="Forking and diffs need a commit to work from"
-            >
-              {session.repositoryState === "absent"
-                ? "Not a Git repo"
-                : "No commits yet"}
-            </span>
-          ) : null}
-        </div>
-
-        <span className="titlebar__spacer" />
-
-        <div className="session-bar__state">
-          <span
-            className={`status status--${status === "live" ? "live" : status === "error" ? "error" : "idle"}`}
-            title={`Event stream: ${status}`}
-          >
-            <span className="status__dot" />
-            {sentenceCase(runStatus)}
-          </span>
-          {run?.type === "run.started" ? (
-            <span className="session-bar__model">
-              {run.payload.run.model.model}
-            </span>
-          ) : null}
-          {/* One component. Control identity used to appear twice here — a
-              pill saying who held it and a separate row of faces that did
-              not say which face that was. */}
-          <MissionAuthority
-            authority={authority}
-            participants={presence.participants}
-          />
-        </div>
-
-        <div className="session-bar__actions">
-          <div className="viewswitch" role="group" aria-label="View">
-            {/* Decision first: it is the product, and it is what the mission is
-                usually waiting on. Activity is the record you consult. */}
-            {viewOption("compare", "Approaches", attempts.length)}
-            {viewOption("timeline", "Activity")}
-          </div>
-          {/*
-            Terminal and Invite moved into the command palette. Neither is part
-            of deciding, and a bar that offers five ways to leave the decision
-            and two ways to use it is not a decision surface. They are one
-            keystroke away and nothing was removed.
-          */}
-          <span className="kbd-hint">
-            <kbd>/</kbd> Commands
-          </span>
-        </div>
-      </div>
-
-      <div
-        // Compare no longer needs a grid of its own: it is a canvas inside the
-        // same three columns as everything else.
-        className={layout.tree ? "body body--browse" : "body"}
-      >
-        <aside className="rail">
-          <div className="rail__scroll">
-          {/*
-            Where the mission stands, before anything that counts what has
-            happened. The rail led with a goal and then a pile of totals, which
-            answers "what has this done" and never "where is this and what is
-            it waiting for" — and the second is the question somebody opening a
-            tab actually has.
-          */}
-          <div className="rail__section">
-            <div className="eyebrow">Mission</div>
-            <DecisionSpine
-              phases={phases}
-              onOpenApproaches={() => setMode("compare")}
-            />
-          </div>
-
-          {busy && lastStarted?.type === "run.started" ? (
-            <div className="rail__section rail__section--live">
-              <div className="eyebrow">Run control</div>
-                <div className="rail__buttons">
-                <button
-                  className="button"
-                  type="button"
-                  disabled={pausing}
-                  onClick={() => {
-                    if (lastStarted.type === "run.started") {
-                      if (paused) {
-                        void resume(lastStarted.payload.run.id);
-                      } else {
-                        void pause(lastStarted.payload.run.id);
-                      }
-                    }
-                  }}
-                  title={
-                    paused
-                      ? "Continue this run where it left off"
-                      : "Suspend this run at its next safe boundary, to resume later"
-                  }
-                >
-                  {pausing ? "Pausing…" : paused ? "Resume" : "Pause"}
-                </button>
-                <button
-                  className="button"
-                  type="button"
-                  disabled={cancelling}
-                  onClick={() => {
-                    if (lastStarted.type === "run.started") {
-                      void cancel(lastStarted.payload.run.id);
-                    }
-                  }}
-                  title="Stop this run at its next safe boundary"
-                >
-                  {cancelling ? "Stopping…" : "Cancel"}
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {/*
-            Approaches, permanently. Branching a mission, running competing
-            approaches and choosing between them on evidence is the product
-            thesis, and it used to be one word in the corner of this bar.
-            Drawn from the /compare data useComparison already fetches for
-            every tab, so this costs no extra request.
-          */}
-          <div className="rail__section rail__section--flush">
-            <div className="eyebrow">Approaches</div>
-            {attempts.length === 0 ? (
-              <div className="rail__empty rail__empty--inset">
-                One approach so far. A second one starts from the same recorded
-                checkpoint, so the two can be compared on evidence rather than
-                on which ran last.
-              </div>
-            ) : (
-              attempts.map((attempt) => (
-                <AttemptRow
-                  key={attempt.runId}
-                  attempt={attempt}
-                  chosen={comparison.decision?.runId === attempt.runId}
-                  onOpen={() => setMode("compare")}
-                />
-              ))
-            )}
-            {/*
-              One primary action, on the Approaches screen where the form and
-              the evidence are. The rail used to carry its own "Fork an
-              attempt" button *and* a "Compare attempts" button, so the same
-              intention had two entry points that led to the same place and
-              read as two different features.
-            */}
-            {/* Hidden while that screen is already open: on the decision room
-                it was a third route to the view you are looking at, competing
-                with the one action the screen is asking for. */}
-            {mode === "compare" ? null : (
-              <button
-                className="button attempt__cta"
-                type="button"
-                onClick={() => setMode("compare")}
-              >
-                {attempts.length === 0 ? "Try another approach" : "Compare approaches"}
-              </button>
-            )}
-          </div>
-
-          {/*
-            Authority, above the roster, because "who may act" is the thing a
-            person needs before "who is here". Every affordance in it is
-            rendered only for the participant who may take it — see the note in
-            control-panel.tsx on why that is not the same as disabling one.
-          */}
-          <ControlPanel
-            authority={authority}
-            participants={presence.participants}
-            onOffer={(participantId) => {
-              void handoff(participantId).then(authority.refresh);
-            }}
-            onRequest={(reason) => {
-              void requestControl(reason).then(authority.refresh);
-            }}
-            onAnswer={(offerEventId, answer) => {
-              void answerHandoff(offerEventId, answer).then(authority.refresh);
-            }}
-          />
-
-          <PendingDirection pending={authority.pendingDirection} />
-
-          {/*
-            Who is here and what they may do. Was a row of 5px dots in the
-            session bar; roles are multiplayer state and belong somewhere
-            legible. The handoff action used to live on these rows and has
-            moved up into Control — a roster answers "who is here", and mixing
-            the one irreversible action in the rail into it put "Hand off"
-            beside every name whether or not the person reading held anything
-            to hand.
-          */}
-          {/*
-            Hidden while you are the only one here. A section headed
-            Participants listing one person, with a badge saying that person
-            holds control, is a whole region of the rail spent telling you
-            something you knew before you opened the app — and it appears on
-            every mission, because most missions have one person in them.
-            Invite is in the command palette when there is somebody to invite.
-          */}
-          {presence.participants.length < 2 ? null : (
-          <div className="rail__section">
-            <div className="eyebrow">Participants</div>
-            {presence.participants.length === 0 ? (
-              <div className="rail__empty">
-                Just you. Invite a teammate to watch this run live.
-              </div>
-            ) : (
-              <div className="party">
-                {presence.participants.map((participant) => (
-                  <div
-                    key={participant.id}
-                    className={`party__row${participant.connected ? " party__row--live" : ""}`}
-                  >
-                    <span className="party__dot" />
-                    <span className="party__who">
-                      <span className="party__name">{participant.name}</span>
-                      <span className="party__role">
-                        {sentenceCase(participant.role)}
-                        {participant.connected ? "" : " · Not connected"}
-                      </span>
-                    </span>
-                    {authority.controlHeldBy === participant.id ? (
-                      <span
-                        className="party__baton"
-                        title="Holds execution authority for this session"
-                      >
-                        Control
-                      </span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          )}
-
-          </div>
-
-          {/*
-            Pinned to the foot of the rail rather than stacked in it.
-
-            These are telemetry: you read them, you never act on them, and
-            they were sitting in the column the eye returns to most while
-            the things you *do* act on — attempts, participants — got pushed
-            below the fold. Kept, because a run's size and elapsed time are
-            worth a glance; demoted, because glancing is all anyone does.
-          */}
-          <div className="rail__meter">
-            <span className="rail__meter-item" title="Events in this session's log">
-              {events.length} ev
-            </span>
-            <span className="rail__meter-item" title="Tool calls the agent has made">
-              {toolCalls.length} tools
-            </span>
-            <span className="rail__meter-item" title="Patches proposed">
-              {patches.length} patches
-            </span>
-            <span className="rail__meter-item">
-              <span className="stat__add">+{fileChanges.additions}</span>{" "}
-              <span className="stat__del">−{fileChanges.deletions}</span>
-            </span>
-            <span className="rail__meter-item">{formatElapsed(events)}</span>
-            {/*
-              What the session has cost. It was computed on every model call,
-              stored on every receipt, and shown nowhere — so the person whose
-              money it is had to read a log line to find out. Drawn from the
-              worker's projection over the log rather than from a counter, so
-              a resumed session shows what it has actually spent instead of
-              starting again at zero.
-            */}
-            <span
-              className="rail__meter-item"
-              title={
-                usage.session.costUsd === null
-                  ? `No model in this session has a configured price, so spend is not being counted. ${usage.session.runs} run(s) finished.`
-                  : `${usage.session.modelCalls} model call(s) across ${usage.session.runs} finished run(s)${
-                      usage.session.costIsFloor
-                        ? " — at least this much: a run is still going, or some of it could not be priced"
-                        : ""
-                    }`
-              }
-            >
-              {usage.session.costUsd === null
-                ? usage.session.runs === 0
-                  ? "$—"
-                  : "Not counted"
-                : formatSpend(usage.session.costUsd, usage.session.costIsFloor ? 1 : 0)}
-            </span>
-          </div>
-
-        </aside>
-
-        {layout.tree ? (
-          <>
-            <FileTree state={fileTree} />
-            <FileViewer state={fileTree} />
-          </>
-        ) : (
-          <>
-            {/*
-              One canvas, two contents. The Decision Room used to replace the
-              whole body — composer and evidence inspector included — which
-              meant reaching a decision cost you the ability to say anything
-              and the panel showing what was verified. Swapping only the
-              middle keeps direction always available and the evidence beside
-              the thing it is evidence for.
-            */}
-            <main className="canvas">
-              <div className="canvas__view">
-                {layout.canvas === "decision-room" ? (
-                  <CompareScreen
-                    state={comparison}
-                    repositoryState={session.repositoryState}
-                    endpoint={endpoint}
-                    sessionId={session.id}
-                    onClose={() => setMode("timeline")}
-                  />
-                ) : (
-              <div className="timeline">
-                {trulyEmpty ? (
-                  <div className="empty empty--page">
-                    {status === "error" ? (
-                      <>
-                        <p className="empty__title">No connection</p>
-                        <p className="empty__hint">
-                          The worker at {endpoint} is not answering. Reconnect
-                          from the command palette, or check that it is running.
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="empty__title">Nothing has run yet</p>
-                        <p className="empty__hint">
-                          Ask the agent to do something and every command,
-                          patch and test it runs will appear here as it
-                          happens.
-                        </p>
-                        <div className="empty__facts">
-                          <span className="chip">
-                            {basename(session.repositoryPath)}
-                          </span>
-                          <span
-                            className={
-                              session.allowWrites ? "chip chip--allow" : "chip"
-                            }
-                          >
-                            {session.allowWrites
-                              ? "Writes allowed"
-                              : "Read-only"}
-                          </span>
-                          <span
-                            className={
-                              session.allowCommands ? "chip chip--allow" : "chip"
-                            }
-                          >
-                            {session.allowCommands
-                              ? "Commands allowed"
-                              : "No commands"}
-                          </span>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  <TimelineView
-                    events={visible}
-                    busy={busy}
-                    raw={raw}
-                    highlighted={highlighted}
-                    groupOverrides={groupOverrides}
-                    onToggleGroup={toggleGroup}
-                    group={filter === "all"}
-                  />
-                )}
-              </div>
-                )}
-              </div>
-              {layout.composer ? (
-                <Composer
-                  busy={busy}
-                  model={turnModel}
-                  onAsk={(goal, modelId) => void ask(goal, modelId)}
-                  onDirect={(goal) => void direct(goal)}
-                />
-              ) : null}
-            </main>
-            {layout.evidence ? (
+          ),
+        }
+      : focusMode === "changes"
+        ? {
+            label: "Changes",
+            onClose: () => setFocusMode(null),
+            node: (
               <FileChangesPanel
                 state={fileChanges}
                 diffs={appliedDiffs}
-                verdict={evidenceVerdict}
+                verdict={{
+                  tests: verification.verified,
+                  testsRun: verification.testsRun,
+                  testsPassed: verification.testsPassed,
+                  approaches: Math.max(attempts.length, workstreams.length),
+                  contested: verification.contested,
+                }}
                 github={github}
               />
-            ) : null}
-          </>
-        )}
-      </div>
-
-      {actionError ? <div className="session-bar__error">{actionError}</div> : null}
-
-      {terminalOpen ? (
-        <div className="terminal-dock" style={{ height: terminalHeight }}>
-          <div
-            className="terminal-dock__resize"
-            onMouseDown={startTerminalResize}
-            title="Drag to resize"
-          />
-          <div className="terminal-dock__head">
-            <span className="terminal-dock__prompt" aria-hidden="true">
-              ❯
-            </span>
-            <span className="terminal-dock__title">Terminal</span>
-            <span className="terminal-dock__path">{session.repositoryPath}</span>
-            <button
-              className="icon-button"
-              type="button"
-              onClick={() => setTerminalOpen(false)}
-              title="Close this shell"
-            >
-              Close
-            </button>
-          </div>
-          <TerminalPanel cwd={session.repositoryPath} theme={theme} />
-        </div>
-      ) : null}
-
-      {paletteOpen ? (
-        <CommandOverlay
-          commands={commands}
-          onAsk={(goal) => {
-            if (busy) {
-              void direct(goal);
-            } else {
-              void ask(goal);
+            ),
+          }
+        : focusMode === "browse"
+          ? {
+              label: "Repository",
+              onClose: () => setFocusMode(null),
+              node: <RepositoryPane state={fileTree} />,
             }
-          }}
-          onClose={() => setPaletteOpen(false)}
-        />
-      ) : null}
+          : focusMode === "log"
+            ? {
+                label:
+                  filter === "tools"
+                    ? "Event log · tool activity"
+                    : filter === "patches"
+                      ? "Event log · proposed patches"
+                      : "Event log",
+                onClose: () => setFocusMode(null),
+                node: (
+                  <EventLogPane
+                    events={visible}
+                    empty={trulyEmpty}
+                    disconnected={status === "error"}
+                    endpoint={endpoint}
+                    busy={busy}
+                    raw={raw}
+                    grouped={filter === "all"}
+                    highlighted={highlighted}
+                    groupOverrides={groupOverrides}
+                    onToggleGroup={toggleGroup}
+                  />
+                ),
+              }
+            : undefined;
 
-      {inviting ? (
-        <InvitePanel onInvite={invite} onClose={() => setInviting(false)} />
-      ) : null}
+  return (
+    <div
+      className="tab-content tab-content--workroom"
+      style={{ display: active ? "grid" : "none" }}
+    >
+      <Workroom
+        composition={composition}
+        goal={missionGoal ?? basename(session.repositoryPath)}
+        // The composition's own headline, not `runStatus`. Two derivations
+        // of "where is this mission" put "Failed" in the header directly
+        // above a banner reading "Changed, not verified" — the same screen
+        // asserting two different things about the same run.
+        state={composition.headline}
+        repository={basename(session.repositoryPath)}
+        branch={null}
+        workstreams={workstreams}
+        people={people}
+        selected={target}
+        onSelect={setAddressed}
+        onAdd={() => setFocusMode("approaches")}
+        onInvite={() => setInviting(true)}
+        milestones={milestones}
+        evidence={{
+          verified: verification.verified,
+          testsRun: verification.testsRun,
+          testsPassed: verification.testsPassed,
+          files: fileChanges.files,
+          contested: verification.contested,
+          risks: [],
+        }}
+        github={github}
+        failureReason={
+          failed?.type === "run.failed" ? failed.payload.reason : null
+        }
+        onRetry={() => {
+          document.querySelector<HTMLTextAreaElement>(".dock__input")?.focus();
+        }}
+        target={target}
+        onTarget={setAddressed}
+        busy={busy}
+        onSend={(text) => {
+          if (busy) {
+            void direct(text);
+          } else {
+            void ask(text, turnModel.option);
+          }
+        }}
+        control={{
+          authority,
+          participants: presence.participants,
+          onOffer: (participantId) => {
+            void handoff(participantId).then(authority.refresh);
+          },
+          onRequest: (reason) => {
+            void requestControl(reason).then(authority.refresh);
+          },
+          onAnswer: (offerEventId, answer) => {
+            void answerHandoff(offerEventId, answer).then(authority.refresh);
+          },
+        }}
+        runControl={
+          busy && lastStarted?.type === "run.started"
+            ? {
+                paused,
+                pausing,
+                cancelling,
+                onPause: () => {
+                  if (lastStarted.type === "run.started") {
+                    if (paused) {
+                      void resume(lastStarted.payload.run.id);
+                    } else {
+                      void pause(lastStarted.payload.run.id);
+                    }
+                  }
+                },
+                onCancel: () => {
+                  if (lastStarted.type === "run.started") {
+                    void cancel(lastStarted.payload.run.id);
+                  }
+                },
+              }
+            : undefined
+        }
+        meter={{
+          elapsed: formatElapsed(events),
+          spend:
+            usage.session.costUsd === null
+              ? usage.session.runs === 0
+                ? "$—"
+                : "Not counted"
+              : formatSpend(
+                  usage.session.costUsd,
+                  usage.session.costIsFloor ? 1 : 0,
+                ),
+          spendTitle:
+            usage.session.costUsd === null
+              ? `No model in this session has a configured price, so spend is not being counted. ${usage.session.runs} run(s) finished.`
+              : `${usage.session.modelCalls} model call(s) across ${usage.session.runs} finished run(s)${
+                  usage.session.costIsFloor
+                    ? " — at least this much: a run is still going, or some of it could not be priced"
+                    : ""
+                }`,
+        }}
+        completion={completion}
+        completedBy={
+          completion === null
+            ? ""
+            : (presence.participants.find(
+                (participant) => participant.id === completion.completedBy,
+              )?.name ?? "a participant")
+        }
+        // TODO(mission lifecycle): there is no route to reopen a mission yet.
+        // `mission.reopened` exists in the contract and `projectSession` already
+        // folds it, but nothing in `event-server.ts` appends one, so this is
+        // deliberately inert rather than a button that fails. The slice that
+        // adds POST /sessions/:id/reopen wires this to it; nothing else here
+        // has to change.
+        onReopen={() => undefined}
+        focus={focus}
+        dominant={dominant}
+        {...(approachAction ? { action: approachAction } : {})}
+      />
+
+      {terminalDock}
+
+      {overlays}
     </div>
   );
 };

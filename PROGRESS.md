@@ -6,7 +6,7 @@ defines the scope and carries the narrative; this file is the index you read
 in two minutes. If the two disagree, one of them is wrong — fix the wrong one
 in the same commit you notice it.
 
-Updated 2026-08-01, audited against commit `a83dff9`.
+Updated 2026-08-01, audited against commit `6384d2f`.
 
 ## The rules this file follows
 
@@ -98,9 +98,9 @@ direction laid on top of it.
 
 | Item | Status | Evidence |
 | --- | --- | --- |
-| Mission Room — decision spine | **Met** (2026-07-31) | `mission-phase.ts` derives Brief → Execution → Approaches → Decision → Receipt from the log and the comparison; `decision-spine.tsx` draws it. `mission-phase.test.ts` |
+| Mission Room — decision spine | **Partial** (2026-08-01) | `mission-phase.ts` still derives Brief → Execution → Approaches → Decision → Receipt from the log and the comparison, with `mission-phase.test.ts` (9 tests), and the Workroom reads its Decision phase to decide whether to *offer* the Decision Room. **The ladder itself is no longer drawn**: `decision-spine.tsx` was deleted with the legacy shell, and the Workroom rail leads with the agents and people in the room instead. STEERING still names the spine as a thing this product owns, so the derivation is kept and the surface is owed |
 | Mission Room — evidence inspector | **Met** (2026-07-31) | Verification above changed files, contested files beside it, absent when there is nothing to say. `file-changes-panel.tsx`, `timeline-summary.test.tsx` |
-| Mission Room — active canvas | **Met** (2026-08-01) | The centre column switches between timeline, approaches and browse, and the branching picture is drawn above the approach cards: one shared checkpoint, the branches, and the decision they converge into. Which surfaces each view shows, and when the Decision Room opens itself, are pure functions the screen renders from rather than inline effects: `decision-room.ts`, `decision-room.test.ts` (once per arrival, browse never interrupted, a later decision re-opens, composer and evidence inspector stay). `branch-diagram.tsx`, `compare-view.render.test.tsx` |
+| Mission Room — active canvas | **Met** (2026-08-01) | The centre of the Workroom is the activity feed, the recovery state, the completion state, or a `focus` pane a person opened — approaches, the repository, the changed files, the raw log. The branching picture is still drawn above the approach cards: one shared checkpoint, the branches, and the decision they converge into. **Nothing opens itself.** `decision-room.ts` and its auto-route are deleted; a focus pane swaps the centre column and keeps the header, the room and the composer, held by `workroom.render.test.tsx`. `branch-diagram.tsx`, `compare-view.render.test.tsx` |
 | Activity as milestones | **Met** (2026-07-31) | Collapsed groups read "Read 2 files · Ran the tests" rather than `read_file ×2`; machinery and the call total sit under Technical details. `timeline-summary.test.tsx` |
 | Vocabulary | **Met** (2026-07-31) | Attempt → Approach and Session → Mission in customer-facing text; event types and URL parameters deliberately keep the contract's spelling |
 | Guest parity | **Partial** (2026-07-31) | Shared tokens in `packages/ui/src/tokens.css`, imported by both apps (`apps/guest/src/styles.css:13`); guest literals snapped onto the scale; labels capitalised; header leads with the goal. **Open:** the guest never stamps `data-theme`, so it is dark-only against the desktop's two themes (gap 9) |
@@ -191,12 +191,15 @@ pixels, so the three-column grid at 1728 remains unlooked-at.)
 | Embedded terminal (node-pty + xterm), repo cwd, human-side only | Met (hand-tested) | `apps/desktop/electron/main.ts`, `src/components/terminal-panel.tsx` |
 | Read-only file browser, host-side confinement | Met | `electron/fs-browser.ts` with `fs-browser.test.ts` (11 tests: absolute paths, `..`, symlinks, `.git`/`.env`, binary, oversize) |
 | Hosting-vs-joining launch, and the renderer's own asset boundary | Met | `electron/launch.test.ts` (10 tests), `electron/renderer-host.test.ts` (16 tests: `resolveAsset` climbs, loopback host check) |
-| Persistent composer with model picker, wired end-to-end to the turns route | Met (hand-tested) | `composer.tsx` → `use-session-actions.ts` → `POST /sessions/:id/turns`; worker side pinned by `turn-model-route.test.ts`, renderer side untested |
+| Persistent composer, wired end-to-end to the turns route | Met (hand-tested) | `components/workroom/composer-dock.tsx` → `use-session-actions.ts` → `POST /sessions/:id/turns`; worker side pinned by `turn-model-route.test.ts`. It superseded `components/composer.tsx`, which was deleted with the shell that rendered it — the model picker went with it and `use-turn-model.ts` still supplies the per-turn choice to `ask()` |
 | Open-a-repository modal, separate from the Mission Inbox | Met | `components/open-repository.tsx` with `open-repository.render.test.tsx` (7 tests); `components/modal.tsx` with `modal.test.tsx` (11 tests) |
 | Spacing/type design system (`--space-1..8`, `--text-*`, radii, control heights) | Met | `packages/ui/src/tokens.css`, imported by `apps/desktop/src/styles.css`; `styles.test.ts` (6 tests) pins it; `skills/novus-ui/SKILL.md` documents it |
-| **Workroom shell: composition derived from mission state** | Met (2026-08-01) | `mission-state.ts` with `mission-state.test.ts` (11 tests) derives seven states and which regions each mounts; `components/workroom/*` renders them; `workroom.render.test.tsx` (14 tests) asserts what each state must *not* contain. Styling split out of `styles.css` into `styles/workroom.css` |
+| **Workroom shell: the only host mission screen** | Met (2026-08-01) | `mission-state.ts` with `mission-state.test.ts` (17 tests) derives eight states and which regions each mounts; `components/workroom/*` renders them; `workroom.render.test.tsx` (33 tests) asserts what each state must *not* contain. `session-tab.tsx` used to hold a second complete shell chosen by a `mode` value; it is now a container that derives state and renders one screen. Approaches, the repository browser, the changed-files panel and the raw event log are `focus` panes over the same screen, each keeping the header, the room and the composer. Styling in `styles/workroom.css` |
 | **Start canvas — a repository opened with nothing asked** | Met (2026-08-01, hand-tested at 1280 and 1440) | `components/workroom/empty-mission.tsx`. One question, one composer, one primary action; no rail, no evidence, no lifecycle. Replaces a screen that rendered every region the app has against no data |
-| **Workstream rail — agents and people as the primary objects** | Met (2026-08-01) | `workstreams.ts` with `workstreams.test.ts` (8 tests). A workstream is an approach (baseline + forks), read from `/compare` with a log-only fallback that never overstates liveness. Identity colours are provenance only and none of them is green. **The multi-workstream rail is proven in tests, not on screen** — a session with two approaches routes to the Decision Room instead (gap 19) |
+| **Workstream rail — agents, people, and who may act** | Met (2026-08-01) | `workstreams.ts` with `workstreams.test.ts` (8 tests). A workstream is an approach (baseline + forks), read from `/compare` with a log-only fallback that never overstates liveness. Identity colours are provenance only and none of them is green. The rail also carries the control lifecycle, pending direction, pause/resume/cancel, and what the mission has spent. Nothing routes away from it any more (gap 19 closed), so the multi-workstream composition is reachable on screen |
+| **Control, handoff and pending direction on the default screen** | Met (2026-08-01) | `components/control-panel.tsx`, unchanged, rendered by `components/workroom/workstream-rail.tsx`. It previously rendered only in the shell a host was routed *away* from, so an incoming offer showed "Waiting on you" with no way to answer. `control-panel.render.test.tsx` (10 tests) still holds the three-state handoff lifecycle, that only the named participant may answer, and that a single-user session renders no authority chrome; `workroom.render.test.tsx` now holds the same properties against the screen that has to keep them |
+| **A mission can end without inventing a decision** | Partial (2026-08-01) | `mission-completion.ts` with `mission-completion.test.ts` (5 tests) folds `mission.completed` / `mission.reopened` from the log; `components/workroom/completion-state.tsx` renders the outcome, the *frozen* verification, the files changed, and a reopen action. **The routes do not exist**: nothing in `event-server.ts` appends either event, so `onReopen` is inert and carries a `TODO(mission lifecycle)` (gap 20) |
+| **Verification read from the log, not only from `/compare`** | Met (2026-08-01) | `verification.ts` with `verification.test.ts` (6 tests). The verdict was computed from `comparison.attempts` alone, so a one-workstream mission that ran its suite reported "Nothing has verified these changes" three inches from a feed reading "Tests passed". Log and comparison are reconciled by taking the larger, never summed — fork runs append to the same log, so adding them would double-count |
 | **Activity as attributed milestones rather than an event list** | Met (2026-08-01) | `components/workroom/activity-feed.tsx` with `activity-feed.test.tsx` (6 tests). Consecutive reads fold into one line counted by file; a person's direction is attributed to the person; `run.completed` is never told as verified |
 | **Evidence inspector mounted only when it has something to say** | Met (2026-08-01) | `components/workroom/evidence-inspector.tsx`. `verified: null` renders "Nothing has verified these changes", muted — never green, never red |
 | Light/dark theme | Met (hand-tested) | `packages/ui/src/tokens.css` `:root[data-theme="light"]`, stamped before first paint by `main.tsx` from `use-theme.ts:initialTheme` |
@@ -319,8 +322,9 @@ exists.
    test script globs `src/**/*.test.ts` and `src/**/*.test.tsx` beside
    `electron/*.test.ts`. What exists now: 104 tests over ten files under
    `apps/desktop/src` (`control-panel.render`, `mission-inbox`, `modal`,
-   `open-repository.render`, `timeline-summary`, `join/joined-surface.render`
-   rendered to static markup; `decision-room`, `mission-phase`,
+   `open-repository.render`, `timeline-summary`, `join/joined-surface.render`,
+   `workroom.render` rendered to static markup; `mission-phase`,
+   `mission-state`, `mission-completion`, `verification`, `workstreams`,
    `join/joined-api`, `styles` as logic), 37 over three under
    `apps/desktop/electron`, 66 in `packages/ui`, and 41 in
    `packages/session-client`. That last package is what actually closed the
@@ -468,13 +472,31 @@ exists.
     correct, and the test was asserting against a window the product never
     promised.
 19. **A multi-approach session cannot reach the Workroom, so its rail has
-    never been seen.** *Open (2026-08-01.)* `decideDecisionRoom` opens the
-    Decision Room automatically when a mission has approaches awaiting a
-    decision — correct behaviour, and the point of an earlier slice. The
-    consequence is that the one session shape that would show two workstreams
-    side by side in the new rail routes somewhere else entirely, so the
-    multi-workstream composition is proven only by
-    `workroom.render.test.tsx` and `workstreams.test.ts` and has not been
-    looked at on screen. Closing this needs either a fixture with two
-    approaches and a recorded decision, or a way to reach the Workroom from
-    the Decision Room without dismissing the decision.
+    never been seen.** *Closed (2026-08-01.)* `decideDecisionRoom` is deleted
+    along with `decision-room.ts` and the second shell it routed to. Nothing
+    changes the view on a person's behalf: approaches open as a `focus` pane
+    over the Workroom, from the header action or the command palette, and the
+    rail, header and composer stay where they were. The header action is
+    inverted only when the approaches have stopped and are genuinely waiting
+    on a decision — offered, never taken.
+
+    The reason this mattered beyond the rail never being seen: routing a
+    mission into a comparison the moment two runs finish presents
+    complementary workstreams as competing approaches, which is the one thing
+    STEERING says the decision surface must never do.
+
+    **Still not measured on screen.** The composition is proven by
+    `workroom.render.test.tsx` and `workstreams.test.ts`, and the gate does
+    not see pixels. A session with two approaches should be looked at at 1280
+    and 1440 before this is called finished.
+20. **A mission has a finished state and no way to reach it.** *Open
+    (2026-08-01.)* `mission.completed` and `mission.reopened` are in the
+    contract, `projectSession` folds them into `SessionProjection.completion`,
+    `session-registry.ts` reports a completed mission as `finished` in the
+    inbox, and the desktop now renders the ending — outcome, the frozen
+    verification, files changed, and a Reopen action. Nothing appends either
+    event: there is no `POST /sessions/:id/complete` and no
+    `POST /sessions/:id/reopen`, so the state is reachable only by a log that
+    already contains one. `session-tab.tsx`'s `onReopen` is a no-op carrying
+    `TODO(mission lifecycle)`; the slice that adds the routes wires it and
+    nothing else on this side has to change.
