@@ -2,6 +2,7 @@ import type {
   DecisionKind,
   DecisionOutcome,
   DecisionTarget,
+  MissionOutcome,
   Participant,
   SessionEvent,
 } from "@novus/contracts";
@@ -126,6 +127,27 @@ export type SessionProjection = {
     outcome: DecisionOutcome;
   } | null;
   /**
+   * Whether a person has declared this mission over, and on what evidence.
+   *
+   * Null for a mission still in flight — which is every mission that has never
+   * been completed, and every one that was completed and reopened since. Note
+   * that this is emphatically not derived from whether the runs have stopped:
+   * a mission whose last run completed an hour ago is not finished, it is
+   * waiting on somebody, and the whole reason this field exists is that the
+   * product previously had no way to tell those two apart.
+   *
+   * The numbers here are the ones frozen onto the event, not recomputed from
+   * the log as it stands now. See the payload's own comment for why.
+   */
+  completion: {
+    outcome: MissionOutcome;
+    summary: string;
+    verification: "verified" | "failing" | "unverified";
+    filesChanged: number;
+    completedBy: string;
+    completedAt: string;
+  } | null;
+  /**
    * What this session has spent, summed from the receipts in its own log.
    *
    * Budgets accumulate in memory, per run, and that memory dies with the
@@ -213,6 +235,7 @@ export const projectSession = (
   let controlHeldBy: string | null = null;
   let controlOffer: ControlOffer | null = null;
   let decision: SessionProjection["decision"] = null;
+  let completion: SessionProjection["completion"] = null;
   let sequence = -1;
   // Session spend, folded from receipts. Null rather than 0 until something
   // priced actually lands, so "nothing was counted" stays distinguishable
@@ -497,6 +520,27 @@ export const projectSession = (
         break;
       }
 
+      // Last write wins, both ways. A mission can be finished, reopened and
+      // finished again, and only the newest of those events describes where it
+      // stands now — the earlier ones stay in the log as the history of a team
+      // changing its mind, which is exactly what a durable log is for.
+      case "mission.completed": {
+        completion = {
+          outcome: event.payload.outcome,
+          summary: event.payload.summary,
+          verification: event.payload.verification,
+          filesChanged: event.payload.filesChanged,
+          completedBy: event.payload.actorId,
+          completedAt: event.occurredAt,
+        };
+        break;
+      }
+
+      case "mission.reopened": {
+        completion = null;
+        break;
+      }
+
       // Usage enters the log here and nowhere else — there is no
       // model.requested / model.responded family yet — so this is the only
       // place a session total can be folded from.
@@ -543,6 +587,7 @@ export const projectSession = (
       runs: countedRuns,
       unpricedRuns,
     },
+    completion,
     participants: [...participants.values()],
     controlHeldBy,
     controlOffer,

@@ -49,6 +49,13 @@ const GLYPHS: Record<SessionEvent["type"], string> = {
   "checkpoint.created": "◈",
   "fork.created": "⑂",
   "decision.recorded": "☑",
+  // A mission ending is the heaviest mark in the log — filled, and larger than
+  // the ■ a single run ends with, because the run stopping and the team calling
+  // it are different sizes of fact. Not ◻ for the reopening: that is already
+  // `run.cancelled`, and two events sharing a glyph is how a reader learns to
+  // stop trusting the column.
+  "mission.completed": "◼",
+  "mission.reopened": "⟲",
   "run.cancel_requested": "◐",
   "run.cancelled": "◻",
   "run.pause_requested": "◑",
@@ -356,6 +363,50 @@ export const EventRow = ({
           <span className="event__text event__text--error">
             {chose} {what}
             <span className="event__type"> · not applied — {outcome.reason}</span>
+          </span>
+        );
+      }
+
+      case "mission.completed": {
+        const { outcome, verification, filesChanged, summary } = event.payload;
+        // The outcome and the evidence are said as two separate clauses,
+        // never merged into one verdict. "Resolved · verified" and "Resolved ·
+        // nothing verified" are both legitimate endings, and a row that let
+        // the first word imply the second would be the exact green-because-it
+        // -finished failure the payload's own comment refuses.
+        const evidence =
+          verification === "verified"
+            ? "tests passed"
+            : verification === "failing"
+              ? "tests failing"
+              : "nothing verified";
+        // Only a resolved-and-verified mission earns the pass treatment.
+        // Abandoning is not an error either — it is a choice, and painting it
+        // red tells a team its decision was a malfunction.
+        const tone =
+          outcome === "resolved" && verification === "verified"
+            ? "approved"
+            : verification === "failing"
+              ? "error"
+              : "";
+
+        return (
+          <span className={`event__text${tone ? ` event__text--${tone}` : ""}`}>
+            {outcome === "resolved" ? "Mission resolved" : "Mission abandoned"}
+            <span className="event__type">
+              {" "}
+              · {evidence} · {filesChanged} file
+              {filesChanged === 1 ? "" : "s"} changed — {summary}
+            </span>
+          </span>
+        );
+      }
+
+      case "mission.reopened": {
+        return (
+          <span className="event__text">
+            Mission reopened
+            <span className="event__type"> · {event.payload.reason}</span>
           </span>
         );
       }

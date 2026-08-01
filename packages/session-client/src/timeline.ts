@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@novus/contracts";
+import type { MissionOutcome, SessionEvent } from "@novus/contracts";
 
 /**
  * What the guest knows about its connection to the session, and nothing more.
@@ -192,6 +192,17 @@ export type TimelineSummary = {
   model: string | null;
   /** What the run is doing, derived only from events the guest has seen. */
   runStatus: "waiting" | "working" | "paused" | "completed" | "failed" | "cancelled";
+  /**
+   * Whether a person has declared the mission over, and how it ended.
+   *
+   * A separate field from `runStatus` rather than a seventh value in it,
+   * because they answer different questions and a reader needs both at once:
+   * a resolved mission whose last run failed is an ordinary ending (the team
+   * fixed it by hand and said so), and one field could only tell that story by
+   * suppressing half of it. Null while the mission is live — including after a
+   * reopening, which is the point of reopening.
+   */
+  missionOutcome: MissionOutcome | null;
   events: number;
   toolCalls: SessionEvent[];
   patches: PatchEvent[];
@@ -254,7 +265,18 @@ export const summarise = (events: SessionEvent[]): TimelineSummary => {
           ? "cancelled"
           : "completed";
 
+  // Last one wins, and a reopening wins over the completion before it — the
+  // same rule the worker's projection applies, kept in step deliberately
+  // because this file is the copy a teammate's screen reads and the two
+  // disagreeing is precisely the failure this duplication has caused before.
+  const finished = events.findLast(
+    (event) =>
+      event.type === "mission.completed" || event.type === "mission.reopened",
+  );
+
   return {
+    missionOutcome:
+      finished?.type === "mission.completed" ? finished.payload.outcome : null,
     goal: started?.type === "run.started" ? started.payload.run.goal : null,
     model:
       started?.type === "run.started"

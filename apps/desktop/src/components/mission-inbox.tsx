@@ -25,6 +25,7 @@ export const ATTENTION_GROUPS: { attention: MissionAttention; label: string }[] 
     { attention: "running", label: "Running" },
     { attention: "needs-direction", label: "Needs your direction" },
     { attention: "settled", label: "Recently decided" },
+    { attention: "finished", label: "Finished" },
   ];
 
 export type MissionGroup = {

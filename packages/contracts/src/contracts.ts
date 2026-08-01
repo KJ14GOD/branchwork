@@ -1733,6 +1733,81 @@ export const DecisionRecordedEventSchema = EventEnvelopeSchema.extend({
     ),
 });
 
+/**
+ * How a mission ended, in the two words a person would actually use.
+ *
+ * Deliberately not a synonym for "the tests passed". A mission can be resolved
+ * with nothing verified and abandoned with everything green — the outcome is
+ * what the team decided the work was worth, and `verification` below is the
+ * separate, unnegotiable record of what the evidence said at that moment.
+ * Collapsing the two is how a screen ends up calling a run green because it
+ * merely finished, which STEERING names as a thing this product does not do.
+ */
+export const MissionOutcomeSchema = z.enum(["resolved", "abandoned"]);
+
+export type MissionOutcome = z.infer<typeof MissionOutcomeSchema>;
+
+/**
+ * A mission a person declared finished.
+ *
+ * Distinct from `decision.recorded`, which settles *which of several approaches
+ * won*. Most missions have one workstream and nothing to choose between, and
+ * making those missions invent a comparison in order to end was the shape the
+ * product had before this event: a fake decision as the only exit. A mission
+ * with competing attempts records both — the decision that picked one, and this,
+ * saying the mission itself is over.
+ *
+ * Distinct from `run.completed` for the same reason `run.completed` is not a
+ * verdict: a run ending is the machine stopping, and a mission ending is a
+ * person saying so. Nothing derives this event; only a route appends it.
+ */
+export const MissionCompletedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("mission.completed"),
+  payload: z.object({
+    outcome: MissionOutcomeSchema,
+    /**
+     * What the team says happened, in their words.
+     *
+     * Floored at the same length as a decision's rationale and for the same
+     * reason: this is the sentence somebody reads three weeks later, and "done"
+     * is the answer the floor exists to refuse.
+     */
+    summary: DecisionRationaleSchema,
+    /**
+     * What the evidence said at the moment of completion, frozen.
+     *
+     * Stored rather than re-derived, because re-deriving it later reads the
+     * repository as it is *now* — and a mission completed unverified would
+     * silently start claiming it was verified the next time anybody ran the
+     * suite for an unrelated reason. Three values, never a boolean: "nothing
+     * ran" and "something ran and failed" are different facts, and a product
+     * that blurs them is the one this repository has already shipped twice.
+     */
+    verification: z.enum(["verified", "failing", "unverified"]),
+    /** How many files the mission had changed when it was declared over. */
+    filesChanged: z.number().int().nonnegative(),
+    /** The person who called it. A mission does not finish itself. */
+    actorId: IdSchema,
+  }),
+});
+
+/**
+ * A completed mission opened again, because completing one is not a trapdoor.
+ *
+ * Empty or failed work has to lead to recovery rather than to a fake decision.
+ * A mission abandoned at 2am and picked up the next morning is the ordinary
+ * case, and without this the only route back was to open a second mission on
+ * the same repository and lose the thread.
+ */
+export const MissionReopenedEventSchema = EventEnvelopeSchema.extend({
+  type: z.literal("mission.reopened"),
+  payload: z.object({
+    actorId: IdSchema,
+    /** Why it is being reopened. Same floor, same reason. */
+    reason: DecisionRationaleSchema,
+  }),
+});
+
 export const SessionEventSchema = z.discriminatedUnion("type", [
   SessionCreatedEventSchema,
   RunStartedEventSchema,
@@ -1764,6 +1839,8 @@ export const SessionEventSchema = z.discriminatedUnion("type", [
   CheckpointCreatedEventSchema,
   ForkCreatedEventSchema,
   DecisionRecordedEventSchema,
+  MissionCompletedEventSchema,
+  MissionReopenedEventSchema,
   RunCancelRequestedEventSchema,
   RunCancelledEventSchema,
   RunPauseRequestedEventSchema,
@@ -1920,6 +1997,16 @@ export const SessionEventDraftSchema = z.discriminatedUnion("type", [
     occurredAt: true,
   }),
   DecisionRecordedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  MissionCompletedEventSchema.omit({
+    eventId: true,
+    sequence: true,
+    occurredAt: true,
+  }),
+  MissionReopenedEventSchema.omit({
     eventId: true,
     sequence: true,
     occurredAt: true,

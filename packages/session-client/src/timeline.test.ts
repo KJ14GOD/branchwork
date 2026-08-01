@@ -199,3 +199,71 @@ test("a cancelled run reads as cancelled, not as still working or as a failure",
   // reason the guest carries its own runStatus at all.
   assert.notEqual(summarise([started(0), cancelled(1)]).runStatus, "failed");
 });
+
+// A mission ending, in the copy a teammate's screen reads. The worker's
+// projection is asserted against the same sequences in
+// `apps/worker/src/mission-completion.test.ts`; the two are separate
+// implementations on purpose and drift silently if only one is pinned.
+
+const missionCompleted = (
+  sequence: number,
+  outcome: "resolved" | "abandoned" = "resolved",
+): SessionEvent =>
+  SessionEventSchema.parse({
+    ...envelope(sequence),
+    type: "mission.completed",
+    payload: {
+      outcome,
+      summary: "The failing checkout test passes again after the rounding fix.",
+      verification: "verified",
+      filesChanged: 2,
+      actorId: "agent",
+    },
+  });
+
+const missionReopened = (sequence: number): SessionEvent =>
+  SessionEventSchema.parse({
+    ...envelope(sequence),
+    type: "mission.reopened",
+    payload: {
+      actorId: "agent",
+      reason: "The fix regressed the refund path, so this is not finished.",
+    },
+  });
+
+const runCompleted = (sequence: number): SessionEvent =>
+  SessionEventSchema.parse({
+    ...envelope(sequence),
+    type: "run.completed",
+    payload: { runId: RUN, summary: "Adjusted the rounding in the tax helper." },
+  });
+
+test("a mission is finished only once somebody says so", () => {
+  // Not when its runs stop. A completed run is a mission waiting on a person,
+  // and conflating the two is what left the product with no ending at all.
+  assert.equal(summarise([started(0), runCompleted(1)]).missionOutcome, null);
+  assert.equal(summarise([started(0), runCompleted(1)]).runStatus, "completed");
+  assert.equal(
+    summarise([started(0), runCompleted(1), missionCompleted(2)]).missionOutcome,
+    "resolved",
+  );
+});
+
+test("reopening a mission makes it live again for a teammate too", () => {
+  assert.equal(summarise([missionCompleted(0), missionReopened(1)]).missionOutcome, null);
+  assert.equal(
+    summarise([missionCompleted(0), missionReopened(1), missionCompleted(2, "abandoned")])
+      .missionOutcome,
+    "abandoned",
+  );
+});
+
+test("the mission's ending and the run's ending are reported separately", () => {
+  // A resolved mission whose last run failed is an ordinary ending: somebody
+  // finished the job by hand and said so. One field could only tell that story
+  // by suppressing half of it.
+  const events = [started(0), failed(1), missionCompleted(2)];
+
+  assert.equal(summarise(events).runStatus, "failed");
+  assert.equal(summarise(events).missionOutcome, "resolved");
+});

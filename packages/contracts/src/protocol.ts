@@ -462,6 +462,14 @@ export const MissionAttentionSchema = z.enum([
   "needs-direction",
   /** A decision was recorded. Nothing is being asked of anyone. */
   "settled",
+  /**
+   * A person declared the mission over. The least urgent state there is, and
+   * the only one that is a genuine ending rather than a lull — which is why it
+   * is separate from `settled`: a decision between approaches can be followed
+   * by more work on the winner, and this cannot be followed by anything until
+   * somebody reopens it.
+   */
+  "finished",
 ]);
 
 export type MissionAttention = z.infer<typeof MissionAttentionSchema>;

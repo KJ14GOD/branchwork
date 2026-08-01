@@ -192,6 +192,7 @@ const ATTENTION_ORDER: MissionAttention[] = [
   "running",
   "needs-direction",
   "settled",
+  "finished",
 ];
 
 /**
@@ -249,6 +250,16 @@ const attentionFor = (
    */
   live: boolean,
 ): MissionAttention => {
+  // First, and above the decision check below, because a person saying the
+  // mission is over settles every question the rest of this function asks. A
+  // finished mission with two approaches and no `decision.recorded` was
+  // otherwise reported as `needs-decision` forever — the inbox demanding a
+  // choice between attempts the team had already walked away from, which is
+  // the fake-decision-as-only-exit shape this event was added to remove.
+  if (projected.completion !== null) {
+    return "finished";
+  }
+
   // An approval that was requested and never answered blocks a live run, so it
   // outranks everything except a decision nobody made.
   const answered = new Set(

@@ -3,10 +3,11 @@ import test from "node:test";
 
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type {
-  HostCapabilities,
-  MissionAttention,
-  RememberedSession,
+import {
+  MissionAttentionSchema,
+  type HostCapabilities,
+  type MissionAttention,
+  type RememberedSession,
 } from "@novus/contracts/protocol";
 
 import {
@@ -118,20 +119,24 @@ test("a group with nothing in it is not rendered at all", () => {
   }
 });
 
-test("every attention state has a heading worded as a request", () => {
-  const attentions: MissionAttention[] = [
-    "needs-decision",
-    "needs-approval",
-    "waiting-on-someone",
-    "running",
-    "needs-direction",
-    "settled",
-  ];
-
+test("every attention state has a heading, in the contract's own order", () => {
+  // Read from the schema rather than repeated here. This assertion used to
+  // carry its own hand-written copy of the enum, which meant adding a state to
+  // the contract and forgetting the heading left the test green and the
+  // mission invisible — the group simply never rendered. Deriving it makes the
+  // contract the thing that fails, which is the only version of this test that
+  // does what its name says.
   assert.deepEqual(
     ATTENTION_GROUPS.map((group) => group.attention),
-    attentions,
+    MissionAttentionSchema.options as MissionAttention[],
   );
+
+  for (const group of ATTENTION_GROUPS) {
+    assert.ok(
+      group.label.length > 0,
+      `${group.attention} must have a heading a person can read`,
+    );
+  }
 });
 
 test("nothing is dropped from a group, however many there are", () => {
