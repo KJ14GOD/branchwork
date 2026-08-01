@@ -399,12 +399,25 @@ test("tokenizing 4,000 lines of TypeScript stays well inside a frame", () => {
       `  { id: ${index}, name: "row-${index}", ok: ${index % 3 === 0}, /* c */ score: 0x${index.toString(16)} },`,
   );
 
-  const started = performance.now();
-  highlightLines(lines, "typescript");
-  const elapsed = performance.now() - started;
+  // Best of three, not a single timing.
+  //
+  // This suite runs beside four others and a wall-clock assertion measures
+  // whatever else the machine was doing — it failed at 543ms against a 250ms
+  // budget while a worker and a build were running, which says nothing about
+  // the tokenizer. What the test actually cares about is that the algorithm
+  // has not become quadratic, and the fastest of a few runs answers that
+  // while dropping the scheduling noise. Raising the budget instead would
+  // have kept the flake and weakened the guard at the same time.
+  let best = Infinity;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const started = performance.now();
+    highlightLines(lines, "typescript");
+    best = Math.min(best, performance.now() - started);
+  }
 
   assert.ok(
-    elapsed < 250,
-    `tokenizing 4,000 lines took ${elapsed.toFixed(1)}ms, which is far past the few milliseconds the viewer's design assumes`,
+    best < 250,
+    `tokenizing 4,000 lines took ${best.toFixed(1)}ms at best over three runs, which is far past the few milliseconds the viewer's design assumes`,
   );
 });
