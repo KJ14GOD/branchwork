@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { composeMission, type MissionState } from "../../mission-state.ts";
 import type { Person, Workstream } from "../../workstreams.ts";
 import type { Milestone } from "./activity-feed.tsx";
+import { HarnessPicker } from "../harness-picker.tsx";
 import { EmptyMission } from "./empty-mission.tsx";
 import { Workroom } from "./workroom.tsx";
 
@@ -107,6 +108,9 @@ const startCanvas = (error: string | null = null): string =>
       branch="main"
       repositoryState="ready"
       allowWrites={false}
+      harnesses={[]}
+      harness={null}
+      onHarness={() => {}}
       busy={false}
       error={error}
       onStart={() => {}}
@@ -295,4 +299,35 @@ test("a workstream says which harness runs it, not only which model", () => {
 
   assert.match(html, /Claude Code/);
   assert.match(html, /claude-opus-5/);
+});
+
+test("the agent picker appears only when there is a choice to make", () => {
+  // One option is not a choice, and a picker with a single entry teaches
+  // people to ignore pickers.
+  const one = renderToStaticMarkup(
+    <HarnessPicker
+      choices={[
+        { kind: "claude-code", name: "Claude Code", detail: "Max plan", available: true },
+      ]}
+      selected="claude-code"
+      onSelect={() => {}}
+    />,
+  );
+  const two = renderToStaticMarkup(
+    <HarnessPicker
+      choices={[
+        { kind: "claude-code", name: "Claude Code", detail: "Max plan", available: true },
+        { kind: "codex", name: "Codex", detail: "Installed, not signed in", available: false },
+      ]}
+      selected="claude-code"
+      onSelect={() => {}}
+    />,
+  );
+
+  assert.equal(one, "");
+  assert.match(two, /Claude Code/);
+  assert.match(two, /Codex/);
+  // Shown and disabled, not hidden: hiding it turns "run `codex login`" into
+  // "Novus does not support Codex".
+  assert.match(two, /disabled/);
 });

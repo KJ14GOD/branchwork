@@ -35,6 +35,12 @@
 /* First run: which harnesses this machine can actually reach. */
 @import "./styles/setup.css";
 
+/* Coming back to work already in flight — the ordinary way into Novus. */
+@import "./styles/missions.css";
+
+/* Files, changes, checks, and the lower dock. */
+@import "./styles/inspector.css";
+
 * {
   box-sizing: border-box;
 }

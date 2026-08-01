@@ -1,6 +1,9 @@
 import { useState } from "react";
 
+import type { HarnessKind } from "@novus/contracts";
 import type { RepositoryState } from "@novus/contracts/protocol";
+
+import { HarnessPicker, type HarnessChoice } from "../harness-picker.tsx";
 
 /**
  * A repository is open and nobody has asked for anything yet.
@@ -22,6 +25,9 @@ export const EmptyMission = ({
   branch,
   repositoryState,
   allowWrites,
+  harnesses,
+  harness,
+  onHarness,
   busy,
   error,
   onStart,
@@ -37,6 +43,10 @@ export const EmptyMission = ({
    * control at all.
    */
   allowWrites: boolean;
+  /** Which agents this machine can actually reach. Empty hides the picker. */
+  harnesses: readonly HarnessChoice[];
+  harness: HarnessKind | null;
+  onHarness: (kind: HarnessKind) => void;
   busy: boolean;
   /**
    * Why the last attempt to start did not start.
@@ -100,6 +110,16 @@ export const EmptyMission = ({
                 : "No commits yet"}
           </span>
         </div>
+
+        {/*
+          Which agent runs this. Above the field rather than beside the button:
+          it is a decision about the whole mission, not a modifier on the send.
+        */}
+        <HarnessPicker
+          choices={harnesses}
+          selected={harness}
+          onSelect={onHarness}
+        />
 
         <form className="start__composer" onSubmit={submit}>
           <textarea

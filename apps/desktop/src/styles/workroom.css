@@ -1184,3 +1184,73 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ============================================================
+   Which agent runs this
+   ============================================================
+ *
+ * A row of options, not a dropdown. There are two or three, the difference
+ * between them matters, and each carries a line of its own state ("Max plan",
+ * "Logged in using ChatGPT") that a collapsed control would hide behind a
+ * click — which is exactly the fact somebody most needs before starting.
+ */
+.harness {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-3);
+  width: 100%;
+  margin-top: var(--space-4);
+}
+
+.harness__option {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.harness__option:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border);
+}
+
+/* Selection is a fill and a stronger edge, never a hue: which agent runs this
+   is a choice, not a verdict, and none of these is better than another. */
+.harness__option--selected {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* Installed but not signed in. Shown rather than hidden — hiding it turns
+   "run `codex login`" into "Novus does not support Codex". */
+.harness__option:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.harness__name {
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+  color: inherit;
+}
+
+.harness__detail {
+  font-size: var(--text-eyebrow);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

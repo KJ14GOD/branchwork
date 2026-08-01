@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { SessionEvent } from "@novus/contracts";
+import type { HarnessKind, SessionEvent } from "@novus/contracts";
 import type { AttemptComparison, SessionSummary } from "@novus/contracts/protocol";
 import { formatSpend } from "@novus/ui";
 
@@ -27,6 +27,8 @@ import { appliedDiffsByPath } from "./applied-diffs.ts";
 import { InvitePanel } from "./components/invite-panel.tsx";
 import { TerminalPanel } from "./components/terminal-panel.tsx";
 import { groupKeyFor, TimelineView } from "./components/timeline-view.tsx";
+import { harnessChoices } from "./components/harness-picker.tsx";
+import { useProviders } from "./use-providers.ts";
 import { EmptyMission } from "./components/workroom/empty-mission.tsx";
 import { Workroom } from "./components/workroom/workroom.tsx";
 import { readMilestones } from "./components/workroom/activity-feed.tsx";
@@ -305,6 +307,18 @@ export const SessionTab = ({
   }, [comparison.comparison]);
   const fileTree = useFileTree(mode === "browse" ? session.repositoryPath : null);
   const turnModel = useTurnModel();
+  /**
+   * Which agent this mission runs on.
+   *
+   * Held per tab and only until the first turn: after that the mission's runs
+   * carry their own harness on the log, and a picker that could retroactively
+   * change what already ran would be lying about history.
+   */
+  const providers = useProviders(endpoint, true);
+  const harnesses = harnessChoices(providers.providers);
+  const [harness, setHarness] = useState<HarnessKind | null>(null);
+  const chosenHarness =
+    harness ?? harnesses.find((choice) => choice.available)?.kind ?? null;
   const [filter, setFilter] = useState<Filter>("all");
   const [raw, setRaw] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -721,9 +735,14 @@ export const SessionTab = ({
           branch={null}
           repositoryState={session.repositoryState}
           allowWrites={session.allowWrites}
+          harnesses={harnesses}
+          harness={chosenHarness}
+          onHarness={setHarness}
           busy={busy}
           error={actionError}
-          onStart={(goal) => void ask(goal, turnModel.option)}
+          onStart={(goal) =>
+            void ask(goal, turnModel.option, chosenHarness ?? undefined)
+          }
           onInvite={() => setInviting(true)}
         />
 

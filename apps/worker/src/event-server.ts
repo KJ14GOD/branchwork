@@ -1711,7 +1711,15 @@ export const startEventServer = (
       }
 
       // Accepted, not completed: progress arrives on the event stream.
-      void sessions.submitTurn(session, parsed.data.goal, chosen);
+      // The harness is not validated against installed binaries here: the
+      // adapter refuses before a run exists if its CLI is missing, which is a
+      // better error than a 400 guessing at what this machine has.
+      void sessions.submitTurn(
+        session,
+        parsed.data.goal,
+        chosen,
+        parsed.data.harness,
+      );
       sendJson(response, 202, { accepted: true });
       return true;
     }

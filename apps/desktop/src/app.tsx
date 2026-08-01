@@ -4,10 +4,8 @@ import { SessionSummarySchema, type SessionSummary } from "@novus/contracts/prot
 import type { ParsedInvite } from "@novus/session-client";
 
 import { bridge, type LaunchDescriptor } from "./bridge.ts";
-import {
-  MissionInbox,
-  type ResumeRequest,
-} from "./components/mission-inbox.tsx";
+import { type ResumeRequest } from "./components/mission-inbox.tsx";
+import { MissionsPage } from "./components/missions-page.tsx";
 import { Sidebar } from "./components/sidebar.tsx";
 import { SetupScreen } from "./components/setup/setup-screen.tsx";
 import { useProviders } from "./use-providers.ts";
@@ -529,14 +527,26 @@ export const App = () => {
       />
     ) : null;
 
-  const inboxOverlay =
+  /**
+   * Missions, as a screen rather than a sheet.
+   *
+   * It was a modal over a dimmed app, which had the priority backwards:
+   * coming back to work already in flight is the ordinary way into Novus, not
+   * an interruption of something else. A sheet also capped it — projects and
+   * missions together do not fit one, and the page underneath was dead space
+   * the whole time it was open.
+   */
+  const missionsPage =
     inboxOpen && hosting ? (
-      <MissionInbox
+      <MissionsPage
         missions={remembered}
         capabilities={capabilities}
         opening={opening}
         error={newTabOpen ? null : error}
-        onResume={resumeMission}
+        onResume={(request) => {
+          setInboxOpen(false);
+          resumeMission(request);
+        }}
         onOpenRepository={() => {
           fromInbox.current = true;
           setInboxOpen(false);
@@ -620,7 +630,7 @@ export const App = () => {
           // back to work is the common case; starting something new is the
           // deliberate one, and it gets its own modal rather than being the
           // top half of this screen with the missions dangling underneath.
-          <MissionInbox
+          <MissionsPage
             missions={remembered}
             capabilities={capabilities}
             opening={opening}
@@ -688,7 +698,7 @@ export const App = () => {
         />
       ))}
 
-      {inboxOverlay}
+      {missionsPage}
       {openRepositoryModal}
       {joinOverlay}
     </div>

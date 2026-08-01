@@ -3,7 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
-import type { Fork, ToolCall } from "@novus/contracts";
+import type { Fork, HarnessKind, ToolCall } from "@novus/contracts";
 import type {
   MissionAttention,
   RememberedSession,
@@ -12,6 +12,9 @@ import type { SessionEvent } from "@novus/contracts";
 import type { SessionEventStore } from "@novus/session-service";
 
 import { AgentRunFailure, AgentRunner } from "./agent-runner.ts";
+import type { Harness } from "./harness.ts";
+import { ClaudeCodeHarness } from "./claude-code-harness.ts";
+import { CodexHarness } from "./codex-harness.ts";
 import {
   WorktreeManager,
   collectableForks,
@@ -666,14 +669,56 @@ export class SessionRegistry {
    * router decides. Passed through untouched — precedence lives in the
    * runner, in one place.
    */
+  /**
+   * The harness that will run a turn.
+   *
+   * Built per turn rather than held on the session, because a mission can have
+   * a Claude Code workstream beside a Codex one beside Novus's own — that is
+   * the whole point of the boundary. Each is cheap to construct; the expensive
+   * part is the subprocess, which lives for exactly one run.
+   *
+   * An unknown or absent kind falls back to the session's built-in runner,
+   * which is what every turn submitted before harnesses had names used.
+   */
+  private harnessFor(session: Session, kind: HarnessKind | undefined): Harness {
+    if (kind === "claude-code") {
+      return new ClaudeCodeHarness({
+        eventStore: this.eventStore,
+        cwd: session.repositoryPath,
+        // The session's permissions, translated — never widened. An external
+        // harness enforces them itself, which is why its descriptor declares
+        // `approvals: "harness-internal"` rather than implying Novus's gate
+        // ran.
+        permissions: {
+          allowWrites: session.allowWrites,
+          allowCommands: session.allowCommands,
+        },
+      });
+    }
+
+    if (kind === "codex") {
+      return new CodexHarness({
+        eventStore: this.eventStore,
+        cwd: session.repositoryPath,
+        permissions: {
+          allowWrites: session.allowWrites,
+          allowCommands: session.allowCommands,
+        },
+      });
+    }
+
+    return session.runner;
+  }
+
   submitTurn(
     session: Session,
     goal: string,
     model?: ModelSelection,
+    harness?: HarnessKind,
   ): Promise<void> {
     session.queue = session.queue
       .then(() =>
-        session.runner.run({
+        this.harnessFor(session, harness).run({
           sessionId: session.id,
           actorId: "agent-1",
           goal,

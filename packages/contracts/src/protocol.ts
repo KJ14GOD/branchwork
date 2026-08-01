@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  HarnessKindSchema,
   DecisionKindSchema,
   DecisionOutcomeSchema,
   DecisionRationaleSchema,
@@ -80,6 +81,20 @@ export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 
 export const SubmitTurnRequestSchema = z.object({
   goal: z.string().min(1).max(20_000),
+  /**
+   * Which harness should run this turn.
+   *
+   * Absent means the session's own default, which is the built-in loop —
+   * true of every turn ever submitted before harnesses had names, so an older
+   * client keeps working unchanged.
+   *
+   * Separate from `model` because they answer different questions. A model is
+   * the intelligence; a harness is the whole program around it. Asking Claude
+   * Code to run is not the same as asking Novus's loop to call a Claude
+   * model: they differ in who enforces permissions, what Novus can see, and
+   * whose account pays.
+   */
+  harness: HarnessKindSchema.optional(),
   /**
    * An explicit model for this turn — the composer's picker, as opposed to
    * its "Auto". Absent means route: the worker's router decides. Present, it

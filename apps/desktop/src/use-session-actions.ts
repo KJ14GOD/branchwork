@@ -1,5 +1,7 @@
 import { useCallback, useState } from "react";
 
+import type { HarnessKind } from "@novus/contracts";
+
 import { authorization } from "./access.ts";
 import { readError } from "./http.ts";
 import {
@@ -22,7 +24,11 @@ export type SessionActions = {
    * every mission on that screen simply failed to start. Taking the object
    * makes that mistake a compile error instead of a runtime one.
    */
-  ask: (goal: string, choice?: { modelId: string | null } | null) => Promise<void>;
+  ask: (
+    goal: string,
+    choice?: { modelId: string | null } | null,
+    harness?: HarnessKind,
+  ) => Promise<void>;
   /** Mints a token for a new participant. Null on failure — `error` says why. */
   invite: (name: string, role: InviteRole) => Promise<InviteResponse | null>;
   /** Recorded for the running turn to fold in, not applied immediately. */
@@ -72,7 +78,11 @@ export const useSessionActions = (
   const sessionId = session.id;
 
   const ask = useCallback(
-    async (goal: string, choice?: { modelId: string | null } | null) => {
+    async (
+      goal: string,
+      choice?: { modelId: string | null } | null,
+      harness?: HarnessKind,
+    ) => {
       const response = await fetch(
         `${endpoint}/sessions/${encodeURIComponent(sessionId)}/turns`,
         {
@@ -83,12 +93,16 @@ export const useSessionActions = (
           },
           body: JSON.stringify(
             choice?.modelId
-              ? { goal, model: { provider: "anthropic", model: choice.modelId } }
+              ? {
+                  goal,
+                  model: { provider: "anthropic", model: choice.modelId },
+                  ...(harness ? { harness } : {}),
+                }
               : // No model named is a request to let the worker's own router
                 // decide, which is what "Auto" means. It must send no `model`
                 // key at all — the turns route validates any model it is given
                 // against the adapters that exist.
-                { goal },
+                { goal, ...(harness ? { harness } : {}) },
           ),
         },
       );
