@@ -23,6 +23,7 @@ const stream = (over: Partial<Workstream> = {}): Workstream => ({
   runId: "r1",
   name: "Claude",
   model: "claude-sonnet-5",
+  harness: "Claude Code",
   assignment: "Migrate authentication to scoped tokens",
   state: "running",
   signal: "--ws-1",
@@ -282,4 +283,16 @@ test("the recipient selector appears only when there is more than one agent", ()
 
   assert.doesNotMatch(one, /dock__select/);
   assert.match(two, /dock__select/);
+});
+
+test("a workstream says which harness runs it, not only which model", () => {
+  // The rail named the model alone, so real Claude Code and Novus's own loop
+  // against a Claude model read identically — while differing in who enforces
+  // permissions, whether Novus sees typed tool calls, and whose account pays.
+  const html = workroom("working", {
+    workstreams: [stream({ harness: "Claude Code", model: "claude-opus-5" })],
+  });
+
+  assert.match(html, /Claude Code/);
+  assert.match(html, /claude-opus-5/);
 });

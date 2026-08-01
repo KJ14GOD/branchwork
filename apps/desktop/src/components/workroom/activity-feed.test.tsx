@@ -69,6 +69,7 @@ const streams: Workstream[] = [
     runId: "r1",
     name: "Claude",
     model: "claude-sonnet-5",
+    harness: "Novus agent",
     assignment: "Migrate auth",
     state: "running",
     signal: "--ws-1",

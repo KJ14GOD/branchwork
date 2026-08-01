@@ -48,6 +48,13 @@ export const WorkstreamRow = ({
     </span>
     <span className="wsrow__body">
       <span className="wsrow__name">{stream.name}</span>
+      {/*
+        Which program, then which model. The rail said only the model, so a
+        workstream running real Claude Code and one running Novus's own loop
+        against a Claude model looked the same — while differing in who
+        enforces permissions and whose account pays.
+      */}
+      <span className="wsrow__harness">{stream.harness}</span>
       <span className="wsrow__model">{stream.model}</span>
       <span className="wsrow__assignment">{stream.assignment}</span>
       <span className={`wsrow__state wsrow__state--${stream.state}`}>

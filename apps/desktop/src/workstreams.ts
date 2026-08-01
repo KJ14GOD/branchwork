@@ -29,6 +29,16 @@ export type Workstream = {
   name: string;
   /** The model, shown as secondary technical metadata. */
   model: string;
+  /**
+   * Which harness is running this — "Claude Code", "Codex", "Novus agent".
+   *
+   * The thing the rail could not say. It named the *model* and left the
+   * harness invisible, so a workstream driven by real Claude Code and one
+   * driven by Novus's own loop against a Claude model read identically —
+   * despite differing in who enforces permissions, whether Novus sees typed
+   * tool calls, and whose account pays.
+   */
+  harness: string;
   /** What this workstream was asked to do differently, or the mission goal. */
   assignment: string;
   state: WorkstreamState;
@@ -57,6 +67,27 @@ const SIGNALS = ["--ws-1", "--ws-2", "--ws-3", "--ws-4"] as const;
  * sentence. The room needs the second, and keeps the first beside it rather
  * than instead of it.
  */
+/**
+ * A person-facing name for a harness.
+ *
+ * Deliberately distinct from `agentName`, which names the *model*. "Claude
+ * Code" and "Claude" are different answers to different questions, and the
+ * rail needs both: which program is running, and which intelligence it is
+ * running on.
+ */
+export const harnessName = (kind: string | undefined): string => {
+  switch (kind) {
+    case "claude-code":
+      return "Claude Code";
+    case "codex":
+      return "Codex";
+    case "external":
+      return "External harness";
+    default:
+      return "Novus agent";
+  }
+};
+
 export const agentName = (model: string): string => {
   const family = model.toLowerCase();
 
@@ -110,13 +141,19 @@ export const readWorkstreams = (
   comparison: Comparison | null,
 ): Workstream[] => {
   const attempts = comparison?.attempts ?? [];
-  const started = new Map<string, { goal: string; model: string }>();
+  const started = new Map<
+    string,
+    { goal: string; model: string; harness: string }
+  >();
 
   for (const event of events) {
     if (event.type === "run.started") {
       started.set(event.payload.run.id, {
         goal: event.payload.run.goal,
         model: event.payload.run.model.model,
+        // Absent on every run recorded before harnesses had names, and all of
+        // those went through the built-in loop.
+        harness: harnessName(event.payload.run.harness?.kind),
       });
     }
   }
@@ -132,6 +169,7 @@ export const readWorkstreams = (
       runId: attempt.runId,
       name: agentName(model),
       model,
+      harness: run?.harness ?? harnessName(undefined),
       assignment: attempt.baseline
         ? (run?.goal ?? "The mission")
         : attempt.label,
@@ -199,6 +237,7 @@ export const readWorkstreams = (
       runId,
       name: agentName(run.model),
       model: run.model,
+      harness: run.harness,
       assignment: run.goal,
       state: ended.get(runId) ?? "running",
       signal: SIGNALS[0]!,

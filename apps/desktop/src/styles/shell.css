@@ -292,11 +292,18 @@
   min-width: 0;
 }
 
-/* The active workspace carries a workstream accent. --ws-accent is set per row
-   (style="--ws-accent: var(--ws-2)"); it is provenance — whose work this is —
-   and says nothing about quality, which is why it is never green. */
+/*
+ * The active row's marker is the foreground colour, not a hue.
+ *
+ * It carried a workstream identity colour, which was wrong twice over: inside
+ * a mission those colours mean "whose work this is" and there is exactly one
+ * mission per row here, so the colour distinguished nothing — and a violet bar
+ * on a navigation row is decoration, which is the thing that reads as
+ * generated rather than designed. Identity colour stays where it earns its
+ * keep: the workstream rail, and the milestones that belong to a workstream.
+ */
 .side__workspace--active {
-  --ws-accent: var(--ws-1);
+  --ws-accent: var(--text);
   background: var(--selected);
   color: var(--text);
   font-weight: var(--weight-medium);

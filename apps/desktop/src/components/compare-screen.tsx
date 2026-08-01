@@ -130,9 +130,39 @@ export const CompareScreen = ({
   const settled = alternativeList.every(
     (attempt) => attempt.status !== "running" && attempt.status !== "paused",
   );
+  /**
+   * Whether there is anything here a person could actually decide between.
+   *
+   * This screen compares *competing implementations* — approach A keeps the
+   * existing auth system, approach B replaces it, and only one gets adopted.
+   * That is a real and important surface, and it is also a rare one. It is not
+   * the same thing as several workstreams doing complementary work, which is
+   * combined rather than chosen between.
+   *
+   * When every approach changed nothing and ran nothing, none of that applies.
+   * There is no engineering decision, because nothing was produced to decide
+   * about — and rendering a checkpoint graph, two approach cards, a decision
+   * workflow and a receipt action over an empty set asks somebody to judge
+   * work that does not exist. Seen on a real mission where both approaches
+   * failed to touch a file and the screen still said "Decision required".
+   */
+  const produced = attempts.some(
+    (attempt) => attempt.filesChanged.length > 0 || attempt.testsRun > 0,
+  );
+
   /** A decision is genuinely waiting when alternatives exist and none is moving. */
   const awaiting =
-    state.decision === null && alternativeList.length > 0 && settled;
+    state.decision === null &&
+    alternativeList.length > 0 &&
+    settled &&
+    produced;
+
+  /**
+   * Nothing was produced, and every approach has stopped. Not a decision — a
+   * recovery.
+   */
+  const barren =
+    state.decision === null && alternativeList.length > 0 && settled && !produced;
 
   /**
    * What this screen is, said in two lines.
@@ -163,7 +193,13 @@ export const CompareScreen = ({
   // two of them did not have one at all.
   const approachCount = ran === 1 ? "One approach" : `${ran} approaches`;
 
-  const headline = awaiting
+  const headline = barren
+    ? {
+        state: "Nothing to compare",
+        detail:
+          "Neither approach produced a usable result. Revise the instruction and try again, or go back to the mission.",
+      }
+    : awaiting
     ? {
         state: "Decision required",
         detail:
@@ -293,7 +329,37 @@ export const CompareScreen = ({
       {state.error ? <div className="open__error">{state.error}</div> : null}
 
       <div className="compare-screen__scroll">
-        {state.comparison ? (
+        {/*
+          Nothing was produced, so nothing below it is worth drawing: a
+          checkpoint graph over two empty approaches, a decision workflow with
+          no evidence, and a receipt action for work that did not happen. What
+          a person needs here is the short list of ways forward.
+        */}
+        {barren ? (
+          <div className="recovery">
+            <h2 className="recovery__title">
+              Neither approach produced a usable result
+            </h2>
+            <p className="recovery__lede">
+              No files changed and no tests ran, so there is no engineering
+              decision to make here yet.
+            </p>
+            <div className="recovery__ways">
+              <button className="button button--primary" type="button" onClick={onClose}>
+                Back to the mission
+              </button>
+              <button
+                className="button"
+                type="button"
+                onClick={() => {
+                  onClose();
+                }}
+              >
+                Revise the instruction
+              </button>
+            </div>
+          </div>
+        ) : state.comparison ? (
           <CompareView
             comparison={state.comparison}
             footers={Object.fromEntries(

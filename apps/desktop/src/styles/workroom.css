@@ -1166,3 +1166,21 @@
     display: none;
   }
 }
+
+/* The ways forward out of a barren comparison. Side by side, one dominant. */
+.recovery__ways {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* The harness a workstream runs on. Sans, because it is a product's name a
+   person says out loud — the model id below it is the literal. */
+.wsrow__harness {
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
