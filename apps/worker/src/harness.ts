@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -13,6 +13,7 @@ import type {
 import type { SessionEventStore } from "@novus/session-service";
 
 import { buildReceipt, type ReceiptUsage, type RepositoryBase } from "./receipt.ts";
+import { GIT_CONFIG_OVERRIDES, gitEnvironment } from "./tools.ts";
 
 export type { HarnessCapabilities, HarnessDescriptor, HarnessKind };
 
@@ -145,6 +146,25 @@ export const NOVUS_BUILTIN_CAPABILITIES: HarnessCapabilities = {
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Git, run the way every other git call in the worker is run.
+ *
+ * The same `GIT_CONFIG_OVERRIDES` and `gitEnvironment()` the native git tools
+ * use, and for the same reasons `tools.ts` gives: a repository's own config can
+ * name an external diff or a textconv filter and git will happily run it, and
+ * an inherited `GIT_DIR` silently points the call at another checkout
+ * entirely. The environment scrub matters here too — reporting on a run must
+ * not be the one git invocation in the worker that still carries the provider
+ * key.
+ */
+const git = (cwd: string, args: readonly string[], timeoutMs: number) =>
+  execFileAsync("git", [...GIT_CONFIG_OVERRIDES, ...args], {
+    cwd,
+    env: gitEnvironment(),
+    timeout: timeoutMs,
+    maxBuffer: 32 * 1024 * 1024,
+  }).then(({ stdout }) => stdout);
+
 /** The contract's own ceiling on one observation. */
 const MAX_OBSERVED_FILES = 500;
 
@@ -257,24 +277,51 @@ export const observeRepositoryChanges = async (
     return null;
   }
 
-  const git = (args: string[]) =>
-    execFileAsync("git", args, {
-      cwd,
-      timeout: 15_000,
-      maxBuffer: 32 * 1024 * 1024,
-    });
+  const inRepo = (args: readonly string[]) => git(cwd, args, 15_000);
+
+  // The boundary, and it has to be asked before anything is diffed.
+  //
+  // Git walks *up* from the working directory to find its top level, and a
+  // subdirectory of a checkout is a session Novus supports — opening one only
+  // requires `rev-parse --is-inside-work-tree`. So a diff run from
+  // `outer/sub` reports on `outer`, and paths git prints are relative to
+  // `outer`: they are inside no `..`, they escape nothing that
+  // `isReportablePath` can see, and they name files above the selected root.
+  // `assertRepositoryRoot` in tools.ts is the same rule for the native git
+  // tools, written against the same failure.
+  const topLevel = await inRepo(["rev-parse", "--show-toplevel"])
+    .then((stdout) => stdout.trim())
+    .catch(() => "");
+
+  if (topLevel.length === 0) {
+    return null;
+  }
+
+  // Resolved on both sides: macOS symlinks /var to /private/var, and a
+  // comparison of unresolved paths would refuse every session under a temp
+  // directory while letting a genuinely nested one through.
+  const [resolvedTop, resolvedCwd] = await Promise.all([
+    realpath(topLevel).catch(() => topLevel),
+    realpath(cwd).catch(() => cwd),
+  ]);
+
+  if (resolvedTop !== resolvedCwd) {
+    throw new Error(
+      "The selected directory is inside a larger Git repository, so a diff of it would describe files outside the session. Open the repository's root instead.",
+    );
+  }
 
   let numstat: string;
 
   try {
-    ({ stdout: numstat } = await git([
+    numstat = await inRepo([
       "diff",
       "--numstat",
       "--no-renames",
       "-z",
       baseRevision,
       "--",
-    ]));
+    ]);
   } catch {
     return null;
   }
@@ -309,7 +356,7 @@ export const observeRepositoryChanges = async (
   // external harness stages nothing — so without this, the files a run
   // *created* were exactly the ones it appeared not to have touched.
   try {
-    const { stdout } = await git([
+    const stdout = await inRepo([
       "ls-files",
       "--others",
       "--exclude-standard",
@@ -359,22 +406,17 @@ export const readRepositoryBase = async (
   // run, so a git call that stalls on a large repo or a network filesystem
   // would leave the UI showing a run that never continues — and a rejection
   // here would end a run that had already begun.
-  const git = (args: string[]) =>
-    execFileAsync("git", args, {
-      cwd: repositoryPath,
-      timeout: 5_000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
+  const inRepo = (args: readonly string[]) => git(repositoryPath, args, 5_000);
 
-  const revision = await git(["rev-parse", "HEAD"])
-    .then(({ stdout }) => stdout.trim() || null)
+  const revision = await inRepo(["rev-parse", "HEAD"])
+    .then((stdout) => stdout.trim() || null)
     .catch(() => null);
 
   // Null, not false. A failed check reported as clean would make the maximally
   // dirty repository — the one whose status output was too large to read — look
   // like the tidiest one.
-  const dirty = await git(["status", "--porcelain"])
-    .then(({ stdout }) => stdout.trim().length > 0)
+  const dirty = await inRepo(["status", "--porcelain"])
+    .then((stdout) => stdout.trim().length > 0)
     .catch(() => null);
 
   return { revision, dirty };
@@ -422,11 +464,31 @@ export const appendObservedChanges = async (input: {
       },
     });
   } catch (error) {
-    console.warn(
-      `run ${input.runId}: the repository could not be diffed — ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    const reason = error instanceof Error ? error.message : String(error);
+
+    console.warn(`run ${input.runId}: the repository could not be diffed — ${reason}`);
+
+    // On the timeline too, not only on the host's console. A refused boundary
+    // is the one case where the run produced no file evidence *for a reason a
+    // person can act on* — open the repository's root — and a mission that
+    // silently shows no changes is exactly the silence this slice exists to
+    // remove. `observeRepositoryChanges` returning null is the other case and
+    // says nothing here: "not a Git checkout" is a fact about the directory,
+    // not something the team needs told twice.
+    try {
+      input.eventStore.append({
+        sessionId: input.sessionId,
+        actorId: input.actorId,
+        type: "run.progress",
+        payload: {
+          runId: input.runId,
+          message: `No file changes were recorded: ${reason}`,
+        },
+      });
+    } catch {
+      // The console line above already said it. A report about a report must
+      // not be able to end a run.
+    }
   }
 };
 

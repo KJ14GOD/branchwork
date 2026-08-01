@@ -292,6 +292,10 @@ export class CodexHarness implements Harness {
   }
 
   async run(request: HarnessRunRequest): Promise<HarnessRunResult> {
+    // Before the first await, so the reset cannot wipe a `stop()` that arrived
+    // during the version probe or the base read. See the Claude Code adapter.
+    this.cancelled = false;
+
     const descriptor = await this.describe();
 
     if (descriptor.version === null) {
@@ -299,8 +303,6 @@ export class CodexHarness implements Harness {
         `Codex is not installed, or \`${this.command}\` is not on the PATH.`,
       );
     }
-
-    this.cancelled = false;
 
     const runId = request.runId ?? crypto.randomUUID();
     // Before the run exists in the log, so it describes the tree this turn

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -252,17 +252,97 @@ test("the observed diff never names a secret or Novus's own metadata", async () 
   const observed = observedIn(store.list(SESSION));
 
   assert.ok(observed);
-  for (const file of observed.files) {
-    assert.ok(!file.path.startsWith(".env"), `${file.path} must not be reported`);
-    assert.ok(!file.path.startsWith(".git"), `${file.path} must not be reported`);
-    assert.ok(!file.path.startsWith("/"), "no absolute path may be reported");
-    assert.ok(!file.path.includes(".."), "no escaping path may be reported");
-  }
+  // Both are untracked and unignored, so git lists them and only the filter
+  // keeps them off a shared timeline. Delete `isReportablePath` and this fails.
+  assert.deepEqual(
+    observed.files.map((file) => file.path),
+    ["checkout.ts"],
+  );
 
   // Nothing anywhere on the log went near the contents.
   for (const event of store.list(SESSION)) {
     assert.ok(!JSON.stringify(event).includes("sk-not-a-real-key"));
   }
+});
+
+test("a session on a subdirectory never reports files above its own root", async () => {
+  // Git walks *up* to find its top level, and opening a subdirectory is a
+  // supported session — creation only asks `rev-parse --is-inside-work-tree`.
+  // So an unguarded diff from `outer/sub` describes `outer`, under paths that
+  // are relative to `outer`, contain no `..`, and name files the session can
+  // neither read nor reach. That reached the event, the projection, /files,
+  // the receipt and the guest timeline.
+  const outer = await repository();
+  const sub = join(outer, "sub");
+
+  await mkdir(sub);
+  await writeFile(join(sub, "inner.ts"), "inner\n");
+  await git(outer, ["add", "."]);
+  await git(outer, ["commit", "-qm", "add the subdirectory"]);
+  // Above the boundary, and changed while the run is going.
+  await writeFile(join(outer, "toplevel.txt"), "outside the session\n");
+
+  const store = new InMemorySessionEventStore();
+  const harness = claudeOver(
+    fakeClaude({ lines: [INIT, RESULT_OK], shell: `printf 'x\\n' >> inner.ts` }),
+    sub,
+    store,
+  );
+
+  await harness.run({ sessionId: SESSION, actorId: "host", goal: "Go" });
+
+  const events = store.list(SESSION);
+
+  // Refused outright rather than filtered down to the safe half: the paths git
+  // prints are relative to a root this session does not own, so none of them
+  // mean what they say inside it.
+  assert.equal(observedIn(events), null);
+
+  const said = events.find(
+    (event) =>
+      event.type === "run.progress" &&
+      event.payload.message.includes("No file changes were recorded"),
+  );
+
+  // Refused out loud. Silence here is a mission that shows no changes for a
+  // reason nobody can act on.
+  assert.ok(said, "the refusal was not reported on the timeline");
+
+  for (const event of events) {
+    assert.ok(
+      !JSON.stringify(event).includes("toplevel.txt"),
+      "a file above the selected root reached the log",
+    );
+  }
+});
+
+test("a symlink out of the repository is named but never followed", async () => {
+  const repo = await repository();
+  const outside = await mkdtemp(join(tmpdir(), "novus-outside-"));
+
+  await writeFile(join(outside, "secrets.txt"), "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n");
+
+  const store = new InMemorySessionEventStore();
+  const harness = claudeOver(
+    fakeClaude({
+      lines: [INIT, RESULT_OK],
+      shell: `ln -s '${join(outside, "secrets.txt")}' linked.txt`,
+    }),
+    repo,
+    store,
+  );
+
+  await harness.run({ sessionId: SESSION, actorId: "host", goal: "Go" });
+
+  const observed = observedIn(store.list(SESSION));
+  const link = observed?.files.find((file) => file.path === "linked.txt");
+
+  assert.ok(link, "git lists the link, so the observation should mention it");
+  // Zero, not ten. Counting a new file's lines means reading it, and following
+  // a link out of the repository to do so is the escape the boundary refuses —
+  // the same rule `resolveInsideRepository` applies to every native tool.
+  assert.equal(link.additions, 0);
+  assert.equal(link.deletions, 0);
 });
 
 test("an external harness's work reaches GET /sessions/:id/files", async () => {
@@ -561,6 +641,85 @@ test("a cancellation reaches the subprocess and ends the run as cancelled", asyn
     process.env["PATH"] = previousPath;
     await server.close();
   }
+});
+
+test("a cancellation that lands before the subprocess exists is not lost", async () => {
+  // The window is real: `run` awaits the version probe and then the base read
+  // — two git calls with their own timeouts — before it has a child to signal.
+  // A `stop()` in there used to set a flag against a null child and return,
+  // and the subprocess then spawned and ran the turn to completion. It is
+  // unreachable through `POST /cancel` only because that route 409s until
+  // `run.started` exists, which puts the guarantee in a different file.
+  const repo = await repository();
+  const store = new InMemorySessionEventStore();
+  const harness = claudeOver(
+    fakeClaude({
+      lines: [INIT, RESULT_OK],
+      // Only a run that actually got going writes this.
+      shell: `printf 'ran\\n' > ran.txt`,
+    }),
+    repo,
+    store,
+  );
+
+  // Not awaited: `run` has reached its first await and nothing has spawned.
+  const running = harness.run({ sessionId: SESSION, actorId: "host", goal: "Go" });
+
+  harness.stop();
+
+  await running.catch(() => undefined);
+
+  const types = store.list(SESSION).map((event) => event.type);
+
+  assert.ok(
+    !types.includes("run.completed"),
+    "a run cancelled before it spawned must never complete",
+  );
+  assert.equal(
+    existsSync(join(repo, "ran.txt")),
+    false,
+    "the subprocess ran anyway, so the cancellation was lost",
+  );
+});
+
+test("Codex ends a cancelled turn as cancelled rather than as a failure", async () => {
+  const repo = await repository();
+  const store = new InMemorySessionEventStore();
+  const harness = new CodexHarness({
+    eventStore: store,
+    cwd: repo,
+    // Never completes its turn on its own: only a signal ends this.
+    command: fakeCodex([JSON.stringify({ type: "thread.started", thread_id: "t1" })]),
+    permissions: { allowWrites: true, allowCommands: true },
+  });
+
+  // Synchronously, inside the append. Codex writes `run.started` *before* it
+  // spawns, so this lands in exactly the window where the child does not exist
+  // yet — the same race as the Claude Code test above, from the other side.
+  const stopWatching = store.subscribe((event) => {
+    if (event.type === "run.started") {
+      harness.stop();
+    }
+  });
+
+  try {
+    await harness.run({ sessionId: SESSION, actorId: "host", goal: "Go" });
+  } finally {
+    stopWatching();
+  }
+
+  const events = store.list(SESSION);
+  const terminal = events.filter(
+    (event) =>
+      event.type === "run.completed" ||
+      event.type === "run.failed" ||
+      event.type === "run.cancelled",
+  );
+
+  assert.equal(terminal.length, 1);
+  // Not `run.failed` with "exited with code null": a stopped run did not break.
+  assert.equal(terminal[0]?.type, "run.cancelled");
+  assert.equal(receiptIn(events)?.status, "cancelled");
 });
 
 test("an observed diff replaces a patch's numbers rather than adding to them", () => {

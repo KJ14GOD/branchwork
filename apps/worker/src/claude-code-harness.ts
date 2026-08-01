@@ -163,6 +163,12 @@ export class ClaudeCodeHarness implements Harness {
   }
 
   async run(request: HarnessRunRequest): Promise<HarnessRunResult> {
+    // Cleared before the first await, not after it. Anywhere later and the
+    // reset itself is part of the race: a `stop()` arriving while the version
+    // probe or the base read is in flight would set the flag and then have it
+    // wiped by this line.
+    this.cancelled = false;
+
     const descriptor = await this.describe();
 
     if (descriptor.version === null) {
@@ -172,8 +178,6 @@ export class ClaudeCodeHarness implements Harness {
         `Claude Code is not installed, or \`${this.command}\` is not on the PATH.`,
       );
     }
-
-    this.cancelled = false;
 
     // Before the child exists, so `dirty` describes the tree the run opened on
     // and the revision below is genuinely the commit it started from. Both are
@@ -188,6 +192,15 @@ export class ClaudeCodeHarness implements Harness {
     });
 
     this.child = child;
+
+    // A cancellation that landed while the version probe or the base read was
+    // in flight has nothing to signal: `stop()` set the flag against a null
+    // child and returned. Without this re-check that request is simply lost
+    // and the subprocess it was meant to stop runs to completion. The Codex
+    // adapter has the same window and the same guard.
+    if (this.cancelled) {
+      this.closeChild();
+    }
 
     const reader = new LineReader();
     let stderr = "";
@@ -287,12 +300,28 @@ export class ClaudeCodeHarness implements Harness {
     // deadlock: each side is waiting for the other. Found against the real
     // binary — the first fake for this adapter emitted init unprompted and
     // happily concealed it, which is why the fake now reads stdin first.
-    child.stdin?.write(
-      `${JSON.stringify({
-        type: "user",
-        message: { role: "user", content: [{ type: "text", text: request.goal }] },
-      })}\n`,
-    );
+    //
+    // Guarded, because the child may already be gone. A cancellation that
+    // arrived before the spawn has just ended this stream, and a CLI that died
+    // on startup leaves a broken pipe — in both cases the write throws, and an
+    // unguarded one escapes `run` as a raw ERR_STREAM_WRITE_AFTER_END instead
+    // of the handshake's account of what actually happened.
+    if (child.stdin?.writable) {
+      try {
+        child.stdin.write(
+          `${JSON.stringify({
+            type: "user",
+            message: {
+              role: "user",
+              content: [{ type: "text", text: request.goal }],
+            },
+          })}\n`,
+        );
+      } catch {
+        // Deliberately swallowed: the handshake below is already waiting on
+        // this child and fails with the reason a person can read.
+      }
+    }
 
     try {
       await handshake;
