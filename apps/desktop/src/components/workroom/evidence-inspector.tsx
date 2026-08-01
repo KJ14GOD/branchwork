@@ -16,8 +16,22 @@ import type { GithubStatus } from "@novus/contracts/protocol";
 export type EvidenceFacts = {
   /** Null when nothing ran. Never the same as false, never the same as true. */
   verified: boolean | null;
-  testsRun: number;
-  testsPassed: number;
+  /**
+   * Why it is unverified, when it is — and the reason this is not a boolean.
+   *
+   * "No checks have run" and "the checks ran before the last edit" are
+   * different things to tell somebody, and only the second is worth re-running
+   * the suite over. Saying the first to a person who watched the suite go
+   * green ten minutes ago reads as the product having lost their result.
+   */
+  reason: "none-ran" | "stale" | null;
+  /**
+   * Every kind of check, not only tests: a clean typecheck or a green build
+   * verifies too. Named for what it counts, after a spell as `testsRun` while
+   * it was already counting builds.
+   */
+  checksRun: number;
+  checksPassed: number;
   files: { path: string; additions: number; deletions: number }[];
   /** Paths more than one workstream changed. */
   contested: string[];
@@ -32,22 +46,29 @@ export const VerificationSummary = ({ facts }: { facts: EvidenceFacts }) => (
     {facts.verified === null ? (
       // The state most easily misread as success. Said plainly, and dim
       // rather than green or red: an absence of evidence is not a result.
+      // Two sentences, because there are two ways to get here and telling
+      // somebody who watched a suite pass that no checks have run is the
+      // product appearing to have lost their result.
       <p className="evidence__line evidence__line--unknown">
-        Nothing has verified these changes. No checks have run.
+        {facts.reason === "stale"
+          ? `Nothing has verified these changes. ${facts.checksRun} check${
+              facts.checksRun === 1 ? "" : "s"
+            } ran, but before the last edit.`
+          : "Nothing has verified these changes. No checks have run."}
       </p>
     ) : facts.verified ? (
       <p className="evidence__line evidence__line--pass">
         <span className="evidence__glyph" aria-hidden="true">
           ✓
         </span>
-        {facts.testsPassed} of {facts.testsRun} checks passed
+        {facts.checksPassed} of {facts.checksRun} checks passed
       </p>
     ) : (
       <p className="evidence__line evidence__line--fail">
         <span className="evidence__glyph" aria-hidden="true">
           ✕
         </span>
-        {facts.testsPassed} of {facts.testsRun} checks passed
+        {facts.checksPassed} of {facts.checksRun} checks passed
       </p>
     )}
   </section>

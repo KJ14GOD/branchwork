@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import type { SessionEvent } from "@novus/contracts";
 import { DecisionRationaleSchema, MissionOutcomeSchema } from "@novus/contracts";
+import { readVerification } from "@novus/contracts/verification";
 import type { Authority } from "@novus/contracts/protocol";
 import {
   CancelRunRequestSchema,
@@ -493,63 +494,20 @@ export const startEventServer = (
     checksRun: number;
     checksPassed: number;
   } => {
-    const forks = forkRunIds(sessionId);
-    const paths = new Set<string>();
-    let lastChange: number | undefined;
-    let lastCheck: number | undefined;
-    let checksRun = 0;
-    let checksPassed = 0;
-
-    // Walked in sequence order over the session's own events rather than read
-    // off the projection, because the projection keeps no sequence for a change
-    // or a check and the staleness rule is entirely a question of order.
-    for (const event of store.list(sessionId)) {
-      if (event.type !== "tool.completed" || forks.has(event.payload.runId)) {
-        continue;
-      }
-
-      const { result } = event.payload;
-
-      // Only an applied patch changed the tree. A proposal is a preview.
-      if (result.name === "apply_patch") {
-        paths.add(result.output.path);
-        lastChange = event.sequence;
-      }
-
-      // Each checker's own word for passing, mapped onto one vocabulary the
-      // way the receipt maps them: `passed`, `succeeded`, `ok`.
-      const passed =
-        result.name === "run_tests"
-          ? result.output.passed
-          : result.name === "run_build"
-            ? result.output.succeeded
-            : result.name === "run_diagnostics"
-              ? result.output.ok
-              : null;
-
-      if (passed !== null) {
-        checksRun += 1;
-        checksPassed += passed ? 1 : 0;
-        lastCheck = event.sequence;
-      }
-    }
-
-    // Nothing changed means nothing can have gone stale, and a passing check
-    // still counts — the receipt's own carve-out, for the same reason.
-    const checksAreCurrent =
-      lastCheck !== undefined &&
-      (lastChange === undefined || lastCheck > lastChange);
+    // One rule, in `@novus/contracts/verification`, shared with the receipt,
+    // the inbox and the host's own screen. It was restated here first, which
+    // was defensible while the boundary was locked and is not now: four copies
+    // meant a mission could read green in the header and freeze as unverified
+    // the moment somebody finished it.
+    const reading = readVerification(store.list(sessionId), {
+      excludeRunIds: forkRunIds(sessionId),
+    });
 
     return {
-      verification:
-        checksPassed < checksRun
-          ? "failing"
-          : checksAreCurrent
-            ? "verified"
-            : "unverified",
-      filesChanged: paths.size,
-      checksRun,
-      checksPassed,
+      verification: reading.verdict,
+      filesChanged: reading.filesChanged,
+      checksRun: reading.checksRun,
+      checksPassed: reading.checksPassed,
     };
   };
 

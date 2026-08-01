@@ -772,8 +772,9 @@ export const SessionTab = ({
                 diffs={appliedDiffs}
                 verdict={{
                   tests: verification.verified,
-                  testsRun: verification.testsRun,
-                  testsPassed: verification.testsPassed,
+                  reason: verification.reason,
+                  checksRun: verification.checksRun,
+                  checksPassed: verification.checksPassed,
                   approaches: Math.max(attempts.length, workstreams.length),
                   contested: verification.contested,
                 }}
@@ -837,8 +838,9 @@ export const SessionTab = ({
         milestones={milestones}
         evidence={{
           verified: verification.verified,
-          testsRun: verification.testsRun,
-          testsPassed: verification.testsPassed,
+          reason: verification.reason,
+          checksRun: verification.checksRun,
+          checksPassed: verification.checksPassed,
           files: fileChanges.files,
           contested: verification.contested,
           risks: [],

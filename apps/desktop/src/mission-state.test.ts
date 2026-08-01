@@ -48,6 +48,42 @@ const started = (runId: string): SessionEvent =>
 /** `filesChanged` carries counts, not bare paths — the shape the route returns. */
 const changedFile = (path: string) => ({ path, additions: 3, deletions: 1 });
 
+/**
+ * An applied patch and a check, on the log, in that order.
+ *
+ * Verification is read from the log now rather than from `comparison.attempts`,
+ * because the rule it shares with the receipt turns on *order* — a check before
+ * the last edit does not verify it — and an attempt summary carries counts with
+ * no sequences in them. So a fixture that wants to be verified has to have
+ * actually run something, after actually changing something, which is what
+ * these two build.
+ */
+const appliedPatch = (path: string, runId = "r1"): SessionEvent =>
+  event("tool.completed", {
+    runId,
+    result: {
+      toolCallId: `t${sequence + 1}`,
+      name: "apply_patch",
+      output: { patchId: `p${sequence + 1}`, path, additions: 3, deletions: 1 },
+    },
+  });
+
+const ranTests = (passed: boolean, runId = "r1"): SessionEvent =>
+  event("tool.completed", {
+    runId,
+    result: {
+      toolCallId: `t${sequence + 1}`,
+      name: "run_tests",
+      output: {
+        command: "pnpm test",
+        exitCode: passed ? 0 : 1,
+        stdout: "",
+        stderr: "",
+        passed,
+      },
+    },
+  });
+
 const attempt = (
   over: Partial<AttemptComparison> & { paths?: string[] } = {},
 ): AttemptComparison => {
@@ -151,7 +187,7 @@ test("finishing is not verifying: a completed run with no tests still reads unve
 
 test("green tests over changed files is the one state that may claim verified", () => {
   const state = missionState({
-    events: [started("r1")],
+    events: [started("r1"), appliedPatch("a.ts"), ranTests(true)],
     comparison: comparison([
       attempt({
         paths: ["a.ts"],
@@ -166,6 +202,23 @@ test("green tests over changed files is the one state that may claim verified", 
   });
 
   assert.equal(state, "verified");
+});
+
+test("a green suite that ran before the last edit does not claim verified", () => {
+  // Stale-and-green, the failure the receipt has always refused and this
+  // screen used to allow. The suite passed; then a file was written and
+  // nothing ran again, so the green describes a tree that no longer exists.
+  const state = missionState({
+    events: [started("r1"), ranTests(true), appliedPatch("a.ts")],
+    comparison: comparison([
+      attempt({ paths: ["a.ts"], testsRun: 4, testsPassed: 4, green: true }),
+    ]),
+    filesChanged: 1,
+    busy: false,
+    awaitingPerson: false,
+  });
+
+  assert.equal(state, "changed-unverified");
 });
 
 test("one failing attempt among green ones is not verified", () => {

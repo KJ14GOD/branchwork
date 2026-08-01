@@ -78,13 +78,23 @@ const Verification = ({
               decision room and the exported receipt keep, in the third place
               a person could otherwise read "finished" as "verified".
             */}
+            {/*
+              Worded "N of M checks passed", matching the evidence inspector
+              rather than the "check(s) passed on GitHub" line a few rows down.
+              Two different meanings of "check" on one panel is confusing
+              enough without them sharing a sentence shape as well — a reader
+              scanning for a verdict should never have to work out which of
+              the two ran.
+            */}
             {verdict.tests === null
-              ? verdict.approaches > 1
-                ? `All ${verdict.approaches} approaches finished without running any tests.`
-                : "This approach finished without running any tests."
-              : verdict.tests
-                ? `${verdict.testsRun} test run(s) passed.`
-                : `${verdict.testsPassed} of ${verdict.testsRun} test run(s) passed.`}
+              ? verdict.reason === "stale"
+                ? `${verdict.checksRun} check${
+                    verdict.checksRun === 1 ? "" : "s"
+                  } ran, but before the last edit.`
+                : verdict.approaches > 1
+                  ? `All ${verdict.approaches} approaches finished without running any checks.`
+                  : "This approach finished without running any checks."
+              : `${verdict.checksPassed} of ${verdict.checksRun} checks passed`}
           </span>
         </div>
       )}
@@ -150,8 +160,9 @@ export type EvidenceVerdict = {
   approaches: number;
   /** Null when nothing ran — not the same as failing, and never the same as passing. */
   tests: boolean | null;
-  testsRun: number;
-  testsPassed: number;
+  reason: "none-ran" | "stale" | null;
+  checksRun: number;
+  checksPassed: number;
   /** Paths more than one approach changed. */
   contested: string[];
 };

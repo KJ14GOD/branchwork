@@ -149,8 +149,12 @@ const workroom = (
       milestones={over.milestones ?? [milestone()]}
       evidence={{
         verified: over.verified ?? null,
-        testsRun: over.verified === null || over.verified === undefined ? 0 : 4,
-        testsPassed: over.verified ? 4 : 2,
+        reason:
+          over.verified === null || over.verified === undefined
+            ? "none-ran"
+            : null,
+        checksRun: over.verified === null || over.verified === undefined ? 0 : 4,
+        checksPassed: over.verified ? 4 : 2,
         files: Array.from({ length: changed }, (_, index) => ({
           path: `src/file-${index}.ts`,
           additions: 3,

@@ -9,6 +9,7 @@ import type {
   RememberedSession,
 } from "@novus/contracts/protocol";
 import type { SessionEvent } from "@novus/contracts";
+import { readVerification } from "@novus/contracts/verification";
 import type { SessionEventStore } from "@novus/session-service";
 
 import { AgentRunFailure, AgentRunner } from "./agent-runner.ts";
@@ -270,15 +271,16 @@ const attentionFor = (
  * settled and never clean. That is the same rule the compare screen enforces,
  * applied at the level a person scans rather than reads.
  */
-const evidenceFor = (projected: SessionProjection): RememberedSession["evidence"] => {
-  const tests = projected.runs.flatMap((run) => run.tests);
-
-  if (tests.length === 0) {
-    return "unverified";
-  }
-
-  return tests.every((test) => test.passed) ? "verified" : "failing";
-};
+const evidenceFor = (
+  events: readonly SessionEvent[],
+): RememberedSession["evidence"] =>
+  // Reads the log rather than the projection, because the projection keeps no
+  // sequence for a change or a check and the staleness rule is entirely a
+  // question of order. This used to count only `run_tests` and never asked
+  // whether they preceded the last edit, so the inbox reported `verified` for
+  // missions the receipt called `unverified` — a disagreement that predates
+  // this pass and is only visible now that both are one function.
+  readVerification(events).verdict;
 
 /**
  * Command execution is opted into separately from writing.
@@ -495,7 +497,7 @@ export class SessionRegistry {
         goal: projected.runs[0]?.goal ?? null,
         attention: attentionFor(projected, events, this.sessions.has(sessionId)),
         approaches: approachesFor(projected, events),
-        evidence: evidenceFor(projected),
+        evidence: evidenceFor(events),
         controller:
           projected.participants.find(
             (participant) => participant.id === projected.controlHeldBy,

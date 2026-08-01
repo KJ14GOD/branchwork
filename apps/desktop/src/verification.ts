@@ -1,26 +1,27 @@
 import type { SessionEvent } from "@novus/contracts";
 import type { Comparison } from "@novus/contracts/protocol";
+import {
+  readVerification as readSharedVerification,
+  type VerificationVerdict,
+} from "@novus/contracts/verification";
 
 /**
  * What has actually been proven about this mission's changes.
  *
- * Read from the log first, and from the comparison only where the comparison
- * knows more. That order is the whole point of this module. The screen used to
- * compute its verdict from `comparison.attempts` alone, so a mission with one
- * workstream — which is most missions — reported `verified: null` no matter how
- * many test runs were on its own log: `/compare` only ever describes the
- * baseline and the approaches forked from it, and a session that never forked
- * had nothing in it the moment the fetch was slow, refused, or simply behind.
- * The evidence panel then said "Nothing has verified these changes" directly
- * underneath a feed saying "Tests passed", which is the product asserting the
- * opposite of its own record.
+ * The rule itself is not here. It lives in `@novus/contracts/verification`,
+ * shared with the receipt, the worker's frozen mission record and the inbox,
+ * because it had been written four separate times and three of them had each
+ * dropped a different clause. This module only decides *which events* the rule
+ * is applied to, and translates the answer into what the panel renders.
  *
- * `run_tests` completions are the same events `projectSession` folds into
- * `RunProjection.tests`, so the two derivations agree by construction rather
- * than by luck — and because fork runs append to this same session log, the log
- * total already covers every approach the comparison would have counted. The
- * comparison is consulted anyway, and the larger figure wins, so a future
- * source of verification the renderer cannot see still counts.
+ * Reading the log at all is the fix this module originally landed: the screen
+ * used to compute its verdict from `comparison.attempts` alone, so a mission
+ * with one workstream — which is most missions — reported "nothing verified"
+ * no matter how many test runs were on its own log, directly underneath a feed
+ * saying "Tests passed". That part stands. What did not stand was the totals:
+ * fork runs append to this same session log, so summing it unfiltered counted
+ * an experimental attempt's passing suite as evidence about the parent's tree,
+ * and `/compare` keeps those apart for exactly that reason.
  */
 
 export type Verification = {
@@ -30,50 +31,50 @@ export type Verification = {
    * the product claiming something nobody measured.
    */
   verified: boolean | null;
-  testsRun: number;
-  testsPassed: number;
+  /**
+   * Why it is not verified, when it is not.
+   *
+   * `stale` is a check that ran before the last edit — a suite somebody
+   * watched go green, describing a tree that no longer exists. Saying "no
+   * checks have run" to that person is exactly wrong, and it is the sentence
+   * the two-state version of this type forced.
+   */
+  reason: "none-ran" | "stale" | null;
+  checksRun: number;
+  checksPassed: number;
   /** Paths more than one approach changed. Only the comparison knows these. */
   contested: string[];
 };
+
+const verdictToVerified = (verdict: VerificationVerdict): boolean | null =>
+  verdict === "verified" ? true : verdict === "failing" ? false : null;
 
 export const readVerification = (
   events: readonly SessionEvent[],
   comparison: Comparison | null,
 ): Verification => {
-  let testsRun = 0;
-  let testsPassed = 0;
-
-  for (const event of events) {
-    if (
-      event.type === "tool.completed" &&
-      event.payload.result.name === "run_tests"
-    ) {
-      testsRun += 1;
-
-      if (event.payload.result.output.passed) {
-        testsPassed += 1;
-      }
-    }
-  }
-
-  const attempts = comparison?.attempts ?? [];
-  const comparedRun = attempts.reduce(
-    (total, attempt) => total + attempt.testsRun,
-    0,
+  // Forks are excluded rather than summed. An attempt runs in its own worktree
+  // against its own checkpoint, so its passing suite proves nothing about the
+  // tree this mission is about — and the reverse error is just as bad: a green
+  // baseline reading unverified because an experimental fork went red.
+  const forkRunIds = new Set(
+    (comparison?.attempts ?? [])
+      .filter((attempt) => !attempt.baseline)
+      .map((attempt) => attempt.runId),
   );
-
-  if (comparedRun > testsRun) {
-    testsRun = comparedRun;
-    testsPassed = attempts.reduce(
-      (total, attempt) => total + attempt.testsPassed,
-      0,
-    );
-  }
+  const reading = readSharedVerification(events, { excludeRunIds: forkRunIds });
+  const verified = verdictToVerified(reading.verdict);
 
   return {
-    verified: testsRun === 0 ? null : testsPassed === testsRun,
-    testsRun,
-    testsPassed,
+    verified,
+    reason:
+      verified !== null
+        ? null
+        : reading.checksRun === 0
+          ? "none-ran"
+          : "stale",
+    checksRun: reading.checksRun,
+    checksPassed: reading.checksPassed,
     contested: comparison?.contestedPaths ?? [],
   };
 };

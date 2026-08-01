@@ -3,6 +3,7 @@ import {
   type RunReceipt,
   type SessionEvent,
 } from "@novus/contracts";
+import { readVerification } from "@novus/contracts/verification";
 
 import type { ModelRates } from "./pricing.ts";
 
@@ -249,23 +250,17 @@ export const buildReceipt = (
       ? null
       : lastTest > lastChange;
 
-  const lastCheck = checks.at(-1)?.sequence;
-  // Stale-and-green is not verified. A check that ran before the final edit
-  // describes a tree that no longer exists, so it cannot vouch for the diff
-  // this receipt is attached to. When nothing was changed there is nothing to
-  // go stale, and a passing check still counts.
-  const checksAreCurrent =
-    lastCheck !== undefined && (lastChange === undefined || lastCheck > lastChange);
-  // Ordered so a known failure outranks a missing one: `failing` is a fact,
-  // `unverified` is the absence of one, and reporting the absence would hide
-  // the fact.
-  const verification: RunReceipt["verification"] = checks.some(
-    (check) => !check.passed,
-  )
-    ? "failing"
-    : checksAreCurrent
-      ? "verified"
-      : "unverified";
+  // The verdict comes from `@novus/contracts/verification`, which is where the
+  // rule this file used to own now lives. It was moved rather than copied
+  // outward: three other readers had each restated it and each had dropped a
+  // clause, so the receipt agreeing with the screen depended on nobody
+  // editing either. `checks` above is still built here, because the receipt is
+  // the one artifact that needs each check's command and kind, not just the
+  // verdict over them.
+  const verification: RunReceipt["verification"] = readVerification(
+    forRun,
+    { runId },
+  ).verdict;
 
   return RunReceiptSchema.parse({
     runId,

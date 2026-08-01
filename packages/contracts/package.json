@@ -6,7 +6,8 @@
   "description": "Shared Novus event, command, and API contracts.",
   "exports": {
     ".": "./src/contracts.ts",
-    "./protocol": "./src/protocol.ts"
+    "./protocol": "./src/protocol.ts",
+    "./verification": "./src/verification.ts"
   },
   "dependencies": {
     "zod": "^4.4.3"
