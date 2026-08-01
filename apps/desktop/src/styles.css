@@ -24,6 +24,11 @@
    below resolves against these, and an @import is only valid at the top. */
 @import "@novus/ui/tokens.css";
 
+/* The Workroom's own surfaces — header, workstream rail, activity, evidence,
+   composer dock. Kept out of this file deliberately: see the note at the top
+   of it. New component work belongs in styles/, not below. */
+@import "./styles/workroom.css";
+
 * {
   box-sizing: border-box;
 }
@@ -279,25 +284,35 @@ button {
   font-size: var(--text-body);
 }
 
+/*
+ * The dominant action, and the reason a screen can only have one.
+ *
+ * This used to be a raised grey fill one step above its neighbours, which on a
+ * screen carrying four outlined buttons made the primary the fourth-most
+ * obvious thing on it. A filled control in the foreground colour is the only
+ * inversion in the app: nothing else on any screen is light-on-dark, so it
+ * cannot be mistaken for anything, and it costs no hue — green, amber and red
+ * stay reserved for verification, attention and failure.
+ */
 .button--primary {
-  border-color: var(--border-strong);
-  background: var(--surface-raised);
-  color: var(--text);
+  border-color: transparent;
+  background: var(--action);
+  color: var(--action-text);
   font-weight: var(--weight-strong);
 }
 
 .button--primary:hover:not(:disabled) {
-  background: var(--surface-raised-hover);
-  border-color: rgb(var(--fg) / 0.24);
-  color: var(--text);
+  background: var(--action-hover);
+  border-color: transparent;
+  color: var(--action-text);
 }
 
 .button--primary:active:not(:disabled) {
-  border-color: rgb(var(--fg) / 0.3);
+  background: var(--text-muted);
 }
 
 .button--primary:disabled {
-  background: var(--surface);
+  background: var(--surface-raised);
   border-color: var(--border-subtle);
   color: var(--text-dim);
 }

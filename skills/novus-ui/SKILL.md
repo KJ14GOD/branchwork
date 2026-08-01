@@ -5,14 +5,87 @@ description: The desktop UI's visual language — planes, alpha borders, radii, 
 
 # Novus UI
 
-Dark, monochrome, minimal, one monospace face for everything. Depth comes from
-a small set of systems, not decoration. Every rule below exists because its
-absence is what made the app read flat; break one and that flatness returns
-locally, which is worse than globally because it shows.
+Calm, technical, alive, precise, collaborative. Dark graphite and near-white,
+with colour reserved for meaning. Depth comes from a small set of systems, not
+decoration. Every rule below exists because its absence is what made the app
+read flat; break one and that flatness returns locally, which is worse than
+globally because it shows.
 
-All tokens live in `:root` at the top of `apps/desktop/src/styles.css`. Do not
-introduce a literal where a token exists — and after the scales below, a token
-exists for essentially everything.
+All tokens live in **`packages/ui/src/tokens.css`**, which both clients import.
+Do not introduce a literal where a token exists — and after the scales below, a
+token exists for essentially everything.
+
+## Novus Signal — read this first
+
+The product is a shared workroom where several people and several agents work
+one change together. Two rules follow from that and outrank everything else in
+this file.
+
+**1. Colour says whose work this is, or what needs a person. Never how good it
+is.**
+
+| Token | Means, and means only this |
+| --- | --- |
+| `--signal` | Live work, control, addressability. Blue. |
+| `--ws-1`…`--ws-4` | Workstream identity — provenance. Equally saturated, none of them green, because a colour that reads as a verdict would rank the approaches on the one surface that must not. |
+| `--add` | Added lines, and **verification that actually ran and passed**. |
+| `--alert` | Something is waiting on a person. |
+| `--del` | Removed lines, and failure. |
+| `--action` / `--action-text` | The one inverted control: the dominant action. |
+
+**Green is verification. An agent finishing is not an agent being right.** A
+`run.completed` milestone, a "Done" workstream, a summary — all neutral. The
+only things that may take `--add` in chrome are a passed check and a verified
+mission. This is the distinction the whole product exists to make; it is worth
+more than any layout in this file.
+
+**2. Composition follows state. A region that has nothing to say is absent, not
+empty.**
+
+`apps/desktop/src/mission-state.ts` derives which of seven states a mission is
+in and returns a `MissionComposition` saying which regions exist. The shell
+reads that object; it does not re-decide from `busy && attempts.length && …` in
+the markup. That re-deciding is exactly how the old shell came to render the
+lifecycle, an Approaches explanation, Control, Participants, Required checks and
+Changed files — all of them empty — on a repository nobody had asked anything
+of yet. **Each state must render a genuinely different composition, not the
+same three columns with different words in them.** `workroom.render.test.tsx`
+holds that, and most of its assertions are about what is *absent*.
+
+### Typography is split by kind, not by chrome
+
+Sans (`--font-ui`) is the product's voice: mission goals, navigation, actions,
+explanations, names, status, evidence sentences. Mono (`--mono`) is for
+literals only — code, commands, paths, branches, model ids, tokens, raw output.
+A path is mono because somebody may retype it; "Nothing has verified these
+changes" is not.
+
+### One primary action per screen
+
+`.button--primary` is filled in `--action` (the foreground colour) with
+`--action-text` on it. **It is the only inversion anywhere in the app**, which
+is what makes it unmistakable without spending a hue. Two of them on one screen
+destroys the whole mechanism — the recovery state's button is deliberately a
+plain `.button` for this reason, because the dock's Send is already the primary.
+
+### Stylesheet layout
+
+- `packages/ui/src/tokens.css` — tokens, both clients.
+- `apps/desktop/src/styles.css` — shell and the older surfaces.
+- `apps/desktop/src/styles/` — one file per feature area. **New component work
+  goes here.** `styles.css` passed four thousand lines covering every screen the
+  app has ever had, which makes "where does this rule live" unanswerable and "is
+  this rule still used" unanswerable twice.
+
+**The collision that will bite you:** `styles.css` `@import`s the feature files
+at the top, so on equal specificity **the older rules in `styles.css` win**.
+`.evidence__*` and `.rail*` already exist there, owned by the compare screen and
+the legacy rail. The Workroom's copies are scoped (`.evidence--panel …`,
+`.rail.rail--workroom`) for exactly this reason — a single class lost every
+property the two blocks shared, and the inspector silently inherited a
+decorative `::before` diamond and the wrong gap. If a new rule looks like it is
+not applying, check for the same class name further down `styles.css` before
+anything else.
 
 ## Scales
 
@@ -36,7 +109,13 @@ so the right step is obvious at the call site and adjacent steps do not get
 picked by feel.
 
 **Type** — `--text-eyebrow` 11, `--text-micro` 12, `--text-small` 13,
-`--text-body` **14**, `--text-title` 16, `--text-screen` 19, `--text-hero` 24.
+`--text-body` **14**, `--text-section` 15, `--text-title` 16, `--text-screen`
+19, `--text-hero` 24, `--text-display` **30**.
+
+`--text-display` is the mission goal and the start canvas's question, and it is
+the only display-sized type in the shell. Before it existed, the strongest text
+on a session screen was the repository path — so five missions in one
+repository all opened looking identical.
 
 - **Body went 12px → 14px.** "Everything still feels very small/tiny in the
   grand scheme of things" was direct feedback. This is a desktop application,
@@ -798,6 +877,19 @@ quoted here, which is how this paragraph went stale once already.
   and see the min-width bullet above, which is the other half of what makes
   this actually work now that it sits inside `.session-bar` rather than the
   top-level `.titlebar`.
+- **A stale `novus.tabs` in localStorage wedges the renderer.** Tabs persist by
+  session id. Point the app at a rebuilt `NOVUS_DB` and every restored tab
+  refers to a session that no longer exists; the opens hang, `opening` never
+  clears, and *every row in the Mission Inbox renders disabled* — which looks
+  exactly like a broken inbox and is not. Clear `localStorage["novus.tabs"]` and
+  reload before blaming anything you changed. Found while screenshotting
+  fixtures; cost most of an hour.
+- **A mission that needs a decision does not open into the Workroom.**
+  `decideDecisionRoom` routes it straight to the Decision Room, which is a
+  different shell entirely. If you are trying to see a multi-workstream rail on
+  screen, a forked session will not show you one — it will show you the compare
+  screen. Use a session with more than one approach that is *not* awaiting a
+  decision, or drive the components directly in a render test.
 - **The gate does not see pixels.** `pnpm typecheck && pnpm test` passes on any
   CSS. Every bug in this section was found by *measuring the running app*, not
   by reading the stylesheet — and two of them (the xterm blowout, the centred

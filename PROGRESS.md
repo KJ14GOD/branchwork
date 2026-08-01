@@ -181,7 +181,9 @@ is not covered is every `use-*.ts` hook, `app.tsx` itself, and the whole of
 Rows below marked *hand-tested* were driven via CDP against scripted adapters,
 not by any test. Visual verification was done at 1280×800 and 1440×900 and at
 no other size: this display clamps to 1470 logical points, so nothing wider has
-ever been looked at, and no document should say otherwise.
+ever been looked at, and no document should say otherwise. (Page zoom does not
+substitute — it scales the layout uniformly rather than granting more CSS
+pixels, so the three-column grid at 1728 remains unlooked-at.)
 
 | Capability | Status | Evidence |
 | --- | --- | --- |
@@ -192,6 +194,11 @@ ever been looked at, and no document should say otherwise.
 | Persistent composer with model picker, wired end-to-end to the turns route | Met (hand-tested) | `composer.tsx` → `use-session-actions.ts` → `POST /sessions/:id/turns`; worker side pinned by `turn-model-route.test.ts`, renderer side untested |
 | Open-a-repository modal, separate from the Mission Inbox | Met | `components/open-repository.tsx` with `open-repository.render.test.tsx` (7 tests); `components/modal.tsx` with `modal.test.tsx` (11 tests) |
 | Spacing/type design system (`--space-1..8`, `--text-*`, radii, control heights) | Met | `packages/ui/src/tokens.css`, imported by `apps/desktop/src/styles.css`; `styles.test.ts` (6 tests) pins it; `skills/novus-ui/SKILL.md` documents it |
+| **Workroom shell: composition derived from mission state** | Met (2026-08-01) | `mission-state.ts` with `mission-state.test.ts` (11 tests) derives seven states and which regions each mounts; `components/workroom/*` renders them; `workroom.render.test.tsx` (14 tests) asserts what each state must *not* contain. Styling split out of `styles.css` into `styles/workroom.css` |
+| **Start canvas — a repository opened with nothing asked** | Met (2026-08-01, hand-tested at 1280 and 1440) | `components/workroom/empty-mission.tsx`. One question, one composer, one primary action; no rail, no evidence, no lifecycle. Replaces a screen that rendered every region the app has against no data |
+| **Workstream rail — agents and people as the primary objects** | Met (2026-08-01) | `workstreams.ts` with `workstreams.test.ts` (8 tests). A workstream is an approach (baseline + forks), read from `/compare` with a log-only fallback that never overstates liveness. Identity colours are provenance only and none of them is green. **The multi-workstream rail is proven in tests, not on screen** — a session with two approaches routes to the Decision Room instead (gap 19) |
+| **Activity as attributed milestones rather than an event list** | Met (2026-08-01) | `components/workroom/activity-feed.tsx` with `activity-feed.test.tsx` (6 tests). Consecutive reads fold into one line counted by file; a person's direction is attributed to the person; `run.completed` is never told as verified |
+| **Evidence inspector mounted only when it has something to say** | Met (2026-08-01) | `components/workroom/evidence-inspector.tsx`. `verified: null` renders "Nothing has verified these changes", muted — never green, never red |
 | Light/dark theme | Met (hand-tested) | `packages/ui/src/tokens.css` `:root[data-theme="light"]`, stamped before first paint by `main.tsx` from `use-theme.ts:initialTheme` |
 
 ### Guest app
@@ -460,3 +467,14 @@ exists.
     product behaviour changed: folding a direction in at the first boundary is
     correct, and the test was asserting against a window the product never
     promised.
+19. **A multi-approach session cannot reach the Workroom, so its rail has
+    never been seen.** *Open (2026-08-01.)* `decideDecisionRoom` opens the
+    Decision Room automatically when a mission has approaches awaiting a
+    decision — correct behaviour, and the point of an earlier slice. The
+    consequence is that the one session shape that would show two workstreams
+    side by side in the new rail routes somewhere else entirely, so the
+    multi-workstream composition is proven only by
+    `workroom.render.test.tsx` and `workstreams.test.ts` and has not been
+    looked at on screen. Closing this needs either a fixture with two
+    approaches and a recorded decision, or a way to reach the Workroom from
+    the Decision Room without dismissing the decision.

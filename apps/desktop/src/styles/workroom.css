@@ -1,0 +1,1154 @@
+/*
+ * The Workroom: mission header, workstream rail, activity, evidence, composer.
+ *
+ * A separate file from styles.css on purpose. That stylesheet had grown past
+ * four thousand lines covering every screen the app has ever had, which makes
+ * "where does this rule live" unanswerable and "is this rule still used"
+ * unanswerable twice. The split is by ownership: tokens in @novus/ui, shell and
+ * legacy surfaces in styles.css, and the surfaces of the Workroom here.
+ *
+ * Every value below comes from the shared scale. The literals that remain are
+ * geometry — hairlines, dot diameters, track widths — under the same rule the
+ * main stylesheet states at its top.
+ */
+
+/*
+ * Every pane in the Workroom scrolls on its own, so three of them can show a
+ * scrollbar at once. At the platform default width they read as extra vertical
+ * rules — the activity pane's gutter sat a few pixels from the inspector's
+ * border and the two together looked like a broken double divider.
+ */
+.workroom__work,
+.rail--workroom .rail__scroll,
+.evidence,
+.recovery__reason {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* ============================================================
+   The two Workroom tab shells
+   ============================================================
+ *
+ * `.tab-content` is a grid of `auto 1fr auto` — bar, body, dock — sized for
+ * the older screens. The Workroom brings its own header and dock, so it takes
+ * the whole tab as one row and lays itself out internally; the start canvas
+ * keeps a thin utility bar above it and nothing else.
+ *
+ * Both are `min-height: 0` so their children scroll rather than the document.
+ * A pane that grows past the viewport pushes the composer off the bottom edge,
+ * which is the one thing that must never happen.
+ */
+
+/* Doubled class again: `.tab-content` in styles.css sets `auto 1fr auto` and
+   sits later in the cascade, so a single class lost the tie and the Workroom
+   was laid out in an `auto` row with a 74px empty band underneath it — the
+   composer stopped short of the bottom edge on every mission. */
+.tab-content.tab-content--workroom {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.tab-content.tab-content--start {
+  grid-template-rows: var(--session-bar-h) minmax(0, 1fr);
+}
+
+.startbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--session-bar-h);
+  padding: 0 var(--space-5);
+  /* No border. There is nothing above the start canvas to separate it from,
+     and a rule across the top of an otherwise empty screen is decoration. */
+}
+
+/* ============================================================
+   Mission header
+   ============================================================ */
+
+.mission {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-6);
+  /* A separator, not a box. The header used to be a bordered panel sitting
+     inside the bordered shell, which is the nested-frame habit the whole pass
+     is removing. */
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mission__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Without this a long goal refuses to shrink and pushes presence off the
+     right edge — the failure that clipped the title at 1280 before. */
+  min-width: 0;
+  flex: 1;
+}
+
+.mission__goal {
+  margin: 0;
+  font-size: var(--text-display);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-display);
+  letter-spacing: -0.015em;
+  color: var(--text);
+  /* Two lines, then ellipsis. A mission described in a paragraph must not push
+     the work below the fold; the full text is in the composer's record. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mission__where {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: var(--text-meta);
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.mission__state {
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+.mission__dot {
+  width: 3px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--text-dim);
+  flex: none;
+}
+
+.mission__repo,
+.mission__branch {
+  font-family: var(--mono);
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 22ch;
+}
+
+.mission__side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: none;
+}
+
+/* ---------- presence ---------- */
+
+.presence {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.presence__faces {
+  display: flex;
+  align-items: center;
+}
+
+.presence__face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-s);
+  height: var(--control-s);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  /* The ring is the canvas colour, so overlapping faces read as separate
+     tokens rather than one blob. */
+  box-shadow: 0 0 0 2px var(--bg);
+  color: var(--text-muted);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-strong);
+  letter-spacing: 0;
+  margin-left: -6px;
+}
+
+.presence__face:first-child {
+  margin-left: 0;
+}
+
+/*
+ * Control is the one thing in presence that gets a colour. Signal blue, not
+ * green: holding control is not an achievement, it is a live state, and green
+ * is reserved for things that were verified.
+ */
+.presence__face--control {
+  background: var(--signal-quiet);
+  color: var(--signal);
+  box-shadow: 0 0 0 1px var(--signal-line), 0 0 0 3px var(--bg);
+}
+
+.presence__face--away {
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+
+.presence__face--more {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-dim);
+  margin-left: var(--space-2);
+}
+
+.presence__holder {
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Empty mission — the start canvas
+   ============================================================ */
+
+.start {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--space-8) var(--space-6);
+}
+
+.start__canvas {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  /* Wide enough for a real sentence of mission text, narrow enough that the
+     question and the field read as one object. */
+  max-width: 640px;
+}
+
+.start__question {
+  margin: 0;
+  font-size: var(--text-display);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-display);
+  letter-spacing: -0.02em;
+  color: var(--text);
+  text-align: center;
+}
+
+.start__lede {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--text-body);
+  line-height: var(--leading-prose);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.start__where {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  font-size: var(--text-micro);
+  color: var(--text-dim);
+}
+
+.start__repo,
+.start__branch {
+  font-family: var(--mono);
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start__dot {
+  width: 3px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--text-dim);
+  flex: none;
+}
+
+.start__ready {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.start__ready-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--text-muted);
+}
+
+.start__ready--warn {
+  color: var(--alert);
+}
+
+.start__ready--warn .start__ready-dot {
+  background: var(--alert);
+}
+
+/* ---------- the composer on the start canvas ---------- */
+
+.start__composer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  margin-top: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+.start__composer:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: var(--focus-halo);
+}
+
+.start__input {
+  width: 100%;
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--text-title);
+  line-height: var(--leading-normal);
+  resize: none;
+  outline: none;
+}
+
+.start__input::placeholder {
+  color: var(--text-dim);
+}
+
+.start__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-4) var(--space-5);
+}
+
+.start__spacer {
+  flex: 1;
+}
+
+.start__control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-small);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.start__control--static {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.start__later {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--text-micro);
+  color: var(--text-dim);
+}
+
+.start__quiet {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--border-strong);
+  cursor: pointer;
+}
+
+.start__quiet:hover {
+  color: var(--text);
+}
+
+.start__quiet--static {
+  color: var(--text-dim);
+  text-decoration: none;
+  cursor: default;
+}
+
+.start__quiet--static::before {
+  content: "·";
+  margin-right: var(--space-3);
+  color: var(--text-dim);
+}
+
+/* ============================================================
+   Workstream rail
+   ============================================================ */
+
+/* `.rail.rail--workroom`, not `.rail--workroom`: the legacy `.rail` block in
+   styles.css is later in the cascade at equal specificity, so a single class
+   here loses every property the two share. */
+.rail.rail--workroom {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-3);
+  /* One separator between the rail and the work. Not a bordered card. */
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg);
+  min-height: 0;
+}
+
+.rail--workroom .rail__scroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.rail--workroom .rail__eyebrow,
+.evidence--panel .rail__eyebrow {
+  margin: 0 0 var(--space-3) var(--space-3);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ---------- a workstream row ---------- */
+
+.rail--workroom .wsrow,
+.wsrow {
+  position: relative;
+  display: grid;
+  grid-template-columns: 3px var(--control-s) 1fr;
+  align-items: start;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-3) var(--space-3) 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-m);
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.wsrow:hover {
+  background: var(--hover);
+}
+
+.wsrow--selected {
+  background: var(--surface);
+  border-color: var(--border-subtle);
+}
+
+/*
+ * The identity bar. This is the signal: one 3px stripe in the workstream's own
+ * colour, running down the row that owns it and reappearing on that
+ * workstream's milestones and files. It is the only place the colour is
+ * load-bearing, and it says provenance — never quality.
+ */
+.wsrow__mark {
+  align-self: stretch;
+  width: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--ws, var(--border-strong));
+}
+
+.wsrow--person .wsrow__mark {
+  background: var(--border);
+}
+
+.wsrow--person {
+  cursor: default;
+}
+
+.wsrow__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-s);
+  height: var(--control-s);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--ws, var(--text-dim)) 18%, transparent);
+  color: var(--ws, var(--text-muted));
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-strong);
+}
+
+.wsrow__avatar--human {
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.wsrow__body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wsrow__name {
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wsrow__model {
+  font-family: var(--mono);
+  font-size: var(--text-micro);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wsrow__assignment {
+  margin-top: var(--space-1);
+  font-size: var(--text-small);
+  line-height: var(--leading-tight);
+  color: var(--text-muted);
+  /* Two lines of assignment. Enough to say what this agent is on; not enough
+     to turn the rail into a second activity feed. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.wsrow__state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+}
+
+.wsrow__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  flex: none;
+}
+
+/* State is a word plus a dot. The colour is redundant with the word on
+   purpose — colour alone is not a status anyone can read out loud. */
+.wsrow__state--running {
+  color: var(--signal);
+}
+
+.wsrow__state--running .wsrow__dot {
+  animation: wsrow-pulse 1.8s var(--ease) infinite;
+}
+
+.wsrow__state--paused,
+.wsrow__state--control {
+  color: var(--alert);
+}
+
+.wsrow__state--failed {
+  color: var(--del);
+}
+
+/* Done is not verified, and cancelled is not failed. Both take the neutral
+   text colour: the only green in this product means something was checked,
+   and the only red means something broke. */
+.wsrow__state--done,
+.wsrow__state--cancelled {
+  color: var(--text-muted);
+}
+
+@keyframes wsrow-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.rail--workroom .rail__add {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  height: var(--control-m);
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--text-small);
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease), background-color var(--t-fast) var(--ease);
+}
+
+.rail--workroom .rail__add:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.rail--workroom .rail__add-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  font-size: var(--text-title);
+  line-height: 1;
+}
+
+/* ============================================================
+   Activity feed
+   ============================================================ */
+
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-5) var(--space-6);
+  list-style: none;
+}
+
+.beat {
+  display: grid;
+  grid-template-columns: var(--control-s) 1fr;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+}
+
+.beat__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-s);
+  height: var(--control-s);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--ws, var(--text-dim)) 18%, transparent);
+  color: var(--ws, var(--text-muted));
+  font-size: var(--text-eyebrow);
+  font-weight: var(--weight-strong);
+  flex: none;
+}
+
+/* A person's contribution is squared off, an agent's is round. The shape
+   carries the distinction even where the colour does not. */
+.beat__avatar--human {
+  border-radius: var(--radius-s);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.beat__body {
+  min-width: 0;
+}
+
+.beat__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
+}
+
+.beat__actor {
+  font-weight: var(--weight-strong);
+  color: var(--text);
+}
+
+.beat__headline {
+  color: var(--text-muted);
+}
+
+.beat__time {
+  margin-left: auto;
+  font-size: var(--text-micro);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/*
+ * The machinery, kept and demoted. An inset well rather than a bordered card:
+ * the nesting rule says a panel inside a panel is exceptional, and a diff stat
+ * under its own headline is not exceptional.
+ */
+.beat__detail {
+  /* Sized to its content, capped at a readable measure. Full-canvas width put
+     a 1,100px box around the words `src/auth/session.ts`, which made six short
+     details look like six large panels. */
+  max-width: min(100%, 78ch);
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-s);
+  background: var(--inset);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+  /* Four lines of raw output. More than that is the raw event view's job.
+     Inline-box rather than box, so the clamp and the shrink-to-fit above are
+     not fighting over the same property. */
+  display: -webkit-inline-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.beat--verified .beat__headline {
+  color: var(--add);
+}
+
+.beat--failed .beat__headline {
+  color: var(--del);
+}
+
+.beat--attention .beat__headline {
+  color: var(--alert);
+}
+
+/* ============================================================
+   State banner
+   ============================================================
+ *
+ * Not chrome. It appears for the states a person can misread as something
+ * they are not — changed-but-unverified reads as done, waiting-on-you reads as
+ * progress — and for verified, which is the one claim worth stating outright.
+ */
+
+.banner {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: var(--space-5) var(--space-6) 0;
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  /* A 2px edge in the state's own colour rather than a full coloured panel.
+     A tinted box the width of the canvas is louder than the work inside it. */
+  border-left: 2px solid var(--border-strong);
+  font-size: var(--text-small);
+}
+
+.banner__headline {
+  font-size: var(--text-section);
+  font-weight: var(--weight-strong);
+  color: var(--text);
+}
+
+.banner__detail {
+  color: var(--text-muted);
+}
+
+.banner--attention {
+  border-left-color: var(--alert);
+}
+
+.banner--attention .banner__headline {
+  color: var(--alert);
+}
+
+/* The one place green appears in the shell, and only ever here: something ran
+   against these changes and passed. */
+.banner--verified {
+  border-left-color: var(--add);
+}
+
+.banner--verified .banner__headline {
+  color: var(--add);
+}
+
+/* ============================================================
+   Recovery
+   ============================================================ */
+
+.recovery {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  max-width: 640px;
+  margin: var(--space-8) auto;
+  padding: 0 var(--space-6);
+}
+
+.recovery__title {
+  margin: 0;
+  font-size: var(--text-screen);
+  font-weight: var(--weight-strong);
+  line-height: var(--leading-tight);
+  color: var(--text);
+}
+
+.recovery__lede {
+  margin: 0;
+  font-size: var(--text-body);
+  line-height: var(--leading-prose);
+  color: var(--text-muted);
+}
+
+/*
+ * The reason, in full and unwrapped-over. A failure a person cannot read is a
+ * failure they cannot act on, and this is the one place raw provider text is
+ * the most useful thing on the screen.
+ */
+.recovery__reason {
+  width: 100%;
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-m);
+  background: var(--inset);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* ============================================================
+   Evidence inspector
+   ============================================================
+ *
+ * EVERY RULE HERE IS SCOPED UNDER `.evidence--panel`, and must stay that way.
+ *
+ * The compare screen owns an older `.evidence__*` block in styles.css — its
+ * own inspector, with different geometry and a `::before` diamond on every
+ * path. Because this file is imported at the top of that stylesheet, the older
+ * rules win every tie on equal specificity, and unscoped names here inherited
+ * a decorative glyph and the wrong gap. The extra class is what keeps the two
+ * inspectors from styling each other; the compare screen is out of scope for
+ * this pass, so this side takes the discipline.
+ */
+
+.evidence.evidence--panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-5);
+  border-left: 1px solid var(--border-subtle);
+  border-bottom: none;
+  background: var(--bg);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.evidence--panel .evidence__block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/*
+ * Sentence case, not a second row of shouting. The panel already carries one
+ * uppercase eyebrow; stacking EVIDENCE over VERIFICATION over CHANGES made
+ * three levels of label for two levels of content, which is the "excessive
+ * eyebrows" the pass is removing.
+ */
+.evidence--panel .evidence__heading {
+  margin: 0;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-strong);
+  color: var(--text-dim);
+}
+
+.evidence--panel .evidence__line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: var(--text-small);
+  line-height: var(--leading-normal);
+  color: var(--text);
+}
+
+.evidence--panel .evidence__glyph {
+  flex: none;
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
+}
+
+/* The only green in the inspector, and it means one thing: something ran and
+   it passed. */
+.evidence--panel .evidence__line--pass {
+  color: var(--add);
+}
+
+.evidence--panel .evidence__line--fail {
+  color: var(--del);
+}
+
+/* Unknown is muted, never green and never red. An absence of checks is not a
+   result, and colouring it either way would be the product asserting something
+   nobody measured. Muted rather than dim: this sentence is the most important
+   thing on an unverified mission and must not read as disabled. */
+.evidence--panel .evidence__line--unknown {
+  color: var(--text-muted);
+}
+
+.evidence--panel .evidence__line--risk {
+  color: var(--alert);
+}
+
+.evidence--panel .evidence__meta {
+  margin: 0;
+  font-size: var(--text-micro);
+  color: var(--text-dim);
+}
+
+.evidence--panel .evidence__files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.evidence--panel .evidence__file {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-family: var(--mono);
+  font-size: var(--text-micro);
+}
+
+.evidence--panel .evidence__path {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The compare screen's decorative bullet, refused. */
+.evidence--panel .evidence__path::before {
+  content: none;
+}
+
+/* Two workstreams changed this file. Amber because it is the one thing in the
+   list that needs a person to look. */
+.evidence--panel .evidence__file--contested .evidence__path {
+  color: var(--alert);
+}
+
+.evidence--panel .evidence__add {
+  color: var(--add);
+  font-variant-numeric: tabular-nums;
+}
+
+.evidence--panel .evidence__del {
+  color: var(--del);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   Composer dock
+   ============================================================ */
+
+.dock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg);
+  flex: none;
+}
+
+.dock__row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+.dock__row:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: var(--focus-halo);
+}
+
+.dock__target {
+  flex: none;
+  align-self: center;
+}
+
+.dock__select {
+  height: var(--control-s);
+  max-width: 180px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-s);
+  /* The recipient's identity colour, so "who am I talking to" is answered
+     the same way it is answered in the rail. */
+  background: color-mix(in srgb, var(--ws, var(--surface-raised)) 14%, transparent);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--text-micro);
+  cursor: pointer;
+}
+
+.dock__input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
+  resize: none;
+  outline: none;
+}
+
+.dock__input::placeholder {
+  color: var(--text-dim);
+}
+
+.dock__send {
+  flex: none;
+  height: var(--control-m);
+}
+
+.dock__hint {
+  padding-left: var(--space-4);
+  font-size: var(--text-eyebrow);
+  color: var(--text-dim);
+}
+
+.dock__hint kbd {
+  font-family: var(--mono);
+  font-size: inherit;
+  color: var(--text-muted);
+}
+
+/* ============================================================
+   Workroom layout
+   ============================================================
+ *
+ * Three columns and a dock, sized from the outside in. The centre is `1fr` so
+ * it takes every pixel the rails do not, and the whole grid is `min-height: 0`
+ * down its chain so the panes scroll rather than the document.
+ */
+
+.workroom {
+  display: grid;
+  /* 280 rather than --files-w's 240: the inspector's job here is sentences
+     about what was and was not proven, and at 240 every one of them wrapped
+     to three lines. */
+  grid-template-columns: var(--rail-w) minmax(0, 1fr) 280px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "header header header"
+    "rail   work   evidence"
+    "dock   dock   dock";
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* No evidence yet: the inspector is not mounted, and the centre takes its
+   width back rather than leaving a column of empty headings. */
+.workroom--noevidence {
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  grid-template-areas:
+    "header header"
+    "rail   work"
+    "dock   dock";
+}
+
+.workroom--solo {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "header"
+    "work"
+    "dock";
+}
+
+.workroom > .mission {
+  grid-area: header;
+}
+
+.workroom > .rail--workroom {
+  grid-area: rail;
+}
+
+.workroom > .evidence--panel {
+  grid-area: evidence;
+}
+
+.workroom > .dock {
+  grid-area: dock;
+}
+
+.workroom__work {
+  grid-area: work;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/*
+ * Narrow windows drop the inspector rather than crushing the work. 1180px is
+ * where 264 + 240 of rail plus the centre's own minimum stops leaving the
+ * activity feed a readable measure.
+ */
+@media (max-width: 1180px) {
+  .workroom {
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    grid-template-areas:
+      "header header"
+      "rail   work"
+      "dock   dock";
+  }
+
+  .workroom > .evidence--panel {
+    display: none;
+  }
+}

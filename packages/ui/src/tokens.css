@@ -49,12 +49,19 @@
   --text-eyebrow: 11px;  /* uppercase tracked labels ONLY */
   --text-micro: 12px;    /* dense tabular metadata: sequence, counts, kbd */
   --text-small: 13px;    /* secondary text, diffs, terminal, file content */
-  --text-body: 14px;     /* default — set on `body` */
+  --text-body: 14px;
+  /* Novus Signal roles. Display and section are new; the rest map onto the
+     names the existing stylesheet already uses so nothing has to be renamed
+     to inherit the new voice. */
+  --text-display: 30px;
+  --text-section: 15px;
+  --text-meta: 13px;     /* default — set on `body` */
   --text-title: 16px;    /* panel and section titles */
   --text-screen: 19px;   /* screen titles */
   --text-hero: 24px;     /* empty-state headline */
 
   /* ---------- line height ---------- */
+  --leading-display: 1.1;
   --leading-flat: 1.15;   /* single-line chrome where the box sets the height */
   --leading-tight: 1.35;  /* headings */
   --leading-normal: 1.5;  /* default */
@@ -77,9 +84,9 @@
      feedback; a larger radius on the containers that survived the
      border-removal pass is half the answer, space is the other half.
      Outer must always be >= inner. */
-  --radius-s: 4px;
-  --radius-m: 7px;
-  --radius-l: 12px;
+  --radius-s: 8px;
+  --radius-m: 11px;
+  --radius-l: 15px;
   --radius-pill: 999px;
 
   /* ---------- control heights ----------
@@ -116,11 +123,11 @@
   /* Planes, deepest to highest: well < bg < surface < raised < floating.
      Steps are deliberately small — separation is the border's job, not the
      surface's. --bg must match backgroundColor in electron/main.ts. */
-  --bg: #0a0a0b;
-  --bg-well: #060607;
-  --surface: #101012;
-  --surface-raised: #17171a;
-  --surface-raised-hover: #1c1c20;
+  --bg: #0b0c0e;
+  --bg-well: #08090a;
+  --surface: #121316;
+  --surface-raised: #1a1c20;
+  --surface-raised-hover: #212429;
 
   /* One step deeper than whatever it sits on, expressed as a *black* alpha so
      it darkens on every plane rather than being tuned for one. This is what a
@@ -130,7 +137,7 @@
 
   /* Borders and ghost states are the foreground at low alpha, so they read
      the same on every plane instead of being tuned for one background. */
-  --fg: 231 231 234;
+  --fg: 237 237 240;
   --border-subtle: rgb(var(--fg) / 0.07);
   --border: rgb(var(--fg) / 0.1);
   --border-strong: rgb(var(--fg) / 0.16);
@@ -138,9 +145,9 @@
   --pressed: rgb(var(--fg) / 0.1);
   --selected: rgb(var(--fg) / 0.11);
 
-  --text: #e7e7ea;
-  --text-muted: #8a8a93;
-  --text-dim: #56565e;
+  --text: #ededf0;
+  --text-muted: #a2a6af;
+  --text-dim: #71767f;
 
   /* ---------- the three hues ----------
      See "colour" in skills/novus-ui/SKILL.md. Each of these means exactly one
@@ -150,24 +157,57 @@
      what read as sprayed on. */
 
   /* ADDED LINES. Not "good", not "on", not "running". */
-  --add: #5fa26c;
-  --add-bg: rgba(95, 162, 108, 0.13);
+  --add: #35c56a;
+  --add-bg: rgba(53, 197, 106, 0.12);
   /* REMOVED LINES. Not "failed" and not "error" — those are --alert. */
-  --del: #c96a63;
-  --del-bg: rgba(201, 106, 99, 0.13);
+  --del: #e5544b;
+  --del-bg: rgba(229, 84, 75, 0.12);
   /* SOMETHING NEEDS A PERSON: a failed run, a failing check, a denied tool, a
      repository that cannot be forked, an error worth reading. Amber rather
      than red because red is already spoken for by every diff on screen, and a
      failed run must not share a colour with a routine deletion. */
-  --alert: #cfa055;
+  --alert: #e0a03b;
   --alert-line: #8a6d2b;
-  --alert-bg: rgba(207, 160, 85, 0.1);
+  --alert-bg: rgba(224, 160, 59, 0.1);
 
   /* LIVENESS IS NOT A HUE. A pulsing dot in the foreground colour says "now"
      more clearly on a monochrome screen than a green one does, and it stops
      "running" from sharing a colour with "added". Kept as a token rather than
      inlined: apps/guest declares its own copy of this name. */
   --live: var(--text);
+
+  /* ---------- Novus Signal ----------
+   *
+   * The wedge is coordination: several people and several agents working one
+   * change together. So the identity that has to be legible everywhere is
+   * *whose work this is* — not how good it is.
+   *
+   * `--signal` is action and live work. Green is verification and nothing
+   * else: an agent finishing is not an agent being right, and the two must
+   * never share a colour. Amber is anything waiting on a person.
+   */
+  --signal: #3b82f6;
+  --signal-hover: #4d8ffa;
+  --signal-quiet: rgba(59, 130, 246, 0.14);
+  --signal-line: rgba(59, 130, 246, 0.45);
+
+  /* The one inverted control in the app — the dominant action. A hue would
+     have to compete with the semantic three; the foreground colour cannot be
+     confused with any of them and is the strongest thing available on a
+     monochrome canvas. Tokenised because "brighter" flips direction between
+     themes: on paper the dominant action gets darker, not lighter. */
+  --action: #ededf0;
+  --action-hover: #ffffff;
+  --action-text: #0b0c0e;
+
+  /* Workstream identity. Provenance only — a colour here says which agent
+     produced something, never that it is the better answer, which is why they
+     are equally saturated and none of them is green. */
+  --ws-1: #6e9bff;
+  --ws-2: #a78bfa;
+  --ws-3: #4cc9e0;
+  --ws-4: #f2836c;
+
 
   /* ---------- code palette ----------
      A SEPARATE SYSTEM FROM THE THREE HUES ABOVE, and the boundary is strict:
@@ -222,17 +262,17 @@
  * 0.1)` keeps meaning "a border, not a fill" on either background.
  */
 :root[data-theme="light"] {
-  --bg-well: #eef0f2;
-  --bg: #fbfbfc;
-  --surface: #f3f4f6;
+  --bg-well: #ececed;
+  --bg: #f7f7f8;
+  --surface: #efeff1;
   --surface-raised: #ffffff;
-  --surface-raised-hover: #f6f7f8;
+  --surface-raised-hover: #f4f4f6;
 
   /* Much weaker than dark mode's: the same 28% black that reads as one gentle
      step down on a near-black canvas reads as a hole punched in paper. */
   --inset: rgb(20 20 22 / 0.05);
 
-  --fg: 23 23 26;
+  --fg: 20 20 22;
   --border-subtle: rgb(var(--fg) / 0.08);
   --border: rgb(var(--fg) / 0.13);
   --border-strong: rgb(var(--fg) / 0.22);
@@ -240,19 +280,35 @@
   --pressed: rgb(var(--fg) / 0.09);
   --selected: rgb(var(--fg) / 0.09);
 
-  --text: #17171a;
-  --text-muted: #5b5b64;
-  --text-dim: #85858e;
+  --text: #17181b;
+  --text-muted: #5b6068;
+  --text-dim: #82868e;
 
-  --add: #28703f;
-  --add-bg: rgba(40, 112, 63, 0.11);
-  --del: #a8443c;
-  --del-bg: rgba(168, 68, 60, 0.1);
-  --alert: #7a5b16;
-  --alert-line: #a9832f;
-  --alert-bg: rgba(169, 131, 47, 0.12);
+  /* Darker than the dark set at the same hue: a colour that is legible against
+     near-black is not automatically legible against paper. */
+  --add: #157f3c;
+  --add-bg: rgba(21, 127, 60, 0.1);
+  --del: #b8302a;
+  --del-bg: rgba(184, 48, 42, 0.1);
+  --alert: #97650f;
+  --alert-line: #c79a45;
+  --alert-bg: rgba(151, 101, 15, 0.09);
 
   --live: var(--text);
+
+  --signal: #1d63d8;
+  --signal-hover: #1855bd;
+  --signal-quiet: rgba(29, 99, 216, 0.1);
+  --signal-line: rgba(29, 99, 216, 0.45);
+
+  --action: #17181b;
+  --action-hover: #000000;
+  --action-text: #f7f7f8;
+
+  --ws-1: #2f5fd0;
+  --ws-2: #7048c8;
+  --ws-3: #12798c;
+  --ws-4: #bf5137;
 
   /* Darker and a little more saturated than the dark set: the same hue at the
      same chroma reads fainter as dark-on-light than as light-on-dark. */

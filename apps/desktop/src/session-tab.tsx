@@ -27,6 +27,11 @@ import { appliedDiffsByPath } from "./applied-diffs.ts";
 import { InvitePanel } from "./components/invite-panel.tsx";
 import { TerminalPanel } from "./components/terminal-panel.tsx";
 import { groupKeyFor, TimelineView } from "./components/timeline-view.tsx";
+import { EmptyMission } from "./components/workroom/empty-mission.tsx";
+import { Workroom } from "./components/workroom/workroom.tsx";
+import { readMilestones } from "./components/workroom/activity-feed.tsx";
+import { composeMission, missionState } from "./mission-state.ts";
+import { readPeople, readWorkstreams } from "./workstreams.ts";
 import { useComparison } from "./use-comparison.ts";
 import { missionPhases } from "./mission-phase.ts";
 import { useFileChanges } from "./use-file-changes.ts";
@@ -572,6 +577,52 @@ export const SessionTab = ({
                   ? "running"
                   : "ready";
 
+  /**
+   * The Workroom's own derivation: what state this mission is in, who is in it,
+   * and what has happened — each from a module with its own tests.
+   *
+   * This component composes those; it does not compute them. That split is the
+   * point of the pass: the surfaces below read one `composition` object rather
+   * than each re-deciding from `busy && attempts.length && …` in the markup,
+   * which is how the old shell ended up rendering every region on every state.
+   */
+  const awaitingPerson = Boolean(
+    authority.controlOffer || authority.controlRequests.length > 0 || paused,
+  );
+  const mission = useMemo(
+    () =>
+      missionState({
+        events,
+        comparison: comparison.comparison,
+        filesChanged: fileChanges.files.length,
+        busy,
+        awaitingPerson,
+      }),
+    [events, comparison.comparison, fileChanges.files.length, busy, awaitingPerson],
+  );
+  const workstreams = useMemo(
+    () => readWorkstreams(events, comparison.comparison),
+    [events, comparison.comparison],
+  );
+  const people = useMemo(
+    () => readPeople(presence.participants, authority.controlHeldBy),
+    [presence.participants, authority.controlHeldBy],
+  );
+  const milestones = useMemo(
+    () => readMilestones(events, workstreams),
+    [events, workstreams],
+  );
+  const composition = composeMission(mission, {
+    agents: workstreams.length,
+    changed: fileChanges.files.length,
+    verified: mission === "verified",
+  });
+  // Which workstream the composer is addressing. Defaults to the first, and
+  // follows the rail's selection — a room with two agents must never leave
+  // "who receives this" unanswered.
+  const [addressed, setAddressed] = useState<string | null>(null);
+  const target = addressed ?? workstreams.at(0)?.runId ?? null;
+
   // Reports up to the tab strip. Deliberately keyed on the computed values,
   // not on `onStatus`'s identity — that is a fresh closure every render of
   // `App`'s tab map, and depending on it would refire this for every tab on
@@ -621,6 +672,183 @@ export const SessionTab = ({
       ) : null}
     </button>
   );
+
+  /**
+   * A repository is open and nobody has asked for anything.
+   *
+   * Returned early and whole, because this state is a genuinely different
+   * screen and not the working shell with empty panels in it. Everything below
+   * — rail, evidence, view switch, run controls, telemetry — describes work
+   * that does not exist yet.
+   */
+  if (mission === "empty" && layout.canvas !== "decision-room" && !layout.tree) {
+    return (
+      <div
+        className="tab-content tab-content--start"
+        style={{ display: active ? "grid" : "none" }}
+      >
+        <div className="startbar">
+          {/*
+            Presence and Invite only. The utilities are all still one keystroke
+            away in the palette; none of them is what somebody opening a
+            repository is here to do.
+          */}
+          <span className="titlebar__spacer" />
+          <span className="kbd-hint">
+            <kbd>/</kbd> Commands
+          </span>
+          <button
+            className="button button--quiet"
+            type="button"
+            onClick={() => setInviting(true)}
+          >
+            Invite
+          </button>
+        </div>
+
+        <EmptyMission
+          repository={basename(session.repositoryPath)}
+          branch={null}
+          repositoryState={session.repositoryState}
+          allowWrites={session.allowWrites}
+          busy={busy}
+          onStart={(goal) => void ask(goal, turnModel.selected)}
+          onInvite={() => setInviting(true)}
+        />
+
+        {actionError ? <div className="session-bar__error">{actionError}</div> : null}
+
+        {paletteOpen ? (
+          <CommandOverlay
+            commands={commands}
+            onAsk={(goal) => void ask(goal)}
+            onClose={() => setPaletteOpen(false)}
+          />
+        ) : null}
+
+        {inviting ? (
+          <InvitePanel onInvite={invite} onClose={() => setInviting(false)} />
+        ) : null}
+      </div>
+    );
+  }
+
+  /**
+   * A mission with work in it, and neither the decision room nor the file
+   * browser open. The Workroom is the default screen of the product.
+   */
+  if (layout.canvas !== "decision-room" && !layout.tree) {
+    return (
+      <div
+        className="tab-content tab-content--workroom"
+        style={{ display: active ? "grid" : "none" }}
+      >
+        <Workroom
+          composition={composition}
+          goal={missionGoal ?? basename(session.repositoryPath)}
+          // The composition's own headline, not `runStatus`. Two derivations
+          // of "where is this mission" put "Failed" in the header directly
+          // above a banner reading "Changed, not verified" — the same screen
+          // asserting two different things about the same run.
+          state={composition.headline}
+          repository={basename(session.repositoryPath)}
+          branch={null}
+          workstreams={workstreams}
+          people={people}
+          selected={target}
+          onSelect={setAddressed}
+          onAdd={() => setMode("compare")}
+          onInvite={() => setInviting(true)}
+          milestones={milestones}
+          evidence={{
+            verified: evidenceVerdict?.tests ?? null,
+            testsRun: evidenceVerdict?.testsRun ?? 0,
+            testsPassed: evidenceVerdict?.testsPassed ?? 0,
+            files: fileChanges.files,
+            contested: evidenceVerdict?.contested ?? [],
+            risks: [],
+          }}
+          github={github}
+          failureReason={
+            failed?.type === "run.failed" ? failed.payload.reason : null
+          }
+          onRetry={() => {
+            document
+              .querySelector<HTMLTextAreaElement>(".dock__input")
+              ?.focus();
+          }}
+          target={target}
+          onTarget={setAddressed}
+          busy={busy}
+          onSend={(text) => {
+            if (busy) {
+              void direct(text);
+            } else {
+              void ask(text, turnModel.selected);
+            }
+          }}
+          // Only once there is genuinely something to compare. One baseline
+          // attempt is not a comparison, and a filled button offering one drew
+          // the eye harder than the mission goal did — on a screen whose
+          // dominant action is directing the work in the dock below.
+          {...(attempts.length > 1
+            ? {
+                action: {
+                  label: "Compare approaches",
+                  onClick: () => setMode("compare"),
+                },
+              }
+            : {})}
+        />
+
+        {actionError ? <div className="session-bar__error">{actionError}</div> : null}
+
+        {terminalOpen ? (
+          <div className="terminal-dock" style={{ height: terminalHeight }}>
+            <div
+              className="terminal-dock__resize"
+              onMouseDown={startTerminalResize}
+              title="Drag to resize"
+            />
+            <div className="terminal-dock__head">
+              <span className="terminal-dock__prompt" aria-hidden="true">
+                ❯
+              </span>
+              <span className="terminal-dock__title">Terminal</span>
+              <span className="terminal-dock__path">{session.repositoryPath}</span>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setTerminalOpen(false)}
+                title="Close this shell"
+              >
+                Close
+              </button>
+            </div>
+            <TerminalPanel cwd={session.repositoryPath} theme={theme} />
+          </div>
+        ) : null}
+
+        {paletteOpen ? (
+          <CommandOverlay
+            commands={commands}
+            onAsk={(goal) => {
+              if (busy) {
+                void direct(goal);
+              } else {
+                void ask(goal);
+              }
+            }}
+            onClose={() => setPaletteOpen(false)}
+          />
+        ) : null}
+
+        {inviting ? (
+          <InvitePanel onInvite={invite} onClose={() => setInviting(false)} />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="tab-content" style={{ display: active ? "grid" : "none" }}>
