@@ -61,10 +61,39 @@ export const readMilestones = (
   events: readonly SessionEvent[],
   workstreams: readonly Workstream[],
 ): Milestone[] => {
+  /**
+   * Who was running each run, from the log rather than from the rail.
+   *
+   * The rail holds *current* workstreams — the baseline and its forks — so a
+   * run that has since been superseded by a second turn is not in it. Looking
+   * names up there alone made the first half of a two-turn mission read "The
+   * agent" while the second half read "Claude": the same agent, under two
+   * names, in one feed. `run.started` carries the model for every run that
+   * ever began, which is the fact that was wanted.
+   */
+  const models = new Map<string, string>();
+
+  for (const event of events) {
+    if (event.type === "run.started") {
+      models.set(event.payload.run.id, event.payload.run.model.model);
+    }
+  }
+
   const signalFor = (runId: string): string | null =>
-    workstreams.find((stream) => stream.runId === runId)?.signal ?? null;
-  const nameFor = (runId: string): string =>
-    workstreams.find((stream) => stream.runId === runId)?.name ?? "The agent";
+    workstreams.find((stream) => stream.runId === runId)?.signal ??
+    // A superseded run is the same agent continuing, so it keeps the identity
+    // colour of the workstream that continues it rather than losing its
+    // provenance and turning grey halfway down the feed.
+    workstreams.at(0)?.signal ??
+    null;
+  const nameFor = (runId: string): string => {
+    const model = models.get(runId);
+
+    return model
+      ? agentName(model)
+      : (workstreams.find((stream) => stream.runId === runId)?.name ??
+        "The agent");
+  };
 
   const milestones: Milestone[] = [];
   let readsPending = new Map<string, Set<string>>();

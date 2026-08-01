@@ -160,7 +160,7 @@ const workingRun = crypto.randomUUID();
 run(
   working,
   workingRun,
-  "Migrate authentication from session cookies to scoped tokens",
+  "Replace the hand-rolled retry loop with the platform client",
 );
 reads(working, workingRun, [
   "src/auth/session.ts",
@@ -233,21 +233,39 @@ store.append({
   },
 });
 
-/* ---------- 7. two agents, one mission ---------- */
-const twoAgents = session(crypto.randomUUID(), "checkout-service");
-const runA = crypto.randomUUID();
-const runB = crypto.randomUUID();
-run(twoAgents, runA, "Split the billing worker out of the monolith");
-run(twoAgents, runB, "Split the billing worker out of the monolith", "gpt-5-codex");
-reads(twoAgents, runA, ["src/billing/index.ts", "src/billing/queue.ts"]);
-patch(twoAgents, runA, "src/billing/worker.ts", 210, 4);
-reads(twoAgents, runB, ["src/billing/index.ts"]);
-patch(twoAgents, runB, "src/billing/worker.ts", 96, 12);
-tests(twoAgents, runB, false);
+/* ---------- 7. two turns in one session, which is one agent ----------
+ *
+ * Deliberately not two agents. Asking twice in one session is a second turn,
+ * and the rail must show one workstream for it — the fixture below is the one
+ * that shows two. Kept because "two runs on the log" is exactly the shape that
+ * used to put a phantom second participant in the room.
+ */
+const twoTurns = session(crypto.randomUUID(), "checkout-service");
+const turnA = crypto.randomUUID();
+const turnB = crypto.randomUUID();
+run(twoTurns, turnA, "Add a health endpoint");
+reads(twoTurns, turnA, ["src/routes/token.ts"]);
+patch(twoTurns, turnA, "src/routes/health.ts", 24, 0);
+store.append({
+  sessionId: twoTurns,
+  actorId: HOST,
+  type: "run.completed",
+  payload: { runId: turnA, summary: "Added the endpoint." },
+});
+run(twoTurns, turnB, "Now cover it with a test");
+reads(twoTurns, turnB, ["src/routes/health.ts"]);
+patch(twoTurns, turnB, "src/routes/health.test.ts", 31, 0);
+tests(twoTurns, turnB, true);
+store.append({
+  sessionId: twoTurns,
+  actorId: HOST,
+  type: "run.completed",
+  payload: { runId: turnB, summary: "Covered it." },
+});
 
 process.stdout.write(
   JSON.stringify(
-    { empty, working, unverified, verified, failed, twoAgents },
+    { empty, working, unverified, verified, failed, twoTurns },
     null,
     2,
   ) + "\n",

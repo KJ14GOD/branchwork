@@ -46,6 +46,39 @@ const created = (store: InMemorySessionEventStore, sessionId = SESSION) =>
     },
   });
 
+/**
+ * A real fork, which is what makes a second *approach*.
+ *
+ * Distinct from `startRun` on purpose: a second run alone is a second turn in
+ * the same work, and the two must not be counted the same way.
+ */
+const forkFrom = (
+  store: InMemorySessionEventStore,
+  parentRunId: string,
+  runId: string,
+  label: string,
+  sessionId = SESSION,
+) =>
+  store.append({
+    sessionId,
+    actorId: "host",
+    type: "fork.created",
+    payload: {
+      fork: {
+        runId,
+        sessionId,
+        checkpointId: `checkpoint-${runId}`,
+        parentRunId,
+        label,
+        worktreePath: `/tmp/worktrees/${runId}`,
+        branch: `novus/${runId}`,
+        revision: "a".repeat(40),
+        devPorts: [5310],
+        createdAt: new Date().toISOString(),
+      },
+    },
+  });
+
 const startRun = (
   store: InMemorySessionEventStore,
   runId: string,
@@ -103,6 +136,7 @@ test("approaches with no decision are the most urgent thing on the screen", () =
   const store = new InMemorySessionEventStore();
   created(store);
   startRun(store, "run-1", "Fix it");
+  forkFrom(store, "run-1", "fork-a", "Fix it differently");
   startRun(store, "fork-a", "Fix it differently");
   finish(store, "fork-a");
 
@@ -110,6 +144,23 @@ test("approaches with no decision are the most urgent thing on the screen", () =
   // mission is waiting on a person, which is the whole product.
   assert.equal(only(store).attention, "needs-decision");
   assert.equal(only(store).approaches, 2);
+});
+
+test("asking a second thing is a second turn, not a second approach", () => {
+  // The bug this pins: `runs.length > 1` called every follow-up question a
+  // competing approach, so an ordinary second ask filed the mission under
+  // "needs your decision" — and the desktop opens the Decision Room for that
+  // automatically, landing a person on a comparison of one attempt with
+  // nothing to decide. `/compare` never agreed: it counts baseline + forks.
+  const store = new InMemorySessionEventStore();
+  created(store);
+  startRun(store, "run-1", "Add a health endpoint");
+  finish(store, "run-1");
+  startRun(store, "run-2", "Now cover it with a test");
+  finish(store, "run-2");
+
+  assert.equal(only(store).approaches, 1);
+  assert.notEqual(only(store).attention, "needs-decision");
 });
 
 test("an unanswered approval outranks a run that is merely going", () => {
@@ -193,8 +244,10 @@ test("urgency orders the inbox, because recency buries what has stopped moving",
   const store = new InMemorySessionEventStore();
 
   // Oldest, and the one that needs somebody: two approaches, no decision.
+  // A real fork, because two bare runs are two turns of one approach.
   created(store, "waiting");
   startRun(store, "w-1", "Needs a decision", "waiting");
+  forkFrom(store, "w-1", "w-2", "The alternative", "waiting");
   startRun(store, "w-2", "The alternative", "waiting");
   finish(store, "w-2", "waiting");
 

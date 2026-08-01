@@ -143,24 +143,37 @@ export const CompareScreen = ({
    * approach that finished having tested nothing is the state every other
    * surface renders as success.
    */
-  const unverified = alternativeList.filter(
+  /**
+   * Counted over every approach on the screen, baseline included.
+   *
+   * These used to count only the alternatives, which produced a headline
+   * reading "1 approaches ran" directly beside a spine reading "2 approaches"
+   * and two cards — the screen's most important sentence disagreeing with the
+   * screen. The baseline has a card, carries evidence, and "Keep the current
+   * work" is a real decision about it, so it is an approach here.
+   */
+  const unverified = attempts.filter(
     (attempt) => attempt.status === "completed" && attempt.green === null,
   ).length;
-  const failed = alternativeList.filter(
+  const failed = attempts.filter(
     (attempt) => attempt.status === "failed",
   ).length;
+  const ran = attempts.length;
+  // Said once. Every branch below had its own singular/plural expression and
+  // two of them did not have one at all.
+  const approachCount = ran === 1 ? "One approach" : `${ran} approaches`;
 
   const headline = awaiting
     ? {
         state: "Decision required",
         detail:
-          failed === alternativeList.length && failed > 0
-            ? `${alternativeList.length === 1 ? "The approach" : `All ${alternativeList.length} approaches`} failed. Read why, then decide what happens next.`
-            : unverified === alternativeList.length
-              ? `${alternativeList.length === 1 ? "One approach" : `${alternativeList.length} approaches`} finished without running any tests. Nothing here is verified.`
+          failed === ran && failed > 0
+            ? `${ran === 1 ? "The approach" : `All ${ran} approaches`} failed. Read why, then decide what happens next.`
+            : unverified === ran
+              ? `${approachCount} finished without running any tests. Nothing here is verified.`
               : unverified > 0
-                ? `${alternativeList.length} approaches ran · ${unverified} of them verified nothing.`
-                : `${alternativeList.length} approaches ran. Compare the evidence, not the summaries.`,
+                ? `${approachCount} ran · ${unverified} of them verified nothing.`
+                : `${approachCount} ran. Compare the evidence, not the summaries.`,
       }
     : state.decision !== null
       ? {

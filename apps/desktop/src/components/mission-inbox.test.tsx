@@ -279,3 +279,22 @@ test("an error stays beside the primary action", () => {
 
   assert.ok(error > foot, "in the foot, which does not scroll");
 });
+
+test("a repository nobody has asked anything of is not called unverified", () => {
+  // `unverified` is a verdict, and there is nothing here to have a verdict
+  // about — no run, no change, nothing that could have been checked. The row
+  // read as though a mission had been run and found wanting.
+  const untouched = inbox([mission({ goal: null, evidence: "unverified" })]);
+
+  assert.ok(untouched.includes("Opened, nothing run yet"));
+  assert.ok(
+    !untouched.includes("Unverified"),
+    "a session with no runs must not carry a verification verdict",
+  );
+});
+
+test("a mission that did run still states its evidence", () => {
+  const ran = inbox([mission({ goal: "Migrate auth", evidence: "unverified" })]);
+
+  assert.ok(ran.includes("Unverified"));
+});

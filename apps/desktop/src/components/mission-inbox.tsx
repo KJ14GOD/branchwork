@@ -89,6 +89,18 @@ const evidenceLabel = (evidence: RememberedSession["evidence"]): string =>
       ? "Tests failing"
       : "Unverified";
 
+/**
+ * Whether there is anything here to have an opinion about.
+ *
+ * A repository somebody opened and never asked anything of has no runs, no
+ * changes, and nothing that could have been checked — so "Unverified" beside
+ * it is a verdict on work that does not exist, and it read as though a
+ * mission had been run and found wanting. `goal` is null exactly when no run
+ * ever started, which is the same fact the row already uses to say "Opened,
+ * nothing run yet".
+ */
+const hasRun = (mission: RememberedSession): boolean => mission.goal !== null;
+
 const MissionRow = ({
   mission,
   disabled,
@@ -115,10 +127,12 @@ const MissionRow = ({
       {mission.approaches > 1 ? (
         <span>{mission.approaches} approaches</span>
       ) : null}
-      <span className={`inbox__evidence inbox__evidence--${mission.evidence}`}>
-        {/* Never a tick for a mission that tested nothing. */}
-        {evidenceLabel(mission.evidence)}
-      </span>
+      {hasRun(mission) ? (
+        <span className={`inbox__evidence inbox__evidence--${mission.evidence}`}>
+          {/* Never a tick for a mission that tested nothing. */}
+          {evidenceLabel(mission.evidence)}
+        </span>
+      ) : null}
       {mission.controller ? <span>{mission.controller} in control</span> : null}
     </span>
   </button>

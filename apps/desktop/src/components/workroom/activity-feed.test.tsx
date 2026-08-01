@@ -51,6 +51,19 @@ const read = (path: string): SessionEvent[] => {
   ];
 };
 
+const startedRun = (runId: string, model = "claude-sonnet-5"): SessionEvent =>
+  event("run.started", {
+    run: {
+      id: runId,
+      sessionId: "s1",
+      goal: "Do the thing",
+      status: "running",
+      startedBy: "a1",
+      model: { provider: "anthropic", model },
+      createdAt: new Date(0).toISOString(),
+    },
+  });
+
 const streams: Workstream[] = [
   {
     runId: "r1",
@@ -173,4 +186,33 @@ test("reads pending when a run fails are still reported", () => {
   assert.equal(milestones.length, 2);
   assert.equal(milestones[0]?.headline, "Read 2 files");
   assert.equal(milestones[1]?.tone, "failed");
+});
+
+test("a superseded turn keeps the agent's name and its identity colour", () => {
+  // The rail holds current workstreams only, so the first of two turns is not
+  // in it. Reading names from there alone made one agent appear under two
+  // names in one feed — "The agent" for the first half, "Claude" for the
+  // second — and turned its avatars grey halfway down.
+  const milestones = readMilestones(
+    [
+      startedRun("old-run"),
+      event("run.completed", { runId: "old-run", summary: "First pass." }),
+      startedRun("r1"),
+    ],
+    streams,
+  );
+
+  for (const milestone of milestones) {
+    assert.equal(milestone.actor, "Claude", "every turn is the same agent");
+    assert.equal(milestone.signal, "--ws-1", "and keeps one identity colour");
+  }
+});
+
+test("a run the log never started still gets a name rather than nothing", () => {
+  const milestones = readMilestones(
+    [event("run.completed", { runId: "ghost", summary: "…" })],
+    [],
+  );
+
+  assert.equal(milestones[0]?.actor, "The agent");
 });

@@ -44,9 +44,11 @@ cat <<'NOTE'
 Fixture missions seeded. In the app: Missions (top right) → pick one.
 
   Opened, nothing run yet          the start canvas
+  Replace the hand-rolled retry…   an agent part-way through
   Migrate authentication…          changed, nothing verified
   Add rate limiting…               verified — the only green
   Upgrade the payment SDK…         stopped before it changed anything
+  Add a health endpoint            two turns, which is still one agent
   Split the billing worker…        two approaches, opens the Decision Room
 
 A mission that needs a decision opens the Decision Room, not the Workroom.

@@ -199,6 +199,35 @@ const ATTENTION_ORDER: MissionAttention[] = [
  * stopped moving, so a list sorted by last activity buries it under every
  * session still churning away on its own.
  */
+/**
+ * How many approaches this mission has — the baseline and the forks from it.
+ *
+ * Not `runs.length`. A run is a *turn*: asking a second thing in the same
+ * session starts one, and it is the same agent continuing the same work. The
+ * inbox counted turns, so a mission where somebody asked twice announced "2
+ * approaches" and was filed under "needs your decision" — and because the
+ * desktop opens the Decision Room automatically for that, the ordinary act of
+ * asking a follow-up threw a person onto a comparison screen with one attempt
+ * on it and nothing to decide.
+ *
+ * `/compare` has always counted it this way (`compareAttempts` walks
+ * `forksFromLog`). This is the same rule, stated where the inbox can reach it,
+ * so the home screen and the decision surface cannot disagree about how many
+ * approaches exist.
+ */
+const approachesFor = (
+  projected: SessionProjection,
+  events: readonly SessionEvent[],
+): number => {
+  if (projected.runs.length === 0) {
+    return 0;
+  }
+
+  const forks = events.filter((event) => event.type === "fork.created").length;
+
+  return 1 + forks;
+};
+
 const attentionFor = (
   projected: SessionProjection,
   events: readonly SessionEvent[],
@@ -235,7 +264,7 @@ const attentionFor = (
   // More than one approach and nothing decided is the state this whole product
   // exists for. It comes first even while a run is going, because the other
   // approaches are finished and waiting on a person.
-  if (projected.runs.length > 1 && projected.decision === null) {
+  if (approachesFor(projected, events) > 1 && projected.decision === null) {
     return "needs-decision";
   }
 
@@ -405,7 +434,7 @@ export class SessionRegistry {
         lastActivityAt: events.at(-1)?.occurredAt ?? created.occurredAt,
         goal: projected.runs[0]?.goal ?? null,
         attention: attentionFor(projected, events, this.sessions.has(sessionId)),
-        approaches: projected.runs.length,
+        approaches: approachesFor(projected, events),
         evidence: evidenceFor(projected),
         controller:
           projected.participants.find(
