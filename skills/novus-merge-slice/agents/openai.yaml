@@ -1,4 +1,0 @@
-interface:
-  display_name: "Novus Merge Slice"
-  short_description: "Land a finished parallel slice back into main"
-  default_prompt: "Use $novus-merge-slice to verify, audit, merge, and tear down a finished fleet slice."

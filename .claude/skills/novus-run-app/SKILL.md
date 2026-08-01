@@ -1,1 +1,0 @@
-../../../skills/novus-run-app/SKILL.md

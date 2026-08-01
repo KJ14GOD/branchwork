@@ -1,1 +1,0 @@
-../../../skills/novus-ui/SKILL.md

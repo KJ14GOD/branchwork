@@ -1,1 +1,0 @@
-../../../skills/novus-model-routing/SKILL.md

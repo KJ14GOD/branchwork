@@ -1,4 +1,0 @@
-interface:
-  display_name: "Novus Harness Builder"
-  short_description: "Build Novus with its native harness architecture"
-  default_prompt: "Use $novus-build-harness to implement the next safe, observable Novus harness capability."
