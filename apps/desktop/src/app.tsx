@@ -293,6 +293,11 @@ export const App = () => {
       setActiveId(summary.id);
       setNewTabOpen(false);
       setInboxOpen(false);
+      // Cleared here, not only on cancel. A successful open closes both
+      // surfaces without going through the cancel branch, so the flag
+      // survived — and the *next* "+" that was cancelled reopened the Mission
+      // Inbox for somebody who had never come from it.
+      fromInbox.current = false;
     },
     [open],
   );

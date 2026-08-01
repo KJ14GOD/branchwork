@@ -83,11 +83,19 @@ pnpm typecheck && pnpm test && git diff --check
 ## Sessions come back
 
 Opening a session appends `session.created`, which is what makes it findable
-later — the Open screen lists what the log remembers and clicking one resumes
-its id, so the old timeline reappears rather than starting an empty stream
-beside it. Permissions are deliberately not restored: a session recorded with
-writes allowed does not silently regain them, so a resumed session takes the
-host's current defaults and the checkboxes still decide.
+later — the **Mission Inbox** lists what the log remembers and clicking one
+resumes its id, so the old timeline reappears rather than starting an empty
+stream beside it. Permissions are deliberately not restored: a session
+recorded with writes allowed does not silently regain them, so a resumed
+mission takes the host's current defaults.
+
+Resuming no longer offers checkboxes. Since 2026-08-01 the inbox and the
+open-a-repository modal are two surfaces — creation carries the permission
+controls, and resuming grants exactly the host's current defaults with nothing
+to adjust on the way. To resume a mission under different permissions, change
+what the host permits and reopen; the invariant that matters (recorded
+permissions are never restored) is unchanged and now structural, since the
+resume request carries no permission fields at all.
 
 ## Invariants
 

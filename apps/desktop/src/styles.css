@@ -2795,6 +2795,11 @@ pre.kv__value {
 .palette {
   width: min(560px, calc(100vw - var(--space-8)));
   height: fit-content;
+  /* `.overlay` stopped scrolling when it became the modal's backdrop, and the
+     palette is the one user of it that is not a `.modal` — so on a short
+     window its list was clipped rather than reachable. It carries its own
+     bound now instead of relying on the shared primitive. */
+  max-height: calc(100vh - 10vh - var(--space-6) * 2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-l);
   background: var(--surface);
@@ -2834,7 +2839,9 @@ pre.kv__value {
   margin: 0;
   padding: var(--space-2);
   list-style: none;
-  max-height: 360px; /* geometry: about nine rows before it scrolls */
+  /* Shrinks on a short window rather than overflowing the sheet that now
+     bounds it. Nine rows when there is room for nine rows. */
+  max-height: min(360px, 50vh);
   overflow-y: auto;
 }
 
