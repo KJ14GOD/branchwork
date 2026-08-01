@@ -38,12 +38,18 @@ const Verification = ({
   verdict: EvidenceVerdict | null;
   github: GithubStatus | null;
 }) => {
-  if (verdict === null) {
+  // Either half is worth showing on its own. Gating the whole block on the
+  // local verdict hid GitHub's checks until the agent had run at least once,
+  // and the two are unrelated — a branch's CI state is a fact about the
+  // branch, not about whether anything has happened in this mission yet.
+  if (verdict === null && github?.connected !== true) {
     return null;
   }
 
   return (
     <div className="evidence">
+      {verdict === null ? null : (
+        <>
       <span className="eyebrow">Verification</span>
       <span
         className={
@@ -65,6 +71,8 @@ const Verification = ({
             ? `Tests passed (${verdict.testsRun})`
             : `Tests failing (${verdict.testsPassed} of ${verdict.testsRun})`}
       </span>
+        </>
+      )}
 
       {github?.connected ? (
         <>
@@ -106,7 +114,7 @@ const Verification = ({
         </>
       ) : null}
 
-      {verdict.contested.length > 0 ? (
+      {verdict !== null && verdict.contested.length > 0 ? (
         <>
           <span className="eyebrow">Contested files</span>
           {verdict.contested.map((path) => (

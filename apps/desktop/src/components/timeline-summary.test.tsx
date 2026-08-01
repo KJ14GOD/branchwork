@@ -186,3 +186,27 @@ test("a repository with no GitHub remote shows no check section at all", () => {
   // checks" heading for them is the placeholder row this app keeps deleting.
   assert.doesNotMatch(html, /Required checks/);
 });
+
+test("GitHub checks show before the agent has run anything", () => {
+  const html = renderToStaticMarkup(
+    <FileChangesPanel
+      state={{ files: [], additions: 0, deletions: 0, error: null, loading: false }}
+      diffs={new Map()}
+      verdict={null}
+      github={{
+        connected: true,
+        repository: "acme/widget",
+        pullRequest: null,
+        checks: [{ name: "CI", state: "FAILURE" }],
+        verdict: "failing",
+      }}
+    />,
+  );
+
+  // A branch's CI state is a fact about the branch, not about whether
+  // anything has happened in this mission — gating it on the local verdict
+  // hid it until the first run, which read as the feature not working.
+  assert.match(html, /Required checks/);
+  assert.match(html, /not passing/);
+  assert.doesNotMatch(html, /Tests not run/);
+});
