@@ -92,6 +92,9 @@ export const JoinedTab = ({
       runStatus: summary.runStatus,
       additions: summary.additions,
       deletions: summary.deletions,
+      // A joined window shows the mission goal in its own header; the
+      // sidebar names it by the invite label instead.
+      goal: null,
     });
   }, [onStatus, summary.runStatus, summary.additions, summary.deletions]);
 

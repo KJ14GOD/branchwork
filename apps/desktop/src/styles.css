@@ -29,6 +29,12 @@
    of it. New component work belongs in styles/, not below. */
 @import "./styles/workroom.css";
 
+/* The application frame — sidebar, projects, workspaces. */
+@import "./styles/shell.css";
+
+/* First run: which harnesses this machine can actually reach. */
+@import "./styles/setup.css";
+
 * {
   box-sizing: border-box;
 }
@@ -411,12 +417,52 @@ kbd {
 
 /* ---------- shell ---------- */
 
+/*
+ * Titlebar across the top, sidebar down the left, the active mission filling
+ * the rest.
+ *
+ * The sidebar is a column rather than a strip because a strip could hold about
+ * five missions before names truncated, and it said nothing about which
+ * repository each belonged to. Missions now group under their project.
+ *
+ * `.tab-content` children stay DIRECT grid items — every one of them is
+ * mounted at once and all but the active one are `display: none`, which
+ * removes them from the grid entirely. Wrapping them in a container to "tidy
+ * this up" is what would break the always-mounted, always-streaming
+ * guarantee; the note below the sidebar rule says so again where it would be
+ * broken.
+ */
 .shell {
   display: grid;
-  /* Titlebar, then whichever tab is active — a tab owns its own three rows
-     (session bar, body, optional terminal dock) below, in .tab-content. */
-  grid-template-rows: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
+  min-height: 0;
+}
+
+.shell > .titlebar {
+  grid-column: 1 / -1;
+}
+
+.shell > .side {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+/* Second column, second row. Not wrapped — see above. */
+.shell > .tab-content {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+/* With no sidebar (the empty state, and every joined window) the mission
+   takes the whole width rather than leaving a column of nothing. */
+.shell--nosidebar {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.shell--nosidebar > .tab-content {
+  grid-column: 1;
 }
 
 /* One per open tab, all mounted at once so a background tab's event stream,

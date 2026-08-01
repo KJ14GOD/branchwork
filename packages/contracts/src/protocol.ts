@@ -560,6 +560,44 @@ export type SessionHistory = z.infer<typeof SessionHistorySchema>;
  * `filesChanged` carries elsewhere: it covers `apply_patch` only, not writes
  * made through `run_command`.
  */
+/**
+ * One thing this machine can run, and on whose account.
+ *
+ * Novus holds no accounts and runs no sign-in flow of its own. The harnesses a
+ * team already uses have each done their own OAuth, and the credential lives
+ * with them — so this reports what was *found*, never what Novus granted.
+ *
+ * `installed` and `connected` are separate because they fail differently and
+ * are fixed differently: one is `brew install`, the other is `claude auth
+ * login`. Collapsing them into a tick would tell somebody nothing about which
+ * of the two they need to do.
+ */
+export const ProviderStatusSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  /** A harness runs agents; a service is something a mission depends on. */
+  kind: z.enum(["harness", "service"]),
+  installed: z.boolean(),
+  connected: z.boolean(),
+  version: z.string().min(1).nullable(),
+  /**
+   * The provider's own words about its plan or login — "Max plan", "Logged in
+   * using ChatGPT", "API key — billed per token". Materially different facts
+   * that a generic tick would flatten: one is already paid for, another bills
+   * per token.
+   */
+  detail: z.string().min(1),
+  account: z.string().min(1).nullable(),
+});
+
+export type ProviderStatus = z.infer<typeof ProviderStatusSchema>;
+
+export const ProvidersResponseSchema = z.object({
+  providers: z.array(ProviderStatusSchema),
+});
+
+export type ProvidersResponse = z.infer<typeof ProvidersResponseSchema>;
+
 export const SessionFilesResponseSchema = z.object({
   files: z.array(
     z.object({

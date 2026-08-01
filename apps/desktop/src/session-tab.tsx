@@ -56,6 +56,15 @@ export type TabStatus = {
   runStatus: string;
   additions: number;
   deletions: number;
+  /**
+   * What this mission is about, for the sidebar to name it by.
+   *
+   * Reported up rather than read from `SessionSummary`, which does not carry
+   * it: a session is a repository somebody opened, and the goal arrives with
+   * the first run. Null until then, and the sidebar says "Untitled mission"
+   * rather than inventing one.
+   */
+  goal: string | null;
 };
 
 // All three proposal tools. Kept deliberately in step with the guest's own
@@ -632,9 +641,10 @@ export const SessionTab = ({
       runStatus,
       additions: fileChanges.additions,
       deletions: fileChanges.deletions,
+      goal: missionGoal,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runStatus, fileChanges.additions, fileChanges.deletions]);
+  }, [runStatus, fileChanges.additions, fileChanges.deletions, missionGoal]);
 
   const startTerminalResize = (event: React.MouseEvent) => {
     event.preventDefault();

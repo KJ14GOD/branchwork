@@ -8,12 +8,15 @@ import {
   MissionInbox,
   type ResumeRequest,
 } from "./components/mission-inbox.tsx";
+import { Sidebar } from "./components/sidebar.tsx";
+import { SetupScreen } from "./components/setup/setup-screen.tsx";
+import { useProviders } from "./use-providers.ts";
 import { OpenRepository } from "./components/open-repository.tsx";
 import { JoinEntry } from "./join/join-entry.tsx";
 import { JoinedTab } from "./join/joined-tab.tsx";
 import { SessionTab, type TabStatus } from "./session-tab.tsx";
 import { useSession } from "./use-session.ts";
-import { useTheme } from "./use-theme.ts";
+import { useTheme, type Theme } from "./use-theme.ts";
 
 const FALLBACK_ENDPOINT =
   import.meta.env.VITE_NOVUS_ENDPOINT ?? "http://127.0.0.1:4319";
@@ -67,6 +70,19 @@ const loadStoredTabs = (): StoredTabs => {
     return { tabs, activeId };
   } catch {
     return { tabs: [], activeId: null };
+  }
+};
+
+const SETUP_SEEN_KEY = "novus.setup-seen";
+
+/** Whether the setup screen has ever been dismissed on this machine. */
+const hostingSetupUnseen = (): boolean => {
+  try {
+    return localStorage.getItem(SETUP_SEEN_KEY) === null;
+  } catch {
+    // A storage policy that refuses us is not a reason to block the app on a
+    // screen somebody cannot dismiss.
+    return false;
   }
 };
 
@@ -151,6 +167,21 @@ export const App = () => {
   const [newTabOpen, setNewTabOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
+  /**
+   * The first-run setup screen: which harnesses this machine can reach.
+   *
+   * Shown once, then reachable from the sidebar's gear. Remembered in
+   * localStorage rather than derived from "have you opened a mission yet",
+   * because dismissing it is a decision and re-showing a screen somebody has
+   * already read is the app not listening.
+   */
+  const [setupOpen, setSetupOpen] = useState(
+    () => hostingSetupUnseen(),
+  );
+  const providers = useProviders(endpoint, hosting && setupOpen);
+  // A sidebar is only worth its column when there is something in it. A joined
+  // window and a host with nothing open both get the full width instead.
+  const showSidebar = tabs.length > 0 || joined.length > 0;
   const hydrated = useRef(false);
   /** Whether the open-a-repository modal was reached from the inbox overlay. */
   const fromInbox = useRef(false);
@@ -534,7 +565,7 @@ export const App = () => {
     // controls a join window must not have, and its effects start talking to
     // a worker that may belong to a different Novus.
     return (
-      <div className="shell">
+      <div className="shell shell--nosidebar">
         <header className="titlebar">
           <span className="titlebar__mark">Novus</span>
           <span className="titlebar__spacer" />
@@ -543,9 +574,40 @@ export const App = () => {
     );
   }
 
+  if (hosting && setupOpen) {
+    return (
+      <div className="shell shell--nosidebar">
+        <header className="titlebar">
+          <span className="titlebar__mark">Novus</span>
+          <span className="titlebar__spacer" />
+          {themeToggle}
+        </header>
+        <SetupScreen
+          providers={providers.providers}
+          loading={providers.loading}
+          theme={theme}
+          onTheme={(next: Theme) => {
+            if (next !== theme) {
+              toggleTheme();
+            }
+          }}
+          onRefresh={providers.refresh}
+          onDone={() => {
+            try {
+              localStorage.setItem(SETUP_SEEN_KEY, new Date().toISOString());
+            } catch {
+              // Dismissing has to work even when it cannot be remembered.
+            }
+            setSetupOpen(false);
+          }}
+        />
+      </div>
+    );
+  }
+
   if (tabs.length === 0 && joined.length === 0) {
     return (
-      <div className="shell">
+      <div className="shell shell--nosidebar">
         <header className="titlebar">
           <span className="titlebar__mark">Novus</span>
           <span className="titlebar__spacer" />
@@ -581,109 +643,28 @@ export const App = () => {
   }
 
   return (
-    <div className="shell">
+    <div className={showSidebar ? "shell" : "shell shell--nosidebar"}>
       <header className="titlebar">
         <span className="titlebar__mark">Novus</span>
-        <div className="tabstrip">
-          {tabs.map((tab) => {
-            const tabStatus = tabStatuses[tab.id];
-            const hasDiff =
-              tabStatus !== undefined &&
-              (tabStatus.additions > 0 || tabStatus.deletions > 0);
-
-            return (
-              <div
-                key={tab.id}
-                role="button"
-                tabIndex={0}
-                className={`tab${tab.id === activeId ? " tab--active" : ""}`}
-                onClick={() => setActiveId(tab.id)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setActiveId(tab.id);
-                  }
-                }}
-                title={tab.repositoryPath}
-              >
-                <span className={`tab__dot tab__dot--${dotClass(tabStatus?.runStatus)}`} />
-                <span className="tab__label">{basename(tab.repositoryPath)}</span>
-                {hasDiff ? (
-                  <span className="tab__diffstat">
-                    <span className="stat__add">+{tabStatus.additions}</span>
-                    <span className="stat__del">−{tabStatus.deletions}</span>
-                  </span>
-                ) : null}
-                <button
-                  className="tab__close"
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    closeTab(tab.id);
-                  }}
-                  title="Close this tab"
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
-          {joined.map((entry) => {
-            const entryStatus = tabStatuses[entry.key];
-
-            return (
-              <div
-                key={entry.key}
-                role="button"
-                tabIndex={0}
-                className={`tab${entry.key === activeId ? " tab--active" : ""}`}
-                onClick={() => setActiveId(entry.key)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setActiveId(entry.key);
-                  }
-                }}
-                title="A mission this window joined — it lives on another host"
-              >
-                <span
-                  className={`tab__dot tab__dot--${dotClass(entryStatus?.runStatus)}`}
-                />
-                <span className="tab__label">⇅ {entry.label}</span>
-                <button
-                  className="tab__close"
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    closeJoined(entry.key);
-                  }}
-                  title="Leave this mission"
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
-          <button
-            className="tab tab--new"
-            type="button"
-            onClick={() =>
-              hosting ? setNewTabOpen(true) : setJoinOpen(true)
-            }
-            title={
-              hosting
-                ? "Open another repository in a new tab"
-                : "Join another mission"
-            }
-          >
-            +
-          </button>
-        </div>
         <span className="titlebar__spacer" />
         {hosting ? missionsButton : null}
         {hosting ? joinButton : null}
         {themeToggle}
       </header>
+
+      {showSidebar ? (
+        <Sidebar
+          name={hosting ? "This machine" : "Joined"}
+          sessions={tabs}
+          joined={joined.map((entry) => ({ key: entry.key, label: entry.label }))}
+          activeId={activeId}
+          statuses={tabStatuses}
+          onSelect={setActiveId}
+          onCreate={() => (hosting ? setNewTabOpen(true) : setJoinOpen(true))}
+          onMissions={() => (hosting ? setInboxOpen(true) : setJoinOpen(true))}
+          onSettings={() => setSetupOpen(true)}
+        />
+      ) : null}
 
       {tabs.map((tab) => (
         <SessionTab

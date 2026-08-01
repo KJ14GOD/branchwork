@@ -34,6 +34,7 @@ import {
 } from "./participants.ts";
 import { applyDecision } from "./apply-decision.ts";
 import { compareAttempts, forksFromLog } from "./compare.ts";
+import { detectProviders } from "./providers.ts";
 import { projectSession } from "./projection.ts";
 import { readGithubStatus } from "./github.ts";
 import { exportReceipt } from "./receipt-export.ts";
@@ -1822,6 +1823,34 @@ export const startEventServer = (
           allowWrites: sessions?.hostDefaults().allowWrites ?? false,
           allowCommands: sessions?.hostDefaults().allowCommands ?? false,
         }),
+      );
+      return;
+    }
+
+    /**
+     * What this machine can run, and on whose account.
+     *
+     * Behind the token like every other route, because it names installed
+     * software and the email a CLI is signed in as. Probed per request rather
+     * than cached: somebody fixing a missing sign-in wants the screen to agree
+     * with them on the next refresh, not after a restart.
+     */
+    if (url.pathname === "/providers" && request.method === "GET") {
+      // The enclosing handler is synchronous, so the probes settle into the
+      // response rather than being awaited here.
+      void detectProviders().then(
+        (providers) => {
+          response
+            .writeHead(200, { "content-type": "application/json" })
+            .end(JSON.stringify({ providers }));
+        },
+        () => {
+          // A probe that throws is still an answer about the machine, and a
+          // setup screen that 500s tells somebody nothing they can act on.
+          response
+            .writeHead(200, { "content-type": "application/json" })
+            .end(JSON.stringify({ providers: [] }));
+        },
       );
       return;
     }
