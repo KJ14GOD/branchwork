@@ -86,7 +86,7 @@ direction laid on top of it.
 | --- | --- | --- |
 | 1 — Approach surface | **Met** (2026-07-31) | Baseline derived in `apps/worker/src/compare.ts` from `fork.created.parentRunId` and rendered as "Current work"; human status language; single-prompt fork form with derived label. `compare.test.ts`, `compare-view.render.test.tsx` |
 | 2 — First Decision Room | **Met** (2026-08-01) | Three decision kinds (`adopt` / `revision` / `exploration`), interventions as evidence above the agent's summary, summary last and labelled "Unverified claim" when nothing was tested. Requesting a revision cuts a new approach from the same checkpoint carrying the feedback. Exportable Markdown receipt at `GET /sessions/:id/receipt`. **Since 2026-08-01** the baseline is a decision target: keeping the current work records a real `decision.recorded` with its rationale, applies nothing, and is reported as *not needed* rather than as applied or blocked. Rationale is enforced at the route rather than only in React. `compare.test.ts`, `replay.test.ts`, `decision-route.test.ts`, `decision-authority.test.ts`, `receipt-export.test.ts`, `compare-view.render.test.tsx` |
-| 3 — Multiplayer authority | **Met**, deterministic only (2026-07-31) | `control-lifecycle.test.ts` (18 tests): offer/accept/decline/withdraw, superseded offers, disconnect vs departure, cross-session refusal, direction queued vs recorded. UI in `control-panel.tsx`, `control-panel.render.test.tsx` |
+| 3 — Multiplayer authority | **Met**, deterministic only (2026-08-01) | `control-lifecycle.test.ts` (18 tests): offer/accept/decline/withdraw, superseded offers, disconnect vs departure, cross-session refusal, direction queued vs recorded. UI in `control-panel.tsx`, `control-panel.render.test.tsx`. The *joined* window now uses the same protocol rather than only the hosting one: authority state, requesting control, and answering a handoff, in `join/joined-surface.tsx` and `join/joined-api.ts` — `joined-surface.render.test.tsx` (16 tests) for who may see which control, `joined-api.test.ts` (11 tests) for what those calls do against a real event server. A relay join stays watch-only and says so |
 | 4 — Reliability before pilot | **Met**, unsigned (2026-07-31) | Worktree reclamation, interrupted-run reconciliation, dev-server reaping, receipt checks, visible cost. Spend now survives a pause: `run.paused` carries a usage snapshot and `execute()` seeds from it (`pause-resume.test.ts`). Packaged and launch-verified — bundled worker under Electron's own Node, database in userData. **Open:** the DMG is unsigned; that needs an Apple Developer certificate |
 | 5 — Mission Inbox | **Met** (2026-07-31) | Attention grouping derived in `session-registry.ts:attentionFor`, ordered by urgency not recency; goal leads the row. `mission-inbox.test.ts` |
 | 6 — Team pilot surface | **Partial** (2026-07-31) | Exportable receipt (`receipt-export.ts`), installable build (unsigned), and GitHub connection with PR status and required checks (`github.ts`, `github.test.ts` — nine tests, one against the real `gh`) all done. Durable shared sessions, role-aware invitations and the usage/cost view came from earlier slices. **Not started:** team grouping and update delivery. **Blocked on a credential, not on code:** code signing needs an Apple Developer ID certificate |
@@ -138,7 +138,7 @@ direction laid on top of it.
 | Direction folded in at turn boundaries | Met (deterministic) | `POST /sessions/:id/direction`; `agent-runner.test.ts` |
 | Cancel / pause / resume / handoff | Met (deterministic) | `cancel-route.test.ts`, `pause-resume-route.test.ts`, `handoff-route.test.ts` |
 | Off-machine viewing through the relay | Met | `apps/session-service/src/*.test.ts`, guest `relay-client.test.ts` |
-| Requesting control from the guest | **Not started** | The route exists (`POST /sessions/:id/control/request`); no UI calls it (gap 10) |
+| Requesting control from a joined window | Met (deterministic) | `join/joined-surface.render.test.tsx`, `join/joined-api.test.ts`. **Still not the browser guest**, which is structurally read-only (gap 10) |
 
 ### Fork and compare
 
@@ -276,9 +276,18 @@ Numbered so other documents can point at them.
    hand-picked literals, dark-only, zero shared tokens — and its header
    comment still claims "same tokens, same spacing" as the desktop, which
    stopped being true when the desktop moved to scales.
-10. **Requesting control has no UI trigger.** The route exists and renders
-    in the timeline; no button calls it. The natural caller (the guest) is
-    structurally read-only.
+10. **Requesting control has no UI trigger.** *Mostly closed (2026-08-01.)*
+    A joined desktop window now reads `/authority` with its invite token and
+    renders the whole lifecycle — who holds control, standing requests,
+    an offer it can accept or decline, an accepted transfer waiting on the
+    run that is holding it, and direction queued versus merely recorded —
+    with every action absent rather than disabled where the role does not
+    carry it. `join/joined-api.test.ts` drives those calls through a real
+    event server; `join/joined-surface.render.test.tsx` pins who sees what.
+    **Still open:** the browser guest, which remains structurally read-only,
+    and a relay join, which is watch-only in both directions because the
+    transport carries the log outbound and nothing back — the joined window
+    says so on screen rather than hiding it.
 11. **Handoff is atomic, not a two-step accept** — the protocol section in
     V1_README describes recipient acceptance; what is built transfers
     ownership on the owner's click.
