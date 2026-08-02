@@ -46,7 +46,7 @@ alter table auth_flows drop column if exists session_token;
 create table if not exists repositories (
   repo_id           text primary key,
   org_id            text not null references organizations(org_id),
-  provider          text not null check (provider = 'github'),
+  provider          text not null,
   provider_repo_id  text not null,
   name              text not null,
   default_branch    text not null,
@@ -54,6 +54,9 @@ create table if not exists repositories (
   created_at        timestamptz not null default now(),
   unique (org_id, provider, provider_repo_id)
 );
+-- Provider set widened for local repositories (D-032); rerunnable.
+alter table repositories drop constraint if exists repositories_provider_check;
+alter table repositories add constraint repositories_provider_check check (provider in ('github', 'local'));
 
 create table if not exists missions (
   mission_id        text primary key,

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ApiError, ControlPlaneClient } from "./api-client";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
+import { ensureLocalBranch, pathForLocalRepo, pickLocalRepository, resolveLocalBase } from "./local-repos";
 import { SessionStore } from "./session-store";
 
 // Test hooks (see DECISIONS.md D-027): both refuse to exist in packaged builds.
@@ -158,13 +159,66 @@ function registerIpc(): void {
     }
   });
 
+  ipcMain.handle("novus:repos:add-local", async () => {
+    const picked = await pickLocalRepository();
+    if ("cancelled" in picked) return ok(null);
+    if ("error" in picked) return { ok: false, code: "invalid_repo", message: picked.error };
+    try {
+      await api.registerLocalRepo(picked);
+      return ok({
+        providerRepoId: picked.localId,
+        name: picked.name,
+        defaultBranch: picked.defaultBranch,
+        provider: "local"
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
+  ipcMain.handle("novus:repos:local-list", async () => {
+    try {
+      const repositories = await api.localRepositories();
+      return ok(
+        (repositories as { providerRepoId: string; name: string; defaultBranch: string }[]).map((repo) => ({
+          ...repo,
+          onThisMachine: pathForLocalRepo(repo.providerRepoId) !== null
+        }))
+      );
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
+  ipcMain.handle("novus:repos:base-local", async (_event, raw: unknown) => {
+    const parsed = z.string().uuid().safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed repository id." };
+    const base = await resolveLocalBase(parsed.data);
+    if ("error" in base) return { ok: false, code: "local_git", message: base.error };
+    return ok(base);
+  });
+
   ipcMain.handle("novus:missions:create", async (_event, raw: unknown) => {
     const parsed = CreateMissionInputSchema.safeParse(raw);
     if (!parsed.success) {
       return { ok: false, code: "invalid_input", message: parsed.error.issues[0]?.message ?? "Invalid mission." };
     }
     try {
-      return ok(await api.createMission(parsed.data));
+      const created = await api.createMission(parsed.data);
+      // Local branches are this machine's job: create the ref, report the
+      // outcome as a claim, and hand the renderer the settled workstream.
+      if (parsed.data.provider === "local") {
+        const result = await ensureLocalBranch(
+          parsed.data.providerRepoId,
+          created.workstream.missionBranch,
+          parsed.data.baseSha
+        );
+        created.workstream = await api.reportBranch(
+          created.workstream.workstreamId,
+          result.ok ? { status: "created" } : { status: "failed", error: result.error }
+        );
+      }
+      return ok(created);
     } catch (error) {
       return fail(error);
     }

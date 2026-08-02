@@ -49,7 +49,7 @@ function toRepository(row: MissionRow): RepositoryRef | null {
   if (!row.repo_id) return null;
   return {
     repoId: row.repo_id,
-    provider: row.provider as "github",
+    provider: row.provider as "github" | "local",
     providerRepoId: row.provider_repo_id as string,
     name: row.repo_name as string,
     defaultBranch: row.default_branch as string
@@ -126,11 +126,12 @@ async function recordEvent(
 async function upsertRepository(
   client: pg.PoolClient,
   ctx: AuthedContext,
-  available: { providerRepoId: string; name: string; defaultBranch: string }
+  available: { providerRepoId: string; name: string; defaultBranch: string },
+  provider: "github" | "local" = "github"
 ): Promise<string> {
   const existing = await client.query(
-    "select repo_id from repositories where org_id = $1 and provider = 'github' and provider_repo_id = $2",
-    [ctx.orgId, available.providerRepoId]
+    "select repo_id from repositories where org_id = $1 and provider = $3 and provider_repo_id = $2",
+    [ctx.orgId, available.providerRepoId, provider]
   );
   if (existing.rowCount && existing.rows[0]) {
     await client.query("update repositories set name = $2, default_branch = $3 where repo_id = $1", [
@@ -143,8 +144,8 @@ async function upsertRepository(
   const repoId = newRepoId();
   await client.query(
     `insert into repositories (repo_id, org_id, provider, provider_repo_id, name, default_branch, connected_by)
-     values ($1, $2, 'github', $3, $4, $5, $6)`,
-    [repoId, ctx.orgId, available.providerRepoId, available.name, available.defaultBranch, ctx.userId]
+     values ($1, $2, $7, $3, $4, $5, $6)`,
+    [repoId, ctx.orgId, available.providerRepoId, available.name, available.defaultBranch, ctx.userId, provider]
   );
   return repoId;
 }
@@ -169,10 +170,29 @@ export async function createMission(
   ctx: AuthedContext,
   input: CreateMissionInput
 ): Promise<{ mission: Mission; workstream: Workstream }> {
-  // Validate the repository against the provider before writing anything.
-  const listed = await provider.listRepositories(ctx.orgId);
-  const available = listed.find((repo) => repo.providerRepoId === input.providerRepoId);
-  if (!available) throw new MissionCreationError("unknown_repository", "That repository isn't available.");
+  // Validate the repository before writing anything. GitHub repos validate
+  // against the provider; local repos must already be registered (D-032) —
+  // the control plane never touches the folder itself.
+  let available: { providerRepoId: string; name: string; defaultBranch: string };
+  if (input.provider === "local") {
+    const registered = await db.query(
+      "select provider_repo_id, name, default_branch from repositories where org_id = $1 and provider = 'local' and provider_repo_id = $2",
+      [ctx.orgId, input.providerRepoId]
+    );
+    if (!registered.rows[0]) {
+      throw new MissionCreationError("unknown_repository", "That local repository isn't registered on this machine.");
+    }
+    available = {
+      providerRepoId: registered.rows[0].provider_repo_id,
+      name: registered.rows[0].name,
+      defaultBranch: registered.rows[0].default_branch
+    };
+  } else {
+    const listed = await provider.listRepositories(ctx.orgId);
+    const found = listed.find((repo) => repo.providerRepoId === input.providerRepoId);
+    if (!found) throw new MissionCreationError("unknown_repository", "That repository isn't available.");
+    available = found;
+  }
 
   // Concurrent duplicates can violate either the creation-key index or, when
   // the burst is a repository's first mission, the repositories index — and a
@@ -207,7 +227,9 @@ export async function createMission(
   }
   if (created === undefined) throw new Error("mission creation did not settle");
 
-  await attemptBranchCreation(db, provider, ctx, created);
+  // Local branches are created by the desktop and reported back; the server
+  // attempts creation only where the provider can act (GitHub).
+  if (input.provider !== "local") await attemptBranchCreation(db, provider, ctx, created);
 
   const detail = await getMission(db, ctx, created);
   if (!detail || !detail.workstream) throw new Error("mission vanished during creation");
@@ -228,7 +250,7 @@ async function createMissionTx(
       );
       if (duplicate.rowCount && duplicate.rows[0]) return duplicate.rows[0].mission_id as string;
 
-      const repoId = await upsertRepository(client, ctx, available);
+      const repoId = await upsertRepository(client, ctx, available, input.provider);
       await client.query(
         `insert into missions (mission_id, org_id, goal, success_criteria, primary_state, created_by, repo_id, creation_key)
          values ($1, $2, $3, $4, 'new_mission', $5, $6, $7)`,
@@ -286,7 +308,7 @@ export async function attemptBranchCreation(
        from workstreams w
        join missions m on m.mission_id = w.mission_id
        join repositories r on r.repo_id = w.repo_id
-      where w.mission_id = $1 and m.org_id = $2`,
+      where w.mission_id = $1 and m.org_id = $2 and r.provider = 'github'`,
     [missionId, ctx.orgId]
   );
   const row = rows.rows[0];
@@ -406,6 +428,87 @@ export async function getMission(
     occurredAt: event.occurred_at.toISOString()
   }));
   return { mission: toMission(row), workstream, events };
+}
+
+/** Records (or refreshes) a local repository the desktop registered (D-032). */
+export async function registerLocalRepository(
+  db: Db,
+  ctx: AuthedContext,
+  input: { localId: string; name: string; defaultBranch: string }
+): Promise<RepositoryRef> {
+  const repoId = await withTransaction(db, (client) =>
+    upsertRepository(
+      client,
+      ctx,
+      { providerRepoId: input.localId, name: input.name, defaultBranch: input.defaultBranch },
+      "local"
+    )
+  );
+  return {
+    repoId,
+    provider: "local",
+    providerRepoId: input.localId,
+    name: input.name,
+    defaultBranch: input.defaultBranch
+  };
+}
+
+export async function listLocalRepositories(db: Db, ctx: AuthedContext): Promise<RepositoryRef[]> {
+  const rows = await db.query(
+    "select repo_id, provider_repo_id, name, default_branch from repositories where org_id = $1 and provider = 'local' order by created_at desc",
+    [ctx.orgId]
+  );
+  return rows.rows.map((row) => ({
+    repoId: row.repo_id,
+    provider: "local" as const,
+    providerRepoId: row.provider_repo_id,
+    name: row.name,
+    defaultBranch: row.default_branch
+  }));
+}
+
+/**
+ * The desktop's reported outcome for a local branch — a claim from the
+ * machine that ran git, recorded as such. A `created` state never downgrades.
+ */
+export async function reportBranchOutcome(
+  db: Db,
+  ctx: AuthedContext,
+  workstreamId: string,
+  report: { status: "created" | "failed"; error?: string | null }
+): Promise<string | null> {
+  const rows = await db.query(
+    `select w.wst_id, w.mission_id, w.mission_branch from workstreams w
+       join missions m on m.mission_id = w.mission_id
+      where w.wst_id = $1 and m.org_id = $2`,
+    [workstreamId, ctx.orgId]
+  );
+  const row = rows.rows[0];
+  if (!row) return null;
+
+  await withTransaction(db, async (client) => {
+    const updated = await client.query(
+      report.status === "created"
+        ? "update workstreams set branch_status = 'created', branch_error = null where wst_id = $1 and branch_status <> 'created' returning wst_id"
+        : "update workstreams set branch_status = 'failed', branch_error = $2 where wst_id = $1 and branch_status <> 'created' returning wst_id",
+      report.status === "created" ? [row.wst_id] : [row.wst_id, report.error ?? "Branch creation failed."]
+    );
+    if (updated.rowCount) {
+      await recordEvent(client, {
+        orgId: ctx.orgId,
+        missionId: row.mission_id,
+        seq: await nextSeq(client, row.mission_id),
+        kind: report.status === "created" ? "workstream.branch_created" : "workstream.branch_failed",
+        actorKind: "user",
+        actorId: ctx.userId,
+        payload:
+          report.status === "created"
+            ? { missionBranch: row.mission_branch, reportedBy: "local-desktop" }
+            : { missionBranch: row.mission_branch, error: report.error ?? "Branch creation failed.", reportedBy: "local-desktop" }
+      });
+    }
+  });
+  return row.mission_id as string;
 }
 
 export async function getWorkstreamMission(

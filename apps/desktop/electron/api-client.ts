@@ -117,6 +117,34 @@ export class ControlPlaneClient {
     return this.request("POST", "/missions", CreateMissionResponseSchema, input);
   }
 
+  async registerLocalRepo(input: {
+    localId: string;
+    name: string;
+    defaultBranch: string;
+    headSha: string;
+  }): Promise<unknown> {
+    return this.request("POST", "/repositories/local", z.object({}).passthrough(), input);
+  }
+
+  async localRepositories(): Promise<unknown[]> {
+    const body = await this.request(
+      "GET",
+      "/repositories/local",
+      z.object({ repositories: z.array(z.unknown()) })
+    );
+    return body.repositories;
+  }
+
+  async reportBranch(workstreamId: string, report: { status: "created" | "failed"; error?: string | null }): Promise<Workstream> {
+    const body = await this.request(
+      "POST",
+      `/workstreams/${encodeURIComponent(workstreamId)}/branch/report`,
+      RetryBranchResponseSchema,
+      report
+    );
+    return body.workstream;
+  }
+
   async retryBranch(workstreamId: string): Promise<Workstream> {
     const body = await this.request(
       "POST",

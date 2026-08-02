@@ -32,7 +32,11 @@ const novus = {
   repos: {
     available: (): Promise<IpcResult<AvailableRepository[]>> => ipcRenderer.invoke("novus:repos:available"),
     base: (providerRepoId: string, ref?: string): Promise<IpcResult<BaseRevision>> =>
-      ipcRenderer.invoke("novus:repos:base", { providerRepoId, ref })
+      ipcRenderer.invoke("novus:repos:base", { providerRepoId, ref }),
+    addLocal: (): Promise<IpcResult<unknown>> => ipcRenderer.invoke("novus:repos:add-local"),
+    localList: (): Promise<IpcResult<unknown[]>> => ipcRenderer.invoke("novus:repos:local-list"),
+    baseLocal: (localId: string): Promise<IpcResult<unknown>> =>
+      ipcRenderer.invoke("novus:repos:base-local", localId)
   },
   missions: {
     list: (): Promise<IpcResult<Mission[]>> => ipcRenderer.invoke("novus:missions:list"),

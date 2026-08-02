@@ -122,6 +122,7 @@ export function CreateMissionDialog({
     const result = await novus().missions.create({
       goal,
       successCriteria: criteria,
+      provider: "github",
       providerRepoId: repo.providerRepoId,
       baseRef: base.base.ref,
       baseSha: base.base.sha,

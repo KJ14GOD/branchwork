@@ -33,15 +33,33 @@ export const AvailableRepositorySchema = z.object({
 });
 export type AvailableRepository = z.infer<typeof AvailableRepositorySchema>;
 
-/** A repository Novus has recorded for an organization. */
+/** A repository Novus has recorded for an organization. `local` repositories
+ *  live on a user's machine: the control plane records identity and receives
+ *  reported outcomes; it never touches the folder, and paths never leave the
+ *  machine (D-032). */
+export const RepositoryProviderKindSchema = z.enum(["github", "local"]);
 export const RepositoryRefSchema = z.object({
   repoId: z.string().startsWith("rep_"),
-  provider: z.literal("github"),
+  provider: RepositoryProviderKindSchema,
   providerRepoId: z.string().min(1),
   name: z.string().min(1),
   defaultBranch: z.string().min(1)
 });
 export type RepositoryRef = z.infer<typeof RepositoryRefSchema>;
+
+export const RegisterLocalRepoInputSchema = z.object({
+  localId: z.string().uuid(),
+  name: z.string().min(1).max(200),
+  defaultBranch: z.string().min(1),
+  headSha: ShaSchema
+});
+export type RegisterLocalRepoInput = z.infer<typeof RegisterLocalRepoInputSchema>;
+
+export const ReportBranchInputSchema = z.object({
+  status: z.enum(["created", "failed"]),
+  error: z.string().max(500).nullable().optional()
+});
+export type ReportBranchInput = z.infer<typeof ReportBranchInputSchema>;
 
 export const BaseRevisionSchema = z.object({ ref: z.string().min(1), sha: ShaSchema });
 export type BaseRevision = z.infer<typeof BaseRevisionSchema>;
@@ -93,6 +111,7 @@ export type MissionEvent = z.infer<typeof EventSchema>;
 export const CreateMissionInputSchema = z.object({
   goal: z.string().trim().min(1, "A mission needs a goal").max(500),
   successCriteria: z.string().trim().min(1, "State what success looks like").max(5000),
+  provider: RepositoryProviderKindSchema.default("github"),
   providerRepoId: z.string().min(1, "Pick a repository"),
   baseRef: z.string().min(1),
   baseSha: ShaSchema,

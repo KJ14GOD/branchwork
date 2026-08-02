@@ -18,8 +18,12 @@ import {
   createMission,
   getMission,
   getWorkstreamMission,
-  listMissions
+  listLocalRepositories,
+  listMissions,
+  registerLocalRepository,
+  reportBranchOutcome
 } from "./missions.ts";
+import { RegisterLocalRepoInputSchema, ReportBranchInputSchema } from "@novus/contracts";
 import {
   ProviderUnconfiguredError,
   UnknownRepositoryError,
@@ -163,6 +167,33 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
       }
       throw error;
     }
+  });
+
+  app.post("/repositories/local", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    const parsed = RegisterLocalRepoInputSchema.safeParse(request.body);
+    if (!parsed.success) return sendError(reply, 422, "invalid_repo", "Malformed local repository.");
+    return { repository: await registerLocalRepository(db, ctx, parsed.data) };
+  });
+
+  app.get("/repositories/local", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    return { repositories: await listLocalRepositories(db, ctx) };
+  });
+
+  app.post("/workstreams/:workstreamId/branch/report", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    const params = z.object({ workstreamId: z.string().startsWith("wst_") }).safeParse(request.params);
+    const body = ReportBranchInputSchema.safeParse(request.body);
+    if (!params.success || !body.success) return sendError(reply, 400, "bad_request", "Malformed report.");
+    const missionId = await reportBranchOutcome(db, ctx, params.data.workstreamId, body.data);
+    if (!missionId) return sendError(reply, 404, "not_found", "No such workstream in your organization.");
+    const detail = await getMission(db, ctx, missionId);
+    if (!detail?.workstream) return sendError(reply, 500, "workstream_missing", "Workstream disappeared.");
+    return { workstream: detail.workstream };
   });
 
   app.get("/missions", async (request, reply) => {
