@@ -163,13 +163,22 @@ export async function claimFlow(db: Db, config: Config, state: string): Promise<
 }
 
 export async function authenticate(db: Db, bearerToken: string): Promise<AuthedContext | null> {
+  // A person can belong to more than one organization the moment they redeem a
+  // mission invitation (D-036). The session's organization is their own — the
+  // oldest membership, which is the personal org created at first sign-in —
+  // resolved deterministically rather than by whichever row the planner
+  // happened to return. It is the scope for organization-level acts only;
+  // access to a mission is decided by the mission's own organization and the
+  // participant row, never by this field (see authz.ts).
   const result = await db.query(
     `select s.session_id, u.user_id, u.login, u.name, m.org_id, o.name as org_name
        from sessions s
        join users u on u.user_id = s.user_id
        join organization_members m on m.user_id = u.user_id
        join organizations o on o.org_id = m.org_id
-      where s.token_hash = $1 and s.expires_at > now() and s.revoked_at is null`,
+      where s.token_hash = $1 and s.expires_at > now() and s.revoked_at is null
+      order by m.created_at asc, m.org_id asc
+      limit 1`,
     [hashToken(bearerToken)]
   );
   if (result.rowCount === 0 || !result.rows[0]) return null;

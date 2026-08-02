@@ -84,9 +84,17 @@ export function capabilitiesFor(role: MissionRole, isController: boolean): Capab
 
 /**
  * Resolves the caller's standing in a mission. Returns null when the mission
- * does not exist, belongs to another organization, or the caller is not a
- * participant — a non-participant must not be able to confirm a mission id
- * exists by guessing it, so callers turn null into 404, never 403.
+ * does not exist, the caller is not a member of the organization that owns it,
+ * or the caller is not a participant — a non-participant must not be able to
+ * confirm a mission id exists by guessing it, so callers turn null into 404,
+ * never 403.
+ *
+ * Scoping is against the **mission's** organization, not the session's. A
+ * person who redeems an invitation belongs to two organizations (D-036), so a
+ * single "current org" on the session cannot decide this: the mission names
+ * its owner, and the caller must hold both a membership there and a
+ * participant row. `orgId` below is the mission's, and every event this
+ * standing authorizes is recorded against it.
  */
 export async function missionAccess(
   db: Db | pg.PoolClient,
@@ -99,11 +107,12 @@ export async function missionAccess(
             l.lease_id, l.holder_user_id
        from missions m
        join participants p on p.mission_id = m.mission_id and p.user_id = $2
+       join organization_members om on om.org_id = m.org_id and om.user_id = $2
        left join workstreams w on w.mission_id = m.mission_id
        left join control_leases l
               on l.wst_id = w.wst_id and l.state in ('held', 'releasing')
-      where m.mission_id = $1 and m.org_id = $3`,
-    [missionId, ctx.userId, ctx.orgId]
+      where m.mission_id = $1`,
+    [missionId, ctx.userId]
   );
   const row = result.rows[0];
   if (!row) return null;

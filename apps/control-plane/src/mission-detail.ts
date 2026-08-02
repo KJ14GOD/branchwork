@@ -236,11 +236,14 @@ export async function runnerStatus(db: Db, workstreamId: string | null): Promise
  */
 export function projectMissionState(args: {
   hasWorkstream: boolean;
+  /** A workstream whose branch has not been allocated has no workspace to
+   *  instruct yet, which is exactly what *New mission* means. */
+  branchReady: boolean;
   executions: Execution[];
   checkpoints: Checkpoint[];
   checks: VerificationCheck[];
 }): MissionState {
-  if (!args.hasWorkstream) return "new_mission";
+  if (!args.hasWorkstream || !args.branchReady) return "new_mission";
   const latest = args.executions[args.executions.length - 1];
   if (!latest) return "ready_for_instruction";
 
@@ -316,6 +319,7 @@ export async function missionDetail(
 
   const state = projectMissionState({
     hasWorkstream: base.workstream !== null,
+    branchReady: base.workstream?.branchStatus === "created",
     executions,
     checkpoints,
     checks

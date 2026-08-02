@@ -148,7 +148,9 @@ describe("missions, events, and reconstruction", () => {
     });
     expect(created.statusCode).toBe(201);
     const { mission, workstream } = created.json();
-    expect(mission.primaryState).toBe("new_mission");
+    // The branch exists, so the workstream is ready to be instructed. The
+    // presented state is a projection over durable facts, never a stored word.
+    expect(mission.primaryState).toBe("ready_for_instruction");
     expect(mission.orgId).toBe(orgId);
     expect(mission.repository.name).toBe("novus/demo-app");
     expect(workstream.missionBranch).toMatch(/^novus\/m-/);
@@ -159,6 +161,7 @@ describe("missions, events, and reconstruction", () => {
     expect(events.rows.map((event) => event.kind)).toEqual([
       "mission.created",
       "workstream.created",
+      "control.granted",
       "workstream.branch_created"
     ]);
     expect(events.rows[0].actor_kind).toBe("user");

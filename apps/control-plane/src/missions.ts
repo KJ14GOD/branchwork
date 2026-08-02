@@ -201,7 +201,13 @@ export async function createMission(
 
   const base = await getMissionBase(db, ctx, created);
   if (!base || !base.workstream) throw new Error("mission vanished during creation");
-  return { mission: base.mission, workstream: base.workstream };
+  return {
+    mission: {
+      ...base.mission,
+      primaryState: base.workstream.branchStatus === "created" ? "ready_for_instruction" : "new_mission"
+    },
+    workstream: base.workstream
+  };
 }
 
 async function createMissionTx(
@@ -298,19 +304,20 @@ async function createMissionTx(
 export async function attemptBranchCreation(
   db: Db,
   provider: RepositoryProvider,
-  ctx: AuthedContext,
+  _ctx: AuthedContext,
   missionId: string
 ): Promise<void> {
   const rows = await db.query(
-    `select w.wst_id, w.mission_branch, w.base_sha, w.branch_status, r.provider_repo_id
+    `select w.wst_id, w.mission_branch, w.base_sha, w.branch_status, r.provider_repo_id, m.org_id
        from workstreams w
        join missions m on m.mission_id = w.mission_id
        join repositories r on r.repo_id = w.repo_id
-      where w.mission_id = $1 and m.org_id = $2 and r.provider = 'github'`,
-    [missionId, ctx.orgId]
+      where w.mission_id = $1 and r.provider = 'github'`,
+    [missionId]
   );
   const row = rows.rows[0];
   if (!row || row.branch_status === "created") return;
+  const orgId = row.org_id as string;
 
   // Serialize retries: only one caller moves failed → pending; the loser exits
   // quietly instead of emitting a duplicate outcome event (D-031 audit).
@@ -349,7 +356,7 @@ export async function attemptBranchCreation(
       );
       if (updated.rowCount) {
         await recordEvent(client, {
-          orgId: ctx.orgId,
+          orgId,
           missionId,
           workstreamId: row.wst_id,
           kind: "workstream.branch_created",
@@ -365,7 +372,7 @@ export async function attemptBranchCreation(
       );
       if (updated.rowCount) {
         await recordEvent(client, {
-          orgId: ctx.orgId,
+          orgId,
           missionId,
           workstreamId: row.wst_id,
           kind: "workstream.branch_failed",
@@ -387,16 +394,21 @@ const MISSION_SELECT = `
     left join repositories r on r.repo_id = m.repo_id`;
 
 /**
- * Missions the caller participates in. Org scoping is the outer boundary;
- * participation is the inner one — an org member who was never invited to a
- * mission cannot see it, so a mission id is not a capability.
+ * The fragment that decides whether a caller may see a mission at all:
+ * membership in the organization that owns it, and a participant row. An
+ * organization member who was never invited cannot see it, so a mission id is
+ * never a capability; and because the check is against the mission's own
+ * organization, it keeps working for someone who belongs to two (D-036).
  */
+const VISIBLE_TO = `
+   join participants p on p.mission_id = m.mission_id and p.user_id = $1
+   join organization_members om on om.org_id = m.org_id and om.user_id = $1`;
+
+/** Missions the caller participates in, newest first. */
 export async function listMissions(db: Db, ctx: AuthedContext): Promise<Mission[]> {
   const result = await db.query(
-    `${MISSION_SELECT}
-       join participants p on p.mission_id = m.mission_id and p.user_id = $2
-      where m.org_id = $1 order by m.created_at desc`,
-    [ctx.orgId, ctx.userId]
+    `${MISSION_SELECT} ${VISIBLE_TO} order by m.created_at desc`,
+    [ctx.userId]
   );
   const missions = (result.rows as MissionRow[]).map(toMission);
   if (missions.length === 0) return missions;
@@ -408,7 +420,8 @@ export async function listMissions(db: Db, ctx: AuthedContext): Promise<Mission[
     `select m.mission_id,
             (select e.state from executions e
               where e.mission_id = m.mission_id order by e.created_at desc limit 1) as latest_state,
-            exists (select 1 from workstreams w where w.mission_id = m.mission_id) as has_workstream,
+            exists (select 1 from workstreams w
+                     where w.mission_id = m.mission_id and w.branch_status = 'created') as branch_ready,
             exists (select 1 from checkpoints c where c.mission_id = m.mission_id and c.files_changed > 0) as changed,
             exists (select 1 from verification_checks v where v.mission_id = m.mission_id and v.outcome = 'passed') as passed,
             exists (select 1 from verification_checks v where v.mission_id = m.mission_id and v.outcome in ('failed', 'errored')) as broken
@@ -426,12 +439,12 @@ export async function listMissions(db: Db, ctx: AuthedContext): Promise<Mission[
 /** The same state machine as the room's, over the columns a list can afford. */
 function projectListState(row: {
   latest_state: string | null;
-  has_workstream: boolean;
+  branch_ready: boolean;
   changed: boolean;
   passed: boolean;
   broken: boolean;
 }): Mission["primaryState"] {
-  if (!row.has_workstream) return "new_mission";
+  if (!row.branch_ready) return "new_mission";
   switch (row.latest_state) {
     case null:
       return "ready_for_instruction";
@@ -463,10 +476,8 @@ export async function getMissionBase(
   missionId: string
 ): Promise<{ mission: Mission; workstream: Workstream | null } | null> {
   const result = await db.query(
-    `${MISSION_SELECT}
-       join participants p on p.mission_id = m.mission_id and p.user_id = $3
-      where m.org_id = $1 and m.mission_id = $2`,
-    [ctx.orgId, missionId, ctx.userId]
+    `${MISSION_SELECT} ${VISIBLE_TO} where m.mission_id = $2`,
+    [ctx.userId, missionId]
   );
   const row = (result.rows as MissionRow[])[0];
   if (!row) return null;
@@ -536,14 +547,16 @@ export async function reportBranchOutcome(
   report: { status: "created" | "failed"; error?: string | null }
 ): Promise<string | null> {
   const rows = await db.query(
-    `select w.wst_id, w.mission_id, w.mission_branch from workstreams w
+    `select w.wst_id, w.mission_id, w.mission_branch, m.org_id from workstreams w
        join missions m on m.mission_id = w.mission_id
-       join participants p on p.mission_id = m.mission_id and p.user_id = $3
-      where w.wst_id = $1 and m.org_id = $2`,
-    [workstreamId, ctx.orgId, ctx.userId]
+       join participants p on p.mission_id = m.mission_id and p.user_id = $2
+       join organization_members om on om.org_id = m.org_id and om.user_id = $2
+      where w.wst_id = $1`,
+    [workstreamId, ctx.userId]
   );
   const row = rows.rows[0];
   if (!row) return null;
+  const orgId = row.org_id as string;
 
   await withTransaction(db, async (client) => {
     const updated = await client.query(
@@ -554,7 +567,7 @@ export async function reportBranchOutcome(
     );
     if (updated.rowCount) {
       await recordEvent(client, {
-        orgId: ctx.orgId,
+        orgId,
         missionId: row.mission_id,
         workstreamId: row.wst_id,
         kind: report.status === "created" ? "workstream.branch_created" : "workstream.branch_failed",
@@ -583,9 +596,10 @@ export async function getWorkstreamMission(
   const result = await db.query(
     `select w.mission_id from workstreams w
        join missions m on m.mission_id = w.mission_id
-       join participants p on p.mission_id = m.mission_id and p.user_id = $3
-      where w.wst_id = $1 and m.org_id = $2`,
-    [workstreamId, ctx.orgId, ctx.userId]
+       join participants p on p.mission_id = m.mission_id and p.user_id = $2
+       join organization_members om on om.org_id = m.org_id and om.user_id = $2
+      where w.wst_id = $1`,
+    [workstreamId, ctx.userId]
   );
   return (result.rows[0]?.mission_id as string | undefined) ?? null;
 }

@@ -47,7 +47,7 @@ Runner-reported facts are **claims**. Events carry their origin; verification re
 
 Concepts are defined in [PRODUCT.md](PRODUCT.md#domain-model); this section fixes representation, keys, and invariants only.
 
-Identifiers are globally unique, prefixed, opaque strings (`msn_…`, `wst_…`, `exe_…`, `evt_…`, `lease_…`). All rows carry `org_id`; every query is org-scoped.
+Identifiers are globally unique, prefixed, opaque strings with a three-letter prefix per object (`msn_`, `wst_`, `exe_`, `evt_`, `dir_`, `lea_`, `rnr_`, `cmd_`, `ckp_`, `chg_`, `chk_`, `inv_`). All rows carry `org_id`; every query is org-scoped.
 
 | Object | Key fields and invariants |
 | --- | --- |
