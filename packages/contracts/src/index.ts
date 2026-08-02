@@ -21,6 +21,9 @@ export type Organization = z.infer<typeof OrganizationSchema>;
  *  reach. The schema widens as states become real; it never invents one. */
 export const MissionStateSchema = z.enum([
   "new_mission",
+  "workspace_needs_setup",
+  "provisioning_workspace",
+  "workspace_failed",
   "ready_for_instruction",
   "agent_starting",
   "agent_running",
@@ -36,6 +39,8 @@ export type MissionState = z.infer<typeof MissionStateSchema>;
 
 /** Conditions that coexist with a primary state (PRODUCT.md overlays). */
 export const MissionOverlaySchema = z.enum([
+  "project_running",
+  "verification_stale",
   "direction_queued",
   "control_requested",
   "handoff_offered",
@@ -200,6 +205,7 @@ export const CapabilitySchema = z.enum([
   "direction.apply",
   "execution.start",
   "execution.stop",
+  "workspace.command",
   "control.request",
   "control.offer",
   "control.accept",
@@ -346,16 +352,32 @@ export type Checkpoint = z.infer<typeof CheckpointSchema>;
 export const CheckCategorySchema = z.enum(["test", "typecheck", "build", "lint", "diagnostic"]);
 export const CheckOutcomeSchema = z.enum(["passed", "failed", "skipped", "errored"]);
 
+/** Where a check came from. Collapsing these into one green row is the
+ *  fabrication the ledger exists to prevent (D-037). */
+export const CheckOriginSchema = z.enum(["harness", "participant", "external"]);
+export type CheckOrigin = z.infer<typeof CheckOriginSchema>;
+
 export const VerificationCheckSchema = z.object({
   checkId: z.string().startsWith("chk_"),
-  executionId: z.string().min(1),
+  executionId: z.string().nullable(),
   name: z.string().min(1),
   category: CheckCategorySchema,
   outcome: CheckOutcomeSchema,
+  origin: CheckOriginSchema,
+  requestedByLogin: z.string().nullable(),
   command: z.string().min(1),
+  exitCode: z.number().int().nullable(),
   output: z.string().nullable(),
   truncated: z.boolean(),
   environment: z.string().min(1),
+  startedAt: z.string().datetime().nullable(),
+  completedAt: z.string().datetime().nullable(),
+  durationMs: z.number().int().nonnegative().nullable(),
+  /** The revision this check proves. */
+  checkpointSha: z.string().nullable(),
+  /** True once the workstream moved past `checkpointSha`: still history, no
+   *  longer evidence for what is there now. Derived server-side, never stored. */
+  stale: z.boolean(),
   observedAt: z.string().datetime()
 });
 export type VerificationCheck = z.infer<typeof VerificationCheckSchema>;
@@ -368,6 +390,149 @@ export const FileDiffResponseSchema = z.object({
   truncated: z.boolean()
 });
 export type FileDiffResponse = z.infer<typeof FileDiffResponseSchema>;
+
+// --- Workspace runtime (D-040 … D-042) --------------------------------------
+
+export const WorkspaceReadinessSchema = z.enum(["unconfigured", "configuring", "ready", "failed"]);
+export type WorkspaceReadiness = z.infer<typeof WorkspaceReadinessSchema>;
+
+export const WorkspaceSchema = z.object({
+  workspaceId: z.string().startsWith("wsp_"),
+  workstreamId: z.string().startsWith("wst_"),
+  location: z.literal("local"),
+  readiness: WorkspaceReadinessSchema,
+  /** Allocated per workstream so two on one host never collide. */
+  portRangeStart: z.number().int().nullable(),
+  portRangeEnd: z.number().int().nullable(),
+  setupError: z.string().nullable(),
+  configuredAt: z.string().datetime().nullable()
+});
+export type Workspace = z.infer<typeof WorkspaceSchema>;
+
+export const ProcessKindSchema = z.enum(["setup", "run", "verification"]);
+export const ProcessStateSchema = z.enum(["starting", "running", "exited", "failed", "stopped"]);
+
+export const WorkspaceProcessSchema = z.object({
+  processId: z.string().startsWith("prc_"),
+  kind: ProcessKindSchema,
+  name: z.string().min(1),
+  /** Sanitized: the command as declared, never an expanded secret. */
+  command: z.string().min(1),
+  state: ProcessStateSchema,
+  startedByLogin: z.string().nullable(),
+  previewUrl: z.string().nullable(),
+  port: z.number().int().nullable(),
+  exitCode: z.number().int().nullable(),
+  failureReason: z.string().nullable(),
+  startedAt: z.string().datetime(),
+  endedAt: z.string().datetime().nullable()
+});
+export type WorkspaceProcess = z.infer<typeof WorkspaceProcessSchema>;
+
+// The shape of `.novus/settings.toml`. Committed, shared, and non-secret; the
+// machine-local override has the identical shape and layers over it key by key.
+
+const CommandName = z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/, "lowercase, hyphenated, 40 characters or fewer");
+const CommandLine = z.string().min(1).max(400);
+/** A path inside the workspace. Never absolute, never escaping upward. */
+const RelativeDir = z
+  .string()
+  .max(200)
+  .refine((value) => !value.startsWith("/") && !value.split("/").includes(".."), {
+    message: "must be a relative path inside the workspace"
+  });
+
+export const RunCommandSchema = z.object({
+  name: CommandName,
+  command: CommandLine,
+  cwd: RelativeDir.optional(),
+  /** Where the project says its preview appears; `{port}` is substituted. */
+  previewUrl: z.string().max(300).optional(),
+  port: z.number().int().min(1).max(65_535).optional()
+});
+
+export const VerificationCommandSchema = z.object({
+  name: CommandName,
+  command: CommandLine,
+  cwd: RelativeDir.optional(),
+  category: CheckCategorySchema.default("test")
+});
+
+export const WorkspaceSettingsSchema = z.object({
+  setup: z.object({ command: CommandLine, cwd: RelativeDir.optional() }).optional(),
+  run: z.array(RunCommandSchema).max(20).default([]),
+  /** Which run command the Run control offers first. */
+  defaultRun: CommandName.optional(),
+  /** Whether two run commands may be alive at once. Default: no. */
+  concurrentRuns: z.boolean().default(false),
+  verify: z.array(VerificationCommandSchema).max(20).default([]),
+  /** Shared, non-secret. A value here is committed; the gate says so. */
+  env: z.record(z.string().max(2_000)).default({}),
+  /** Names only. Values live in operating-system storage on the machine that
+   *  supplied them and never reach the control plane or the renderer (D-041). */
+  secretNames: z.array(z.string().max(120)).max(50).default([]),
+  /** Gitignored paths this workspace needs, from settings or .worktreeinclude. */
+  localFiles: z.array(z.string().max(300)).max(100).default([])
+});
+export type WorkspaceSettings = z.infer<typeof WorkspaceSettingsSchema>;
+
+export const SettingsScopeSchema = z.enum(["shared", "local"]);
+
+/** What Novus noticed about a project, and what it would therefore propose.
+ *  A proposal is never executed without an explicit confirmation. */
+export const WorkspaceProposalSchema = z.object({
+  projectType: z.string().min(1),
+  signals: z.array(z.string().max(120)),
+  setup: CommandLine.nullable(),
+  run: z.array(RunCommandSchema),
+  verify: z.array(VerificationCommandSchema),
+  /** Filenames only — never contents (D-041). */
+  localFiles: z.array(
+    z.object({
+      path: z.string().min(1),
+      /** Whether the source repository actually has it right now. */
+      availableInSource: z.boolean(),
+      /** Whether the worktree already has a copy. */
+      presentInWorkspace: z.boolean(),
+      /** Only a Git-ignored file may ever be copied. */
+      gitIgnored: z.boolean()
+    })
+  ),
+  /** Non-null when the project already carries committed configuration. */
+  shared: WorkspaceSettingsSchema.nullable(),
+  local: WorkspaceSettingsSchema.nullable(),
+  /** Why the workspace is not runnable yet, in the product's words. */
+  blockers: z.array(z.string().max(200))
+});
+export type WorkspaceProposal = z.infer<typeof WorkspaceProposalSchema>;
+export type SettingsScope = z.infer<typeof SettingsScopeSchema>;
+export type ProcessKind = z.infer<typeof ProcessKindSchema>;
+export type PreparedFile = z.infer<typeof PreparedFileSchema>;
+
+export const SaveWorkspaceSettingsInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  scope: SettingsScopeSchema,
+  settings: WorkspaceSettingsSchema
+});
+
+export const PrepareLocalFilesInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  /** Explicitly confirmed by the person at the machine, one by one. */
+  paths: z.array(z.string().min(1).max(300)).min(1).max(50)
+});
+
+export const PreparedFileSchema = z.object({
+  path: z.string().min(1),
+  copied: z.boolean(),
+  /** Named refusal — path escape, symlink, not ignored, a directory. */
+  refusedBecause: z.string().nullable()
+});
+
+export const WorkspaceCommandInputSchema = z.object({
+  kind: ProcessKindSchema,
+  /** Omitted for setup, and for "run every configured check". */
+  name: CommandName.optional()
+});
 
 // --- Control (PRODUCT.md#control) -------------------------------------------
 
@@ -467,7 +632,11 @@ export const RunnerCommandKindSchema = z.enum([
   "start_execution",
   "apply_direction",
   "stop_execution",
-  "boundary_request"
+  "boundary_request",
+  "run_setup",
+  "run_command",
+  "stop_command",
+  "run_verification"
 ]);
 
 export const RunnerCommandSchema = z.object({
@@ -555,6 +724,25 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
       .strict()
   }),
   z.object({
+    kind: z.literal("verification.completed"),
+    payload: z
+      .object({
+        name: BOUNDED_LINE,
+        category: CheckCategorySchema,
+        outcome: CheckOutcomeSchema,
+        command: BOUNDED_LINE,
+        exitCode: z.number().int().nullable().default(null),
+        output: z.string().max(4_000).nullable().default(null),
+        truncated: z.boolean().default(false),
+        startedAt: z.string().max(40),
+        completedAt: z.string().max(40),
+        durationMs: z.number().int().nonnegative(),
+        /** The revision the check actually ran against. */
+        checkpointSha: z.string().max(64).nullable().default(null)
+      })
+      .strict()
+  }),
+  z.object({
     kind: z.literal("verification.observed"),
     payload: z
       .object({
@@ -564,6 +752,41 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         command: BOUNDED_LINE,
         output: z.string().max(4_000).nullable().default(null),
         truncated: z.boolean().default(false)
+      })
+      .strict()
+  }),
+  z.object({
+    kind: z.literal("workspace.readiness"),
+    payload: z
+      .object({
+        readiness: WorkspaceReadinessSchema,
+        portRangeStart: z.number().int().nullable().default(null),
+        portRangeEnd: z.number().int().nullable().default(null),
+        setupError: BOUNDED_LINE.nullable().default(null)
+      })
+      .strict()
+  }),
+  z.object({
+    kind: z.literal("process.started"),
+    payload: z
+      .object({
+        processId: z.string().startsWith("prc_"),
+        kind: ProcessKindSchema,
+        name: BOUNDED_LINE,
+        command: BOUNDED_LINE,
+        port: z.number().int().nullable().default(null),
+        previewUrl: BOUNDED_LINE.nullable().default(null)
+      })
+      .strict()
+  }),
+  z.object({
+    kind: z.literal("process.exited"),
+    payload: z
+      .object({
+        processId: z.string().startsWith("prc_"),
+        state: z.enum(["exited", "failed", "stopped"]),
+        exitCode: z.number().int().nullable().default(null),
+        failureReason: BOUNDED_LINE.nullable().default(null)
       })
       .strict()
   }),
@@ -657,6 +880,8 @@ export const MissionDetailResponseSchema = z.object({
   checkpoints: z.array(CheckpointSchema),
   checks: z.array(VerificationCheckSchema),
   runner: RunnerStatusSchema.nullable(),
+  workspace: WorkspaceSchema.nullable(),
+  processes: z.array(WorkspaceProcessSchema),
   /** The viewer's server-computed effective capabilities (role ∪ lease). */
   capabilities: z.array(CapabilitySchema),
   viewerUserId: z.string().startsWith("usr_"),
@@ -815,5 +1040,33 @@ export interface NovusBridge {
   };
   evidence: {
     fileDiff(changeId: string): Promise<IpcResult<FileDiffResponse>>;
+  };
+  /**
+   * The workspace runtime. Inspecting a project, writing its configuration,
+   * and supplying local files are acts by the person at the machine, so they
+   * are local calls. Running a command is remotely invokable, so it goes
+   * through the control plane and is authorized there (D-042).
+   */
+  workspace: {
+    /** What Novus noticed and would therefore propose. Executes nothing. */
+    inspect(missionId: string): Promise<IpcResult<WorkspaceProposal>>;
+    save(input: {
+      missionId: string;
+      scope: SettingsScope;
+      settings: WorkspaceSettings;
+    }): Promise<IpcResult<null>>;
+    /** Copies confirmed Git-ignored files into the worktree. Names in, names
+     *  out — a content never crosses this bridge. */
+    prepareLocalFiles(input: {
+      missionId: string;
+      paths: string[];
+    }): Promise<IpcResult<PreparedFile[]>>;
+    /** Asks the control plane to authorize and enqueue a declared command. */
+    command(input: {
+      missionId: string;
+      kind: ProcessKind;
+      name?: string;
+    }): Promise<IpcResult<null>>;
+    stop(input: { missionId: string; name: string }): Promise<IpcResult<null>>;
   };
 }

@@ -8,7 +8,9 @@ import type {
   MissionState,
   Participant,
   RunnerStatus,
-  VerificationCheck
+  VerificationCheck,
+  Workspace,
+  WorkspaceProcess
 } from "@novus/contracts";
 import type { Db } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
@@ -186,22 +188,90 @@ export async function listCheckpoints(db: Db, missionId: string): Promise<Checkp
   }));
 }
 
-export async function listChecks(db: Db, missionId: string): Promise<VerificationCheck[]> {
+/**
+ * A check proves the revision it ran against. Once the workstream's latest
+ * checkpoint has moved past it the row is history, not evidence — so staleness
+ * is derived here against the current head rather than stored and left to rot.
+ */
+export async function listChecks(
+  db: Db,
+  missionId: string,
+  currentCheckpointSha: string | null
+): Promise<VerificationCheck[]> {
   const result = await db.query(
-    "select * from verification_checks where mission_id = $1 order by observed_at",
+    `select v.*, u.login as requested_by_login
+       from verification_checks v
+       left join users u on u.user_id = v.requested_by
+      where v.mission_id = $1 order by v.observed_at`,
+    [missionId]
+  );
+  return result.rows.map((row) => {
+    const checkpointSha = (row.checkpoint_sha as string | null) ?? null;
+    return {
+      checkId: row.chk_id as string,
+      executionId: (row.exe_id as string | null) ?? null,
+      name: row.name as string,
+      category: row.category as VerificationCheck["category"],
+      outcome: row.outcome as VerificationCheck["outcome"],
+      origin: row.origin as VerificationCheck["origin"],
+      requestedByLogin: (row.requested_by_login as string | null) ?? null,
+      command: row.command as string,
+      exitCode: row.exit_code === null || row.exit_code === undefined ? null : Number(row.exit_code),
+      output: (row.output as string | null) ?? null,
+      truncated: Boolean(row.truncated),
+      environment: row.environment as string,
+      startedAt: row.started_at ? (row.started_at as Date).toISOString() : null,
+      completedAt: row.completed_at ? (row.completed_at as Date).toISOString() : null,
+      durationMs: row.duration_ms === null || row.duration_ms === undefined ? null : Number(row.duration_ms),
+      checkpointSha,
+      // No recorded revision means it predates the workspace runtime: it can
+      // never be claimed as proof of the current one.
+      stale: currentCheckpointSha === null || checkpointSha === null
+        ? checkpointSha !== null
+        : checkpointSha !== currentCheckpointSha,
+      observedAt: (row.observed_at as Date).toISOString()
+    };
+  });
+}
+
+export async function workspaceOf(db: Db, workstreamId: string | null): Promise<Workspace | null> {
+  if (!workstreamId) return null;
+  const result = await db.query("select * from workspaces where wst_id = $1", [workstreamId]);
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    workspaceId: row.wsp_id as string,
+    workstreamId: row.wst_id as string,
+    location: "local",
+    readiness: row.readiness as Workspace["readiness"],
+    portRangeStart: row.port_range_start === null ? null : Number(row.port_range_start),
+    portRangeEnd: row.port_range_end === null ? null : Number(row.port_range_end),
+    setupError: (row.setup_error as string | null) ?? null,
+    configuredAt: row.configured_at ? (row.configured_at as Date).toISOString() : null
+  };
+}
+
+export async function listProcesses(db: Db, missionId: string): Promise<WorkspaceProcess[]> {
+  const result = await db.query(
+    `select p.*, u.login as started_by_login
+       from workspace_processes p
+       left join users u on u.user_id = p.started_by
+      where p.mission_id = $1 order by p.started_at desc limit 50`,
     [missionId]
   );
   return result.rows.map((row) => ({
-    checkId: row.chk_id as string,
-    executionId: row.exe_id as string,
+    processId: row.prc_id as string,
+    kind: row.kind as WorkspaceProcess["kind"],
     name: row.name as string,
-    category: row.category as VerificationCheck["category"],
-    outcome: row.outcome as VerificationCheck["outcome"],
     command: row.command as string,
-    output: (row.output as string | null) ?? null,
-    truncated: Boolean(row.truncated),
-    environment: row.environment as string,
-    observedAt: (row.observed_at as Date).toISOString()
+    state: row.state as WorkspaceProcess["state"],
+    startedByLogin: (row.started_by_login as string | null) ?? null,
+    previewUrl: (row.preview_url as string | null) ?? null,
+    port: row.port === null || row.port === undefined ? null : Number(row.port),
+    exitCode: row.exit_code === null || row.exit_code === undefined ? null : Number(row.exit_code),
+    failureReason: (row.failure_reason as string | null) ?? null,
+    startedAt: (row.started_at as Date).toISOString(),
+    endedAt: row.ended_at ? (row.ended_at as Date).toISOString() : null
   }));
 }
 
@@ -239,13 +309,27 @@ export function projectMissionState(args: {
   /** A workstream whose branch has not been allocated has no workspace to
    *  instruct yet, which is exactly what *New mission* means. */
   branchReady: boolean;
+  workspace: Workspace | null;
   executions: Execution[];
   checkpoints: Checkpoint[];
   checks: VerificationCheck[];
 }): MissionState {
   if (!args.hasWorkstream || !args.branchReady) return "new_mission";
+  // A workspace mid-setup is being prepared, which is what *Provisioning
+  // workspace* has always meant; one that was never configured says so rather
+  // than pretending it is ready to run something.
+  if (args.workspace?.readiness === "configuring") return "provisioning_workspace";
+  if (args.workspace?.readiness === "failed") return "workspace_failed";
+  // Idle, with nothing to report: say whether the workspace can actually run
+  // anything. Direction is never blocked on this — the composer stays open —
+  // but the room should not imply a project it cannot start.
+  const idle: MissionState =
+    args.workspace === null || args.workspace.readiness === "unconfigured"
+      ? "workspace_needs_setup"
+      : "ready_for_instruction";
+
   const latest = args.executions[args.executions.length - 1];
-  if (!latest) return "ready_for_instruction";
+  if (!latest) return idle;
 
   switch (latest.state) {
     case "requested":
@@ -267,11 +351,13 @@ export function projectMissionState(args: {
   }
 
   const changed = args.checkpoints.some((checkpoint) => checkpoint.filesChanged > 0);
-  const checksForRun = args.checks.filter((check) => check.executionId === latest.executionId);
+  // Only evidence for the revision that is actually there counts toward
+  // readiness; a stale pass is history (PRODUCT.md#the-mission-state-model).
+  const checksForRun = args.checks.filter((check) => !check.stale);
   if (checksForRun.some((check) => check.outcome === "failed" || check.outcome === "errored")) {
     return "verification_failed";
   }
-  if (!changed) return "ready_for_instruction";
+  if (!changed) return idle;
   if (checksForRun.some((check) => check.outcome === "passed")) return "ready_for_review";
   return "work_completed_unverified";
 }
@@ -280,8 +366,16 @@ export function projectOverlays(args: {
   queuedDirections: number;
   control: ControlSnapshot;
   runner: RunnerStatus | null;
+  processes: WorkspaceProcess[];
+  checks: VerificationCheck[];
 }): MissionOverlay[] {
   const overlays: MissionOverlay[] = [];
+  if (args.processes.some((process) => process.kind === "run" && (process.state === "running" || process.state === "starting"))) {
+    overlays.push("project_running");
+  }
+  if (args.checks.length > 0 && args.checks.every((check) => check.stale)) {
+    overlays.push("verification_stale");
+  }
   if (args.queuedDirections > 0) overlays.push("direction_queued");
   if (args.control.openRequests.length > 0) overlays.push("control_requested");
   if (args.control.liveOffer?.state === "open") overlays.push("handoff_offered");
@@ -302,15 +396,22 @@ export async function missionDetail(
   viewerUserId: string,
   base: { mission: MissionDetailResponse["mission"]; workstream: MissionDetailResponse["workstream"] }
 ): Promise<MissionDetailResponse> {
-  const [participants, control, directions, executions, checkpoints, checks, runner, eventRows] =
+  const checkpointsForSha = await listCheckpoints(db, access.missionId);
+  // The revision a check has to match to still count as current evidence.
+  const currentCheckpointSha =
+    [...checkpointsForSha].reverse().find((checkpoint) => checkpoint.sha !== null)?.sha ?? null;
+
+  const [participants, control, directions, executions, checkpoints, checks, runner, workspace, processes, eventRows] =
     await Promise.all([
       listParticipants(db, access.missionId, access.controllerUserId),
       controlSnapshot(db, access.workstreamId),
       listDirections(db, access.missionId),
       listExecutions(db, access.missionId),
-      listCheckpoints(db, access.missionId),
-      listChecks(db, access.missionId),
+      Promise.resolve(checkpointsForSha),
+      listChecks(db, access.missionId, currentCheckpointSha),
       runnerStatus(db, access.workstreamId),
+      workspaceOf(db, access.workstreamId),
+      listProcesses(db, access.missionId),
       db.query(`${EVENT_SELECT} where org_id = $1 and mission_id = $2 order by seq`, [
         access.orgId,
         access.missionId
@@ -320,6 +421,7 @@ export async function missionDetail(
   const state = projectMissionState({
     hasWorkstream: base.workstream !== null,
     branchReady: base.workstream?.branchStatus === "created",
+    workspace,
     executions,
     checkpoints,
     checks
@@ -327,7 +429,9 @@ export async function missionDetail(
   const overlays = projectOverlays({
     queuedDirections: directions.filter((direction) => direction.state === "queued").length,
     control,
-    runner
+    runner,
+    processes,
+    checks
   });
 
   return {
@@ -341,6 +445,8 @@ export async function missionDetail(
     checkpoints,
     checks,
     runner,
+    workspace,
+    processes,
     capabilities: access.capabilities,
     viewerUserId,
     state,

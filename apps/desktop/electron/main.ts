@@ -389,6 +389,26 @@ function registerIpc(): void {
     return result;
   });
 
+  // --- Workspace runtime ----------------------------------------------------
+  // Contracted and not yet built (PROGRESS.md). Every channel exists so the
+  // bridge is whole, and each answers with a named refusal rather than
+  // hanging or pretending: an unbuilt capability says so.
+  const workspaceRuntimeUnavailable = (): IpcResult<never> => ({
+    ok: false,
+    code: "workspace_runtime_unavailable",
+    message: "Running and verifying a project from Novus isn't built yet."
+  });
+
+  for (const channel of [
+    "novus:workspace:inspect",
+    "novus:workspace:save",
+    "novus:workspace:prepare-local-files",
+    "novus:workspace:command",
+    "novus:workspace:stop"
+  ]) {
+    ipcMain.handle(channel, () => workspaceRuntimeUnavailable());
+  }
+
   // --- Evidence -------------------------------------------------------------
 
   ipcMain.handle("novus:evidence:file-diff", async (_event, raw: unknown) => {

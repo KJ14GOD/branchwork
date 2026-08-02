@@ -74,7 +74,7 @@ export interface StateLineAction {
   label: string;
   /** What the action does; the room wires it to a real call or an inspector
    *  section. Never rendered without a real destination. */
-  kind: "stop" | "changes" | "verification";
+  kind: "stop" | "changes" | "verification" | "setup" | "preview" | "stopRun";
 }
 
 export interface StateLineView {
@@ -141,6 +141,33 @@ export function deriveStateLine(detail: MissionDetailResponse): StateLineView {
     };
   }
 
+  const running = detail.processes.find(
+    (process) => process.kind === "run" && (process.state === "running" || process.state === "starting")
+  );
+  if (running && !base.working) {
+    return {
+      tone: "active",
+      name: "App running",
+      detail: running.port === null ? running.name : `${running.name} on :${running.port}`,
+      suffix: suffixFor(detail),
+      action: running.previewUrl
+        ? { label: "Open preview", kind: "preview" }
+        : { label: "Stop", kind: "stopRun" },
+      working: false
+    };
+  }
+
+  if (overlays.has("verification_stale") && !base.working) {
+    return {
+      tone: "warn",
+      name: "Verification stale",
+      detail: "the workspace moved past what was checked",
+      suffix: suffixFor(detail),
+      action: { label: "Re-run verification", kind: "verification" },
+      working: false
+    };
+  }
+
   return { ...base, suffix: suffixFor(detail) };
 }
 
@@ -169,6 +196,32 @@ function primaryStateLine(
   switch (detail.state) {
     case "new_mission":
       return { ...quiet, tone: "neutral", name: "New mission", detail: "set up the workspace to begin" };
+    case "workspace_needs_setup":
+      return {
+        tone: "warn",
+        name: "Workspace needs setup",
+        detail: "configure it before running the project",
+        suffix: null,
+        action: { label: "Set up workspace", kind: "setup" },
+        working: false
+      };
+    case "provisioning_workspace":
+      return {
+        ...quiet,
+        tone: "active",
+        name: "Setting up workspace",
+        detail: "the project's setup command is running",
+        working: true
+      };
+    case "workspace_failed":
+      return {
+        tone: "danger",
+        name: "Workspace setup failed",
+        detail: workspaceError(detail),
+        suffix: null,
+        action: { label: "Set up workspace", kind: "setup" },
+        working: false
+      };
     case "ready_for_instruction":
       return {
         ...quiet,
@@ -247,6 +300,10 @@ function primaryStateLine(
         detail: interruptionReason(detail)
       };
   }
+}
+
+function workspaceError(detail: MissionDetailResponse): string {
+  return detail.workspace?.setupError ?? "the setup command did not finish";
 }
 
 function interruptionReason(detail: MissionDetailResponse): string {

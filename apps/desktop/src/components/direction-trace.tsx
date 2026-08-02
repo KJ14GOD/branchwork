@@ -213,8 +213,11 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
     queue.push(checkpoint);
     checkpointQueue.set(checkpoint.executionId, queue);
   }
+  // A participant-run check has no execution: it belongs to the ledger, not to
+  // any one direction's trace. Only harness-observed checks hang off a turn.
   const checkQueue = new Map<string, VerificationCheck[]>();
   for (const check of [...detail.checks].sort((a, b) => a.observedAt.localeCompare(b.observedAt))) {
+    if (check.executionId === null) continue;
     const queue = checkQueue.get(check.executionId) ?? [];
     queue.push(check);
     checkQueue.set(check.executionId, queue);

@@ -57,6 +57,13 @@ const novus: NovusBridge = {
   },
   evidence: {
     fileDiff: (changeId) => ipcRenderer.invoke("novus:evidence:file-diff", changeId)
+  },
+  workspace: {
+    inspect: (missionId) => ipcRenderer.invoke("novus:workspace:inspect", missionId),
+    save: (input) => ipcRenderer.invoke("novus:workspace:save", input),
+    prepareLocalFiles: (input) => ipcRenderer.invoke("novus:workspace:prepare-local-files", input),
+    command: (input) => ipcRenderer.invoke("novus:workspace:command", input),
+    stop: (input) => ipcRenderer.invoke("novus:workspace:stop", input)
   }
 };
 
