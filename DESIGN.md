@@ -82,7 +82,7 @@ Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% plu
 
 - Spacing scale (px): 4, 8, 12, 16, 24, 32, 48, 64. No other values.
 - Grid: 8px base; rows in dense lists are 32–36px tall; touch/pointer targets ≥32px.
-- Shell: top bar 48px; navigation rail 240px (Missions surface); Mission Room sidebar 280–320px max; content max-width unconstrained in the Room, 720px for prose-like content (receipts, empty states); outer page margins 24–32px.
+- Shell: top bar 48px, **borderless** — it separates from content by height and spacing alone, never a hairline; navigation rail 240px (Missions surface); Mission Room sidebar 280–320px max; content max-width unconstrained in the Room, 720px for prose-like content (receipts, empty states); outer page margins 24–32px.
 - The app shell never scrolls; see [Overflow](#overflow).
 
 ### Radii
