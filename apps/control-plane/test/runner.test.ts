@@ -28,9 +28,19 @@ interface Lane {
   runnerId: string;
 }
 
-/** A local repository, its mission, and this machine enrolled as its runner —
- *  the only configuration in which anything actually runs today. */
-async function createLane(label = "test-machine"): Promise<Lane> {
+/** Enrols a machine for a workstream. Returns the raw reply so refusals can be
+ *  asserted as precisely as successes. */
+async function enrol(actor: SignedIn, workstreamId: string, label: string) {
+  return harness.app.inject({
+    method: "POST",
+    url: `/workstreams/${workstreamId}/runner`,
+    headers: bearer(actor),
+    payload: { workstreamId, label }
+  });
+}
+
+/** A local repository and its mission, with no machine enrolled yet. */
+async function createMissionLane(): Promise<Omit<Lane, "credential" | "runnerId">> {
   const localId = randomUUID();
   const headSha = sha(localId);
   const registered = await harness.app.inject({
@@ -57,24 +67,42 @@ async function createLane(label = "test-machine"): Promise<Lane> {
   });
   expect(created.statusCode).toBe(201);
   const body = created.json();
-  const workstreamId = body.workstream.workstreamId as string;
-
-  const enrolled = await harness.app.inject({
-    method: "POST",
-    url: `/workstreams/${workstreamId}/runner`,
-    headers: bearer(owner),
-    payload: { workstreamId, label }
-  });
-  expect(enrolled.statusCode).toBe(200);
-  const runner = enrolled.json();
-
   return {
     missionId: body.mission.missionId as string,
-    workstreamId,
-    missionBranch: body.workstream.missionBranch as string,
-    credential: runner.credential as string,
-    runnerId: runner.runnerId as string
+    workstreamId: body.workstream.workstreamId as string,
+    missionBranch: body.workstream.missionBranch as string
   };
+}
+
+/** A local mission with this machine enrolled as its runner — the only
+ *  configuration in which anything actually runs today. */
+async function createLane(label = "test-machine"): Promise<Lane> {
+  const lane = await createMissionLane();
+  const enrolled = await enrol(owner, lane.workstreamId, label);
+  expect(enrolled.statusCode).toBe(200);
+  const runner = enrolled.json();
+  return { ...lane, credential: runner.credential as string, runnerId: runner.runnerId as string };
+}
+
+/** Invites someone into a mission and has them redeem it, which is the only
+ *  way a second person becomes a participant. */
+async function addParticipant(missionId: string, who: string, role = "contributor"): Promise<SignedIn> {
+  const joiner = await harness.signIn(who);
+  const created = await harness.app.inject({
+    method: "POST",
+    url: `/missions/${missionId}/invitations`,
+    headers: bearer(owner),
+    payload: { role }
+  });
+  expect(created.statusCode).toBe(201);
+  const redeemed = await harness.app.inject({
+    method: "POST",
+    url: "/invitations/redeem",
+    headers: bearer(joiner),
+    payload: { token: created.json().token }
+  });
+  expect(redeemed.statusCode).toBe(200);
+  return joiner;
 }
 
 async function direct(missionId: string, body: string) {
@@ -246,6 +274,84 @@ describe("runner enrolment and credential custody", () => {
   });
 });
 
+describe("who may displace a runner", () => {
+  it("lets any participant enrol when no machine holds the workstream", async () => {
+    const lane = await createMissionLane();
+    const contributor = await addParticipant(lane.missionId, "enroller");
+    const enrolled = await enrol(contributor, lane.workstreamId, "contributor-machine");
+    expect(enrolled.statusCode).toBe(200);
+  });
+
+  it("refuses a contributor who would displace someone else's machine", async () => {
+    const lane = await createLane("host-machine");
+    const contributor = await addParticipant(lane.missionId, "displacer");
+
+    const attempt = await enrol(contributor, lane.workstreamId, "their-laptop");
+    expect(attempt.statusCode).toBe(409);
+    expect(attempt.json().error.code).toBe("runner_held");
+    expect(attempt.json().error.message).toContain(owner.login);
+
+    // The host's machine keeps the workstream and its credential still works.
+    const held = await harness.db.query(
+      "select runner_id from runners where wst_id = $1 and revoked_at is null",
+      [lane.workstreamId]
+    );
+    expect(held.rows[0].runner_id).toBe(lane.runnerId);
+    const stillWorks = await harness.app.inject({
+      method: "GET",
+      url: "/runner/commands",
+      headers: runnerAuth(lane.credential)
+    });
+    expect(stillWorks.statusCode).toBe(200);
+  });
+
+  it("lets the owner rotate their own machine's credential", async () => {
+    const lane = await createLane("host-machine");
+    const again = await enrol(owner, lane.workstreamId, "host-machine");
+    expect(again.statusCode).toBe(200);
+    const rotated = again.json().credential as string;
+    expect(rotated).not.toBe(lane.credential);
+
+    const old = await harness.app.inject({
+      method: "GET",
+      url: "/runner/commands",
+      headers: runnerAuth(lane.credential)
+    });
+    expect(old.statusCode).toBe(401);
+    const fresh = await harness.app.inject({
+      method: "GET",
+      url: "/runner/commands",
+      headers: runnerAuth(rotated)
+    });
+    expect(fresh.statusCode).toBe(200);
+  });
+
+  it("lets someone who may start executions take the workstream over, and names it in the log", async () => {
+    const lane = await createMissionLane();
+    const contributor = await addParticipant(lane.missionId, "first-machine-owner");
+    const theirs = await enrol(contributor, lane.workstreamId, "their-machine");
+    expect(theirs.statusCode).toBe(200);
+
+    // The mission admin holds `execution.start`, so displacing is theirs to do.
+    const takeover = await enrol(owner, lane.workstreamId, "host-machine");
+    expect(takeover.statusCode).toBe(200);
+    const displaced = await harness.app.inject({
+      method: "GET",
+      url: "/runner/commands",
+      headers: runnerAuth(theirs.json().credential as string)
+    });
+    expect(displaced.statusCode).toBe(401);
+
+    const registrations = (await eventsOf(lane.missionId)).filter(
+      (event) => event.kind === "runner.registered"
+    );
+    expect(registrations[registrations.length - 1]?.payload).toMatchObject({
+      ownerLogin: owner.login,
+      replacedLogin: contributor.login
+    });
+  });
+});
+
 describe("command transport", () => {
   it("delivers a runner only its own commands, in sequence, and marks them delivered", async () => {
     const first = await createLane();
@@ -316,6 +422,37 @@ describe("command transport", () => {
     // re-run work it already finished.
     const after = await commandsFor(lane.credential);
     expect(after.commands.map((command: { commandId: string }) => command.commandId)).not.toContain(commandId);
+  });
+
+  it("keeps offering a command it acknowledged, so a crashed runner can finish it", async () => {
+    const lane = await createLane();
+    await startExecution(lane);
+    const { commands } = await commandsFor(lane.credential);
+    const commandId = commands[0].commandId as string;
+
+    const claimed = await harness.app.inject({
+      method: "POST",
+      url: `/runner/commands/${commandId}`,
+      headers: runnerAuth(lane.credential),
+      payload: { state: "acknowledged" }
+    });
+    expect(claimed.statusCode).toBe(200);
+
+    // The machine dies here. Without re-delivery its execution would stay
+    // non-terminal forever, with nothing able to finish or fail it.
+    const afterCrash = await commandsFor(lane.credential);
+    expect(afterCrash.commands.map((command: { commandId: string }) => command.commandId)).toContain(commandId);
+
+    await harness.app.inject({
+      method: "POST",
+      url: `/runner/commands/${commandId}`,
+      headers: runnerAuth(lane.credential),
+      payload: { state: "completed" }
+    });
+    const afterSettling = await commandsFor(lane.credential);
+    expect(afterSettling.commands.map((command: { commandId: string }) => command.commandId)).not.toContain(
+      commandId
+    );
   });
 
   it("hides another runner's command behind a 404", async () => {
@@ -593,6 +730,96 @@ describe("event ingestion", () => {
     expect(ended.rows[0].state).toBe("stopped");
     expect(ended.rows[0].ended_at).not.toBeNull();
     expect(ended.rows[0].exit_outcome).toBe("stopped");
+  });
+
+  it("ends the execution as interrupted when the runner has stopped responding", async () => {
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+    // The host closed its laptop mid-turn and never came back.
+    await harness.db.query("update runners set last_seen_at = now() - interval '5 minutes' where wst_id = $1", [
+      lane.workstreamId
+    ]);
+
+    const stop = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/stop`,
+      headers: bearer(owner),
+      payload: {}
+    });
+    expect(stop.statusCode).toBe(200);
+
+    const ended = await harness.db.query(
+      "select state, ended_at, exit_outcome, failure_reason from executions where exe_id = $1",
+      [executionId]
+    );
+    expect(ended.rows[0].state).toBe("interrupted");
+    expect(ended.rows[0].ended_at).not.toBeNull();
+    expect(ended.rows[0].exit_outcome).toBe("interrupted");
+    expect(ended.rows[0].failure_reason).toContain("stopped responding");
+
+    const kinds = (await eventsOf(lane.missionId)).map((event) => event.kind);
+    expect(kinds).toContain("execution.stop_requested");
+    expect(kinds).toContain("execution.interrupted");
+
+    // The point of ending it: the workstream is usable again.
+    const next = await direct(lane.missionId, "Try that again");
+    expect(next.json().dispatched).toBe(true);
+    const executions = await harness.db.query("select exe_id from executions where wst_id = $1", [
+      lane.workstreamId
+    ]);
+    expect(executions.rowCount).toBe(2);
+  });
+
+  it("interrupts rather than stalls when the runner was revoked outright", async () => {
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+    await harness.db.query("update runners set revoked_at = now() where wst_id = $1", [lane.workstreamId]);
+    const stop = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/stop`,
+      headers: bearer(owner),
+      payload: {}
+    });
+    expect(stop.statusCode).toBe(200);
+    const ended = await harness.db.query("select state from executions where exe_id = $1", [executionId]);
+    expect(ended.rows[0].state).toBe("interrupted");
+  });
+
+  it("does not let a returning runner resurrect an execution declared interrupted", async () => {
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+    await harness.db.query("update runners set last_seen_at = now() - interval '5 minutes' where wst_id = $1", [
+      lane.workstreamId
+    ]);
+    await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/stop`,
+      headers: bearer(owner),
+      payload: {}
+    });
+
+    // The machine wakes up and reports as though nothing happened.
+    const late = await report(lane.credential, executionId, [
+      {
+        originSeq: 1,
+        event: {
+          kind: "execution.running",
+          payload: { harness: "claude-code", model: "claude-fable-5", effort: "high" }
+        }
+      },
+      { originSeq: 2, event: { kind: "execution.completed", payload: {} } }
+    ]);
+    expect(late.statusCode).toBe(200);
+
+    const state = await harness.db.query(
+      "select state, exit_outcome from executions where exe_id = $1",
+      [executionId]
+    );
+    expect(state.rows[0].state).toBe("interrupted");
+    expect(state.rows[0].exit_outcome).toBe("interrupted");
+    // The claim is still in the log; only the settled outcome is fixed.
+    const kinds = (await eventsOf(lane.missionId)).map((event) => event.kind);
+    expect(kinds).toContain("execution.completed");
   });
 
   it("keeps every reported payload free of absolute filesystem paths", async () => {

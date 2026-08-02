@@ -164,6 +164,13 @@ function eventPayload(event: RunnerEvent): Record<string, unknown> {
   };
 }
 
+/**
+ * Execution state is monotonic: once an execution has reached a terminal
+ * outcome it never moves again. A runner that was declared gone and then comes
+ * back must not resurrect the run it abandoned — resume-or-restart is a human
+ * choice made in a *new* execution (PRODUCT.md#the-mission-state-model). The
+ * late report is still recorded in the log; only the projected state is fixed.
+ */
 async function setExecutionState(
   client: pg.PoolClient,
   executionId: string,
@@ -177,7 +184,8 @@ async function setExecutionState(
             ended_at = case when $4 then now() else ended_at end,
             exit_outcome = coalesce($5, exit_outcome),
             failure_reason = coalesce($6, failure_reason)
-      where exe_id = $1`,
+      where exe_id = $1
+        and state not in ('completed', 'stopped', 'interrupted', 'failed')`,
     [
       executionId,
       state,
@@ -463,10 +471,28 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
 
     const credential = newSecretToken();
     const runnerId = newRunnerId();
-    const expiresAt = await withTransaction(deps.db, async (client) => {
+    const registration = await withTransaction(deps.db, async (client) => {
+      // Enrolling a machine is not privileged; *displacing someone else's* is.
+      // Without this, an invited Contributor could revoke the host's runner and
+      // enrol a machine with no checkout, killing the workstream — a denial of
+      // service by an invited party, in the part of the product whose whole
+      // claim is that authority is explicit.
+      const held = await client.query(
+        `select r.runner_id, r.owner_user_id, u.login
+           from runners r join users u on u.user_id = r.owner_user_id
+          where r.wst_id = $1 and r.revoked_at is null
+          for update of r`,
+        [params.data.workstreamId]
+      );
+      const current = held.rows[0];
+      const displacing = current !== undefined && current.owner_user_id !== ctx.userId;
+      if (displacing && !access.capabilities.includes("execution.start")) {
+        return { taken: current.login as string };
+      }
+
       // One live runner per workstream: the previous enrolment is revoked in
       // the same transaction that replaces it, so the partial unique index
-      // never sees two.
+      // never sees two. Replacing your own is a relaunch or a rotation.
       await client.query(
         "update runners set revoked_at = now() where wst_id = $1 and revoked_at is null",
         [params.data.workstreamId]
@@ -494,13 +520,27 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
         kind: "runner.registered",
         actorKind: "system",
         actorId: "control-plane",
-        payload: { runnerId, label, ownerLogin: ctx.login }
+        // A takeover is named in the log; nobody's machine disappears silently.
+        payload: {
+          runnerId,
+          label,
+          ownerLogin: ctx.login,
+          replacedLogin: displacing ? (current.login as string) : null
+        }
       });
-      return inserted.rows[0].expires_at as Date;
+      return { expiresAt: inserted.rows[0].expires_at as Date };
     });
 
+    if ("taken" in registration) {
+      return deps.sendError(
+        reply,
+        409,
+        "runner_held",
+        `${registration.taken}'s machine is already the runner for this workstream.`
+      );
+    }
     // The only time the usable credential exists outside the desktop's memory.
-    return { runnerId, credential, expiresAt: expiresAt.toISOString() };
+    return { runnerId, credential, expiresAt: registration.expiresAt.toISOString() };
   });
 
   app.get("/runner/commands", async (request, reply) => {
@@ -508,10 +548,15 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
     if (!ctx) return;
 
     const commands = await withTransaction(deps.db, async (client) => {
+      // Acknowledged commands are re-offered, not forgotten. A runner that
+      // crashed after claiming one would otherwise leave its execution
+      // non-terminal forever, with nothing able to finish or fail it; the
+      // runner's own record of what it has already done makes the replay a
+      // no-op. Only settled commands (completed, failed) stop being offered.
       const result = await client.query(
         `select cmd_id, kind, wst_id, mission_id, exe_id, seq, payload, created_at, state
            from runner_commands
-          where runner_id = $1 and state in ('pending', 'delivered')
+          where runner_id = $1 and state in ('pending', 'delivered', 'acknowledged')
           order by seq`,
         [ctx.runnerId]
       );

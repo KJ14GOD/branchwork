@@ -1,4 +1,3 @@
-import { app } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -11,7 +10,6 @@ import {
 import { z } from "zod";
 import type { ControlPlaneClient } from "./api-client";
 import { startTurn, type RunningTurn, type TurnResult } from "./execution";
-import { pathForLocalRepo } from "./local-repos";
 import { EventOutbox } from "./outbox";
 
 /**
@@ -37,10 +35,55 @@ export interface RunnerAgent {
   shutdown(reason: string): Promise<void>;
 }
 
+/**
+ * Everything the agent needs from the machine it runs on. Injectable so the
+ * agent itself can be stood up and driven in a plain Node test: the bug this
+ * seam exists for — a turn that never started and never failed — is invisible
+ * to a test of the pure modules alone.
+ */
+export interface RunnerHost {
+  /** This machine's private state directory. Nothing here crosses IPC. */
+  userDataPath: string;
+  isPackaged: boolean;
+  /** How this machine names itself in the room's evidence; never a path. */
+  label: string;
+  /** Where a local repository lives on this machine, or null if it does not. */
+  repositoryPath: (providerRepoId: string) => string | null;
+}
+
 export interface RunnerAgentDeps {
   api: ControlPlaneClient;
   controlPlaneUrl: string;
   getToken: () => string | null;
+  /** Absent in the app: Electron and the local-repository map are then loaded
+   *  lazily, so neither sits in this module's import graph. */
+  host?: RunnerHost;
+  fetch?: typeof fetch;
+  /** The scripted harness, normally read from the environment. */
+  fakeHarness?: boolean;
+}
+
+interface ElectronAppShape {
+  getPath: (name: string) => string;
+  isPackaged: boolean;
+}
+
+/**
+ * Loaded on demand rather than imported: a static `import ... from "electron"`
+ * would drag the whole Electron runtime into every import of this module,
+ * including its tests.
+ */
+function electronHost(): RunnerHost {
+  const { app } = require("electron") as { app: ElectronAppShape };
+  const { pathForLocalRepo } = require("./local-repos") as {
+    pathForLocalRepo: (providerRepoId: string) => string | null;
+  };
+  return {
+    userDataPath: app.getPath("userData"),
+    isPackaged: app.isPackaged,
+    label: hostname().slice(0, 120).replace(/[/\\]/g, "-") || "this machine",
+    repositoryPath: pathForLocalRepo
+  };
 }
 
 const DISCOVER_EVERY_MS = 15_000;
@@ -78,12 +121,15 @@ const StartPayloadSchema = z.object({
 });
 
 export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
-  const userData = app.getPath("userData");
+  const host = deps.host ?? electronHost();
+  const httpFetch = deps.fetch ?? fetch;
+  const userData = host.userDataPath;
   const credentialPath = join(userData, "runner-credentials.json");
   const commandMemoryPath = join(userData, "runner-commands.json");
   const worktreeRoot = join(userData, "worktrees");
-  const fakeHarness = process.env.NOVUS_FAKE_HARNESS === "1" && !app.isPackaged;
-  const label = hostname().slice(0, 120).replace(/[/\\]/g, "-") || "this machine";
+  const fakeHarness =
+    deps.fakeHarness ?? (process.env.NOVUS_FAKE_HARNESS === "1" && !host.isPackaged);
+  const label = host.label;
 
   const enrolments = new Map<string, Enrolment>(Object.entries(loadEnrolments()));
   const outboxes = new Map<string, EventOutbox>();
@@ -166,7 +212,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     method: "GET" | "POST",
     body?: unknown
   ): Promise<Response> {
-    return fetch(`${deps.controlPlaneUrl}${path}`, {
+    return httpFetch(`${deps.controlPlaneUrl}${path}`, {
       method,
       headers: {
         ...(body === undefined ? {} : { "content-type": "application/json" }),
@@ -223,7 +269,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       for (const mission of missions) {
         const repository = mission.repository;
         if (!repository || repository.provider !== "local") continue;
-        if (pathForLocalRepo(repository.providerRepoId) === null) continue;
+        if (host.repositoryPath(repository.providerRepoId) === null) continue;
 
         let workstreamId = workstreamByMission.get(mission.missionId);
         if (!workstreamId) {
@@ -374,7 +420,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
 
     const executionId = command.executionId;
     if (!executionId) throw new Error("the command named no execution");
-    const repositoryPath = pathForLocalRepo(workstream.providerRepoId);
+    const repositoryPath = host.repositoryPath(workstream.providerRepoId);
     if (!repositoryPath) throw new Error("this local repository lives on another machine");
     const payload = StartPayloadSchema.safeParse(command.payload);
     if (!payload.success) throw new Error("the command payload was malformed");
@@ -391,7 +437,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       effort: payload.data.effort,
       resumeSessionId: payload.data.resumeSessionId ?? workstream.harnessSessionId,
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
-      pendingApplies: () => pendingAppliesFor(workstreamId, executionId)
+      pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });
   }
 
@@ -457,8 +503,16 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     report(args.workstreamId, args.executionId, result.terminal);
   }
 
-  /** Is more direction already waiting for this execution? */
-  async function pendingAppliesFor(workstreamId: string, executionId: string): Promise<boolean> {
+  /**
+   * Is more direction already waiting for this execution? The command being
+   * served right now is excluded: it is still `acknowledged` server-side, and
+   * counting itself would keep the execution open forever.
+   */
+  async function pendingAppliesFor(
+    workstreamId: string,
+    executionId: string,
+    currentCommandId: string
+  ): Promise<boolean> {
     const enrolment = enrolments.get(workstreamId);
     if (!enrolment) return false;
     try {
@@ -470,6 +524,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         (command) =>
           command.kind === "apply_direction" &&
           command.executionId === executionId &&
+          command.commandId !== currentCommandId &&
           !settled.has(command.commandId)
       );
     } catch {

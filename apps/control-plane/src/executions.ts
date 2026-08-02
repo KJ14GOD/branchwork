@@ -39,6 +39,18 @@ const ACTIVE_EXECUTION_STATES: string[] = ExecutionStateSchema.options.filter(
   (state) => !TERMINAL_EXECUTION_STATES.includes(state)
 );
 
+/**
+ * A runner unheard from for this long is treated as gone. It mirrors the
+ * threshold the room already renders "runner offline" from
+ * (mission-detail.ts), so what a participant sees and what stopping does
+ * cannot disagree.
+ */
+const RUNNER_OFFLINE_AFTER_MS = 30_000;
+
+/** Said in the log when the machine that was working never answered again. */
+const RUNNER_GONE =
+  "The runner stopped responding, so the execution ended without a reported outcome.";
+
 const MissionParamsSchema = z.object({ missionId: z.string().startsWith("msn_") });
 const DirectionParamsSchema = z.object({ directionId: z.string().startsWith("dir_") });
 const ChangeParamsSchema = z.object({ changeId: z.string().startsWith("chg_") });
@@ -361,15 +373,55 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
       if (!row) return;
       const executionId = row.exe_id as string;
 
-      await client.query("update executions set state = 'stopping' where exe_id = $1", [executionId]);
-
       const runner = await client.query(
-        `select runner_id from runners
+        `select runner_id, last_seen_at from runners
           where wst_id = $1 and revoked_at is null and expires_at > now()
           order by created_at desc limit 1`,
         [workstreamId]
       );
+      const lastSeen = (runner.rows[0]?.last_seen_at as Date | null | undefined) ?? null;
+      const online = lastSeen !== null && Date.now() - lastSeen.getTime() < RUNNER_OFFLINE_AFTER_MS;
       const runnerId = (runner.rows[0]?.runner_id as string | undefined) ?? (row.runner_id as string | null);
+
+      await recordEvent(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId,
+        executionId,
+        kind: "execution.stop_requested",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: { runnerOnline: online }
+      });
+
+      if (!online) {
+        // Waiting for a machine that has gone would leave the workstream
+        // blocked by the active-execution index with no way back. D-034's
+        // honest reading: a lost host ends the execution as an explicit
+        // interrupted outcome, never a silent stall.
+        await client.query(
+          `update executions
+              set state = 'interrupted', ended_at = now(),
+                  exit_outcome = 'interrupted', failure_reason = $2
+            where exe_id = $1`,
+          [executionId, RUNNER_GONE]
+        );
+        await recordEvent(client, {
+          orgId: access.orgId,
+          missionId: access.missionId,
+          workstreamId,
+          executionId,
+          kind: "execution.interrupted",
+          actorKind: "system",
+          actorId: "control-plane",
+          payload: { reason: RUNNER_GONE }
+        });
+        return;
+      }
+
+      await client.query("update executions set state = 'stopping' where exe_id = $1", [executionId]);
       if (runnerId) {
         await enqueueCommand(client, {
           orgId: access.orgId,
@@ -382,18 +434,6 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
           idempotencyKey: `stop:${executionId}`
         });
       }
-      await recordEvent(client, {
-        orgId: access.orgId,
-        missionId: access.missionId,
-        workstreamId,
-        executionId,
-        kind: "execution.stop_requested",
-        actorKind: "user",
-        actorId: ctx.userId,
-        actorLogin: ctx.login,
-        causeLeaseId: access.leaseId,
-        payload: {}
-      });
     });
     return { ok: true };
   });
