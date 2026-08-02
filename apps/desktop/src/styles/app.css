@@ -518,8 +518,7 @@ body {
   min-height: 32px;
   padding: 0 var(--s-3);
   border: none;
-  border-left: 2px solid transparent;
-  border-radius: 0; /* rails are sharp: selection is an edge, not a capsule */
+  border-radius: 0; /* rails are sharp: selection is a highlight, nothing more */
   background: transparent;
   font: var(--type-row);
   color: var(--text-2);
@@ -534,7 +533,6 @@ body {
 
 .side-row.selected {
   background: var(--selected);
-  border-left-color: var(--accent);
   color: var(--text-1);
 }
 

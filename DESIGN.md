@@ -57,7 +57,7 @@ Semantic lock: a token may not be used outside its meaning. Sage for "online" fa
 
 Light theme overrides (provisional): `--bg #F2F0EC` · `--surface-1 #FAF9F6` · `--surface-2 #FFFFFF` · `--edge` black 10% (16% hover) · `--text-1 #26241F` · `--text-2 #5D594F` · `--text-3 #77726A` · `--accent #26241F` (authority inverts to warm ink; pressed `#3A3833`) · `--ok #4F7A4A` · `--warn #A15F28` · `--danger #A8443A` · hover/selected/pressed: black 4/6/6%. Same contrast obligations as dark.
 
-Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% plus a 2px `--accent` left edge; pressed `#FFFFFF` at 6%. Disabled controls: label and icon at 40% opacity, no hover response, default cursor.
+Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% (a background highlight only — no accent bar, no outline); pressed `#FFFFFF` at 6%. Disabled controls: label and icon at 40% opacity, no hover response, default cursor.
 
 ### Typography
 
@@ -87,7 +87,7 @@ Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% plu
 
 ### Radii
 
-6px — inputs, rows, small controls, **buttons** (buttons are squarish, never pill-adjacent — D-029). **Navigation rails carry no radius at all**: a selected row is an accent edge plus a background, never a floating capsule · 10px — contained cards · 14px — dialogs, drawers, the composer · full — identity marks only. Squircle corner smoothing where the platform allows; plain border-radius with the same values where it does not. Radii come only from this list.
+6px — inputs, rows, small controls, **buttons** (buttons are squarish, never pill-adjacent — D-029). **Navigation rails carry no radius at all**: a selected row is a background highlight, never a floating capsule or an accent bar · 10px — contained cards · 14px — dialogs, drawers, the composer · full — identity marks only. Squircle corner smoothing where the platform allows; plain border-radius with the same values where it does not. Radii come only from this list.
 
 ### Elevation
 
