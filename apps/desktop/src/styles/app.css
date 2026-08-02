@@ -278,40 +278,99 @@ body {
   }
 }
 
-/* ---------- Sign-in surface ---------- */
+/* ---------- First-run setup surface (DESIGN.md, D-028) ---------- */
 
-.signin {
+.setup-drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--topbar-h);
+  -webkit-app-region: drag;
+}
+
+.setup {
   flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: var(--s-8);
-  max-width: 480px;
+  padding: 0 var(--s-8) var(--s-7);
+  max-width: 1080px;
 }
 
-.signin h1 {
+.setup h1 {
   font: var(--type-mission);
-  margin-bottom: var(--s-3);
+  margin-bottom: var(--s-2);
 }
 
-.signin p {
+.setup .setup-sub {
   font: var(--type-body);
   color: var(--text-2);
-  margin-bottom: var(--s-5);
+  margin-bottom: var(--s-6);
 }
 
-.signin .signin-status {
-  margin-top: var(--s-4);
-  font: var(--type-meta);
-  color: var(--text-2);
+.setup-cards {
+  display: flex;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.card {
+  flex: 1;
+  min-width: 240px;
+  max-width: 320px;
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-button);
+  padding: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.card-head {
   display: flex;
   align-items: center;
   gap: var(--s-2);
+  font: var(--type-row);
+  font-weight: 600;
 }
 
-.signin .signin-error {
-  margin-top: var(--s-4);
-  font: var(--type-row);
+.service-mark {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-control);
+  border: 1px solid var(--edge);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: var(--type-micro);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.card-desc {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.card-status {
+  margin-top: auto;
+  border-top: 1px solid var(--edge);
+  padding-top: var(--s-3);
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.card-status.muted {
+  color: var(--text-3);
+}
+
+.card-status .card-error {
   color: var(--danger);
 }
 
@@ -407,7 +466,8 @@ body {
 }
 
 .state-line .state-name {
-  color: var(--accent);
+  color: var(--text-1);
+  font-weight: 500;
 }
 
 .mission-section {

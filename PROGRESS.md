@@ -44,7 +44,7 @@ The previous prototype was removed in full (commit `50c4851`); none of its behav
 | Missions surface | Partial — loading placeholders, empty state, offline notice with retry, mission rows, creation dialog with validation and persistence-failure states; attention grouping reduced to the one reachable group |
 | Mission Room surface | Partial — reduced New-mission view only: goal, state line, success criteria, event history. No composer, participants, workstreams, or evidence |
 | Review surface | Not started |
-| Design token system and primitives | Partial — tokens.css carries the DESIGN.md values on rendered screens; Button, Input, Textarea, Row, Section separator, StatusDot, IdentityMark, Dialog, ScrollArea built; remaining primitives unbuilt |
+| Design token system and primitives | Partial — tokens.css carries the DESIGN.md values on rendered screens, including the monochrome authority retheme and first-run setup surface (D-028, evidence screenshots re-captured 2026-08-01); Button, Input, Textarea, Row, Section separator, StatusDot, IdentityMark, Dialog, ScrollArea, connection Card built; remaining primitives unbuilt |
 
 ## Documentation
 

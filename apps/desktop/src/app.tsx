@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { IpcAuthStatus } from "@novus/contracts";
 import { novus } from "./bridge";
-import { SignIn } from "./screens/sign-in";
+import { SetupSurface } from "./screens/setup";
 import { MissionsSurface } from "./screens/missions";
 
 export function App() {
@@ -21,7 +21,7 @@ export function App() {
       {auth.state === "signed_in" ? (
         <MissionsSurface user={auth.user} org={auth.org} />
       ) : (
-        <SignIn auth={auth} />
+        <SetupSurface auth={auth} />
       )}
     </div>
   );

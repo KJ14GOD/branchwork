@@ -85,7 +85,7 @@ describe("vertical slice through the desktop app", () => {
   it("signs in, creates a mission, and reconstructs it after a full relaunch", async () => {
     // --- First launch: sign in and create ---
     const first = await launchApp();
-    await first.page.getByTestId("sign-in").waitFor();
+    await first.page.getByTestId("setup").waitFor();
     await first.page.screenshot({ path: join(evidenceDir, "1-sign-in.png") });
 
     await first.page.getByTestId("sign-in-button").click();

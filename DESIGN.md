@@ -45,7 +45,7 @@ Dark, restrained system. No decorative gradients, no neon, no glow, no glassmorp
 | `--text-1` | `#ECEAE6` | Primary text (warm off-white) |
 | `--text-2` | `#A8A49D` | Secondary text (warm gray): metadata and labels only |
 | `--text-3` | `#918C84` | Faint: timestamps, disabled — never the sole carrier of information |
-| `--accent` | `#7A9BBF` | Dusty blue: active state, focus, control/baton. Pressed: `#6688AB` |
+| `--accent` | `#E5E2DC` | Warm ivory: active state, focus, control/baton. Authority and activity are monochrome light, never a hue (D-028). Pressed: `#CFCCC5` |
 | `--ok` | `#8FAE8B` | Muted sage: **verified evidence only** |
 | `--warn` | `#D9A47E` | Soft apricot: attention, incomplete verification |
 | `--danger` | `#C97B6F` | Muted red: failure, denial, destructive actions only |
@@ -124,7 +124,7 @@ Five elements make a screen recognizably Novus. They are the only permitted uses
 2. **The direction thread.** A submitted direction renders with a left-edge `--accent` line connecting author → direction → the activity it produced. Lifecycle (queued, applied, superseded, rejected) renders as states of that one thread — position and line treatment — not as badges.
 3. **The evidence ledger.** Verification is a fixed two-column ledger (check name · outcome) in mono, `--ok` only after a check passed, environment attribution beneath. The identical ledger component appears in Mission Room, Review, and Receipt — "verified" always looks exactly the same.
 4. **Presence as authorship.** Participants appear where they acted: small identity marks inline on directions, reviews, handoffs, and stops. There is no floating avatar pile; the ParticipantStack in the room header is the only aggregate view.
-5. **The state line.** One persistent single-line strip under the mission title: current state + next action ("Running — Claude Code is editing auth middleware · Pause"). It is the only element in the header allowed accent-colored text, and it is the answer to "what is happening and what happens next?"
+5. **The state line.** One persistent single-line strip under the mission title: current state + next action ("Running — Claude Code is editing auth middleware · Pause"). The state name is emphasized by weight (500) in `--text-1`, never by color — the header contains no colored text; it is the answer to "what is happening and what happens next?"
 
 ## Information architecture
 
@@ -171,6 +171,7 @@ These are the only primitives. Feature components compose primitives; they never
 
 Composition rules:
 
+- Primary Button: `--accent` background, `--bg` text — a light control on a dark product, never a colored one. Secondary: `--surface-1` with a 1px edge. Text buttons: `--text-2`, lifting to `--text-1` on hover.
 - Exactly one primary Button visible per surface state. Everything else renders secondary, text, or icon.
 - Maximum one border level per region: a bordered container never contains another bordered container. Nesting is expressed by spacing and type, never a second border. Section separation defaults to whitespace or a 1px Separator, not a card.
 - Maximum one pill-shaped element per row; pills are interactive filters/toggles only. Status is StatusDot + text (see [Status semantics](#status-semantics)); new badge variants require a change to this document.
@@ -188,6 +189,7 @@ Composition rules:
 - **Workstreams.** One workstream: no workstream chrome at all — the room is the workstream. Multiple: a slim lane header per workstream (name, controller baton, execution status). An approach-flagged workstream gets an `--alt` edge on its lane header — identification only, never a quality signal, and no comparison UI unless both compared artifacts exist.
 - **Cloud workspace lifecycle.** Rendered in the state line + an inspector: provisioning (progress as text, no spinner theater), ready, suspended, failed (provider error verbatim, Retry provisions new). Workspace machinery never occupies the canvas.
 - **Repository continuity.** The workspace inspector shows location, mission branch, abbreviated base SHA, abbreviated workspace SHA, and one synchronization state: Up to date, Update available, Syncing, or Sync failed. These are compact label/value rows, not badges or a permanent status dashboard. Update available offers Inspect commits as the primary action; after inspection, Sync workspace is capability-gated and states that it waits for a safe boundary. Uncommitted files on another machine are never implied to be present. Local-mirror controls do not render in V0.
+- **First-run setup.** The signed-out surface is a setup room, not a login page: no top bar and no hairline — the window's top inset is a full-width drag region and the traffic lights sit over the canvas. Title "Set up Novus" at the mission scale, one subtitle sentence, then a row of connection cards — the one sanctioned card grid in the product. Each card: rounded-square service mark, name, one-line description, a separator, and a status row. Only real connections are interactive (GitHub: Connect → status while the browser leg runs → connected identity). Capabilities that do not exist yet may appear only as muted informational cards — status in `--text-3`, zero interactive affordance, wording that says *when* they arrive, never pretending they work (this is the sole sanctioned mention of unreleased capability, D-028). Waiting and error states are plain text under the card's status row — no dots, no spinners.
 - **Review.** Result summary in prose (what the change does, per the mission's success criteria), then diff, then ledger, then comments/concerns as attributed rows, then PR readiness as a CheckRow list (approvals, checks, conflicts). One primary action: Request revisions or Accept result (capability-gated).
 - **Receipt.** A single scrollable document (720px measure): goal, participants and roles, timeline of applied directions and control transfers, changes summary, the evidence ledger's final state, review outcomes, PR reference, and an explicit "remaining uncertain" section. Same components as the room — a receipt is the room, frozen.
 
