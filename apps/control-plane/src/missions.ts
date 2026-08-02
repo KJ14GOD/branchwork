@@ -84,6 +84,10 @@ function toWorkstream(row: WorkstreamRow): Workstream {
 }
 
 async function nextSeq(client: pg.PoolClient, missionId: string): Promise<number> {
+  // Per-mission advisory lock: concurrent reporters (two machines, or a
+  // reporter racing a retry) serialize here instead of colliding on the
+  // (mission_id, seq) unique index and losing events.
+  await client.query("select pg_advisory_xact_lock(hashtext($1))", [missionId]);
   const result = await client.query(
     "select coalesce(max(seq), 0)::int + 1 as next from events where mission_id = $1",
     [missionId]
