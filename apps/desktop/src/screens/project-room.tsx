@@ -214,7 +214,10 @@ export function ProjectRoom({
   const detail = selectedMissionId === null ? undefined : details[selectedMissionId];
   // Agents run where the repository is: local, on this machine (D-032).
   const canExecute = project.provider === "local" && project.onThisMachine;
-  const composerEnabled = isDraft || canExecute;
+  // A draft on a repository nothing can execute would swallow the first
+  // message: the mission would be created and the words would go nowhere.
+  // Say so before it is typed, not after (D-032 honesty rule).
+  const composerEnabled = canExecute;
 
   const resolveBase = useCallback(async () => {
     setDraft((prev) =>
@@ -328,14 +331,21 @@ export function ProjectRoom({
       if (canExecute) {
         const directed = await novus().missions.direct({
           missionId: created.value.mission.missionId,
-          localId: project.providerRepoId,
-          missionBranch: created.value.workstream.missionBranch,
           body
         });
-        if (directed.ok) setRunning(true);
-        else setSendError(offlineOr(directed.code, directed.message));
+        setSending(false);
+        if (!directed.ok) {
+          // The mission exists but the words never landed anywhere. Keep them
+          // in the composer rather than swallowing what the user typed.
+          setSendError(offlineOr(directed.code, directed.message));
+          setDraft(null);
+          onCreated({ mission: created.value.mission, workstream: created.value.workstream, events: [] });
+          return;
+        }
+        setRunning(true);
+      } else {
+        setSending(false);
       }
-      setSending(false);
       setText("");
       setDraft(null);
       onCreated({ mission: created.value.mission, workstream: created.value.workstream, events: [] });
@@ -346,8 +356,6 @@ export function ProjectRoom({
     setSending(true);
     const result = await novus().missions.direct({
       missionId: detail.mission.missionId,
-      localId: project.providerRepoId,
-      missionBranch: detail.workstream.missionBranch,
       body
     });
     setSending(false);

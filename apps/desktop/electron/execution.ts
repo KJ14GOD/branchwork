@@ -47,19 +47,44 @@ async function ensureWorktree(localId: string, missionId: string, missionBranch:
   const worktreeDir = join(app.getPath("userData"), "worktrees", missionId);
   if (existsSync(worktreeDir)) return worktreeDir;
   mkdirSync(join(app.getPath("userData"), "worktrees"), { recursive: true });
-  await git(repoPath, ["worktree", "add", worktreeDir, missionBranch]);
+  // A worktree the user deleted by hand leaves stale metadata behind; prune
+  // before adding so recovery never needs manual git surgery.
+  await git(repoPath, ["worktree", "prune"]).catch(() => undefined);
+  await git(repoPath, ["worktree", "add", "--", worktreeDir, missionBranch]);
   return worktreeDir;
+}
+
+/** Files an agent may create that must never be swept into a checkpoint. */
+const SECRET_PATTERNS = [/(^|\/)\.env(\.|$)/i, /(^|\/)id_(rsa|ed25519)$/i, /\.pem$/i, /(^|\/)\.npmrc$/i, /credentials?\.json$/i];
+
+function isSecretPath(path: string): boolean {
+  return SECRET_PATTERNS.some((pattern) => pattern.test(path));
 }
 
 /** Attributed checkpoint commit at the turn boundary (D-025); no-op when clean. */
 async function checkpoint(worktree: string, direction: string, emit: Emit): Promise<void> {
   const dirty = await git(worktree, ["status", "--porcelain"]);
   if (!dirty) return;
-  await git(worktree, ["add", "-A"]);
+
+  // Never sweep a secret the agent happened to create into a commit.
+  const paths = dirty
+    .split("\n")
+    .map((line) => line.slice(3).trim())
+    .filter(Boolean);
+  const withheld = paths.filter(isSecretPath);
+  const safe = paths.filter((path) => !isSecretPath(path));
+  if (withheld.length > 0) {
+    emit({
+      kind: "workspace.checkpoint",
+      payload: { withheld: withheld.length, note: "Files that look like secrets were left uncommitted." }
+    });
+  }
+  if (safe.length === 0) return;
+  await git(worktree, ["add", "--", ...safe]);
   const summary = direction.length > 60 ? `${direction.slice(0, 57)}...` : direction;
   await git(worktree, ["-c", "user.name=Novus", "-c", "user.email=novus@local", "commit", "-m", `Checkpoint: ${summary}`]);
   const sha = await git(worktree, ["rev-parse", "HEAD"]);
-  emit({ kind: "workspace.checkpoint", payload: { sha, files: dirty.split("\n").length } });
+  emit({ kind: "workspace.checkpoint", payload: { sha, files: safe.length } });
 }
 
 const activeTurns = new Map<string, { kill: () => void }>();
@@ -75,6 +100,14 @@ export function isRunning(missionId: string): boolean {
   return activeTurns.has(missionId);
 }
 
+/** Kills every in-flight turn; returns the missions that were interrupted. */
+export function stopAllExecutions(): string[] {
+  const interrupted = [...activeTurns.keys()];
+  for (const [, turn] of activeTurns) turn.kill();
+  activeTurns.clear();
+  return interrupted;
+}
+
 /**
  * Runs one direction as one harness turn. Resolves when the turn ends;
  * events stream through `emit` as they happen.
@@ -87,9 +120,29 @@ export async function runDirection(args: {
   emit: Emit;
 }): Promise<void> {
   const { missionId, direction, emit } = args;
+  // Reserve synchronously: two directions arriving in the same tick must not
+  // both pass the guard and spawn agents into one worktree.
   if (activeTurns.has(missionId)) throw new Error("An execution is already running for this mission.");
+  let cancelled = false;
+  activeTurns.set(missionId, { kill: () => { cancelled = true; } });
 
-  const worktree = await ensureWorktree(args.localId, missionId, args.missionBranch);
+  if (!/^novus\/m-[0-9a-z]+$/.test(args.missionBranch)) {
+    activeTurns.delete(missionId);
+    throw new Error("Refusing to run against an unrecognized branch name.");
+  }
+
+  let worktree: string;
+  try {
+    worktree = await ensureWorktree(args.localId, missionId, args.missionBranch);
+  } catch (error) {
+    activeTurns.delete(missionId);
+    throw error;
+  }
+  if (cancelled) {
+    activeTurns.delete(missionId);
+    emit({ kind: "execution.stopped", payload: {} });
+    return;
+  }
   emit({ kind: "execution.started", payload: { harness: "claude-code", worktree: "mission worktree" } });
 
   if (FAKE_HARNESS) {
@@ -145,7 +198,11 @@ export async function runDirection(args: {
       try {
         await checkpoint(worktree, direction, emit);
       } catch (error) {
-        emit({ kind: "harness.text", payload: { text: `Checkpoint failed: ${error instanceof Error ? error.message : "unknown"}` } });
+        // Novus speaking, not the harness — never put our words in its mouth.
+        emit({
+          kind: "execution.failed",
+          payload: { error: `Checkpoint failed: ${error instanceof Error ? error.message : "unknown"}` }
+        });
       }
       if (stopped) emit({ kind: "execution.stopped", payload: {} });
       else if (code === 0) emit({ kind: "execution.completed", payload: {} });
@@ -158,16 +215,24 @@ export async function runDirection(args: {
 /** Deterministic scripted turn for e2e: same pipeline, no model, real git. */
 async function runFakeTurn(worktree: string, direction: string, missionId: string, emit: Emit): Promise<void> {
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  activeTurns.set(missionId, { kill: () => undefined });
+  let stopped = false;
+  activeTurns.set(missionId, { kill: () => { stopped = true; } }); // a real stop, so stop regressions surface
   await wait(120);
+  if (stopped) return finishFake(missionId, emit, true);
   emit({ kind: "harness.text", payload: { text: `Working on: ${direction}` } });
   await wait(120);
+  if (stopped) return finishFake(missionId, emit, true);
   emit({ kind: "harness.tool", payload: { tool: "Write" } });
   const { writeFileSync } = await import("node:fs");
   writeFileSync(join(worktree, "NOVUS_FAKE_TURN.md"), `# Fake turn\n\n${direction}\n`);
   await wait(120);
+  if (stopped) return finishFake(missionId, emit, true);
   emit({ kind: "harness.text", payload: { text: "Done. I made the change and it's ready to review." } });
   await checkpoint(worktree, direction, emit);
+  finishFake(missionId, emit, stopped);
+}
+
+function finishFake(missionId: string, emit: Emit, stopped: boolean): void {
   activeTurns.delete(missionId);
-  emit({ kind: "execution.completed", payload: {} });
+  emit({ kind: stopped ? "execution.stopped" : "execution.completed", payload: {} });
 }

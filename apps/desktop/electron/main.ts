@@ -6,7 +6,7 @@ import { ApiError, ControlPlaneClient } from "./api-client";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
 import { ensureLocalBranch, pathForLocalRepo, pickLocalRepository, resolveLocalBase } from "./local-repos";
-import { isRunning, runDirection, stopExecution, type ReportedEvent } from "./execution";
+import { isRunning, runDirection, stopAllExecutions, stopExecution, type ReportedEvent } from "./execution";
 import { SessionStore } from "./session-store";
 
 // Test hooks (see DECISIONS.md D-027): both refuse to exist in packaged builds.
@@ -245,10 +245,11 @@ function registerIpc(): void {
     });
   };
 
+  // The renderer names the mission and the words; it never names the branch
+  // or the repository. Those come from server state (ARCHITECTURE.md: the
+  // client originates no authority).
   const DirectSchema = z.object({
     missionId: z.string().startsWith("msn_"),
-    localId: z.string().uuid(),
-    missionBranch: z.string().min(1),
     body: z.string().trim().min(1).max(4000)
   });
 
@@ -259,6 +260,18 @@ function registerIpc(): void {
     if (isRunning(input.missionId)) {
       return { ok: false, code: "busy", message: "The agent is already working. Wait for this turn to finish." };
     }
+    let detail: Awaited<ReturnType<typeof api.getMission>>;
+    try {
+      detail = await api.getMission(input.missionId);
+    } catch (error) {
+      return fail(error);
+    }
+    const repository = detail.mission.repository;
+    const workstream = detail.workstream;
+    if (!repository || !workstream || repository.provider !== "local") {
+      return { ok: false, code: "not_executable", message: "Agents run on local repositories for now." };
+    }
+
     try {
       await api.submitDirection(input.missionId, input.body);
     } catch (error) {
@@ -267,8 +280,8 @@ function registerIpc(): void {
     // The turn streams in the background; the room's poll renders it live.
     void runDirection({
       missionId: input.missionId,
-      localId: input.localId,
-      missionBranch: input.missionBranch,
+      localId: repository.providerRepoId,
+      missionBranch: workstream.missionBranch,
       direction: input.body,
       emit: (event) => reportInOrder(input.missionId, event)
     }).catch((error) => {
@@ -337,6 +350,23 @@ app.whenReady().then(async () => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+// An agent must never outlive the app that started it: kill in-flight turns
+// and record the interruption so a room never hangs on "started" forever.
+app.on("before-quit", (event) => {
+  const interrupted = stopAllExecutions();
+  if (interrupted.length === 0) return;
+  event.preventDefault();
+  Promise.all(
+    interrupted.map((missionId) =>
+      api
+        .reportEvents(missionId, [
+          { kind: "execution.stopped", payload: { reason: "Novus quit while the agent was working." } }
+        ])
+        .catch(() => undefined)
+    )
+  ).finally(() => app.exit(0));
 });
 
 app.on("window-all-closed", () => {

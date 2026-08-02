@@ -114,7 +114,7 @@ afterAll(() => {
 });
 
 describe("the project-first shell", () => {
-  it("adds a GitHub project, creates a mission from the first message, and states execution honestly", async () => {
+  it("adds a GitHub project and refuses execution honestly before the first message", async () => {
     const { app, page } = await launchApp();
 
     // Sign in through the setup room.
@@ -140,36 +140,13 @@ describe("the project-first shell", () => {
     expect(baseText).toContain("main");
     expect(baseText).toContain(DEMO_HEAD_SHA.slice(0, 8));
     expect(baseText).not.toContain(DEMO_HEAD_SHA); // abbreviated
-    await page.screenshot({ path: join(evidenceDir, "10-first-message.png") });
-
-    // The first message creates the mission; the goal derives from it.
-    const message =
-      "Rotate the API signing keys so every service verifies with the new key and the old key is revoked cleanly.";
-    await page.getByTestId("composer-input").fill(message);
-    await page.keyboard.press("Enter");
-
-    const tab = page.getByTestId("ws-tab");
-    await tab.waitFor({ timeout: 20_000 });
-    expect(await tab.textContent()).toContain("Rotate the API signing keys");
-
-    const goal = (await page.getByTestId("room-goal").textContent()) ?? "";
-    expect(goal.length).toBeLessThanOrEqual(80);
-    expect(message.startsWith(goal)).toBe(true); // word-truncated prefix
-
-    // Honesty: GitHub missions get no local agent; the composer says so.
+    // Honesty before typing: a GitHub project cannot run an agent yet, so the
+    // composer refuses up front rather than swallowing the first message.
     const note = page.getByTestId("composer-disabled");
     await note.waitFor();
     expect(await note.textContent()).toContain("Agents run on local repositories for now");
     expect(await page.getByTestId("composer-input").isDisabled()).toBe(true);
-
-    // The durable history renders as system lines in the feed.
-    await page.getByTestId("sys-line").first().waitFor({ timeout: 10_000 });
-
-    // The repository continuity block lives in the inspector, not the canvas.
-    await page.getByTestId("inspector-toggle").click();
-    await page.getByTestId("ws-branch").waitFor();
-    expect(await page.getByTestId("ws-base").getAttribute("title")).toBe(DEMO_HEAD_SHA);
-    await page.keyboard.press("Escape");
+    await page.screenshot({ path: join(evidenceDir, "10-first-message.png") });
 
     await app.close();
   });
