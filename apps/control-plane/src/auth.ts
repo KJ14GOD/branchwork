@@ -22,12 +22,18 @@ export interface AuthedContext {
 
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
-export async function startFlow(db: Db, config: Config): Promise<{ state: string; authorizeUrl: string }> {
+export async function startFlow(
+  db: Db,
+  config: Config,
+  /** Test-only: which deterministic identity the gated fake upstream returns.
+   *  Recorded on the flow row and read only when `fakeGithub` is on. */
+  fakeLogin?: string
+): Promise<{ state: string; authorizeUrl: string }> {
   const state = newStateNonce();
   await db.query("delete from auth_flows where expires_at < now()"); // opportunistic prune
   await db.query(
-    "insert into auth_flows (state, expires_at) values ($1, now() + interval '10 minutes')",
-    [state]
+    "insert into auth_flows (state, expires_at, fake_login) values ($1, now() + interval '10 minutes', $2)",
+    [state, config.fakeGithub ? fakeLogin ?? null : null]
   );
   const callback = `${config.publicBaseUrl}/auth/github/callback`;
   const authorizeUrl = config.fakeGithub
@@ -36,10 +42,27 @@ export async function startFlow(db: Db, config: Config): Promise<{ state: string
   return { state, authorizeUrl };
 }
 
-export async function exchangeGithubCode(config: Config, code: string): Promise<GithubIdentity> {
+export async function exchangeGithubCode(
+  config: Config,
+  code: string,
+  db?: Db,
+  state?: string
+): Promise<GithubIdentity> {
   if (config.fakeGithub) {
-    // Deterministic test identity; the rest of the machinery is real.
-    return { githubId: 1_000_001, login: "spike-user", name: "Spike User" };
+    // Deterministic test identity. Only the upstream is faked: sessions,
+    // organizations, membership, invitations, and scoping are all real. A
+    // per-flow login lets a test be two different people (D-027).
+    let login = "spike-user";
+    if (db && state) {
+      const row = await db.query("select fake_login from auth_flows where state = $1", [state]);
+      const hinted = row.rows[0]?.fake_login as string | null | undefined;
+      if (hinted) login = hinted;
+    }
+    const githubId =
+      login === "spike-user"
+        ? 1_000_001
+        : 1_000_000 + (Number.parseInt(createHash("sha256").update(login).digest("hex").slice(0, 8), 16) % 900_000) + 100;
+    return { githubId, login, name: login.replace(/(^|-)([a-z])/g, (_, sep, ch) => sep + ch.toUpperCase()) };
   }
   const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",

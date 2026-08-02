@@ -5,18 +5,30 @@ import {
   AvailableRepositoriesResponseSchema,
   BaseRevisionSchema,
   CreateMissionResponseSchema,
+  CreatedInvitationSchema,
+  FileDiffResponseSchema,
+  InvitationListResponseSchema,
   MeResponseSchema,
   MissionDetailResponseSchema,
   MissionListResponseSchema,
+  OkResponseSchema,
+  RedeemInvitationResponseSchema,
+  RegisterRunnerResponseSchema,
   RetryBranchResponseSchema,
+  SubmitDirectionResponseSchema,
   type AuthClaimResponse,
   type AuthStartResponse,
   type AvailableRepository,
   type BaseRevision,
   type CreateMissionInput,
+  type Effort,
+  type Invitation,
   type MeResponse,
   type Mission,
   type MissionDetailResponse,
+  type MissionRole,
+  type ModelId,
+  type RegisterRunnerResponse,
   type Workstream
 } from "@novus/contracts";
 import { z } from "zod";
@@ -69,8 +81,10 @@ export class ControlPlaneClient {
     return parsed.data;
   }
 
-  startAuth(): Promise<AuthStartResponse> {
-    return this.request("POST", "/auth/github/start", AuthStartResponseSchema, undefined, { auth: false });
+  startAuth(as?: string): Promise<AuthStartResponse> {
+    return this.request("POST", "/auth/github/start", AuthStartResponseSchema, as ? { as } : {}, {
+      auth: false
+    });
   }
 
   /** Returns null while the browser leg is still pending. */
@@ -135,7 +149,10 @@ export class ControlPlaneClient {
     return body.repositories;
   }
 
-  async reportBranch(workstreamId: string, report: { status: "created" | "failed"; error?: string | null }): Promise<Workstream> {
+  async reportBranch(
+    workstreamId: string,
+    report: { status: "created" | "failed"; error?: string | null }
+  ): Promise<Workstream> {
     const body = await this.request(
       "POST",
       `/workstreams/${encodeURIComponent(workstreamId)}/branch/report`,
@@ -143,14 +160,6 @@ export class ControlPlaneClient {
       report
     );
     return body.workstream;
-  }
-
-  async submitDirection(missionId: string, body: string): Promise<void> {
-    await this.request("POST", `/missions/${missionId}/direction`, z.object({ ok: z.boolean() }), { body });
-  }
-
-  async reportEvents(missionId: string, events: { kind: string; payload: Record<string, unknown> }[]): Promise<void> {
-    await this.request("POST", `/missions/${missionId}/events/report`, z.object({ ok: z.boolean() }), { events });
   }
 
   async retryBranch(workstreamId: string): Promise<Workstream> {
@@ -163,6 +172,131 @@ export class ControlPlaneClient {
   }
 
   getMission(missionId: string): Promise<MissionDetailResponse> {
-    return this.request("GET", `/missions/${missionId}`, MissionDetailResponseSchema);
+    return this.request("GET", `/missions/${encodeURIComponent(missionId)}`, MissionDetailResponseSchema);
+  }
+
+  // --- Direction ------------------------------------------------------------
+
+  submitDirection(
+    missionId: string,
+    input: { body: string; model: ModelId; effort: Effort }
+  ): Promise<z.infer<typeof SubmitDirectionResponseSchema>> {
+    return this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/direction`,
+      SubmitDirectionResponseSchema,
+      input
+    );
+  }
+
+  async resolveDirection(
+    directionId: string,
+    input: { action: "apply" | "reject" | "supersede"; reason?: string }
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/directions/${encodeURIComponent(directionId)}/resolve`,
+      OkResponseSchema,
+      input
+    );
+  }
+
+  async cancelDirection(directionId: string): Promise<void> {
+    await this.request("POST", `/directions/${encodeURIComponent(directionId)}/cancel`, OkResponseSchema, {});
+  }
+
+  async stopExecution(missionId: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/execution/stop`,
+      OkResponseSchema,
+      {}
+    );
+  }
+
+  // --- Evidence -------------------------------------------------------------
+
+  fileDiff(changeId: string): Promise<z.infer<typeof FileDiffResponseSchema>> {
+    return this.request("GET", `/file-changes/${encodeURIComponent(changeId)}`, FileDiffResponseSchema);
+  }
+
+  // --- Invitations ----------------------------------------------------------
+
+  createInvitation(
+    missionId: string,
+    role: MissionRole
+  ): Promise<z.infer<typeof CreatedInvitationSchema>> {
+    return this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/invitations`,
+      CreatedInvitationSchema,
+      { role }
+    );
+  }
+
+  async listInvitations(missionId: string): Promise<Invitation[]> {
+    const body = await this.request(
+      "GET",
+      `/missions/${encodeURIComponent(missionId)}/invitations`,
+      InvitationListResponseSchema
+    );
+    return body.invitations;
+  }
+
+  async revokeInvitation(invitationId: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/invitations/${encodeURIComponent(invitationId)}/revoke`,
+      OkResponseSchema,
+      {}
+    );
+  }
+
+  redeemInvitation(token: string): Promise<z.infer<typeof RedeemInvitationResponseSchema>> {
+    return this.request("POST", "/invitations/redeem", RedeemInvitationResponseSchema, { token });
+  }
+
+  // --- Control --------------------------------------------------------------
+
+  private async controlPost(path: string, body: unknown = {}): Promise<void> {
+    await this.request("POST", path, OkResponseSchema, body);
+  }
+
+  requestControl(missionId: string): Promise<void> {
+    return this.controlPost(`/missions/${encodeURIComponent(missionId)}/control/request`);
+  }
+  withdrawControlRequest(missionId: string): Promise<void> {
+    return this.controlPost(`/missions/${encodeURIComponent(missionId)}/control/request/withdraw`);
+  }
+  declineControlRequest(requestId: string): Promise<void> {
+    return this.controlPost(`/control/requests/${encodeURIComponent(requestId)}/decline`);
+  }
+  offerControl(missionId: string, toUserId: string): Promise<void> {
+    return this.controlPost(`/missions/${encodeURIComponent(missionId)}/control/offer`, { toUserId });
+  }
+  withdrawOffer(offerId: string): Promise<void> {
+    return this.controlPost(`/control/offers/${encodeURIComponent(offerId)}/withdraw`);
+  }
+  acceptOffer(offerId: string): Promise<void> {
+    return this.controlPost(`/control/offers/${encodeURIComponent(offerId)}/accept`);
+  }
+  declineOffer(offerId: string): Promise<void> {
+    return this.controlPost(`/control/offers/${encodeURIComponent(offerId)}/decline`);
+  }
+  revokeControl(missionId: string): Promise<void> {
+    return this.controlPost(`/missions/${encodeURIComponent(missionId)}/control/revoke`);
+  }
+
+  // --- Runner registration --------------------------------------------------
+
+  /** Issues this machine's runner credential. Called from the main process
+   *  only; the credential never crosses the IPC bridge. */
+  registerRunner(workstreamId: string, label: string): Promise<RegisterRunnerResponse> {
+    return this.request(
+      "POST",
+      `/workstreams/${encodeURIComponent(workstreamId)}/runner`,
+      RegisterRunnerResponseSchema,
+      { workstreamId, label }
+    );
   }
 }

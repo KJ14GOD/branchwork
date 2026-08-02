@@ -1,0 +1,130 @@
+import type { MissionEvent } from "@novus/contracts";
+import type pg from "pg";
+import { newEventId } from "./ids.ts";
+
+/**
+ * The one path that writes mission events. Every module records through this
+ * function so actor attribution, causation, and ordering stay uniform
+ * (ARCHITECTURE.md#event-model). The actor is always chosen by the server —
+ * nothing a client sends decides it.
+ */
+
+export interface RecordEventArgs {
+  orgId: string;
+  missionId: string;
+  workstreamId?: string | null;
+  executionId?: string | null;
+  kind: string;
+  actorKind: "user" | "system" | "harness" | "runner" | "external";
+  actorId: string;
+  actorLogin?: string | null;
+  causeDirectionId?: string | null;
+  causeLeaseId?: string | null;
+  originSeq?: number | null;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Per-mission advisory lock, then max(seq)+1. Concurrent writers (a runner
+ * reporting while a second participant submits direction) serialize here
+ * instead of colliding on the (mission_id, seq) unique index and losing an
+ * event.
+ */
+export async function nextSeq(client: pg.PoolClient, missionId: string): Promise<number> {
+  await client.query("select pg_advisory_xact_lock(hashtext($1))", [missionId]);
+  const result = await client.query(
+    "select coalesce(max(seq), 0)::int + 1 as next from events where mission_id = $1",
+    [missionId]
+  );
+  return result.rows[0]?.next as number;
+}
+
+/** Records one event at the next mission sequence. Returns its id. */
+export async function recordEvent(client: pg.PoolClient, args: RecordEventArgs): Promise<string> {
+  const seq = await nextSeq(client, args.missionId);
+  return recordEventAtSeq(client, args, seq);
+}
+
+/**
+ * Records an event at an explicit sequence — used by mission creation, which
+ * writes seq 1 and 2 inside the creating transaction.
+ *
+ * Runner-origin events carry `originSeq`; a replay of the same (execution,
+ * originSeq) is ignored, so a retried delivery after a partition lands once
+ * (ARCHITECTURE.md#event-model). Returns the empty string when the write was
+ * a de-duplicated replay.
+ */
+export async function recordEventAtSeq(
+  client: pg.PoolClient,
+  args: RecordEventArgs,
+  seq: number
+): Promise<string> {
+  const eventId = newEventId();
+  const result = await client.query(
+    `insert into events (
+       event_id, org_id, mission_id, workstream_id, execution_id, seq, kind,
+       actor_kind, actor_id, actor_login, cause_direction_id, cause_lease_id,
+       origin_seq, payload)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     on conflict (execution_id, origin_seq) where origin_seq is not null do nothing
+     returning event_id`,
+    [
+      eventId,
+      args.orgId,
+      args.missionId,
+      args.workstreamId ?? null,
+      args.executionId ?? null,
+      seq,
+      args.kind,
+      args.actorKind,
+      args.actorId,
+      args.actorLogin ?? null,
+      args.causeDirectionId ?? null,
+      args.causeLeaseId ?? null,
+      args.originSeq ?? null,
+      JSON.stringify(args.payload)
+    ]
+  );
+  return (result.rows[0]?.event_id as string | undefined) ?? "";
+}
+
+export interface EventRow {
+  event_id: string;
+  mission_id: string;
+  seq: string | number;
+  kind: string;
+  actor_kind: string;
+  actor_id: string;
+  actor_login: string | null;
+  cause_direction_id: string | null;
+  cause_lease_id: string | null;
+  execution_id: string | null;
+  payload: Record<string, unknown>;
+  schema_version: number;
+  occurred_at: Date;
+}
+
+export function toMissionEvent(row: EventRow): MissionEvent {
+  return {
+    eventId: row.event_id,
+    missionId: row.mission_id,
+    seq: Number(row.seq),
+    kind: row.kind,
+    actor: {
+      kind: row.actor_kind as MissionEvent["actor"]["kind"],
+      id: row.actor_id,
+      login: row.actor_login
+    },
+    cause: { directionId: row.cause_direction_id, leaseId: row.cause_lease_id },
+    executionId: row.execution_id,
+    payload: row.payload,
+    schemaVersion: row.schema_version,
+    occurredAt: row.occurred_at.toISOString()
+  };
+}
+
+export const EVENT_SELECT = `
+  select event_id, mission_id, seq, kind, actor_kind, actor_id, actor_login,
+         cause_direction_id, cause_lease_id, execution_id, payload,
+         schema_version, occurred_at
+    from events`;

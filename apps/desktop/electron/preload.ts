@@ -1,59 +1,63 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type {
-  AvailableRepository,
-  BaseRevision,
-  CreateMissionInput,
-  IpcAuthStatus,
-  IpcResult,
-  Mission,
-  MissionDetailResponse,
-  SetupProbeResponse,
-  Workstream
-} from "@novus/contracts";
+import type { IpcAuthStatus, NovusBridge } from "@novus/contracts";
 
 /**
  * The complete renderer surface. No Node, no Electron internals, no session
- * credentials — only these typed calls cross the bridge.
+ * credentials, no runner credentials, no filesystem paths — only these typed
+ * calls cross the bridge. `NovusBridge` in the renderer and this object are
+ * the same shape by construction: the type annotation below fails the build if
+ * they drift.
  */
-const novus = {
+const novus: NovusBridge = {
   auth: {
-    status: (): Promise<IpcAuthStatus> => ipcRenderer.invoke("novus:auth:status"),
-    start: (): Promise<IpcResult<null>> => ipcRenderer.invoke("novus:auth:start"),
-    signOut: (): Promise<IpcResult<null>> => ipcRenderer.invoke("novus:auth:signout"),
-    onChanged: (listener: (status: IpcAuthStatus) => void): (() => void) => {
+    status: () => ipcRenderer.invoke("novus:auth:status"),
+    start: () => ipcRenderer.invoke("novus:auth:start"),
+    signOut: () => ipcRenderer.invoke("novus:auth:signout"),
+    onChanged: (listener: (status: IpcAuthStatus) => void) => {
       const wrapped = (_event: unknown, status: IpcAuthStatus) => listener(status);
       ipcRenderer.on("novus:auth-changed", wrapped);
       return () => ipcRenderer.removeListener("novus:auth-changed", wrapped);
     }
   },
   setup: {
-    probe: (): Promise<IpcResult<SetupProbeResponse>> => ipcRenderer.invoke("novus:setup:probe")
+    probe: () => ipcRenderer.invoke("novus:setup:probe")
   },
   repos: {
-    available: (): Promise<IpcResult<AvailableRepository[]>> => ipcRenderer.invoke("novus:repos:available"),
-    base: (providerRepoId: string, ref?: string): Promise<IpcResult<BaseRevision>> =>
-      ipcRenderer.invoke("novus:repos:base", { providerRepoId, ref }),
-    addLocal: (): Promise<IpcResult<unknown>> => ipcRenderer.invoke("novus:repos:add-local"),
-    localList: (): Promise<IpcResult<unknown[]>> => ipcRenderer.invoke("novus:repos:local-list"),
-    baseLocal: (localId: string): Promise<IpcResult<unknown>> =>
-      ipcRenderer.invoke("novus:repos:base-local", localId)
+    available: () => ipcRenderer.invoke("novus:repos:available"),
+    base: (providerRepoId, ref) => ipcRenderer.invoke("novus:repos:base", { providerRepoId, ref }),
+    addLocal: () => ipcRenderer.invoke("novus:repos:add-local"),
+    localList: () => ipcRenderer.invoke("novus:repos:local-list"),
+    baseLocal: (localId) => ipcRenderer.invoke("novus:repos:base-local", localId)
   },
   missions: {
-    list: (): Promise<IpcResult<Mission[]>> => ipcRenderer.invoke("novus:missions:list"),
-    create: (input: CreateMissionInput): Promise<IpcResult<{ mission: Mission; workstream: Workstream }>> =>
-      ipcRenderer.invoke("novus:missions:create", input),
-    get: (missionId: string): Promise<IpcResult<MissionDetailResponse>> =>
-      ipcRenderer.invoke("novus:missions:get", missionId),
-    retryBranch: (workstreamId: string): Promise<IpcResult<Workstream>> =>
-      ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
-    direct: (input: { missionId: string; body: string; model: string; effort: string }): Promise<IpcResult<null>> =>
-      ipcRenderer.invoke("novus:missions:direct", input),
-    stop: (missionId: string): Promise<IpcResult<boolean>> => ipcRenderer.invoke("novus:missions:stop", missionId),
-    running: (missionId: string): Promise<IpcResult<boolean>> =>
-      ipcRenderer.invoke("novus:missions:running", missionId)
+    list: () => ipcRenderer.invoke("novus:missions:list"),
+    create: (input) => ipcRenderer.invoke("novus:missions:create", input),
+    get: (missionId) => ipcRenderer.invoke("novus:missions:get", missionId),
+    retryBranch: (workstreamId) => ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
+    direct: (input) => ipcRenderer.invoke("novus:missions:direct", input),
+    resolveDirection: (input) => ipcRenderer.invoke("novus:missions:resolve-direction", input),
+    cancelDirection: (directionId) => ipcRenderer.invoke("novus:missions:cancel-direction", directionId),
+    stop: (missionId) => ipcRenderer.invoke("novus:missions:stop", missionId)
+  },
+  control: {
+    request: (missionId) => ipcRenderer.invoke("novus:control:request", missionId),
+    withdrawRequest: (missionId) => ipcRenderer.invoke("novus:control:withdraw-request", missionId),
+    declineRequest: (requestId) => ipcRenderer.invoke("novus:control:decline-request", requestId),
+    offer: (input) => ipcRenderer.invoke("novus:control:offer", input),
+    withdrawOffer: (offerId) => ipcRenderer.invoke("novus:control:withdraw-offer", offerId),
+    acceptOffer: (offerId) => ipcRenderer.invoke("novus:control:accept-offer", offerId),
+    declineOffer: (offerId) => ipcRenderer.invoke("novus:control:decline-offer", offerId),
+    revoke: (missionId) => ipcRenderer.invoke("novus:control:revoke", missionId)
+  },
+  invites: {
+    create: (input) => ipcRenderer.invoke("novus:invites:create", input),
+    list: (missionId) => ipcRenderer.invoke("novus:invites:list", missionId),
+    revoke: (invitationId) => ipcRenderer.invoke("novus:invites:revoke", invitationId),
+    redeem: (token) => ipcRenderer.invoke("novus:invites:redeem", token)
+  },
+  evidence: {
+    fileDiff: (changeId) => ipcRenderer.invoke("novus:evidence:file-diff", changeId)
   }
 };
-
-export type NovusBridge = typeof novus;
 
 contextBridge.exposeInMainWorld("novus", novus);

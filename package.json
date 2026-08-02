@@ -12,7 +12,7 @@
     "build": "pnpm --filter @novus/contracts build && pnpm --filter @novus/control-plane build && pnpm --filter @novus/desktop build",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint apps packages --ext .ts,.tsx",
-    "test": "pnpm --filter @novus/contracts test && pnpm --filter @novus/control-plane test",
+    "test": "pnpm --filter @novus/contracts test && pnpm --filter @novus/control-plane test && pnpm --filter @novus/desktop test",
     "e2e": "pnpm --filter @novus/desktop e2e",
     "dev": "node scripts/dev.mjs"
   },

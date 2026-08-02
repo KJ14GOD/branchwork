@@ -423,9 +423,10 @@ describe("reconstruction depth", () => {
         expect(body.events.map((event: { kind: string }) => event.kind)).toEqual([
           "mission.created",
           "workstream.created",
+          "control.granted",
           "workstream.branch_created"
         ]);
-        expect(body.events.map((event: { seq: number }) => event.seq)).toEqual([1, 2, 3]);
+        expect(body.events.map((event: { seq: number }) => event.seq)).toEqual([1, 2, 3, 4]);
       }
     } finally {
       await cold.close();

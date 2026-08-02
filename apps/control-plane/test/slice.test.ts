@@ -210,6 +210,7 @@ describe("missions, events, and reconstruction", () => {
     expect(body.events.map((event: { kind: string }) => event.kind)).toEqual([
       "mission.created",
       "workstream.created",
+      "control.granted",
       "workstream.branch_created"
     ]);
     await freshApp.close();

@@ -74,7 +74,7 @@ Conceptual definitions. Each term has exactly one meaning, defined here; data re
 - **User** (V0) — an authenticated person. Agents are never Users; they act within Executions and are attributed as harness actors.
 - **Organization** (V0) — the ownership boundary for repositories, missions, members, and policy.
 - **OrganizationMember** (V0) — a User's membership in an Organization, with an org-level role (owner, member).
-- **Repository** (V0) — a connected GitHub repository, authorized through a GitHub App installation owned by the Organization.
+- **Repository** (V0) — a connected code repository: either a GitHub repository authorized through a GitHub App installation owned by the Organization, or a folder on a user's own machine registered as a local repository (D-032). Local git operations run in the desktop application; the control plane records identity and revisions and never touches the folder.
 - **Mission** (V0) — the shared objective and collaboration boundary: a goal, success criteria, a repository, participants, control policy, an event history, and at completion a receipt. Missions are the unit of attention, invitation, and record.
 - **Participant** (V0) — a (User, Mission) pair with a Role. In V0, participants must be members of the mission's organization; cross-org guests are an extension point.
 - **Invitation** (V0) — a mission-scoped, expiring, single-use grant that makes a User a Participant with a stated Role.
@@ -84,8 +84,8 @@ Conceptual definitions. Each term has exactly one meaning, defined here; data re
 - **Execution** (V0) — one harness working a workstream, from start to a terminal state. At most one active execution per workstream. An execution owns its turns, events, and changes.
 - **Run / turn** — a lower-level unit inside an execution (a harness turn or tool run), surfaced in the activity feed for legibility. Not addressable by users in V0.
 - **Harness** (V0) — a supported coding agent product (Claude Code, Codex in V0) operated through the adapter contract in [ARCHITECTURE.md](ARCHITECTURE.md#harness-protocol).
-- **Runner** (V0) — the machine-side program that supervises executions and speaks the runner protocol: a Novus-managed cloud runner in V0; local, enterprise, and third-party runners are conformance targets ([ARCHITECTURE.md](ARCHITECTURE.md#runner-plane)).
-- **Workspace** (V0) — a provisioned working environment (the workstream branch's working tree, dependencies, scoped credentials) on a runner. One active workspace per workstream, reused across that workstream's executions so its changes accumulate in one place. Its location may be cloud, local, or customer-managed; V0 ships cloud only. The workspace is resumable execution state, not the permanent system of record.
+- **Runner** (V0) — the machine-side program that supervises executions and speaks the runner protocol. The first shipped runner is the host desktop itself, registered per workstream and authenticated with its own scoped credential (D-035); the Novus-managed cloud runner and enterprise and third-party runners speak the same protocol ([ARCHITECTURE.md](ARCHITECTURE.md#runner-plane)).
+- **Workspace** (V0) — a provisioned working environment (the workstream branch's working tree, dependencies, scoped credentials) on a runner. One active workspace per workstream, reused across that workstream's executions so its changes accumulate in one place. Its location may be cloud, local, or customer-managed; the first shipped workspace is a dedicated git worktree on the host machine (D-032), and the user's own checkout is never touched. The workspace is resumable execution state, not the permanent system of record.
 - **Direction** (V0) — an attributed instruction submitted to a workstream and consumed by an execution, with the lifecycle in [Direction](#direction).
 - **ControlLease** (V0) — the server-issued grant that makes exactly one participant the controller of a workstream (see [Control](#control)).
 - **ControlRequest** (V0) — a participant's standing, visible request to become controller.
@@ -121,7 +121,7 @@ Capabilities are the enforcement unit, and they live in two scopes that never mi
 | `mission.invite`, `mission.close` | ✓ | — | — | — | — |
 | `direction.submit` | ✓ | ✓ | ✓ | — | — |
 | `direction.apply` (apply, supersede, or reject queued direction) | — | — | — | — | ✓ |
-| `execution.start` | ✓ | ✓ | — | — | — |
+| `execution.start` | ✓ | ✓ | — | — | ✓ |
 | `execution.pause`, `execution.resume` | — | — | — | — | ✓ |
 | `workspace.sync` (apply a visible remote update at a safe boundary) | — | — | — | — | ✓ |
 | `execution.stop` | ✓ | ✓ | ✓ | — | ✓ |
@@ -136,6 +136,7 @@ Capabilities are the enforcement unit, and they live in two scopes that never mi
 
 Deliberate choices:
 - **Stopping is broad, operating is narrow.** Any non-viewer participant may stop a running execution (`execution.stop`); a wrong or dangerous direction must not be able to run until a handoff completes. Only the lease holder steers, pauses, resumes, and answers approvals.
+- **The lease starts the work it authorizes.** An applied direction with no active execution has to be able to run, so the lease grants `execution.start` for its workstream whatever the holder's role (D-034). Starting an execution as a role capability remains an Operator-and-above act for anyone who is not the controller.
 - **Non-controllers are not spectators.** Contributor verbs — submit direction to the queue, request control, comment on evidence, stop the work — are real, server-enforced operations, not chat.
 - Direction submitted by a non-controller queues automatically; only the controller applies, supersedes, or rejects it. Submission is never silently dropped.
 
@@ -165,6 +166,8 @@ Rules that prevent deadlock and races:
 - The lease is a durable grant, not a connection. A disconnected controller still holds the lease until TTL expiry. On expiry the workstream has no controller: the execution pauses at its next boundary, every participant sees "no controller," and any participant with `control.request` may claim the lease: a claim is a ControlRequest made against an unheld lease, which the server fulfills immediately — first accepted wins. The Mission Admin may revoke and reassign at any time.
 - An accepted offer survives the recipient's disconnection; control is granted at the boundary regardless, because the grant is durable.
 - Simultaneous requests both stay open and visible; the controller chooses. A completed transfer closes all other open requests as `superseded`.
+
+**Control authority and execution lifetime are separate** (D-034). Novus imposes no universal wall-clock or turn-count limit: an authorized execution continues until the harness completes, requires human direction or approval, encounters a real failure, reaches an explicitly configured policy boundary, or receives an authorized pause, stop, or interrupt command. A participant disconnecting does not end an execution that was already authorized. An expired or transferred lease removes that person's ability to issue privileged commands from that moment on; it never retroactively revokes work already authorized. A local execution does depend on its host machine: quitting the host desktop ends the execution as an explicit *Execution interrupted* outcome, never as a silent stall and never as an orphaned process. Cloud execution will continue independently of the laptop that started it, and a rotated provider workspace preserves the mission through checkpoints and reconstruction. Vendor quota, organization policy, or an explicit user budget may stop an execution; Novus itself imposes no duration or turn ceiling.
 
 ### Direction
 
@@ -267,8 +270,6 @@ The canonical 20-step narrative lives in [README.md](README.md#the-golden-v0-wor
 A full IDE; a generic Kanban board; a model marketplace; automatic approach ranking or synthesis of competing implementations; dozens-of-agents fleet views; multi-repository missions; organization analytics; billing complexity; SSO/SCIM; mobile-native applications; a visual workflow builder; agent personas; building a foundation model; replacing GitHub; rebuilding Claude Code or Codex; an integration catalog. The architecture may keep honest extension points for some of these; the UI must never expose fictional future capabilities.
 
 ### Extension points (schema or protocol exists; no V0 UI)
-
-An open product question, deliberately undecided (D-031): whether Novus can create or attach **local** repositories rather than GitHub-hosted ones — it tensions with the GitHub exchange boundary (D-025) and waits for a real decision.
 
 Additional harnesses (Droid, OpenCode); local, enterprise, and third-party execution providers; a local mirror that explicitly checks out a cloud workstream's branch; cross-org mission guests; org-definable policy (autonomy ceilings, retention); API-driven mission creation and automation; approach comparison workflows; org-level audit export.
 
