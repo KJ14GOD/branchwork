@@ -128,6 +128,36 @@ function registerIpc(): void {
     }
   });
 
+  ipcMain.handle("novus:repos:available", async () => {
+    try {
+      return ok(await api.availableRepositories());
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
+  ipcMain.handle("novus:repos:base", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ providerRepoId: z.string().min(1), ref: z.string().min(1).optional() })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed repository reference." };
+    try {
+      return ok(await api.baseRevision(parsed.data.providerRepoId, parsed.data.ref));
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
+  ipcMain.handle("novus:missions:retry-branch", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("wst_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed workstream id." };
+    try {
+      return ok(await api.retryBranch(parsed.data));
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
   ipcMain.handle("novus:missions:create", async (_event, raw: unknown) => {
     const parsed = CreateMissionInputSchema.safeParse(raw);
     if (!parsed.success) {

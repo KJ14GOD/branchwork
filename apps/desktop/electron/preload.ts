@@ -1,11 +1,14 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
+  AvailableRepository,
+  BaseRevision,
   CreateMissionInput,
   IpcAuthStatus,
   IpcResult,
   Mission,
   MissionDetailResponse,
-  SetupProbeResponse
+  SetupProbeResponse,
+  Workstream
 } from "@novus/contracts";
 
 /**
@@ -26,12 +29,19 @@ const novus = {
   setup: {
     probe: (): Promise<IpcResult<SetupProbeResponse>> => ipcRenderer.invoke("novus:setup:probe")
   },
+  repos: {
+    available: (): Promise<IpcResult<AvailableRepository[]>> => ipcRenderer.invoke("novus:repos:available"),
+    base: (providerRepoId: string, ref?: string): Promise<IpcResult<BaseRevision>> =>
+      ipcRenderer.invoke("novus:repos:base", { providerRepoId, ref })
+  },
   missions: {
     list: (): Promise<IpcResult<Mission[]>> => ipcRenderer.invoke("novus:missions:list"),
-    create: (input: CreateMissionInput): Promise<IpcResult<Mission>> =>
+    create: (input: CreateMissionInput): Promise<IpcResult<{ mission: Mission; workstream: Workstream }>> =>
       ipcRenderer.invoke("novus:missions:create", input),
     get: (missionId: string): Promise<IpcResult<MissionDetailResponse>> =>
-      ipcRenderer.invoke("novus:missions:get", missionId)
+      ipcRenderer.invoke("novus:missions:get", missionId),
+    retryBranch: (workstreamId: string): Promise<IpcResult<Workstream>> =>
+      ipcRenderer.invoke("novus:missions:retry-branch", workstreamId)
   }
 };
 

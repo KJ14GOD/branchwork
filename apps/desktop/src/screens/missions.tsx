@@ -111,6 +111,9 @@ export function MissionsSurface({ user, org }: { user: User; org: Organization }
                 >
                   <span className="status-dot neutral" />
                   <span>{mission.goal}</span>
+                  {mission.repository && (
+                    <span className="row-repo" data-testid="row-repo">{mission.repository.name}</span>
+                  )}
                   <span className="row-meta">{STATE_LABELS[mission.primaryState]}</span>
                   <span className="spacer" style={{ flex: 1 }} />
                   <span className="row-meta">{relativeTime(mission.createdAt)}</span>
