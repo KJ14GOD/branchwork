@@ -5,6 +5,8 @@ import { z } from "zod";
 import { ApiError, ControlPlaneClient } from "./api-client";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
+import { ensureLocalBranch, pathForLocalRepo, pickLocalRepository, resolveLocalBase } from "./local-repos";
+import { isRunning, runDirection, stopAllExecutions, stopExecution, type ReportedEvent } from "./execution";
 import { SessionStore } from "./session-store";
 
 // Test hooks (see DECISIONS.md D-027): both refuse to exist in packaged builds.
@@ -158,16 +160,163 @@ function registerIpc(): void {
     }
   });
 
+  ipcMain.handle("novus:repos:add-local", async () => {
+    const picked = await pickLocalRepository();
+    if ("cancelled" in picked) return ok(null);
+    if ("error" in picked) return { ok: false, code: "invalid_repo", message: picked.error };
+    try {
+      await api.registerLocalRepo(picked);
+      return ok({
+        providerRepoId: picked.localId,
+        name: picked.name,
+        defaultBranch: picked.defaultBranch,
+        provider: "local"
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
+  ipcMain.handle("novus:repos:local-list", async () => {
+    try {
+      const repositories = await api.localRepositories();
+      return ok(
+        (repositories as { providerRepoId: string; name: string; defaultBranch: string }[]).map((repo) => ({
+          ...repo,
+          onThisMachine: pathForLocalRepo(repo.providerRepoId) !== null
+        }))
+      );
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
+  ipcMain.handle("novus:repos:base-local", async (_event, raw: unknown) => {
+    const parsed = z.string().uuid().safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed repository id." };
+    const base = await resolveLocalBase(parsed.data);
+    if ("error" in base) return { ok: false, code: "local_git", message: base.error };
+    return ok(base);
+  });
+
   ipcMain.handle("novus:missions:create", async (_event, raw: unknown) => {
     const parsed = CreateMissionInputSchema.safeParse(raw);
     if (!parsed.success) {
       return { ok: false, code: "invalid_input", message: parsed.error.issues[0]?.message ?? "Invalid mission." };
     }
     try {
-      return ok(await api.createMission(parsed.data));
+      const created = await api.createMission(parsed.data);
+      // Local branches are this machine's job: create the ref, report the
+      // outcome as a claim, and hand the renderer the settled workstream.
+      if (parsed.data.provider === "local") {
+        const result = await ensureLocalBranch(
+          parsed.data.providerRepoId,
+          created.workstream.missionBranch,
+          parsed.data.baseSha
+        );
+        created.workstream = await api.reportBranch(
+          created.workstream.workstreamId,
+          result.ok ? { status: "created" } : { status: "failed", error: result.error }
+        );
+      }
+      return ok(created);
     } catch (error) {
       return fail(error);
     }
+  });
+
+  // Reported claims leave this machine strictly in order. Two in-flight
+  // reports race for the same event sequence on the server (max(seq)+1) and
+  // the loser is dropped — a checkpoint emitted immediately before completion
+  // was lost exactly that way. A per-mission chain serializes them.
+  const reportChains = new Map<string, Promise<void>>();
+  const reportInOrder = (missionId: string, event: ReportedEvent): void => {
+    const prev = reportChains.get(missionId) ?? Promise.resolve();
+    const next = prev.then(async () => {
+      try {
+        await api.reportEvents(missionId, [event]);
+      } catch (error) {
+        console.error("event report failed:", error instanceof Error ? error.message : error);
+      }
+    });
+    reportChains.set(missionId, next);
+    void next.finally(() => {
+      if (reportChains.get(missionId) === next) reportChains.delete(missionId);
+    });
+  };
+
+  // The renderer names the mission and the words; it never names the branch
+  // or the repository. Those come from server state (ARCHITECTURE.md: the
+  // client originates no authority).
+  const DirectSchema = z.object({
+    missionId: z.string().startsWith("msn_"),
+    body: z.string().trim().min(1).max(4000),
+    // Allowlisted: these become CLI flags, so nothing arbitrary may pass.
+    model: z
+      .enum([
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-sonnet-5",
+        "claude-haiku-4-5-20251001"
+      ])
+      .default("claude-fable-5"),
+    effort: z.enum(["low", "medium", "high", "xhigh", "max"]).default("high")
+  });
+
+  ipcMain.handle("novus:missions:direct", async (_event, raw: unknown) => {
+    const parsed = DirectSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed direction." };
+    const input = parsed.data;
+    if (isRunning(input.missionId)) {
+      return { ok: false, code: "busy", message: "The agent is already working. Wait for this turn to finish." };
+    }
+    let detail: Awaited<ReturnType<typeof api.getMission>>;
+    try {
+      detail = await api.getMission(input.missionId);
+    } catch (error) {
+      return fail(error);
+    }
+    const repository = detail.mission.repository;
+    const workstream = detail.workstream;
+    if (!repository || !workstream || repository.provider !== "local") {
+      return { ok: false, code: "not_executable", message: "Agents run on local repositories for now." };
+    }
+
+    try {
+      await api.submitDirection(input.missionId, input.body);
+    } catch (error) {
+      return fail(error);
+    }
+    // The turn streams in the background; the room's poll renders it live.
+    void runDirection({
+      missionId: input.missionId,
+      localId: repository.providerRepoId,
+      missionBranch: workstream.missionBranch,
+      direction: input.body,
+      model: input.model,
+      effort: input.effort,
+      emit: (event) => reportInOrder(input.missionId, event)
+    }).catch((error) => {
+      reportInOrder(input.missionId, {
+        kind: "execution.failed",
+        payload: { error: error instanceof Error ? error.message : "unknown" }
+      });
+    });
+    return ok(null);
+  });
+
+  ipcMain.handle("novus:missions:stop", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("msn_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return ok(stopExecution(parsed.data));
+  });
+
+  ipcMain.handle("novus:missions:running", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("msn_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return ok(isRunning(parsed.data));
   });
 
   ipcMain.handle("novus:missions:get", async (_event, raw: unknown) => {
@@ -215,6 +364,23 @@ app.whenReady().then(async () => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+// An agent must never outlive the app that started it: kill in-flight turns
+// and record the interruption so a room never hangs on "started" forever.
+app.on("before-quit", (event) => {
+  const interrupted = stopAllExecutions();
+  if (interrupted.length === 0) return;
+  event.preventDefault();
+  Promise.all(
+    interrupted.map((missionId) =>
+      api
+        .reportEvents(missionId, [
+          { kind: "execution.stopped", payload: { reason: "Novus quit while the agent was working." } }
+        ])
+        .catch(() => undefined)
+    )
+  ).finally(() => app.exit(0));
 });
 
 app.on("window-all-closed", () => {

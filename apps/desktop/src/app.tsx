@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { IpcAuthStatus } from "@novus/contracts";
 import { novus } from "./bridge";
 import { SetupSurface } from "./screens/setup";
-import { MissionsSurface } from "./screens/missions";
+import { ProjectShell } from "./screens/project-shell";
 
 export function App() {
   const [auth, setAuth] = useState<IpcAuthStatus | null>(null);
@@ -31,7 +31,7 @@ export function App() {
   return (
     <div className="shell">
       {auth.state === "signed_in" && !inSetup ? (
-        <MissionsSurface user={auth.user} org={auth.org} />
+        <ProjectShell user={auth.user} org={auth.org} />
       ) : (
         <SetupSurface auth={auth} onFinished={() => setInSetup(false)} />
       )}

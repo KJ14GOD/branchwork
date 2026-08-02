@@ -32,7 +32,11 @@ const novus = {
   repos: {
     available: (): Promise<IpcResult<AvailableRepository[]>> => ipcRenderer.invoke("novus:repos:available"),
     base: (providerRepoId: string, ref?: string): Promise<IpcResult<BaseRevision>> =>
-      ipcRenderer.invoke("novus:repos:base", { providerRepoId, ref })
+      ipcRenderer.invoke("novus:repos:base", { providerRepoId, ref }),
+    addLocal: (): Promise<IpcResult<unknown>> => ipcRenderer.invoke("novus:repos:add-local"),
+    localList: (): Promise<IpcResult<unknown[]>> => ipcRenderer.invoke("novus:repos:local-list"),
+    baseLocal: (localId: string): Promise<IpcResult<unknown>> =>
+      ipcRenderer.invoke("novus:repos:base-local", localId)
   },
   missions: {
     list: (): Promise<IpcResult<Mission[]>> => ipcRenderer.invoke("novus:missions:list"),
@@ -41,7 +45,12 @@ const novus = {
     get: (missionId: string): Promise<IpcResult<MissionDetailResponse>> =>
       ipcRenderer.invoke("novus:missions:get", missionId),
     retryBranch: (workstreamId: string): Promise<IpcResult<Workstream>> =>
-      ipcRenderer.invoke("novus:missions:retry-branch", workstreamId)
+      ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
+    direct: (input: { missionId: string; body: string; model: string; effort: string }): Promise<IpcResult<null>> =>
+      ipcRenderer.invoke("novus:missions:direct", input),
+    stop: (missionId: string): Promise<IpcResult<boolean>> => ipcRenderer.invoke("novus:missions:stop", missionId),
+    running: (missionId: string): Promise<IpcResult<boolean>> =>
+      ipcRenderer.invoke("novus:missions:running", missionId)
   }
 };
 

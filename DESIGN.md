@@ -57,7 +57,7 @@ Semantic lock: a token may not be used outside its meaning. Sage for "online" fa
 
 Light theme overrides (provisional): `--bg #F2F0EC` · `--surface-1 #FAF9F6` · `--surface-2 #FFFFFF` · `--edge` black 10% (16% hover) · `--text-1 #26241F` · `--text-2 #5D594F` · `--text-3 #77726A` · `--accent #26241F` (authority inverts to warm ink; pressed `#3A3833`) · `--ok #4F7A4A` · `--warn #A15F28` · `--danger #A8443A` · hover/selected/pressed: black 4/6/6%. Same contrast obligations as dark.
 
-Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% plus a 2px `--accent` left edge; pressed `#FFFFFF` at 6%. Disabled controls: label and icon at 40% opacity, no hover response, default cursor.
+Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% (a background highlight only — no accent bar, no outline); pressed `#FFFFFF` at 6%. Disabled controls: label and icon at 40% opacity, no hover response, default cursor.
 
 ### Typography
 
@@ -87,7 +87,7 @@ Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% plu
 
 ### Radii
 
-6px — inputs, rows, small controls, **buttons** (buttons are squarish, never pill-adjacent — D-029) · 10px — contained cards · 14px — dialogs, drawers, the composer · full — identity marks only. Squircle corner smoothing where the platform allows; plain border-radius with the same values where it does not. Radii come only from this list.
+6px — inputs, rows, small controls, **buttons** (buttons are squarish, never pill-adjacent — D-029). **Navigation rails carry no radius at all**: a selected row is a background highlight, never a floating capsule or an accent bar · 10px — contained cards · 14px — dialogs, drawers, the composer · full — identity marks only. Squircle corner smoothing where the platform allows; plain border-radius with the same values where it does not. Radii come only from this list.
 
 ### Elevation
 
@@ -135,7 +135,7 @@ Five elements make a screen recognizably Novus. They are the only permitted uses
 Project-first (D-032). The window's subject is parallel agent work, never code files. Invitations, permissions, technical logs, environment configuration, and advanced settings live in bounded overlays or contextual inspectors.
 
 1. **Projects sidebar** — the persistent left rail (240px): the user's repositories (GitHub and local), each expanding to its missions/workstreams; nouns and counts only, plus Add project (GitHub picker or local folder). An **attention view** at the rail's top surfaces Needs-you items across projects — the old Missions queue, demoted to a lens.
-2. **Project room** — the center: **workstream tabs** across the top (parallel attempts, each its own harness/model choice); each tab is a chat-first mission room — the direction thread as a conversational feed, the state line, and a persistent chat composer (prominent; the one exception to the idle-height rule) carrying harness/model selection; Changes and Verification one keystroke away, never the default canvas.
+2. **Project room** — the center: **workstream tabs** across the top (parallel attempts, each its own harness/model choice); each tab is a chat-first mission room — the direction thread as a conversational feed, the state line, and a persistent chat composer (prominent; the one exception to the idle-height rule) carrying harness/model selection; Changes and Verification one keystroke away, never the default canvas. **Creation is form-free**: a new tab opens straight into the composer with the pinned base shown quietly; the first message creates the mission (goal derives from it, renamable; success criteria attach later in the room) and, where execution exists, starts the agent. No goal/criteria form ever gates starting work (D-032).
 3. **Review** — behavioral result summary; the diff; the evidence ledger; build/diagnostic state; comments; open concerns; PR readiness.
 
 The room keeps Novus's identity inside Conductor-adjacent patterns: state line, evidence ledger, attribution, and (later) the baton are what the tabs contain — not a bare chatbot, and never a file tree as the main event.
@@ -185,7 +185,7 @@ Composition rules:
 
 ## Component behavior
 
-- **Composer.** Persistent in the room, proportionate: idle height one input row (≤56px), grows with content to 40% of viewport maximum. It states its behavior in placeholder microcopy per state (see matrix). Non-controllers' composer submits to the queue and says so. In a multi-workstream room it submits to the focused workstream and names it in the placeholder. It is never a large blank canvas.
+- **Composer.** One bordered field containing the input and its controls: the textarea sits on the box's own surface (no nested border), and a foot row inside the box carries the model chip (harness glyph + model name), the effort chip, and the send control at the right edge. Model and effort selectors may only offer values the harness actually accepts — each maps to a real flag; a capability that does not exist renders disabled with a plain "arrives later" note, never as a live option. Selection persists across sessions and is recorded on the execution's start event, so a receipt can say which model and effort produced the work. Persistent in the room, proportionate: idle height one input row (≤56px), grows with content to 40% of viewport maximum. It states its behavior in placeholder microcopy per state (see matrix). Non-controllers' composer submits to the queue and says so. In a multi-workstream room it submits to the focused workstream and names it in the placeholder. It is never a large blank canvas.
 - **Diff.** Per-file DiffRows: path (mono), +/− counts (tabular), state. Expanded: unified diff, mono 13/20, additions/deletions tinted at 12% background opacity of `--ok`/`--danger` — the only place those tokens appear as backgrounds. Inline comments attach to lines and appear in Review.
 - **Verification.** The evidence ledger (signature element 3). Checks never render as pills; a pending check is `--text-3`, running `--accent` dot, passed `--ok`, failed `--danger` with its output one reveal away. Environment attribution ("reported by cloud workspace wsp_…") always visible — evidence is a claim with an origin ([PRODUCT.md](PRODUCT.md#principles) P3).
 - **Mission-list row.** 36px: StatusDot, mission title (13/20, `--text-1`), repo ref (12/18 `--text-2`), controller's IdentityMark + baton if held, needs-you reason in `--warn` text when applicable, relative time (`--text-3`, tabular). No progress bars, no thumbnails.

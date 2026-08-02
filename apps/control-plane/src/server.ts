@@ -18,8 +18,18 @@ import {
   createMission,
   getMission,
   getWorkstreamMission,
-  listMissions
+  listLocalRepositories,
+  listMissions,
+  registerLocalRepository,
+  reportBranchOutcome
 } from "./missions.ts";
+import {
+  DirectionInputSchema,
+  RegisterLocalRepoInputSchema,
+  ReportBranchInputSchema,
+  ReportEventsInputSchema
+} from "@novus/contracts";
+import { reportExecutionEvents, submitDirection } from "./missions.ts";
 import {
   ProviderUnconfiguredError,
   UnknownRepositoryError,
@@ -165,6 +175,33 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     }
   });
 
+  app.post("/repositories/local", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    const parsed = RegisterLocalRepoInputSchema.safeParse(request.body);
+    if (!parsed.success) return sendError(reply, 422, "invalid_repo", "Malformed local repository.");
+    return { repository: await registerLocalRepository(db, ctx, parsed.data) };
+  });
+
+  app.get("/repositories/local", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    return { repositories: await listLocalRepositories(db, ctx) };
+  });
+
+  app.post("/workstreams/:workstreamId/branch/report", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    const params = z.object({ workstreamId: z.string().startsWith("wst_") }).safeParse(request.params);
+    const body = ReportBranchInputSchema.safeParse(request.body);
+    if (!params.success || !body.success) return sendError(reply, 400, "bad_request", "Malformed report.");
+    const missionId = await reportBranchOutcome(db, ctx, params.data.workstreamId, body.data);
+    if (!missionId) return sendError(reply, 404, "not_found", "No such workstream in your organization.");
+    const detail = await getMission(db, ctx, missionId);
+    if (!detail?.workstream) return sendError(reply, 500, "workstream_missing", "Workstream disappeared.");
+    return { workstream: detail.workstream };
+  });
+
   app.get("/missions", async (request, reply) => {
     const ctx = await requireAuth(request, reply);
     if (!ctx) return;
@@ -204,6 +241,30 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     const detail = await getMission(db, ctx, missionId);
     if (!detail?.workstream) return sendError(reply, 500, "workstream_missing", "Workstream disappeared.");
     return { workstream: detail.workstream };
+  });
+
+  app.post("/missions/:missionId/direction", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    const params = z.object({ missionId: z.string().startsWith("msn_") }).safeParse(request.params);
+    const body = DirectionInputSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return sendError(reply, 422, "invalid_direction", body.success ? "Malformed mission id." : body.error.issues[0]?.message ?? "Invalid direction.");
+    }
+    const recorded = await submitDirection(db, ctx, params.data.missionId, body.data.body);
+    if (!recorded) return sendError(reply, 404, "not_found", "No such mission in your organization.");
+    return reply.status(201).send({ ok: true });
+  });
+
+  app.post("/missions/:missionId/events/report", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    const params = z.object({ missionId: z.string().startsWith("msn_") }).safeParse(request.params);
+    const body = ReportEventsInputSchema.safeParse(request.body);
+    if (!params.success || !body.success) return sendError(reply, 422, "invalid_report", "Malformed event report.");
+    const recorded = await reportExecutionEvents(db, ctx, params.data.missionId, body.data.events);
+    if (!recorded) return sendError(reply, 404, "not_found", "No such mission in your organization.");
+    return reply.status(201).send({ ok: true });
   });
 
   app.get("/missions/:missionId", async (request, reply) => {

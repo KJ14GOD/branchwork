@@ -117,6 +117,42 @@ export class ControlPlaneClient {
     return this.request("POST", "/missions", CreateMissionResponseSchema, input);
   }
 
+  async registerLocalRepo(input: {
+    localId: string;
+    name: string;
+    defaultBranch: string;
+    headSha: string;
+  }): Promise<unknown> {
+    return this.request("POST", "/repositories/local", z.object({}).passthrough(), input);
+  }
+
+  async localRepositories(): Promise<unknown[]> {
+    const body = await this.request(
+      "GET",
+      "/repositories/local",
+      z.object({ repositories: z.array(z.unknown()) })
+    );
+    return body.repositories;
+  }
+
+  async reportBranch(workstreamId: string, report: { status: "created" | "failed"; error?: string | null }): Promise<Workstream> {
+    const body = await this.request(
+      "POST",
+      `/workstreams/${encodeURIComponent(workstreamId)}/branch/report`,
+      RetryBranchResponseSchema,
+      report
+    );
+    return body.workstream;
+  }
+
+  async submitDirection(missionId: string, body: string): Promise<void> {
+    await this.request("POST", `/missions/${missionId}/direction`, z.object({ ok: z.boolean() }), { body });
+  }
+
+  async reportEvents(missionId: string, events: { kind: string; payload: Record<string, unknown> }[]): Promise<void> {
+    await this.request("POST", `/missions/${missionId}/events/report`, z.object({ ok: z.boolean() }), { events });
+  }
+
   async retryBranch(workstreamId: string): Promise<Workstream> {
     const body = await this.request(
       "POST",
