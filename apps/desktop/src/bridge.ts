@@ -3,7 +3,8 @@ import type {
   IpcAuthStatus,
   IpcResult,
   Mission,
-  MissionDetailResponse
+  MissionDetailResponse,
+  SetupProbeResponse
 } from "@novus/contracts";
 
 export interface NovusBridge {
@@ -12,6 +13,9 @@ export interface NovusBridge {
     start(): Promise<IpcResult<null>>;
     signOut(): Promise<IpcResult<null>>;
     onChanged(listener: (status: IpcAuthStatus) => void): () => void;
+  };
+  setup: {
+    probe(): Promise<IpcResult<SetupProbeResponse>>;
   };
   missions: {
     list(): Promise<IpcResult<Mission[]>>;

@@ -101,6 +101,21 @@ export const IpcAuthStatusSchema = z.discriminatedUnion("state", [
 ]);
 export type IpcAuthStatus = z.infer<typeof IpcAuthStatusSchema>;
 
+/** Read-only facts observed about harness CLIs on this machine (D-029). */
+export const HarnessProbeSchema = z.object({
+  installed: z.boolean(),
+  version: z.string().nullable(),
+  /** e.g. "Max plan", "Pro plan", "signed in" — from the CLI's own local files; null when unknown. */
+  account: z.string().nullable()
+});
+export type HarnessProbe = z.infer<typeof HarnessProbeSchema>;
+
+export const SetupProbeResponseSchema = z.object({
+  claudeCode: HarnessProbeSchema,
+  codex: HarnessProbeSchema
+});
+export type SetupProbeResponse = z.infer<typeof SetupProbeResponseSchema>;
+
 export const IpcResultSchema = <T extends z.ZodTypeAny>(value: T) =>
   z.discriminatedUnion("ok", [
     z.object({ ok: z.literal(true), value }),

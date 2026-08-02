@@ -54,6 +54,9 @@ importers:
       '@novus/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      simple-icons:
+        specifier: ^16.27.1
+        version: 16.27.1
       zod:
         specifier: ^3.25.0
         version: 3.25.76
@@ -1535,6 +1538,10 @@ packages:
 
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
+
+  simple-icons@16.27.1:
+    resolution: {integrity: sha512-slZF8iKxkv7Lb9SF3L1AcIl5iYLNvDrKKm8yV69cG66XvxJ12SX+bYTgxRwCY4bXSmklGXoXaKEyVmEypOCeqw==}
+    engines: {node: '>=0.12.18'}
 
   sonic-boom@4.2.1:
     resolution: {integrity: sha512-w6AxtubXa2wTXAUsZMMWERrsIRAdrK0Sc+FUytWvYAhBJLyuI4llrMIC1DtlNSdI99EI86KZum2MMq3EAZlF9Q==}
@@ -3176,6 +3183,8 @@ snapshots:
   shebang-regex@3.0.0: {}
 
   siginfo@2.0.0: {}
+
+  simple-icons@16.27.1: {}
 
   sonic-boom@4.2.1:
     dependencies:

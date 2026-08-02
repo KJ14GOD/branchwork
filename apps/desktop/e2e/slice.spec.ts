@@ -89,7 +89,10 @@ describe("vertical slice through the desktop app", () => {
     await first.page.screenshot({ path: join(evidenceDir, "1-sign-in.png") });
 
     await first.page.getByTestId("sign-in-button").click();
-    await first.page.getByTestId("missions").waitFor({ timeout: 30_000 });
+    await first.page.getByTestId("github-connected").waitFor({ timeout: 30_000 });
+    await first.page.screenshot({ path: join(evidenceDir, "1b-setup-connected.png") });
+    await first.page.getByTestId("finish-setup").click();
+    await first.page.getByTestId("missions").waitFor();
     await first.page.getByTestId("empty").waitFor();
     await first.page.screenshot({ path: join(evidenceDir, "2-missions-empty.png") });
 

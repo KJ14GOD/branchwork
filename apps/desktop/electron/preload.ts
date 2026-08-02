@@ -4,7 +4,8 @@ import type {
   IpcAuthStatus,
   IpcResult,
   Mission,
-  MissionDetailResponse
+  MissionDetailResponse,
+  SetupProbeResponse
 } from "@novus/contracts";
 
 /**
@@ -21,6 +22,9 @@ const novus = {
       ipcRenderer.on("novus:auth-changed", wrapped);
       return () => ipcRenderer.removeListener("novus:auth-changed", wrapped);
     }
+  },
+  setup: {
+    probe: (): Promise<IpcResult<SetupProbeResponse>> => ipcRenderer.invoke("novus:setup:probe")
   },
   missions: {
     list: (): Promise<IpcResult<Mission[]>> => ipcRenderer.invoke("novus:missions:list"),

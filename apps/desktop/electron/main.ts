@@ -4,6 +4,7 @@ import { CreateMissionInputSchema, type IpcAuthStatus, type IpcResult } from "@n
 import { z } from "zod";
 import { ApiError, ControlPlaneClient } from "./api-client";
 import { TOKEN_BG } from "./design-tokens";
+import { probeHarnesses } from "./harness-probe";
 import { SessionStore } from "./session-store";
 
 // Test hooks (see DECISIONS.md D-027): both refuse to exist in packaged builds.
@@ -93,6 +94,17 @@ async function beginSignIn(): Promise<IpcResult<null>> {
 
 function registerIpc(): void {
   ipcMain.handle("novus:auth:status", () => authStatus);
+
+  ipcMain.handle("novus:setup:probe", async () => {
+    try {
+      return ok(await probeHarnesses());
+    } catch {
+      return ok({
+        claudeCode: { installed: false, version: null, account: null },
+        codex: { installed: false, version: null, account: null }
+      });
+    }
+  });
 
   ipcMain.handle("novus:auth:start", () => beginSignIn());
 

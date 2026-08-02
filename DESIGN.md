@@ -30,7 +30,9 @@ Novus's own signature is none of these: it is the multiplayer Mission Room — t
 
 ## Tokens
 
-Every visual value in the product comes from this section. A literal hex, px shadow, one-off radius, or unlisted type size in component code fails review ([AGENTS.md](AGENTS.md#rules), rule 14). V0 is dark-only; no light theme exists.
+Every visual value in the product comes from this section. A literal hex, px shadow, one-off radius, or unlisted type size in component code fails review ([AGENTS.md](AGENTS.md#rules), rule 14).
+
+Two themes exist: **dark is the default and the reference**; light is a token-for-token override selected by preference (Light / Dark / System, persisted, resolved before first paint — D-029). Components never branch on theme; they consume tokens only. Light values are provisional until proven on rendered screens the way the dark set was.
 
 ### Color
 
@@ -52,6 +54,8 @@ Dark, restrained system. No decorative gradients, no neon, no glow, no glassmorp
 | `--alt` | `#9C8DB8` | Subdued violet: identifies a competing approach only — never quality. May render as a 1px lane-header border: the only non-`--edge` border in the product |
 
 Semantic lock: a token may not be used outside its meaning. Sage for "online" fails review exactly like a raw hex does. Anything not covered by a semantic token renders in neutrals.
+
+Light theme overrides (provisional): `--bg #F2F0EC` · `--surface-1 #FAF9F6` · `--surface-2 #FFFFFF` · `--edge` black 10% (16% hover) · `--text-1 #26241F` · `--text-2 #5D594F` · `--text-3 #77726A` · `--accent #26241F` (authority inverts to warm ink; pressed `#3A3833`) · `--ok #4F7A4A` · `--warn #A15F28` · `--danger #A8443A` · hover/selected/pressed: black 4/6/6%. Same contrast obligations as dark.
 
 Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% plus a 2px `--accent` left edge; pressed `#FFFFFF` at 6%. Disabled controls: label and icon at 40% opacity, no hover response, default cursor.
 
@@ -83,7 +87,7 @@ Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% plu
 
 ### Radii
 
-6px — inputs, rows, small controls · 10px — buttons, contained cards · 14px — dialogs, drawers, the composer · full — identity marks only. Squircle corner smoothing where the platform allows; plain border-radius with the same values where it does not. Radii come only from this list.
+6px — inputs, rows, small controls, **buttons** (buttons are squarish, never pill-adjacent — D-029) · 10px — contained cards · 14px — dialogs, drawers, the composer · full — identity marks only. Squircle corner smoothing where the platform allows; plain border-radius with the same values where it does not. Radii come only from this list.
 
 ### Elevation
 
@@ -189,7 +193,7 @@ Composition rules:
 - **Workstreams.** One workstream: no workstream chrome at all — the room is the workstream. Multiple: a slim lane header per workstream (name, controller baton, execution status). An approach-flagged workstream gets an `--alt` edge on its lane header — identification only, never a quality signal, and no comparison UI unless both compared artifacts exist.
 - **Cloud workspace lifecycle.** Rendered in the state line + an inspector: provisioning (progress as text, no spinner theater), ready, suspended, failed (provider error verbatim, Retry provisions new). Workspace machinery never occupies the canvas.
 - **Repository continuity.** The workspace inspector shows location, mission branch, abbreviated base SHA, abbreviated workspace SHA, and one synchronization state: Up to date, Update available, Syncing, or Sync failed. These are compact label/value rows, not badges or a permanent status dashboard. Update available offers Inspect commits as the primary action; after inspection, Sync workspace is capability-gated and states that it waits for a safe boundary. Uncommitted files on another machine are never implied to be present. Local-mirror controls do not render in V0.
-- **First-run setup.** The signed-out surface is a setup room, not a login page: no top bar and no hairline — the window's top inset is a full-width drag region and the traffic lights sit over the canvas. Title "Set up Novus" at the mission scale, one subtitle sentence, then a row of connection cards — the one sanctioned card grid in the product. Each card: rounded-square service mark, name, one-line description, a separator, and a status row. Only real connections are interactive (GitHub: Connect → status while the browser leg runs → connected identity). Capabilities that do not exist yet may appear only as muted informational cards — status in `--text-3`, zero interactive affordance, wording that says *when* they arrive, never pretending they work (this is the sole sanctioned mention of unreleased capability, D-028). Waiting and error states are plain text under the card's status row — no dots, no spinners.
+- **First-run setup.** The signed-out surface is a setup room, not a login page: no top bar and no hairline — the window's top inset is a full-width drag region and the traffic lights sit over the canvas. Content sits in the upper third, title left; the connection-card row aligns to the right edge of the content column. Title "Set up Novus" at the mission scale, one subtitle sentence, then the card row — the one sanctioned card grid in the product. Each card: official service glyph (monochrome, `currentColor`, from the sanctioned brand-icon set — D-029), name, one-line description, a separator, and a status row. GitHub is interactive (Connect → plain waiting text while the browser leg runs → "✓ Connected as {login}" in `--text-1`). Harness cards report *observed local facts* — CLI detected on this machine, signed-in plan where the CLI's own files state it — as claims about this Mac, never as Novus capability; when nothing is detected they say so plainly. Cloud execution wording stays future-tense until it exists (sole sanctioned mention of unreleased capability, D-028). Below the cards, a Theme row: label and one-line description left, a three-option segmented control (Light / Dark / System) right; the selection applies immediately and persists. Once connected, the surface's single primary action is "Finish setup", bottom-right. Waiting and error states are plain text — no dots, no spinners.
 - **Review.** Result summary in prose (what the change does, per the mission's success criteria), then diff, then ledger, then comments/concerns as attributed rows, then PR readiness as a CheckRow list (approvals, checks, conflicts). One primary action: Request revisions or Accept result (capability-gated).
 - **Receipt.** A single scrollable document (720px measure): goal, participants and roles, timeline of applied directions and control transfers, changes summary, the evidence ledger's final state, review outcomes, PR reference, and an explicit "remaining uncertain" section. Same components as the room — a receipt is the room, frozen.
 

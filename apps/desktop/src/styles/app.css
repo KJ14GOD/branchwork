@@ -96,7 +96,7 @@ body {
   font: var(--type-row);
   font-weight: 500;
   border: 1px solid transparent;
-  border-radius: var(--r-button);
+  border-radius: var(--r-control);
   padding: var(--s-2) var(--s-4);
   cursor: pointer;
   transition: background var(--m-press) var(--ease);
@@ -291,11 +291,15 @@ body {
 
 .setup {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  padding: 0 var(--s-8) var(--s-7);
-  max-width: 1080px;
+  padding: var(--s-8) var(--s-8) var(--s-7);
+  padding-top: 96px;
+  max-width: 1160px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .setup h1 {
@@ -313,6 +317,56 @@ body {
   display: flex;
   gap: var(--s-3);
   flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.setup-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-6);
+  margin-top: var(--s-7);
+}
+
+.setup-row .setup-row-label {
+  font: var(--type-section);
+}
+
+.setup-row .setup-row-desc {
+  font: var(--type-meta);
+  color: var(--text-2);
+  margin-top: var(--s-1);
+}
+
+.segment {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.segment .btn-secondary[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--text-1);
+}
+
+.setup-finish {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--s-7);
+}
+
+.card-glyph {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--text-1);
+}
+
+.card-status .connected {
+  color: var(--text-1);
+}
+
+.card-status .plan {
+  color: var(--text-2);
 }
 
 .card {
