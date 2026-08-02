@@ -1,9 +1,30 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import type { BaseRevision, MissionDetailResponse, MissionEvent } from "@novus/contracts";
-import { siClaudecode } from "simple-icons";
-import codexIcon from "../assets/codex-icon.png";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  BaseRevision,
+  Direction,
+  Effort,
+  Mission,
+  MissionDetailResponse,
+  ModelId
+} from "@novus/contracts";
 import { novus } from "../bridge";
-import { deriveGoal, shortSha, truncateLabel } from "../format";
+import { Composer, type SubmitOutcome } from "../components/composer";
+import {
+  changedFiles,
+  checkTallies,
+  controller as controllerOf,
+  deriveStateLine,
+  viewerIsController
+} from "../components/derive";
+import {
+  ControlEventRow,
+  TraceView,
+  buildFeed
+} from "../components/direction-trace";
+import { GatedAction } from "../components/gated";
+import { Baton, HumanMark, ParticipantStack } from "../components/identity";
+import { Inspector, type InspectorSection } from "../components/inspector";
+import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
 import type { Project } from "./project-shell";
 
 type BaseLoad =
@@ -24,189 +45,14 @@ function offlineOr(code: string, message: string): string {
 }
 
 /**
- * Repository continuity, collapsed into the room's inspector (D-032): branch,
- * base, and branch status with retry — compact label/value rows, never the
- * canvas.
- */
-function RepositoryInspector({
-  detail,
-  onDetail
-}: {
-  detail: MissionDetailResponse;
-  onDetail: (detail: MissionDetailResponse) => void;
-}) {
-  const { mission, workstream } = detail;
-  const [retrying, setRetrying] = useState(false);
-  const [retryError, setRetryError] = useState<string | null>(null);
-
-  if (!mission.repository || !workstream) {
-    return <p className="inspector-note">No repository recorded for this mission.</p>;
-  }
-
-  const retry = async () => {
-    setRetrying(true);
-    setRetryError(null);
-    const result = await novus().missions.retryBranch(workstream.workstreamId);
-    setRetrying(false);
-    if (result.ok) onDetail({ ...detail, workstream: result.value });
-    else setRetryError(offlineOr(result.code, result.message));
-  };
-
-  return (
-    <div className="repo-block" data-testid="repo-block">
-      <span className="repo-label">Repository</span>
-      <span className="repo-value" data-testid="repo-name">{mission.repository.name}</span>
-
-      <span className="repo-label">Base</span>
-      <span className="repo-value mono" data-testid="ws-base" title={workstream.baseSha}>
-        {workstream.baseRef} · {shortSha(workstream.baseSha)}
-      </span>
-
-      <span className="repo-label">Mission branch</span>
-      <span className="repo-value mono" data-testid="ws-branch">{workstream.missionBranch}</span>
-
-      <span className="repo-label">Branch status</span>
-      <span className="repo-value" data-testid="ws-branch-status">
-        {workstream.branchStatus === "created" && <span className="branch-created">✓ Branch created</span>}
-        {workstream.branchStatus === "pending" && <span className="branch-pending">Branch pending</span>}
-        {workstream.branchStatus === "failed" && (
-          <>
-            <span className="inline-error" data-testid="branch-error">
-              {workstream.branchError ?? "Branch creation failed."}
-            </span>{" "}
-            <button className="btn btn-text" onClick={retry} disabled={retrying} data-testid="retry-branch">
-              Retry
-            </button>
-            {retryError && (
-              <span className="inline-error" role="alert" data-testid="retry-error">
-                {retryError}
-              </span>
-            )}
-          </>
-        )}
-      </span>
-    </div>
-  );
-}
-
-function SysLine({ children, danger, testid }: { children: ReactNode; danger?: boolean; testid?: string }) {
-  return (
-    <div className={danger ? "sys-line danger" : "sys-line"} data-testid={testid ?? "sys-line"}>
-      {children}
-    </div>
-  );
-}
-
-/** The event feed rendered as a conversation (D-032 chat room). */
-function Feed({ detail }: { detail: MissionDetailResponse }) {
-  const events = [...detail.events].sort((a, b) => a.seq - b.seq);
-  const nodes: ReactNode[] = [];
-  let prevKind: string | null = null;
-
-  const push = (event: MissionEvent, node: ReactNode) => {
-    nodes.push(<div key={event.eventId} className="feed-item">{node}</div>);
-    prevKind = event.kind;
-  };
-
-  for (const event of events) {
-    const payload = event.payload as Record<string, unknown>;
-    switch (event.kind) {
-      case "mission.created":
-        // Its content IS the first user message; rendering it would double it.
-        break;
-      case "direction.submitted":
-        push(event, <div className="msg-user" data-testid="msg-user">{String(payload.body ?? "")}</div>);
-        break;
-      case "harness.text":
-        push(
-          event,
-          <div className="msg-agent" data-testid="msg-agent">
-            <span className="mark-slot">
-              {prevKind !== "harness.text" && (
-                <span className="agent-mark" title="Claude Code"><ClaudeGlyph /></span>
-              )}
-            </span>
-            <span className="msg-agent-text">{String(payload.text ?? "")}</span>
-          </div>
-        );
-        break;
-      case "harness.tool":
-        push(event, <div className="tool-line" data-testid="tool-line">· {String(payload.tool ?? "tool")}</div>);
-        break;
-      case "execution.started":
-        push(event, <SysLine>Claude Code started</SysLine>);
-        break;
-      case "execution.completed":
-        push(event, <SysLine>Turn completed</SysLine>);
-        break;
-      case "execution.failed":
-        push(
-          event,
-          <SysLine danger>
-            Turn failed{typeof payload.error === "string" ? ` — ${payload.error}` : ""}
-          </SysLine>
-        );
-        break;
-      case "execution.stopped":
-        push(event, <SysLine>Stopped</SysLine>);
-        break;
-      case "workspace.checkpoint":
-        push(
-          event,
-          <SysLine testid="checkpoint-line">
-            checkpoint <span className="mono">{shortSha(String(payload.sha ?? ""))}</span>
-          </SysLine>
-        );
-        break;
-      case "workstream.created": {
-        const branch = typeof payload.missionBranch === "string" ? payload.missionBranch : "a branch";
-        const ref = typeof payload.baseRef === "string" ? payload.baseRef : "base";
-        const sha = typeof payload.baseSha === "string" ? ` @ ${shortSha(payload.baseSha)}` : "";
-        push(
-          event,
-          <SysLine>{`${detail.mission.createdByLogin} allocated branch ${branch} from ${ref}${sha}`}</SysLine>
-        );
-        break;
-      }
-      case "workstream.branch_created":
-        push(event, <SysLine>branch created</SysLine>);
-        break;
-      case "workstream.branch_failed":
-        push(event, <SysLine danger>branch creation failed</SysLine>);
-        break;
-      default:
-        push(event, <SysLine>{event.kind}</SysLine>);
-    }
-  }
-
-  return <>{nodes}</>;
-}
-
-/** Every option maps to a real Claude Code flag: --model and --effort. */
-const MODELS = [
-  { id: "claude-fable-5", label: "Fable 5" },
-  { id: "claude-opus-5", label: "Opus 5" },
-  { id: "claude-opus-4-8", label: "Opus 4.8" },
-  { id: "claude-opus-4-7", label: "Opus 4.7" },
-  { id: "claude-sonnet-5", label: "Sonnet 5" },
-  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" }
-] as const;
-const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-type ModelId = (typeof MODELS)[number]["id"];
-type Effort = (typeof EFFORTS)[number];
-
-function ClaudeGlyph() {
-  return (
-    <svg className="chip-glyph" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="Claude Code">
-      <path d={siClaudecode.path} />
-    </svg>
-  );
-}
-
-/**
- * The project room (D-032): workstream tabs, a chat-shaped mission feed, and
- * the persistent composer. A "+" tab is a mission that does not exist yet —
- * the first message creates it, with the goal derived from the message.
+ * The Mission Room (D-032). Top to bottom it answers the room's questions in
+ * one order: what work (the title), what is happening and what happens next
+ * (the state line), who is in control and who is here (the authority row),
+ * what the agent did and which direction caused it (the trace), and what
+ * changed and what was verified (the inspector, one keystroke away).
+ *
+ * Repository, model, and revision machinery live in the inspector, never in
+ * the header (DESIGN.md prohibited pattern 12).
  */
 export function ProjectRoom({
   project,
@@ -221,51 +67,19 @@ export function ProjectRoom({
   selectedMissionId: string | null;
   onSelectTab: (missionId: string | null) => void;
   onDetail: (detail: MissionDetailResponse) => void;
-  onCreated: (detail: MissionDetailResponse) => void;
+  onCreated: (mission: Mission) => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [text, setText] = useState("");
-  const [model, setModel] = useState<ModelId>(
-    () => (localStorage.getItem("novus-model") as ModelId | null) ?? "claude-fable-5"
-  );
-  const [effort, setEffort] = useState<Effort>(
-    () => (localStorage.getItem("novus-effort") as Effort | null) ?? "high"
-  );
-  const [openMenu, setOpenMenu] = useState<"model" | "effort" | null>(null);
-  const footRef = useRef<HTMLDivElement>(null);
-
-  // A menu closes when you click away from it or press Escape.
-  useEffect(() => {
-    if (!openMenu) return;
-    const onDown = (event: MouseEvent) => {
-      if (!footRef.current?.contains(event.target as Node)) setOpenMenu(null);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpenMenu(null);
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [openMenu]);
-  const [sending, setSending] = useState(false);
-  const [sendError, setSendError] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspector, setInspector] = useState<InspectorSection | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inspectorTriggerRef = useRef<HTMLButtonElement>(null);
 
   const isDraft = selectedMissionId === null;
   const detail = selectedMissionId === null ? undefined : details[selectedMissionId];
   // Agents run where the repository is: local, on this machine (D-032).
-  const canExecute = project.provider === "local" && project.onThisMachine;
-  // A draft on a repository nothing can execute would swallow the first
-  // message: the mission would be created and the words would go nowhere.
-  // Say so before it is typed, not after (D-032 honesty rule).
-  const composerEnabled = canExecute;
+  const executionAvailable = project.provider === "local" && project.onThisMachine;
 
   const resolveBase = useCallback(async () => {
     setDraft((prev) =>
@@ -293,27 +107,14 @@ export function ProjectRoom({
     if (isDraft && draft === null) void resolveBase();
   }, [isDraft, draft, resolveBase]);
 
-  // The composer is the room's one focus target; it takes focus per tab.
+  // One poll carries the whole room: state, participants, control, directions,
+  // executions, evidence (ARCHITECTURE.md — MissionDetailResponse).
   useEffect(() => {
-    inputRef.current?.focus();
-  }, [selectedMissionId]);
-
-  // Poll the mission while its tab is visible: the feed and the running state
-  // both come from the server every 2 seconds.
-  useEffect(() => {
-    if (selectedMissionId === null) {
-      setRunning(false);
-      return;
-    }
+    if (selectedMissionId === null) return;
     let live = true;
     const tick = async () => {
-      const [detailResult, runningResult] = await Promise.all([
-        novus().missions.get(selectedMissionId),
-        canExecute ? novus().missions.running(selectedMissionId) : Promise.resolve(null)
-      ]);
-      if (!live) return;
-      if (detailResult.ok) onDetail(detailResult.value);
-      if (runningResult?.ok) setRunning(runningResult.value);
+      const result = await novus().missions.get(selectedMissionId);
+      if (live && result.ok) onDetail(result.value);
     };
     void tick();
     const timer = setInterval(() => void tick(), 2000);
@@ -321,43 +122,80 @@ export function ProjectRoom({
       live = false;
       clearInterval(timer);
     };
-  }, [selectedMissionId, canExecute, onDetail]);
+  }, [selectedMissionId, onDetail]);
 
-  // Auto-scroll on new events unless the user scrolled up to read.
+  // Auto-scroll on new activity unless the reader scrolled up.
   const eventCount = detail?.events.length ?? 0;
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+    const element = scrollRef.current;
+    if (element && pinnedRef.current) element.scrollTop = element.scrollHeight;
   }, [eventCount, selectedMissionId]);
 
+  // Resizing the window must not strand the feed halfway up: a reader who was
+  // at the bottom stays at the bottom.
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (pinnedRef.current) element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   const onScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    pinnedRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 48;
+    const element = scrollRef.current;
+    if (!element) return;
+    pinnedRef.current = element.scrollTop + element.clientHeight >= element.scrollHeight - 48;
   };
 
+  // Room keys (DESIGN.md#keyboard): G then C/V/A, R to request control.
+  const chordRef = useRef(false);
   useEffect(() => {
-    if (!inspectorOpen) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setInspectorOpen(false);
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (chordRef.current) {
+        chordRef.current = false;
+        if (key === "c") setInspector("changes");
+        else if (key === "v") setInspector("verification");
+        else if (key === "a") setInspector(null);
+        return;
+      }
+      if (key === "g") {
+        chordRef.current = true;
+        setTimeout(() => {
+          chordRef.current = false;
+        }, 1200);
+      } else if (key === "r" && detail?.capabilities.includes("control.request")) {
+        void novus().control.request(detail.mission.missionId);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inspectorOpen]);
+  }, [detail]);
 
-  const grow = (el: HTMLTextAreaElement) => {
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, Math.floor(window.innerHeight * 0.4))}px`;
-  };
+  const closeInspector = useCallback(() => {
+    setInspector(null);
+    inspectorTriggerRef.current?.focus();
+  }, []);
 
-  const send = async () => {
-    const body = text.trim();
-    if (!body || sending || running) return;
-    setSendError(null);
-
+  const submit = async ({
+    body,
+    model,
+    effort
+  }: {
+    body: string;
+    model: ModelId;
+    effort: Effort;
+  }): Promise<SubmitOutcome> => {
+    setActionError(null);
     if (isDraft) {
-      if (!draft || draft.base.kind !== "resolved") return;
-      setSending(true);
+      if (!draft || draft.base.kind !== "resolved") {
+        return { ok: false, message: "The base revision is not resolved yet." };
+      }
       const created = await novus().missions.create({
         goal: deriveGoal(body),
         successCriteria: body,
@@ -368,60 +206,115 @@ export function ProjectRoom({
         creationKey: draft.creationKey
       });
       if (!created.ok) {
-        setSending(false);
-        setSendError(
-          created.code === "offline"
-            ? "Can't reach Novus. Nothing was created — try again when you're back online."
-            : created.message
-        );
-        return;
+        return {
+          ok: false,
+          message:
+            created.code === "offline"
+              ? "Can't reach Novus. Nothing was created — try again when you're back online."
+              : created.message
+        };
       }
-      if (canExecute) {
-        const directed = await novus().missions.direct({
-          missionId: created.value.mission.missionId,
-          body,
-          model,
-          effort
-        });
-        setSending(false);
-        if (!directed.ok) {
-          // The mission exists but the words never landed anywhere. Keep them
-          // in the composer rather than swallowing what the user typed.
-          setSendError(offlineOr(directed.code, directed.message));
-          setDraft(null);
-          onCreated({ mission: created.value.mission, workstream: created.value.workstream, events: [] });
-          return;
-        }
-        setRunning(true);
-      } else {
-        setSending(false);
-      }
-      setText("");
+      const directed = await novus().missions.direct({
+        missionId: created.value.mission.missionId,
+        body,
+        model,
+        effort
+      });
       setDraft(null);
-      onCreated({ mission: created.value.mission, workstream: created.value.workstream, events: [] });
-      return;
+      onCreated(created.value.mission);
+      if (!directed.ok) {
+        // The mission exists but the words never landed. Say so at the site of
+        // the failure rather than swallowing what the user typed.
+        setActionError(offlineOr(directed.code, directed.message));
+        return { ok: false, message: offlineOr(directed.code, directed.message) };
+      }
+      return {
+        ok: true,
+        queued: !directed.value.dispatched,
+        deferred: directed.value.deferred
+      };
     }
 
-    if (!detail?.workstream || !canExecute) return;
-    setSending(true);
+    if (!detail) return { ok: false, message: "This workstream is still loading." };
     const result = await novus().missions.direct({
       missionId: detail.mission.missionId,
       body,
       model,
       effort
     });
-    setSending(false);
-    if (result.ok) {
-      setText("");
-      setRunning(true);
-    } else {
-      setSendError(offlineOr(result.code, result.message));
-    }
+    if (!result.ok) return { ok: false, message: offlineOr(result.code, result.message) };
+    return { ok: true, queued: !result.value.dispatched, deferred: result.value.deferred };
   };
 
-  const stop = () => {
-    if (selectedMissionId) void novus().missions.stop(selectedMissionId);
+  const feed = useMemo(() => (detail ? buildFeed(detail) : null), [detail]);
+  const stateLine = detail ? deriveStateLine(detail) : null;
+  const controller = detail ? controllerOf(detail) : null;
+  const isController = detail ? viewerIsController(detail) : false;
+  const files = detail ? changedFiles(detail) : [];
+  const checks = detail ? checkTallies(detail) : { total: 0, passed: 0, failed: 0 };
+  const liveOffer = detail?.control.liveOffer ?? null;
+  const offerIsLive =
+    liveOffer !== null && ["open", "accepted", "waiting_for_boundary"].includes(liveOffer.state);
+
+  const runAction = async (call: Promise<{ ok: boolean; message?: string }>) => {
+    const result = await call;
+    if (!result.ok) setActionError(result.message ?? "That did not go through.");
+    else setActionError(null);
   };
+
+  const directionActions = (direction: Direction) => {
+    if (!detail) return null;
+    // Apply and Reject belong to the lease, not to authorship: the server
+    // grants `direction.apply` to whoever holds the baton, including for their
+    // own direction, so the interface may never hide a verb the server allows
+    // (AGENTS.md rule 13, in the mirror). Cancel belongs to the author.
+    const mine = direction.authorUserId === detail.viewerUserId;
+    return (
+      <span className="inline-actions">
+        <GatedAction
+          capability="direction.apply"
+          capabilities={detail.capabilities}
+          denialReason="Only the controller can apply direction."
+          holderLogin={detail.control.holderLogin}
+          onClick={() =>
+            void runAction(
+              novus().missions.resolveDirection({ directionId: direction.directionId, action: "apply" })
+            )
+          }
+          variant="secondary"
+          testid="apply-direction"
+        >
+          Apply
+        </GatedAction>
+        <GatedAction
+          capability="direction.apply"
+          capabilities={detail.capabilities}
+          denialReason="Only the controller can reject direction."
+          holderLogin={detail.control.holderLogin}
+          onClick={() =>
+            void runAction(
+              novus().missions.resolveDirection({ directionId: direction.directionId, action: "reject" })
+            )
+          }
+          variant="text"
+          testid="reject-direction"
+        >
+          Reject
+        </GatedAction>
+        {mine && (
+          <button
+            className="btn btn-text"
+            onClick={() => void runAction(novus().missions.cancelDirection(direction.directionId))}
+            data-testid="cancel-direction"
+          >
+            Cancel
+          </button>
+        )}
+      </span>
+    );
+  };
+
+  const title = isDraft ? "New workstream" : (detail?.mission.goal ?? "Loading workstream");
 
   return (
     <div className="room" data-testid="project-room">
@@ -455,46 +348,281 @@ export function ProjectRoom({
         </button>
       </div>
 
-      {!isDraft && detail && (
-        <div className="room-head">
-          <span className="room-goal" data-testid="room-goal">{detail.mission.goal}</span>
-          <span className="head-spacer" />
-          <button
-            className="btn btn-text"
-            onClick={() => setInspectorOpen((open) => !open)}
-            aria-expanded={inspectorOpen}
-            data-testid="inspector-toggle"
-          >
-            Details
-          </button>
-          {inspectorOpen && (
-            <div className="inspector" role="dialog" aria-label="Repository details" data-testid="inspector">
-              <RepositoryInspector detail={detail} onDetail={onDetail} />
-            </div>
+      <header className="room-header">
+        <h1 className="mission-title" data-testid="room-goal" title={title}>
+          {title}
+        </h1>
+
+        <div className="state-line" role="status" aria-live="polite" data-testid="state-line">
+          {stateLine ? (
+            <>
+              <span
+                className={`status-dot ${stateLine.tone}${stateLine.working ? " breath" : ""}`}
+                data-testid={stateLine.working ? "working" : "state-dot"}
+              />
+              <span className="state-name">{stateLine.name}</span>
+              <span className="state-detail">— {stateLine.detail}</span>
+              {stateLine.suffix && <span className="state-detail">· {stateLine.suffix}</span>}
+              {stateLine.action?.kind === "stop" && detail && (
+                <GatedAction
+                  capability="execution.stop"
+                  capabilities={detail.capabilities}
+                  denialReason="Only participants who can stop this execution may stop it."
+                  onClick={() => void runAction(novus().missions.stop(detail.mission.missionId))}
+                  variant="secondary"
+                  testid="stop"
+                >
+                  Stop
+                </GatedAction>
+              )}
+              {(stateLine.action?.kind === "changes" || stateLine.action?.kind === "verification") && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={() =>
+                    setInspector(stateLine.action?.kind === "verification" ? "verification" : "changes")
+                  }
+                  data-testid="state-action"
+                >
+                  {stateLine.action.label}
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <span className="status-dot neutral" />
+              <span className="state-name">Ready</span>
+              <span className="state-detail">
+                {isDraft ? "— the first direction creates this workstream" : "— loading this workstream"}
+              </span>
+              {isDraft && !executionAvailable && (
+                <span className="state-detail">
+                  · no machine has this repository checked out for Novus yet
+                </span>
+              )}
+            </>
           )}
         </div>
+
+        <div className="authority-row">
+          {detail ? (
+            <>
+              <span className="controller-slot" data-testid="controller">
+                {controller ? (
+                  <>
+                    <HumanMark login={controller.login} name={controller.name} />
+                    <Baton holderUserId={controller.userId} />
+                    <span className="controller-name">
+                      {isController ? "You have the baton" : `${controller.name ?? controller.login} has the baton`}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="status-dot warn" />
+                    <span className="controller-name">No one holds the baton</span>
+                  </>
+                )}
+              </span>
+              {!isController && (
+                <GatedAction
+                  capability="control.request"
+                  capabilities={detail.capabilities}
+                  denialReason="Only participants who can operate this mission may request control."
+                  holderLogin={detail.control.holderLogin}
+                  onClick={() => void runAction(novus().control.request(detail.mission.missionId))}
+                  variant="text"
+                  testid="request-control"
+                >
+                  Request control
+                </GatedAction>
+              )}
+              <span className="head-spacer" />
+              <ParticipantStack
+                participants={detail.participants}
+                attention={detail.control.openRequests.length > 0}
+              />
+              <nav className="inspector-triggers" aria-label="Evidence">
+                <button
+                  ref={inspectorTriggerRef}
+                  className="btn btn-text"
+                  onClick={() => setInspector("overview")}
+                  data-testid="open-overview"
+                >
+                  Overview
+                </button>
+                <button
+                  className="btn btn-text"
+                  onClick={() => setInspector("changes")}
+                  data-testid="open-changes"
+                >
+                  Changes{files.length > 0 ? ` ${files.length}` : ""}
+                </button>
+                <button
+                  className="btn btn-text"
+                  onClick={() => setInspector("verification")}
+                  data-testid="open-verification"
+                >
+                  Verification{checks.total > 0 ? ` ${checks.passed}/${checks.total}` : ""}
+                </button>
+              </nav>
+            </>
+          ) : (
+            <span className="controller-name quiet">
+              {isDraft ? "Nobody has joined this workstream yet" : "Loading participants…"}
+            </span>
+          )}
+        </div>
+      </header>
+
+      {actionError && (
+        <p className="inline-error room-error" role="alert" data-testid="action-error">
+          {actionError}
+        </p>
       )}
 
-      <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
-        <div className="chat" data-testid="chat">
+      <div className="feed-scroll" ref={scrollRef} onScroll={onScroll}>
+        <div className="feed" data-testid="chat">
           {isDraft ? (
-            draft === null || draft.base.kind === "resolving" ? (
-              <p className="quiet-line">Resolving base…</p>
-            ) : draft.base.kind === "failed" ? (
-              <p className="quiet-line">
-                <span className="inline-error" data-testid="base-error">{draft.base.message}</span>{" "}
-                <button className="btn btn-text" onClick={() => void resolveBase()} data-testid="base-retry">
-                  Try again
-                </button>
-              </p>
-            ) : (
-              <p className="quiet-line" data-testid="draft-base">
-                {project.name} · <span className="mono">{draft.base.base.ref}</span> ·{" "}
-                <span className="mono">{shortSha(draft.base.base.sha)}</span>
-              </p>
-            )
-          ) : detail ? (
-            <Feed detail={detail} />
+            <DraftCanvas draft={draft} project={project} onRetry={() => void resolveBase()} />
+          ) : detail && feed ? (
+            <>
+              {feed.setup && (
+                <div
+                  className={feed.setup.danger ? "workspace-row danger" : "workspace-row"}
+                  data-testid="setup-row"
+                >
+                  <span className="status-dot neutral" />
+                  <span>{feed.setup.label}</span>
+                  <button
+                    className="btn btn-text workspace-row-action"
+                    onClick={() => setInspector("overview")}
+                    data-testid="setup-overview"
+                  >
+                    Overview
+                  </button>
+                </div>
+              )}
+              {feed.blocks.map((block) =>
+                block.kind === "control" ? (
+                  <ControlEventRow key={block.key} block={block} />
+                ) : (
+                  <TraceView
+                    key={block.key}
+                    block={block}
+                    controllerUserId={detail.control.holderUserId}
+                    controllerLogin={detail.control.holderLogin}
+                    viewerIsController={isController}
+                    onOpenChanges={() => setInspector("changes")}
+                    onOpenVerification={() => setInspector("verification")}
+                    actions={block.direction ? directionActions(block.direction) : null}
+                  />
+                )
+              )}
+
+              {detail.control.openRequests
+                .filter((request) => request.state === "open")
+                .map((request) => (
+                  <div className="authority-card" key={request.requestId} data-testid="control-request">
+                    <span className="status-dot warn" />
+                    <HumanMark login={request.requesterLogin} />
+                    <span className="authority-text">
+                      <strong>{request.requesterLogin}</strong> requests control
+                    </span>
+                    <span className="trace-time">{clockTime(request.createdAt)}</span>
+                    {request.requesterUserId === detail.viewerUserId ? (
+                      <button
+                        className="btn btn-text"
+                        onClick={() => void runAction(novus().control.withdrawRequest(detail.mission.missionId))}
+                        data-testid="withdraw-request"
+                      >
+                        Withdraw
+                      </button>
+                    ) : (
+                      <span className="inline-actions">
+                        <GatedAction
+                          capability="control.offer"
+                          capabilities={detail.capabilities}
+                          denialReason="Only the controller can offer control."
+                          holderLogin={detail.control.holderLogin}
+                          onClick={() =>
+                            void runAction(
+                              novus().control.offer({
+                                missionId: detail.mission.missionId,
+                                toUserId: request.requesterUserId
+                              })
+                            )
+                          }
+                          variant="secondary"
+                          testid="offer-control"
+                        >
+                          Offer
+                        </GatedAction>
+                        <GatedAction
+                          capability="control.offer"
+                          capabilities={detail.capabilities}
+                          denialReason="Only the controller can decline a request for control."
+                          holderLogin={detail.control.holderLogin}
+                          onClick={() => void runAction(novus().control.declineRequest(request.requestId))}
+                          variant="text"
+                          testid="decline-request"
+                        >
+                          Decline
+                        </GatedAction>
+                      </span>
+                    )}
+                  </div>
+                ))}
+
+              {liveOffer && offerIsLive && (
+                <div className="authority-card" data-testid="handoff-offer">
+                  <span className="status-dot warn" />
+                  <HumanMark login={liveOffer.fromLogin} />
+                  <span className="authority-text">
+                    <strong>{liveOffer.fromLogin}</strong> offers control to{" "}
+                    {liveOffer.toUserId === detail.viewerUserId ? "you" : liveOffer.toLogin}
+                  </span>
+                  <span className="trace-time">{clockTime(liveOffer.createdAt)}</span>
+                  {liveOffer.toUserId === detail.viewerUserId ? (
+                    <span className="inline-actions">
+                      <GatedAction
+                        capability="control.accept"
+                        capabilities={detail.capabilities}
+                        denialReason="Only the named recipient can accept this offer."
+                        onClick={() => void runAction(novus().control.acceptOffer(liveOffer.offerId))}
+                        variant="secondary"
+                        testid="accept-offer"
+                      >
+                        Accept
+                      </GatedAction>
+                      <button
+                        className="btn btn-text"
+                        onClick={() => void runAction(novus().control.declineOffer(liveOffer.offerId))}
+                        data-testid="decline-offer"
+                      >
+                        Decline
+                      </button>
+                    </span>
+                  ) : (
+                    <GatedAction
+                      capability="control.offer"
+                      capabilities={detail.capabilities}
+                      denialReason="Only the controller can withdraw this offer."
+                      holderLogin={detail.control.holderLogin}
+                      onClick={() => void runAction(novus().control.withdrawOffer(liveOffer.offerId))}
+                      variant="text"
+                      testid="withdraw-offer"
+                    >
+                      Withdraw
+                    </GatedAction>
+                  )}
+                </div>
+              )}
+
+              {feed.blocks.length === 0 && !feed.setup && (
+                <p className="quiet" data-testid="feed-empty">
+                  Nothing has happened here yet.
+                </p>
+              )}
+            </>
           ) : (
             <div data-testid="feed-loading">
               <div className="placeholder-block" />
@@ -505,131 +633,63 @@ export function ProjectRoom({
         </div>
       </div>
 
-      <div className="composer-bar" data-testid="composer">
-        {sendError && (
-          <p className="inline-error" role="alert" data-testid="send-error">{sendError}</p>
-        )}
-        <div className="composer-box">
-          <textarea
-            ref={inputRef}
-            className="composer-input"
-            placeholder="Direct the agent — what should happen?"
-            value={text}
-            rows={1}
-            disabled={!composerEnabled || running || sending}
-            onChange={(event) => {
-              setText(event.target.value);
-              grow(event.target);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void send();
-              }
-            }}
-            aria-label="Direct the agent"
-            data-testid="composer-input"
-          />
-          <div className="composer-foot" ref={footRef}>
-            <span className="chip-wrap">
-              <button
-                className="chip-button"
-                disabled={!composerEnabled}
-                aria-haspopup="menu"
-                aria-expanded={openMenu === "model"}
-                onClick={() => setOpenMenu(openMenu === "model" ? null : "model")}
-                data-testid="model-chip"
-              >
-                <ClaudeGlyph />
-                {MODELS.find((option) => option.id === model)?.label ?? model}
-              </button>
-              {openMenu === "model" && (
-                <div className="chip-menu" role="menu" data-testid="model-menu">
-                  {MODELS.map((option) => (
-                    <button
-                      key={option.id}
-                      className="chip-menu-row"
-                      role="menuitem"
-                      onClick={() => {
-                        setModel(option.id);
-                        localStorage.setItem("novus-model", option.id);
-                        setOpenMenu(null);
-                      }}
-                    >
-                      <ClaudeGlyph />
-                      {option.label}
-                      {option.id === model && <span className="chip-menu-note">current</span>}
-                    </button>
-                  ))}
-                  <button className="chip-menu-row" role="menuitem" disabled data-testid="codex-option">
-                    <img className="chip-glyph chip-glyph-bitmap" src={codexIcon} alt="" />
-                    Codex
-                    <span className="chip-menu-note">arrives later</span>
-                  </button>
-                </div>
-              )}
-            </span>
+      <Composer
+        key={selectedMissionId ?? "draft"}
+        /* A draft has no mission yet, so no server capabilities exist to read:
+           creating one is an org act (PRODUCT.md#roles-and-capabilities) and
+           the creator becomes its Mission Admin. */
+        capabilities={isDraft ? ["direction.submit"] : (detail?.capabilities ?? null)}
+        isController={isController || isDraft}
+        onSubmit={submit}
+      />
 
-            <span className="chip-wrap">
-              <button
-                className="chip-button"
-                disabled={!composerEnabled}
-                aria-haspopup="menu"
-                aria-expanded={openMenu === "effort"}
-                onClick={() => setOpenMenu(openMenu === "effort" ? null : "effort")}
-                data-testid="effort-chip"
-              >
-                Effort · {effort}
-              </button>
-              {openMenu === "effort" && (
-                <div className="chip-menu" role="menu" data-testid="effort-menu">
-                  {EFFORTS.map((option) => (
-                    <button
-                      key={option}
-                      className="chip-menu-row"
-                      role="menuitem"
-                      onClick={() => {
-                        setEffort(option);
-                        localStorage.setItem("novus-effort", option);
-                        setOpenMenu(null);
-                      }}
-                    >
-                      {option}
-                      {option === effort && <span className="chip-menu-note">current</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </span>
+      {inspector && detail && (
+        <Inspector
+          detail={detail}
+          section={inspector}
+          onSection={setInspector}
+          onClose={closeInspector}
+          onDetail={onDetail}
+          onRevoke={() => void runAction(novus().control.revoke(detail.mission.missionId))}
+        />
+      )}
+    </div>
+  );
+}
 
-            {!composerEnabled && (
-              <span className="composer-note" data-testid="composer-disabled">
-                Agents run on local repositories for now — cloud execution arrives later.
-              </span>
-            )}
-            {running && (
-              <span className="composer-working" data-testid="working">
-                <span className="status-dot active breath" />
-                Working…
-                <button className="btn btn-text" onClick={stop} data-testid="stop">
-                  Stop
-                </button>
-              </span>
-            )}
-            <button
-              className="send-button"
-              onClick={() => void send()}
-              disabled={!composerEnabled || running || sending || text.trim().length === 0}
-              aria-label="Send direction"
-              data-testid="send"
-            >
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M12 19V5M5 12l7-7 7 7" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </div>
+/** The "+" tab before its first message: the pinned base, quietly, and one
+ *  left-aligned sentence — never a form and never a marketing empty state. */
+function DraftCanvas({
+  draft,
+  project,
+  onRetry
+}: {
+  draft: Draft | null;
+  project: Project;
+  onRetry: () => void;
+}) {
+  if (draft === null || draft.base.kind === "resolving") {
+    return <p className="quiet">Resolving the base revision…</p>;
+  }
+  if (draft.base.kind === "failed") {
+    return (
+      <p className="quiet">
+        <span className="inline-error" data-testid="base-error">
+          {draft.base.message}
+        </span>{" "}
+        <button className="btn btn-text" onClick={onRetry} data-testid="base-retry">
+          Try again
+        </button>
+      </p>
+    );
+  }
+  return (
+    <div className="draft-canvas">
+      <p className="draft-lead">The first direction creates this workstream and starts Claude Code.</p>
+      <p className="quiet" data-testid="draft-base">
+        Pinned to {project.name} · <span className="mono">{draft.base.base.ref}</span> ·{" "}
+        <span className="mono">{shortSha(draft.base.base.sha)}</span>
+      </p>
     </div>
   );
 }

@@ -1,5 +1,7 @@
 /* All values come from tokens.css variables — no raw colors, sizes outside the
-   scale, or one-off shadows (DESIGN.md composition rules; AGENTS.md rule 14). */
+   scale, or one-off shadows (DESIGN.md composition rules; AGENTS.md rule 14).
+   Where DESIGN.md prescribes a derived value (the diff's 12% tint), it is
+   mixed from the token rather than written out. */
 
 * {
   margin: 0;
@@ -7,11 +9,50 @@
   box-sizing: border-box;
 }
 
+/* The document declares its colour scheme, or the platform paints scrollbars,
+   inputs, and menus for light mode on top of a near-black product. */
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
 html,
 body,
 #root {
   height: 100%;
   overflow: hidden; /* the app shell never scrolls */
+}
+
+/* ScrollAreas own overflow (DESIGN.md#overflow) and their scrollbars are part
+   of the surface: a quiet thumb from the edge token, never a light plane. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge-hover) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--edge-hover);
+  border-radius: var(--r-control);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 body {
@@ -57,6 +98,11 @@ body {
   margin-left: var(--s-8); /* clears macOS traffic lights under hiddenInset */
 }
 
+.topbar .rail-toggle {
+  display: none; /* only when the sidebar collapses to an overlay */
+  margin-left: var(--s-8);
+}
+
 .topbar .spacer {
   flex: 1;
   -webkit-app-region: drag;
@@ -67,12 +113,6 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.scroll {
-  overflow-y: auto;
-  min-height: 0;
-  flex: 1;
 }
 
 /* ---------- Notice bar (offline / reconnecting) ---------- */
@@ -96,25 +136,28 @@ body {
   font-weight: 500;
   border: 1px solid transparent;
   border-radius: var(--r-control);
-  padding: var(--s-2) var(--s-4);
+  padding: var(--s-1) var(--s-3);
+  min-height: 28px;
   cursor: pointer;
   transition: background var(--m-press) var(--ease);
   color: var(--text-1);
   background: transparent;
+  white-space: nowrap;
 }
 
 .btn:disabled {
   opacity: 0.4;
   cursor: default;
-  pointer-events: none;
 }
 
 .btn-primary {
   background: var(--accent);
   color: var(--bg);
+  padding: var(--s-2) var(--s-4);
+  min-height: 32px;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   background: var(--accent-pressed);
 }
 
@@ -123,7 +166,7 @@ body {
   background: var(--surface-1);
 }
 
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   border-color: var(--edge-hover);
   background: var(--hover);
 }
@@ -132,13 +175,12 @@ body {
   color: var(--text-2);
 }
 
-.btn-text:hover {
+.btn-text:hover:not(:disabled) {
   color: var(--text-1);
   background: var(--hover);
 }
 
-.input,
-.textarea {
+.input {
   width: 100%;
   font: var(--type-body);
   color: var(--text-1);
@@ -148,33 +190,12 @@ body {
   padding: var(--s-2) var(--s-3);
 }
 
-.input::placeholder,
-.textarea::placeholder {
+.input::placeholder {
   color: var(--text-3);
 }
 
-.input:hover,
-.textarea:hover {
+.input:hover {
   border-color: var(--edge-hover);
-}
-
-.textarea {
-  resize: vertical;
-  min-height: 88px;
-  font-family: var(--font-ui);
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-1);
-}
-
-.field-label {
-  font: var(--type-micro);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--text-2);
 }
 
 .status-dot {
@@ -186,62 +207,157 @@ body {
 
 .status-dot.neutral { background: var(--text-3); }
 .status-dot.active { background: var(--accent); }
+.status-dot.ok { background: var(--ok); }
 .status-dot.warn { background: var(--warn); }
 .status-dot.danger { background: var(--danger); }
 
-.identity-mark {
+/* Identity marks: humans are circles, machines are rounded squares. */
+.mark {
   width: 20px;
   height: 20px;
-  border-radius: 999px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--edge);
   background: var(--surface-2);
   color: var(--text-2);
   font: var(--type-micro);
+  text-transform: uppercase;
+}
+
+.mark-lg {
+  width: 24px;
+  height: 24px;
+}
+
+.mark-human {
+  border-radius: 999px;
+}
+
+.mark-harness {
+  border-radius: var(--r-control);
+  color: var(--text-1);
+}
+
+.harness-glyph {
+  width: 12px;
+  height: 12px;
+}
+
+/* The baton (DESIGN.md signature element 1): one small solid --accent
+   squircle, the product-wide answer to "who is in control?". */
+.baton {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: var(--r-control);
+  background: var(--accent);
+}
+
+.baton-moving {
+  animation: baton-arrive var(--m-overlay) var(--ease) 1;
+}
+
+@keyframes baton-arrive {
+  from {
+    transform: translateX(-12px);
+    opacity: 0.2;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.participant-stack {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  text-transform: uppercase;
-  flex: none;
+  gap: var(--s-2);
 }
 
-.separator {
-  border: 0;
-  border-top: 1px solid var(--edge);
-}
-
-.row {
-  display: flex;
+.participant-stack .stack-item {
+  display: inline-flex;
   align-items: center;
-  gap: var(--s-3);
-  min-height: 36px;
-  padding: 0 var(--s-3);
-  border-radius: var(--r-control);
-  font: var(--type-row);
-  cursor: pointer;
-  border: none;
-  background: transparent;
-  color: var(--text-1);
-  width: 100%;
-  text-align: left;
+  gap: var(--s-1);
 }
 
-.row:hover {
-  background: var(--hover);
-}
-
-.row .row-meta {
-  font: var(--type-meta);
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.row .row-repo {
+.stack-overflow {
   font: var(--type-meta);
   color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }
 
 .mono {
   font-family: var(--font-mono);
+}
+
+.quiet {
+  font: var(--type-row);
+  color: var(--text-2);
+}
+
+.inline-error {
+  font: var(--type-row);
+  color: var(--danger);
+}
+
+.head-spacer {
+  flex: 1;
+}
+
+.inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-left: auto;
+}
+
+/* Disclosure: technical detail one keystroke away, never on the canvas. */
+.disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 24px;
+  font: var(--type-meta);
+  color: var(--text-2);
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--r-control);
+}
+
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure > summary:hover {
+  color: var(--text-1);
+}
+
+.disclosure-chevron {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  transition: transform var(--m-reveal) var(--ease);
+}
+
+.disclosure[open] > summary .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.disclosure-count {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Overlays sit on a dimmed room; the dim is the background token, not a new
+   colour (DESIGN.md#tokens: color is semantic or absent). */
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  opacity: 0.6;
+  z-index: 40;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -343,10 +459,6 @@ body {
   color: var(--text-1);
 }
 
-.card-status .plan {
-  color: var(--text-2);
-}
-
 .card {
   flex: 1;
   min-width: 240px;
@@ -366,20 +478,6 @@ body {
   gap: var(--s-2);
   font: var(--type-row);
   font-weight: 600;
-}
-
-.service-mark {
-  width: 24px;
-  height: 24px;
-  border-radius: var(--r-control);
-  border: 1px solid var(--edge);
-  background: var(--surface-2);
-  color: var(--text-2);
-  font: var(--type-micro);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
 }
 
 .card-desc {
@@ -426,6 +524,7 @@ body {
   margin-bottom: var(--s-4);
 }
 
+/* Quiet placeholders in final layout positions — no shimmer, no motion. */
 .placeholder-block {
   height: 36px;
   border-radius: var(--r-control);
@@ -433,59 +532,13 @@ body {
   margin-bottom: var(--s-2);
 }
 
-.inline-error {
-  font: var(--type-row);
-  color: var(--danger);
-}
-
-/* ---------- Repository continuity (DESIGN.md#component-behavior) ---------- */
-
-.repo-block {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  column-gap: var(--s-4);
-  row-gap: var(--s-1);
-  align-items: baseline;
-  margin-bottom: var(--s-5);
-  max-width: 720px;
-}
-
-.repo-label {
-  font: var(--type-micro);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--text-2);
-}
-
-.repo-value {
-  font: var(--type-row);
-  color: var(--text-1);
-  user-select: text;
-}
-
-.repo-value.mono {
-  font-family: var(--font-mono);
-}
-
-.branch-created {
-  color: var(--text-1);
-}
-
-.branch-pending {
-  color: var(--text-2);
-}
-
-/* System actors are machines: square mark, never a person's circle. */
-.identity-mark.system-mark {
-  border-radius: var(--r-control);
-}
-
-/* ---------- Project-first shell (DESIGN.md#information-architecture, D-032) ---------- */
+/* ---------- Project-first shell (DESIGN.md#information-architecture) ---------- */
 
 .project-shell {
   flex: 1;
   min-height: 0;
   display: flex;
+  position: relative;
 }
 
 .sidebar {
@@ -537,12 +590,6 @@ body {
   font: var(--type-meta);
 }
 
-.side-child .side-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .side-row.selected {
   background: var(--selected);
   color: var(--text-1);
@@ -575,51 +622,12 @@ body {
 
 .sidebar-foot {
   flex: none;
-  position: relative;
   padding-top: var(--s-2);
 }
 
 .add-project {
   width: 100%;
   text-align: left;
-}
-
-.menu {
-  position: absolute;
-  bottom: calc(100% + var(--s-1));
-  left: 0;
-  right: 0;
-  background: var(--surface-2);
-  border: 1px solid var(--edge);
-  border-radius: var(--r-button);
-  box-shadow: var(--elev-1);
-  padding: var(--s-1);
-  max-height: 320px;
-  overflow-y: auto;
-  z-index: 30;
-}
-
-.menu-item {
-  display: block;
-  width: 100%;
-  padding: var(--s-2) var(--s-3);
-  border: none;
-  border-radius: var(--r-control);
-  background: transparent;
-  font: var(--type-row);
-  color: var(--text-1);
-  text-align: left;
-  cursor: pointer;
-}
-
-.menu-item:hover {
-  background: var(--hover);
-}
-
-.menu-note {
-  font: var(--type-meta);
-  color: var(--text-2);
-  padding: var(--s-2) var(--s-3);
 }
 
 .room-area {
@@ -634,7 +642,11 @@ body {
   padding: var(--s-6);
 }
 
-/* ---------- Project room: tabs, chat, composer (D-032) ---------- */
+.rail-scrim {
+  display: none;
+}
+
+/* ---------- Mission Room ---------- */
 
 .room {
   flex: 1;
@@ -642,6 +654,7 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .tabbar {
@@ -649,7 +662,7 @@ body {
   display: flex;
   align-items: stretch;
   gap: var(--s-1);
-  padding: 0 var(--s-5);
+  padding: 0 var(--s-6);
   overflow-x: auto;
   border-bottom: 1px solid var(--edge);
 }
@@ -663,7 +676,7 @@ body {
   padding: var(--s-2) var(--s-3);
   cursor: pointer;
   white-space: nowrap;
-  max-width: 34ch;
+  max-width: 30ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -684,146 +697,341 @@ body {
   text-align: center;
 }
 
-.room-head {
+/* The header answers, in order: what work, what is happening, who controls it. */
+.room-header {
   flex: none;
-  position: relative;
   display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  padding: var(--s-3) var(--s-5) 0;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-5) var(--s-6) var(--s-4);
 }
 
-.room-goal {
+.mission-title {
+  font: var(--type-mission);
+  color: var(--text-1);
+  user-select: text;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The state line: one line, emphasis by weight, never by colour. */
+.state-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 28px;
   font: var(--type-body);
-  font-weight: 600;
+  color: var(--text-1);
+}
+
+.state-line .state-name {
+  font-weight: 500;
+}
+
+.state-line .state-detail {
+  color: var(--text-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  user-select: text;
 }
 
-.room-head .head-spacer {
-  flex: 1;
+.state-line .btn {
+  margin-left: var(--s-2);
 }
 
-.inspector {
-  position: absolute;
-  top: calc(100% + var(--s-2));
-  right: var(--s-5);
-  width: 360px;
-  max-width: calc(100vw - var(--s-8));
-  background: var(--surface-2);
-  border: 1px solid var(--edge);
-  border-radius: var(--r-dialog);
-  box-shadow: var(--elev-2);
-  padding: var(--s-4);
-  z-index: 20;
-}
-
-.inspector .repo-block {
-  margin-bottom: 0;
-}
-
-.inspector-note {
+.authority-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 28px;
   font: var(--type-meta);
   color: var(--text-2);
 }
 
-.chat-scroll {
+.controller-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.controller-name {
+  color: var(--text-2);
+}
+
+.inspector-triggers {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.room-error {
+  flex: none;
+  padding: 0 var(--s-6) var(--s-2);
+}
+
+/* ---------- The direction trace ---------- */
+
+.feed-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
 
-.chat {
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  padding: var(--s-2) var(--s-6) var(--s-6);
+}
+
+/* Prose wraps at the reading measure; rows keep the full width so the room
+   reads as a ledger rather than a column floating in space. */
+.prose {
   max-width: 720px;
-  width: 100%;
-  margin: 0 auto;
-  padding: var(--s-4) var(--s-5) var(--s-5);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-}
-
-.feed-item {
-  display: flex;
-  flex-direction: column;
-}
-
-.msg-user {
-  align-self: flex-end;
-  max-width: 560px;
-  background: var(--surface-1);
-  border-radius: var(--r-button);
-  padding: var(--s-2) var(--s-3);
-  font: var(--type-body);
   white-space: pre-wrap;
   user-select: text;
 }
 
-.msg-agent {
-  align-self: flex-start;
+/* Technical setup, collapsed to one subordinate row. Named apart from the
+   first-run surface's own .setup-row so the two never share a rule. */
+.workspace-row {
   display: flex;
-  gap: var(--s-3);
-  font: var(--type-body);
-}
-
-.msg-agent .mark-slot {
-  width: 20px;
-  flex: none;
-  padding-top: var(--s-1);
-}
-
-.msg-agent .msg-agent-text {
-  white-space: pre-wrap;
-  user-select: text;
-}
-
-.tool-line {
-  font: 400 12px/18px var(--font-mono);
-  color: var(--text-3);
-  padding-left: calc(20px + var(--s-3));
-  user-select: text;
-}
-
-.sys-line {
-  align-self: center;
-  text-align: center;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--s-2);
+  min-height: 32px;
+  margin: 0;
   font: var(--type-meta);
-  color: var(--text-3);
+  color: var(--text-2);
 }
 
-.feed-item .sys-line {
-  align-self: center;
-}
-
-.sys-line.danger {
+.workspace-row.danger {
   color: var(--danger);
 }
 
-.quiet-line {
-  align-self: center;
-  text-align: center;
+.workspace-row .workspace-row-action {
+  margin-left: var(--s-2);
+}
+
+.trace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  border-left: 1px solid var(--accent);
+  padding-left: var(--s-4);
+}
+
+/* Lifecycle is line treatment and position, never a badge. */
+.trace-waiting,
+.trace-settled {
+  border-left-color: var(--edge);
+}
+
+.trace-settled .trace-body {
+  color: var(--text-2);
+}
+
+.trace-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 24px;
+}
+
+.trace-author {
+  font: var(--type-row);
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.trace-time {
+  margin-left: auto;
+  font: var(--type-meta);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.trace-body {
+  font: var(--type-body);
+  color: var(--text-1);
+}
+
+.trace-machinery {
   font: var(--type-meta);
   color: var(--text-3);
 }
 
-/* The chat composer: prominent by design (D-032 exception), bounded at 40vh. */
-
-.composer-bar {
-  flex: none;
-  width: 100%;
-  max-width: 1100px; /* the composer is the room's primary action: give it room */
-  margin: 0 auto;
-  padding: var(--s-2) var(--s-5) var(--s-4);
+.trace-waiting-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 32px;
+  font: var(--type-row);
+  color: var(--text-1);
 }
 
-/* One bordered field containing the input and its controls. */
+.harness-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.harness-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.harness-name {
+  font: var(--type-row);
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.harness-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  font: var(--type-body);
+  color: var(--text-1);
+  padding-left: calc(20px + var(--s-2));
+}
+
+.tool-list {
+  list-style: none;
+  padding: var(--s-1) 0 0 calc(14px + var(--s-2));
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.tool-list li {
+  display: flex;
+  gap: var(--s-2);
+  font: var(--type-meta);
+}
+
+.tool-name {
+  color: var(--text-2);
+}
+
+.tool-detail {
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Evidence milestones: dense rows, tabular numbers, no cards. */
+.milestone {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 32px;
+  font: var(--type-row);
+  color: var(--text-1);
+}
+
+.milestone-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  min-width: 84px;
+}
+
+.milestone-body {
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.milestone-sha {
+  color: var(--text-2);
+}
+
+.milestone-action {
+  margin-left: auto;
+}
+
+.trace-note,
+.trace-outcome {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 28px;
+  font: var(--type-row);
+  color: var(--text-2);
+}
+
+.trace-outcome {
+  color: var(--text-2);
+}
+
+.tone-warn {
+  color: var(--warn);
+}
+
+.tone-danger {
+  color: var(--danger);
+}
+
+/* Control lives in the stream, never in a toast or a modal. */
+.control-event {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 32px;
+  font: var(--type-row);
+  color: var(--text-2);
+}
+
+.authority-card {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 40px;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-button);
+  font: var(--type-row);
+  color: var(--text-1);
+}
+
+.authority-text strong {
+  font-weight: 500;
+}
+
+.draft-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.draft-lead {
+  font: var(--type-body);
+  color: var(--text-1);
+  max-width: 720px;
+}
+
+/* ---------- Composer ---------- */
+
+.composer {
+  flex: none;
+  padding: 0 var(--s-6) var(--s-5);
+}
+
+.composer-error {
+  display: block;
+  margin-bottom: var(--s-2);
+}
+
 .composer-box {
   border: 1px solid var(--edge);
-  border-radius: var(--r-control);
+  border-radius: var(--r-dialog);
   background: var(--surface-1);
-  padding: var(--s-3);
+  padding: var(--s-2) var(--s-3);
 }
 
 .composer-box:focus-within {
@@ -831,15 +1039,17 @@ body {
 }
 
 .composer-input {
+  display: block;
   width: 100%;
-  min-height: 44px;
+  min-height: 24px;
   max-height: 40vh;
   resize: none;
+  overflow-y: auto;
   font: var(--type-body);
   color: var(--text-1);
   background: transparent;
   border: none;
-  padding: 0;
+  padding: var(--s-1) 0;
 }
 
 .composer-input:focus {
@@ -850,24 +1060,18 @@ body {
   color: var(--text-3);
 }
 
-.composer-input:disabled {
-  opacity: 0.4;
-}
-
-.composer-bar .inline-error {
-  display: block;
-  margin-bottom: var(--s-2);
-}
-
 .composer-foot {
   display: flex;
   align-items: center;
-  gap: var(--s-3);
+  gap: var(--s-2);
   min-height: 28px;
-  margin-top: var(--s-3);
 }
 
-/* Model and effort selectors: sharp, quiet, and real — each maps to a flag. */
+.chip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
 .chip-button {
   display: inline-flex;
   align-items: center;
@@ -892,16 +1096,6 @@ body {
   cursor: default;
 }
 
-.agent-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  flex: none;
-  color: var(--text-1);
-}
-
 .chip-glyph {
   width: 14px;
   height: 14px;
@@ -913,13 +1107,22 @@ body {
   filter: invert(1);
 }
 
+.composer-note {
+  font: var(--type-meta);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .send-button {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
+  flex: none;
   border: none;
   border-radius: var(--r-control);
   background: var(--accent);
@@ -934,15 +1137,15 @@ body {
 
 .chip-menu {
   position: absolute;
-  bottom: 34px;
+  bottom: 32px;
   left: 0;
   min-width: 180px;
   background: var(--surface-2);
   border: 1px solid var(--edge);
   border-radius: var(--r-control);
-  box-shadow: var(--elev-2);
+  box-shadow: var(--elev-1);
   padding: var(--s-1);
-  z-index: 20;
+  z-index: 30;
 }
 
 .chip-menu-row {
@@ -976,33 +1179,6 @@ body {
   color: var(--text-3);
 }
 
-.chip-wrap {
-  position: relative;
-  display: inline-flex;
-}
-
-.harness-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  font: var(--type-meta);
-  color: var(--text-2);
-}
-
-.composer-note {
-  font: var(--type-meta);
-  color: var(--text-2);
-}
-
-.composer-working {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  font: var(--type-meta);
-  color: var(--text-2);
-}
-
 /* The one sanctioned loop: the working indicator while an agent runs. */
 .breath {
   animation: breath var(--motion-breath) var(--ease) infinite;
@@ -1015,5 +1191,497 @@ body {
   }
   50% {
     opacity: 0.3;
+  }
+}
+
+/* ---------- Inspector: Overview, Changes, Verification ---------- */
+
+.inspector {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 440px;
+  max-width: 100%;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  border-left: 1px solid var(--edge);
+  border-radius: var(--r-dialog) 0 0 var(--r-dialog);
+  box-shadow: var(--elev-2);
+}
+
+.inspector-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-3) var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--edge);
+}
+
+.inspector-tabs {
+  display: flex;
+  gap: var(--s-1);
+  flex: 1;
+}
+
+.inspector-tab {
+  font: var(--type-row);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-control);
+  padding: var(--s-1) var(--s-2);
+  min-height: 28px;
+  cursor: pointer;
+}
+
+.inspector-tab:hover {
+  color: var(--text-1);
+  background: var(--hover);
+}
+
+.inspector-tab.active {
+  color: var(--text-1);
+  background: var(--selected);
+}
+
+.inspector-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s-4);
+}
+
+.inspector-heading {
+  font: var(--type-section);
+  margin: var(--s-5) 0 var(--s-2);
+}
+
+.inspector-summary {
+  font: var(--type-meta);
+  color: var(--text-2);
+  margin-bottom: var(--s-2);
+}
+
+.inspector-actions {
+  margin-top: var(--s-4);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: var(--s-4);
+  row-gap: var(--s-2);
+  align-items: baseline;
+}
+
+.kv-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.kv-value {
+  font: var(--type-row);
+  color: var(--text-1);
+  user-select: text;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.participant-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.participant-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 32px;
+  font: var(--type-row);
+}
+
+.participant-name {
+  color: var(--text-1);
+}
+
+.participant-role {
+  margin-left: auto;
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+/* Changes: compact rows, tabular counts, the diff one click away. */
+.change-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  min-height: 32px;
+  padding: 0 var(--s-2);
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-1);
+  font: var(--type-row);
+  cursor: pointer;
+  text-align: left;
+}
+
+.change-row:hover {
+  background: var(--hover);
+}
+
+.change-row.selected {
+  background: var(--selected);
+}
+
+.change-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.change-state {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.change-counts {
+  display: inline-flex;
+  gap: var(--s-2);
+  font: var(--type-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.count-add {
+  color: var(--text-2);
+}
+
+.count-del {
+  color: var(--text-2);
+}
+
+.change-diff {
+  padding: var(--s-2) 0 var(--s-3);
+}
+
+/* The diff owns its own horizontal scroll (DESIGN.md#overflow). */
+.diff {
+  overflow-x: auto;
+  background: var(--surface-1);
+  border-radius: var(--r-control);
+  padding: var(--s-2) 0;
+}
+
+.diff-line {
+  font: 400 13px/20px var(--font-mono);
+  white-space: pre;
+  padding: 0 var(--s-3);
+  color: var(--text-1);
+  user-select: text;
+}
+
+/* The only place --ok and --danger appear as backgrounds, at 12% opacity. */
+.diff-add {
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+.diff-del {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.diff-hunk,
+.diff-meta {
+  color: var(--text-2);
+}
+
+/* The evidence ledger: two columns, mono, --ok only after a check passed. */
+.ledger {
+  display: flex;
+  flex-direction: column;
+}
+
+.ledger-entry {
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--edge);
+}
+
+.ledger-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  font: 400 13px/20px var(--font-mono);
+}
+
+.ledger-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+}
+
+.ledger-outcome {
+  color: var(--text-2);
+}
+
+.outcome-passed {
+  color: var(--ok);
+}
+
+.outcome-failed,
+.outcome-errored {
+  color: var(--danger);
+}
+
+.outcome-skipped {
+  color: var(--text-3);
+}
+
+.ledger-origin {
+  font: var(--type-meta);
+  color: var(--text-2);
+  margin-top: var(--s-1);
+}
+
+.check-output {
+  font: 400 12px/18px var(--font-mono);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  user-select: text;
+  padding-top: var(--s-1);
+}
+
+/* ---------- Add project dialog ---------- */
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 560px;
+  max-width: calc(100vw - var(--s-6));
+  max-height: calc(100vh - var(--s-8));
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-dialog);
+  box-shadow: var(--elev-2);
+}
+
+.dialog-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  border-bottom: 1px solid var(--edge);
+}
+
+.dialog-title {
+  font: var(--type-title);
+}
+
+.segment-tab {
+  font: var(--type-row);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-control);
+  padding: var(--s-1) var(--s-3);
+  min-height: 28px;
+  cursor: pointer;
+}
+
+.segment-tab:hover {
+  color: var(--text-1);
+  background: var(--hover);
+}
+
+.segment-tab.active {
+  color: var(--text-1);
+  background: var(--selected);
+}
+
+.dialog-context {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.dialog-search {
+  background: var(--bg);
+}
+
+.dialog-results {
+  flex: 1;
+  min-height: 200px;
+  overflow-y: auto;
+  padding: var(--s-2);
+}
+
+.repo-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 40px;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-control);
+  cursor: pointer;
+}
+
+.repo-row:hover {
+  background: var(--hover);
+}
+
+.repo-row.active {
+  background: var(--selected);
+}
+
+.repo-row.away {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.row-glyph {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--text-2);
+}
+
+.repo-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.repo-row-primary {
+  font: var(--type-row);
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-row-secondary {
+  font: var(--type-meta);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialog-state {
+  padding: var(--s-4) var(--s-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  align-items: flex-start;
+}
+
+.dialog-state-title {
+  font: var(--type-body);
+  color: var(--text-1);
+}
+
+.dialog-state-body {
+  font: var(--type-meta);
+  color: var(--text-2);
+  max-width: 720px;
+}
+
+.dialog-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--edge);
+}
+
+.dialog-spacer {
+  flex: 1;
+}
+
+.dialog-note {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+/* ---------- Responsive (DESIGN.md#responsive) ---------- */
+
+@media (max-width: 1200px) {
+  /* The rail toggle takes over the traffic-light clearance from the brand. */
+  .topbar .rail-toggle {
+    display: inline-flex;
+  }
+
+  .topbar .rail-toggle + .brand {
+    margin-left: 0;
+  }
+
+  .sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 45;
+    background: var(--surface-1);
+    border-right: 1px solid var(--edge);
+    transform: translateX(-100%);
+    transition: transform var(--m-overlay) var(--ease);
+  }
+
+  .rail-open .sidebar {
+    transform: none;
+  }
+
+  .rail-open .rail-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 44;
+    background: var(--bg);
+    opacity: 0.6;
+  }
+}
+
+@media (max-width: 900px) {
+  .room-header,
+  .feed,
+  .composer,
+  .room-error {
+    padding-left: var(--s-5);
+    padding-right: var(--s-5);
+  }
+
+  .tabbar {
+    padding: 0 var(--s-5);
+  }
+
+  /* Changes and Verification become full-screen views. */
+  .inspector {
+    width: auto;
+    left: 0;
+    border-radius: 0;
+    border-left: none;
+  }
+
+  .authority-row {
+    flex-wrap: wrap;
   }
 }

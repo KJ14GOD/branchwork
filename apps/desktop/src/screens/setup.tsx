@@ -63,9 +63,11 @@ export function SetupSurface({
       <div className="setup-drag" />
       <section className="setup" data-testid="setup">
         <h1>Set up Novus</h1>
+        {/* Cloud execution stays future-tense until it exists (D-028); what
+            runs today is a harness on this Mac. */}
         <p className="setup-sub">
-          Novus signs in with GitHub and operates your team&apos;s coding agents in cloud
-          workspaces.
+          Novus signs in with GitHub and operates your coding agents on this Mac. Cloud workspaces
+          arrive later.
         </p>
 
         <div className="setup-cards">
