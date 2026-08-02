@@ -250,7 +250,10 @@ function registerIpc(): void {
   // client originates no authority).
   const DirectSchema = z.object({
     missionId: z.string().startsWith("msn_"),
-    body: z.string().trim().min(1).max(4000)
+    body: z.string().trim().min(1).max(4000),
+    // Allowlisted: these become CLI flags, so nothing arbitrary may pass.
+    model: z.enum(["fable", "opus", "sonnet", "haiku"]).default("fable"),
+    effort: z.enum(["low", "medium", "high", "xhigh", "max"]).default("high")
   });
 
   ipcMain.handle("novus:missions:direct", async (_event, raw: unknown) => {
@@ -283,6 +286,8 @@ function registerIpc(): void {
       localId: repository.providerRepoId,
       missionBranch: workstream.missionBranch,
       direction: input.body,
+      model: input.model,
+      effort: input.effort,
       emit: (event) => reportInOrder(input.missionId, event)
     }).catch((error) => {
       reportInOrder(input.missionId, {

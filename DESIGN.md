@@ -87,7 +87,7 @@ Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% plu
 
 ### Radii
 
-6px — inputs, rows, small controls, **buttons** (buttons are squarish, never pill-adjacent — D-029) · 10px — contained cards · 14px — dialogs, drawers, the composer · full — identity marks only. Squircle corner smoothing where the platform allows; plain border-radius with the same values where it does not. Radii come only from this list.
+6px — inputs, rows, small controls, **buttons** (buttons are squarish, never pill-adjacent — D-029). **Navigation rails carry no radius at all**: a selected row is an accent edge plus a background, never a floating capsule · 10px — contained cards · 14px — dialogs, drawers, the composer · full — identity marks only. Squircle corner smoothing where the platform allows; plain border-radius with the same values where it does not. Radii come only from this list.
 
 ### Elevation
 
@@ -185,7 +185,7 @@ Composition rules:
 
 ## Component behavior
 
-- **Composer.** Persistent in the room, proportionate: idle height one input row (≤56px), grows with content to 40% of viewport maximum. It states its behavior in placeholder microcopy per state (see matrix). Non-controllers' composer submits to the queue and says so. In a multi-workstream room it submits to the focused workstream and names it in the placeholder. It is never a large blank canvas.
+- **Composer.** One bordered field containing the input and its controls: the textarea sits on the box's own surface (no nested border), and a foot row inside the box carries the model chip (harness glyph + model name), the effort chip, and the send control at the right edge. Model and effort selectors may only offer values the harness actually accepts — each maps to a real flag; a capability that does not exist renders disabled with a plain "arrives later" note, never as a live option. Selection persists across sessions and is recorded on the execution's start event, so a receipt can say which model and effort produced the work. Persistent in the room, proportionate: idle height one input row (≤56px), grows with content to 40% of viewport maximum. It states its behavior in placeholder microcopy per state (see matrix). Non-controllers' composer submits to the queue and says so. In a multi-workstream room it submits to the focused workstream and names it in the placeholder. It is never a large blank canvas.
 - **Diff.** Per-file DiffRows: path (mono), +/− counts (tabular), state. Expanded: unified diff, mono 13/20, additions/deletions tinted at 12% background opacity of `--ok`/`--danger` — the only place those tokens appear as backgrounds. Inline comments attach to lines and appear in Review.
 - **Verification.** The evidence ledger (signature element 3). Checks never render as pills; a pending check is `--text-3`, running `--accent` dot, passed `--ok`, failed `--danger` with its output one reveal away. Environment attribution ("reported by cloud workspace wsp_…") always visible — evidence is a claim with an origin ([PRODUCT.md](PRODUCT.md#principles) P3).
 - **Mission-list row.** 36px: StatusDot, mission title (13/20, `--text-1`), repo ref (12/18 `--text-2`), controller's IdentityMark + baton if held, needs-you reason in `--warn` text when applicable, relative time (`--text-3`, tabular). No progress bars, no thumbnails.

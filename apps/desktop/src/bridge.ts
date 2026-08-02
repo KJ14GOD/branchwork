@@ -36,7 +36,7 @@ export interface NovusBridge {
     create(input: CreateMissionInput): Promise<IpcResult<{ mission: Mission; workstream: Workstream }>>;
     get(missionId: string): Promise<IpcResult<MissionDetailResponse>>;
     retryBranch(workstreamId: string): Promise<IpcResult<Workstream>>;
-    direct(input: { missionId: string; body: string }): Promise<IpcResult<null>>;
+    direct(input: { missionId: string; body: string; model: string; effort: string }): Promise<IpcResult<null>>;
     stop(missionId: string): Promise<IpcResult<boolean>>;
     running(missionId: string): Promise<IpcResult<boolean>>;
   };

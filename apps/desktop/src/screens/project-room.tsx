@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { BaseRevision, MissionDetailResponse, MissionEvent } from "@novus/contracts";
+import { siClaudecode } from "simple-icons";
+import codexIcon from "../assets/codex-icon.png";
 import { novus } from "../bridge";
 import { deriveGoal, shortSha, truncateLabel } from "../format";
 import type { Project } from "./project-shell";
@@ -180,6 +182,25 @@ function Feed({ detail }: { detail: MissionDetailResponse }) {
   return <>{nodes}</>;
 }
 
+/** Every option maps to a real Claude Code flag: --model and --effort. */
+const MODELS = [
+  { id: "fable", label: "Fable 5" },
+  { id: "opus", label: "Opus 5" },
+  { id: "sonnet", label: "Sonnet 5" },
+  { id: "haiku", label: "Haiku 4.5" }
+] as const;
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+type ModelId = (typeof MODELS)[number]["id"];
+type Effort = (typeof EFFORTS)[number];
+
+function ClaudeGlyph() {
+  return (
+    <svg className="chip-glyph" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="Claude Code">
+      <path d={siClaudecode.path} />
+    </svg>
+  );
+}
+
 /**
  * The project room (D-032): workstream tabs, a chat-shaped mission feed, and
  * the persistent composer. A "+" tab is a mission that does not exist yet —
@@ -202,6 +223,13 @@ export function ProjectRoom({
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [text, setText] = useState("");
+  const [model, setModel] = useState<ModelId>(
+    () => (localStorage.getItem("novus-model") as ModelId | null) ?? "fable"
+  );
+  const [effort, setEffort] = useState<Effort>(
+    () => (localStorage.getItem("novus-effort") as Effort | null) ?? "high"
+  );
+  const [openMenu, setOpenMenu] = useState<"model" | "effort" | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -331,7 +359,9 @@ export function ProjectRoom({
       if (canExecute) {
         const directed = await novus().missions.direct({
           missionId: created.value.mission.missionId,
-          body
+          body,
+          model,
+          effort
         });
         setSending(false);
         if (!directed.ok) {
@@ -356,7 +386,9 @@ export function ProjectRoom({
     setSending(true);
     const result = await novus().missions.direct({
       missionId: detail.mission.missionId,
-      body
+      body,
+      model,
+      effort
     });
     setSending(false);
     if (result.ok) {
@@ -457,47 +489,123 @@ export function ProjectRoom({
         {sendError && (
           <p className="inline-error" role="alert" data-testid="send-error">{sendError}</p>
         )}
-        <textarea
-          ref={inputRef}
-          className="composer-input"
-          placeholder="Direct the agent — what should happen?"
-          value={text}
-          rows={1}
-          disabled={!composerEnabled || running || sending}
-          onChange={(event) => {
-            setText(event.target.value);
-            grow(event.target);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void send();
-            }
-          }}
-          aria-label="Direct the agent"
-          data-testid="composer-input"
-        />
-        <div className="composer-foot">
-          {canExecute && (
-            <span className="harness-chip">
-              <span className="identity-mark system-mark" title="Claude Code">cc</span>
-              Claude Code · Local
-            </span>
-          )}
-          {!composerEnabled && (
-            <span className="composer-note" data-testid="composer-disabled">
-              Agents run on local repositories for now — cloud execution arrives later.
-            </span>
-          )}
-          {running && (
-            <span className="composer-working" data-testid="working">
-              <span className="status-dot active breath" />
-              Working…
-              <button className="btn btn-text" onClick={stop} data-testid="stop">
-                Stop
+        <div className="composer-box">
+          <textarea
+            ref={inputRef}
+            className="composer-input"
+            placeholder="Direct the agent — what should happen?"
+            value={text}
+            rows={1}
+            disabled={!composerEnabled || running || sending}
+            onChange={(event) => {
+              setText(event.target.value);
+              grow(event.target);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void send();
+              }
+            }}
+            aria-label="Direct the agent"
+            data-testid="composer-input"
+          />
+          <div className="composer-foot">
+            <span className="chip-wrap">
+              <button
+                className="chip-button"
+                disabled={!composerEnabled}
+                aria-haspopup="menu"
+                aria-expanded={openMenu === "model"}
+                onClick={() => setOpenMenu(openMenu === "model" ? null : "model")}
+                data-testid="model-chip"
+              >
+                <ClaudeGlyph />
+                {MODELS.find((option) => option.id === model)?.label ?? model}
               </button>
+              {openMenu === "model" && (
+                <div className="chip-menu" role="menu" data-testid="model-menu">
+                  {MODELS.map((option) => (
+                    <button
+                      key={option.id}
+                      className="chip-menu-row"
+                      role="menuitem"
+                      onClick={() => {
+                        setModel(option.id);
+                        localStorage.setItem("novus-model", option.id);
+                        setOpenMenu(null);
+                      }}
+                    >
+                      <ClaudeGlyph />
+                      {option.label}
+                      {option.id === model && <span className="chip-menu-note">current</span>}
+                    </button>
+                  ))}
+                  <button className="chip-menu-row" role="menuitem" disabled data-testid="codex-option">
+                    <img className="chip-glyph chip-glyph-bitmap" src={codexIcon} alt="" />
+                    Codex
+                    <span className="chip-menu-note">arrives later</span>
+                  </button>
+                </div>
+              )}
             </span>
-          )}
+
+            <span className="chip-wrap">
+              <button
+                className="chip-button"
+                disabled={!composerEnabled}
+                aria-haspopup="menu"
+                aria-expanded={openMenu === "effort"}
+                onClick={() => setOpenMenu(openMenu === "effort" ? null : "effort")}
+                data-testid="effort-chip"
+              >
+                Effort · {effort}
+              </button>
+              {openMenu === "effort" && (
+                <div className="chip-menu" role="menu" data-testid="effort-menu">
+                  {EFFORTS.map((option) => (
+                    <button
+                      key={option}
+                      className="chip-menu-row"
+                      role="menuitem"
+                      onClick={() => {
+                        setEffort(option);
+                        localStorage.setItem("novus-effort", option);
+                        setOpenMenu(null);
+                      }}
+                    >
+                      {option}
+                      {option === effort && <span className="chip-menu-note">current</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </span>
+
+            {!composerEnabled && (
+              <span className="composer-note" data-testid="composer-disabled">
+                Agents run on local repositories for now — cloud execution arrives later.
+              </span>
+            )}
+            {running && (
+              <span className="composer-working" data-testid="working">
+                <span className="status-dot active breath" />
+                Working…
+                <button className="btn btn-text" onClick={stop} data-testid="stop">
+                  Stop
+                </button>
+              </span>
+            )}
+            <button
+              className="send-button"
+              onClick={() => void send()}
+              disabled={!composerEnabled || running || sending || text.trim().length === 0}
+              aria-label="Send direction"
+              data-testid="send"
+            >
+              ↑
+            </button>
+          </div>
         </div>
       </div>
     </div>

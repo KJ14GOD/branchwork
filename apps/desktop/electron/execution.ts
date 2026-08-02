@@ -117,6 +117,8 @@ export async function runDirection(args: {
   localId: string;
   missionBranch: string;
   direction: string;
+  model: string;
+  effort: string;
   emit: Emit;
 }): Promise<void> {
   const { missionId, direction, emit } = args;
@@ -143,7 +145,10 @@ export async function runDirection(args: {
     emit({ kind: "execution.stopped", payload: {} });
     return;
   }
-  emit({ kind: "execution.started", payload: { harness: "claude-code", worktree: "mission worktree" } });
+  emit({
+    kind: "execution.started",
+    payload: { harness: "claude-code", model: args.model, effort: args.effort }
+  });
 
   if (FAKE_HARNESS) {
     await runFakeTurn(worktree, direction, missionId, emit);
@@ -153,7 +158,19 @@ export async function runDirection(args: {
   await new Promise<void>((resolve) => {
     const child = spawn(
       "claude",
-      ["-p", direction, "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"],
+      [
+        "-p",
+        direction,
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--permission-mode",
+        "acceptEdits",
+        "--model",
+        args.model,
+        "--effort",
+        args.effort
+      ],
       { cwd: worktree, env: { ...process.env, PATH: PROBE_PATH }, stdio: ["ignore", "pipe", "pipe"] }
     );
     let stopped = false;

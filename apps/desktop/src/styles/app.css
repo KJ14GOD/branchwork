@@ -519,7 +519,7 @@ body {
   padding: 0 var(--s-3);
   border: none;
   border-left: 2px solid transparent;
-  border-radius: var(--r-control);
+  border-radius: 0; /* rails are sharp: selection is an edge, not a capsule */
   background: transparent;
   font: var(--type-row);
   color: var(--text-2);
@@ -808,6 +808,18 @@ body {
   padding: var(--s-2) var(--s-5) var(--s-4);
 }
 
+/* One bordered field containing the input and its controls. */
+.composer-box {
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  background: var(--surface-1);
+  padding: var(--s-3);
+}
+
+.composer-box:focus-within {
+  border-color: var(--edge-hover);
+}
+
 .composer-input {
   width: 100%;
   min-height: 44px;
@@ -815,18 +827,17 @@ body {
   resize: none;
   font: var(--type-body);
   color: var(--text-1);
-  background: var(--surface-1);
-  border: 1px solid var(--edge);
-  border-radius: var(--r-dialog);
-  padding: var(--s-3) var(--s-4);
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.composer-input:focus {
+  outline: none; /* the box owns the focus treatment */
 }
 
 .composer-input::placeholder {
   color: var(--text-3);
-}
-
-.composer-input:hover:not(:disabled) {
-  border-color: var(--edge-hover);
 }
 
 .composer-input:disabled {
@@ -842,8 +853,112 @@ body {
   display: flex;
   align-items: center;
   gap: var(--s-3);
-  min-height: 24px;
-  margin-top: var(--s-2);
+  min-height: 28px;
+  margin-top: var(--s-3);
+}
+
+/* Model and effort selectors: sharp, quiet, and real — each maps to a flag. */
+.chip-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 24px;
+  padding: 0 var(--s-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  font: var(--type-meta);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.chip-button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.chip-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.chip-glyph {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--text-1);
+}
+
+:root[data-theme="dark"] .chip-glyph-bitmap {
+  filter: invert(1);
+}
+
+.send-button {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--r-control);
+  background: var(--accent);
+  color: var(--bg);
+  cursor: pointer;
+}
+
+.send-button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.chip-menu {
+  position: absolute;
+  bottom: 34px;
+  left: 0;
+  min-width: 180px;
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  box-shadow: var(--elev-2);
+  padding: var(--s-1);
+  z-index: 20;
+}
+
+.chip-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  min-height: 28px;
+  padding: 0 var(--s-2);
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  font: var(--type-row);
+  color: var(--text-1);
+  cursor: pointer;
+  text-align: left;
+}
+
+.chip-menu-row:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.chip-menu-row:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.chip-menu-row .chip-menu-note {
+  margin-left: auto;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.chip-wrap {
+  position: relative;
+  display: inline-flex;
 }
 
 .harness-chip {

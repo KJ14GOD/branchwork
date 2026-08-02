@@ -46,7 +46,7 @@ const novus = {
       ipcRenderer.invoke("novus:missions:get", missionId),
     retryBranch: (workstreamId: string): Promise<IpcResult<Workstream>> =>
       ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
-    direct: (input: { missionId: string; body: string }): Promise<IpcResult<null>> =>
+    direct: (input: { missionId: string; body: string; model: string; effort: string }): Promise<IpcResult<null>> =>
       ipcRenderer.invoke("novus:missions:direct", input),
     stop: (missionId: string): Promise<IpcResult<boolean>> => ipcRenderer.invoke("novus:missions:stop", missionId),
     running: (missionId: string): Promise<IpcResult<boolean>> =>
