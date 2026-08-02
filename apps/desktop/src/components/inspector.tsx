@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FileChange, FileDiffResponse, MissionDetailResponse } from "@novus/contracts";
+import type {
+  FileChange,
+  FileDiffResponse,
+  Invitation,
+  MissionDetailResponse,
+  MissionRole
+} from "@novus/contracts";
 import { novus } from "../bridge";
 import { clockTime, plural, shortSha } from "../format";
 import { changedFiles } from "./derive";
@@ -103,6 +109,147 @@ function ChangeRow({
  * mission header (DESIGN.md prohibited pattern 12): a contextual inspector,
  * an overlay and not a permanent column (DESIGN.md#layout).
  */
+
+/**
+ * Inviting someone is the only way a mission gets a second responsible human,
+ * so it lives with the participants rather than behind a menu. The token is
+ * shown exactly once, here, because the server only ever stores its hash: if
+ * this is dismissed without copying it, the invitation has to be reissued.
+ */
+function InviteSection({ detail }: { detail: MissionDetailResponse }) {
+  const [invitations, setInvitations] = useState<Invitation[] | null>(null);
+  const [issued, setIssued] = useState<{ token: string; role: MissionRole } | null>(null);
+  const [role, setRole] = useState<MissionRole>("contributor");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const canInvite = detail.capabilities.includes("mission.invite");
+
+  const refresh = useCallback(async () => {
+    if (!canInvite) return;
+    const result = await novus().invites.list(detail.mission.missionId);
+    if (result.ok) setInvitations(result.value);
+  }, [canInvite, detail.mission.missionId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (!canInvite) return null;
+
+  const create = async () => {
+    setBusy(true);
+    setError(null);
+    setCopied(false);
+    const result = await novus().invites.create({ missionId: detail.mission.missionId, role });
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    setIssued({ token: result.value.token, role });
+    await refresh();
+  };
+
+  const revoke = async (invitationId: string) => {
+    setBusy(true);
+    const result = await novus().invites.revoke(invitationId);
+    setBusy(false);
+    if (!result.ok) setError(result.message);
+    await refresh();
+  };
+
+  const copy = async () => {
+    if (!issued) return;
+    try {
+      await navigator.clipboard.writeText(issued.token);
+      setCopied(true);
+    } catch {
+      // Clipboard access can be refused; the token is selectable either way.
+      setCopied(false);
+    }
+  };
+
+  const live = (invitations ?? []).filter(
+    (invitation) => !invitation.redeemedAt && !invitation.revokedAt
+  );
+  const spent = (invitations ?? []).filter((invitation) => invitation.redeemedAt);
+
+  return (
+    <>
+      <h3 className="inspector-heading">Invite someone</h3>
+      <div className="invite-row">
+        <label className="invite-role">
+          <span className="kv-label">Role</span>
+          <select
+            className="invite-select"
+            value={role}
+            onChange={(event) => setRole(event.target.value as MissionRole)}
+            data-testid="invite-role"
+          >
+            <option value="contributor">Contributor</option>
+            <option value="operator">Operator</option>
+            <option value="viewer">Viewer</option>
+            <option value="mission_admin">Mission Admin</option>
+          </select>
+        </label>
+        <button
+          className="btn btn-primary"
+          onClick={() => void create()}
+          disabled={busy}
+          data-testid="create-invitation"
+        >
+          Create invitation
+        </button>
+      </div>
+
+      {issued && (
+        <div className="invite-issued" data-testid="invitation-token">
+          <p className="quiet">
+            Send this to the person you are inviting. It works once, expires in seven days, and
+            Novus cannot show it again.
+          </p>
+          <code className="invite-token mono">{issued.token}</code>
+          <button className="btn btn-secondary" onClick={() => void copy()} data-testid="copy-invitation">
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <p className="inline-error" role="alert" data-testid="invite-error">
+          {error}
+        </p>
+      )}
+
+      {live.length > 0 && (
+        <ul className="invite-list">
+          {live.map((invitation) => (
+            <li key={invitation.invitationId} className="invite-item">
+              <span className="invite-state">
+                Unredeemed · {roleLabel(invitation.role)}
+              </span>
+              <button
+                className="btn btn-text"
+                onClick={() => void revoke(invitation.invitationId)}
+                disabled={busy}
+                data-testid="revoke-invitation"
+              >
+                Revoke
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {spent.length > 0 && (
+        <p className="quiet" data-testid="invitations-redeemed">
+          {plural(spent.length, "invitation")} redeemed.
+        </p>
+      )}
+    </>
+  );
+}
+
 export function Inspector({
   detail,
   section,
@@ -127,38 +274,18 @@ export function Inspector({
   const files = changedFiles(detail);
   const { mission, workstream } = detail;
 
-  // Esc closes; Tab is trapped inside the drawer (DESIGN.md#keyboard).
+  // Escape closes the panel. Focus is deliberately not trapped and not stolen:
+  // this is a docked region beside the room, not a modal over it, so tabbing
+  // continues naturally between the trace, the composer, and the evidence.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const panel = panelRef.current;
-      if (!panel) return;
-      const focusable = panel.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      );
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!first || !last) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      onClose();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
-
-  useEffect(() => {
-    panelRef.current?.querySelector<HTMLElement>("button")?.focus();
-  }, []);
 
   const toggleFile = useCallback(
     async (file: FileChange) => {
@@ -192,10 +319,9 @@ export function Inspector({
 
   return (
     <>
-      <div className="scrim" onClick={onClose} data-testid="inspector-scrim" />
       <aside
         className="inspector"
-        role="dialog"
+        role="complementary"
         aria-modal="true"
         aria-label="Mission inspector"
         ref={panelRef}
@@ -298,6 +424,8 @@ export function Inspector({
                 ))}
                 {detail.participants.length === 0 && <li className="quiet">No participants recorded.</li>}
               </ul>
+              <InviteSection detail={detail} />
+
               {detail.control.holderLogin && (
                 <div className="inspector-actions">
                   <GatedAction

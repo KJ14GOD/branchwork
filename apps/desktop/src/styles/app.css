@@ -584,6 +584,59 @@ body {
   color: var(--text-1);
 }
 
+/* A project row is two controls in one line: disclose, and open. */
+.side-parent {
+  padding: 0;
+  gap: 0;
+}
+
+.side-twisty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  min-height: 32px;
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 0;
+}
+
+.side-twisty:hover:not(:disabled) {
+  color: var(--text-1);
+}
+
+.side-twisty:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.twisty-glyph {
+  transition: transform var(--m-reveal) var(--ease);
+}
+
+.twisty-glyph.open {
+  transform: rotate(90deg);
+}
+
+.side-open {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 var(--s-3) 0 var(--s-1);
+  border: none;
+  background: transparent;
+  font: var(--type-row);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
 .side-child {
   padding-left: var(--s-5);
   color: var(--text-2);
@@ -653,8 +706,17 @@ body {
   min-width: 0;
   min-height: 0;
   display: flex;
-  flex-direction: column;
   position: relative;
+}
+
+/* The room's own column. The evidence panel docks beside it rather than over
+   it, so the trace never disappears behind what it is evidence for (D-039). */
+.room-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .tabbar {
@@ -758,6 +820,11 @@ body {
 
 .controller-name {
   color: var(--text-2);
+}
+
+.inspector-triggers .btn-text.active {
+  color: var(--text-1);
+  background: var(--selected);
 }
 
 .inspector-triggers {
@@ -1196,20 +1263,17 @@ body {
 
 /* ---------- Inspector: Overview, Changes, Verification ---------- */
 
+/* Snapped to the right edge, sharing the row with the room. Bounded so the
+   room keeps the majority of the width it is entitled to (DESIGN.md#layout). */
 .inspector {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 440px;
-  max-width: 100%;
-  z-index: 50;
+  flex: none;
+  width: 420px;
+  max-width: 40%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface-2);
+  background: var(--surface-1);
   border-left: 1px solid var(--edge);
-  border-radius: var(--r-dialog) 0 0 var(--r-dialog);
-  box-shadow: var(--elev-2);
 }
 
 .inspector-head {
@@ -1675,13 +1739,92 @@ body {
 
   /* Changes and Verification become full-screen views. */
   .inspector {
+    position: absolute;
+    inset: 0;
     width: auto;
-    left: 0;
-    border-radius: 0;
+    max-width: none;
+    z-index: 50;
     border-left: none;
+    background: var(--surface-2);
   }
 
   .authority-row {
     flex-wrap: wrap;
   }
+}
+
+/* ---------- Invitations: issue one, and redeem one ---------- */
+
+.invite-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-3);
+  margin-bottom: var(--s-3);
+}
+
+.invite-role {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.invite-select {
+  font: var(--type-row);
+  color: var(--text-1);
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  padding: var(--s-2) var(--s-2);
+}
+
+.invite-issued {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  align-items: flex-start;
+  margin-bottom: var(--s-3);
+}
+
+/* Selectable, because a token you cannot copy is a token you cannot use. */
+.invite-token {
+  font: 400 12px/18px var(--font-mono);
+  color: var(--text-1);
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  padding: var(--s-2) var(--s-3);
+  width: 100%;
+  word-break: break-all;
+  user-select: text;
+}
+
+.invite-list {
+  list-style: none;
+  margin-bottom: var(--s-3);
+}
+
+.invite-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 32px;
+}
+
+.invite-state {
+  flex: 1;
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+/* A join dialog is a single question, so it is short and its actions sit in it. */
+.join-dialog {
+  width: 480px;
+  gap: var(--s-3);
+  padding: var(--s-5);
+}
+
+.join-dialog .dialog-actions {
+  justify-content: flex-end;
+  padding: 0;
+  border-top: none;
 }

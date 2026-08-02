@@ -6,6 +6,103 @@ import { HumanMark } from "../components/identity";
 import { truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
 
+
+/**
+ * The other half of an invitation. Somebody who has been sent a token has no
+ * project, no mission, and nothing to click — so this lives beside Add project
+ * in the rail, which is the only place a person with an empty Novus looks.
+ */
+function JoinDialog({ onJoined, onClose }: { onJoined: () => void; onClose: () => void }) {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const redeem = async () => {
+    const value = token.trim();
+    if (!value || busy) return;
+    setBusy(true);
+    setError(null);
+    const result = await novus().invites.redeem(value);
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    onJoined();
+  };
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose} />
+      <div className="dialog join-dialog" role="dialog" aria-label="Join a mission" data-testid="join-dialog">
+        <h2 className="dialog-title">Join a mission</h2>
+        <p className="quiet">
+          Paste the invitation someone sent you. It works once, and it names the role you join with.
+        </p>
+        <input
+          ref={inputRef}
+          className="input"
+          value={token}
+          placeholder="Invitation"
+          onChange={(event) => setToken(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void redeem();
+          }}
+          aria-label="Invitation"
+          data-testid="join-token"
+        />
+        {error && (
+          <p className="inline-error" role="alert" data-testid="join-error">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          <button className="btn btn-text" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => void redeem()}
+            disabled={busy || token.trim().length === 0}
+            data-testid="join-submit"
+          >
+            Join mission
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      className={open ? "twisty-glyph open" : "twisty-glyph"}
+      viewBox="0 0 16 16"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 4l4 4-4 4" />
+    </svg>
+  );
+}
+
 /** A repository the sidebar presents as a project (D-032 project-first IA). */
 export interface Project {
   key: string;
@@ -47,6 +144,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [selection, setSelection] = useState<{ projectKey: string; missionId: string | null } | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
+  /** Which projects are showing their workstreams. Disclosure is the reader's
+   *  choice and survives selection moving elsewhere. */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const addTriggerRef = useRef<HTMLButtonElement>(null);
 
   const refresh = useCallback(async () => {
@@ -141,6 +242,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     const first = projects[0];
     if (first && (!selection || !projects.some((project) => project.key === selection.projectKey))) {
       setSelection({ projectKey: first.key, missionId: first.missions[0]?.missionId ?? null });
+      setExpanded((prev) => new Set(prev).add(first.key));
     }
   }, [projects, selection]);
 
@@ -187,7 +289,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     closeDialog();
   };
 
+  const toggleExpanded = useCallback((key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
   const selectProject = (project: Project) => {
+    setExpanded((prev) => new Set(prev).add(project.key));
     setSelection({ projectKey: project.key, missionId: project.missions[0]?.missionId ?? null });
     setRailOpen(false);
   };
@@ -280,23 +392,38 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             {projects.map((project) => {
               const away = project.provider === "local" && !project.onThisMachine;
               const selected = selection?.projectKey === project.key;
+              const open = expanded.has(project.key);
               return (
                 <div key={project.key} className="side-group">
-                  <button
-                    className={`side-row${selected ? " selected" : ""}${away ? " away" : ""}`}
-                    onClick={() => selectProject(project)}
-                    title={away ? "On another machine" : project.name}
-                    aria-current={selected}
-                    data-testid="project-row"
-                  >
-                    <span className="side-name">{project.name}</span>
-                    {project.missions.length > 0 && (
-                      <span className="side-count">{project.missions.length}</span>
-                    )}
-                  </button>
+                  <div className={`side-row side-parent${selected ? " selected" : ""}${away ? " away" : ""}`}>
+                    {/* Disclosure and selection are separate acts: you can look
+                        inside a project without leaving the one you are in. */}
+                    <button
+                      className="side-twisty"
+                      onClick={() => toggleExpanded(project.key)}
+                      aria-expanded={open}
+                      aria-label={`${open ? "Collapse" : "Expand"} ${project.name}`}
+                      disabled={project.missions.length === 0}
+                      data-testid="project-twisty"
+                    >
+                      <Chevron open={open} />
+                    </button>
+                    <button
+                      className="side-open"
+                      onClick={() => selectProject(project)}
+                      title={away ? "On another machine" : project.name}
+                      aria-current={selected}
+                      data-testid="project-row"
+                    >
+                      <span className="side-name">{project.name}</span>
+                      {project.missions.length > 0 && (
+                        <span className="side-count">{project.missions.length}</span>
+                      )}
+                    </button>
+                  </div>
                   {/* An open project shows its workstreams inline: the tabs and
                       the rail name the same things (D-032). */}
-                  {selected &&
+                  {open &&
                     project.missions.map((mission) => (
                       <button
                         key={mission.missionId}
@@ -329,8 +456,25 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             >
               + Add project
             </button>
+            <button
+              className="btn btn-text add-project"
+              onClick={() => setJoinOpen(true)}
+              data-testid="join-mission"
+            >
+              Join with invitation
+            </button>
           </div>
         </aside>
+
+        {joinOpen && (
+          <JoinDialog
+            onClose={() => setJoinOpen(false)}
+            onJoined={() => {
+              setJoinOpen(false);
+              void refresh();
+            }}
+          />
+        )}
 
         {railOpen && <div className="rail-scrim" onClick={() => setRailOpen(false)} />}
 

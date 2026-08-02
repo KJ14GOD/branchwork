@@ -182,6 +182,11 @@ export function ProjectRoom({
     inspectorTriggerRef.current?.focus();
   }, []);
 
+  /** Open that section, or close the panel if it is already the one showing. */
+  const toggleInspector = useCallback((section: InspectorSection) => {
+    setInspector((current) => (current === section ? null : section));
+  }, []);
+
   const submit = async ({
     body,
     model,
@@ -318,6 +323,7 @@ export function ProjectRoom({
 
   return (
     <div className="room" data-testid="project-room">
+      <div className="room-main">
       <div className="tabbar" role="tablist" aria-label={`Workstreams in ${project.name}`}>
         {project.missions.map((mission) => (
           <button
@@ -440,25 +446,31 @@ export function ProjectRoom({
                 participants={detail.participants}
                 attention={detail.control.openRequests.length > 0}
               />
+              {/* Each trigger toggles its own section: pressing the one that
+                  is already showing closes the panel, so the same control
+                  both opens and dismisses. */}
               <nav className="inspector-triggers" aria-label="Evidence">
                 <button
                   ref={inspectorTriggerRef}
-                  className="btn btn-text"
-                  onClick={() => setInspector("overview")}
+                  className={inspector === "overview" ? "btn btn-text active" : "btn btn-text"}
+                  aria-pressed={inspector === "overview"}
+                  onClick={() => toggleInspector("overview")}
                   data-testid="open-overview"
                 >
                   Overview
                 </button>
                 <button
-                  className="btn btn-text"
-                  onClick={() => setInspector("changes")}
+                  className={inspector === "changes" ? "btn btn-text active" : "btn btn-text"}
+                  aria-pressed={inspector === "changes"}
+                  onClick={() => toggleInspector("changes")}
                   data-testid="open-changes"
                 >
                   Changes{files.length > 0 ? ` ${files.length}` : ""}
                 </button>
                 <button
-                  className="btn btn-text"
-                  onClick={() => setInspector("verification")}
+                  className={inspector === "verification" ? "btn btn-text active" : "btn btn-text"}
+                  aria-pressed={inspector === "verification"}
+                  onClick={() => toggleInspector("verification")}
                   data-testid="open-verification"
                 >
                   Verification{checks.total > 0 ? ` ${checks.passed}/${checks.total}` : ""}
@@ -642,6 +654,8 @@ export function ProjectRoom({
         isController={isController || isDraft}
         onSubmit={submit}
       />
+
+      </div>
 
       {inspector && detail && (
         <Inspector

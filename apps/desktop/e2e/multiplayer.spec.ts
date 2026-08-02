@@ -131,13 +131,26 @@ async function mintToken(as: string): Promise<string> {
   return body.token;
 }
 
+/** Reloads into the room, so the frame is a reconstruction from the control
+ *  plane rather than whatever this client had on screen. */
+async function showRoom(client: Client): Promise<void> {
+  await client.page.reload();
+  await client.page.waitForLoadState("domcontentloaded");
+  await client.page.getByTestId("project-room").first().waitFor({ timeout: 20_000 });
+  await client.page.waitForTimeout(1_500);
+}
+
 /**
  * Captures what a client is actually showing at this point in the story.
- * Reloading makes the renderer re-read the mission from the control plane, so
- * the frame is the reconstructed room rather than whatever was left on screen.
  * Screenshots are evidence, not assertions: a capture that cannot be taken
  * records that fact and never fails the run.
  */
+/** Screenshots exactly what is on screen now, without reloading — for frames
+ *  whose whole point is transient interface state, like an open panel. */
+async function snap(client: Client, name: string): Promise<void> {
+  await client.page.screenshot({ path: join(evidenceDir, `${name}.png`) });
+}
+
 async function capture(client: Client, name: string): Promise<void> {
   try {
     await client.page.reload();
@@ -313,27 +326,37 @@ describe("two people, one mission", () => {
     await capture(kartik, "20-direction-trace-with-checkpoint");
 
     // --- Maya joins from a second authenticated client -----------------------
-    const invitation = await kartik.page.evaluate(async (id) => {
-      const result = await window.novus.invites.create({ missionId: id, role: "contributor" });
-      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
-      return result.value;
-    }, missionId);
+    // Through the interface, not the bridge: an invitation nobody can issue by
+    // clicking is an invitation that does not exist for a user.
+    await showRoom(kartik);
+    await kartik.page.getByTestId("open-overview").click();
+    await kartik.page.getByTestId("create-invitation").click();
+    await kartik.page.getByTestId("invitation-token").waitFor({ timeout: 15_000 });
+    const invitationToken = (
+      (await kartik.page.getByTestId("invitation-token").locator("code").textContent()) ?? ""
+    ).trim();
+    expect(invitationToken.length).toBeGreaterThanOrEqual(32);
+    await snap(kartik, "28-invitation-issued");
 
     // Before redeeming, the mission does not exist for her.
     const beforeJoin = await maya.page.evaluate(async (id) => window.novus.missions.get(id), missionId);
     expect(beforeJoin.ok).toBe(false);
 
-    const redeemed = await maya.page.evaluate(async (token) => {
-      const result = await window.novus.invites.redeem(token);
-      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
-      return result.value;
-    }, invitation.token);
-    expect(redeemed.missionId).toBe(missionId);
+    // And redeemed the same way: a person with an empty Novus pastes what they
+    // were sent into the one control the rail offers them.
+    await maya.page.reload();
+    await maya.page.waitForLoadState("domcontentloaded");
+    await maya.page.getByTestId("join-mission").waitFor({ timeout: 20_000 });
+    await maya.page.getByTestId("join-mission").click();
+    await maya.page.getByTestId("join-token").fill(invitationToken);
+    await snap(maya, "29-join-with-invitation");
+    await maya.page.getByTestId("join-submit").click();
+    await maya.page.getByTestId("join-dialog").waitFor({ state: "detached", timeout: 20_000 });
 
     // The same invitation cannot be spent twice.
     const replay = await maya.page.evaluate(
       async (token) => window.novus.invites.redeem(token),
-      invitation.token
+      invitationToken
     );
     expect(replay.ok).toBe(false);
 
