@@ -1,0 +1,164 @@
+import { createHash } from "node:crypto";
+import type pg from "pg";
+import type { Config } from "./config.ts";
+import type { Db } from "./db.ts";
+import { withTransaction } from "./db.ts";
+import { newOrgId, newSessionId, newSessionToken, newStateNonce, newUserId } from "./ids.ts";
+
+export interface GithubIdentity {
+  githubId: number;
+  login: string;
+  name: string | null;
+}
+
+export interface AuthedContext {
+  userId: string;
+  login: string;
+  name: string | null;
+  orgId: string;
+  orgName: string;
+  sessionId: string;
+}
+
+const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
+
+export async function startFlow(db: Db, config: Config): Promise<{ state: string; authorizeUrl: string }> {
+  const state = newStateNonce();
+  await db.query(
+    "insert into auth_flows (state, expires_at) values ($1, now() + interval '10 minutes')",
+    [state]
+  );
+  const callback = `${config.publicBaseUrl}/auth/github/callback`;
+  const authorizeUrl = config.fakeGithub
+    ? `${config.publicBaseUrl}/auth/fake/authorize?state=${state}`
+    : `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(config.githubClientId)}&redirect_uri=${encodeURIComponent(callback)}&state=${state}&scope=read:user`;
+  return { state, authorizeUrl };
+}
+
+export async function exchangeGithubCode(config: Config, code: string): Promise<GithubIdentity> {
+  if (config.fakeGithub) {
+    // Deterministic test identity; the rest of the machinery is real.
+    return { githubId: 1_000_001, login: "spike-user", name: "Spike User" };
+  }
+  const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({
+      client_id: config.githubClientId,
+      client_secret: config.githubClientSecret,
+      code
+    })
+  });
+  if (!tokenResponse.ok) throw new Error(`github token exchange failed: ${tokenResponse.status}`);
+  const tokenBody = (await tokenResponse.json()) as { access_token?: string; error?: string };
+  if (!tokenBody.access_token) throw new Error(`github token exchange rejected: ${tokenBody.error ?? "no token"}`);
+
+  const userResponse = await fetch("https://api.github.com/user", {
+    headers: { authorization: `Bearer ${tokenBody.access_token}`, accept: "application/vnd.github+json" }
+  });
+  if (!userResponse.ok) throw new Error(`github user lookup failed: ${userResponse.status}`);
+  const user = (await userResponse.json()) as { id: number; login: string; name: string | null };
+  return { githubId: user.id, login: user.login, name: user.name ?? null };
+}
+
+/** Upserts the user, guarantees a personal org + membership, issues a session. */
+export async function completeFlow(
+  db: Db,
+  config: Config,
+  state: string,
+  identity: GithubIdentity
+): Promise<void> {
+  await withTransaction(db, async (client) => {
+    const flow = await client.query(
+      "select state from auth_flows where state = $1 and expires_at > now() and session_token is null for update",
+      [state]
+    );
+    if (flow.rowCount === 0) throw new Error("auth flow missing, expired, or already completed");
+
+    const user = await upsertUser(client, identity);
+    await ensurePersonalOrg(client, user.userId, identity.login);
+
+    const token = newSessionToken();
+    await client.query(
+      "insert into sessions (session_id, user_id, token_hash, expires_at) values ($1, $2, $3, now() + ($4 || ' hours')::interval)",
+      [newSessionId(), user.userId, hashToken(token), String(config.sessionTtlHours)]
+    );
+    await client.query("update auth_flows set session_token = $1, user_id = $2 where state = $3", [
+      token,
+      user.userId,
+      state
+    ]);
+  });
+}
+
+async function upsertUser(client: pg.PoolClient, identity: GithubIdentity): Promise<{ userId: string }> {
+  const existing = await client.query("select user_id from users where github_id = $1", [identity.githubId]);
+  if (existing.rowCount && existing.rows[0]) {
+    await client.query("update users set login = $2, name = $3 where github_id = $1", [
+      identity.githubId,
+      identity.login,
+      identity.name
+    ]);
+    return { userId: existing.rows[0].user_id as string };
+  }
+  const userId = newUserId();
+  await client.query("insert into users (user_id, github_id, login, name) values ($1, $2, $3, $4)", [
+    userId,
+    identity.githubId,
+    identity.login,
+    identity.name
+  ]);
+  return { userId };
+}
+
+async function ensurePersonalOrg(client: pg.PoolClient, userId: string, login: string): Promise<void> {
+  const membership = await client.query("select org_id from organization_members where user_id = $1", [userId]);
+  if (membership.rowCount) return;
+  const orgId = newOrgId();
+  await client.query("insert into organizations (org_id, name) values ($1, $2)", [orgId, login]);
+  await client.query(
+    "insert into organization_members (org_id, user_id, org_role) values ($1, $2, 'owner')",
+    [orgId, userId]
+  );
+}
+
+/** One-shot claim: hands the session token to the desktop exactly once. */
+export async function claimFlow(db: Db, state: string): Promise<string | null> {
+  return withTransaction(db, async (client) => {
+    const row = await client.query(
+      "select session_token from auth_flows where state = $1 and expires_at > now() for update",
+      [state]
+    );
+    if (row.rowCount === 0) throw new Error("auth flow missing or expired");
+    const token = row.rows[0]?.session_token as string | null;
+    if (!token) return null; // browser leg not finished yet — keep polling
+    await client.query("delete from auth_flows where state = $1", [state]);
+    return token;
+  });
+}
+
+export async function authenticate(db: Db, bearerToken: string): Promise<AuthedContext | null> {
+  const result = await db.query(
+    `select s.session_id, u.user_id, u.login, u.name, m.org_id, o.name as org_name
+       from sessions s
+       join users u on u.user_id = s.user_id
+       join organization_members m on m.user_id = u.user_id
+       join organizations o on o.org_id = m.org_id
+      where s.token_hash = $1 and s.expires_at > now() and s.revoked_at is null`,
+    [hashToken(bearerToken)]
+  );
+  if (result.rowCount === 0 || !result.rows[0]) return null;
+  const row = result.rows[0];
+  return {
+    userId: row.user_id,
+    login: row.login,
+    name: row.name,
+    orgId: row.org_id,
+    orgName: row.org_name,
+    sessionId: row.session_id
+  };
+}
+
+export async function revokeSession(db: Db, sessionId: string): Promise<void> {
+  await db.query("update sessions set revoked_at = now() where session_id = $1", [sessionId]);
+}

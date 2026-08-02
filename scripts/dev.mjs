@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+// Development launcher: PostgreSQL container → control plane → the desktop app.
+// Requires NOVUS_GITHUB_CLIENT_ID / NOVUS_GITHUB_CLIENT_SECRET in the
+// environment or in a .env file at the repository root for real sign-in.
+import { spawn, execSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const root = resolve(new URL(".", import.meta.url).pathname, "..");
+
+const envFile = resolve(root, ".env");
+if (existsSync(envFile)) {
+  for (const line of readFileSync(envFile, "utf8").split("\n")) {
+    const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (match && !(match[1] in process.env)) process.env[match[1]] = match[2];
+  }
+}
+
+execSync("docker start novus-pg 2>/dev/null || docker run -d --name novus-pg -e POSTGRES_PASSWORD=novus -e POSTGRES_USER=novus -e POSTGRES_DB=novus -p 5433:5432 postgres:16", {
+  stdio: "inherit", shell: "/bin/bash"
+});
+
+const controlPlane = spawn(
+  process.execPath,
+  ["--experimental-strip-types", resolve(root, "apps/control-plane/src/main.ts")],
+  { stdio: "inherit", env: process.env }
+);
+
+const desktop = spawn("pnpm", ["--filter", "@novus/desktop", "start"], {
+  stdio: "inherit",
+  env: process.env,
+  cwd: root
+});
+
+const stop = () => {
+  controlPlane.kill("SIGTERM");
+  desktop.kill("SIGTERM");
+};
+desktop.on("exit", stop);
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);

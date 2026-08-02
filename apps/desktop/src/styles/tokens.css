@@ -1,0 +1,66 @@
+/* Design tokens — the only file in the client where raw color values exist.
+   Values are canonical in DESIGN.md#tokens; a change here requires a DESIGN.md
+   change in the same commit. V0 is dark-only. */
+
+:root {
+  /* Color */
+  --bg: #141517;
+  --surface-1: #1c1d20;
+  --surface-2: #232428;
+  --edge: rgba(255, 255, 255, 0.08);
+  --edge-hover: rgba(255, 255, 255, 0.12);
+  --text-1: #eceae6;
+  --text-2: #a8a49d;
+  --text-3: #918c84;
+  --accent: #7a9bbf;
+  --accent-pressed: #6688ab;
+  --ok: #8fae8b;
+  --warn: #d9a47e;
+  --danger: #c97b6f;
+  --alt: #9c8db8;
+
+  /* Interaction states */
+  --hover: rgba(255, 255, 255, 0.04);
+  --selected: rgba(255, 255, 255, 0.06);
+  --pressed: rgba(255, 255, 255, 0.06);
+
+  /* Type scale (size/line-height, weight) — no other sizes exist */
+  --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --type-micro: 500 11px/16px var(--font-ui);
+  --type-meta: 400 12px/18px var(--font-ui);
+  --type-row: 400 13px/20px var(--font-ui);
+  --type-body: 400 14px/22px var(--font-ui);
+  --type-section: 600 16px/24px var(--font-ui);
+  --type-title: 600 20px/28px var(--font-ui);
+  --type-mission: 650 28px/34px var(--font-ui);
+
+  /* Spacing scale */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+
+  /* Radii */
+  --r-control: 6px;
+  --r-button: 10px;
+  --r-dialog: 14px;
+
+  /* Elevation */
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --elev-2: 0 8px 24px rgba(0, 0, 0, 0.35);
+
+  /* Motion */
+  --m-press: 120ms;
+  --m-reveal: 180ms;
+  --m-overlay: 240ms;
+  --ease: cubic-bezier(0.3, 0.7, 0.3, 1);
+  --motion-breath: 1500ms;
+
+  /* Shell */
+  --topbar-h: 48px;
+}

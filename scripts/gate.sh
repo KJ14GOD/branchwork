@@ -84,7 +84,14 @@ fi
 untracked=$(git status --porcelain 2>/dev/null | grep '^??' | awk '{print $2}' || true)
 [ -z "$untracked" ] || { echo "$untracked" | sed 's/^/GATE FAIL: untracked file (track it or ignore it deliberately): /'; FAIL=1; }
 
-# 13. Build/test/lint hook: added here when application code exists (AGENTS.md owns this list).
+# 13. Application build, typecheck, lint, and deterministic tests.
+if [ -f package.json ]; then
+  pnpm run db:up >/dev/null 2>&1 || true
+  pnpm run build      >/dev/null 2>&1 || fail "application build failed (pnpm run build)"
+  pnpm run typecheck  >/dev/null 2>&1 || fail "typecheck failed (pnpm run typecheck)"
+  pnpm run lint       >/dev/null 2>&1 || fail "lint failed (pnpm run lint)"
+  pnpm run test       >/dev/null 2>&1 || fail "deterministic tests failed (pnpm run test)"
+fi
 
 if [ "$FAIL" -eq 0 ]; then
   echo "GATE PASS"

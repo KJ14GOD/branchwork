@@ -1,0 +1,443 @@
+/* All values come from tokens.css variables — no raw colors, sizes outside the
+   scale, or one-off shadows (DESIGN.md composition rules; AGENTS.md rule 14). */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden; /* the app shell never scrolls */
+}
+
+body {
+  background: var(--bg);
+  color: var(--text-1);
+  font: var(--type-body);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- Shell ---------- */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.topbar {
+  height: var(--topbar-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-4) 0 var(--s-5);
+  border-bottom: 1px solid var(--edge);
+  -webkit-app-region: drag;
+}
+
+.topbar > * {
+  -webkit-app-region: no-drag;
+}
+
+.topbar .brand {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-left: var(--s-8); /* clears macOS traffic lights under hiddenInset */
+}
+
+.topbar .spacer {
+  flex: 1;
+  -webkit-app-region: drag;
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.scroll {
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+/* ---------- Notice bar (offline / reconnecting) ---------- */
+
+.notice-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-5);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--edge);
+  font: var(--type-meta);
+  color: var(--warn);
+}
+
+/* ---------- Primitives ---------- */
+
+.btn {
+  font: var(--type-row);
+  font-weight: 500;
+  border: 1px solid transparent;
+  border-radius: var(--r-button);
+  padding: var(--s-2) var(--s-4);
+  cursor: pointer;
+  transition: background var(--m-press) var(--ease);
+  color: var(--text-1);
+  background: transparent;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.btn-primary:hover {
+  background: var(--accent-pressed);
+}
+
+.btn-secondary {
+  border-color: var(--edge);
+  background: var(--surface-1);
+}
+
+.btn-secondary:hover {
+  border-color: var(--edge-hover);
+  background: var(--hover);
+}
+
+.btn-text {
+  color: var(--text-2);
+}
+
+.btn-text:hover {
+  color: var(--text-1);
+  background: var(--hover);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  font: var(--type-body);
+  color: var(--text-1);
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  padding: var(--s-2) var(--s-3);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--text-3);
+}
+
+.input:hover,
+.textarea:hover {
+  border-color: var(--edge-hover);
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 88px;
+  font-family: var(--font-ui);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.field-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex: none;
+}
+
+.status-dot.neutral { background: var(--text-3); }
+.status-dot.active { background: var(--accent); }
+.status-dot.warn { background: var(--warn); }
+.status-dot.danger { background: var(--danger); }
+
+.identity-mark {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid var(--edge);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: var(--type-micro);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: uppercase;
+  flex: none;
+}
+
+.separator {
+  border: 0;
+  border-top: 1px solid var(--edge);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 36px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-control);
+  font: var(--type-row);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  width: 100%;
+  text-align: left;
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.row .row-meta {
+  font: var(--type-meta);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Dialog ---------- */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  animation: dialog-in var(--m-overlay) var(--ease);
+}
+
+.dialog {
+  width: 480px;
+  max-width: calc(100vw - var(--s-6));
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-dialog);
+  box-shadow: var(--elev-2);
+  padding: var(--s-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.dialog h2 {
+  font: var(--type-section);
+}
+
+@keyframes dialog-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ---------- Sign-in surface ---------- */
+
+.signin {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: var(--s-8);
+  max-width: 480px;
+}
+
+.signin h1 {
+  font: var(--type-mission);
+  margin-bottom: var(--s-3);
+}
+
+.signin p {
+  font: var(--type-body);
+  color: var(--text-2);
+  margin-bottom: var(--s-5);
+}
+
+.signin .signin-status {
+  margin-top: var(--s-4);
+  font: var(--type-meta);
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.signin .signin-error {
+  margin-top: var(--s-4);
+  font: var(--type-row);
+  color: var(--danger);
+}
+
+/* ---------- Missions surface ---------- */
+
+.missions {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-6) var(--s-6) 0;
+  max-width: 920px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.missions-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  margin-bottom: var(--s-5);
+}
+
+.missions-head h1 {
+  font: var(--type-title);
+}
+
+.missions-head .spacer {
+  flex: 1;
+}
+
+.group-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin: var(--s-4) 0 var(--s-2);
+}
+
+.empty {
+  padding: var(--s-6) 0;
+}
+
+.empty p {
+  font: var(--type-body);
+  color: var(--text-2);
+  margin-bottom: var(--s-4);
+}
+
+.placeholder-block {
+  height: 36px;
+  border-radius: var(--r-control);
+  background: var(--surface-1);
+  margin-bottom: var(--s-2);
+}
+
+.inline-error {
+  font: var(--type-row);
+  color: var(--danger);
+}
+
+/* ---------- Mission view ---------- */
+
+.mission-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-6) var(--s-6) 0;
+  max-width: 920px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.mission-view .back {
+  align-self: flex-start;
+  margin-bottom: var(--s-4);
+}
+
+.mission-view h1 {
+  font: var(--type-mission);
+  margin-bottom: var(--s-2);
+  user-select: text;
+}
+
+.state-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font: var(--type-row);
+  color: var(--text-2);
+  margin-bottom: var(--s-5);
+}
+
+.state-line .state-name {
+  color: var(--accent);
+}
+
+.mission-section {
+  margin-bottom: var(--s-5);
+}
+
+.mission-section h2 {
+  font: var(--type-section);
+  margin-bottom: var(--s-2);
+}
+
+.mission-section p {
+  font: var(--type-body);
+  color: var(--text-1);
+  white-space: pre-wrap;
+  user-select: text;
+  max-width: 720px;
+}
+
+.event-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 32px;
+  font: var(--type-row);
+  color: var(--text-2);
+}
+
+.event-row .event-kind {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-1);
+}

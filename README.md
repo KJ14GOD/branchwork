@@ -53,7 +53,7 @@ Each workstream has one branch and one active execution filesystem. GitHub is th
 
 ## Repository map
 
-The repository currently contains the documentation foundation and its gate. No application code exists yet; see [PROGRESS.md](PROGRESS.md).
+What exists versus what is planned is recorded only in [PROGRESS.md](PROGRESS.md).
 
 | File | Owns |
 | --- | --- |
@@ -65,5 +65,11 @@ The repository currently contains the documentation foundation and its gate. No 
 | [DECISIONS.md](DECISIONS.md) | Append-only decision record |
 | [AGENTS.md](AGENTS.md) | Working rules for every implementation agent; `CLAUDE.md` is a symlink to it |
 | `scripts/gate.sh` | The executable repository gate ([AGENTS.md](AGENTS.md#the-repository-gate)) |
+| `packages/contracts/` | Runtime-validated shapes shared across network and IPC boundaries |
+| `apps/control-plane/` | Control-plane service: identity, sessions, organizations, missions, events (PostgreSQL) |
+| `apps/desktop/` | The Novus desktop application (Electron shell, isolated renderer) |
+| `spikes/` | Disposable feasibility experiments; never product code |
+
+Development: `pnpm install`, then `pnpm dev` (starts PostgreSQL in Docker, the control plane, and the desktop app). Real sign-in needs GitHub OAuth credentials in `.env` (see `.env.example`).
 
 Do not add root Markdown files without a recorded decision; see [AGENTS.md](AGENTS.md#rules).

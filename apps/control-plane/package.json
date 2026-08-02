@@ -1,0 +1,25 @@
+{
+  "name": "@novus/control-plane",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "migrate": "node --experimental-strip-types src/migrate.ts",
+    "start": "node --experimental-strip-types src/main.ts",
+    "test": "vitest run --pool=forks --poolOptions.forks.singleFork"
+  },
+  "dependencies": {
+    "@novus/contracts": "workspace:*",
+    "fastify": "^5.4.0",
+    "pg": "^8.16.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.0"
+  }
+}

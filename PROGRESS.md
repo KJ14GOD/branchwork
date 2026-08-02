@@ -8,7 +8,7 @@ Last reviewed: 2026-08-01
 
 ## Current milestone
 
-**Pre-implementation feasibility.** The canonical documentation foundation is complete. The current milestone is to test the chosen cloud workspace and both official harness CLIs before their adapter contracts shape application code. This milestone still contains no application functionality.
+**First vertical slice.** The documentation foundation and feasibility spikes are complete. The current milestone delivered the first production-shaped slice: launch the Novus desktop application, authenticate one user, create one mission, persist it and its initial event in PostgreSQL, and reconstruct it after a full relaunch. Everything beyond that slice remains Not started.
 
 ## Status rules
 
@@ -18,17 +18,17 @@ Last reviewed: 2026-08-01
 
 ## Application capabilities
 
-All application capabilities are **Not started**. The previous prototype was removed in full (commit `50c4851`); none of its behavior carries over.
+The previous prototype was removed in full (commit `50c4851`); none of its behavior carries over. Evidence for every Partial line: `pnpm run test` (14 deterministic tests: 5 contract, 9 control-plane against real PostgreSQL) and `pnpm run e2e` (the complete slice through the actual Electron app — sign-in, empty surface, creation, relaunch, reconstruction — with screenshots in `apps/desktop/e2e/evidence/`), both run 2026-08-01.
 
 | Capability | Status |
 | --- | --- |
-| Authentication and sessions | Not started |
-| Organizations and membership | Not started |
+| Authentication and sessions | Partial — GitHub OAuth desktop flow (D-027), first-party revocable sessions, hashed tokens, OS-backed credential storage. The live-GitHub leg has not run: it needs OAuth app credentials; all runs so far used the gated fake upstream over real session machinery |
+| Organizations and membership | Partial — personal org auto-provisioned at first sign-in; server-side org scoping proven (cross-org missions invisible, 404 not 403). No multi-member orgs, no org management |
 | Repository connection (GitHub App) | Not started |
 | Repository branches, checkpoints, and workspace synchronization | Not started |
-| Mission creation and lifecycle | Not started |
-| Invitations and participants | Not started |
-| Roles and server-enforced capabilities | Not started |
+| Mission creation and lifecycle | Partial — creation with goal + success criteria; mission + Mission Admin participant + initial `mission.created` event commit in one transaction; only the New mission state exists; no lifecycle transitions |
+| Invitations and participants | Partial — creator-as-Mission-Admin participant row only; no invitations |
+| Roles and server-enforced capabilities | Partial — `org.mission.create` and org scoping enforced server-side; the full capability table is not implemented |
 | Control leases, requests, handoffs | Not started |
 | Direction lifecycle | Not started |
 | Workstreams and executions | Not started |
@@ -41,10 +41,10 @@ All application capabilities are **Not started**. The previous prototype was rem
 | Review and revision requests | Not started |
 | Pull-request creation and tracking | Not started |
 | Receipts | Not started |
-| Missions surface | Not started |
-| Mission Room surface | Not started |
+| Missions surface | Partial — loading placeholders, empty state, offline notice with retry, mission rows, creation dialog with validation and persistence-failure states; attention grouping reduced to the one reachable group |
+| Mission Room surface | Partial — reduced New-mission view only: goal, state line, success criteria, event history. No composer, participants, workstreams, or evidence |
 | Review surface | Not started |
-| Design token system and primitives | Not started |
+| Design token system and primitives | Partial — tokens.css carries the DESIGN.md values on rendered screens; Button, Input, Textarea, Row, Section separator, StatusDot, IdentityMark, Dialog, ScrollArea built; remaining primitives unbuilt |
 
 ## Documentation
 
@@ -57,18 +57,20 @@ All application capabilities are **Not started**. The previous prototype was rem
 | Harness feasibility — documentation-level | Implemented | Official-docs verification for Claude Code (headless, streaming, resume, permissions, auth) and Codex (exec/app-server, approvals, interrupt, auth), recorded with sources in D-017 |
 | Harness feasibility — hands-on, local + clean-Linux container | Partial | Run 2026-08-01. Verified live: Claude Code 2.1.220 `-p --output-format stream-json` (init event with capability flags, session id, per-model cost), `--resume` with correct recall, SIGTERM → exit 143 with child tasks marked killed, allowlist enforcement; Codex 0.145.0 `exec --json` (thread.started/turn/item events, usage), `exec resume --last` with correct recall, `app-server` JSON-RPC initialize handshake with server-initiated notifications. Clean Ubuntu 24.04 (aarch64 Docker): Claude Code installs via official script and returns structured JSON `is_error` when unauthenticated; Codex 0.146.0 musl binary from GitHub releases runs and requires a trusted git directory or `--skip-git-repo-check`. Adapter notes: `codex exec` consumes stdin; both CLIs emit stderr noise the supervisor must tolerate. |
 | E2B provider spike — live run | Implemented | Run 2026-08-01, results in `spikes/e2b/spike-results.json` (D-024). Create 125–190ms, pause 134ms, resume 238ms, cold starts 146–1561ms; files and background processes survive pause/resume; both harness CLIs install and run in-sandbox; default-deny denies as expected, but IP-based allowlists break DNS — egress default-deny requires a proxy (D-024). No provider API keys were transmitted; the authenticated-harness leg has not run. |
+| Vertical slice — desktop workflow, live | Implemented | `pnpm run e2e` run 2026-08-01: the actual Electron app signs in, shows the empty Missions surface, creates a mission, closes fully, relaunches, restores its session from OS-backed storage, and reconstructs the mission and its `mission.created` event from PostgreSQL. Screenshots: `apps/desktop/e2e/evidence/1-sign-in.png` … `4-mission-reconstructed.png`, reviewed against DESIGN.md prohibited patterns. Gate now runs build, typecheck, lint, and the deterministic suites. |
 
 ## Known gaps
 
-- No application code, application tests, product build system, or production dependencies exist. The disposable feasibility runner and its pinned SDK under `spikes/e2b` are not application functionality.
+- Real GitHub OAuth has never round-tripped: every authenticated run used the gated fake upstream (D-027). Proving it needs a GitHub OAuth App (callback `http://127.0.0.1:4460/auth/github/callback`) and its credentials in `.env`.
+- The desktop app runs from `pnpm dev` only; there is no packaged, signed, downloadable build, and no Windows/Linux run has happened.
+- One personal organization per user is assumed throughout the slice; org selection and multi-membership are undefined in code.
+- The design token values are now proven on rendered screens (evidence screenshots), but only on macOS at one window size; density, keyboard navigation, and most primitives remain unexercised.
 - The harness spike (D-017) has run locally, in a clean-Linux container, and live on E2B (D-024). Still unproven: authenticated harness operation in a clean environment under org-provisioned API keys (no provider keys have been transmitted to any sandbox), and structured approval surfacing end to end (Claude Code `--permission-prompt-tool`, Codex app-server `requestApproval` round-trip) — a forced `--disallowedTools` denial returned no structured denial record in `-p` mode, so approval routing must be proven at the adapter level. These two items are the remaining gate on freezing the adapter contract.
 - Egress default-deny via provider IP rules is proven unworkable (D-024): the design answer is an egress proxy, which does not yet exist even as a specification.
 - The repository-continuity contract is documented (D-025), but none of it is implemented: no mission-branch allocation, revision tracking, checkpoint artifacts, explicit synchronization, conflict presentation, or replacement-workspace reconstruction exists.
-- The design token values in [DESIGN.md](DESIGN.md#tokens) have not been proven on a rendered screen; contrast ratios are calculated, not observed.
-- The gate's source-code checks (gradients, raw colors, PROGRESS staleness) are dormant until application code exists.
-
 ## Blocked
 
+- The live-GitHub authentication leg is blocked on GitHub OAuth App credentials (only the account holder can create them; see `.env.example`).
 - The authenticated-harness leg of the spike is blocked on explicit opt-in to transmit provider API keys to a disposable sandbox (`NOVUS_SPIKE_SEND_*` flags), and on an Anthropic API key, which is not present on this machine. Only the account holder can provide these.
 
-Next step: the first implementation slice — a thin vertical skeleton: authenticate one user, create one mission, persist it, reconstruct it after refresh — with no agents and no visual flourish. The authenticated-harness spike leg can run in parallel whenever keys are provided.
+Next step: prove the live GitHub OAuth round-trip, then the second slice — repository connection (GitHub App) and mission-branch allocation per D-025 — before any harness execution.

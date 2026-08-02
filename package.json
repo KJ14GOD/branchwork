@@ -1,0 +1,25 @@
+{
+  "name": "novus",
+  "private": true,
+  "version": "0.0.1",
+  "packageManager": "pnpm@10.12.1",
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "esbuild"]
+  },
+  "scripts": {
+    "db:up": "docker start novus-pg 2>/dev/null || docker run -d --name novus-pg -e POSTGRES_PASSWORD=novus -e POSTGRES_USER=novus -e POSTGRES_DB=novus -p 5433:5432 postgres:16",
+    "db:migrate": "pnpm --filter @novus/control-plane migrate",
+    "build": "pnpm --filter @novus/contracts build && pnpm --filter @novus/control-plane build && pnpm --filter @novus/desktop build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint apps packages --ext .ts,.tsx",
+    "test": "pnpm --filter @novus/contracts test && pnpm --filter @novus/control-plane test",
+    "e2e": "pnpm --filter @novus/desktop e2e",
+    "dev": "node scripts/dev.mjs"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.38.0",
+    "@typescript-eslint/parser": "^8.38.0",
+    "eslint": "^9.32.0",
+    "typescript": "^5.9.2"
+  }
+}
