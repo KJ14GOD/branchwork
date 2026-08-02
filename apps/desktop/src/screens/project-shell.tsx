@@ -5,6 +5,7 @@ import { AddProjectDialog, type PickedRepository } from "../components/add-proje
 import { HumanMark } from "../components/identity";
 import { truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
+import type { InspectorSection } from "../components/inspector";
 
 
 /**
@@ -84,6 +85,24 @@ function JoinDialog({ onJoined, onClose }: { onJoined: () => void; onClose: () =
   );
 }
 
+function PanelGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+      <path d="M10 2.75v10.5" />
+    </svg>
+  );
+}
+
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
@@ -145,6 +164,11 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
+  /** The docked evidence panel. Held here because its toggle lives in the top
+   *  bar and because the panel outlives the workstream tab beneath it. */
+  const [inspector, setInspector] = useState<InspectorSection | null>(null);
+  /** Reopening returns to whatever section you were last reading. */
+  const lastSection = useRef<InspectorSection>("overview");
   /** Which projects are showing their workstreams. Disclosure is the reader's
    *  choice and survives selection moving elsewhere. */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -304,6 +328,20 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     setRailOpen(false);
   };
 
+  /**
+   * Clicking anywhere on a project row opens it — the name is the control, not
+   * just the arrow beside it. Clicking the project you are already reading
+   * closes it again, so one target both reveals and hides.
+   */
+  const openProject = (project: Project) => {
+    const showing = expanded.has(project.key) && selection?.projectKey === project.key;
+    if (showing) {
+      toggleExpanded(project.key);
+      return;
+    }
+    selectProject(project);
+  };
+
   const openAttention = (mission: Mission) => {
     const repo = mission.repository;
     if (!repo) return;
@@ -325,10 +363,11 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     setMissions((prev) => (prev ? [...prev, mission] : [mission]));
     const repo = mission.repository;
     if (repo) {
-      setSelection({
-        projectKey: keyOf(repo.provider, repo.providerRepoId),
-        missionId: mission.missionId
-      });
+      const key = keyOf(repo.provider, repo.providerRepoId);
+      setSelection({ projectKey: key, missionId: mission.missionId });
+      // A workstream you just created should be visible in the rail, not
+      // hidden behind a project that never opened.
+      setExpanded((prev) => new Set(prev).add(key));
     }
   }, []);
 
@@ -345,6 +384,25 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         </button>
         <span className="brand">Novus</span>
         <span className="spacer" />
+        <button
+          className={inspector ? "icon-button active" : "icon-button"}
+          onClick={() =>
+            setInspector((current) => {
+              if (current) {
+                lastSection.current = current;
+                return null;
+              }
+              return lastSection.current;
+            })
+          }
+          aria-pressed={inspector !== null}
+          aria-label={inspector ? "Hide the evidence panel" : "Show the evidence panel"}
+          title={inspector ? "Hide details" : "Show details"}
+          disabled={!selectedProject || selection?.missionId === null}
+          data-testid="panel-toggle"
+        >
+          <PanelGlyph />
+        </button>
         <HumanMark login={user.login} name={user.name} />
         <button className="btn btn-text" onClick={() => novus().auth.signOut()}>
           Sign out
@@ -410,7 +468,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                     </button>
                     <button
                       className="side-open"
-                      onClick={() => selectProject(project)}
+                      onClick={() => openProject(project)}
                       title={away ? "On another machine" : project.name}
                       aria-current={selected}
                       data-testid="project-row"
@@ -485,6 +543,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               project={selectedProject}
               details={details}
               selectedMissionId={selection.missionId}
+              inspector={inspector}
+              onInspector={setInspector}
               onSelectTab={handleSelectTab}
               onDetail={handleDetail}
               onCreated={handleCreated}

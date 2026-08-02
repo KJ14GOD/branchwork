@@ -58,6 +58,8 @@ export function ProjectRoom({
   project,
   details,
   selectedMissionId,
+  inspector,
+  onInspector,
   onSelectTab,
   onDetail,
   onCreated
@@ -65,12 +67,15 @@ export function ProjectRoom({
   project: Project;
   details: Record<string, MissionDetailResponse>;
   selectedMissionId: string | null;
+  /** Owned by the shell: the panel is docked at shell level and its toggle
+   *  lives in the top bar, so it must outlive a workstream tab. */
+  inspector: InspectorSection | null;
+  onInspector: (section: InspectorSection | null) => void;
   onSelectTab: (missionId: string | null) => void;
   onDetail: (detail: MissionDetailResponse) => void;
   onCreated: (mission: Mission) => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [inspector, setInspector] = useState<InspectorSection | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
@@ -159,9 +164,9 @@ export function ProjectRoom({
       const key = event.key.toLowerCase();
       if (chordRef.current) {
         chordRef.current = false;
-        if (key === "c") setInspector("changes");
-        else if (key === "v") setInspector("verification");
-        else if (key === "a") setInspector(null);
+        if (key === "c") onInspector("changes");
+        else if (key === "v") onInspector("verification");
+        else if (key === "a") onInspector(null);
         return;
       }
       if (key === "g") {
@@ -178,14 +183,15 @@ export function ProjectRoom({
   }, [detail]);
 
   const closeInspector = useCallback(() => {
-    setInspector(null);
+    onInspector(null);
     inspectorTriggerRef.current?.focus();
-  }, []);
+  }, [onInspector]);
 
   /** Open that section, or close the panel if it is already the one showing. */
-  const toggleInspector = useCallback((section: InspectorSection) => {
-    setInspector((current) => (current === section ? null : section));
-  }, []);
+  const toggleInspector = useCallback(
+    (section: InspectorSection) => onInspector(inspector === section ? null : section),
+    [inspector, onInspector]
+  );
 
   const submit = async ({
     body,
@@ -385,7 +391,7 @@ export function ProjectRoom({
                 <button
                   className="btn btn-secondary"
                   onClick={() =>
-                    setInspector(stateLine.action?.kind === "verification" ? "verification" : "changes")
+                    onInspector(stateLine.action?.kind === "verification" ? "verification" : "changes")
                   }
                   data-testid="state-action"
                 >
@@ -506,7 +512,7 @@ export function ProjectRoom({
                   <span>{feed.setup.label}</span>
                   <button
                     className="btn btn-text workspace-row-action"
-                    onClick={() => setInspector("overview")}
+                    onClick={() => onInspector("overview")}
                     data-testid="setup-overview"
                   >
                     Overview
@@ -523,8 +529,8 @@ export function ProjectRoom({
                     controllerUserId={detail.control.holderUserId}
                     controllerLogin={detail.control.holderLogin}
                     viewerIsController={isController}
-                    onOpenChanges={() => setInspector("changes")}
-                    onOpenVerification={() => setInspector("verification")}
+                    onOpenChanges={() => onInspector("changes")}
+                    onOpenVerification={() => onInspector("verification")}
                     actions={block.direction ? directionActions(block.direction) : null}
                   />
                 )
@@ -661,7 +667,7 @@ export function ProjectRoom({
         <Inspector
           detail={detail}
           section={inspector}
-          onSection={setInspector}
+          onSection={onInspector}
           onClose={closeInspector}
           onDetail={onDetail}
           onRevoke={() => void runAction(novus().control.revoke(detail.mission.missionId))}

@@ -371,6 +371,38 @@ describe("the Mission Room", () => {
     await first.page.screenshot({ path: join(evidenceDir, "18-room-narrow.png") });
     await resizeWindow(first.app, 1440, 900);
 
+    // The evidence panel is docked, not modal: opening it leaves the trace
+    // visible beside it, and one control in the top bar both opens and closes.
+    const panel = first.page.getByTestId("inspector");
+    const panelToggle = first.page.getByTestId("panel-toggle");
+    expect(await panel.count()).toBe(0);
+    await panelToggle.click();
+    await panel.waitFor({ timeout: 10_000 });
+    expect(await first.page.getByTestId("msg-user").first().isVisible()).toBe(true);
+    expect(await first.page.getByTestId("inspector-scrim").count()).toBe(0);
+    await first.page.screenshot({ path: join(evidenceDir, "19-panel-docked.png") });
+    await panelToggle.click();
+    await panel.waitFor({ state: "detached", timeout: 10_000 });
+
+    // A section trigger also toggles: pressing the one already showing closes it.
+    await first.page.getByTestId("open-changes").click();
+    await panel.waitFor({ timeout: 10_000 });
+    await first.page.getByTestId("open-changes").click();
+    await panel.waitFor({ state: "detached", timeout: 10_000 });
+
+    // Disclosure is the whole project row, not only the arrow beside it.
+    const workstreams = first.page.getByTestId("workstream-row");
+    expect(await workstreams.count()).toBeGreaterThan(0);
+    await first.page.getByTestId("project-row").filter({ hasText: repoName }).click();
+    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBe(0);
+    await first.page.getByTestId("project-row").filter({ hasText: repoName }).click();
+    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBeGreaterThan(0);
+    // And the arrow alone still works, independently of selection.
+    await first.page.getByTestId("project-twisty").first().click();
+    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBe(0);
+    await first.page.getByTestId("project-twisty").first().click();
+    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBeGreaterThan(0);
+
     await first.app.close();
 
     // Relaunch: the entire conversation reconstructs from the server.

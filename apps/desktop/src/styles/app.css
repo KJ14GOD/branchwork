@@ -637,6 +637,38 @@ body {
   text-align: left;
 }
 
+/* An icon control with no adjacent text: it carries a tooltip and a label,
+   and it is the only shape in the product allowed to (DESIGN.md#icons). */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--m-press) var(--ease);
+}
+
+.icon-button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.icon-button.active {
+  background: var(--selected);
+  color: var(--text-1);
+}
+
+.icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .side-child {
   padding-left: var(--s-5);
   color: var(--text-2);
