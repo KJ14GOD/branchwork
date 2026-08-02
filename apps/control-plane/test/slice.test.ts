@@ -62,6 +62,18 @@ describe("authentication and sessions", () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it("refuses to start real sign-in without OAuth credentials, with a named error", async () => {
+    const unconfigured = buildServer(
+      db,
+      loadConfig({ ...process.env, NOVUS_FAKE_GITHUB: undefined, NOVUS_GITHUB_CLIENT_ID: "", NODE_ENV: "test" })
+    );
+    await unconfigured.ready();
+    const res = await unconfigured.inject({ method: "POST", url: "/auth/github/start" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error.code).toBe("auth_unconfigured");
+    await unconfigured.close();
+  });
+
   it("issues a claimable session exactly once", async () => {
     const start = await app.inject({ method: "POST", url: "/auth/github/start" });
     const { state, authorizeUrl } = start.json();

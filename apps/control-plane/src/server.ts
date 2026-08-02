@@ -43,7 +43,17 @@ export function buildServer(db: Db, config: Config): FastifyInstance {
 
   app.get("/health", async () => ({ ok: true }));
 
-  app.post("/auth/github/start", async () => startFlow(db, config));
+  app.post("/auth/github/start", async (_request, reply) => {
+    if (!config.fakeGithub && !config.githubClientId) {
+      return sendError(
+        reply,
+        503,
+        "auth_unconfigured",
+        "GitHub sign-in isn't configured yet: the control plane has no OAuth app credentials."
+      );
+    }
+    return startFlow(db, config);
+  });
 
   if (config.fakeGithub) {
     // Test-only upstream stand-in; refuses to exist in production (config.ts).

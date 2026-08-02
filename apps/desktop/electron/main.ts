@@ -82,12 +82,13 @@ async function beginSignIn(): Promise<IpcResult<null>> {
     return ok(null);
   } catch (error) {
     console.error("sign-in start failed:", error);
-    setAuthStatus({
-      state: "failed",
-      message: error instanceof ApiError && error.code === "offline"
+    const message =
+      error instanceof ApiError && error.code === "offline"
         ? "Can't reach Novus. Check your connection and try again."
-        : "Sign-in couldn't start. Try again."
-    });
+        : error instanceof ApiError && error.code === "auth_unconfigured"
+          ? "GitHub sign-in isn't configured: add the OAuth app credentials to .env and restart."
+          : "Sign-in couldn't start. Try again.";
+    setAuthStatus({ state: "failed", message });
     return fail(error);
   }
 }

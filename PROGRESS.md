@@ -22,7 +22,7 @@ The previous prototype was removed in full (commit `50c4851`); none of its behav
 
 | Capability | Status |
 | --- | --- |
-| Authentication and sessions | Partial — GitHub OAuth desktop flow (D-027), first-party revocable sessions, hashed tokens, OS-backed credential storage. The live-GitHub leg has not run: it needs OAuth app credentials; all runs so far used the gated fake upstream over real session machinery |
+| Authentication and sessions | Partial — GitHub OAuth desktop flow (D-027), first-party revocable sessions, hashed tokens, OS-backed credential storage. Unconfigured OAuth now fails fast with a named 503 surfaced in the setup card instead of opening a doomed browser tab (observed live as a GitHub 404, 2026-08-01). The live-GitHub leg has not run: it needs OAuth app credentials; all runs so far used the gated fake upstream over real session machinery |
 | Organizations and membership | Partial — personal org auto-provisioned at first sign-in; server-side org scoping proven (cross-org missions invisible, 404 not 403). No multi-member orgs, no org management |
 | Repository connection (GitHub App) | Not started |
 | Repository branches, checkpoints, and workspace synchronization | Not started |
