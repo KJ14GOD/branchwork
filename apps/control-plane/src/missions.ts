@@ -13,6 +13,8 @@ import type { AuthedContext } from "./auth.ts";
 import {
   BranchConflictError,
   ProviderTransientError,
+  ProviderUnconfiguredError,
+  UnknownBaseError,
   type RepositoryProvider
 } from "./repo-provider.ts";
 
@@ -173,29 +175,64 @@ export async function createMission(
   if (!available) throw new MissionCreationError("unknown_repository", "That repository isn't available.");
 
   const missionId = newMissionId();
-  const created = await withTransaction(db, async (client) => {
-    const duplicate = await client.query(
-      "select mission_id from missions where org_id = $1 and creation_key = $2",
-      [ctx.orgId, input.creationKey]
-    );
-    if (duplicate.rowCount && duplicate.rows[0]) return duplicate.rows[0].mission_id as string;
+  let created: string;
+  try {
+    created = await createMissionTx(db, ctx, input, available, missionId);
+  } catch (error) {
+    const unique = (error as { code?: string; constraint?: string }) ?? {};
+    if (unique.code === "23505" && (unique.constraint ?? "").includes("creation_key")) {
+      // Concurrent submissions with the same creationKey: return the winner's mission.
+      const winner = await db.query(
+        "select mission_id from missions where org_id = $1 and creation_key = $2",
+        [ctx.orgId, input.creationKey]
+      );
+      if (!winner.rows[0]) throw error;
+      created = winner.rows[0].mission_id as string;
+    } else if (unique.code === "23505" && (unique.constraint ?? "").startsWith("repositories_")) {
+      // First-mission-on-a-repo race: the repo now exists; one retry resolves it.
+      created = await createMissionTx(db, ctx, input, available, missionId);
+    } else {
+      throw error;
+    }
+  }
 
-    const repoId = await upsertRepository(client, ctx, available);
-    await client.query(
-      `insert into missions (mission_id, org_id, goal, success_criteria, primary_state, created_by, repo_id, creation_key)
-       values ($1, $2, $3, $4, 'new_mission', $5, $6, $7)`,
-      [missionId, ctx.orgId, input.goal, input.successCriteria, ctx.userId, repoId, input.creationKey]
-    );
-    await client.query(
-      "insert into participants (mission_id, user_id, mission_role) values ($1, $2, 'mission_admin')",
-      [missionId, ctx.userId]
-    );
-    const missionBranch = `novus/m-${missionId.slice(4, 12)}`;
-    await client.query(
-      `insert into workstreams (wst_id, mission_id, name, base_ref, base_sha, mission_branch, branch_status)
-       values ($1, $2, 'main', $3, $4, $5, 'pending')`,
-      [newWorkstreamId(), missionId, input.baseRef, input.baseSha, missionBranch]
-    );
+  await attemptBranchCreation(db, provider, ctx, created);
+
+  const detail = await getMission(db, ctx, created);
+  if (!detail || !detail.workstream) throw new Error("mission vanished during creation");
+  return { mission: detail.mission, workstream: detail.workstream };
+}
+
+async function createMissionTx(
+  db: Db,
+  ctx: AuthedContext,
+  input: CreateMissionInput,
+  available: { providerRepoId: string; name: string; defaultBranch: string },
+  missionId: string
+): Promise<string> {
+  return withTransaction(db, async (client) => {
+      const duplicate = await client.query(
+        "select mission_id from missions where org_id = $1 and creation_key = $2",
+        [ctx.orgId, input.creationKey]
+      );
+      if (duplicate.rowCount && duplicate.rows[0]) return duplicate.rows[0].mission_id as string;
+
+      const repoId = await upsertRepository(client, ctx, available);
+      await client.query(
+        `insert into missions (mission_id, org_id, goal, success_criteria, primary_state, created_by, repo_id, creation_key)
+         values ($1, $2, $3, $4, 'new_mission', $5, $6, $7)`,
+        [missionId, ctx.orgId, input.goal, input.successCriteria, ctx.userId, repoId, input.creationKey]
+      );
+      await client.query(
+        "insert into participants (mission_id, user_id, mission_role) values ($1, $2, 'mission_admin')",
+        [missionId, ctx.userId]
+      );
+      const missionBranch = `novus/m-${missionId.slice(4, 12)}`;
+      await client.query(
+        `insert into workstreams (wst_id, mission_id, repo_id, name, base_ref, base_sha, mission_branch, branch_status)
+         values ($1, $2, $3, 'main', $4, $5, $6, 'pending')`,
+        [newWorkstreamId(), missionId, repoId, input.baseRef, input.baseSha, missionBranch]
+      );
     await recordEvent(client, {
       orgId: ctx.orgId,
       missionId,
@@ -205,27 +242,21 @@ export async function createMission(
       actorId: ctx.userId,
       payload: { goal: input.goal, successCriteria: input.successCriteria, repository: available.name }
     });
-    await recordEvent(client, {
-      orgId: ctx.orgId,
-      missionId,
-      seq: 2,
-      kind: "workstream.created",
-      actorKind: "user",
-      actorId: ctx.userId,
-      payload: {
-        baseRef: input.baseRef,
-        baseSha: input.baseSha,
-        missionBranch
-      }
-    });
-    return missionId;
+      await recordEvent(client, {
+        orgId: ctx.orgId,
+        missionId,
+        seq: 2,
+        kind: "workstream.created",
+        actorKind: "user",
+        actorId: ctx.userId,
+        payload: {
+          baseRef: input.baseRef,
+          baseSha: input.baseSha,
+          missionBranch
+        }
+      });
+      return missionId;
   });
-
-  await attemptBranchCreation(db, provider, ctx, created);
-
-  const detail = await getMission(db, ctx, created);
-  if (!detail || !detail.workstream) throw new Error("mission vanished during creation");
-  return { mission: detail.mission, workstream: detail.workstream };
 }
 
 /**
@@ -243,16 +274,44 @@ export async function attemptBranchCreation(
     `select w.wst_id, w.mission_branch, w.base_sha, w.branch_status, r.provider_repo_id
        from workstreams w
        join missions m on m.mission_id = w.mission_id
-       join repositories r on r.repo_id = m.repo_id
+       join repositories r on r.repo_id = w.repo_id
       where w.mission_id = $1 and m.org_id = $2`,
     [missionId, ctx.orgId]
   );
   const row = rows.rows[0];
   if (!row || row.branch_status === "created") return;
 
+  // Serialize retries: only one caller moves failed → pending; the loser exits
+  // quietly instead of emitting a duplicate outcome event (D-031 audit).
+  if (row.branch_status === "failed") {
+    const claimed = await db.query(
+      "update workstreams set branch_status = 'pending', branch_error = null where wst_id = $1 and branch_status = 'failed' returning wst_id",
+      [row.wst_id]
+    );
+    if (claimed.rowCount === 0) return;
+  }
+
+  // Only provider outcomes decide branch state; a database failure here must
+  // propagate rather than record a false 'failed' for a branch that exists.
+  let outcome: { ok: true } | { ok: false; message: string };
   try {
     await provider.ensureBranch(row.provider_repo_id, row.mission_branch, row.base_sha);
-    await withTransaction(db, async (client) => {
+    outcome = { ok: true };
+  } catch (error) {
+    outcome = {
+      ok: false,
+      message:
+        error instanceof BranchConflictError ||
+        error instanceof ProviderTransientError ||
+        error instanceof UnknownBaseError ||
+        error instanceof ProviderUnconfiguredError
+          ? error.message
+          : "Branch creation failed."
+    };
+  }
+
+  await withTransaction(db, async (client) => {
+    if (outcome.ok) {
       const updated = await client.query(
         "update workstreams set branch_status = 'created', branch_error = null where wst_id = $1 and branch_status <> 'created' returning wst_id",
         [row.wst_id]
@@ -268,18 +327,10 @@ export async function attemptBranchCreation(
           payload: { missionBranch: row.mission_branch, baseSha: row.base_sha }
         });
       }
-    });
-  } catch (error) {
-    const message =
-      error instanceof BranchConflictError
-        ? error.message
-        : error instanceof ProviderTransientError
-          ? error.message
-          : "Branch creation failed.";
-    await withTransaction(db, async (client) => {
+    } else {
       const updated = await client.query(
         "update workstreams set branch_status = 'failed', branch_error = $2 where wst_id = $1 and branch_status <> 'created' returning wst_id",
-        [row.wst_id, message]
+        [row.wst_id, outcome.message]
       );
       if (updated.rowCount) {
         await recordEvent(client, {
@@ -289,11 +340,11 @@ export async function attemptBranchCreation(
           kind: "workstream.branch_failed",
           actorKind: "system",
           actorId: "control-plane",
-          payload: { missionBranch: row.mission_branch, error: message }
+          payload: { missionBranch: row.mission_branch, error: outcome.message }
         });
       }
-    });
-  }
+    }
+  });
 }
 
 const MISSION_SELECT = `

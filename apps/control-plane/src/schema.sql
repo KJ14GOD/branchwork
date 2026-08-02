@@ -33,13 +33,15 @@ create table if not exists sessions (
 );
 
 -- Desktop OAuth handshake state: one row per attempt, claimable exactly once.
+-- Holds no credentials: the session token is minted at claim time (D-031 audit),
+-- so an unclaimed flow row contains only the state nonce and the user it resolved to.
 create table if not exists auth_flows (
   state         text primary key,
   created_at    timestamptz not null default now(),
   expires_at    timestamptz not null,
-  session_token text,
   user_id       text references users(user_id)
 );
+alter table auth_flows drop column if exists session_token;
 
 create table if not exists repositories (
   repo_id           text primary key,
@@ -72,6 +74,7 @@ create unique index if not exists missions_creation_key on missions (org_id, cre
 create table if not exists workstreams (
   wst_id         text primary key,
   mission_id     text not null references missions(mission_id),
+  repo_id        text not null references repositories(repo_id),
   name           text not null,
   approach_flag  boolean not null default false,
   base_ref       text not null,
@@ -81,9 +84,11 @@ create table if not exists workstreams (
   branch_error   text,
   created_at     timestamptz not null default now()
 );
+-- V0 constraint: exactly one workstream per mission (multi-workstream is a later, deliberate change).
 create unique index if not exists workstreams_one_per_mission on workstreams (mission_id);
--- One branch name per repository: the branch belongs to the repo, via the mission.
-create unique index if not exists workstreams_branch_unique on workstreams (mission_branch, mission_id);
+drop index if exists workstreams_branch_unique;
+-- One branch name per repository — the invariant the audit demanded be real.
+create unique index if not exists workstreams_repo_branch_unique on workstreams (repo_id, mission_branch);
 
 create table if not exists participants (
   mission_id  text not null references missions(mission_id),

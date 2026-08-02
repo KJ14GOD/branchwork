@@ -268,6 +268,8 @@ A full IDE; a generic Kanban board; a model marketplace; automatic approach rank
 
 ### Extension points (schema or protocol exists; no V0 UI)
 
+An open product question, deliberately undecided (D-031): whether Novus can create or attach **local** repositories rather than GitHub-hosted ones — it tensions with the GitHub exchange boundary (D-025) and waits for a real decision.
+
 Additional harnesses (Droid, OpenCode); local, enterprise, and third-party execution providers; a local mirror that explicitly checks out a cloud workstream's branch; cross-org mission guests; org-definable policy (autonomy ceilings, retention); API-driven mission creation and automation; approach comparison workflows; org-level audit export.
 
 ## Roadmap

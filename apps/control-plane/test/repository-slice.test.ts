@@ -263,17 +263,11 @@ describe("idempotent creation", () => {
     }
   });
 
-  // DEFECT (documented, not fixed — src/ is frozen): createMission checks for
-  // an existing creation_key before inserting, but concurrent requests all pass
-  // that check before any of them commits. The losers then die on a 23505 that
-  // nothing catches (missions.ts createMission, server.ts POST /missions), so
-  // Fastify answers 500 instead of the idempotent 201 the creationKey contract
-  // (D-031) promises. Observed bodies leak the raw constraint name to the
-  // client: "missions_creation_key" when the repository row already exists,
-  // "repositories_org_id_provider_provider_repo_id_key" when the burst is the
-  // repo's first mission (upsertRepository select-then-insert has the same
-  // race). Marked .fails: it passes the day the race is handled.
-  it.fails("DEFECT: losing concurrent duplicates should get the idempotent 201, not 500", async () => {
+  // Regression lock for the race Worker C/D found: concurrent same-creationKey
+  // submissions used to 500 the losers with a leaked constraint name. The fix
+  // catches the 23505 (both the creation_key and first-mission repositories_
+  // variants) and returns the winner's mission to every caller.
+  it("losing concurrent duplicates get the idempotent 201, not 500", async () => {
     const payload = await missionPayload(app, "9001", { goal: "Concurrent losers deserve the winner" });
     const responses = await Promise.all(
       Array.from({ length: 8 }, () => postMission(app, { ...payload }))

@@ -26,6 +26,11 @@ export class UnknownRepositoryError extends Error {
     super("No such repository is available to this organization.");
   }
 }
+export class UnknownBaseError extends Error {
+  constructor() {
+    super("The base revision no longer exists on the provider. Reselect the repository to pin a fresh base.");
+  }
+}
 
 export interface RepositoryProvider {
   readonly kind: "fake" | "unconfigured";
@@ -103,6 +108,10 @@ export class FakeRepositoryProvider implements RepositoryProvider {
       if (existing !== fromSha) throw new BranchConflictError(branch);
       return { alreadyExisted: true };
     }
+
+    // A live provider rejects branch creation from a commit it doesn't know;
+    // the fake must too, or stale-base bugs pass silently (D-031 audit).
+    if (fromSha !== repo.headSha) throw new UnknownBaseError();
 
     const failureKey = `${providerRepoId}:${branch}`;
     const seen = this.failuresSeen.get(failureKey) ?? 0;

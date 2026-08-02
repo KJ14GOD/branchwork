@@ -100,7 +100,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     if (!parsed.success) return sendError(reply, 400, "bad_state", "Malformed claim.");
     let token: string | null;
     try {
-      token = await claimFlow(db, parsed.data.state);
+      token = await claimFlow(db, config, parsed.data.state);
     } catch {
       return sendError(reply, 410, "flow_gone", "Sign-in attempt expired. Start again.");
     }
