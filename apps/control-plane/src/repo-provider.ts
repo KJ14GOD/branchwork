@@ -130,5 +130,12 @@ export function selectRepositoryProvider(config: Config, env: NodeJS.ProcessEnv 
   if (fakeRepos && env.NODE_ENV === "production") {
     throw new Error("Fake repository provider must never be enabled in production");
   }
-  return fakeRepos ? new FakeRepositoryProvider() : new UnconfiguredRepositoryProvider();
+  if (fakeRepos) return new FakeRepositoryProvider();
+  if (config.githubAppId && config.githubAppPem) {
+    return new GithubAppRepositoryProvider(config.githubAppId, config.githubAppPem);
+  }
+  return new UnconfiguredRepositoryProvider();
 }
+
+// Placed after the classes it selects among to avoid a cycle at type level.
+import { GithubAppRepositoryProvider } from "./github-app-provider.ts";

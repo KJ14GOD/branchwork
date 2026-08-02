@@ -26,6 +26,7 @@ import {
   selectRepositoryProvider,
   type RepositoryProvider
 } from "./repo-provider.ts";
+import { registerGithubAppSetup } from "./github-app.ts";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -56,6 +57,8 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
   };
 
   app.get("/health", async () => ({ ok: true }));
+
+  registerGithubAppSetup(app, config);
 
   app.post("/auth/github/start", async (_request, reply) => {
     if (!config.fakeGithub && !config.githubClientId) {
