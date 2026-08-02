@@ -400,8 +400,10 @@ function registerIpc(): void {
 
 function createWindow(): void {
   window = new BrowserWindow({
-    width: 1180,
-    height: 760,
+    // Above DESIGN.md's 1200px threshold, so the app opens into the full shell
+    // rather than the band where the sidebar collapses to an overlay.
+    width: 1440,
+    height: 900,
     minWidth: 720,
     minHeight: 480,
     title: "Novus",

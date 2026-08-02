@@ -15,6 +15,7 @@ import { workstreamAccess } from "./authz.ts";
 import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { markDirectionApplied } from "./directions.ts";
+import { dispatchQueuedForController } from "./executions.ts";
 import { nextSeq, recordEvent, recordEventAtSeq } from "./events.ts";
 import { newCheckId, newCheckpointId, newFileChangeId, newRunnerId, newSecretToken } from "./ids.ts";
 import type { RouteDeps } from "./routes.ts";
@@ -539,6 +540,16 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
         `${registration.taken}'s machine is already the runner for this workstream.`
       );
     }
+    // A workstream's first direction is submitted before its host has finished
+    // enrolling, so it was deferred with a reason. Now there is somewhere to
+    // send it; without this the room would sit on "queued" forever waiting for
+    // nobody.
+    try {
+      await dispatchQueuedForController({ db: deps.db }, params.data.workstreamId);
+    } catch (error) {
+      request.log?.error?.(error);
+    }
+
     // The only time the usable credential exists outside the desktop's memory.
     return { runnerId, credential, expiresAt: registration.expiresAt.toISOString() };
   });

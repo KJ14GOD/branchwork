@@ -83,7 +83,8 @@ export async function submitDirection(
   db: Db,
   access: MissionAccess,
   author: { userId: string; login: string },
-  body: string
+  body: string,
+  harness: { model: string; effort: string }
 ): Promise<SubmittedDirection> {
   if (!access.workstreamId) {
     throw new AuthorizationError("no_workstream", "This mission has no workstream yet.", 409);
@@ -94,9 +95,9 @@ export async function submitDirection(
 
   const row = await withTransaction(db, async (client) => {
     const inserted = await client.query(
-      `insert into directions (dir_id, org_id, mission_id, wst_id, author_user_id, body, state)
-       values ($1, $2, $3, $4, $5, $6, 'queued') returning dir_id`,
-      [dirId, access.orgId, access.missionId, workstreamId, author.userId, body]
+      `insert into directions (dir_id, org_id, mission_id, wst_id, author_user_id, body, state, model, effort)
+       values ($1, $2, $3, $4, $5, $6, 'queued', $7, $8) returning dir_id`,
+      [dirId, access.orgId, access.missionId, workstreamId, author.userId, body, harness.model, harness.effort]
     );
     const id = inserted.rows[0]?.dir_id as string;
     await recordEvent(client, {
@@ -109,7 +110,7 @@ export async function submitDirection(
       actorLogin: author.login,
       causeDirectionId: id,
       causeLeaseId: access.leaseId,
-      payload: { body, authorIsController }
+      payload: { body, authorIsController, model: harness.model, effort: harness.effort }
     });
     if (!authorIsController) {
       // The visible product state: attributed, queued, waiting for whoever

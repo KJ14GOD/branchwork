@@ -352,6 +352,59 @@ describe("who may displace a runner", () => {
   });
 });
 
+describe("enrolment unblocks what was already authorized", () => {
+  // A workstream's first direction is submitted before its host has finished
+  // enrolling, so it is deferred. If nothing re-dispatched on enrolment the
+  // room would sit on "queued" forever, waiting for a machine that had in fact
+  // arrived — the defect the interface slice found by walking the real flow.
+  it("dispatches the controller's deferred direction the moment a machine enrols", async () => {
+    const lane = await createMissionLane();
+
+    const submitted = await direct(lane.missionId, "Add a session-expiry guard");
+    expect(submitted.statusCode).toBe(200);
+    const deferred = submitted.json();
+    expect(deferred.dispatched).toBe(false);
+    expect(deferred.deferred).toMatch(/no runner/i);
+    expect(deferred.direction.state).toBe("queued");
+
+    const enrolled = await enrol(owner, lane.workstreamId, "late-machine");
+    expect(enrolled.statusCode).toBe(200);
+
+    const queued = await commandsFor(enrolled.json().credential as string);
+    expect(queued.commands).toHaveLength(1);
+    expect(queued.commands[0].kind).toBe("start_execution");
+    // It runs as it was written, not under whatever defaults happened to apply.
+    expect(queued.commands[0].payload.body).toBe("Add a session-expiry guard");
+    expect(queued.commands[0].payload.model).toBe("claude-fable-5");
+    expect(queued.commands[0].payload.effort).toBe("high");
+  });
+
+  it("leaves a non-controller's queued direction alone — a machine arriving is not authority", async () => {
+    const lane = await createMissionLane();
+    const maya = await addParticipant(lane.missionId, "maya-late");
+
+    const submitted = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/direction`,
+      headers: bearer(maya),
+      payload: { body: "Also rotate the signing key", model: "claude-fable-5", effort: "high" }
+    });
+    expect(submitted.statusCode).toBe(200);
+    expect(submitted.json().dispatched).toBe(false);
+
+    const enrolled = await enrol(owner, lane.workstreamId, "late-machine");
+    expect(enrolled.statusCode).toBe(200);
+
+    // Nothing to run: the baton holder never authorized it.
+    const queued = await commandsFor(enrolled.json().credential as string);
+    expect(queued.commands).toHaveLength(0);
+    const rows = await harness.db.query("select state from directions where wst_id = $1", [
+      lane.workstreamId
+    ]);
+    expect(rows.rows[0]?.state).toBe("queued");
+  });
+});
+
 describe("command transport", () => {
   it("delivers a runner only its own commands, in sequence, and marks them delivered", async () => {
     const first = await createLane();

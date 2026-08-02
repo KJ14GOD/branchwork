@@ -288,6 +288,10 @@ create table if not exists directions (
   consumed_by_execution_id text references executions(exe_id)
 );
 create index if not exists directions_by_workstream on directions (wst_id, ordinal);
+-- The model and effort the author chose, so a direction dispatched later runs
+-- as it was written rather than under whatever the last execution happened to use.
+alter table directions add column if not exists model text;
+alter table directions add column if not exists effort text;
 
 -- ---------------------------------------------------------------------------
 -- Durable command transport, control plane → host runner (D-035). Ordered per

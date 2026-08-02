@@ -116,6 +116,52 @@ async function activeExecution(client: pg.PoolClient, workstreamId: string): Pro
 }
 
 /**
+ * Dispatches whatever the controller already authorized but nothing could
+ * carry yet. A workstream's very first direction is submitted before its host
+ * has finished enrolling as the runner, so it is deferred with a reason and
+ * would otherwise sit there: the room would say "queued" for work nobody was
+ * waiting on. Enrolment calls this, and the controller's own oldest queued
+ * direction goes out at once.
+ *
+ * Only the lease holder's own direction is dispatched. Someone else's still
+ * waits for an explicit apply — a runner appearing is not authority.
+ */
+export async function dispatchQueuedForController(
+  deps: { db: RouteDeps["db"] },
+  workstreamId: string
+): Promise<DispatchResult | null> {
+  const pending = await deps.db.query(
+    `select d.dir_id, d.mission_id, d.model, d.effort, u.user_id, u.login
+       from directions d
+       join control_leases l on l.wst_id = d.wst_id and l.state = 'held'
+                            and l.holder_user_id = d.author_user_id
+       join users u on u.user_id = d.author_user_id
+      where d.wst_id = $1 and d.state = 'queued'
+      order by d.ordinal limit 1`,
+    [workstreamId]
+  );
+  const row = pending.rows[0];
+  if (!row) return null;
+
+  // The author's own standing decides this, not the enroller's: authority is
+  // read from durable state at command time (ARCHITECTURE.md#authorization).
+  const access = await missionAccess(deps.db, { userId: row.user_id as string }, row.mission_id as string);
+  if (!access || !access.isController) return null;
+  if (!access.capabilities.includes("execution.start")) return null;
+
+  return dispatchDirection(
+    deps,
+    access,
+    { userId: row.user_id as string, login: row.login as string },
+    {
+      directionId: row.dir_id as string,
+      model: (row.model as string | null) ?? DEFAULT_MODEL,
+      effort: (row.effort as string | null) ?? DEFAULT_EFFORT
+    }
+  );
+}
+
+/**
  * Sends an authorized direction toward the host runner: starts a new execution
  * when the workstream is idle, or applies it to the running one. Enqueues a
  * durable command; it never marks the direction Applied — only the runner's
@@ -281,7 +327,10 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
     requireCapability(access, "direction.submit");
 
     const actor = { userId: ctx.userId, login: ctx.login };
-    const submitted = await submitDirection(deps.db, access, actor, body.data.body);
+    const submitted = await submitDirection(deps.db, access, actor, body.data.body, {
+      model: body.data.model,
+      effort: body.data.effort
+    });
     // Only the controller's own direction proceeds toward the harness; anyone
     // else's waits, visibly, for whoever holds the baton.
     const dispatch = submitted.authorIsController

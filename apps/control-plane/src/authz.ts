@@ -98,7 +98,9 @@ export function capabilitiesFor(role: MissionRole, isController: boolean): Capab
  */
 export async function missionAccess(
   db: Db | pg.PoolClient,
-  ctx: AuthedContext,
+  /** Only the caller's identity is read; a full session is not required, so a
+   *  server-side path can resolve someone else's standing deliberately. */
+  ctx: Pick<AuthedContext, "userId">,
   missionId: string
 ): Promise<MissionAccess | null> {
   const result = await db.query(
