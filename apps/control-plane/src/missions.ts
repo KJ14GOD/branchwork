@@ -98,7 +98,7 @@ async function recordEvent(
     missionId: string;
     seq: number;
     kind: string;
-    actorKind: "user" | "system";
+    actorKind: "user" | "system" | "harness" | "runner";
     actorId: string;
     payload: Record<string, unknown>;
   }
@@ -509,6 +509,65 @@ export async function reportBranchOutcome(
     }
   });
   return row.mission_id as string;
+}
+
+/** Records a submitted direction as a durable, attributed event. */
+export async function submitDirection(
+  db: Db,
+  ctx: AuthedContext,
+  missionId: string,
+  body: string
+): Promise<boolean> {
+  const owns = await db.query("select 1 from missions where mission_id = $1 and org_id = $2", [
+    missionId,
+    ctx.orgId
+  ]);
+  if (!owns.rowCount) return false;
+  await withTransaction(db, async (client) => {
+    await recordEvent(client, {
+      orgId: ctx.orgId,
+      missionId,
+      seq: await nextSeq(client, missionId),
+      kind: "direction.submitted",
+      actorKind: "user",
+      actorId: ctx.userId,
+      payload: { body }
+    });
+  });
+  return true;
+}
+
+/**
+ * Batch-records harness/runner activity reported by a client machine — claims
+ * from the machine that ran the work, with the actor forced server-side.
+ */
+export async function reportExecutionEvents(
+  db: Db,
+  ctx: AuthedContext,
+  missionId: string,
+  events: { kind: string; payload: Record<string, unknown> }[]
+): Promise<boolean> {
+  const owns = await db.query("select 1 from missions where mission_id = $1 and org_id = $2", [
+    missionId,
+    ctx.orgId
+  ]);
+  if (!owns.rowCount) return false;
+  await withTransaction(db, async (client) => {
+    let seq = await nextSeq(client, missionId);
+    for (const event of events) {
+      await recordEvent(client, {
+        orgId: ctx.orgId,
+        missionId,
+        seq,
+        kind: event.kind,
+        actorKind: event.kind.startsWith("harness.") ? "harness" : "runner",
+        actorId: event.kind.startsWith("harness.") ? "claude-code" : `local:${ctx.userId}`,
+        payload: event.payload
+      });
+      seq += 1;
+    }
+  });
+  return true;
 }
 
 export async function getWorkstreamMission(

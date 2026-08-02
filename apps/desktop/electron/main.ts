@@ -6,6 +6,7 @@ import { ApiError, ControlPlaneClient } from "./api-client";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
 import { ensureLocalBranch, pathForLocalRepo, pickLocalRepository, resolveLocalBase } from "./local-repos";
+import { isRunning, runDirection, stopExecution } from "./execution";
 import { SessionStore } from "./session-store";
 
 // Test hooks (see DECISIONS.md D-027): both refuse to exist in packaged builds.
@@ -222,6 +223,58 @@ function registerIpc(): void {
     } catch (error) {
       return fail(error);
     }
+  });
+
+  const DirectSchema = z.object({
+    missionId: z.string().startsWith("msn_"),
+    localId: z.string().uuid(),
+    missionBranch: z.string().min(1),
+    body: z.string().trim().min(1).max(4000)
+  });
+
+  ipcMain.handle("novus:missions:direct", async (_event, raw: unknown) => {
+    const parsed = DirectSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed direction." };
+    const input = parsed.data;
+    if (isRunning(input.missionId)) {
+      return { ok: false, code: "busy", message: "The agent is already working. Wait for this turn to finish." };
+    }
+    try {
+      await api.submitDirection(input.missionId, input.body);
+    } catch (error) {
+      return fail(error);
+    }
+    // The turn streams in the background; the room's poll renders it live.
+    void runDirection({
+      missionId: input.missionId,
+      localId: input.localId,
+      missionBranch: input.missionBranch,
+      direction: input.body,
+      emit: (event) => {
+        api.reportEvents(input.missionId, [event]).catch((error) => {
+          console.error("event report failed:", error instanceof Error ? error.message : error);
+        });
+      }
+    }).catch((error) => {
+      api
+        .reportEvents(input.missionId, [
+          { kind: "execution.failed", payload: { error: error instanceof Error ? error.message : "unknown" } }
+        ])
+        .catch(() => undefined);
+    });
+    return ok(null);
+  });
+
+  ipcMain.handle("novus:missions:stop", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("msn_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return ok(stopExecution(parsed.data));
+  });
+
+  ipcMain.handle("novus:missions:running", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("msn_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return ok(isRunning(parsed.data));
   });
 
   ipcMain.handle("novus:missions:get", async (_event, raw: unknown) => {

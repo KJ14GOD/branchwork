@@ -145,6 +145,14 @@ export class ControlPlaneClient {
     return body.workstream;
   }
 
+  async submitDirection(missionId: string, body: string): Promise<void> {
+    await this.request("POST", `/missions/${missionId}/direction`, z.object({ ok: z.boolean() }), { body });
+  }
+
+  async reportEvents(missionId: string, events: { kind: string; payload: Record<string, unknown> }[]): Promise<void> {
+    await this.request("POST", `/missions/${missionId}/events/report`, z.object({ ok: z.boolean() }), { events });
+  }
+
   async retryBranch(workstreamId: string): Promise<Workstream> {
     const body = await this.request(
       "POST",

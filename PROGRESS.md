@@ -32,7 +32,7 @@ The previous prototype was removed in full (commit `50c4851`); none of its behav
 | Control leases, requests, handoffs | Not started |
 | Direction lifecycle | Not started |
 | Workstreams and executions | Partial — workstream records exist (base ref/SHA, mission branch, branch status; one per mission as a V0 constraint); executions not started |
-| Harness adapters (Claude Code, Codex) | Not started |
+| Harness adapters (Claude Code, Codex) | Partial — local Claude Code execution machinery built (D-032): one direction = one headless turn in a dedicated mission worktree (never the user's checkout), stream-json parsed to attributed harness events reported as claims, checkpoint commits at turn boundaries per D-025, stop via SIGTERM, deterministic fake-harness mode for e2e. Not yet surfaced in UI or proven live; Codex not started |
 | Execution providers and cloud workspaces | Not started |
 | Runner protocol (events, commands, reconnection) | Not started |
 | Presence | Not started |

@@ -121,6 +121,37 @@ export const CreateMissionInputSchema = z.object({
 });
 export type CreateMissionInput = z.infer<typeof CreateMissionInputSchema>;
 
+// --- Direction and execution reporting (D-032 chat room) -------------------
+
+export const DirectionInputSchema = z.object({
+  body: z.string().trim().min(1, "Say what should happen").max(4000)
+});
+export type DirectionInput = z.infer<typeof DirectionInputSchema>;
+
+/** Event kinds a client may report; everything else is server-originated. */
+export const ReportableEventKindSchema = z.enum([
+  "execution.started",
+  "harness.text",
+  "harness.tool",
+  "execution.completed",
+  "execution.failed",
+  "execution.stopped",
+  "workspace.checkpoint"
+]);
+
+export const ReportEventsInputSchema = z.object({
+  events: z
+    .array(
+      z.object({
+        kind: ReportableEventKindSchema,
+        payload: z.record(z.unknown()).default({})
+      })
+    )
+    .min(1)
+    .max(50)
+});
+export type ReportEventsInput = z.infer<typeof ReportEventsInputSchema>;
+
 // --- Control-plane HTTP responses -----------------------------------------
 
 export const AuthStartResponseSchema = z.object({
