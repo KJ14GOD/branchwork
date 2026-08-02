@@ -6,7 +6,7 @@ import { ApiError, ControlPlaneClient } from "./api-client";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
 import { ensureLocalBranch, pathForLocalRepo, pickLocalRepository, resolveLocalBase } from "./local-repos";
-import { isRunning, runDirection, stopExecution } from "./execution";
+import { isRunning, runDirection, stopExecution, type ReportedEvent } from "./execution";
 import { SessionStore } from "./session-store";
 
 // Test hooks (see DECISIONS.md D-027): both refuse to exist in packaged builds.
@@ -225,6 +225,26 @@ function registerIpc(): void {
     }
   });
 
+  // Reported claims leave this machine strictly in order. Two in-flight
+  // reports race for the same event sequence on the server (max(seq)+1) and
+  // the loser is dropped — a checkpoint emitted immediately before completion
+  // was lost exactly that way. A per-mission chain serializes them.
+  const reportChains = new Map<string, Promise<void>>();
+  const reportInOrder = (missionId: string, event: ReportedEvent): void => {
+    const prev = reportChains.get(missionId) ?? Promise.resolve();
+    const next = prev.then(async () => {
+      try {
+        await api.reportEvents(missionId, [event]);
+      } catch (error) {
+        console.error("event report failed:", error instanceof Error ? error.message : error);
+      }
+    });
+    reportChains.set(missionId, next);
+    void next.finally(() => {
+      if (reportChains.get(missionId) === next) reportChains.delete(missionId);
+    });
+  };
+
   const DirectSchema = z.object({
     missionId: z.string().startsWith("msn_"),
     localId: z.string().uuid(),
@@ -250,17 +270,12 @@ function registerIpc(): void {
       localId: input.localId,
       missionBranch: input.missionBranch,
       direction: input.body,
-      emit: (event) => {
-        api.reportEvents(input.missionId, [event]).catch((error) => {
-          console.error("event report failed:", error instanceof Error ? error.message : error);
-        });
-      }
+      emit: (event) => reportInOrder(input.missionId, event)
     }).catch((error) => {
-      api
-        .reportEvents(input.missionId, [
-          { kind: "execution.failed", payload: { error: error instanceof Error ? error.message : "unknown" } }
-        ])
-        .catch(() => undefined);
+      reportInOrder(input.missionId, {
+        kind: "execution.failed",
+        payload: { error: error instanceof Error ? error.message : "unknown" }
+      });
     });
     return ok(null);
   });

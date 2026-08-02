@@ -244,53 +244,6 @@ body {
   font-family: var(--font-mono);
 }
 
-/* ---------- Dialog ---------- */
-
-.dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 12vh;
-  animation: dialog-in var(--m-overlay) var(--ease);
-}
-
-.dialog {
-  width: 480px;
-  max-width: calc(100vw - var(--s-6));
-  background: var(--surface-2);
-  border: 1px solid var(--edge);
-  border-radius: var(--r-dialog);
-  box-shadow: var(--elev-2);
-  padding: var(--s-5);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-4);
-}
-
-.dialog h2 {
-  font: var(--type-section);
-}
-
-.dialog-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--s-2);
-}
-
-.dialog-note {
-  font: var(--type-row);
-  color: var(--text-2);
-}
-
-@keyframes dialog-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
 @media (prefers-reduced-motion: reduce) {
   * {
     animation: none !important;
@@ -453,33 +406,7 @@ body {
   color: var(--danger);
 }
 
-/* ---------- Missions surface ---------- */
-
-.missions {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: var(--s-6) var(--s-6) 0;
-  max-width: 920px;
-  width: 100%;
-  margin: 0 auto;
-}
-
-.missions-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-4);
-  margin-bottom: var(--s-5);
-}
-
-.missions-head h1 {
-  font: var(--type-title);
-}
-
-.missions-head .spacer {
-  flex: 1;
-}
+/* ---------- Shared list chrome ---------- */
 
 .group-label {
   font: var(--type-micro);
@@ -509,76 +436,6 @@ body {
 .inline-error {
   font: var(--type-row);
   color: var(--danger);
-}
-
-/* ---------- Mission view ---------- */
-
-.mission-view {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: var(--s-6) var(--s-6) 0;
-  max-width: 920px;
-  width: 100%;
-  margin: 0 auto;
-}
-
-.mission-view .back {
-  align-self: flex-start;
-  margin-bottom: var(--s-4);
-}
-
-.mission-view h1 {
-  font: var(--type-mission);
-  margin-bottom: var(--s-2);
-  user-select: text;
-}
-
-.state-line {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  font: var(--type-row);
-  color: var(--text-2);
-  margin-bottom: var(--s-5);
-}
-
-.state-line .state-name {
-  color: var(--text-1);
-  font-weight: 500;
-}
-
-.mission-section {
-  margin-bottom: var(--s-5);
-}
-
-.mission-section h2 {
-  font: var(--type-section);
-  margin-bottom: var(--s-2);
-}
-
-.mission-section p {
-  font: var(--type-body);
-  color: var(--text-1);
-  white-space: pre-wrap;
-  user-select: text;
-  max-width: 720px;
-}
-
-.event-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  min-height: 32px;
-  font: var(--type-row);
-  color: var(--text-2);
-}
-
-.event-row .event-kind {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-1);
 }
 
 /* ---------- Repository continuity (DESIGN.md#component-behavior) ---------- */
@@ -621,4 +478,407 @@ body {
 /* System actors are machines: square mark, never a person's circle. */
 .identity-mark.system-mark {
   border-radius: var(--r-control);
+}
+
+/* ---------- Project-first shell (DESIGN.md#information-architecture, D-032) ---------- */
+
+.project-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.sidebar {
+  width: 240px;
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-2) var(--s-2) var(--s-3);
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sidebar .group-label {
+  padding: 0 var(--s-3);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.side-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  font: var(--type-row);
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+}
+
+.side-row:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.side-row.selected {
+  background: var(--selected);
+  border-left-color: var(--accent);
+  color: var(--text-1);
+}
+
+/* A local repository registered from another machine: present, but not here. */
+.side-row.away {
+  opacity: 0.4;
+}
+
+.side-row .side-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-count {
+  font: var(--type-meta);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.side-empty {
+  font: var(--type-row);
+  color: var(--text-3);
+  padding: var(--s-2) var(--s-3);
+}
+
+.sidebar-foot {
+  flex: none;
+  position: relative;
+  padding-top: var(--s-2);
+}
+
+.add-project {
+  width: 100%;
+  text-align: left;
+}
+
+.menu {
+  position: absolute;
+  bottom: calc(100% + var(--s-1));
+  left: 0;
+  right: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-button);
+  box-shadow: var(--elev-1);
+  padding: var(--s-1);
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 30;
+}
+
+.menu-item {
+  display: block;
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  font: var(--type-row);
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: var(--hover);
+}
+
+.menu-note {
+  font: var(--type-meta);
+  color: var(--text-2);
+  padding: var(--s-2) var(--s-3);
+}
+
+.room-area {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.room-empty {
+  padding: var(--s-6);
+}
+
+/* ---------- Project room: tabs, chat, composer (D-032) ---------- */
+
+.room {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tabbar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: var(--s-1);
+  padding: 0 var(--s-5);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--edge);
+}
+
+.tab {
+  font: var(--type-row);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: var(--s-2) var(--s-3);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab:hover {
+  color: var(--text-1);
+  background: var(--hover);
+}
+
+.tab.active {
+  color: var(--text-1);
+  border-bottom-color: var(--accent);
+}
+
+.tab.tab-new {
+  font-weight: 500;
+  min-width: 32px;
+  text-align: center;
+}
+
+.room-head {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-5) 0;
+}
+
+.room-goal {
+  font: var(--type-body);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.room-head .head-spacer {
+  flex: 1;
+}
+
+.inspector {
+  position: absolute;
+  top: calc(100% + var(--s-2));
+  right: var(--s-5);
+  width: 360px;
+  max-width: calc(100vw - var(--s-8));
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-dialog);
+  box-shadow: var(--elev-2);
+  padding: var(--s-4);
+  z-index: 20;
+}
+
+.inspector .repo-block {
+  margin-bottom: 0;
+}
+
+.inspector-note {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat {
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  padding: var(--s-4) var(--s-5) var(--s-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.feed-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.msg-user {
+  align-self: flex-end;
+  max-width: 560px;
+  background: var(--surface-1);
+  border-radius: var(--r-button);
+  padding: var(--s-2) var(--s-3);
+  font: var(--type-body);
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.msg-agent {
+  align-self: flex-start;
+  display: flex;
+  gap: var(--s-3);
+  font: var(--type-body);
+}
+
+.msg-agent .mark-slot {
+  width: 20px;
+  flex: none;
+  padding-top: var(--s-1);
+}
+
+.msg-agent .msg-agent-text {
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.tool-line {
+  font: 400 12px/18px var(--font-mono);
+  color: var(--text-3);
+  padding-left: calc(20px + var(--s-3));
+  user-select: text;
+}
+
+.sys-line {
+  align-self: center;
+  text-align: center;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.feed-item .sys-line {
+  align-self: center;
+}
+
+.sys-line.danger {
+  color: var(--danger);
+}
+
+.quiet-line {
+  align-self: center;
+  text-align: center;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+/* The chat composer: prominent by design (D-032 exception), bounded at 40vh. */
+
+.composer-bar {
+  flex: none;
+  width: 100%;
+  max-width: calc(720px + 2 * var(--s-5));
+  margin: 0 auto;
+  padding: var(--s-2) var(--s-5) var(--s-4);
+}
+
+.composer-input {
+  width: 100%;
+  min-height: 44px;
+  max-height: 40vh;
+  resize: none;
+  font: var(--type-body);
+  color: var(--text-1);
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-dialog);
+  padding: var(--s-3) var(--s-4);
+}
+
+.composer-input::placeholder {
+  color: var(--text-3);
+}
+
+.composer-input:hover:not(:disabled) {
+  border-color: var(--edge-hover);
+}
+
+.composer-input:disabled {
+  opacity: 0.4;
+}
+
+.composer-bar .inline-error {
+  display: block;
+  margin-bottom: var(--s-2);
+}
+
+.composer-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 24px;
+  margin-top: var(--s-2);
+}
+
+.harness-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.composer-note {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.composer-working {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+/* The one sanctioned loop: the working indicator while an agent runs. */
+.breath {
+  animation: breath var(--motion-breath) var(--ease) infinite;
+}
+
+@keyframes breath {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
