@@ -123,7 +123,7 @@ function Feed({ detail }: { detail: MissionDetailResponse }) {
           <div className="msg-agent" data-testid="msg-agent">
             <span className="mark-slot">
               {prevKind !== "harness.text" && (
-                <span className="identity-mark system-mark" title="Claude Code">cc</span>
+                <span className="agent-mark" title="Claude Code"><ClaudeGlyph /></span>
               )}
             </span>
             <span className="msg-agent-text">{String(payload.text ?? "")}</span>
@@ -184,10 +184,12 @@ function Feed({ detail }: { detail: MissionDetailResponse }) {
 
 /** Every option maps to a real Claude Code flag: --model and --effort. */
 const MODELS = [
-  { id: "fable", label: "Fable 5" },
-  { id: "opus", label: "Opus 5" },
-  { id: "sonnet", label: "Sonnet 5" },
-  { id: "haiku", label: "Haiku 4.5" }
+  { id: "claude-fable-5", label: "Fable 5" },
+  { id: "claude-opus-5", label: "Opus 5" },
+  { id: "claude-opus-4-8", label: "Opus 4.8" },
+  { id: "claude-opus-4-7", label: "Opus 4.7" },
+  { id: "claude-sonnet-5", label: "Sonnet 5" },
+  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" }
 ] as const;
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 type ModelId = (typeof MODELS)[number]["id"];
@@ -224,12 +226,30 @@ export function ProjectRoom({
   const [draft, setDraft] = useState<Draft | null>(null);
   const [text, setText] = useState("");
   const [model, setModel] = useState<ModelId>(
-    () => (localStorage.getItem("novus-model") as ModelId | null) ?? "fable"
+    () => (localStorage.getItem("novus-model") as ModelId | null) ?? "claude-fable-5"
   );
   const [effort, setEffort] = useState<Effort>(
     () => (localStorage.getItem("novus-effort") as Effort | null) ?? "high"
   );
   const [openMenu, setOpenMenu] = useState<"model" | "effort" | null>(null);
+  const footRef = useRef<HTMLDivElement>(null);
+
+  // A menu closes when you click away from it or press Escape.
+  useEffect(() => {
+    if (!openMenu) return;
+    const onDown = (event: MouseEvent) => {
+      if (!footRef.current?.contains(event.target as Node)) setOpenMenu(null);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenMenu(null);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [openMenu]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -510,7 +530,7 @@ export function ProjectRoom({
             aria-label="Direct the agent"
             data-testid="composer-input"
           />
-          <div className="composer-foot">
+          <div className="composer-foot" ref={footRef}>
             <span className="chip-wrap">
               <button
                 className="chip-button"
@@ -603,7 +623,9 @@ export function ProjectRoom({
               aria-label="Send direction"
               data-testid="send"
             >
-              ↑
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
             </button>
           </div>
         </div>

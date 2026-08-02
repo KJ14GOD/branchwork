@@ -252,7 +252,16 @@ function registerIpc(): void {
     missionId: z.string().startsWith("msn_"),
     body: z.string().trim().min(1).max(4000),
     // Allowlisted: these become CLI flags, so nothing arbitrary may pass.
-    model: z.enum(["fable", "opus", "sonnet", "haiku"]).default("fable"),
+    model: z
+      .enum([
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-sonnet-5",
+        "claude-haiku-4-5-20251001"
+      ])
+      .default("claude-fable-5"),
     effort: z.enum(["low", "medium", "high", "xhigh", "max"]).default("high")
   });
 

@@ -310,19 +310,38 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               const away = project.provider === "local" && !project.onThisMachine;
               const selected = selection?.projectKey === project.key;
               return (
-                <button
-                  key={project.key}
-                  className={`side-row${selected ? " selected" : ""}${away ? " away" : ""}`}
-                  onClick={() => selectProject(project)}
-                  title={away ? "On another machine" : project.name}
-                  aria-current={selected}
-                  data-testid="project-row"
-                >
-                  <span className="side-name">{project.name}</span>
-                  {project.missions.length > 0 && (
-                    <span className="side-count">{project.missions.length}</span>
-                  )}
-                </button>
+                <div key={project.key} className="side-group">
+                  <button
+                    className={`side-row${selected ? " selected" : ""}${away ? " away" : ""}`}
+                    onClick={() => selectProject(project)}
+                    title={away ? "On another machine" : project.name}
+                    aria-current={selected}
+                    data-testid="project-row"
+                  >
+                    <span className="side-name">{project.name}</span>
+                    {project.missions.length > 0 && (
+                      <span className="side-count">{project.missions.length}</span>
+                    )}
+                  </button>
+                  {/* An open project shows its workstreams inline: the tabs and
+                      the rail name the same things (D-032). */}
+                  {selected &&
+                    project.missions.map((mission) => (
+                      <button
+                        key={mission.missionId}
+                        className={`side-row side-child${
+                          selection?.missionId === mission.missionId ? " selected" : ""
+                        }`}
+                        onClick={() =>
+                          setSelection({ projectKey: project.key, missionId: mission.missionId })
+                        }
+                        title={mission.goal}
+                        data-testid="workstream-row"
+                      >
+                        <span className="side-name">{mission.goal}</span>
+                      </button>
+                    ))}
+                </div>
               );
             })}
             {missions !== null && projects.length === 0 && (
