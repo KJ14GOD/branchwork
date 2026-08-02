@@ -20,3 +20,20 @@ export const newEventId = () => `evt_${opaque(20)}`;
 export const newSessionId = () => `ses_${opaque(20)}`;
 export const newStateNonce = () => opaque(32);
 export const newSessionToken = () => randomBytes(32).toString("base64url");
+
+// Investor-demo spine (D-034 … D-037).
+export const newInvitationId = () => `inv_${opaque(20)}`;
+export const newLeaseId = () => `lea_${opaque(20)}`;
+export const newControlRequestId = () => `crq_${opaque(20)}`;
+export const newHandoffOfferId = () => `hof_${opaque(20)}`;
+export const newRunnerId = () => `rnr_${opaque(20)}`;
+export const newExecutionId = () => `exe_${opaque(20)}`;
+export const newDirectionId = () => `dir_${opaque(20)}`;
+export const newCommandId = () => `cmd_${opaque(20)}`;
+export const newCheckpointId = () => `ckp_${opaque(20)}`;
+export const newFileChangeId = () => `chg_${opaque(20)}`;
+export const newCheckId = () => `chk_${opaque(20)}`;
+
+/** Single-use secrets handed out exactly once: invitation tokens and runner
+ *  credentials. Only their SHA-256 hash is ever stored. */
+export const newSecretToken = () => randomBytes(32).toString("base64url");

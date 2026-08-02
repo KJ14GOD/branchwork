@@ -18,7 +18,7 @@ Software teams that use coding agents for consequential work and need more than 
 
 ## The wedge
 
-The first wedge is not generic parallel-agent management. It is **a software team operating one consequential coding mission together**: authentication changes, migrations, infrastructure work, incident remediation, security-sensitive changes, risky dependency upgrades, large refactors. Work where shared context, control, evidence, and accountability are worth a dedicated room — running in cloud workspaces that survive a closed laptop and can be joined from anywhere.
+The first wedge is not generic parallel-agent management. It is **a software team operating one consequential coding mission together**: authentication changes, migrations, infrastructure work, incident remediation, security-sensitive changes, risky dependency upgrades, large refactors. Work where shared context, control, evidence, and accountability are worth a dedicated room. Execution ships local-first — the host desktop runs the harness against a repository on that machine and any participant can direct it (D-032, D-035) — and cloud workspaces that survive a closed laptop follow on the same runner protocol (D-002).
 
 Most missions begin with one workstream and one execution. Competing approaches exist but are an advanced, deliberate workflow — they never dominate the default product. Scope and non-goals are defined in [PRODUCT.md](PRODUCT.md#scope-and-non-goals).
 
@@ -27,7 +27,7 @@ Most missions begin with one workstream and one execution. Competing approaches 
 The first implementation is not complete until two real clients can execute this workflow end to end:
 
 1. Kartik signs in.
-2. Kartik connects a GitHub repository.
+2. Kartik connects a repository — a GitHub repository or a folder on his own machine.
 3. Kartik creates a mission with a goal and success criteria.
 4. Kartik chooses Claude Code or Codex.
 5. Novus creates a dedicated mission branch from an exact base commit and provisions or connects to its execution workspace.
@@ -67,7 +67,7 @@ What exists versus what is planned is recorded only in [PROGRESS.md](PROGRESS.md
 | `scripts/gate.sh` | The executable repository gate ([AGENTS.md](AGENTS.md#the-repository-gate)) |
 | `packages/contracts/` | Runtime-validated shapes shared across network and IPC boundaries |
 | `apps/control-plane/` | Control-plane service: identity, sessions, organizations, missions, events (PostgreSQL) |
-| `apps/desktop/` | The Novus desktop application (Electron shell, isolated renderer) |
+| `apps/desktop/` | The Novus desktop application (Electron shell, isolated renderer, and the host runner that operates local harnesses) |
 | `spikes/` | Disposable feasibility experiments; never product code |
 
 Development: `pnpm install`, then `pnpm dev` (starts PostgreSQL in Docker, the control plane, and the desktop app). Real sign-in needs GitHub OAuth credentials in `.env` (see `.env.example`).

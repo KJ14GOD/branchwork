@@ -1,0 +1,278 @@
+import type { Direction, DirectionState } from "@novus/contracts";
+import type pg from "pg";
+import type { Db } from "./db.ts";
+import { withTransaction } from "./db.ts";
+import { recordEvent } from "./events.ts";
+import { newDirectionId } from "./ids.ts";
+import type { MissionAccess } from "./authz.ts";
+import { AuthorizationError } from "./authz.ts";
+
+/**
+ * The direction lifecycle (PRODUCT.md#direction). Attributed instruction in,
+ * durable state out. Two rules carry the product's weight:
+ *
+ *  - Submission is never silently dropped. It is recorded, attributed, and
+ *    visible to every participant the instant the write commits.
+ *  - **Applied** is marked only when the runner acknowledges the direction —
+ *    never when the control plane sends it. "Which direction is it following?"
+ *    must never lie.
+ *
+ * Queueing is automatic: Submitted becomes Queued on acceptance of the write.
+ * A `direction.queued` event is recorded only when the direction must actually
+ * wait for someone — a non-controller's submission — because that waiting is
+ * the visible product state. The controller's own direction goes straight
+ * toward application and its next event is `direction.applied`.
+ */
+
+interface DirectionRow {
+  dir_id: string;
+  wst_id: string;
+  author_user_id: string;
+  author_login: string;
+  body: string;
+  state: string;
+  ordinal: string | number;
+  submitted_at: Date;
+  applied_at: Date | null;
+  resolution_reason: string | null;
+  consumed_by_execution_id: string | null;
+}
+
+const DIRECTION_SELECT = `
+  select d.dir_id, d.wst_id, d.author_user_id, u.login as author_login, d.body,
+         d.state, d.ordinal, d.submitted_at, d.applied_at, d.resolution_reason,
+         d.consumed_by_execution_id
+    from directions d
+    join users u on u.user_id = d.author_user_id`;
+
+export function toDirection(row: DirectionRow): Direction {
+  return {
+    directionId: row.dir_id,
+    workstreamId: row.wst_id,
+    authorUserId: row.author_user_id,
+    authorLogin: row.author_login,
+    body: row.body,
+    state: row.state as DirectionState,
+    ordinal: Number(row.ordinal),
+    submittedAt: row.submitted_at.toISOString(),
+    appliedAt: row.applied_at ? row.applied_at.toISOString() : null,
+    resolutionReason: row.resolution_reason,
+    consumedByExecutionId: row.consumed_by_execution_id
+  };
+}
+
+export async function listDirections(db: Db, missionId: string): Promise<Direction[]> {
+  const result = await db.query(`${DIRECTION_SELECT} where d.mission_id = $1 order by d.ordinal`, [
+    missionId
+  ]);
+  return (result.rows as DirectionRow[]).map(toDirection);
+}
+
+export interface SubmittedDirection {
+  direction: Direction;
+  /** True when the author holds the lease, so the direction proceeds toward
+   *  application immediately instead of waiting for the controller. */
+  authorIsController: boolean;
+}
+
+/**
+ * Records a submitted direction. The caller has already been checked for
+ * `direction.submit`; this function decides only the resulting state.
+ */
+export async function submitDirection(
+  db: Db,
+  access: MissionAccess,
+  author: { userId: string; login: string },
+  body: string,
+  harness: { model: string; effort: string }
+): Promise<SubmittedDirection> {
+  if (!access.workstreamId) {
+    throw new AuthorizationError("no_workstream", "This mission has no workstream yet.", 409);
+  }
+  const workstreamId = access.workstreamId;
+  const authorIsController = access.isController;
+  const dirId = newDirectionId();
+
+  const row = await withTransaction(db, async (client) => {
+    const inserted = await client.query(
+      `insert into directions (dir_id, org_id, mission_id, wst_id, author_user_id, body, state, model, effort)
+       values ($1, $2, $3, $4, $5, $6, 'queued', $7, $8) returning dir_id`,
+      [dirId, access.orgId, access.missionId, workstreamId, author.userId, body, harness.model, harness.effort]
+    );
+    const id = inserted.rows[0]?.dir_id as string;
+    await recordEvent(client, {
+      orgId: access.orgId,
+      missionId: access.missionId,
+      workstreamId,
+      kind: "direction.submitted",
+      actorKind: "user",
+      actorId: author.userId,
+      actorLogin: author.login,
+      causeDirectionId: id,
+      causeLeaseId: access.leaseId,
+      payload: { body, authorIsController, model: harness.model, effort: harness.effort }
+    });
+    if (!authorIsController) {
+      // The visible product state: attributed, queued, waiting for whoever
+      // holds the baton.
+      await recordEvent(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId,
+        kind: "direction.queued",
+        actorKind: "system",
+        actorId: "control-plane",
+        causeDirectionId: id,
+        payload: { authorLogin: author.login, awaiting: access.controllerUserId }
+      });
+    }
+    const fetched = await client.query(`${DIRECTION_SELECT} where d.dir_id = $1`, [id]);
+    return fetched.rows[0] as DirectionRow;
+  });
+
+  return { direction: toDirection(row), authorIsController };
+}
+
+/**
+ * The controller's judgment on a queued direction: apply it, reject it, or
+ * supersede it. Only Submitted/Queued direction can be resolved — Applied
+ * direction is history and can only be followed, never rewritten.
+ */
+export async function resolveDirection(
+  db: Db,
+  access: MissionAccess,
+  actor: { userId: string; login: string },
+  directionId: string,
+  action: "apply" | "reject" | "supersede",
+  reason?: string
+): Promise<Direction | null> {
+  const nextState: DirectionState =
+    action === "apply" ? "queued" : action === "reject" ? "rejected" : "superseded";
+
+  return withTransaction(db, async (client) => {
+    const current = await client.query(
+      `select dir_id, wst_id, state, author_user_id from directions
+        where dir_id = $1 and mission_id = $2 for update`,
+      [directionId, access.missionId]
+    );
+    const row = current.rows[0];
+    if (!row) return null;
+    if (row.state !== "submitted" && row.state !== "queued") {
+      throw new AuthorizationError(
+        "direction_settled",
+        "That direction has already been applied or resolved.",
+        409
+      );
+    }
+    if (action === "apply") {
+      // Applying does not change state here: the direction stays queued until
+      // the runner acknowledges it. What changes is that the controller has
+      // authorized it, which the dispatcher acts on.
+      await recordEvent(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId: row.wst_id,
+        kind: "direction.authorized",
+        actorKind: "user",
+        actorId: actor.userId,
+        actorLogin: actor.login,
+        causeDirectionId: directionId,
+        causeLeaseId: access.leaseId,
+        payload: {}
+      });
+    } else {
+      await client.query(
+        "update directions set state = $2, ended_at = now(), resolution_reason = $3 where dir_id = $1",
+        [directionId, nextState, reason ?? null]
+      );
+      await recordEvent(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId: row.wst_id,
+        kind: action === "reject" ? "direction.rejected" : "direction.superseded",
+        actorKind: "user",
+        actorId: actor.userId,
+        actorLogin: actor.login,
+        causeDirectionId: directionId,
+        causeLeaseId: access.leaseId,
+        payload: { reason: reason ?? null }
+      });
+    }
+    const fetched = await client.query(`${DIRECTION_SELECT} where d.dir_id = $1`, [directionId]);
+    return toDirection(fetched.rows[0] as DirectionRow);
+  });
+}
+
+/** The author withdraws their own direction before it is applied. */
+export async function cancelDirection(
+  db: Db,
+  access: MissionAccess,
+  actor: { userId: string; login: string },
+  directionId: string
+): Promise<Direction | null> {
+  return withTransaction(db, async (client) => {
+    const current = await client.query(
+      "select dir_id, wst_id, state, author_user_id from directions where dir_id = $1 and mission_id = $2 for update",
+      [directionId, access.missionId]
+    );
+    const row = current.rows[0];
+    if (!row) return null;
+    if (row.author_user_id !== actor.userId) {
+      throw new AuthorizationError("not_author", "Only the author can cancel their direction.");
+    }
+    if (row.state !== "submitted" && row.state !== "queued") {
+      throw new AuthorizationError(
+        "direction_settled",
+        "That direction has already been applied or resolved.",
+        409
+      );
+    }
+    await client.query(
+      "update directions set state = 'cancelled', ended_at = now() where dir_id = $1",
+      [directionId]
+    );
+    await recordEvent(client, {
+      orgId: access.orgId,
+      missionId: access.missionId,
+      workstreamId: row.wst_id,
+      kind: "direction.cancelled",
+      actorKind: "user",
+      actorId: actor.userId,
+      actorLogin: actor.login,
+      causeDirectionId: directionId,
+      payload: {}
+    });
+    const fetched = await client.query(`${DIRECTION_SELECT} where d.dir_id = $1`, [directionId]);
+    return toDirection(fetched.rows[0] as DirectionRow);
+  });
+}
+
+/**
+ * Marks a direction Applied. Called only from runner event ingestion, on the
+ * runner's `direction.applied` acknowledgement — the harness has it.
+ * Idempotent: a replayed acknowledgement changes nothing.
+ */
+export async function markDirectionApplied(
+  client: pg.PoolClient,
+  args: { orgId: string; missionId: string; workstreamId: string; directionId: string; executionId: string }
+): Promise<boolean> {
+  const updated = await client.query(
+    `update directions set state = 'applied', applied_at = now(), consumed_by_execution_id = $2
+      where dir_id = $1 and state in ('submitted', 'queued') returning dir_id`,
+    [args.directionId, args.executionId]
+  );
+  return (updated.rowCount ?? 0) > 0;
+}
+
+/** The oldest queued direction for a workstream, if any. */
+export async function nextQueuedDirection(
+  client: pg.PoolClient,
+  workstreamId: string
+): Promise<{ dirId: string; body: string; authorUserId: string } | null> {
+  const result = await client.query(
+    "select dir_id, body, author_user_id from directions where wst_id = $1 and state = 'queued' order by ordinal limit 1",
+    [workstreamId]
+  );
+  const row = result.rows[0];
+  return row ? { dirId: row.dir_id, body: row.body, authorUserId: row.author_user_id } : null;
+}

@@ -73,11 +73,38 @@ interface FakeRepo {
  */
 export class FakeRepositoryProvider implements RepositoryProvider {
   readonly kind = "fake" as const;
-  private readonly repos: FakeRepo[] = [
-    { providerRepoId: "9001", name: "novus/demo-app", defaultBranch: "main", headSha: fixedSha("demo-app@main"), transientFailures: 0 },
-    { providerRepoId: "9002", name: "novus/api", defaultBranch: "main", headSha: fixedSha("api@main"), transientFailures: 0 },
-    { providerRepoId: "9003", name: "flaky/payments", defaultBranch: "main", headSha: fixedSha("payments@main"), transientFailures: 1 }
-  ];
+  private readonly repos: FakeRepo[];
+
+  /**
+   * The three fixed repositories every deterministic test relies on, plus —
+   * only when asked — enough filler to exercise a long, searchable, scrollable
+   * picker. The extra entries are generated deterministically so a test can
+   * assert on any of them by name.
+   */
+  constructor(extraRepositories = 0) {
+    this.repos = [
+      { providerRepoId: "9001", name: "novus/demo-app", defaultBranch: "main", headSha: fixedSha("demo-app@main"), transientFailures: 0 },
+      { providerRepoId: "9002", name: "novus/api", defaultBranch: "main", headSha: fixedSha("api@main"), transientFailures: 0 },
+      { providerRepoId: "9003", name: "flaky/payments", defaultBranch: "main", headSha: fixedSha("payments@main"), transientFailures: 1 }
+    ];
+    const owners = ["novus", "acme", "northwind", "helios", "meridian"];
+    const subjects = [
+      "auth", "billing", "gateway", "ingest", "ledger", "notifier", "pipeline",
+      "registry", "scheduler", "telemetry", "webhooks", "workers"
+    ];
+    for (let index = 0; index < extraRepositories; index += 1) {
+      const owner = owners[index % owners.length] as string;
+      const subject = subjects[index % subjects.length] as string;
+      const name = `${owner}/${subject}-${String(index + 1).padStart(3, "0")}`;
+      this.repos.push({
+        providerRepoId: String(10_000 + index),
+        name,
+        defaultBranch: index % 4 === 0 ? "develop" : "main",
+        headSha: fixedSha(`${name}@head`),
+        transientFailures: 0
+      });
+    }
+  }
   private readonly branches = new Map<string, Map<string, string>>();
   private readonly failuresSeen = new Map<string, number>();
 
@@ -130,7 +157,12 @@ export function selectRepositoryProvider(config: Config, env: NodeJS.ProcessEnv 
   if (fakeRepos && env.NODE_ENV === "production") {
     throw new Error("Fake repository provider must never be enabled in production");
   }
-  if (fakeRepos) return new FakeRepositoryProvider();
+  if (fakeRepos) {
+    // A long list is the honest shape of a real GitHub account; the picker has
+    // to survive it. Off by default so deterministic suites stay small.
+    const extra = Number(env.NOVUS_FAKE_REPO_COUNT ?? 0);
+    return new FakeRepositoryProvider(Number.isFinite(extra) && extra > 0 ? Math.min(extra, 500) : 0);
+  }
   if (config.githubAppId && config.githubAppPem) {
     return new GithubAppRepositoryProvider(config.githubAppId, config.githubAppPem);
   }

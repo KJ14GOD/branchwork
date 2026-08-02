@@ -222,6 +222,7 @@ describe("idempotent creation", () => {
     expect(await eventKinds(missionId)).toEqual([
       "mission.created",
       "workstream.created",
+      "control.granted",
       "workstream.branch_created"
     ]);
   });
@@ -250,6 +251,7 @@ describe("idempotent creation", () => {
     expect(await eventKinds(missionId)).toEqual([
       "mission.created",
       "workstream.created",
+      "control.granted",
       "workstream.branch_created"
     ]);
 
@@ -291,6 +293,7 @@ describe("retry after transient failure", () => {
     expect(await eventKinds(missionId)).toEqual([
       "mission.created",
       "workstream.created",
+      "control.granted",
       "workstream.branch_failed"
     ]);
   });
@@ -309,11 +312,12 @@ describe("retry after transient failure", () => {
     expect(events.rows.map((row) => row.kind)).toEqual([
       "mission.created",
       "workstream.created",
+      "control.granted",
       "workstream.branch_failed",
       "workstream.branch_created"
     ]);
     const seqs = events.rows.map((row) => Number(row.seq));
-    expect(seqs).toEqual([1, 2, 3, 4]); // strictly ordered; created strictly after failed
+    expect(seqs).toEqual([1, 2, 3, 4, 5]); // strictly ordered; created strictly after failed
   });
 
   it("keeps a second retry silent: still created, no duplicate events", async () => {
@@ -327,6 +331,7 @@ describe("retry after transient failure", () => {
     expect(await eventKinds(missionId)).toEqual([
       "mission.created",
       "workstream.created",
+      "control.granted",
       "workstream.branch_failed",
       "workstream.branch_created"
     ]);
@@ -381,6 +386,7 @@ describe("branch conflict", () => {
       expect(await eventKinds(body.mission.missionId)).toEqual([
         "mission.created",
         "workstream.created",
+        "control.granted",
         "workstream.branch_failed",
         "workstream.branch_failed"
       ]);
@@ -423,9 +429,10 @@ describe("reconstruction depth", () => {
         expect(body.events.map((event: { kind: string }) => event.kind)).toEqual([
           "mission.created",
           "workstream.created",
+          "control.granted",
           "workstream.branch_created"
         ]);
-        expect(body.events.map((event: { seq: number }) => event.seq)).toEqual([1, 2, 3]);
+        expect(body.events.map((event: { seq: number }) => event.seq)).toEqual([1, 2, 3, 4]);
       }
     } finally {
       await cold.close();

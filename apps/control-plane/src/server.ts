@@ -1,5 +1,9 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
-import { CreateMissionInputSchema } from "@novus/contracts";
+import {
+  CreateMissionInputSchema,
+  RegisterLocalRepoInputSchema,
+  ReportBranchInputSchema
+} from "@novus/contracts";
 import { z } from "zod";
 import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
@@ -23,13 +27,11 @@ import {
   registerLocalRepository,
   reportBranchOutcome
 } from "./missions.ts";
-import {
-  DirectionInputSchema,
-  RegisterLocalRepoInputSchema,
-  ReportBranchInputSchema,
-  ReportEventsInputSchema
-} from "@novus/contracts";
-import { reportExecutionEvents, submitDirection } from "./missions.ts";
+import { AuthorizationError } from "./authz.ts";
+import { registerAuthorityRoutes } from "./authority.ts";
+import { registerExecutionRoutes } from "./executions.ts";
+import { registerRunnerRoutes } from "./runner.ts";
+import type { RouteDeps } from "./routes.ts";
 import {
   ProviderUnconfiguredError,
   UnknownRepositoryError,
@@ -48,7 +50,9 @@ const StateSchema = z.object({ state: z.string().min(16).max(64) });
 const CallbackSchema = z.object({ code: z.string().min(1).max(200), state: z.string().min(16).max(64) });
 
 export function buildServer(db: Db, config: Config, providerOverride?: RepositoryProvider): FastifyInstance {
-  const app = Fastify({ logger: false });
+  // Checkpoint reports carry bounded per-file diffs; the ceiling is generous
+  // enough for a real turn and small enough to stay a bound.
+  const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
   const provider = providerOverride ?? selectRepositoryProvider(config);
 
   const sendError = (reply: FastifyReply, status: number, code: string, message: string) =>
@@ -66,11 +70,23 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     return ctx;
   };
 
+  // An authorization failure anywhere becomes a plain, named rejection —
+  // never a 500, and never a silent success (ARCHITECTURE.md#authorization).
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof AuthorizationError) {
+      return sendError(reply, error.status, error.code, error.message);
+    }
+    if (error instanceof ProviderUnconfiguredError) {
+      return sendError(reply, 503, "repo_unconfigured", error.message);
+    }
+    return sendError(reply, 500, "server_error", "Something went wrong.");
+  });
+
   app.get("/health", async () => ({ ok: true }));
 
   registerGithubAppSetup(app, config);
 
-  app.post("/auth/github/start", async (_request, reply) => {
+  app.post("/auth/github/start", async (request, reply) => {
     if (!config.fakeGithub && !config.githubClientId) {
       return sendError(
         reply,
@@ -79,7 +95,13 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
         "GitHub sign-in isn't configured yet: the control plane has no OAuth app credentials."
       );
     }
-    return startFlow(db, config);
+    // Test-only: which deterministic identity the gated fake upstream returns,
+    // so two desktop clients can be two different people. Ignored entirely
+    // unless NOVUS_FAKE_GITHUB is on, which refuses production (D-027).
+    const hint = config.fakeGithub
+      ? z.object({ as: z.string().regex(/^[a-z0-9-]{1,32}$/).optional() }).safeParse(request.body ?? {})
+      : null;
+    return startFlow(db, config, hint?.success ? hint.data.as : undefined);
   });
 
   if (config.fakeGithub) {
@@ -94,7 +116,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     const parsed = CallbackSchema.safeParse(request.query);
     if (!parsed.success) return sendError(reply, 400, "bad_callback", "Malformed OAuth callback.");
     try {
-      const identity = await exchangeGithubCode(config, parsed.data.code);
+      const identity = await exchangeGithubCode(config, parsed.data.code, db, parsed.data.state);
       await completeFlow(db, config, parsed.data.state, identity);
       return reply
         .type("text/html")
@@ -243,30 +265,6 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     return { workstream: detail.workstream };
   });
 
-  app.post("/missions/:missionId/direction", async (request, reply) => {
-    const ctx = await requireAuth(request, reply);
-    if (!ctx) return;
-    const params = z.object({ missionId: z.string().startsWith("msn_") }).safeParse(request.params);
-    const body = DirectionInputSchema.safeParse(request.body);
-    if (!params.success || !body.success) {
-      return sendError(reply, 422, "invalid_direction", body.success ? "Malformed mission id." : body.error.issues[0]?.message ?? "Invalid direction.");
-    }
-    const recorded = await submitDirection(db, ctx, params.data.missionId, body.data.body);
-    if (!recorded) return sendError(reply, 404, "not_found", "No such mission in your organization.");
-    return reply.status(201).send({ ok: true });
-  });
-
-  app.post("/missions/:missionId/events/report", async (request, reply) => {
-    const ctx = await requireAuth(request, reply);
-    if (!ctx) return;
-    const params = z.object({ missionId: z.string().startsWith("msn_") }).safeParse(request.params);
-    const body = ReportEventsInputSchema.safeParse(request.body);
-    if (!params.success || !body.success) return sendError(reply, 422, "invalid_report", "Malformed event report.");
-    const recorded = await reportExecutionEvents(db, ctx, params.data.missionId, body.data.events);
-    if (!recorded) return sendError(reply, 404, "not_found", "No such mission in your organization.");
-    return reply.status(201).send({ ok: true });
-  });
-
   app.get("/missions/:missionId", async (request, reply) => {
     const ctx = await requireAuth(request, reply);
     if (!ctx) return;
@@ -276,6 +274,12 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     if (!found) return sendError(reply, 404, "not_found", "No such mission in your organization.");
     return found;
   });
+
+  // Slice modules own disjoint path sets; see each module's header.
+  const deps: RouteDeps = { db, config, provider, requireAuth, sendError };
+  registerAuthorityRoutes(app, deps);
+  registerExecutionRoutes(app, deps);
+  registerRunnerRoutes(app, deps);
 
   return app;
 }

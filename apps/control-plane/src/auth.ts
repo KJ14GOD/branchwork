@@ -22,12 +22,18 @@ export interface AuthedContext {
 
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
-export async function startFlow(db: Db, config: Config): Promise<{ state: string; authorizeUrl: string }> {
+export async function startFlow(
+  db: Db,
+  config: Config,
+  /** Test-only: which deterministic identity the gated fake upstream returns.
+   *  Recorded on the flow row and read only when `fakeGithub` is on. */
+  fakeLogin?: string
+): Promise<{ state: string; authorizeUrl: string }> {
   const state = newStateNonce();
   await db.query("delete from auth_flows where expires_at < now()"); // opportunistic prune
   await db.query(
-    "insert into auth_flows (state, expires_at) values ($1, now() + interval '10 minutes')",
-    [state]
+    "insert into auth_flows (state, expires_at, fake_login) values ($1, now() + interval '10 minutes', $2)",
+    [state, config.fakeGithub ? fakeLogin ?? null : null]
   );
   const callback = `${config.publicBaseUrl}/auth/github/callback`;
   const authorizeUrl = config.fakeGithub
@@ -36,10 +42,27 @@ export async function startFlow(db: Db, config: Config): Promise<{ state: string
   return { state, authorizeUrl };
 }
 
-export async function exchangeGithubCode(config: Config, code: string): Promise<GithubIdentity> {
+export async function exchangeGithubCode(
+  config: Config,
+  code: string,
+  db?: Db,
+  state?: string
+): Promise<GithubIdentity> {
   if (config.fakeGithub) {
-    // Deterministic test identity; the rest of the machinery is real.
-    return { githubId: 1_000_001, login: "spike-user", name: "Spike User" };
+    // Deterministic test identity. Only the upstream is faked: sessions,
+    // organizations, membership, invitations, and scoping are all real. A
+    // per-flow login lets a test be two different people (D-027).
+    let login = "spike-user";
+    if (db && state) {
+      const row = await db.query("select fake_login from auth_flows where state = $1", [state]);
+      const hinted = row.rows[0]?.fake_login as string | null | undefined;
+      if (hinted) login = hinted;
+    }
+    const githubId =
+      login === "spike-user"
+        ? 1_000_001
+        : 1_000_000 + (Number.parseInt(createHash("sha256").update(login).digest("hex").slice(0, 8), 16) % 900_000) + 100;
+    return { githubId, login, name: login.replace(/(^|-)([a-z])/g, (_, sep, ch) => sep + ch.toUpperCase()) };
   }
   const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
@@ -140,13 +163,22 @@ export async function claimFlow(db: Db, config: Config, state: string): Promise<
 }
 
 export async function authenticate(db: Db, bearerToken: string): Promise<AuthedContext | null> {
+  // A person can belong to more than one organization the moment they redeem a
+  // mission invitation (D-036). The session's organization is their own — the
+  // oldest membership, which is the personal org created at first sign-in —
+  // resolved deterministically rather than by whichever row the planner
+  // happened to return. It is the scope for organization-level acts only;
+  // access to a mission is decided by the mission's own organization and the
+  // participant row, never by this field (see authz.ts).
   const result = await db.query(
     `select s.session_id, u.user_id, u.login, u.name, m.org_id, o.name as org_name
        from sessions s
        join users u on u.user_id = s.user_id
        join organization_members m on m.user_id = u.user_id
        join organizations o on o.org_id = m.org_id
-      where s.token_hash = $1 and s.expires_at > now() and s.revoked_at is null`,
+      where s.token_hash = $1 and s.expires_at > now() and s.revoked_at is null
+      order by m.created_at asc, m.org_id asc
+      limit 1`,
     [hashToken(bearerToken)]
   );
   if (result.rowCount === 0 || !result.rows[0]) return null;

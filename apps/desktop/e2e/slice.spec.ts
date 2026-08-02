@@ -6,15 +6,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
-// The project-first shell (D-032) exercised through the actual Electron app:
-// sign in → add a GitHub project from the lazily-fetched available list →
-// the "+" tab shows repo · base ref · short SHA → the first chat message
-// creates the mission with a derived goal → the composer then states honestly
-// that agents only run on local repositories. A second walk registers a real
-// local git repository directly with the control plane, maps it into the
-// app's machine-local store, and drives a full fake-harness turn through the
-// chat room — then relaunches and proves the conversation reconstructs from
-// the server. Screenshots land in e2e/evidence/.
+// The Mission Room (D-032) exercised through the actual Electron app:
+// sign in → Add project as a real dialog over 120+ repositories with search,
+// keyboard navigation and focus restoration → the "+" tab shows repo · base
+// ref · short SHA → the first chat message creates the mission → a full
+// harness turn renders as ONE direction trace (author → direction → grouped
+// harness speech → collapsed technical activity → checkpoint → outcome) →
+// Changes and Verification answer honestly, including "No checks observed" →
+// relaunch reconstructs the conversation from the server.
+// Screenshots land in e2e/evidence/.
 
 const desktopRoot = resolve(__dirname, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
@@ -42,7 +42,10 @@ async function waitForHealth(): Promise<void> {
   throw new Error("control plane never became healthy");
 }
 
-async function launchApp(): Promise<{ app: ElectronApplication; page: Page }> {
+async function launchApp(options: { dataDir?: string; identity?: string } = {}): Promise<{
+  app: ElectronApplication;
+  page: Page;
+}> {
   const app = await electron.launch({
     args: [desktopRoot],
     env: {
@@ -50,12 +53,26 @@ async function launchApp(): Promise<{ app: ElectronApplication; page: Page }> {
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
-      NOVUS_USER_DATA_DIR: userDataDir
+      NOVUS_USER_DATA_DIR: options.dataDir ?? userDataDir,
+      ...(options.identity ? { NOVUS_FAKE_IDENTITY: options.identity } : {})
     }
   });
   const page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
+  // The full shell starts at 1200px (DESIGN.md#responsive); the app's own
+  // default window is narrower than that, so every scenario states the size it
+  // is proving instead of inheriting one.
+  await resizeWindow(app, 1440, 900);
   return { app, page };
+}
+
+/** The room is a resizable window, so the responsive rules are proved by
+ *  resizing the real window rather than a browser viewport. */
+async function resizeWindow(app: ElectronApplication, width: number, height: number): Promise<void> {
+  await app.evaluate(async ({ BrowserWindow }, size) => {
+    BrowserWindow.getAllWindows()[0]?.setContentSize(size.width, size.height);
+  }, { width, height });
+  await new Promise((r) => setTimeout(r, 250));
 }
 
 /** Completes the gated fake-GitHub auth flow directly over HTTP: the same
@@ -100,6 +117,8 @@ beforeAll(async () => {
       env: {
         ...process.env,
         NOVUS_FAKE_GITHUB: "1",
+        // The picker has to be proved at a real repository count, not at three.
+        NOVUS_FAKE_REPO_COUNT: "120",
         NOVUS_CP_PORT: String(CP_PORT),
         NOVUS_DATABASE_URL: DB_URL
       },
@@ -113,8 +132,8 @@ afterAll(() => {
   controlPlane?.kill("SIGTERM");
 });
 
-describe("the project-first shell", () => {
-  it("adds a GitHub project and refuses execution honestly before the first message", async () => {
+describe("the Mission Room", () => {
+  it("picks a project from 120+ repositories with search, keys, and restored focus", async () => {
     const { app, page } = await launchApp();
 
     // Sign in through the setup room.
@@ -124,15 +143,69 @@ describe("the project-first shell", () => {
     await page.getByTestId("finish-setup").click();
     await page.getByTestId("project-shell").waitFor();
 
-    // No projects yet; GitHub repositories are fetched only on Add project.
+    // No projects yet; repositories are fetched only when the dialog opens.
     await page.getByTestId("no-projects").waitFor();
     await page.getByTestId("add-project").click();
-    await page.getByTestId("menu-github").click();
-    const demoRepo = page.getByTestId("gh-repo").filter({ hasText: "novus/demo-app" });
-    await demoRepo.waitFor();
-    await demoRepo.click();
+    await page.getByTestId("add-project-dialog").waitFor();
+    await page.getByTestId("repo-row").first().waitFor();
 
-    // The "+" tab: no form — a quiet repo · ref · sha line and the composer.
+    // A real repository count, not a demo-sized one.
+    const rowCount = await page.getByTestId("repo-row").count();
+    expect(rowCount).toBeGreaterThan(100);
+    await page.screenshot({ path: join(evidenceDir, "12-add-project-1440.png") });
+
+    // The search field already has focus: type without clicking anything.
+    await page.keyboard.type("billing-002");
+    await expect
+      .poll(async () => page.getByTestId("repo-row").count(), { timeout: 5_000 })
+      .toBe(1);
+    expect(await page.getByTestId("repo-row").first().textContent()).toContain("billing-002");
+
+    // Keyboard navigation moves the active option; the header and the actions
+    // never scroll away.
+    for (let i = 0; i < "billing-002".length; i += 1) await page.keyboard.press("Backspace");
+    await expect.poll(async () => page.getByTestId("repo-row").count()).toBeGreaterThan(100);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    const active = page.locator('[data-testid="repo-row"][aria-selected="true"]');
+    expect(await active.count()).toBe(1);
+    expect(await active.textContent()).toContain("payments");
+    await page.keyboard.press("End");
+    expect(await page.locator('[data-testid="repo-row"][aria-selected="true"]').count()).toBe(1);
+    await page.keyboard.press("Home");
+    expect(await page.locator('[data-testid="repo-row"][aria-selected="true"]').textContent()).toContain(
+      "demo-app"
+    );
+    // The search field is still reachable and the primary action is still there.
+    await page.getByTestId("open-repository").waitFor();
+    await page.getByTestId("repo-search").waitFor();
+
+    // Narrow windows: header, results, and actions all survive.
+    await resizeWindow(app, 1000, 700);
+    await page.getByTestId("repo-search").waitFor();
+    await page.getByTestId("open-repository").waitFor();
+    await page.screenshot({ path: join(evidenceDir, "13-add-project-1000.png") });
+    await resizeWindow(app, 760, 600);
+    await page.getByTestId("repo-search").waitFor();
+    await page.getByTestId("open-repository").waitFor();
+    await page.screenshot({ path: join(evidenceDir, "14-add-project-760.png") });
+    await resizeWindow(app, 1440, 900);
+
+    // Escape closes the dialog and returns focus to what opened it.
+    await page.keyboard.press("Escape");
+    await page.getByTestId("add-project-dialog").waitFor({ state: "detached" });
+    expect(await page.evaluate(() => document.activeElement?.getAttribute("data-testid"))).toBe(
+      "add-project"
+    );
+
+    // Reopen and pick by typing + Enter.
+    await page.getByTestId("add-project").click();
+    await page.getByTestId("repo-search").waitFor();
+    await page.keyboard.type("demo-app");
+    await expect.poll(async () => page.getByTestId("repo-row").count(), { timeout: 5_000 }).toBe(1);
+    await page.keyboard.press("Enter");
+
+    // The "+" tab: no form — a quiet pinned base line and the composer.
     const baseLine = page.getByTestId("draft-base");
     await baseLine.waitFor();
     const baseText = (await baseLine.textContent()) ?? "";
@@ -140,18 +213,21 @@ describe("the project-first shell", () => {
     expect(baseText).toContain("main");
     expect(baseText).toContain(DEMO_HEAD_SHA.slice(0, 8));
     expect(baseText).not.toContain(DEMO_HEAD_SHA); // abbreviated
-    // Honesty before typing: a GitHub project cannot run an agent yet, so the
-    // composer refuses up front rather than swallowing the first message.
-    const note = page.getByTestId("composer-disabled");
-    await note.waitFor();
-    expect(await note.textContent()).toContain("Agents run on local repositories for now");
-    expect(await page.getByTestId("composer-input").isDisabled()).toBe(true);
+
+    // The composer is gated on the server's capability and nothing else;
+    // whether any machine can run the work is the state line's business.
+    const draftInput = page.getByTestId("composer-input");
+    expect(await draftInput.isDisabled()).toBe(false);
+    expect(await draftInput.getAttribute("placeholder")).toBe("Direct Claude Code…");
+    expect(await page.getByTestId("state-line").textContent()).toContain(
+      "no machine has this repository checked out"
+    );
     await page.screenshot({ path: join(evidenceDir, "10-first-message.png") });
 
     await app.close();
   });
 
-  it("runs a full fake-harness turn on a local repository and reconstructs the conversation after relaunch", async () => {
+  it("renders a full turn as one direction trace, with evidence and an honest ledger", async () => {
     // A real local git repository, made in the test.
     const localRepoDir = mkdtempSync(join(tmpdir(), "novus-local-repo-"));
     const repoName = basename(localRepoDir);
@@ -187,10 +263,23 @@ describe("the project-first shell", () => {
     expect(baseText).toContain(repoName);
     expect(baseText).toContain(headSha.slice(0, 8));
 
-    // The first message creates the mission AND starts the fake turn.
-    await first.page.getByTestId("composer-input").fill("add a fake turn file");
+    // The composer sits at one row before anything is typed, and returns to
+    // that height after it submits (DESIGN.md prohibited pattern 9).
+    const input = first.page.getByTestId("composer-input");
+    const idleHeight = (await input.boundingBox())?.height ?? 0;
+    expect(idleHeight).toBeGreaterThan(0);
+    await input.fill("add a fake turn file\nsecond line\nthird line\nfourth line");
+    const grownHeight = (await input.boundingBox())?.height ?? 0;
+    expect(grownHeight).toBeGreaterThan(idleHeight);
+    await input.fill("add a fake turn file");
     await first.page.keyboard.press("Enter");
 
+    // The first message creates the mission and runs it. This machine enrols as
+    // the workstream's runner moments after the mission exists, and the control
+    // plane dispatches the direction the controller already authorized rather
+    // than leaving it queued for nobody.
+    const trace = first.page.getByTestId("direction-trace");
+    await trace.first().waitFor({ timeout: 20_000 });
     await first.page
       .getByTestId("msg-user")
       .filter({ hasText: "add a fake turn file" })
@@ -199,19 +288,121 @@ describe("the project-first shell", () => {
       .getByTestId("msg-agent")
       .filter({ hasText: "Working on: add a fake turn file" })
       .waitFor({ timeout: 20_000 });
-    await first.page.getByTestId("tool-line").filter({ hasText: "Write" }).waitFor({ timeout: 20_000 });
-    await first.page.getByTestId("msg-agent").filter({ hasText: "Done." }).waitFor({ timeout: 20_000 });
-    await first.page.getByTestId("checkpoint-line").waitFor({ timeout: 20_000 });
     await first.page
-      .getByTestId("sys-line")
+      .getByTestId("trace-outcome")
       .filter({ hasText: "Turn completed" })
-      .waitFor({ timeout: 20_000 });
+      .waitFor({ timeout: 30_000 });
 
-    // The composer re-enables once the turn completes.
-    await first.page.getByTestId("working").waitFor({ state: "detached", timeout: 10_000 });
-    expect(await first.page.getByTestId("composer-input").isDisabled()).toBe(false);
+    // Consecutive harness speech groups under ONE harness identity.
+    expect(await first.page.getByTestId("harness-mark").count()).toBe(1);
+    expect(await first.page.getByTestId("msg-agent").count()).toBe(1);
+    expect(await first.page.getByTestId("msg-agent").textContent()).toContain("Done.");
+
+    // Tool calls are collapsed, not confetti; expanding shows them.
+    const technical = first.page.getByTestId("technical-activity");
+    await technical.waitFor();
+    expect(await first.page.getByTestId("tool-line").isVisible().catch(() => false)).toBe(false);
+    await technical.locator("summary").click();
+    await first.page.getByTestId("tool-line").filter({ hasText: "Write" }).waitFor({ timeout: 10_000 });
+    await technical.locator("summary").click();
+
+    // Setup collapsed to one subordinate row, never centred debug fragments.
+    const setupRow = first.page.getByTestId("setup-row");
+    await setupRow.waitFor();
+    expect(await setupRow.textContent()).toContain("Workspace ready");
+    expect(await setupRow.textContent()).toContain(headSha.slice(0, 8));
+
+    await first.page.getByTestId("checkpoint-line").waitFor({ timeout: 20_000 });
+
+    // The composer is back to one row and empty.
+    await first.page.getByTestId("working").waitFor({ state: "detached", timeout: 20_000 });
+    expect(await input.inputValue()).toBe("");
+    expect((await input.boundingBox())?.height ?? 0).toBe(idleHeight);
+
+    // Authority is rendered from the server's own snapshot.
+    const controller = first.page.getByTestId("controller");
+    await controller.waitFor();
+    expect(await controller.textContent()).toContain("baton");
+    await first.page.getByTestId("participant-stack").waitFor();
+    expect(await first.page.getByTestId("baton").count()).toBeGreaterThan(0);
+
+    // The state line names a PRODUCT.md state and what happens next.
+    const stateLine = first.page.getByTestId("state-line");
+    await stateLine.waitFor();
+    const stateText = (await stateLine.textContent()) ?? "";
+    expect(stateText.length).toBeGreaterThan(0);
 
     await first.page.screenshot({ path: join(evidenceDir, "9-project-shell.png") });
+
+    // Verification is honest when nothing ran.
+    await first.page.getByTestId("open-verification").click();
+    await first.page.getByTestId("inspector").waitFor();
+    const empty = first.page.getByTestId("checks-empty");
+    await empty.waitFor();
+    expect(await empty.textContent()).toContain("No checks observed");
+    await first.page.screenshot({ path: join(evidenceDir, "16-verification-empty.png") });
+
+    // Changes: the file the turn actually wrote, and its real diff.
+    await first.page.getByTestId("inspector-tab-changes").click();
+    await first.page.getByTestId("inspector-changes").waitFor();
+    const changeRows = first.page.getByTestId("change-row");
+    await changeRows.first().waitFor({ timeout: 10_000 });
+    await changeRows.first().click();
+    await first.page.getByTestId("diff").waitFor({ timeout: 10_000 });
+    await first.page.screenshot({ path: join(evidenceDir, "15-changes-diff.png") });
+
+    // Overview holds the machinery the header must never carry.
+    await first.page.getByTestId("inspector-tab-overview").click();
+    await first.page.getByTestId("ws-branch").waitFor();
+    expect(await first.page.getByTestId("ws-base").textContent()).toContain(headSha.slice(0, 8));
+    await first.page.screenshot({ path: join(evidenceDir, "17-inspector-overview.png") });
+
+    // Escape closes the drawer and focus returns to its trigger.
+    await first.page.keyboard.press("Escape");
+    await first.page.getByTestId("inspector").waitFor({ state: "detached" });
+    expect(await first.page.evaluate(() => document.activeElement?.getAttribute("data-testid"))).toBe(
+      "open-overview"
+    );
+
+    // Narrow: single column, nothing clipped, nothing below the fold.
+    await resizeWindow(first.app, 860, 700);
+    await first.page.getByTestId("state-line").waitFor();
+    await first.page.getByTestId("composer-input").waitFor();
+    await first.page.screenshot({ path: join(evidenceDir, "18-room-narrow.png") });
+    await resizeWindow(first.app, 1440, 900);
+
+    // The evidence panel is docked, not modal: opening it leaves the trace
+    // visible beside it, and one control in the top bar both opens and closes.
+    const panel = first.page.getByTestId("inspector");
+    const panelToggle = first.page.getByTestId("panel-toggle");
+    expect(await panel.count()).toBe(0);
+    await panelToggle.click();
+    await panel.waitFor({ timeout: 10_000 });
+    expect(await first.page.getByTestId("msg-user").first().isVisible()).toBe(true);
+    expect(await first.page.getByTestId("inspector-scrim").count()).toBe(0);
+    await first.page.screenshot({ path: join(evidenceDir, "19-panel-docked.png") });
+    await panelToggle.click();
+    await panel.waitFor({ state: "detached", timeout: 10_000 });
+
+    // A section trigger also toggles: pressing the one already showing closes it.
+    await first.page.getByTestId("open-changes").click();
+    await panel.waitFor({ timeout: 10_000 });
+    await first.page.getByTestId("open-changes").click();
+    await panel.waitFor({ state: "detached", timeout: 10_000 });
+
+    // Disclosure is the whole project row, not only the arrow beside it.
+    const workstreams = first.page.getByTestId("workstream-row");
+    expect(await workstreams.count()).toBeGreaterThan(0);
+    await first.page.getByTestId("project-row").filter({ hasText: repoName }).click();
+    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBe(0);
+    await first.page.getByTestId("project-row").filter({ hasText: repoName }).click();
+    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBeGreaterThan(0);
+    // And the arrow alone still works, independently of selection.
+    await first.page.getByTestId("project-twisty").first().click();
+    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBe(0);
+    await first.page.getByTestId("project-twisty").first().click();
+    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBeGreaterThan(0);
+
     await first.app.close();
 
     // Relaunch: the entire conversation reconstructs from the server.
@@ -230,7 +421,7 @@ describe("the project-first shell", () => {
     await second.page.getByTestId("msg-agent").filter({ hasText: "Done." }).waitFor();
     await second.page.getByTestId("checkpoint-line").waitFor();
     await second.page
-      .getByTestId("sys-line")
+      .getByTestId("trace-outcome")
       .filter({ hasText: "Turn completed" })
       .waitFor();
     await second.app.close();

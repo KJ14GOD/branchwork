@@ -1,15 +1,18 @@
 import type {
   CreateMissionInput,
   Mission,
-  MissionEvent,
+  MissionDetailResponse,
   RepositoryRef,
   Workstream
 } from "@novus/contracts";
 import type pg from "pg";
 import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
-import { newEventId, newMissionId, newRepoId, newWorkstreamId } from "./ids.ts";
+import { recordEvent, recordEventAtSeq } from "./events.ts";
+import { newLeaseId, newMissionId, newRepoId, newWorkstreamId } from "./ids.ts";
 import type { AuthedContext } from "./auth.ts";
+import { missionAccess } from "./authz.ts";
+import { missionDetail } from "./mission-detail.ts";
 import {
   BranchConflictError,
   ProviderTransientError,
@@ -83,46 +86,6 @@ function toWorkstream(row: WorkstreamRow): Workstream {
   };
 }
 
-async function nextSeq(client: pg.PoolClient, missionId: string): Promise<number> {
-  // Per-mission advisory lock: concurrent reporters (two machines, or a
-  // reporter racing a retry) serialize here instead of colliding on the
-  // (mission_id, seq) unique index and losing events.
-  await client.query("select pg_advisory_xact_lock(hashtext($1))", [missionId]);
-  const result = await client.query(
-    "select coalesce(max(seq), 0)::int + 1 as next from events where mission_id = $1",
-    [missionId]
-  );
-  return result.rows[0]?.next as number;
-}
-
-async function recordEvent(
-  client: pg.PoolClient,
-  args: {
-    orgId: string;
-    missionId: string;
-    seq: number;
-    kind: string;
-    actorKind: "user" | "system" | "harness" | "runner";
-    actorId: string;
-    payload: Record<string, unknown>;
-  }
-): Promise<void> {
-  await client.query(
-    `insert into events (event_id, org_id, mission_id, seq, kind, actor_kind, actor_id, payload)
-     values ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [
-      newEventId(),
-      args.orgId,
-      args.missionId,
-      args.seq,
-      args.kind,
-      args.actorKind,
-      args.actorId,
-      JSON.stringify(args.payload)
-    ]
-  );
-}
-
 /**
  * Records the repository for this org if it isn't recorded yet. Repository
  * identity is the stable provider id, never the name (ARCHITECTURE.md).
@@ -163,10 +126,11 @@ export class MissionCreationError extends Error {
 }
 
 /**
- * Creates the mission, its workstream, and both initial events in one
- * transaction, then attempts branch creation as a recorded side effect.
- * Idempotent end to end: the creationKey makes retried submissions return
- * the existing mission instead of minting a second one (D-031).
+ * Creates the mission, its workstream, the creator's Mission Admin
+ * participation, the workstream's first control lease, and the initial events
+ * in one transaction, then attempts branch creation as a recorded side effect.
+ * Idempotent end to end: the creationKey makes retried submissions return the
+ * existing mission instead of minting a second one (D-031).
  */
 export async function createMission(
   db: Db,
@@ -235,9 +199,15 @@ export async function createMission(
   // attempts creation only where the provider can act (GitHub).
   if (input.provider !== "local") await attemptBranchCreation(db, provider, ctx, created);
 
-  const detail = await getMission(db, ctx, created);
-  if (!detail || !detail.workstream) throw new Error("mission vanished during creation");
-  return { mission: detail.mission, workstream: detail.workstream };
+  const base = await getMissionBase(db, ctx, created);
+  if (!base || !base.workstream) throw new Error("mission vanished during creation");
+  return {
+    mission: {
+      ...base.mission,
+      primaryState: base.workstream.branchStatus === "created" ? "ready_for_instruction" : "new_mission"
+    },
+    workstream: base.workstream
+  };
 }
 
 async function createMissionTx(
@@ -248,51 +218,81 @@ async function createMissionTx(
   missionId: string
 ): Promise<string> {
   return withTransaction(db, async (client) => {
-      const duplicate = await client.query(
-        "select mission_id from missions where org_id = $1 and creation_key = $2",
-        [ctx.orgId, input.creationKey]
-      );
-      if (duplicate.rowCount && duplicate.rows[0]) return duplicate.rows[0].mission_id as string;
+    const duplicate = await client.query(
+      "select mission_id from missions where org_id = $1 and creation_key = $2",
+      [ctx.orgId, input.creationKey]
+    );
+    if (duplicate.rowCount && duplicate.rows[0]) return duplicate.rows[0].mission_id as string;
 
-      const repoId = await upsertRepository(client, ctx, available, input.provider);
-      await client.query(
-        `insert into missions (mission_id, org_id, goal, success_criteria, primary_state, created_by, repo_id, creation_key)
+    const repoId = await upsertRepository(client, ctx, available, input.provider);
+    await client.query(
+      `insert into missions (mission_id, org_id, goal, success_criteria, primary_state, created_by, repo_id, creation_key)
          values ($1, $2, $3, $4, 'new_mission', $5, $6, $7)`,
-        [missionId, ctx.orgId, input.goal, input.successCriteria, ctx.userId, repoId, input.creationKey]
-      );
-      await client.query(
-        "insert into participants (mission_id, user_id, mission_role) values ($1, $2, 'mission_admin')",
-        [missionId, ctx.userId]
-      );
-      const missionBranch = `novus/m-${missionId.slice(4, 12)}`;
-      await client.query(
-        `insert into workstreams (wst_id, mission_id, repo_id, name, base_ref, base_sha, mission_branch, branch_status)
+      [missionId, ctx.orgId, input.goal, input.successCriteria, ctx.userId, repoId, input.creationKey]
+    );
+    await client.query(
+      "insert into participants (mission_id, user_id, mission_role) values ($1, $2, 'mission_admin')",
+      [missionId, ctx.userId]
+    );
+    const workstreamId = newWorkstreamId();
+    const missionBranch = `novus/m-${missionId.slice(4, 12)}`;
+    await client.query(
+      `insert into workstreams (wst_id, mission_id, repo_id, name, base_ref, base_sha, mission_branch, branch_status)
          values ($1, $2, $3, 'main', $4, $5, $6, 'pending')`,
-        [newWorkstreamId(), missionId, repoId, input.baseRef, input.baseSha, missionBranch]
-      );
-    await recordEvent(client, {
-      orgId: ctx.orgId,
-      missionId,
-      seq: 1,
-      kind: "mission.created",
-      actorKind: "user",
-      actorId: ctx.userId,
-      payload: { goal: input.goal, successCriteria: input.successCriteria, repository: available.name }
-    });
-      await recordEvent(client, {
+      [workstreamId, missionId, repoId, input.baseRef, input.baseSha, missionBranch]
+    );
+    // The creator holds the first lease: a workstream is never born without a
+    // controller (PRODUCT.md#control).
+    const leaseId = newLeaseId();
+    await client.query(
+      `insert into control_leases (lease_id, org_id, mission_id, wst_id, holder_user_id, state)
+         values ($1, $2, $3, $4, $5, 'held')`,
+      [leaseId, ctx.orgId, missionId, workstreamId, ctx.userId]
+    );
+
+    await recordEventAtSeq(
+      client,
+      {
         orgId: ctx.orgId,
         missionId,
-        seq: 2,
+        workstreamId,
+        kind: "mission.created",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        payload: { goal: input.goal, successCriteria: input.successCriteria, repository: available.name }
+      },
+      1
+    );
+    await recordEventAtSeq(
+      client,
+      {
+        orgId: ctx.orgId,
+        missionId,
+        workstreamId,
         kind: "workstream.created",
         actorKind: "user",
         actorId: ctx.userId,
-        payload: {
-          baseRef: input.baseRef,
-          baseSha: input.baseSha,
-          missionBranch
-        }
-      });
-      return missionId;
+        actorLogin: ctx.login,
+        payload: { baseRef: input.baseRef, baseSha: input.baseSha, missionBranch }
+      },
+      2
+    );
+    await recordEventAtSeq(
+      client,
+      {
+        orgId: ctx.orgId,
+        missionId,
+        workstreamId,
+        kind: "control.granted",
+        actorKind: "system",
+        actorId: "control-plane",
+        causeLeaseId: leaseId,
+        payload: { holderLogin: ctx.login, reason: "mission_created" }
+      },
+      3
+    );
+    return missionId;
   });
 }
 
@@ -304,19 +304,20 @@ async function createMissionTx(
 export async function attemptBranchCreation(
   db: Db,
   provider: RepositoryProvider,
-  ctx: AuthedContext,
+  _ctx: AuthedContext,
   missionId: string
 ): Promise<void> {
   const rows = await db.query(
-    `select w.wst_id, w.mission_branch, w.base_sha, w.branch_status, r.provider_repo_id
+    `select w.wst_id, w.mission_branch, w.base_sha, w.branch_status, r.provider_repo_id, m.org_id
        from workstreams w
        join missions m on m.mission_id = w.mission_id
        join repositories r on r.repo_id = w.repo_id
-      where w.mission_id = $1 and m.org_id = $2 and r.provider = 'github'`,
-    [missionId, ctx.orgId]
+      where w.mission_id = $1 and r.provider = 'github'`,
+    [missionId]
   );
   const row = rows.rows[0];
   if (!row || row.branch_status === "created") return;
+  const orgId = row.org_id as string;
 
   // Serialize retries: only one caller moves failed → pending; the loser exits
   // quietly instead of emitting a duplicate outcome event (D-031 audit).
@@ -355,9 +356,9 @@ export async function attemptBranchCreation(
       );
       if (updated.rowCount) {
         await recordEvent(client, {
-          orgId: ctx.orgId,
+          orgId,
           missionId,
-          seq: await nextSeq(client, missionId),
+          workstreamId: row.wst_id,
           kind: "workstream.branch_created",
           actorKind: "system",
           actorId: "control-plane",
@@ -371,9 +372,9 @@ export async function attemptBranchCreation(
       );
       if (updated.rowCount) {
         await recordEvent(client, {
-          orgId: ctx.orgId,
+          orgId,
           missionId,
-          seq: await nextSeq(client, missionId),
+          workstreamId: row.wst_id,
           kind: "workstream.branch_failed",
           actorKind: "system",
           actorId: "control-plane",
@@ -392,46 +393,110 @@ const MISSION_SELECT = `
     join users u on u.user_id = m.created_by
     left join repositories r on r.repo_id = m.repo_id`;
 
-/** Every query is org-scoped; a mission outside the caller's org does not exist. */
+/**
+ * The fragment that decides whether a caller may see a mission at all:
+ * membership in the organization that owns it, and a participant row. An
+ * organization member who was never invited cannot see it, so a mission id is
+ * never a capability; and because the check is against the mission's own
+ * organization, it keeps working for someone who belongs to two (D-036).
+ */
+const VISIBLE_TO = `
+   join participants p on p.mission_id = m.mission_id and p.user_id = $1
+   join organization_members om on om.org_id = m.org_id and om.user_id = $1`;
+
+/** Missions the caller participates in, newest first. */
 export async function listMissions(db: Db, ctx: AuthedContext): Promise<Mission[]> {
   const result = await db.query(
-    `${MISSION_SELECT} where m.org_id = $1 order by m.created_at desc`,
-    [ctx.orgId]
+    `${MISSION_SELECT} ${VISIBLE_TO} order by m.created_at desc`,
+    [ctx.userId]
   );
-  return (result.rows as MissionRow[]).map(toMission);
+  const missions = (result.rows as MissionRow[]).map(toMission);
+  if (missions.length === 0) return missions;
+
+  // The list must not disagree with the room. Both states come from the same
+  // projection over the same durable facts; the stored column is never read.
+  const ids = missions.map((mission) => mission.missionId);
+  const summary = await db.query(
+    `select m.mission_id,
+            (select e.state from executions e
+              where e.mission_id = m.mission_id order by e.created_at desc limit 1) as latest_state,
+            exists (select 1 from workstreams w
+                     where w.mission_id = m.mission_id and w.branch_status = 'created') as branch_ready,
+            exists (select 1 from checkpoints c where c.mission_id = m.mission_id and c.files_changed > 0) as changed,
+            exists (select 1 from verification_checks v where v.mission_id = m.mission_id and v.outcome = 'passed') as passed,
+            exists (select 1 from verification_checks v where v.mission_id = m.mission_id and v.outcome in ('failed', 'errored')) as broken
+       from missions m where m.mission_id = any($1::text[])`,
+    [ids]
+  );
+  const byId = new Map(summary.rows.map((row) => [row.mission_id as string, row]));
+  return missions.map((mission) => {
+    const row = byId.get(mission.missionId);
+    if (!row) return mission;
+    return { ...mission, primaryState: projectListState(row) };
+  });
 }
 
+/** The same state machine as the room's, over the columns a list can afford. */
+function projectListState(row: {
+  latest_state: string | null;
+  branch_ready: boolean;
+  changed: boolean;
+  passed: boolean;
+  broken: boolean;
+}): Mission["primaryState"] {
+  if (!row.branch_ready) return "new_mission";
+  switch (row.latest_state) {
+    case null:
+      return "ready_for_instruction";
+    case "requested":
+    case "starting":
+      return "agent_starting";
+    case "running":
+    case "stopping":
+      return "agent_running";
+    case "needs_direction":
+      return "needs_direction";
+    case "needs_approval":
+      return "needs_approval";
+    case "interrupted":
+    case "failed":
+      return "execution_interrupted";
+    default:
+      break;
+  }
+  if (row.broken) return "verification_failed";
+  if (!row.changed) return "ready_for_instruction";
+  return row.passed ? "ready_for_review" : "work_completed_unverified";
+}
+
+/** The mission row and its workstream, without the room projection. */
+export async function getMissionBase(
+  db: Db,
+  ctx: AuthedContext,
+  missionId: string
+): Promise<{ mission: Mission; workstream: Workstream | null } | null> {
+  const result = await db.query(
+    `${MISSION_SELECT} ${VISIBLE_TO} where m.mission_id = $2`,
+    [ctx.userId, missionId]
+  );
+  const row = (result.rows as MissionRow[])[0];
+  if (!row) return null;
+  const workstreamRows = await db.query("select * from workstreams where mission_id = $1", [missionId]);
+  const workstream = workstreamRows.rows[0] ? toWorkstream(workstreamRows.rows[0] as WorkstreamRow) : null;
+  return { mission: toMission(row), workstream };
+}
+
+/** The complete room payload for one authorized viewer. */
 export async function getMission(
   db: Db,
   ctx: AuthedContext,
   missionId: string
-): Promise<{ mission: Mission; workstream: Workstream | null; events: MissionEvent[] } | null> {
-  const result = await db.query(
-    `${MISSION_SELECT} where m.org_id = $1 and m.mission_id = $2`,
-    [ctx.orgId, missionId]
-  );
-  const row = (result.rows as MissionRow[])[0];
-  if (!row) return null;
-
-  const workstreamRows = await db.query("select * from workstreams where mission_id = $1", [missionId]);
-  const workstream = workstreamRows.rows[0] ? toWorkstream(workstreamRows.rows[0] as WorkstreamRow) : null;
-
-  const eventRows = await db.query(
-    `select event_id, mission_id, seq, kind, actor_kind, actor_id, payload, schema_version, occurred_at
-       from events where org_id = $1 and mission_id = $2 order by seq`,
-    [ctx.orgId, missionId]
-  );
-  const events: MissionEvent[] = eventRows.rows.map((event) => ({
-    eventId: event.event_id,
-    missionId: event.mission_id,
-    seq: Number(event.seq),
-    kind: event.kind,
-    actor: { kind: event.actor_kind, id: event.actor_id },
-    payload: event.payload,
-    schemaVersion: event.schema_version,
-    occurredAt: event.occurred_at.toISOString()
-  }));
-  return { mission: toMission(row), workstream, events };
+): Promise<MissionDetailResponse | null> {
+  const base = await getMissionBase(db, ctx, missionId);
+  if (!base) return null;
+  const access = await missionAccess(db, ctx, missionId);
+  if (!access) return null;
+  return missionDetail(db, access, ctx.userId, base);
 }
 
 /** Records (or refreshes) a local repository the desktop registered (D-032). */
@@ -482,13 +547,16 @@ export async function reportBranchOutcome(
   report: { status: "created" | "failed"; error?: string | null }
 ): Promise<string | null> {
   const rows = await db.query(
-    `select w.wst_id, w.mission_id, w.mission_branch from workstreams w
+    `select w.wst_id, w.mission_id, w.mission_branch, m.org_id from workstreams w
        join missions m on m.mission_id = w.mission_id
-      where w.wst_id = $1 and m.org_id = $2`,
-    [workstreamId, ctx.orgId]
+       join participants p on p.mission_id = m.mission_id and p.user_id = $2
+       join organization_members om on om.org_id = m.org_id and om.user_id = $2
+      where w.wst_id = $1`,
+    [workstreamId, ctx.userId]
   );
   const row = rows.rows[0];
   if (!row) return null;
+  const orgId = row.org_id as string;
 
   await withTransaction(db, async (client) => {
     const updated = await client.query(
@@ -499,79 +567,25 @@ export async function reportBranchOutcome(
     );
     if (updated.rowCount) {
       await recordEvent(client, {
-        orgId: ctx.orgId,
+        orgId,
         missionId: row.mission_id,
-        seq: await nextSeq(client, row.mission_id),
+        workstreamId: row.wst_id,
         kind: report.status === "created" ? "workstream.branch_created" : "workstream.branch_failed",
         actorKind: "user",
         actorId: ctx.userId,
+        actorLogin: ctx.login,
         payload:
           report.status === "created"
             ? { missionBranch: row.mission_branch, reportedBy: "local-desktop" }
-            : { missionBranch: row.mission_branch, error: report.error ?? "Branch creation failed.", reportedBy: "local-desktop" }
+            : {
+                missionBranch: row.mission_branch,
+                error: report.error ?? "Branch creation failed.",
+                reportedBy: "local-desktop"
+              }
       });
     }
   });
   return row.mission_id as string;
-}
-
-/** Records a submitted direction as a durable, attributed event. */
-export async function submitDirection(
-  db: Db,
-  ctx: AuthedContext,
-  missionId: string,
-  body: string
-): Promise<boolean> {
-  const owns = await db.query("select 1 from missions where mission_id = $1 and org_id = $2", [
-    missionId,
-    ctx.orgId
-  ]);
-  if (!owns.rowCount) return false;
-  await withTransaction(db, async (client) => {
-    await recordEvent(client, {
-      orgId: ctx.orgId,
-      missionId,
-      seq: await nextSeq(client, missionId),
-      kind: "direction.submitted",
-      actorKind: "user",
-      actorId: ctx.userId,
-      payload: { body }
-    });
-  });
-  return true;
-}
-
-/**
- * Batch-records harness/runner activity reported by a client machine — claims
- * from the machine that ran the work, with the actor forced server-side.
- */
-export async function reportExecutionEvents(
-  db: Db,
-  ctx: AuthedContext,
-  missionId: string,
-  events: { kind: string; payload: Record<string, unknown> }[]
-): Promise<boolean> {
-  const owns = await db.query("select 1 from missions where mission_id = $1 and org_id = $2", [
-    missionId,
-    ctx.orgId
-  ]);
-  if (!owns.rowCount) return false;
-  await withTransaction(db, async (client) => {
-    let seq = await nextSeq(client, missionId);
-    for (const event of events) {
-      await recordEvent(client, {
-        orgId: ctx.orgId,
-        missionId,
-        seq,
-        kind: event.kind,
-        actorKind: event.kind.startsWith("harness.") ? "harness" : "runner",
-        actorId: event.kind.startsWith("harness.") ? "claude-code" : `local:${ctx.userId}`,
-        payload: event.payload
-      });
-      seq += 1;
-    }
-  });
-  return true;
 }
 
 export async function getWorkstreamMission(
@@ -580,9 +594,12 @@ export async function getWorkstreamMission(
   workstreamId: string
 ): Promise<string | null> {
   const result = await db.query(
-    `select w.mission_id from workstreams w join missions m on m.mission_id = w.mission_id
-      where w.wst_id = $1 and m.org_id = $2`,
-    [workstreamId, ctx.orgId]
+    `select w.mission_id from workstreams w
+       join missions m on m.mission_id = w.mission_id
+       join participants p on p.mission_id = m.mission_id and p.user_id = $2
+       join organization_members om on om.org_id = m.org_id and om.user_id = $2
+      where w.wst_id = $1`,
+    [workstreamId, ctx.userId]
   );
   return (result.rows[0]?.mission_id as string | undefined) ?? null;
 }

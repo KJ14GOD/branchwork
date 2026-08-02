@@ -47,7 +47,7 @@ Runner-reported facts are **claims**. Events carry their origin; verification re
 
 Concepts are defined in [PRODUCT.md](PRODUCT.md#domain-model); this section fixes representation, keys, and invariants only.
 
-Identifiers are globally unique, prefixed, opaque strings (`msn_…`, `wst_…`, `exe_…`, `evt_…`, `lease_…`). All rows carry `org_id`; every query is org-scoped.
+Identifiers are globally unique, prefixed, opaque strings with a three-letter prefix per object (`msn_`, `wst_`, `exe_`, `evt_`, `dir_`, `lea_`, `rnr_`, `cmd_`, `ckp_`, `chg_`, `chk_`, `inv_`). All rows carry `org_id`; every query is org-scoped.
 
 | Object | Key fields and invariants |
 | --- | --- |
@@ -59,14 +59,17 @@ Identifiers are globally unique, prefixed, opaque strings (`msn_…`, `wst_…`,
 | Participant | (`mission_id`, `user_id`), role. Invariant: user is an OrganizationMember (V0). |
 | Invitation | `inv_id`, `mission_id`, role, expiry, single-use token hash, `redeemed_by?`. |
 | Workstream | `wst_id`, `mission_id`, name, `approach_flag` (default false), `base_ref`, immutable `base_sha`, unique `mission_branch`, observed `remote_head_sha`, `workspace_id?`. One active mission branch per workstream; branch names are server-allocated and org/repo scoped. |
-| Execution | `exe_id`, `wst_id`, harness id, state, `started_by`. Invariant: at most one non-terminal execution per workstream (partial unique index). |
+| Execution | `exe_id`, `wst_id`, harness id, selected model and effort, `runner_id?`, `starting_direction_id?`, state, `started_by`, created/started/ended timestamps, `harness_session_id?`, `resumed_session`, exit outcome, failure reason, `last_origin_seq`, `latest_checkpoint_sha?`. Invariant: at most one non-terminal execution per workstream (partial unique index over the non-terminal states). |
+| Runner | `runner_id`, `org_id`, `mission_id`, `wst_id`, owner, kind, label, `credential_hash`, expiry, `revoked_at?`, `last_seen_at?`. Only the hash is stored. Invariant: at most one live runner per workstream (partial unique index). |
+| RunnerCommand | `cmd_id`, `wst_id`, `exe_id?`, expected `runner_id`, kind, payload, `idempotency_key` (unique per workstream), ordered `seq`, lifecycle `pending → delivered → acknowledged → completed \| failed`, timestamps, failure reason. |
+| Checkpoint | `ckp_id`, `exe_id`, outcome (`committed \| clean \| failed`), `sha?`, `parent_sha?`, branch, file/addition/deletion counts, withheld-secret count, uncommitted flag, `runner_id?`, environment label, error. |
 | Workspace | `wsp_id`, `wst_id`, execution location, provider id, provider ref, lifecycle state, `checkout_head_sha`, `last_synced_remote_sha`, dirty-state summary, latest checkpoint ref. At most one active workspace per workstream; a replacement workspace keeps the workstream and branch identity. |
 | ControlLease | `lease_id`, `wst_id`, `holder_user_id`, state, TTL, heartbeat timestamp. Invariant: at most one lease in `held`/`releasing` per workstream (partial unique index); transitions by compare-and-swap on `lease_id` + state. Heartbeat = the holder's authenticated client-session liveness, renewed automatically; the TTL is the grace period after the last heartbeat. |
 | ControlRequest / HandoffOffer | own ids, `wst_id`, actor, state, TTL. States per [PRODUCT.md](PRODUCT.md#control). |
-| Direction | `dir_id`, `wst_id`, author, body, state, `consumed_by_execution_id?`. Drafted is client-local and has no row. |
+| Direction | `dir_id`, `org_id`, `mission_id`, `wst_id`, author, body, state, monotonic `ordinal`, `submitted_at`, `applied_at?`, `resolution_reason?`, `consumed_by_execution_id?`. Drafted is client-local and has no row. Applied is written only on runner acknowledgement. |
 | Event | see [Event model](#event-model). |
-| FileChange | derived from the workspace git state per execution; stored as per-file diff summaries + content refs, not raw worktrees. |
-| VerificationCheck | `chk_id`, `mission_id`, `exe_id?`, name, outcome, environment attribution, evidence ref. |
+| FileChange | `chg_id`, `ckp_id`, path, `previous_path?`, state (`added \| modified \| deleted \| renamed`), additions, deletions, binary and truncated flags, and a bounded unified diff. Derived from git, never from a harness-reported file list. V0 stores the bounded diff inline; the artifact store (D-022) takes it when transcripts and exports arrive (D-037). |
+| VerificationCheck | `chk_id`, `mission_id`, `exe_id`, name, category (`test \| typecheck \| build \| lint \| diagnostic`), outcome (`passed \| failed \| skipped \| errored`), the observed command, bounded output, environment attribution. Written only from a structured tool call correlated with its own tool result (D-037). |
 | Artifact | `art_id`, `mission_id`, kind, blob ref, origin attribution. |
 | Review | `rev_id`, `mission_id`, author, kind (comment / revision-request / acceptance), body, refs. |
 | PullRequest | `pr_id`, `mission_id`, GitHub ref, tracked state. |
@@ -99,13 +102,17 @@ Retention: org-configurable audit retention. Deletion requests are honored by **
 
 ### Connection model
 
-**The runner always dials out.** One persistent outbound connection (bidirectional stream) to the control plane: commands down, events up. Novus-managed cloud runners use the same protocol and direction as future local/enterprise runners — no special cases, or there would be two protocols. The control plane never needs inbound access to any runner.
+**The runner always dials out.** Commands down, events up, over a connection the runner opens. Novus-managed cloud runners use the same protocol and direction as local and enterprise runners — no special cases, or there would be two protocols. The control plane never needs inbound access to any runner.
 
-Runners buffer events locally while disconnected (bounded). On overflow, the runner emits a **gap marker** event with the dropped range; receipts state gaps honestly.
+The shipped transport is **authenticated polling** (D-035): the runner asks for its own commands, acknowledges delivery, reports completion, and posts sequenced events. A persistent bidirectional stream (D-021) is the destination and changes the transport, not the semantics — idempotency keys, ordered delivery, per-execution sequence numbers, acknowledgement, and de-duplication are all defined here and carry over unchanged.
+
+**Runner identity** (D-035). A runner registers for one workstream and receives a cryptographically random credential; the control plane stores only its SHA-256 hash, scoped to (organization, mission, workstream, runner), with an expiry and a revocation flag. Runner requests carry it under a `Runner` authentication scheme distinct from user sessions, so a session can never be mistaken for a runner and a runner can never act as a person. Only this credential may write harness-, runner-, execution-, workspace-, or verification-attributed records; the server chooses actor attribution, validates every payload against a closed union of event kinds, and bounds every field. Expired, revoked, wrong-workstream, and wrong-execution credentials are rejected by name.
+
+Runners buffer events locally while disconnected in a bounded outbox: a monotonic per-execution sequence, retry with backoff rather than a hot loop, a flush at clean shutdown, and — on overflow — a **gap marker** event naming the dropped range, so receipts state gaps honestly rather than reading as complete.
 
 ### Runner protocol (shape, not wire format)
 
-Commands (control plane → runner): `provision_workspace`, `sync_repository`, `checkpoint_workspace`, `start_execution`, `apply_direction`, `pause`, `resume`, `stop`, `force_interrupt`, `run_verification`, `respond_approval` (the controller's typed answer to an `approval_required` event), `report_boundary_request` (transfer pending — ack at next safe boundary), `destroy_workspace`. All carry idempotency keys. `sync_repository` carries the expected local and remote SHAs plus the authorizing lease id; `run_verification` executes checks defined in repository-level configuration; mission success criteria may add manual confirmations, recorded as VerificationChecks attributed to the confirming participant.
+Commands (control plane → runner): `provision_workspace`, `sync_repository`, `checkpoint_workspace`, `start_execution`, `apply_direction`, `pause`, `resume`, `stop`, `force_interrupt`, `run_verification`, `respond_approval` (the controller's typed answer to an `approval_required` event), `report_boundary_request` (transfer pending — ack at next safe boundary), `destroy_workspace`. All carry idempotency keys. The commands realized so far are `start_execution`, `apply_direction`, `stop_execution`, and `report_boundary_request`; the rest are protocol surface with no implementation yet. `sync_repository` carries the expected local and remote SHAs plus the authorizing lease id; `run_verification` executes checks defined in repository-level configuration; mission success criteria may add manual confirmations, recorded as VerificationChecks attributed to the confirming participant.
 
 Events (runner → control plane): workspace lifecycle transitions, repository revision observations, checkpoint and sync outcomes, execution lifecycle transitions, harness activity summaries, `boundary_reached`, `approval_required` (opaque harness payload passed through), file-change summaries, verification outcomes, heartbeats, gap markers.
 
@@ -177,7 +184,7 @@ The control plane ingests GitHub App webhooks — pull-request state, reviews, c
 - **Desktop sign-in flow (D-027):** the desktop app asks the control plane to start a flow, opens the authorization URL in the system browser, and polls a single-use claim endpoint keyed by the flow's state nonce. The browser leg completes at a control-plane callback; the claim hands the session token to the Electron main process exactly once. The token lives only in the main process — encrypted at rest with OS-backed storage (`safeStorage`), never written in plaintext, and never crossing the IPC bridge to the renderer.
 - **GitHub access is two distinct things, never conflated:** a **GitHub App installation** (org admin installs; repo-scoped; mints short-lived installation tokens for runners) provides machine access to repositories. **User OAuth** provides identity and attributes human PR actions where desired. App = machine access; OAuth = who you are.
 - Invitations: single-use, expiring, mission-scoped tokens; redemption requires an authenticated user and creates the Participant row ([PRODUCT.md](PRODUCT.md#domain-model)).
-- Runners authenticate with signed, short-lived runner tokens scoped to (org, mission, workstream), issued at provision and refreshed over the live connection. Cloud runners receive their initial token injected at workspace creation; local and enterprise runners will require an explicit enrollment/pairing flow — an interface deferred with those runners (D-003), named here so runner-agnosticism stays honest.
+- Runners authenticate with credentials scoped to (org, mission, workstream, runner), stored only as hashes, expiring and revocable (D-035). The local runner enrolls explicitly: the host desktop registers for a workstream over its owner's authenticated session and receives the credential exactly once, into the Electron main process — never the renderer, never an event payload, never a log line. Cloud runners will receive their initial credential injected at workspace creation; the verification path is the same either way.
 
 ## Authorization
 
@@ -202,7 +209,8 @@ Named failure modes with defined behavior — these are contracts, not aspiratio
 6. **Event overflow during a long disconnect**: gap marker; the receipt states the gap.
 7. **Harness hangs** (endless tool call): watchdog → execution `stalled`; `force_interrupt` available and logged.
 8. **GitHub token expiry/revocation or force-push to the mission branch**: repository-sync error state with human-visible remediation; no silent retry loops and no mutation from a stale expected SHA.
-9. **Controller disconnects and does not return**: lease TTL expiry → workstream has no controller; execution pauses at next boundary; claim/revoke path per [PRODUCT.md](PRODUCT.md#control).
+9. **Controller disconnects and does not return**: lease TTL expiry → the workstream has no controller and no privileged command can be issued until someone claims or is granted the lease. The already-authorized execution keeps running (D-034); authority lapsing is not a stop signal. Claim/revoke path per [PRODUCT.md](PRODUCT.md#control).
+14. **Host desktop quits during a local execution**: in-flight turns are killed with their process trees, the execution is recorded `interrupted` with the reason, and the outbox flushes before exit — no orphan process, and no room left claiming "running" forever (D-034).
 10. **Control plane unavailable**: the runner continues its current execution under the last applied direction, buffers events, and refuses privileged transitions (transfers, new executions) until reconnect.
 11. **Workspace suspended or destroyed while a transfer or queued direction is pending**: the offer moves to `failed` visibly; queued direction stays queued for the workstream's next workspace and execution.
 12. **Mission branch or workspace conflicts with a remote update**: repository-sync error state with both revisions and conflicting paths preserved; resolving the conflict is directed work, never a silent automatic rebase or filesystem overwrite.
@@ -210,8 +218,9 @@ Named failure modes with defined behavior — these are contracts, not aspiratio
 
 ## Deployment modes
 
-- **V0**: Novus-hosted control plane; Novus-managed cloud runners on one sandbox provider; a downloadable desktop client (D-018).
-- **Kept-possible by the protocol (not shipped in V0)**: local runner (user's machine dials out — same protocol), enterprise runner (customer infrastructure dials out), third-party sandbox providers behind the execution-provider interface. The conformance suite ([Testing strategy](#testing-strategy)) is what keeps these honest.
+- **Shipped first**: a Novus-hosted control plane, a downloadable desktop client (D-018), and the **host desktop as the runner** — registered per workstream, credentialed, and speaking the runner protocol against local repositories (D-032, D-035). Local execution is the first real surface, not a fallback.
+- **Next, on the same protocol**: Novus-managed cloud runners on one sandbox provider (D-023), which is what makes a mission survive a closed laptop and remain the multiplayer default (D-002).
+- **Kept-possible by the protocol**: enterprise runner (customer infrastructure dials out) and third-party sandbox providers behind the execution-provider interface. The conformance suite ([Testing strategy](#testing-strategy)) is what keeps these honest.
 
 ## Observability
 

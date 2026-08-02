@@ -1,16 +1,26 @@
 import { BrowserWindow, app, ipcMain, shell } from "electron";
 import { join } from "node:path";
-import { CreateMissionInputSchema, type IpcAuthStatus, type IpcResult } from "@novus/contracts";
+import {
+  CreateMissionInputSchema,
+  DirectionResolutionSchema,
+  IpcDirectInputSchema,
+  MissionRoleSchema,
+  type IpcAuthStatus,
+  type IpcResult
+} from "@novus/contracts";
 import { z } from "zod";
 import { ApiError, ControlPlaneClient } from "./api-client";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
 import { ensureLocalBranch, pathForLocalRepo, pickLocalRepository, resolveLocalBase } from "./local-repos";
-import { isRunning, runDirection, stopAllExecutions, stopExecution, type ReportedEvent } from "./execution";
+import { startRunnerAgent, type RunnerAgent } from "./runner-agent";
 import { SessionStore } from "./session-store";
 
 // Test hooks (see DECISIONS.md D-027): both refuse to exist in packaged builds.
 const AUTO_VISIT = process.env.NOVUS_AUTH_AUTOVISIT === "1" && !app.isPackaged;
+/** Test-only: which deterministic fake identity this client signs in as, so an
+ *  end-to-end run can be two different people on two desktops. */
+const FAKE_IDENTITY = !app.isPackaged ? process.env.NOVUS_FAKE_IDENTITY : undefined;
 if (process.env.NOVUS_USER_DATA_DIR && !app.isPackaged) {
   app.setPath("userData", process.env.NOVUS_USER_DATA_DIR);
 }
@@ -22,10 +32,29 @@ const api = new ControlPlaneClient(controlPlaneUrl, () => store.load());
 let window: BrowserWindow | null = null;
 let authStatus: IpcAuthStatus = { state: "signed_out" };
 let pollTimer: NodeJS.Timeout | null = null;
+let runner: RunnerAgent | null = null;
 
 function setAuthStatus(next: IpcAuthStatus): void {
   authStatus = next;
   window?.webContents.send("novus:auth-changed", authStatus);
+  if (next.state === "signed_in") startRunner();
+  else void stopRunner();
+}
+
+/**
+ * This machine is a runner. It registers itself for every local workstream it
+ * can actually reach, polls for the commands it is authorized to run, and
+ * reports what happened — under a credential the renderer never sees (D-035).
+ */
+function startRunner(): void {
+  if (runner) return;
+  runner = startRunnerAgent({ api, controlPlaneUrl, getToken: () => store.load() });
+}
+
+async function stopRunner(): Promise<void> {
+  const current = runner;
+  runner = null;
+  if (current) await current.shutdown("signed out");
 }
 
 function ok<T>(value: T): IpcResult<T> {
@@ -36,6 +65,17 @@ function fail(error: unknown): IpcResult<never> {
   if (error instanceof ApiError) return { ok: false, code: error.code, message: error.message };
   return { ok: false, code: "unexpected", message: "Something went wrong on this machine." };
 }
+
+/** Wraps a control-plane call as an IPC result, with one shape for every verb. */
+async function call<T>(fn: () => Promise<T>): Promise<IpcResult<T>> {
+  try {
+    return ok(await fn());
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+const MissionIdSchema = z.string().startsWith("msn_");
 
 async function restoreSession(): Promise<void> {
   if (!store.load()) return;
@@ -50,7 +90,7 @@ async function restoreSession(): Promise<void> {
 
 async function beginSignIn(): Promise<IpcResult<null>> {
   try {
-    const { state, authorizeUrl } = await api.startAuth();
+    const { state, authorizeUrl } = await api.startAuth(FAKE_IDENTITY);
     setAuthStatus({ state: "waiting_for_browser" });
     if (AUTO_VISIT) {
       await fetch(authorizeUrl, { redirect: "follow" });
@@ -112,6 +152,7 @@ function registerIpc(): void {
   ipcMain.handle("novus:auth:start", () => beginSignIn());
 
   ipcMain.handle("novus:auth:signout", async () => {
+    await stopRunner();
     try {
       await api.signOut();
     } catch {
@@ -122,42 +163,21 @@ function registerIpc(): void {
     return ok(null);
   });
 
-  ipcMain.handle("novus:missions:list", async () => {
-    try {
-      return ok(await api.listMissions());
-    } catch (error) {
-      return fail(error);
-    }
-  });
-
-  ipcMain.handle("novus:repos:available", async () => {
-    try {
-      return ok(await api.availableRepositories());
-    } catch (error) {
-      return fail(error);
-    }
-  });
+  ipcMain.handle("novus:missions:list", () => call(() => api.listMissions()));
+  ipcMain.handle("novus:repos:available", () => call(() => api.availableRepositories()));
 
   ipcMain.handle("novus:repos:base", async (_event, raw: unknown) => {
     const parsed = z
       .object({ providerRepoId: z.string().min(1), ref: z.string().min(1).optional() })
       .safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed repository reference." };
-    try {
-      return ok(await api.baseRevision(parsed.data.providerRepoId, parsed.data.ref));
-    } catch (error) {
-      return fail(error);
-    }
+    return call(() => api.baseRevision(parsed.data.providerRepoId, parsed.data.ref));
   });
 
   ipcMain.handle("novus:missions:retry-branch", async (_event, raw: unknown) => {
     const parsed = z.string().startsWith("wst_").safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed workstream id." };
-    try {
-      return ok(await api.retryBranch(parsed.data));
-    } catch (error) {
-      return fail(error);
-    }
+    return call(() => api.retryBranch(parsed.data));
   });
 
   ipcMain.handle("novus:repos:add-local", async () => {
@@ -219,121 +239,171 @@ function registerIpc(): void {
           result.ok ? { status: "created" } : { status: "failed", error: result.error }
         );
       }
+      // Register this machine as the workstream's runner right away, so the
+      // first direction has somewhere to run.
+      runner?.discoverNow();
       return ok(created);
     } catch (error) {
       return fail(error);
     }
   });
 
-  // Reported claims leave this machine strictly in order. Two in-flight
-  // reports race for the same event sequence on the server (max(seq)+1) and
-  // the loser is dropped — a checkpoint emitted immediately before completion
-  // was lost exactly that way. A per-mission chain serializes them.
-  const reportChains = new Map<string, Promise<void>>();
-  const reportInOrder = (missionId: string, event: ReportedEvent): void => {
-    const prev = reportChains.get(missionId) ?? Promise.resolve();
-    const next = prev.then(async () => {
-      try {
-        await api.reportEvents(missionId, [event]);
-      } catch (error) {
-        console.error("event report failed:", error instanceof Error ? error.message : error);
-      }
-    });
-    reportChains.set(missionId, next);
-    void next.finally(() => {
-      if (reportChains.get(missionId) === next) reportChains.delete(missionId);
-    });
-  };
-
-  // The renderer names the mission and the words; it never names the branch
-  // or the repository. Those come from server state (ARCHITECTURE.md: the
-  // client originates no authority).
-  const DirectSchema = z.object({
-    missionId: z.string().startsWith("msn_"),
-    body: z.string().trim().min(1).max(4000),
-    // Allowlisted: these become CLI flags, so nothing arbitrary may pass.
-    model: z
-      .enum([
-        "claude-fable-5",
-        "claude-opus-5",
-        "claude-opus-4-8",
-        "claude-opus-4-7",
-        "claude-sonnet-5",
-        "claude-haiku-4-5-20251001"
-      ])
-      .default("claude-fable-5"),
-    effort: z.enum(["low", "medium", "high", "xhigh", "max"]).default("high")
-  });
+  // --- Direction and execution ---------------------------------------------
+  // The renderer asks; the control plane decides. It authorizes the direction,
+  // records it, and — only when the author holds the lease — enqueues a
+  // command for the host runner. Nothing here starts a process.
 
   ipcMain.handle("novus:missions:direct", async (_event, raw: unknown) => {
-    const parsed = DirectSchema.safeParse(raw);
+    const parsed = IpcDirectInputSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed direction." };
     const input = parsed.data;
-    if (isRunning(input.missionId)) {
-      return { ok: false, code: "busy", message: "The agent is already working. Wait for this turn to finish." };
-    }
-    let detail: Awaited<ReturnType<typeof api.getMission>>;
-    try {
-      detail = await api.getMission(input.missionId);
-    } catch (error) {
-      return fail(error);
-    }
-    const repository = detail.mission.repository;
-    const workstream = detail.workstream;
-    if (!repository || !workstream || repository.provider !== "local") {
-      return { ok: false, code: "not_executable", message: "Agents run on local repositories for now." };
-    }
-
-    try {
-      await api.submitDirection(input.missionId, input.body);
-    } catch (error) {
-      return fail(error);
-    }
-    // The turn streams in the background; the room's poll renders it live.
-    void runDirection({
-      missionId: input.missionId,
-      localId: repository.providerRepoId,
-      missionBranch: workstream.missionBranch,
-      direction: input.body,
-      model: input.model,
-      effort: input.effort,
-      emit: (event) => reportInOrder(input.missionId, event)
-    }).catch((error) => {
-      reportInOrder(input.missionId, {
-        kind: "execution.failed",
-        payload: { error: error instanceof Error ? error.message : "unknown" }
-      });
+    const result = await call(() =>
+      api.submitDirection(input.missionId, { body: input.body, model: input.model, effort: input.effort })
+    );
+    if (!result.ok) return result;
+    runner?.pollNow();
+    return ok({
+      directionId: result.value.direction.directionId,
+      dispatched: result.value.dispatched,
+      deferred: result.value.deferred
     });
-    return ok(null);
+  });
+
+  ipcMain.handle("novus:missions:resolve-direction", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ directionId: z.string().startsWith("dir_") })
+      .and(DirectionResolutionSchema)
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed resolution." };
+    const result = await call(async () => {
+      await api.resolveDirection(parsed.data.directionId, {
+        action: parsed.data.action,
+        reason: parsed.data.reason
+      });
+      return null;
+    });
+    runner?.pollNow();
+    return result;
+  });
+
+  ipcMain.handle("novus:missions:cancel-direction", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("dir_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed direction id." };
+    return call(async () => {
+      await api.cancelDirection(parsed.data);
+      return null;
+    });
   });
 
   ipcMain.handle("novus:missions:stop", async (_event, raw: unknown) => {
-    const parsed = z.string().startsWith("msn_").safeParse(raw);
+    const parsed = MissionIdSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
-    return ok(stopExecution(parsed.data));
-  });
-
-  ipcMain.handle("novus:missions:running", async (_event, raw: unknown) => {
-    const parsed = z.string().startsWith("msn_").safeParse(raw);
-    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
-    return ok(isRunning(parsed.data));
+    const result = await call(async () => {
+      await api.stopExecution(parsed.data);
+      return null;
+    });
+    runner?.pollNow();
+    return result;
   });
 
   ipcMain.handle("novus:missions:get", async (_event, raw: unknown) => {
-    const parsed = z.string().startsWith("msn_").safeParse(raw);
+    const parsed = MissionIdSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
-    try {
-      return ok(await api.getMission(parsed.data));
-    } catch (error) {
-      return fail(error);
-    }
+    return call(() => api.getMission(parsed.data));
+  });
+
+  // --- Control --------------------------------------------------------------
+
+  const controlVerb = <T>(schema: z.ZodType<T>, fn: (value: T) => Promise<void>) =>
+    async (_event: unknown, raw: unknown): Promise<IpcResult<null>> => {
+      const parsed = schema.safeParse(raw);
+      if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+      const result = await call(async () => {
+        await fn(parsed.data);
+        return null;
+      });
+      runner?.pollNow();
+      return result;
+    };
+
+  ipcMain.handle("novus:control:request", controlVerb(MissionIdSchema, (id) => api.requestControl(id)));
+  ipcMain.handle(
+    "novus:control:withdraw-request",
+    controlVerb(MissionIdSchema, (id) => api.withdrawControlRequest(id))
+  );
+  ipcMain.handle(
+    "novus:control:decline-request",
+    controlVerb(z.string().startsWith("crq_"), (id) => api.declineControlRequest(id))
+  );
+  ipcMain.handle(
+    "novus:control:offer",
+    controlVerb(
+      z.object({ missionId: MissionIdSchema, toUserId: z.string().startsWith("usr_") }),
+      (input) => api.offerControl(input.missionId, input.toUserId)
+    )
+  );
+  ipcMain.handle(
+    "novus:control:withdraw-offer",
+    controlVerb(z.string().startsWith("hof_"), (id) => api.withdrawOffer(id))
+  );
+  ipcMain.handle(
+    "novus:control:accept-offer",
+    controlVerb(z.string().startsWith("hof_"), (id) => api.acceptOffer(id))
+  );
+  ipcMain.handle(
+    "novus:control:decline-offer",
+    controlVerb(z.string().startsWith("hof_"), (id) => api.declineOffer(id))
+  );
+  ipcMain.handle("novus:control:revoke", controlVerb(MissionIdSchema, (id) => api.revokeControl(id)));
+
+  // --- Invitations ----------------------------------------------------------
+
+  ipcMain.handle("novus:invites:create", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ missionId: MissionIdSchema, role: MissionRoleSchema })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed invitation." };
+    return call(() => api.createInvitation(parsed.data.missionId, parsed.data.role));
+  });
+
+  ipcMain.handle("novus:invites:list", async (_event, raw: unknown) => {
+    const parsed = MissionIdSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(() => api.listInvitations(parsed.data));
+  });
+
+  ipcMain.handle("novus:invites:revoke", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("inv_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed invitation id." };
+    return call(async () => {
+      await api.revokeInvitation(parsed.data);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:invites:redeem", async (_event, raw: unknown) => {
+    const parsed = z.string().min(32).max(200).safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "That doesn't look like an invitation." };
+    const result = await call(() => api.redeemInvitation(parsed.data));
+    runner?.discoverNow();
+    return result;
+  });
+
+  // --- Evidence -------------------------------------------------------------
+
+  ipcMain.handle("novus:evidence:file-diff", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("chg_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed change id." };
+    return call(() => api.fileDiff(parsed.data));
   });
 }
 
 function createWindow(): void {
   window = new BrowserWindow({
-    width: 1180,
-    height: 760,
+    // Above DESIGN.md's 1200px threshold, so the app opens into the full shell
+    // rather than the band where the sidebar collapses to an overlay.
+    width: 1440,
+    height: 900,
     minWidth: 720,
     minHeight: 480,
     title: "Novus",
@@ -366,21 +436,19 @@ app.whenReady().then(async () => {
   });
 });
 
-// An agent must never outlive the app that started it: kill in-flight turns
-// and record the interruption so a room never hangs on "started" forever.
+// An agent must never outlive the app that started it. Quitting kills every
+// in-flight turn, records the interruption as an explicit outcome, and flushes
+// the outbox — a room never hangs on "running" forever, and no orphan process
+// is left behind (D-034).
+let quitting = false;
 app.on("before-quit", (event) => {
-  const interrupted = stopAllExecutions();
-  if (interrupted.length === 0) return;
+  if (quitting || !runner) return;
+  quitting = true;
   event.preventDefault();
-  Promise.all(
-    interrupted.map((missionId) =>
-      api
-        .reportEvents(missionId, [
-          { kind: "execution.stopped", payload: { reason: "Novus quit while the agent was working." } }
-        ])
-        .catch(() => undefined)
-    )
-  ).finally(() => app.exit(0));
+  runner
+    .shutdown("The host desktop closed while the agent was working.")
+    .catch(() => undefined)
+    .finally(() => app.exit(0));
 });
 
 app.on("window-all-closed", () => {

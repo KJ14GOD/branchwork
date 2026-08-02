@@ -1,0 +1,278 @@
+import {
+  TERMINAL_EXECUTION_STATES,
+  type Execution,
+  type FileChange,
+  type MissionDetailResponse,
+  type Participant
+} from "@novus/contracts";
+import { clockTime, plural, shortSha } from "../format";
+
+/** Pure projections of one poll (`MissionDetailResponse`) into what the room
+ *  shows. No fetching, no fabrication: everything here is derived from state
+ *  the server actually sent. */
+
+const HARNESS_NAME = "Claude Code";
+
+/** The one execution that is still live, if any. At most one per workstream
+ *  (PRODUCT.md#domain-model). */
+export function activeExecution(detail: MissionDetailResponse): Execution | null {
+  const live = detail.executions.filter(
+    (execution) => !TERMINAL_EXECUTION_STATES.includes(execution.state)
+  );
+  return live[live.length - 1] ?? null;
+}
+
+export function latestExecution(detail: MissionDetailResponse): Execution | null {
+  return detail.executions[detail.executions.length - 1] ?? null;
+}
+
+export function controller(detail: MissionDetailResponse): Participant | null {
+  return detail.participants.find((participant) => participant.isController) ?? null;
+}
+
+export function viewerIsController(detail: MissionDetailResponse): boolean {
+  return detail.control.holderUserId === detail.viewerUserId;
+}
+
+/**
+ * Every file the mission has changed, latest checkpoint wins per path. A file
+ * touched three times is one row, not three.
+ */
+export function changedFiles(detail: MissionDetailResponse): FileChange[] {
+  const byPath = new Map<string, FileChange>();
+  const ordered = [...detail.checkpoints].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const checkpoint of ordered) {
+    for (const file of checkpoint.files) byPath.set(file.path, file);
+  }
+  return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export function checkTallies(detail: MissionDetailResponse): {
+  total: number;
+  passed: number;
+  failed: number;
+} {
+  let passed = 0;
+  let failed = 0;
+  for (const check of detail.checks) {
+    if (check.outcome === "passed") passed += 1;
+    if (check.outcome === "failed" || check.outcome === "errored") failed += 1;
+  }
+  return { total: detail.checks.length, passed, failed };
+}
+
+/** Direction that is still waiting for the controller's judgment. */
+export function pendingDirections(detail: MissionDetailResponse) {
+  return detail.directions.filter(
+    (direction) => direction.state === "submitted" || direction.state === "queued"
+  );
+}
+
+export type StateTone = "neutral" | "active" | "warn" | "danger" | "ok";
+
+export interface StateLineAction {
+  label: string;
+  /** What the action does; the room wires it to a real call or an inspector
+   *  section. Never rendered without a real destination. */
+  kind: "stop" | "changes" | "verification";
+}
+
+export interface StateLineView {
+  tone: StateTone;
+  /** The state name — emphasized by weight, never by color (D-028). */
+  name: string;
+  /** The rest of the sentence. */
+  detail: string;
+  /** Overlay text appended to the line, e.g. a handoff waiting for a boundary. */
+  suffix: string | null;
+  action: StateLineAction | null;
+  /** Working indicator: the one element in the product that may loop. */
+  working: boolean;
+}
+
+/**
+ * The state line (DESIGN.md signature element 5): current state, then next
+ * action. State names key verbatim to PRODUCT.md#the-mission-state-model — the
+ * renderer never invents one, and it never claims an action the bridge cannot
+ * perform.
+ */
+export function deriveStateLine(detail: MissionDetailResponse): StateLineView {
+  const overlays = new Set(detail.overlays);
+  const files = changedFiles(detail);
+  const checks = checkTallies(detail);
+  const holder = detail.control.holderLogin;
+
+  // Runner offline invalidates every claim about what the agent is doing, so
+  // it replaces the line rather than decorating it (DESIGN.md#state-presentation).
+  if (overlays.has("runner_offline")) {
+    const lastSeen = detail.runner?.lastSeenAt;
+    return {
+      tone: "danger",
+      name: "Runner offline",
+      detail: lastSeen
+        ? `last event received at ${clockTime(lastSeen)}`
+        : "no events have been received from this machine",
+      suffix: handoffSuffix(detail),
+      action: null,
+      working: false
+    };
+  }
+
+  const base = primaryStateLine(detail, files.length, checks);
+
+  // A queued direction that only the controller can apply is the room's real
+  // state while nothing else is happening.
+  const waiting = pendingDirections(detail).filter(
+    (direction) => direction.authorUserId !== detail.control.holderUserId
+  );
+  const idle =
+    detail.state === "ready_for_instruction" ||
+    detail.state === "needs_direction" ||
+    detail.state === "paused" ||
+    detail.state === "new_mission";
+  if (overlays.has("direction_queued") && waiting.length > 0 && idle && holder) {
+    return {
+      tone: "warn",
+      name: `Waiting for ${holder}`,
+      detail: `${plural(waiting.length, "direction")} ${waiting.length === 1 ? "is" : "are"} queued`,
+      suffix: suffixFor(detail),
+      action: null,
+      working: false
+    };
+  }
+
+  return { ...base, suffix: suffixFor(detail) };
+}
+
+/** Overlay text appended to the line. Whether a runner exists at all belongs
+ *  here, not in the composer: direction is always submittable, but nothing
+ *  runs until some machine has this workstream. */
+function suffixFor(detail: MissionDetailResponse): string | null {
+  const handoff = handoffSuffix(detail);
+  if (handoff) return handoff;
+  if (detail.runner === null) return "no machine has connected to run this workstream yet";
+  return null;
+}
+
+function handoffSuffix(detail: MissionDetailResponse): string | null {
+  const offer = detail.control.liveOffer;
+  if (!detail.overlays.includes("handoff_waiting_for_boundary") || !offer) return null;
+  return `Handing control to ${offer.toLogin} at the next safe point`;
+}
+
+function primaryStateLine(
+  detail: MissionDetailResponse,
+  fileCount: number,
+  checks: { total: number; passed: number; failed: number }
+): StateLineView {
+  const quiet = { suffix: null, action: null, working: false };
+  switch (detail.state) {
+    case "new_mission":
+      return { ...quiet, tone: "neutral", name: "New mission", detail: "set up the workspace to begin" };
+    case "ready_for_instruction":
+      return {
+        ...quiet,
+        tone: "neutral",
+        name: "Ready",
+        detail: `tell ${HARNESS_NAME} what to change`
+      };
+    case "agent_starting":
+      return {
+        ...quiet,
+        tone: "active",
+        name: "Starting",
+        detail: "preparing the mission worktree",
+        working: true
+      };
+    case "agent_running":
+      return {
+        tone: "active",
+        name: "Running",
+        detail: `${HARNESS_NAME} is working`,
+        suffix: null,
+        action: { label: "Stop", kind: "stop" },
+        working: true
+      };
+    case "needs_direction":
+      return {
+        ...quiet,
+        tone: "warn",
+        name: "Needs direction",
+        detail: `${HARNESS_NAME} is waiting at a safe boundary`
+      };
+    case "needs_approval":
+      return {
+        ...quiet,
+        tone: "warn",
+        name: "Needs approval",
+        detail: `${HARNESS_NAME} is waiting for a decision it cannot make itself`
+      };
+    case "paused":
+      return { ...quiet, tone: "warn", name: "Paused", detail: "the execution is held at a safe boundary" };
+    case "work_completed_unverified":
+      return {
+        tone: "warn",
+        name: "Work finished",
+        detail:
+          checks.total === 0
+            ? `${plural(fileCount, "file")} changed, nothing verified`
+            : `${plural(fileCount, "file")} changed, ${plural(checks.total, "check")} observed`,
+        suffix: null,
+        action: { label: "Review changes", kind: "changes" },
+        working: false
+      };
+    case "ready_for_review":
+      return {
+        tone: "ok",
+        name: "Ready for review",
+        detail: `${plural(checks.passed, "check")} passed`,
+        suffix: null,
+        action: { label: "Open changes", kind: "changes" },
+        working: false
+      };
+    case "verification_failed":
+      return {
+        tone: "danger",
+        name: "Verification failed",
+        detail: `${checks.failed} of ${plural(checks.total, "check")} failed`,
+        suffix: null,
+        action: { label: "Review failures", kind: "verification" },
+        working: false
+      };
+    case "execution_interrupted":
+      return {
+        ...quiet,
+        tone: "warn",
+        name: "Interrupted",
+        detail: interruptionReason(detail)
+      };
+  }
+}
+
+function interruptionReason(detail: MissionDetailResponse): string {
+  for (let i = detail.events.length - 1; i >= 0; i -= 1) {
+    const event = detail.events[i];
+    if (event?.kind !== "execution.interrupted") continue;
+    const reason = event.payload.reason;
+    if (typeof reason === "string" && reason.length > 0) return reason;
+  }
+  return "the execution ended before it finished";
+}
+
+/** The workspace's one-line technical summary, folded out of the feed's
+ *  setup noise: "Workspace ready · main @ f88c40df". */
+export function workspaceSummary(detail: MissionDetailResponse): {
+  label: string;
+  danger: boolean;
+} | null {
+  const workstream = detail.workstream;
+  if (!workstream) return null;
+  const anchor = `${workstream.baseRef} @ ${shortSha(workstream.baseSha)}`;
+  if (workstream.branchStatus === "failed") {
+    return { label: `Branch creation failed · ${anchor}`, danger: true };
+  }
+  if (workstream.branchStatus === "pending") {
+    return { label: `Preparing the mission branch · ${anchor}`, danger: false };
+  }
+  return { label: `Workspace ready · ${anchor}`, danger: false };
+}

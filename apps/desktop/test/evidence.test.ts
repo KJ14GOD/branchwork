@@ -1,0 +1,222 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  captureCheckpoint,
+  createSanitizer,
+  dirtyEntries,
+  isSecretPath,
+  uncommittedChanges,
+  type GitRunner
+} from "../electron/evidence";
+
+/**
+ * Evidence comes from git, so these run against a real temporary repository
+ * rather than a stubbed one. A parser that agrees with a fake `git` and
+ * disagrees with the real one proves nothing.
+ */
+
+const git: GitRunner = (cwd, args) =>
+  new Promise((resolve, reject) => {
+    execFile("git", ["-C", cwd, ...args], { maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) =>
+      error ? reject(new Error(stderr.trim() || error.message)) : resolve(stdout)
+    );
+  });
+
+let repo: string;
+
+async function commitAll(message: string): Promise<void> {
+  await git(repo, ["add", "-A"]);
+  await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", message]);
+}
+
+const write = (relative: string, contents: string): void => {
+  const path = join(repo, relative);
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, contents);
+};
+
+beforeEach(async () => {
+  repo = mkdtempSync(join(tmpdir(), "novus-evidence-"));
+  await git(repo, ["init", "-b", "main"]);
+  await git(repo, ["config", "user.name", "Test"]);
+  await git(repo, ["config", "user.email", "test@local"]);
+  write("README.md", "# fixture\n");
+  await commitAll("initial");
+});
+
+afterEach(() => {
+  rmSync(repo, { recursive: true, force: true });
+});
+
+describe("the dirty set", () => {
+  it("reads paths with spaces and reports the state of each", async () => {
+    write("src/added file.ts", "export const added = 1;\n");
+    write("README.md", "# fixture\n\nchanged\n");
+    const entries = await dirtyEntries(git, repo);
+    const byPath = new Map(entries.map((entry) => [entry.path, entry.changeState]));
+    expect(byPath.get("src/added file.ts")).toBe("added");
+    expect(byPath.get("README.md")).toBe("modified");
+  });
+});
+
+describe("captureCheckpoint", () => {
+  it("records a clean turn as evidence rather than as silence", async () => {
+    const checkpoint = await captureCheckpoint(git, repo, { branch: "novus/m-abc123", summary: "nothing to do" });
+    expect(checkpoint.outcome).toBe("clean");
+    expect(checkpoint.sha).toBeNull();
+    expect(checkpoint.files).toEqual([]);
+    expect(checkpoint.uncommitted).toBe(false);
+    expect(checkpoint.parentSha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("commits added, modified and deleted files with counts and diffs", async () => {
+    write("doomed.txt", "delete me\n");
+    await commitAll("a file that a later turn removes");
+
+    write("src/added.ts", "export const added = 1;\n");
+    write("README.md", "# fixture\n\nsecond line\n");
+    rmSync(join(repo, "doomed.txt"));
+
+    const checkpoint = await captureCheckpoint(git, repo, {
+      branch: "novus/m-abc123",
+      summary: "Add the health check"
+    });
+    expect(checkpoint.outcome).toBe("committed");
+    expect(checkpoint.sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(checkpoint.parentSha).not.toBe(checkpoint.sha);
+
+    const byPath = new Map(checkpoint.files.map((file) => [file.path, file]));
+    expect(byPath.get("src/added.ts")?.changeState).toBe("added");
+    expect(byPath.get("src/added.ts")?.additions).toBe(1);
+    expect(byPath.get("src/added.ts")?.diff).toContain("export const added = 1;");
+    expect(byPath.get("README.md")?.changeState).toBe("modified");
+    expect(byPath.get("doomed.txt")?.changeState).toBe("deleted");
+    expect(byPath.get("doomed.txt")?.deletions).toBe(1);
+
+    const message = await git(repo, ["log", "-1", "--format=%s%n%an"]);
+    expect(message).toContain("Checkpoint: Add the health check");
+    expect(message).toContain("Novus");
+  });
+
+  it("detects a rename instead of reporting a delete and an add", async () => {
+    write("src/original.ts", Array.from({ length: 30 }, (_, index) => `export const value${index} = ${index};`).join("\n"));
+    await commitAll("add a file worth renaming");
+    renameSync(join(repo, "src/original.ts"), join(repo, "src/renamed.ts"));
+
+    const checkpoint = await captureCheckpoint(git, repo, { branch: "novus/m-abc123", summary: "rename" });
+    expect(checkpoint.outcome).toBe("committed");
+    expect(checkpoint.files.length).toBe(1);
+    expect(checkpoint.files[0]?.changeState).toBe("renamed");
+    expect(checkpoint.files[0]?.path).toBe("src/renamed.ts");
+    expect(checkpoint.files[0]?.previousPath).toBe("src/original.ts");
+  });
+
+  it("marks a binary file as binary and carries no diff for it", async () => {
+    writeFileSync(join(repo, "logo.bin"), Buffer.from([0, 1, 2, 3, 0, 255, 7, 0]));
+    const checkpoint = await captureCheckpoint(git, repo, { branch: "novus/m-abc123", summary: "add a binary" });
+    const binary = checkpoint.files.find((file) => file.path === "logo.bin");
+    expect(binary?.binary).toBe(true);
+    expect(binary?.diff).toBeNull();
+  });
+
+  it("refuses to commit files that look like secrets and says how many it withheld", async () => {
+    write(".env", "ANTHROPIC_API_KEY=sk-should-never-be-committed\n");
+    write("keys/id_ed25519", "PRIVATE KEY\n");
+    write("src/real.ts", "export const real = true;\n");
+
+    const checkpoint = await captureCheckpoint(git, repo, { branch: "novus/m-abc123", summary: "mixed" });
+    expect(checkpoint.outcome).toBe("committed");
+    expect(checkpoint.withheldSecrets).toBe(2);
+    expect(checkpoint.uncommitted).toBe(true);
+    expect(checkpoint.files.map((file) => file.path)).toEqual(["src/real.ts"]);
+
+    const tracked = await git(repo, ["ls-files"]);
+    expect(tracked).not.toContain(".env");
+    expect(tracked).not.toContain("id_ed25519");
+  });
+
+  it("stays clean, and uncommitted, when the only change is a withheld secret", async () => {
+    write(".env.local", "TOKEN=nope\n");
+    const checkpoint = await captureCheckpoint(git, repo, { branch: "novus/m-abc123", summary: "secret only" });
+    expect(checkpoint.outcome).toBe("clean");
+    expect(checkpoint.withheldSecrets).toBe(1);
+    expect(checkpoint.uncommitted).toBe(true);
+    expect(checkpoint.sha).toBeNull();
+  });
+
+  it("reports a failure as a failure, with the error and nothing committed", async () => {
+    const notARepo = mkdtempSync(join(tmpdir(), "novus-not-a-repo-"));
+    try {
+      const checkpoint = await captureCheckpoint(git, notARepo, { branch: "novus/m-abc123", summary: "doomed" });
+      expect(checkpoint.outcome).toBe("failed");
+      expect(checkpoint.uncommitted).toBe(true);
+      expect(checkpoint.error).toBeTruthy();
+      expect(checkpoint.sha).toBeNull();
+    } finally {
+      rmSync(notARepo, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds a very large diff and says it truncated", async () => {
+    write("src/big.ts", Array.from({ length: 4_000 }, (_, index) => `export const line${index} = ${index};`).join("\n"));
+    const checkpoint = await captureCheckpoint(git, repo, { branch: "novus/m-abc123", summary: "a big file" });
+    const file = checkpoint.files.find((entry) => entry.path === "src/big.ts");
+    expect(file?.truncated).toBe(true);
+    expect(file?.diff?.length).toBe(12_000);
+  });
+
+  it("lists what is still uncommitted when a checkpoint could not take it", async () => {
+    write("README.md", "# fixture\n\nnot yet committed\n");
+    const files = await uncommittedChanges(git, repo);
+    expect(files.map((file) => file.path)).toEqual(["README.md"]);
+    expect(files[0]?.additions).toBeGreaterThan(0);
+  });
+});
+
+describe("secret paths", () => {
+  it("names the files an agent must never have committed for it", () => {
+    for (const path of [".env", "config/.env.local", "keys/id_rsa", "certs/server.pem", ".npmrc", "gcp/credentials.json"]) {
+      expect(isSecretPath(path)).toBe(true);
+    }
+    for (const path of ["src/environment.ts", "docs/credentials.md", "src/app.ts"]) {
+      expect(isSecretPath(path)).toBe(false);
+    }
+  });
+});
+
+describe("path sanitization", () => {
+  it("replaces machine-local paths with neutral labels", () => {
+    const sanitize = createSanitizer([
+      { path: "/Users/someone/Library/Application Support/Novus/worktrees/msn_1", label: "the mission worktree" },
+      { path: "/Users/someone/code/payments", label: "the repository" }
+    ]);
+    expect(sanitize("wrote /Users/someone/Library/Application Support/Novus/worktrees/msn_1/src/app.ts")).toBe(
+      "wrote the mission worktree/src/app.ts"
+    );
+    expect(sanitize("cloned from /Users/someone/code/payments")).toBe("cloned from the repository");
+  });
+
+  it("masks the longest path first, so a nested worktree is not half-masked", () => {
+    const sanitize = createSanitizer([
+      { path: "/repo", label: "the repository" },
+      { path: "/repo/.worktrees/msn_1", label: "the mission worktree" }
+    ]);
+    expect(sanitize("/repo/.worktrees/msn_1/src/app.ts")).toBe("the mission worktree/src/app.ts");
+  });
+
+  it("masks the /private alias macOS prints for temporary paths", () => {
+    const sanitize = createSanitizer([{ path: "/var/folders/t7/novus-worktree", label: "the mission worktree" }]);
+    expect(sanitize("fatal: /private/var/folders/t7/novus-worktree/.git is missing")).toBe(
+      "fatal: the mission worktree/.git is missing"
+    );
+  });
+
+  it("sweeps any home directory it was never told about", () => {
+    const sanitize = createSanitizer([]);
+    expect(sanitize("ENOENT: /Users/kartik/Desktop/thing.txt")).toBe("ENOENT: ~/Desktop/thing.txt");
+    expect(sanitize("ENOENT: /home/kartik/thing.txt")).toBe("ENOENT: ~/thing.txt");
+  });
+});
