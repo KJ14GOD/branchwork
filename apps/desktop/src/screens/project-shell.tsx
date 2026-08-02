@@ -5,7 +5,7 @@ import { AddProjectDialog, type PickedRepository } from "../components/add-proje
 import { HumanMark } from "../components/identity";
 import { truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
-import type { InspectorSection } from "../components/inspector";
+import { Inspector, type InspectorSection } from "../components/inspector";
 
 
 /**
@@ -371,8 +371,11 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     }
   }, []);
 
+  const openMission = selection?.missionId ? details[selection.missionId] : undefined;
+
   return (
-    <>
+    <div className="shell-split">
+      <div className="shell-column">
       <header className="topbar">
         <button
           className="btn btn-text rail-toggle"
@@ -402,10 +405,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           data-testid="panel-toggle"
         >
           <PanelGlyph />
-        </button>
-        <HumanMark login={user.login} name={user.name} />
-        <button className="btn btn-text" onClick={() => novus().auth.signOut()}>
-          Sign out
         </button>
       </header>
 
@@ -521,6 +520,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             >
               Join with invitation
             </button>
+            <div className="sidebar-identity">
+              <HumanMark login={user.login} name={user.name} />
+              <span className="sidebar-login">{user.login}</span>
+              <button
+                className="btn btn-text"
+                onClick={() => novus().auth.signOut()}
+                data-testid="sign-out"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -543,7 +553,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               project={selectedProject}
               details={details}
               selectedMissionId={selection.missionId}
-              inspector={inspector}
               onInspector={setInspector}
               onSelectTab={handleSelectTab}
               onDetail={handleDetail}
@@ -569,6 +578,20 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           onClose={closeDialog}
         />
       )}
-    </>
+      </div>
+
+      {/* Full height, hard against the right edge: the panel owns that corner
+          of the window, including the identity and control it reports on. */}
+      {inspector && openMission && (
+        <Inspector
+          detail={openMission}
+          section={inspector}
+          onSection={setInspector}
+          onClose={() => setInspector(null)}
+          onDetail={handleDetail}
+          onRevoke={() => void novus().control.revoke(openMission.mission.missionId)}
+        />
+      )}
+    </div>
   );
 }

@@ -329,7 +329,8 @@ describe("two people, one mission", () => {
     // Through the interface, not the bridge: an invitation nobody can issue by
     // clicking is an invitation that does not exist for a user.
     await showRoom(kartik);
-    await kartik.page.getByTestId("open-overview").click();
+    await kartik.page.getByTestId("panel-toggle").click();
+    await kartik.page.getByTestId("inspector-tab-overview").click();
     await kartik.page.getByTestId("create-invitation").click();
     await kartik.page.getByTestId("invitation-token").waitFor({ timeout: 15_000 });
     const invitationToken = (

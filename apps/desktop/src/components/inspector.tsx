@@ -10,7 +10,15 @@ import { novus } from "../bridge";
 import { clockTime, plural, shortSha } from "../format";
 import { changedFiles } from "./derive";
 import { GatedAction } from "./gated";
-import { Baton, HumanMark, roleLabel } from "./identity";
+import { Baton, HumanMark, ParticipantStack, roleLabel } from "./identity";
+
+function CloseGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <path d="M4 4l8 8M12 4l-8 8" />
+    </svg>
+  );
+}
 
 export type InspectorSection = "overview" | "changes" | "verification";
 
@@ -327,6 +335,30 @@ export function Inspector({
         ref={panelRef}
         data-testid="inspector"
       >
+        <div className="inspector-identity">
+          <ParticipantStack
+            participants={detail.participants}
+            attention={detail.control.openRequests.length > 0}
+          />
+          <span className="inspector-controller" data-testid="panel-controller">
+            {/* The baton lives on the controller's mark in the stack beside this
+                line. One mark, one meaning — it is not repeated here. */}
+            {detail.control.holderLogin ? (
+              detail.control.holderUserId === detail.viewerUserId
+                ? "You have control"
+                : `${detail.control.holderLogin} has control`
+            ) : (
+              <>
+                <span className="status-dot warn" />
+                No controller
+              </>
+            )}
+          </span>
+          <button className="icon-button" onClick={onClose} aria-label="Hide the evidence panel" data-testid="inspector-close">
+            <CloseGlyph />
+          </button>
+        </div>
+
         <div className="inspector-head">
           <div className="inspector-tabs" role="tablist" aria-label="Inspector sections">
             {SECTIONS.map((option) => (
@@ -342,9 +374,6 @@ export function Inspector({
               </button>
             ))}
           </div>
-          <button className="btn btn-text" onClick={onClose} data-testid="inspector-close">
-            Close
-          </button>
         </div>
 
         <div className="inspector-scroll">

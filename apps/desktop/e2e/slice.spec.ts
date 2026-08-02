@@ -319,11 +319,11 @@ describe("the Mission Room", () => {
     expect(await input.inputValue()).toBe("");
     expect((await input.boundingBox())?.height ?? 0).toBe(idleHeight);
 
-    // Authority is rendered from the server's own snapshot.
+    // Authority is rendered from the server's own snapshot. The room header
+    // keeps who holds the baton; who is here lives in the panel's own header.
     const controller = first.page.getByTestId("controller");
     await controller.waitFor();
     expect(await controller.textContent()).toContain("baton");
-    await first.page.getByTestId("participant-stack").waitFor();
     expect(await first.page.getByTestId("baton").count()).toBeGreaterThan(0);
 
     // The state line names a PRODUCT.md state and what happens next.
@@ -335,8 +335,9 @@ describe("the Mission Room", () => {
     await first.page.screenshot({ path: join(evidenceDir, "9-project-shell.png") });
 
     // Verification is honest when nothing ran.
-    await first.page.getByTestId("open-verification").click();
+    await first.page.getByTestId("panel-toggle").click();
     await first.page.getByTestId("inspector").waitFor();
+    await first.page.getByTestId("inspector-tab-verification").click();
     const empty = first.page.getByTestId("checks-empty");
     await empty.waitFor();
     expect(await empty.textContent()).toContain("No checks observed");
@@ -357,12 +358,10 @@ describe("the Mission Room", () => {
     expect(await first.page.getByTestId("ws-base").textContent()).toContain(headSha.slice(0, 8));
     await first.page.screenshot({ path: join(evidenceDir, "17-inspector-overview.png") });
 
-    // Escape closes the drawer and focus returns to its trigger.
+    // Escape closes the panel. It is docked rather than modal, so focus is not
+    // yanked back to a trigger — it stays where the reader left it.
     await first.page.keyboard.press("Escape");
     await first.page.getByTestId("inspector").waitFor({ state: "detached" });
-    expect(await first.page.evaluate(() => document.activeElement?.getAttribute("data-testid"))).toBe(
-      "open-overview"
-    );
 
     // Narrow: single column, nothing clipped, nothing below the fold.
     await resizeWindow(first.app, 860, 700);
@@ -384,11 +383,19 @@ describe("the Mission Room", () => {
     await panelToggle.click();
     await panel.waitFor({ state: "detached", timeout: 10_000 });
 
-    // A section trigger also toggles: pressing the one already showing closes it.
-    await first.page.getByTestId("open-changes").click();
+    // The panel carries who is here and who holds the baton in its own header,
+    // and its close control hides it again.
+    await panelToggle.click();
     await panel.waitFor({ timeout: 10_000 });
-    await first.page.getByTestId("open-changes").click();
+    await first.page.getByTestId("panel-controller").waitFor();
+    await first.page.getByTestId("participant-stack").waitFor();
+    await first.page.getByTestId("inspector-tab-changes").click();
+    await first.page.getByTestId("inspector-changes").waitFor();
+    await first.page.getByTestId("inspector-close").click();
     await panel.waitFor({ state: "detached", timeout: 10_000 });
+
+    // Identity sits at the foot of the rail, not in the top-right corner.
+    await first.page.getByTestId("sign-out").waitFor();
 
     // Disclosure is the whole project row, not only the arrow beside it.
     const workstreams = first.page.getByTestId("workstream-row");

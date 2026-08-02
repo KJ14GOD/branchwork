@@ -10,8 +10,6 @@ import type {
 import { novus } from "../bridge";
 import { Composer, type SubmitOutcome } from "../components/composer";
 import {
-  changedFiles,
-  checkTallies,
   controller as controllerOf,
   deriveStateLine,
   viewerIsController
@@ -22,8 +20,8 @@ import {
   buildFeed
 } from "../components/direction-trace";
 import { GatedAction } from "../components/gated";
-import { Baton, HumanMark, ParticipantStack } from "../components/identity";
-import { Inspector, type InspectorSection } from "../components/inspector";
+import { Baton, HumanMark } from "../components/identity";
+import type { InspectorSection } from "../components/inspector";
 import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
 import type { Project } from "./project-shell";
 
@@ -58,7 +56,6 @@ export function ProjectRoom({
   project,
   details,
   selectedMissionId,
-  inspector,
   onInspector,
   onSelectTab,
   onDetail,
@@ -67,9 +64,8 @@ export function ProjectRoom({
   project: Project;
   details: Record<string, MissionDetailResponse>;
   selectedMissionId: string | null;
-  /** Owned by the shell: the panel is docked at shell level and its toggle
-   *  lives in the top bar, so it must outlive a workstream tab. */
-  inspector: InspectorSection | null;
+  /** Opening the evidence panel is the shell's job — it owns the panel and the
+   *  control that shows it. The room only ever asks for a section. */
   onInspector: (section: InspectorSection | null) => void;
   onSelectTab: (missionId: string | null) => void;
   onDetail: (detail: MissionDetailResponse) => void;
@@ -79,7 +75,6 @@ export function ProjectRoom({
   const [actionError, setActionError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
-  const inspectorTriggerRef = useRef<HTMLButtonElement>(null);
 
   const isDraft = selectedMissionId === null;
   const detail = selectedMissionId === null ? undefined : details[selectedMissionId];
@@ -182,17 +177,6 @@ export function ProjectRoom({
     return () => window.removeEventListener("keydown", onKey);
   }, [detail]);
 
-  const closeInspector = useCallback(() => {
-    onInspector(null);
-    inspectorTriggerRef.current?.focus();
-  }, [onInspector]);
-
-  /** Open that section, or close the panel if it is already the one showing. */
-  const toggleInspector = useCallback(
-    (section: InspectorSection) => onInspector(inspector === section ? null : section),
-    [inspector, onInspector]
-  );
-
   const submit = async ({
     body,
     model,
@@ -261,8 +245,6 @@ export function ProjectRoom({
   const stateLine = detail ? deriveStateLine(detail) : null;
   const controller = detail ? controllerOf(detail) : null;
   const isController = detail ? viewerIsController(detail) : false;
-  const files = detail ? changedFiles(detail) : [];
-  const checks = detail ? checkTallies(detail) : { total: 0, passed: 0, failed: 0 };
   const liveOffer = detail?.control.liveOffer ?? null;
   const offerIsLive =
     liveOffer !== null && ["open", "accepted", "waiting_for_boundary"].includes(liveOffer.state);
@@ -448,40 +430,6 @@ export function ProjectRoom({
                 </GatedAction>
               )}
               <span className="head-spacer" />
-              <ParticipantStack
-                participants={detail.participants}
-                attention={detail.control.openRequests.length > 0}
-              />
-              {/* Each trigger toggles its own section: pressing the one that
-                  is already showing closes the panel, so the same control
-                  both opens and dismisses. */}
-              <nav className="inspector-triggers" aria-label="Evidence">
-                <button
-                  ref={inspectorTriggerRef}
-                  className={inspector === "overview" ? "btn btn-text active" : "btn btn-text"}
-                  aria-pressed={inspector === "overview"}
-                  onClick={() => toggleInspector("overview")}
-                  data-testid="open-overview"
-                >
-                  Overview
-                </button>
-                <button
-                  className={inspector === "changes" ? "btn btn-text active" : "btn btn-text"}
-                  aria-pressed={inspector === "changes"}
-                  onClick={() => toggleInspector("changes")}
-                  data-testid="open-changes"
-                >
-                  Changes{files.length > 0 ? ` ${files.length}` : ""}
-                </button>
-                <button
-                  className={inspector === "verification" ? "btn btn-text active" : "btn btn-text"}
-                  aria-pressed={inspector === "verification"}
-                  onClick={() => toggleInspector("verification")}
-                  data-testid="open-verification"
-                >
-                  Verification{checks.total > 0 ? ` ${checks.passed}/${checks.total}` : ""}
-                </button>
-              </nav>
             </>
           ) : (
             <span className="controller-name quiet">
@@ -663,16 +611,6 @@ export function ProjectRoom({
 
       </div>
 
-      {inspector && detail && (
-        <Inspector
-          detail={detail}
-          section={inspector}
-          onSection={onInspector}
-          onClose={closeInspector}
-          onDetail={onDetail}
-          onRevoke={() => void runAction(novus().control.revoke(detail.mission.missionId))}
-        />
-      )}
     </div>
   );
 }
