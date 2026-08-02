@@ -5,6 +5,9 @@ import {
   DirectionResolutionSchema,
   IpcDirectInputSchema,
   MissionRoleSchema,
+  PrepareLocalFilesInputSchema,
+  SaveWorkspaceSettingsInputSchema,
+  WorkspaceCommandInputSchema,
   type IpcAuthStatus,
   type IpcResult
 } from "@novus/contracts";
@@ -14,6 +17,12 @@ import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
 import { ensureLocalBranch, pathForLocalRepo, pickLocalRepository, resolveLocalBase } from "./local-repos";
 import { startRunnerAgent, type RunnerAgent } from "./runner-agent";
+import {
+  inspectWorkspace,
+  prepareLocalFiles,
+  saveWorkspaceSettings,
+  type WorkspaceTarget
+} from "./workspace";
 import { SessionStore } from "./session-store";
 
 // Test hooks (see DECISIONS.md D-027): both refuse to exist in packaged builds.
@@ -390,24 +399,91 @@ function registerIpc(): void {
   });
 
   // --- Workspace runtime ----------------------------------------------------
-  // Contracted and not yet built (PROGRESS.md). Every channel exists so the
-  // bridge is whole, and each answers with a named refusal rather than
-  // hanging or pretending: an unbuilt capability says so.
-  const workspaceRuntimeUnavailable = (): IpcResult<never> => ({
-    ok: false,
-    code: "workspace_runtime_unavailable",
-    message: "Running and verifying a project from Novus isn't built yet."
+  // Inspecting a project, writing its configuration, and supplying its local
+  // files are acts by the person sitting at this machine, so they are local.
+  // Running a declared command is remotely invokable, so it goes through the
+  // control plane and is authorized there (D-042).
+
+  /** Resolves which workstream a request means, and refuses when this machine
+   *  is not the one holding that repository. */
+  const targetFor = async (missionId: string): Promise<WorkspaceTarget> => {
+    const detail = await api.getMission(missionId);
+    const repository = detail.mission.repository;
+    const workstream = detail.workstream;
+    if (!repository || !workstream || repository.provider !== "local") {
+      throw new ApiError("not_local", "This workstream has no local workspace.", 409);
+    }
+    if (pathForLocalRepo(repository.providerRepoId) === null) {
+      throw new ApiError(
+        "not_this_machine",
+        "This repository lives on another machine, so its workspace can only be prepared there.",
+        409
+      );
+    }
+    return {
+      missionId,
+      workstreamId: workstream.workstreamId,
+      localId: repository.providerRepoId,
+      missionBranch: workstream.missionBranch
+    };
+  };
+
+  ipcMain.handle("novus:workspace:inspect", async (_event, raw: unknown) => {
+    const parsed = MissionIdSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(async () => inspectWorkspace(await targetFor(parsed.data)));
   });
 
-  for (const channel of [
-    "novus:workspace:inspect",
-    "novus:workspace:save",
-    "novus:workspace:prepare-local-files",
-    "novus:workspace:command",
-    "novus:workspace:stop"
-  ]) {
-    ipcMain.handle(channel, () => workspaceRuntimeUnavailable());
-  }
+  ipcMain.handle("novus:workspace:save", async (_event, raw: unknown) => {
+    const parsed = SaveWorkspaceSettingsInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed settings." };
+    return call(async () => {
+      await saveWorkspaceSettings(
+        await targetFor(parsed.data.missionId),
+        parsed.data.scope,
+        parsed.data.settings
+      );
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:workspace:prepare-local-files", async (_event, raw: unknown) => {
+    const parsed = PrepareLocalFilesInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed file list." };
+    return call(async () =>
+      prepareLocalFiles(await targetFor(parsed.data.missionId), parsed.data.paths)
+    );
+  });
+
+  ipcMain.handle("novus:workspace:command", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ missionId: MissionIdSchema })
+      .and(WorkspaceCommandInputSchema)
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed command." };
+    const result = await call(async () => {
+      await api.workspaceCommand(parsed.data.missionId, {
+        kind: parsed.data.kind,
+        name: parsed.data.name
+      });
+      return null;
+    });
+    runner?.pollNow();
+    return result;
+  });
+
+  ipcMain.handle("novus:workspace:stop", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ missionId: MissionIdSchema, name: z.string().min(1).max(80) })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    const result = await call(async () => {
+      await api.workspaceStop(parsed.data.missionId, parsed.data.name);
+      return null;
+    });
+    runner?.pollNow();
+    return result;
+  });
 
   // --- Evidence -------------------------------------------------------------
 
