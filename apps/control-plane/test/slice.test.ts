@@ -118,26 +118,51 @@ describe("authentication and sessions", () => {
   });
 });
 
+async function missionPayload(server: FastifyInstance, token: string, overrides: Record<string, unknown> = {}) {
+  const base = await server.inject({
+    method: "GET",
+    url: "/repositories/available/9001/base",
+    headers: { authorization: `Bearer ${token}` }
+  });
+  expect(base.statusCode).toBe(200);
+  const { ref, sha } = base.json();
+  return {
+    goal: "Rotate the signing keys",
+    successCriteria: "All services verify with the new key",
+    providerRepoId: "9001",
+    baseRef: ref,
+    baseSha: sha,
+    creationKey: crypto.randomUUID(),
+    ...overrides
+  };
+}
+
 describe("missions, events, and reconstruction", () => {
-  it("creates a mission with its initial event in one transaction", async () => {
+  it("creates a mission, workstream, and initial events in one transaction", async () => {
     const { token, orgId, userId } = await signIn(app);
     const created = await app.inject({
       method: "POST",
       url: "/missions",
       headers: { authorization: `Bearer ${token}` },
-      payload: { goal: "Rotate the signing keys", successCriteria: "All services verify with the new key" }
+      payload: await missionPayload(app, token)
     });
     expect(created.statusCode).toBe(201);
-    const mission = created.json().mission;
+    const { mission, workstream } = created.json();
     expect(mission.primaryState).toBe("new_mission");
     expect(mission.orgId).toBe(orgId);
+    expect(mission.repository.name).toBe("novus/demo-app");
+    expect(workstream.missionBranch).toMatch(/^novus\/m-/);
+    expect(workstream.branchStatus).toBe("created");
+    expect(workstream.baseSha).toMatch(/^[0-9a-f]{40}$/);
 
     const events = await db.query("select * from events where mission_id = $1 order by seq", [mission.missionId]);
-    expect(events.rowCount).toBe(1);
-    expect(events.rows[0].kind).toBe("mission.created");
+    expect(events.rows.map((event) => event.kind)).toEqual([
+      "mission.created",
+      "workstream.created",
+      "workstream.branch_created"
+    ]);
     expect(events.rows[0].actor_kind).toBe("user");
     expect(events.rows[0].actor_id).toBe(userId);
-    expect(events.rows[0].seq).toBe("1");
 
     const participants = await db.query("select mission_role from participants where mission_id = $1", [
       mission.missionId
@@ -152,20 +177,20 @@ describe("missions, events, and reconstruction", () => {
       method: "POST",
       url: "/missions",
       headers: { authorization: `Bearer ${token}` },
-      payload: { goal: "   ", successCriteria: "x" }
+      payload: await missionPayload(app, token, { goal: "   " })
     });
     expect(res.statusCode).toBe(422);
     const after = await db.query("select count(*)::int as n from missions");
     expect(after.rows[0].n).toBe(before.rows[0].n);
   });
 
-  it("reconstructs the mission from durable state through a fresh server", async () => {
+  it("reconstructs the mission, repository, and workstream through a fresh server", async () => {
     const { token } = await signIn(app);
     const created = await app.inject({
       method: "POST",
       url: "/missions",
       headers: { authorization: `Bearer ${token}` },
-      payload: { goal: "Migrate the sessions table", successCriteria: "Zero downtime; old rows preserved" }
+      payload: await missionPayload(app, token, { goal: "Migrate the sessions table" })
     });
     const missionId = created.json().mission.missionId;
 
@@ -180,8 +205,13 @@ describe("missions, events, and reconstruction", () => {
     expect(fetched.statusCode).toBe(200);
     const body = fetched.json();
     expect(body.mission.goal).toBe("Migrate the sessions table");
-    expect(body.events).toHaveLength(1);
-    expect(body.events[0].kind).toBe("mission.created");
+    expect(body.mission.repository.providerRepoId).toBe("9001");
+    expect(body.workstream.missionBranch).toMatch(/^novus\/m-/);
+    expect(body.events.map((event: { kind: string }) => event.kind)).toEqual([
+      "mission.created",
+      "workstream.created",
+      "workstream.branch_created"
+    ]);
     await freshApp.close();
   });
 });
@@ -193,7 +223,7 @@ describe("organization scoping", () => {
       method: "POST",
       url: "/missions",
       headers: { authorization: `Bearer ${tokenA}` },
-      payload: { goal: "Org A private mission", successCriteria: "Stays private" }
+      payload: await missionPayload(app, tokenA, { goal: "Org A private mission", successCriteria: "Stays private" })
     });
     const missionId = created.json().mission.missionId;
 

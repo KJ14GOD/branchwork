@@ -82,7 +82,7 @@ Interaction states: row/list hover `#FFFFFF` at 4%; selected `#FFFFFF` at 6% plu
 
 - Spacing scale (px): 4, 8, 12, 16, 24, 32, 48, 64. No other values.
 - Grid: 8px base; rows in dense lists are 32–36px tall; touch/pointer targets ≥32px.
-- Shell: top bar 48px; navigation rail 240px (Missions surface); Mission Room sidebar 280–320px max; content max-width unconstrained in the Room, 720px for prose-like content (receipts, empty states); outer page margins 24–32px.
+- Shell: top bar 48px, **borderless** — it separates from content by height and spacing alone, never a hairline; navigation rail 240px (Missions surface); Mission Room sidebar 280–320px max; content max-width unconstrained in the Room, 720px for prose-like content (receipts, empty states); outer page margins 24–32px.
 - The app shell never scrolls; see [Overflow](#overflow).
 
 ### Radii
@@ -132,11 +132,13 @@ Five elements make a screen recognizably Novus. They are the only permitted uses
 
 ## Information architecture
 
-Three primary surfaces. Repository setup, harness selection, invitations, permissions, technical logs, environment configuration, and advanced settings live in bounded overlays (dialogs, drawers) or contextual inspectors — never as permanent navigation destinations. An internal entity's existence never justifies a nav item.
+Project-first (D-032). The window's subject is parallel agent work, never code files. Invitations, permissions, technical logs, environment configuration, and advanced settings live in bounded overlays or contextual inspectors.
 
-1. **Missions** — grouped by attention: **Needs you**, **Running**, **Waiting**, **Completed**. An attention queue, not a task board: no columns, no drag, no swimlanes. Rows only.
-2. **Mission Room** — mission goal and title; the state line; participants (ParticipantStack + controller baton); workstreams; a human-readable activity feed (the direction thread lives here); the composer; Changes; Verification (evidence ledger).
+1. **Projects sidebar** — the persistent left rail (240px): the user's repositories (GitHub and local), each expanding to its missions/workstreams; nouns and counts only, plus Add project (GitHub picker or local folder). An **attention view** at the rail's top surfaces Needs-you items across projects — the old Missions queue, demoted to a lens.
+2. **Project room** — the center: **workstream tabs** across the top (parallel attempts, each its own harness/model choice); each tab is a chat-first mission room — the direction thread as a conversational feed, the state line, and a persistent chat composer (prominent; the one exception to the idle-height rule) carrying harness/model selection; Changes and Verification one keystroke away, never the default canvas.
 3. **Review** — behavioral result summary; the diff; the evidence ledger; build/diagnostic state; comments; open concerns; PR readiness.
+
+The room keeps Novus's identity inside Conductor-adjacent patterns: state line, evidence ledger, attribution, and (later) the baton are what the tabs contain — not a bare chatbot, and never a file tree as the main event.
 
 ## Layout
 
@@ -277,7 +279,7 @@ Each rule is testable in review; violating any one fails the review.
 6. No screen with fewer than three type-scale steps.
 7. No page scrolling: only ScrollArea scrolls; the shell never does.
 8. No equal-weight regions; one primary region ≥55% width per surface.
-9. No composer taller than one row at idle.
+9. No composer taller than one row at idle — except the project room's chat composer, whose prominence is deliberate (D-032) and still bounded at 40% of viewport.
 10. No prose in navigation rails.
 11. No decision or comparison UI over empty content.
 12. No machinery (model, repo, workspace ids) in the mission header.

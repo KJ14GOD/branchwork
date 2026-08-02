@@ -21,6 +21,46 @@ export const MissionStateSchema = z.enum(["new_mission"]);
 // The full canonical vocabulary is PRODUCT.md's mission state model; this slice
 // only ever produces "new_mission" and the schema widens as states become real.
 
+// --- Repositories and workstreams (D-025, D-031) --------------------------
+
+export const ShaSchema = z.string().regex(/^[0-9a-f]{40}$/, "must be a full 40-hex commit SHA");
+
+/** A repository as the provider reports it, before Novus records it. */
+export const AvailableRepositorySchema = z.object({
+  providerRepoId: z.string().min(1), // stable provider identifier, never the name
+  name: z.string().min(1), // owner/name, display only
+  defaultBranch: z.string().min(1)
+});
+export type AvailableRepository = z.infer<typeof AvailableRepositorySchema>;
+
+/** A repository Novus has recorded for an organization. */
+export const RepositoryRefSchema = z.object({
+  repoId: z.string().startsWith("rep_"),
+  provider: z.literal("github"),
+  providerRepoId: z.string().min(1),
+  name: z.string().min(1),
+  defaultBranch: z.string().min(1)
+});
+export type RepositoryRef = z.infer<typeof RepositoryRefSchema>;
+
+export const BaseRevisionSchema = z.object({ ref: z.string().min(1), sha: ShaSchema });
+export type BaseRevision = z.infer<typeof BaseRevisionSchema>;
+
+export const BranchStatusSchema = z.enum(["pending", "created", "failed"]);
+export type BranchStatus = z.infer<typeof BranchStatusSchema>;
+
+export const WorkstreamSchema = z.object({
+  workstreamId: z.string().startsWith("wst_"),
+  missionId: z.string().startsWith("msn_"),
+  name: z.string().min(1),
+  baseRef: z.string().min(1),
+  baseSha: ShaSchema,
+  missionBranch: z.string().min(1),
+  branchStatus: BranchStatusSchema,
+  branchError: z.string().nullable()
+});
+export type Workstream = z.infer<typeof WorkstreamSchema>;
+
 export const MissionSchema = z.object({
   missionId: z.string().startsWith("msn_"),
   orgId: z.string().startsWith("org_"),
@@ -29,7 +69,9 @@ export const MissionSchema = z.object({
   primaryState: MissionStateSchema,
   createdBy: z.string().startsWith("usr_"),
   createdByLogin: z.string().min(1),
-  createdAt: z.string().datetime()
+  createdAt: z.string().datetime(),
+  /** Null only for missions created before repository connection existed. */
+  repository: RepositoryRefSchema.nullable()
 });
 export type Mission = z.infer<typeof MissionSchema>;
 
@@ -50,7 +92,13 @@ export type MissionEvent = z.infer<typeof EventSchema>;
 
 export const CreateMissionInputSchema = z.object({
   goal: z.string().trim().min(1, "A mission needs a goal").max(500),
-  successCriteria: z.string().trim().min(1, "State what success looks like").max(5000)
+  successCriteria: z.string().trim().min(1, "State what success looks like").max(5000),
+  providerRepoId: z.string().min(1, "Pick a repository"),
+  baseRef: z.string().min(1),
+  baseSha: ShaSchema,
+  /** Client-generated per creation attempt; retries reuse it, so a retried
+   *  or double-submitted creation can never mint a second mission or branch. */
+  creationKey: z.string().uuid()
 });
 export type CreateMissionInput = z.infer<typeof CreateMissionInputSchema>;
 
@@ -80,9 +128,22 @@ export const MissionListResponseSchema = z.object({
 });
 export const MissionDetailResponseSchema = z.object({
   mission: MissionSchema,
+  /** Null only for missions created before repository connection existed. */
+  workstream: WorkstreamSchema.nullable(),
   events: z.array(EventSchema)
 });
 export type MissionDetailResponse = z.infer<typeof MissionDetailResponseSchema>;
+
+export const AvailableRepositoriesResponseSchema = z.object({
+  repositories: z.array(AvailableRepositorySchema)
+});
+export const CreateMissionResponseSchema = z.object({
+  mission: MissionSchema,
+  workstream: WorkstreamSchema
+});
+export const RetryBranchResponseSchema = z.object({
+  workstream: WorkstreamSchema
+});
 
 export const ApiErrorSchema = z.object({
   error: z.object({ code: z.string(), message: z.string() })

@@ -11,6 +11,8 @@ export interface Config {
    */
   fakeGithub: boolean;
   sessionTtlHours: number;
+  githubAppId: string;
+  githubAppPem: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -26,6 +28,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubClientId: env.NOVUS_GITHUB_CLIENT_ID ?? "",
     githubClientSecret: env.NOVUS_GITHUB_CLIENT_SECRET ?? "",
     fakeGithub,
-    sessionTtlHours: Number(env.NOVUS_SESSION_TTL_HOURS ?? 24 * 30)
+    sessionTtlHours: Number(env.NOVUS_SESSION_TTL_HOURS ?? 24 * 30),
+    githubAppId: env.NOVUS_GHAPP_ID ?? "",
+    githubAppPem: env.NOVUS_GHAPP_PEM_B64
+      ? Buffer.from(env.NOVUS_GHAPP_PEM_B64, "base64").toString("utf8")
+      : ""
   };
 }

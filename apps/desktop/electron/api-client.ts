@@ -2,16 +2,22 @@ import {
   ApiErrorSchema,
   AuthClaimResponseSchema,
   AuthStartResponseSchema,
+  AvailableRepositoriesResponseSchema,
+  BaseRevisionSchema,
+  CreateMissionResponseSchema,
   MeResponseSchema,
   MissionDetailResponseSchema,
   MissionListResponseSchema,
-  MissionSchema,
+  RetryBranchResponseSchema,
   type AuthClaimResponse,
   type AuthStartResponse,
+  type AvailableRepository,
+  type BaseRevision,
   type CreateMissionInput,
   type MeResponse,
   type Mission,
-  type MissionDetailResponse
+  type MissionDetailResponse,
+  type Workstream
 } from "@novus/contracts";
 import { z } from "zod";
 
@@ -93,9 +99,31 @@ export class ControlPlaneClient {
     return body.missions;
   }
 
-  async createMission(input: CreateMissionInput): Promise<Mission> {
-    const body = await this.request("POST", "/missions", z.object({ mission: MissionSchema }), input);
-    return body.mission;
+  async availableRepositories(): Promise<AvailableRepository[]> {
+    const body = await this.request("GET", "/repositories/available", AvailableRepositoriesResponseSchema);
+    return body.repositories;
+  }
+
+  baseRevision(providerRepoId: string, ref?: string): Promise<BaseRevision> {
+    const query = ref === undefined ? "" : `?ref=${encodeURIComponent(ref)}`;
+    return this.request(
+      "GET",
+      `/repositories/available/${encodeURIComponent(providerRepoId)}/base${query}`,
+      BaseRevisionSchema
+    );
+  }
+
+  createMission(input: CreateMissionInput): Promise<{ mission: Mission; workstream: Workstream }> {
+    return this.request("POST", "/missions", CreateMissionResponseSchema, input);
+  }
+
+  async retryBranch(workstreamId: string): Promise<Workstream> {
+    const body = await this.request(
+      "POST",
+      `/workstreams/${encodeURIComponent(workstreamId)}/branch/retry`,
+      RetryBranchResponseSchema
+    );
+    return body.workstream;
   }
 
   getMission(missionId: string): Promise<MissionDetailResponse> {

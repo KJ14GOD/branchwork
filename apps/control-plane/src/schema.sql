@@ -33,12 +33,26 @@ create table if not exists sessions (
 );
 
 -- Desktop OAuth handshake state: one row per attempt, claimable exactly once.
+-- Holds no credentials: the session token is minted at claim time (D-031 audit),
+-- so an unclaimed flow row contains only the state nonce and the user it resolved to.
 create table if not exists auth_flows (
   state         text primary key,
   created_at    timestamptz not null default now(),
   expires_at    timestamptz not null,
-  session_token text,
   user_id       text references users(user_id)
+);
+alter table auth_flows drop column if exists session_token;
+
+create table if not exists repositories (
+  repo_id           text primary key,
+  org_id            text not null references organizations(org_id),
+  provider          text not null check (provider = 'github'),
+  provider_repo_id  text not null,
+  name              text not null,
+  default_branch    text not null,
+  connected_by      text not null references users(user_id),
+  created_at        timestamptz not null default now(),
+  unique (org_id, provider, provider_repo_id)
 );
 
 create table if not exists missions (
@@ -51,6 +65,30 @@ create table if not exists missions (
   created_at        timestamptz not null default now()
 );
 create index if not exists missions_by_org on missions (org_id, created_at desc);
+-- Additive columns for the repository slice (schema.sql is rerunnable):
+alter table missions add column if not exists repo_id text references repositories(repo_id);
+alter table missions add column if not exists creation_key text;
+create unique index if not exists missions_creation_key on missions (org_id, creation_key)
+  where creation_key is not null;
+
+create table if not exists workstreams (
+  wst_id         text primary key,
+  mission_id     text not null references missions(mission_id),
+  repo_id        text not null references repositories(repo_id),
+  name           text not null,
+  approach_flag  boolean not null default false,
+  base_ref       text not null,
+  base_sha       text not null check (base_sha ~ '^[0-9a-f]{40}$'),
+  mission_branch text not null,
+  branch_status  text not null check (branch_status in ('pending', 'created', 'failed')),
+  branch_error   text,
+  created_at     timestamptz not null default now()
+);
+-- V0 constraint: exactly one workstream per mission (multi-workstream is a later, deliberate change).
+create unique index if not exists workstreams_one_per_mission on workstreams (mission_id);
+drop index if exists workstreams_branch_unique;
+-- One branch name per repository — the invariant the audit demanded be real.
+create unique index if not exists workstreams_repo_branch_unique on workstreams (repo_id, mission_branch);
 
 create table if not exists participants (
   mission_id  text not null references missions(mission_id),

@@ -1,10 +1,13 @@
 import type {
+  AvailableRepository,
+  BaseRevision,
   CreateMissionInput,
   IpcAuthStatus,
   IpcResult,
   Mission,
   MissionDetailResponse,
-  SetupProbeResponse
+  SetupProbeResponse,
+  Workstream
 } from "@novus/contracts";
 
 export interface NovusBridge {
@@ -17,10 +20,15 @@ export interface NovusBridge {
   setup: {
     probe(): Promise<IpcResult<SetupProbeResponse>>;
   };
+  repos: {
+    available(): Promise<IpcResult<AvailableRepository[]>>;
+    base(providerRepoId: string, ref?: string): Promise<IpcResult<BaseRevision>>;
+  };
   missions: {
     list(): Promise<IpcResult<Mission[]>>;
-    create(input: CreateMissionInput): Promise<IpcResult<Mission>>;
+    create(input: CreateMissionInput): Promise<IpcResult<{ mission: Mission; workstream: Workstream }>>;
     get(missionId: string): Promise<IpcResult<MissionDetailResponse>>;
+    retryBranch(workstreamId: string): Promise<IpcResult<Workstream>>;
   };
 }
 

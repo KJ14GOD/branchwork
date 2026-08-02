@@ -24,6 +24,7 @@ const hashToken = (token: string) => createHash("sha256").update(token).digest("
 
 export async function startFlow(db: Db, config: Config): Promise<{ state: string; authorizeUrl: string }> {
   const state = newStateNonce();
+  await db.query("delete from auth_flows where expires_at < now()"); // opportunistic prune
   await db.query(
     "insert into auth_flows (state, expires_at) values ($1, now() + interval '10 minutes')",
     [state]
@@ -61,33 +62,28 @@ export async function exchangeGithubCode(config: Config, code: string): Promise<
   return { githubId: user.id, login: user.login, name: user.name ?? null };
 }
 
-/** Upserts the user, guarantees a personal org + membership, issues a session. */
+/**
+ * Upserts the user and guarantees a personal org + membership. No session is
+ * created here and no credential is stored: the flow row only records which
+ * user the browser leg resolved to. The session token is minted at claim time,
+ * so a live token never sits in the database (D-031 audit).
+ */
 export async function completeFlow(
   db: Db,
-  config: Config,
+  _config: Config,
   state: string,
   identity: GithubIdentity
 ): Promise<void> {
   await withTransaction(db, async (client) => {
     const flow = await client.query(
-      "select state from auth_flows where state = $1 and expires_at > now() and session_token is null for update",
+      "select state from auth_flows where state = $1 and expires_at > now() and user_id is null for update",
       [state]
     );
     if (flow.rowCount === 0) throw new Error("auth flow missing, expired, or already completed");
 
     const user = await upsertUser(client, identity);
     await ensurePersonalOrg(client, user.userId, identity.login);
-
-    const token = newSessionToken();
-    await client.query(
-      "insert into sessions (session_id, user_id, token_hash, expires_at) values ($1, $2, $3, now() + ($4 || ' hours')::interval)",
-      [newSessionId(), user.userId, hashToken(token), String(config.sessionTtlHours)]
-    );
-    await client.query("update auth_flows set session_token = $1, user_id = $2 where state = $3", [
-      token,
-      user.userId,
-      state
-    ]);
+    await client.query("update auth_flows set user_id = $1 where state = $2", [user.userId, state]);
   });
 }
 
@@ -122,16 +118,22 @@ async function ensurePersonalOrg(client: pg.PoolClient, userId: string, login: s
   );
 }
 
-/** One-shot claim: hands the session token to the desktop exactly once. */
-export async function claimFlow(db: Db, state: string): Promise<string | null> {
+/** One-shot claim: mints the session and hands its token over exactly once. */
+export async function claimFlow(db: Db, config: Config, state: string): Promise<string | null> {
   return withTransaction(db, async (client) => {
     const row = await client.query(
-      "select session_token from auth_flows where state = $1 and expires_at > now() for update",
+      "select user_id from auth_flows where state = $1 and expires_at > now() for update",
       [state]
     );
     if (row.rowCount === 0) throw new Error("auth flow missing or expired");
-    const token = row.rows[0]?.session_token as string | null;
-    if (!token) return null; // browser leg not finished yet — keep polling
+    const userId = row.rows[0]?.user_id as string | null;
+    if (!userId) return null; // browser leg not finished yet — keep polling
+
+    const token = newSessionToken();
+    await client.query(
+      "insert into sessions (session_id, user_id, token_hash, expires_at) values ($1, $2, $3, now() + ($4 || ' hours')::interval)",
+      [newSessionId(), userId, hashToken(token), String(config.sessionTtlHours)]
+    );
     await client.query("delete from auth_flows where state = $1", [state]);
     return token;
   });

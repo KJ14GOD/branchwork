@@ -12,7 +12,21 @@ import {
   startFlow,
   type AuthedContext
 } from "./auth.ts";
-import { createMission, getMission, listMissions } from "./missions.ts";
+import {
+  MissionCreationError,
+  attemptBranchCreation,
+  createMission,
+  getMission,
+  getWorkstreamMission,
+  listMissions
+} from "./missions.ts";
+import {
+  ProviderUnconfiguredError,
+  UnknownRepositoryError,
+  selectRepositoryProvider,
+  type RepositoryProvider
+} from "./repo-provider.ts";
+import { registerGithubAppSetup } from "./github-app.ts";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -23,8 +37,9 @@ declare module "fastify" {
 const StateSchema = z.object({ state: z.string().min(16).max(64) });
 const CallbackSchema = z.object({ code: z.string().min(1).max(200), state: z.string().min(16).max(64) });
 
-export function buildServer(db: Db, config: Config): FastifyInstance {
+export function buildServer(db: Db, config: Config, providerOverride?: RepositoryProvider): FastifyInstance {
   const app = Fastify({ logger: false });
+  const provider = providerOverride ?? selectRepositoryProvider(config);
 
   const sendError = (reply: FastifyReply, status: number, code: string, message: string) =>
     reply.status(status).send({ error: { code, message } });
@@ -42,6 +57,8 @@ export function buildServer(db: Db, config: Config): FastifyInstance {
   };
 
   app.get("/health", async () => ({ ok: true }));
+
+  registerGithubAppSetup(app, config);
 
   app.post("/auth/github/start", async (_request, reply) => {
     if (!config.fakeGithub && !config.githubClientId) {
@@ -86,7 +103,7 @@ export function buildServer(db: Db, config: Config): FastifyInstance {
     if (!parsed.success) return sendError(reply, 400, "bad_state", "Malformed claim.");
     let token: string | null;
     try {
-      token = await claimFlow(db, parsed.data.state);
+      token = await claimFlow(db, config, parsed.data.state);
     } catch {
       return sendError(reply, 410, "flow_gone", "Sign-in attempt expired. Start again.");
     }
@@ -116,6 +133,38 @@ export function buildServer(db: Db, config: Config): FastifyInstance {
     };
   });
 
+  app.get("/repositories/available", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    try {
+      return { repositories: await provider.listRepositories(ctx.orgId) };
+    } catch (error) {
+      if (error instanceof ProviderUnconfiguredError) {
+        return sendError(reply, 503, "repo_unconfigured", error.message);
+      }
+      throw error;
+    }
+  });
+
+  app.get("/repositories/available/:providerRepoId/base", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    const params = z.object({ providerRepoId: z.string().min(1) }).safeParse(request.params);
+    const query = z.object({ ref: z.string().min(1).optional() }).safeParse(request.query);
+    if (!params.success || !query.success) return sendError(reply, 400, "bad_request", "Malformed request.");
+    try {
+      return await provider.resolveBase(params.data.providerRepoId, query.data.ref);
+    } catch (error) {
+      if (error instanceof ProviderUnconfiguredError) {
+        return sendError(reply, 503, "repo_unconfigured", error.message);
+      }
+      if (error instanceof UnknownRepositoryError) {
+        return sendError(reply, 404, "unknown_repository", error.message);
+      }
+      throw error;
+    }
+  });
+
   app.get("/missions", async (request, reply) => {
     const ctx = await requireAuth(request, reply);
     if (!ctx) return;
@@ -130,8 +179,31 @@ export function buildServer(db: Db, config: Config): FastifyInstance {
       const message = parsed.error.issues[0]?.message ?? "Invalid mission.";
       return sendError(reply, 422, "invalid_mission", message);
     }
-    const mission = await createMission(db, ctx, parsed.data);
-    return reply.status(201).send({ mission });
+    try {
+      const created = await createMission(db, provider, ctx, parsed.data);
+      return reply.status(201).send(created);
+    } catch (error) {
+      if (error instanceof ProviderUnconfiguredError) {
+        return sendError(reply, 503, "repo_unconfigured", error.message);
+      }
+      if (error instanceof MissionCreationError) {
+        return sendError(reply, 422, error.code, error.message);
+      }
+      throw error;
+    }
+  });
+
+  app.post("/workstreams/:workstreamId/branch/retry", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    const params = z.object({ workstreamId: z.string().startsWith("wst_") }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, "bad_id", "Malformed workstream id.");
+    const missionId = await getWorkstreamMission(db, ctx, params.data.workstreamId);
+    if (!missionId) return sendError(reply, 404, "not_found", "No such workstream in your organization.");
+    await attemptBranchCreation(db, provider, ctx, missionId);
+    const detail = await getMission(db, ctx, missionId);
+    if (!detail?.workstream) return sendError(reply, 500, "workstream_missing", "Workstream disappeared.");
+    return { workstream: detail.workstream };
   });
 
   app.get("/missions/:missionId", async (request, reply) => {
