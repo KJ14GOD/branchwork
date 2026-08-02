@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { siClaudecode, siGithub } from "simple-icons";
+import codexIcon from "../assets/codex-icon.png";
 import type { HarnessProbe, IpcAuthStatus, SetupProbeResponse } from "@novus/contracts";
 import { novus } from "../bridge";
 import { applyTheme, themePreference, type ThemePreference } from "../theme";
@@ -114,7 +115,7 @@ export function SetupSurface({
 
           <div className="card">
             <div className="card-head">
-              <span className="service-mark">CX</span>
+              <img className="card-glyph card-glyph-bitmap" src={codexIcon} alt="Codex" />
               Codex
             </div>
             <div className="card-desc">OpenAI&apos;s coding agent. Cloud runs arrive with missions.</div>

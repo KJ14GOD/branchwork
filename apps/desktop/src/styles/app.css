@@ -361,6 +361,11 @@ body {
   color: var(--text-1);
 }
 
+/* User-supplied dark-ink bitmap glyphs invert to match the theme (D-030). */
+:root[data-theme="dark"] .card-glyph-bitmap {
+  filter: invert(1);
+}
+
 .card-status .connected {
   color: var(--text-1);
 }

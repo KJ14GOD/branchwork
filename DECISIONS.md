@@ -241,3 +241,11 @@ Format per entry: Context · Decision · Alternatives · Consequences · Revisit
 **Alternatives.** Dark-only until later (rejected: the user asked, and a token-override theme is cheap now, expensive after components accrete); shipping color logo bitmaps (rejected: unlicensed files in-repo and visual noise); skipping plan detection (rejected: an honest observed fact with real orientation value).
 **Consequences.** DESIGN.md tokens gain a provisional light block; the credentials-file parsing is fragile-by-nature and wrapped so failure means "not found," never a crash; the light palette needs its own screen-proof pass.
 **Revisit when.** Harness vendors change their local credential formats, or the light theme gets its evidence pass.
+
+## D-030 — User-supplied Codex glyph; vectors stay for GitHub and Claude Code
+
+**Context.** D-029 chose `simple-icons` as the sole brand-glyph source, but the set no longer carries OpenAI's mark, leaving Codex with a neutral monogram. The user supplied bitmap icons for all three services; the GitHub and Claude marks duplicate the vectors already in use (and one has a baked background), while the OpenAI knot fills the real gap.
+**Decision.** The Codex card uses the user-supplied monochrome bitmap (nominative use, identifying OpenAI's own product), theme-inverted via CSS so it reads correctly on both themes. GitHub and Claude Code keep their `currentColor` vectors. The source bitmaps stay in `images/`; the app consumes a copy under `apps/desktop/src/assets/`.
+**Alternatives.** Hand-tracing the OpenAI mark as an SVG path (rejected: redrawing a trademark from memory); keeping the monogram (rejected: the user explicitly supplied the icon to use).
+**Consequences.** One bitmap glyph exists in an otherwise vector set; if OpenAI's mark returns to a licensed vector source, it replaces the bitmap.
+**Revisit when.** A licensed vector of the OpenAI/Codex mark becomes available.

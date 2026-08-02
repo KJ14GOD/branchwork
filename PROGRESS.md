@@ -44,7 +44,7 @@ The previous prototype was removed in full (commit `50c4851`); none of its behav
 | Missions surface | Partial — loading placeholders, empty state, offline notice with retry, mission rows, creation dialog with validation and persistence-failure states; attention grouping reduced to the one reachable group |
 | Mission Room surface | Partial — reduced New-mission view only: goal, state line, success criteria, event history. No composer, participants, workstreams, or evidence |
 | Review surface | Not started |
-| Design token system and primitives | Partial — tokens.css carries the DESIGN.md values on rendered screens: monochrome authority retheme and setup room (D-028), plus the Light/Dark/System theme system, 6px buttons, sanctioned brand glyphs, and read-only local-harness detection with plan reporting on setup (D-029; observed live: GitHub connected identity, Claude Code "Max plan" via macOS Keychain, Codex "ChatGPT Plus" via its token claim). Light palette is provisional — not yet screen-proven. Remaining primitives unbuilt |
+| Design token system and primitives | Partial — tokens.css carries the DESIGN.md values on rendered screens: monochrome authority retheme and setup room (D-028), plus the Light/Dark/System theme system, 6px buttons, sanctioned brand glyphs (vectors for GitHub/Claude Code; user-supplied theme-inverted OpenAI mark for Codex, D-030), and read-only local-harness detection with plan reporting on setup (D-029; observed live: GitHub connected identity, Claude Code "Max plan" via macOS Keychain, Codex "ChatGPT Plus" via its token claim). Light palette is provisional — not yet screen-proven. Remaining primitives unbuilt |
 
 ## Documentation
 
