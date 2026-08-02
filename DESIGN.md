@@ -186,7 +186,8 @@ Composition rules:
 - **Control request.** An inline row in the activity feed (not a toast, not a modal): requester's mark, "requests control", Offer/Decline for the controller, quiet `--warn` dot while open.
 - **Handoff.** The offer renders as a card-level row addressed to the recipient with Accept/Decline; on accept, "waiting for a safe boundary" appears in the state line; at the boundary the baton animates to the recipient (240ms) and an attributed event lands in the feed.
 - **Workstreams.** One workstream: no workstream chrome at all — the room is the workstream. Multiple: a slim lane header per workstream (name, controller baton, execution status). An approach-flagged workstream gets an `--alt` edge on its lane header — identification only, never a quality signal, and no comparison UI unless both compared artifacts exist.
-- **Cloud workspace lifecycle.** Rendered in the state line + an inspector: provisioning (progress as text, no spinner theater), ready, failed (provider error verbatim, Retry provisions new). Workspace machinery never occupies the canvas.
+- **Cloud workspace lifecycle.** Rendered in the state line + an inspector: provisioning (progress as text, no spinner theater), ready, suspended, failed (provider error verbatim, Retry provisions new). Workspace machinery never occupies the canvas.
+- **Repository continuity.** The workspace inspector shows location, mission branch, abbreviated base SHA, abbreviated workspace SHA, and one synchronization state: Up to date, Update available, Syncing, or Sync failed. These are compact label/value rows, not badges or a permanent status dashboard. Update available offers Inspect commits as the primary action; after inspection, Sync workspace is capability-gated and states that it waits for a safe boundary. Uncommitted files on another machine are never implied to be present. Local-mirror controls do not render in V0.
 - **Review.** Result summary in prose (what the change does, per the mission's success criteria), then diff, then ledger, then comments/concerns as attributed rows, then PR readiness as a CheckRow list (approvals, checks, conflicts). One primary action: Request revisions or Accept result (capability-gated).
 - **Receipt.** A single scrollable document (720px measure): goal, participants and roles, timeline of applied directions and control transfers, changes summary, the evidence ledger's final state, review outcomes, PR reference, and an explicit "remaining uncertain" section. Same components as the room — a receipt is the room, frozen.
 
@@ -255,6 +256,8 @@ Keyed verbatim to [PRODUCT.md](PRODUCT.md#the-mission-state-model). Fields per s
 **Reconnecting** *(overlay)* — the notice bar (see Transient states): "Reconnecting — current as of {time}." Room read-only; composer disabled preserving draft; on restore, bar resolves and backfilled events land marked.
 
 **Runner offline** *(overlay)* — state line: "Runner offline — last heard {time}." Actions requiring the runner disable with tooltips; direction still queues durably; on reconnect, events backfill with a gap marker if any ([ARCHITECTURE.md](ARCHITECTURE.md#runner-plane)).
+
+**Repository update available** *(overlay)* — state line appends "Repository update available — agent is on {short SHA}." Primary in the workspace inspector: Inspect commits · Secondary after inspection: Sync workspace (controller only; waits for a safe boundary) · Composer remains enabled and names the pinned revision in its context tooltip · Color: `--warn` dot on the inspector row only · Recovery: explicit sync succeeds to the reviewed target SHA or moves to Repository sync error. Missions surface does not become Needs you unless the active execution requires the update to proceed.
 
 ## Prohibited patterns
 

@@ -25,6 +25,7 @@ All application capabilities are **Not started**. The previous prototype was rem
 | Authentication and sessions | Not started |
 | Organizations and membership | Not started |
 | Repository connection (GitHub App) | Not started |
+| Repository branches, checkpoints, and workspace synchronization | Not started |
 | Mission creation and lifecycle | Not started |
 | Invitations and participants | Not started |
 | Roles and server-enforced capabilities | Not started |
@@ -50,8 +51,9 @@ All application capabilities are **Not started**. The previous prototype was rem
 | Item | Status | Evidence |
 | --- | --- | --- |
 | Canonical documents (README, PRODUCT, DESIGN, ARCHITECTURE, PROGRESS, DECISIONS, AGENTS, CLAUDE symlink) | Implemented | Files exist at repository root; `CLAUDE.md` is a symlink (`ls -la CLAUDE.md`); `scripts/gate.sh` exits 0 (run 2026-08-01) |
-| Executable repository gate | Implemented | `scripts/gate.sh` exits non-zero on seeded violations and 0 on the current tree (run 2026-08-01; D-016) |
-| Decision record | Implemented | [DECISIONS.md](DECISIONS.md) entries D-001 through D-023, including vendor selections D-019–D-023 |
+| Executable repository gate | Implemented | `scripts/gate.sh` exits non-zero on seeded violations and 0 on the current tree (run 2026-08-01; D-016, D-026); implementation/PROGRESS reconciliation covers staged, unstaged, and untracked implementation paths |
+| Decision record | Implemented | [DECISIONS.md](DECISIONS.md) entries D-001 through D-026, including provider-spike outcome D-024, repository-continuity contract D-025, and agent workflow enforcement D-026 |
+| Repository/workspace synchronization contract | Implemented | Product behavior, revision representation, checkpoint/sync protocol, UI states, V0 boundary, and failure handling reconcile across README.md, PRODUCT.md, ARCHITECTURE.md, DESIGN.md, and D-025; `scripts/gate.sh` passes (run 2026-08-01) |
 | Harness feasibility — documentation-level | Implemented | Official-docs verification for Claude Code (headless, streaming, resume, permissions, auth) and Codex (exec/app-server, approvals, interrupt, auth), recorded with sources in D-017 |
 | Harness feasibility — hands-on, local + clean-Linux container | Partial | Run 2026-08-01. Verified live: Claude Code 2.1.220 `-p --output-format stream-json` (init event with capability flags, session id, per-model cost), `--resume` with correct recall, SIGTERM → exit 143 with child tasks marked killed, allowlist enforcement; Codex 0.145.0 `exec --json` (thread.started/turn/item events, usage), `exec resume --last` with correct recall, `app-server` JSON-RPC initialize handshake with server-initiated notifications. Clean Ubuntu 24.04 (aarch64 Docker): Claude Code installs via official script and returns structured JSON `is_error` when unauthenticated; Codex 0.146.0 musl binary from GitHub releases runs and requires a trusted git directory or `--skip-git-repo-check`. Adapter notes: `codex exec` consumes stdin; both CLIs emit stderr noise the supervisor must tolerate. |
 | E2B provider spike — live run | Implemented | Run 2026-08-01, results in `spikes/e2b/spike-results.json` (D-024). Create 125–190ms, pause 134ms, resume 238ms, cold starts 146–1561ms; files and background processes survive pause/resume; both harness CLIs install and run in-sandbox; default-deny denies as expected, but IP-based allowlists break DNS — egress default-deny requires a proxy (D-024). No provider API keys were transmitted; the authenticated-harness leg has not run. |
@@ -61,6 +63,7 @@ All application capabilities are **Not started**. The previous prototype was rem
 - No application code, application tests, product build system, or production dependencies exist. The disposable feasibility runner and its pinned SDK under `spikes/e2b` are not application functionality.
 - The harness spike (D-017) has run locally, in a clean-Linux container, and live on E2B (D-024). Still unproven: authenticated harness operation in a clean environment under org-provisioned API keys (no provider keys have been transmitted to any sandbox), and structured approval surfacing end to end (Claude Code `--permission-prompt-tool`, Codex app-server `requestApproval` round-trip) — a forced `--disallowedTools` denial returned no structured denial record in `-p` mode, so approval routing must be proven at the adapter level. These two items are the remaining gate on freezing the adapter contract.
 - Egress default-deny via provider IP rules is proven unworkable (D-024): the design answer is an egress proxy, which does not yet exist even as a specification.
+- The repository-continuity contract is documented (D-025), but none of it is implemented: no mission-branch allocation, revision tracking, checkpoint artifacts, explicit synchronization, conflict presentation, or replacement-workspace reconstruction exists.
 - The design token values in [DESIGN.md](DESIGN.md#tokens) have not been proven on a rendered screen; contrast ratios are calculated, not observed.
 - The gate's source-code checks (gradients, raw colors, PROGRESS staleness) are dormant until application code exists.
 

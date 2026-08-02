@@ -30,7 +30,7 @@ The first implementation is not complete until two real clients can execute this
 2. Kartik connects a GitHub repository.
 3. Kartik creates a mission with a goal and success criteria.
 4. Kartik chooses Claude Code or Codex.
-5. Novus provisions or connects to an execution workspace.
+5. Novus creates a dedicated mission branch from an exact base commit and provisions or connects to its execution workspace.
 6. The coding harness begins working.
 7. Maya joins through a mission invitation.
 8. Both participants see the same current state and activity.
@@ -40,7 +40,7 @@ The first implementation is not complete until two real clients can execute this
 12. Maya accepts.
 13. Control transfers at a safe execution boundary.
 14. The current controller can steer, pause, resume, or stop the work.
-15. The harness changes the repository and runs verification.
+15. The harness changes the mission branch, checkpoints its work, and runs verification.
 16. Both participants inspect the diff and verification evidence.
 17. The team requests revisions or accepts the result.
 18. Novus creates or tracks the pull request.
@@ -48,6 +48,8 @@ The first implementation is not complete until two real clients can execute this
 20. Reopening the mission reconstructs who did what, what ran, what changed, and what remains uncertain.
 
 [PRODUCT.md](PRODUCT.md#the-complete-workflow) elaborates each phase of this workflow with roles, capabilities, and lifecycles. The numbered list above is canonical; no other document renumbers it.
+
+Each workstream has one branch and one active execution filesystem. GitHub is the explicit exchange boundary between a cloud workspace and any developer checkout: Novus detects newer remote commits, shows the exact revision the agent sees, and requires an intentional sync at a safe boundary. It never silently copies uncommitted local files into the cloud or pretends two filesystems are one. Product behavior is defined in [PRODUCT.md](PRODUCT.md#repository-continuity); mechanics are in [ARCHITECTURE.md](ARCHITECTURE.md#repository-and-workspace-synchronization).
 
 ## Repository map
 

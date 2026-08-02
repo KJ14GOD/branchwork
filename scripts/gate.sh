@@ -61,17 +61,23 @@ truth_leak=$(grep -rlE '^(Mission|Workstream|Execution|Direction|ControlLease|Re
 [ -z "$truth_leak" ] || { echo "$truth_leak" | sed 's/^/GATE FAIL: product definitions outside canonical docs: /'; FAIL=1; }
 
 # 9. No gradients in source code (once it exists).
-grads=$(grep -rln 'linear-gradient\|radial-gradient\|conic-gradient' --include='*.css' --include='*.tsx' --include='*.ts' apps/ packages/ src/ 2>/dev/null || true)
+grads=$(grep -rln 'linear-gradient\|radial-gradient\|conic-gradient' --include='*.css' --include='*.tsx' --include='*.ts' apps/ packages/ src/ services/ clients/ 2>/dev/null || true)
 [ -z "$grads" ] || { echo "$grads" | sed 's/^/GATE FAIL: gradient in source: /'; FAIL=1; }
 
 # 10. No raw color values in component source (tokens only; token definition files exempt via 'tokens' in path).
-rawhex=$(grep -rlnE '#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(' --include='*.tsx' --include='*.ts' apps/ packages/ src/ 2>/dev/null | grep -v tokens || true)
+rawhex=$(grep -rlnE '#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(' --include='*.tsx' --include='*.ts' apps/ packages/ src/ services/ clients/ 2>/dev/null | grep -v tokens || true)
 [ -z "$rawhex" ] || { echo "$rawhex" | sed 's/^/GATE FAIL: raw color value in component source: /'; FAIL=1; }
 
-# 11. Staged source changes require a PROGRESS.md update in the same change.
-staged=$(git diff --cached --name-only 2>/dev/null || true)
-if echo "$staged" | grep -qE '^(apps|packages|src)/'; then
-  echo "$staged" | grep -q '^PROGRESS.md$' || fail "staged source changes without a PROGRESS.md update"
+# 11. Any implementation change requires a PROGRESS.md reconciliation in the same working change.
+changed=$(
+  {
+    git diff --name-only 2>/dev/null || true
+    git diff --cached --name-only 2>/dev/null || true
+    git ls-files --others --exclude-standard 2>/dev/null || true
+  } | sort -u
+)
+if echo "$changed" | grep -qE '^(apps|packages|src|services|clients|spikes|scripts)/|^(package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig[^/]*\.json)$'; then
+  echo "$changed" | grep -q '^PROGRESS.md$' || fail "implementation changes without a PROGRESS.md reconciliation"
 fi
 
 # 12. Untracked files: nothing sits in the repo undecided.

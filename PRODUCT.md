@@ -80,12 +80,12 @@ Conceptual definitions. Each term has exactly one meaning, defined here; data re
 - **Invitation** (V0) — a mission-scoped, expiring, single-use grant that makes a User a Participant with a stated Role.
 - **Role** (V0) — a named bundle of capabilities within one authority scope. Organization roles: org owner, org member. Mission roles: Mission Admin, Operator, Contributor, Viewer (see [Roles and capabilities](#roles-and-capabilities)). Fixed archetypes in V0; no custom roles. "Controller" is not a role — it names whoever currently holds a workstream's ControlLease.
 - **Capability** (V0) — a single verb a participant may perform, enforced by the server on every mutating command. The interface renders from capabilities; it never grants them.
-- **Workstream** (V0) — a named lane of responsibility inside a mission. A workstream owns its control lease, direction queue, and workspace. Every mission has at least one; most have exactly one. A workstream may carry the **approach flag**, marking it as a deliberately created competing implementation for comparison. *Approach is a workstream attribute, not a separate object.* A new execution in the same workstream is a continuation — a retry, follow-up, or harness switch — never an approach. Approaches exist only when a participant explicitly creates one.
+- **Workstream** (V0) — a named lane of responsibility inside a mission. A workstream owns its dedicated mission branch, recorded base commit, control lease, direction queue, and workspace. Every mission has at least one; most have exactly one. A workstream may carry the **approach flag**, marking it as a deliberately created competing implementation for comparison. *Approach is a workstream attribute, not a separate object.* A new execution in the same workstream is a continuation — a retry, follow-up, or harness switch — never an approach. Approaches exist only when a participant explicitly creates one.
 - **Execution** (V0) — one harness working a workstream, from start to a terminal state. At most one active execution per workstream. An execution owns its turns, events, and changes.
 - **Run / turn** — a lower-level unit inside an execution (a harness turn or tool run), surfaced in the activity feed for legibility. Not addressable by users in V0.
 - **Harness** (V0) — a supported coding agent product (Claude Code, Codex in V0) operated through the adapter contract in [ARCHITECTURE.md](ARCHITECTURE.md#harness-protocol).
 - **Runner** (V0) — the machine-side program that supervises executions and speaks the runner protocol: a Novus-managed cloud runner in V0; local, enterprise, and third-party runners are conformance targets ([ARCHITECTURE.md](ARCHITECTURE.md#runner-plane)).
-- **Workspace** (V0) — a provisioned working environment (repository checkout, dependencies, scoped credentials) on a runner. One workspace per workstream, reused across that workstream's executions so its changes accumulate in one place.
+- **Workspace** (V0) — a provisioned working environment (the workstream branch's working tree, dependencies, scoped credentials) on a runner. One active workspace per workstream, reused across that workstream's executions so its changes accumulate in one place. Its location may be cloud, local, or customer-managed; V0 ships cloud only. The workspace is resumable execution state, not the permanent system of record.
 - **Direction** (V0) — an attributed instruction submitted to a workstream and consumed by an execution, with the lifecycle in [Direction](#direction).
 - **ControlLease** (V0) — the server-issued grant that makes exactly one participant the controller of a workstream (see [Control](#control)).
 - **ControlRequest** (V0) — a participant's standing, visible request to become controller.
@@ -123,6 +123,7 @@ Capabilities are the enforcement unit, and they live in two scopes that never mi
 | `direction.apply` (apply, supersede, or reject queued direction) | — | — | — | — | ✓ |
 | `execution.start` | ✓ | ✓ | — | — | — |
 | `execution.pause`, `execution.resume` | — | — | — | — | ✓ |
+| `workspace.sync` (apply a visible remote update at a safe boundary) | — | — | — | — | ✓ |
 | `execution.stop` | ✓ | ✓ | ✓ | — | ✓ |
 | `approval.respond` (approve or deny a harness approval request) | — | — | — | — | ✓ |
 | `control.request` | ✓ | ✓ | ✓ | — | — |
@@ -183,6 +184,21 @@ Transitions: queueing is automatic — Submitted becomes Queued on acceptance of
 
 Presence (who is in the room, focus, typing) is ephemeral and never appears in receipts. Connection state is per-participant and visible: connected, reconnecting, offline. Reconnection restores the room from durable state; nothing a participant is entitled to see depends on having been online when it happened. Rendering rules are in [DESIGN.md](DESIGN.md#component-behavior).
 
+### Repository continuity
+
+Every workstream is anchored to one dedicated mission branch created from an exact recorded base commit. The active workspace has its own filesystem, whether it runs in Novus cloud, on a developer's machine, or later in customer infrastructure. Those filesystems are never described as automatically identical.
+
+Product rules:
+
+- The room always exposes the execution location, mission branch, base commit, workspace revision, and synchronization state one level below the mission's primary state. A prompt applies to the displayed workspace revision.
+- GitHub is V0's exchange boundary. Committed work enters or leaves a cloud workspace through the mission branch; uncommitted files in another checkout are invisible until the user deliberately commits and pushes them.
+- If the remote mission branch or its base advances, Novus records **Repository update available**. It does not silently pull, merge, rebase, overwrite, or restart the harness. The controller may inspect the commits and invoke `workspace.sync`; application waits for a safe execution boundary.
+- A clean fast-forward is still visible and attributed. A non-fast-forward update, force-push, dirty-worktree collision, or merge conflict becomes **Repository sync error** with the conflicting refs preserved. Resolving it is directed work, not background magic.
+- At safe boundaries, Novus checkpoints the workspace's Git diff and revision outside the sandbox so a destroyed provider workspace can be reconstructed. Provider persistence accelerates resume; it is never the only copy of mission work.
+- A future local mirror may make opening and editing a cloud workstream convenient, but it remains an explicit checkout of the mission branch. Invisible bidirectional filesystem mirroring is not part of the product contract.
+
+Representation and checkpoint mechanics live in [ARCHITECTURE.md](ARCHITECTURE.md#repository-and-workspace-synchronization); presentation lives in [DESIGN.md](DESIGN.md#component-behavior).
+
 ## The mission state model
 
 The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-presentation) defines the presentation of each and may not add, rename, or merge states. A mission has one **primary state**; the conditions marked *(overlay)* can coexist with a primary state and demand attention without replacing it. In a mission with several workstreams, the primary state is a projection over workstream and execution states with fixed precedence: attention-demanding states, then running, then waiting — mirroring how "the controller" is derived for the single-workstream case.
@@ -215,6 +231,7 @@ The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-prese
 | Repository sync error *(overlay)* | The workspace cannot sync with GitHub — token expiry or revocation, force-push, or branch conflict with base. Human-visible remediation; never silent retries. |
 | Reconnecting *(overlay)* | This client lost its connection; room is stale until restored. |
 | Runner offline *(overlay)* | The runner's connection dropped; execution state is last-known; events will backfill on reconnect. |
+| Repository update available *(overlay)* | The remote mission branch or base moved beyond the workspace's recorded revision. No files move automatically; the controller may inspect and sync at a safe boundary. |
 
 A harness that fails to start is not a separate state: it surfaces inside *Agent starting* as that state's error recovery.
 
@@ -225,10 +242,10 @@ Every state presents at most one primary action — never two — defined per st
 The canonical 20-step narrative lives in [README.md](README.md#the-golden-v0-workflow). Elaboration by phase:
 
 1. **Open** (steps 1–4): Kartik authenticates, connects a repository through the org's GitHub App installation (`org.repo.connect`), creates a mission with a goal and success criteria (`org.mission.create`), picks a harness. Mission: *New mission*. Kartik becomes the Mission Admin and holds the first workstream's lease by default.
-2. **Provision** (steps 5–6): the execution provider prepares a workspace (*Provisioning workspace* → *Ready for instruction*); Kartik's initial direction starts the first execution (*Agent starting* → *Agent running*).
+2. **Provision** (steps 5–6): Novus records the selected base commit, creates the workstream's dedicated mission branch, and the execution provider prepares its workspace (*Provisioning workspace* → *Ready for instruction*); Kartik's initial direction starts the first execution (*Agent starting* → *Agent running*).
 3. **Join** (steps 7–9): Maya redeems a mission invitation as Contributor. She sees the identical room state, reads the activity, and submits direction — which queues, visibly, attributed to her.
 4. **Handoff** (steps 10–13): Maya opens a ControlRequest; Kartik responds with a HandoffOffer; Maya accepts; the transfer completes at the next safe boundary. The room shows every step of that handshake.
-5. **Operate** (step 14): the controller steers, pauses, resumes, or stops. Every action is an attributed event.
+5. **Operate** (step 14): the controller steers, pauses, resumes, stops, or deliberately synchronizes a visible repository update at a safe boundary. Every action is an attributed event.
 6. **Evidence** (steps 15–16): the harness changes the repository and runs verification; both participants inspect the same diff and the same check ledger.
 7. **Resolve** (steps 17–18): review yields revision requests (back to phase 5) or acceptance; Novus creates or adopts the pull request and tracks it to resolution. Merging happens on GitHub, by humans, in V0 — Novus tracks the merge and never performs it.
 8. **Record** (steps 19–20): the mission completes; the receipt is snapshotted; reopening the mission reconstructs the entire collaboration from the event history.
@@ -240,6 +257,7 @@ The canonical 20-step narrative lives in [README.md](README.md#the-golden-v0-wor
 - One organization type, fixed roles, GitHub only.
 - Two harnesses: Claude Code and Codex. The adapter contract is written for N harnesses; V0 ships two.
 - Cloud execution via one Novus-managed execution provider is the default and the demo. The runner protocol is the conformance target that keeps local and enterprise runners possible; V0 does not ship them.
+- One dedicated GitHub branch per workstream, pinned to an exact base commit; explicit commit/checkpoint/push and sync operations; no automatic bidirectional filesystem mirroring.
 - One workstream per mission created by default; additional workstreams and the approach flag exist in the data model, and creating them is possible but plain — the UI never pushes parallelism.
 - Three surfaces: Missions, Mission Room, Review ([DESIGN.md](DESIGN.md#information-architecture)).
 - One client: a downloadable desktop application — an Electron shell over a single web-architecture client — like the tools teams already run agents in. Browser access is a later delivery of the same client, not a second codebase (D-018). "Two real clients" in the Golden V0 workflow means two people's desktop apps.
@@ -250,7 +268,7 @@ A full IDE; a generic Kanban board; a model marketplace; automatic approach rank
 
 ### Extension points (schema or protocol exists; no V0 UI)
 
-Additional harnesses (Droid, OpenCode); local, enterprise, and third-party execution providers; cross-org mission guests; org-definable policy (autonomy ceilings, retention); API-driven mission creation and automation; approach comparison workflows; org-level audit export.
+Additional harnesses (Droid, OpenCode); local, enterprise, and third-party execution providers; a local mirror that explicitly checks out a cloud workstream's branch; cross-org mission guests; org-definable policy (autonomy ceilings, retention); API-driven mission creation and automation; approach comparison workflows; org-level audit export.
 
 ## Roadmap
 

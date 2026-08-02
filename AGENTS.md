@@ -8,14 +8,14 @@ Last reviewed: 2026-08-01
 
 ## Required workflow for every task
 
-1. Read [README.md](README.md).
-2. Read the canonical documents relevant to the task — at minimum the "Authoritative for" lines of all seven, and the full sections that own what you are about to touch.
+1. Read [README.md](README.md) and [PROGRESS.md](PROGRESS.md) completely. Inspect `git status`; existing changes belong to the user unless the task clearly says otherwise.
+2. Read the canonical documents relevant to the task — at minimum the "Authoritative for" lines of all seven, the latest decision entries, and the full sections that own what you are about to touch.
 3. Before writing code, state the affected product and architectural contracts: which domain objects, lifecycles, capabilities, protocol messages, or design tokens your change touches, and which documents own them.
 4. Do not widen scope. If the task requires something a canonical document forbids or does not define, stop and surface it; do not improvise product truth.
-5. Update the owning documentation in the same change that alters behavior. A renamed or added mission state lands in PRODUCT.md and DESIGN.md in the same commit; a new domain object lands in PRODUCT.md and ARCHITECTURE.md in the same commit; a vendor or irreversible choice lands in DECISIONS.md.
+5. Update the owning documentation in the same change that alters behavior. A renamed or added mission state lands in PRODUCT.md and DESIGN.md in the same commit; a new domain object lands in PRODUCT.md and ARCHITECTURE.md in the same commit; a vendor or irreversible choice appends a DECISIONS.md entry. Do not touch unrelated canonical files merely to make every file appear updated.
 6. Run the repository gate (below) before declaring a change complete.
-7. Provide evidence: the command you ran and its observed output, or an artifact a human can inspect. Changes touching UI additionally include a screenshot, reviewed against [DESIGN.md](DESIGN.md#prohibited-patterns) and its composition rules. Update [PROGRESS.md](PROGRESS.md) status lines with that evidence.
-8. Report documentation impact in your change summary: which documents you updated, and explicitly "no documentation impact" only when the gate's checks confirm it.
+7. Provide evidence: the command you ran and its observed output, or an artifact a human can inspect. Changes touching UI additionally include a screenshot, reviewed against [DESIGN.md](DESIGN.md#prohibited-patterns) and its composition rules. Reconcile [PROGRESS.md](PROGRESS.md) in every implementation change: move only the capability lines whose evidence changed, add the evidence, and leave everything else honest. Never use a checkbox or prose claim as a substitute for the status table.
+8. Before finishing, inspect the complete working diff and reconcile it against all seven ownership scopes. Report which canonical documents you consulted and updated; say "no change required" for a relevant owner only with a one-sentence reason. Run the gate after this reconciliation, not before it.
 
 ## Rules
 
@@ -34,7 +34,7 @@ Last reviewed: 2026-08-01
 scripts/gate.sh
 ```
 
-One command; it exits non-zero on any violation and `GATE PASS` / zero only when everything passes (D-016). It checks: frontmatter presence and order in every canonical doc; the CLAUDE.md symlink; a root-Markdown allowlist; internal file links and anchors; banned language; domain terms defined outside PRODUCT.md; product truth in skills or agent config; gradients and raw color values in application source; staged source changes lacking a PROGRESS.md update; and untracked files. When application code exists, its build, test, and lint commands are added to this script (and only there). A change is not complete until the gate passes.
+One command; it exits non-zero on any violation and `GATE PASS` / zero only when everything passes (D-016, D-026). It checks: frontmatter presence and order in every canonical doc; the CLAUDE.md symlink; a root-Markdown allowlist; internal file links and anchors; banned language; domain terms defined outside PRODUCT.md; product truth in skills or agent config; gradients and raw color values in application source; staged, unstaged, or untracked implementation changes lacking a PROGRESS.md update; and untracked files. When application code exists, its build, test, and lint commands are added to this script (and only there). A change is not complete until the gate passes.
 
 ## Reading order for common tasks
 

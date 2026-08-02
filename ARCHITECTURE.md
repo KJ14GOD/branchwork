@@ -58,9 +58,9 @@ Identifiers are globally unique, prefixed, opaque strings (`msn_…`, `wst_…`,
 | Mission | `mission_id`, `org_id`, `repo_id`, goal, success criteria, primary state (a projection over workstream states, precedence per [PRODUCT.md](PRODUCT.md#the-mission-state-model)), `receipt_id?`. Primary state transitions are events. |
 | Participant | (`mission_id`, `user_id`), role. Invariant: user is an OrganizationMember (V0). |
 | Invitation | `inv_id`, `mission_id`, role, expiry, single-use token hash, `redeemed_by?`. |
-| Workstream | `wst_id`, `mission_id`, name, `approach_flag` (default false), `workspace_id?`. |
+| Workstream | `wst_id`, `mission_id`, name, `approach_flag` (default false), `base_ref`, immutable `base_sha`, unique `mission_branch`, observed `remote_head_sha`, `workspace_id?`. One active mission branch per workstream; branch names are server-allocated and org/repo scoped. |
 | Execution | `exe_id`, `wst_id`, harness id, state, `started_by`. Invariant: at most one non-terminal execution per workstream (partial unique index). |
-| Workspace | `wsp_id`, `wst_id`, provider id, provider ref, lifecycle state. One workspace per workstream, reused across executions. |
+| Workspace | `wsp_id`, `wst_id`, execution location, provider id, provider ref, lifecycle state, `checkout_head_sha`, `last_synced_remote_sha`, dirty-state summary, latest checkpoint ref. At most one active workspace per workstream; a replacement workspace keeps the workstream and branch identity. |
 | ControlLease | `lease_id`, `wst_id`, `holder_user_id`, state, TTL, heartbeat timestamp. Invariant: at most one lease in `held`/`releasing` per workstream (partial unique index); transitions by compare-and-swap on `lease_id` + state. Heartbeat = the holder's authenticated client-session liveness, renewed automatically; the TTL is the grace period after the last heartbeat. |
 | ControlRequest / HandoffOffer | own ids, `wst_id`, actor, state, TTL. States per [PRODUCT.md](PRODUCT.md#control). |
 | Direction | `dir_id`, `wst_id`, author, body, state, `consumed_by_execution_id?`. Drafted is client-local and has no row. |
@@ -76,7 +76,7 @@ Identifiers are globally unique, prefixed, opaque strings (`msn_…`, `wst_…`,
 
 The event log is the mission's memory and the receipt's source. If a receipt needs data that is not in events, the event schema is incomplete — fix the schema, not the receipt.
 
-**Durable (events):** direction lifecycle, all three control machines, execution lifecycle, workspace lifecycle, harness activity summaries (turn boundaries, tool activity, approval requests), file-change summaries, verification outcomes, review actions, PR state changes, participant joins/role changes, receipt snapshots.
+**Durable (events):** direction lifecycle, all three control machines, execution lifecycle, workspace lifecycle, repository revision observations and sync attempts/outcomes, harness activity summaries (turn boundaries, tool activity, approval requests), file-change summaries, verification outcomes, review actions, PR state changes, participant joins/role changes, receipt snapshots.
 
 **Ephemeral (never events):** presence, typing, cursor position, live token streams. Full harness transcripts are stored as Artifacts referenced by events, not inlined per-delta into the log.
 
@@ -105,9 +105,9 @@ Runners buffer events locally while disconnected (bounded). On overflow, the run
 
 ### Runner protocol (shape, not wire format)
 
-Commands (control plane → runner): `provision_workspace`, `start_execution`, `apply_direction`, `pause`, `resume`, `stop`, `force_interrupt`, `run_verification`, `respond_approval` (the controller's typed answer to an `approval_required` event), `report_boundary_request` (transfer pending — ack at next safe boundary), `destroy_workspace`. All carry idempotency keys. `run_verification` executes checks defined in repository-level configuration; mission success criteria may add manual confirmations, recorded as VerificationChecks attributed to the confirming participant.
+Commands (control plane → runner): `provision_workspace`, `sync_repository`, `checkpoint_workspace`, `start_execution`, `apply_direction`, `pause`, `resume`, `stop`, `force_interrupt`, `run_verification`, `respond_approval` (the controller's typed answer to an `approval_required` event), `report_boundary_request` (transfer pending — ack at next safe boundary), `destroy_workspace`. All carry idempotency keys. `sync_repository` carries the expected local and remote SHAs plus the authorizing lease id; `run_verification` executes checks defined in repository-level configuration; mission success criteria may add manual confirmations, recorded as VerificationChecks attributed to the confirming participant.
 
-Events (runner → control plane): workspace lifecycle transitions, execution lifecycle transitions, harness activity summaries, `boundary_reached`, `approval_required` (opaque harness payload passed through), file-change summaries, verification outcomes, heartbeats, gap markers.
+Events (runner → control plane): workspace lifecycle transitions, repository revision observations, checkpoint and sync outcomes, execution lifecycle transitions, harness activity summaries, `boundary_reached`, `approval_required` (opaque harness payload passed through), file-change summaries, verification outcomes, heartbeats, gap markers.
 
 The protocol is versioned from day one; version negotiation happens at connection time.
 
@@ -118,6 +118,32 @@ Novus does not build a microVM platform first. An **execution provider** is an a
 `requested → provisioning → ready → active → suspended → destroyed`, with `failed` reachable from any non-terminal state and carrying the provider's error verbatim. Retry after `failed` provisions a **new** workspace; there is no silent reuse. Providers report transitions; they never invent states.
 
 Workspace contents at `ready`: repository checkout on a mission branch, dependency setup per repo configuration, scoped credentials via the supervisor boundary, harness installed. Network policy: egress restricted to an org-configurable allowlist (package registries, the repo host, the harness's model endpoint) — default-deny is the goal, default-logged is the V0 floor (D-015).
+
+### Repository and workspace synchronization
+
+Git is the revision protocol between execution locations; it is not a claim that their filesystems are continuously identical. The control plane owns branch identity and expected revisions, the runner owns the checked-out working tree, and GitHub is V0's remote exchange boundary.
+
+Provisioning contract:
+
+1. The control plane resolves the requested base ref to an exact commit through the GitHub App and stores immutable `base_sha`.
+2. It allocates one repository-unique mission branch for the workstream and creates it at `base_sha` with a compare-and-set request. Repeating the command is idempotent only when the existing branch points to the expected SHA.
+3. The provider receives a short-lived, repository-scoped credential through the supervisor, checks out that branch, and reports `checkout_head_sha` and dirty state. The harness never receives the GitHub credential.
+4. The workspace becomes `ready` only when the reported revision matches the control plane's expected branch head and repository setup succeeds.
+
+Checkpoint contract:
+
+- The runner snapshots the Git diff and repository metadata at each safe turn boundary, before suspension, and at execution termination. Diff content is stored as a mission-scoped artifact; its digest and the workspace/remote SHAs are durable events.
+- A successful execution boundary with repository changes produces an attributed checkpoint commit and pushes it to the mission branch with an expected-old-SHA guard; a clean boundary records the unchanged revision without manufacturing a commit. The control plane advances `remote_head_sha` only from the observed GitHub result, never from the runner's claim alone.
+- A destroyed workspace is reconstructed from the mission branch plus the latest verified checkpoint artifact when the artifact is newer than the published branch. Provider pause/resume is an optimization, not durability.
+
+Inbound-update contract:
+
+- GitHub webhooks and a pre-direction remote-head check detect movement of either the mission branch or its base. Detection emits `repository.update_available`; it never mutates the workspace.
+- `workspace.sync` is controller-authorized and executes only at a runner-declared safe boundary. The command includes expected `checkout_head_sha`, expected `remote_head_sha`, and the target remote SHA so stale clients cannot synchronize a different revision than the one they reviewed.
+- A clean, explicitly approved fast-forward records its actor and resulting SHA. Novus never silently rebases or merges. Divergence, force-push, dirty overlap, or conflicts emit `repository.sync_failed` with both SHAs and conflicting paths; the workspace remains inspectable and further direction may be queued.
+- Uncommitted files in a developer checkout are outside the cloud runner's knowledge. A future local mirror uses a normal checkout of the mission branch and the same remote-head protocol; it does not introduce a second file-sync protocol.
+
+Conformance tests cover idempotent branch creation, stale-SHA rejection, remote movement during a turn, clean explicit fast-forward, dirty divergence, force-push, checkpoint-before-suspend, provider loss and reconstruction, and two humans attempting sync concurrently.
 
 ### Control-transfer mechanics
 
@@ -170,11 +196,11 @@ Named failure modes with defined behavior — these are contracts, not aspiratio
 5. **Simultaneous conflicting commands**: per-mission serialization; losers get explicit rejection events (see [Authorization](#authorization)).
 6. **Event overflow during a long disconnect**: gap marker; the receipt states the gap.
 7. **Harness hangs** (endless tool call): watchdog → execution `stalled`; `force_interrupt` available and logged.
-8. **GitHub token expiry/revocation or force-push to the mission branch**: repo-sync error state with human-visible remediation; no silent retry loops.
+8. **GitHub token expiry/revocation or force-push to the mission branch**: repository-sync error state with human-visible remediation; no silent retry loops and no mutation from a stale expected SHA.
 9. **Controller disconnects and does not return**: lease TTL expiry → workstream has no controller; execution pauses at next boundary; claim/revoke path per [PRODUCT.md](PRODUCT.md#control).
 10. **Control plane unavailable**: the runner continues its current execution under the last applied direction, buffers events, and refuses privileged transitions (transfers, new executions) until reconnect.
 11. **Workspace suspended or destroyed while a transfer or queued direction is pending**: the offer moves to `failed` visibly; queued direction stays queued for the workstream's next workspace and execution.
-12. **Mission branch conflicts with its base**: repo-sync error state with human-visible remediation; resolving the conflict is directed work, never a silent automatic rebase.
+12. **Mission branch or workspace conflicts with a remote update**: repository-sync error state with both revisions and conflicting paths preserved; resolving the conflict is directed work, never a silent automatic rebase or filesystem overwrite.
 13. **Invitation redeemed after the mission reached a terminal state**: redemption succeeds as read access — the participant joins as Viewer and sees history and receipt; no operational verbs.
 
 ## Deployment modes
@@ -195,4 +221,5 @@ Named failure modes with defined behavior — these are contracts, not aspiratio
 - **State-machine tests**: exhaustive transition tables for lease/request/offer, direction, mission state, workspace lifecycle — including the race cases named in PRODUCT.md (simultaneous requests, expiry during action, accept-then-disconnect).
 - **Deterministic replay tests**: receipt projection over recorded event logs; same log, same receipt, byte-for-byte.
 - **Integration tests** with a fake harness adapter (scripted activity, boundaries, approvals) so multiplayer flows are tested without model calls.
+- **Repository-continuity tests**: branch creation from an exact SHA, checkpoint/push guards, update detection, explicit sync at a boundary, conflict preservation, and reconstruction in a replacement workspace.
 - **Live proof**: the Golden V0 workflow executed by two real clients against a real deployment is the only thing that marks M1 complete ([PROGRESS.md](PROGRESS.md)); deterministic suites never substitute for it.
