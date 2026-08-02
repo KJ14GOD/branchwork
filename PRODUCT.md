@@ -254,9 +254,9 @@ The canonical 20-step narrative lives in [README.md](README.md#the-golden-v0-wor
 
 ### V0 scope
 
-- One organization type, fixed roles, GitHub only.
+- One organization type, fixed roles. Repositories are GitHub (via the GitHub App) **or local folders on the user's machine** (D-032) — local git operations run in the desktop app, never the control plane.
 - Two harnesses: Claude Code and Codex. The adapter contract is written for N harnesses; V0 ships two.
-- Cloud execution via one Novus-managed execution provider is the default and the demo. The runner protocol is the conformance target that keeps local and enterprise runners possible; V0 does not ship them.
+- Execution ships **local-first** (D-032): the desktop app runs harnesses against local repositories as the first real execution surface. Cloud execution on the Novus-managed provider remains the architecture's spine and the multiplayer default; the runner protocol keeps both honest.
 - One dedicated GitHub branch per workstream, pinned to an exact base commit; explicit commit/checkpoint/push and sync operations; no automatic bidirectional filesystem mirroring.
 - One workstream per mission created by default; additional workstreams and the approach flag exist in the data model, and creating them is possible but plain — the UI never pushes parallelism.
 - Three surfaces: Missions, Mission Room, Review ([DESIGN.md](DESIGN.md#information-architecture)).
