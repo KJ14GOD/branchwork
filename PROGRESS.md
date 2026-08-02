@@ -69,6 +69,7 @@ Unless a line says otherwise, its evidence is the suite run of 2026-08-02 record
 
 - **No lease expiry.** A control lease ends by transfer or by Mission Admin revocation. A controller who disappears holds the baton until someone revokes it; the TTL and heartbeat described in PRODUCT.md#control are not implemented.
 - **`stop_execution` queues behind the turn it should interrupt.** The runner agent chains commands per workstream, so Stop cannot reach a running Claude turn until that turn ends on its own. Found while building the workspace supervisor, which bypasses the chain for its own stop; the execution path was left alone deliberately rather than widened into.
+- **A local preview cannot be opened from Novus.** Electron's window-open handler forwards only `https:`, so a `http://localhost:3100` preview is shown as selectable text rather than opened. Opening it needs a bridge verb that does not exist.
 - **No interactive terminal.** Contracted in DESIGN.md and D-042 and not built: it needs a native PTY module and an Electron rebuild.
 - **No heartbeat watchdog on the runner.** A host that is killed rather than quitted leaves its execution non-terminal; the room shows *Runner offline* and a participant must stop the execution to free the workstream. ARCHITECTURE's failure case 1 is documented, not built.
 - **The runner transport is polling.** D-021 chose control-plane WebSockets and D-035 records polling as the shipped transport with identical semantics. Event latency is bounded by the two-second poll.

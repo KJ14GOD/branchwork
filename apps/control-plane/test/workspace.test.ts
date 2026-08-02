@@ -557,7 +557,7 @@ describe("what the runner reports about the machine", () => {
     expect(rows.rows[0].started_by).toBe(kartik.userId);
 
     const running = await detail(kartik, lane.missionId);
-    expect(running.overlays).toContain("project_running");
+    expect(running.overlays).toContain("app_running");
     expect(running.processes[0].startedByLogin).toBe(kartik.login);
 
     await report(lane.credential, null, [
@@ -594,7 +594,7 @@ describe("what the runner reports about the machine", () => {
     expect(rows.rows[0].failure_reason).toBeNull();
     expect((rows.rows[0].ended_at as Date).getTime()).toBe(endedAt.getTime());
 
-    expect((await detail(kartik, lane.missionId)).overlays).not.toContain("project_running");
+    expect((await detail(kartik, lane.missionId)).overlays).not.toContain("app_running");
   });
 
   it("takes a preview URL a running process only learned about later", async () => {
@@ -631,7 +631,7 @@ describe("what the runner reports about the machine", () => {
       lane.workstreamId
     ]);
     expect(rows.rowCount).toBe(1);
-    expect((await detail(kartik, lane.missionId)).overlays).toContain("project_running");
+    expect((await detail(kartik, lane.missionId)).overlays).toContain("app_running");
 
     // And a later report that knows less does not unlearn it.
     await report(lane.credential, null, [started(3, null, null)]);
@@ -702,7 +702,7 @@ describe("what the runner reports about the machine", () => {
     expect((rows.rows[0].ended_at as Date).getTime()).toBe((ended.ended_at as Date).getTime());
 
     const body = await detail(kartik, lane.missionId);
-    expect(body.overlays).not.toContain("project_running");
+    expect(body.overlays).not.toContain("app_running");
     expect(
       body.processes.find((process: { processId: string }) => process.processId === processId).previewUrl
     ).toBeNull();

@@ -371,7 +371,7 @@ export function projectOverlays(args: {
 }): MissionOverlay[] {
   const overlays: MissionOverlay[] = [];
   if (args.processes.some((process) => process.kind === "run" && (process.state === "running" || process.state === "starting"))) {
-    overlays.push("project_running");
+    overlays.push("app_running");
   }
   if (args.checks.length > 0 && args.checks.every((check) => check.stale)) {
     overlays.push("verification_stale");

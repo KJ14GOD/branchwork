@@ -238,7 +238,7 @@ Keyed verbatim to [PRODUCT.md](PRODUCT.md#the-mission-state-model). Fields per s
 
 **Needs approval** — "{Harness} asks to {action}." · Primary: Approve (controller) · Secondary: Deny · Canvas: approval request payload rendered plainly · Composer: enabled · Evidence: current · Participants: non-controllers see who can approve · Color: `--warn` · Recovery: deny returns to running with denial as context. Needs you (controller).
 
-**Project running** *(overlay)* — state line appends "{name} running on :{port}"; the Run control offers Stop and, where the project declared one, Open preview. Independent of the harness: it neither blocks direction nor ends with a turn.
+**App running** *(overlay)* — state line appends "{name} running on :{port}"; the Run control offers Stop and, where the project declared one, Open preview. Independent of the harness: it neither blocks direction nor ends with a turn.
 
 **Verification stale** *(overlay)* — the ledger's rows dim to `--text-3` and read "proved {short SHA}, since changed"; the primary action becomes Re-run verification. A stale row is never counted as passing in the state line.
 

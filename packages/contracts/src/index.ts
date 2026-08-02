@@ -39,7 +39,7 @@ export type MissionState = z.infer<typeof MissionStateSchema>;
 
 /** Conditions that coexist with a primary state (PRODUCT.md overlays). */
 export const MissionOverlaySchema = z.enum([
-  "project_running",
+  "app_running",
   "verification_stale",
   "direction_queued",
   "control_requested",

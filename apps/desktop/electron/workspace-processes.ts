@@ -174,7 +174,7 @@ export class WorkspaceProcesses {
   /**
    * A long-lived run command. It is not tied to any harness turn: an agent
    * finishing does not stop the app, and the app running does not block
-   * direction (PRODUCT.md, *Project running*).
+   * direction (PRODUCT.md, *App running*).
    */
   async startRun(spec: LongRunSpec): Promise<void> {
     if (this.live.has(key("run", spec.name))) return; // already alive: starting it again is a no-op

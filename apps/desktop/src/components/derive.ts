@@ -51,7 +51,7 @@ export function changedFiles(detail: MissionDetailResponse): FileChange[] {
 /**
  * A run command the project declared that is alive right now — the reason the
  * room can say "App running" at all, and the process the Run control collapses
- * to (PRODUCT.md *Project running*).
+ * to (PRODUCT.md *App running*).
  */
 export function liveRunProcess(detail: MissionDetailResponse): WorkspaceProcess | null {
   return (

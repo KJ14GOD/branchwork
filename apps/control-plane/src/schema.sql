@@ -413,7 +413,7 @@ create table if not exists workspaces (
 create unique index if not exists workspaces_one_per_workstream on workspaces (wst_id);
 
 -- A command the project declared, alive or finished, in a workspace. Long-lived
--- run commands are the reason both clients can see "Project running" at all.
+-- run commands are the reason both clients can see "App running" at all.
 create table if not exists workspace_processes (
   prc_id       text primary key,
   org_id       text not null references organizations(org_id),

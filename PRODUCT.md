@@ -237,7 +237,7 @@ The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-prese
 | Repository sync error *(overlay)* | The workspace cannot sync with GitHub — token expiry or revocation, force-push, or branch conflict with base. Human-visible remediation; never silent retries. |
 | Reconnecting *(overlay)* | This client lost its connection; room is stale until restored. |
 | Runner offline *(overlay)* | The runner's connection dropped; execution state is last-known; events will backfill on reconnect. |
-| Project running *(overlay)* | A run command the project declared is alive in the workspace. Independent of any harness turn: an agent finishing does not stop the app, and the app running does not block direction. |
+| App running *(overlay)* | A run command the project declared is alive in the workspace. Independent of any harness turn: an agent finishing does not stop the app, and the app running does not block direction. |
 | Verification stale *(overlay)* | The workspace moved past the revision the current checks proved. The results remain as history; they are no longer evidence for what is there now. |
 | Repository update available *(overlay)* | The remote mission branch or base moved beyond the workspace's recorded revision. No files move automatically; the controller may inspect and sync at a safe boundary. |
 
