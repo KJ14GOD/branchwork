@@ -19,6 +19,7 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     "direction.submit",
     "execution.start",
     "execution.stop",
+    "workspace.command",
     "control.request",
     "control.accept",
     "control.revoke"
@@ -28,6 +29,7 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     "direction.submit",
     "execution.start",
     "execution.stop",
+    "workspace.command",
     "control.request",
     "control.accept"
   ],
@@ -51,6 +53,9 @@ const LEASE_CAPABILITIES: Capability[] = [
   "direction.apply",
   "execution.start",
   "execution.stop",
+  // The controller runs the commands the project declared — and only those.
+  // An interactive shell is not here, and is not anywhere (D-042).
+  "workspace.command",
   "control.offer"
 ];
 

@@ -3,7 +3,8 @@ import {
   type Execution,
   type FileChange,
   type MissionDetailResponse,
-  type Participant
+  type Participant,
+  type WorkspaceProcess
 } from "@novus/contracts";
 import { clockTime, plural, shortSha } from "../format";
 
@@ -47,18 +48,44 @@ export function changedFiles(detail: MissionDetailResponse): FileChange[] {
   return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
+/**
+ * A run command the project declared that is alive right now — the reason the
+ * room can say "App running" at all, and the process the Run control collapses
+ * to (PRODUCT.md *Project running*).
+ */
+export function liveRunProcess(detail: MissionDetailResponse): WorkspaceProcess | null {
+  return (
+    detail.processes.find(
+      (process) => process.kind === "run" && (process.state === "running" || process.state === "starting")
+    ) ?? null
+  );
+}
+
+/**
+ * Counts for the state line and the ledger's summary. A stale check proved an
+ * earlier revision, so it is history and never counted as passing or failing
+ * evidence for what is there now (PRODUCT.md *Verification stale*, D-037) —
+ * `total` still reports everything observed, because hiding it would be its
+ * own dishonesty.
+ */
 export function checkTallies(detail: MissionDetailResponse): {
   total: number;
   passed: number;
   failed: number;
+  stale: number;
 } {
   let passed = 0;
   let failed = 0;
+  let stale = 0;
   for (const check of detail.checks) {
+    if (check.stale) {
+      stale += 1;
+      continue;
+    }
     if (check.outcome === "passed") passed += 1;
     if (check.outcome === "failed" || check.outcome === "errored") failed += 1;
   }
-  return { total: detail.checks.length, passed, failed };
+  return { total: detail.checks.length, passed, failed, stale };
 }
 
 /** Direction that is still waiting for the controller's judgment. */
@@ -141,9 +168,7 @@ export function deriveStateLine(detail: MissionDetailResponse): StateLineView {
     };
   }
 
-  const running = detail.processes.find(
-    (process) => process.kind === "run" && (process.state === "running" || process.state === "starting")
-  );
+  const running = liveRunProcess(detail);
   if (running && !base.working) {
     return {
       tone: "active",

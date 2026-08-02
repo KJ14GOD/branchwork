@@ -1,10 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import type { NovusBridge } from "@novus/contracts";
+
+declare global {
+  interface Window {
+    novus: NovusBridge;
+  }
+}
 
 // The Mission Room (D-032) exercised through the actual Electron app:
 // sign in → Add project as a real dialog over 120+ repositories with search,
@@ -95,6 +102,65 @@ async function mintToken(): Promise<string> {
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd }).toString().trim();
 }
+
+/** Direct SQL, for the one fact a passing run cannot manufacture: a check whose
+ *  revision the workstream has already moved past. What is written here is read
+ *  back through the server's own projection, so the room renders a real
+ *  `VerificationCheck` with the staleness the server derived. */
+async function sql(text: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
+  const pg = await import("pg");
+  const pool = new pg.default.Pool({ connectionString: DB_URL });
+  try {
+    return (await pool.query(text, params)).rows as Record<string, unknown>[];
+  } finally {
+    await pool.end();
+  }
+}
+
+/** Records one verification check the way a runner eventually will. */
+async function recordCheck(input: {
+  missionId: string;
+  name: string;
+  origin: "harness" | "participant" | "external";
+  outcome: "passed" | "failed";
+  command: string;
+  checkpointSha: string | null;
+  exitCode: number;
+  durationMs: number;
+  byCreator: boolean;
+}): Promise<void> {
+  const rows = await sql("select org_id, created_by from missions where mission_id = $1", [
+    input.missionId
+  ]);
+  const mission = rows[0];
+  if (!mission) throw new Error(`no such mission: ${input.missionId}`);
+  await sql(
+    `insert into verification_checks
+       (chk_id, org_id, mission_id, exe_id, name, category, outcome, origin, requested_by, command,
+        exit_code, output, truncated, environment, started_at, completed_at, duration_ms,
+        checkpoint_sha, observed_at)
+     values ($1, $2, $3, null, $4, 'test', $5, $6, $7, $8, $9, null, false, 'local worktree',
+             now() - interval '1 minute', now(), $10, $11, now())`,
+    [
+      `chk_${randomUUID().replace(/-/g, "")}`,
+      mission.org_id,
+      input.missionId,
+      input.name,
+      input.outcome,
+      input.origin,
+      input.byCreator ? mission.created_by : null,
+      input.command,
+      input.exitCode,
+      input.durationMs,
+      input.checkpointSha
+    ]
+  );
+}
+
+/** The mission the workspace-runtime tests build on, created by the first of
+ *  them and read by the ones that follow. */
+let runtimeMissionId = "";
+let runtimeRepoName = "";
 
 beforeAll(async () => {
   mkdirSync(evidenceDir, { recursive: true });
@@ -432,5 +498,417 @@ describe("the Mission Room", () => {
       .filter({ hasText: "Turn completed" })
       .waitFor();
     await second.app.close();
+  });
+});
+
+/**
+ * The workspace runtime's interface (D-040 … D-042).
+ *
+ * Everything here runs against a real project on this machine: a real
+ * inspection of a real worktree, a real `.novus/settings.toml`, and a real
+ * gitignored file that is copied only after that one file is confirmed. The
+ * one synthetic part is the stale check, because staleness is a fact about a
+ * revision the workstream has moved past; it is written to the database and
+ * read back through the server's own projection, so what the ledger renders is
+ * a real `VerificationCheck`.
+ */
+describe("the workspace runtime", () => {
+  it("proposes what the project says, copies a named file only on consent, then offers the declared commands", async () => {
+    // A real project: a manifest with scripts, a lockfile that names the
+    // package manager, and one gitignored file it needs to run.
+    const repoDir = mkdtempSync(join(tmpdir(), "novus-runtime-repo-"));
+    runtimeRepoName = basename(repoDir);
+    git(repoDir, ["init", "-b", "main"]);
+    writeFileSync(
+      join(repoDir, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "demo-web",
+          packageManager: "pnpm@10.12.1",
+          scripts: { dev: "sleep 45", test: "echo ok", lint: "echo ok" }
+        },
+        null,
+        2
+      )}\n`
+    );
+    writeFileSync(join(repoDir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    writeFileSync(join(repoDir, ".gitignore"), ".env\n");
+    writeFileSync(join(repoDir, ".env.example"), "TOKEN=\n");
+    writeFileSync(join(repoDir, "README.md"), "# demo-web\n");
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "init"]);
+    const headSha = git(repoDir, ["rev-parse", "HEAD"]);
+    // Ignored, and on this machine only: its name may be shown, its contents
+    // may not (D-041).
+    writeFileSync(join(repoDir, ".env"), "TOKEN=super-secret-value\n");
+
+    const localId = randomUUID();
+    const token = await mintToken();
+    const registered = await fetch(`${CP_URL}/repositories/local`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ localId, name: runtimeRepoName, defaultBranch: "main", headSha })
+    });
+    expect(registered.ok).toBe(true);
+    // The earlier repository is still on this machine; only this one is added.
+    const mapPath = join(userDataDir, "local-repos.json");
+    let mapping: Record<string, string> = {};
+    try {
+      mapping = JSON.parse(readFileSync(mapPath, "utf8")) as Record<string, string>;
+    } catch {
+      /* first repository on this machine */
+    }
+    writeFileSync(mapPath, JSON.stringify({ ...mapping, [localId]: repoDir }));
+
+    const { app, page } = await launchApp();
+    await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
+    const projectRow = page.getByTestId("project-row").filter({ hasText: runtimeRepoName });
+    await projectRow.waitFor({ timeout: 20_000 });
+    await projectRow.click();
+
+    // One real turn, so the ledger has an actual revision to prove later. The
+    // base has to be resolved before the first message can create anything.
+    await page.getByTestId("draft-base").waitFor({ timeout: 20_000 });
+    await page.getByTestId("composer-input").fill("add a fake turn file");
+    await page.keyboard.press("Enter");
+    expect(await page.getByTestId("send-error").count()).toBe(0);
+    await page
+      .getByTestId("trace-outcome")
+      .filter({ hasText: "Turn completed" })
+      .waitFor({ timeout: 60_000 });
+    runtimeMissionId = await page.evaluate(async (id) => {
+      const result = await window.novus.missions.list();
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      return result.value.find((mission) => mission.repository?.providerRepoId === id)?.missionId ?? "";
+    }, localId);
+    expect(runtimeMissionId).toMatch(/^msn_/);
+
+    // A second workstream with no execution — what a room looks like before
+    // anything has said how this project installs, runs, or verifies itself.
+    const freshGoal = "Prepare the runtime";
+    const freshMissionId = await page.evaluate(
+      async (args) => {
+        const base = await window.novus.repos.baseLocal(args.localId);
+        if (!base.ok) throw new Error(`${base.code}: ${base.message}`);
+        const created = await window.novus.missions.create({
+          goal: args.goal,
+          successCriteria: "The project says how to install, run, and verify itself",
+          provider: "local",
+          providerRepoId: args.localId,
+          baseRef: base.value.ref,
+          baseSha: base.value.sha,
+          creationKey: args.creationKey
+        });
+        if (!created.ok) throw new Error(`${created.code}: ${created.message}`);
+        return created.value.mission.missionId;
+      },
+      { localId, goal: freshGoal, creationKey: randomUUID() }
+    );
+
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
+    await page.getByTestId("project-row").filter({ hasText: runtimeRepoName }).click();
+    await page.getByTestId("ws-tab").filter({ hasText: freshGoal }).click();
+
+    // --- The state names what is missing, and offers one action -------------
+    const stateLine = page.getByTestId("state-line");
+    await expect
+      .poll(async () => (await stateLine.textContent()) ?? "", { timeout: 30_000 })
+      .toContain("Workspace needs setup");
+    await page.getByTestId("state-setup").waitFor();
+    expect(await page.getByTestId("state-setup").textContent()).toBe("Set up workspace");
+    // Exactly one action in the line: the state has one next step, not two.
+    expect(await page.getByTestId("state-action").count()).toBe(0);
+    expect(await page.getByTestId("stop").count()).toBe(0);
+
+    // --- Nothing is declared yet, so nothing in the menu is invokable -------
+    const runControl = page.getByTestId("run-control");
+    await runControl.click();
+    await page.getByTestId("run-menu").waitFor();
+    await expect
+      .poll(async () => page.getByTestId("run-suggested").count(), { timeout: 20_000 })
+      .toBe(4);
+    expect(await page.getByTestId("run-item").count()).toBe(0);
+    const suggestions = await page.getByTestId("run-suggested").allTextContents();
+    expect(suggestions[0]).toContain("pnpm install");
+    expect(suggestions.join(" ")).toContain("suggested");
+    // A suggestion never runs: it opens the dialog, where a person confirms it.
+    await page.getByTestId("run-suggested").first().click();
+
+    const dialog = page.getByTestId("workspace-setup");
+    await dialog.waitFor();
+    await page.getByTestId("setup-detected").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("setup-project-type").textContent()).toContain("Node.js (pnpm)");
+    expect(await page.getByTestId("setup-command").inputValue()).toBe("pnpm install");
+    const runCommands = page.getByTestId("setup-run-command");
+    expect(await runCommands.count()).toBe(1);
+    expect(await runCommands.first().inputValue()).toBe("pnpm run dev");
+    const verifyCommands = page.getByTestId("setup-verify-command");
+    expect(await verifyCommands.count()).toBe(2);
+
+    // Filenames and three facts — never a byte of what is in them (D-041).
+    const fileRow = page.getByTestId("local-file");
+    expect(await fileRow.count()).toBe(1);
+    const fileText = (await fileRow.textContent()) ?? "";
+    expect(fileText).toContain(".env");
+    expect(fileText).toContain("Git ignores it");
+    expect(fileText).toContain("not in the workspace yet");
+    expect((await dialog.textContent()) ?? "").not.toContain("super-secret-value");
+    await page.screenshot({ path: join(evidenceDir, "40-workspace-setup.png") });
+
+    // Opening it ran nothing: no configuration written, no file copied, no
+    // process, no execution.
+    const worktree = join(userDataDir, "worktrees", freshMissionId);
+    expect(existsSync(join(worktree, ".novus", "settings.toml"))).toBe(false);
+    expect(existsSync(join(worktree, ".env"))).toBe(false);
+    const afterOpen = await page.evaluate(async (id) => {
+      const result = await window.novus.missions.get(id);
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      return {
+        processes: result.value.processes.length,
+        executions: result.value.executions.length,
+        state: result.value.state
+      };
+    }, freshMissionId);
+    expect(afterOpen.processes).toBe(0);
+    expect(afterOpen.executions).toBe(0);
+    expect(afterOpen.state).toBe("workspace_needs_setup");
+
+    // --- One file, one confirmation -----------------------------------------
+    await page.getByTestId("file-supply").click();
+    const confirm = page.getByTestId("file-confirm");
+    await confirm.waitFor();
+    expect(await confirm.textContent()).toContain("reads its name, never its contents");
+    await page.screenshot({ path: join(evidenceDir, "41-local-file-consent.png") });
+    // Asking is not consenting: still nothing has moved.
+    expect(existsSync(join(worktree, ".env"))).toBe(false);
+    await page.getByTestId("file-confirm-yes").click();
+    await page.getByTestId("file-copied").waitFor({ timeout: 20_000 });
+    // The copy is real, and it happened on this machine only.
+    expect(readFileSync(join(worktree, ".env"), "utf8")).toContain("super-secret-value");
+
+    // --- Editable before saving, and only saving writes anything ------------
+    await runCommands.first().fill("sleep 45");
+    await verifyCommands.first().fill("echo verified");
+    await page.getByTestId("scope-shared").click();
+    await page.getByTestId("setup-save").click();
+    await page.getByTestId("setup-saved").waitFor({ timeout: 20_000 });
+    const written = readFileSync(join(worktree, ".novus", "settings.toml"), "utf8");
+    expect(written).toContain("sleep 45");
+    expect(written).toContain("echo verified");
+    await page.getByTestId("setup-close").click();
+    await dialog.waitFor({ state: "detached" });
+
+    // --- Now the Run control offers exactly what the project declared -------
+    await page.getByTestId("run-control").click();
+    await page.getByTestId("run-menu").waitFor();
+    await expect.poll(async () => page.getByTestId("run-item").count(), { timeout: 20_000 }).toBe(4);
+    expect(await page.getByTestId("run-suggested").count()).toBe(0);
+    const declared = await page.getByTestId("run-item").allTextContents();
+    expect(declared[0]).toContain("Setup");
+    expect(declared[1]).toContain("dev");
+    expect(declared[1]).toContain("default");
+    expect(declared.join(" ")).toContain("echo verified");
+    // Every one of them is a capability-gated request, not a local action.
+    expect(await page.locator('[data-testid="run-item"][data-capability="workspace.command"]').count()).toBe(4);
+    expect(await page.locator('[data-testid="run-item"][data-permitted="true"]').count()).toBe(4);
+    await page.screenshot({ path: join(evidenceDir, "42-run-control.png") });
+
+    // --- A live run collapses the control to that command and Stop ----------
+    await page.getByTestId("run-item").nth(1).click();
+    const live = page.getByTestId("run-live");
+    await live.waitFor({ timeout: 45_000 });
+    expect(await live.textContent()).toContain("dev");
+    // Open preview appears only when the process itself reported an address.
+    // This one did, because Novus allocated it a port and said so.
+    const reportedPreview = await page.evaluate(async (id) => {
+      const result = await window.novus.missions.get(id);
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      return result.value.processes.find((process) => process.kind === "run")?.previewUrl ?? null;
+    }, freshMissionId);
+    expect(reportedPreview).toContain("http://localhost:");
+    expect(await page.getByTestId("open-preview").count()).toBe(1);
+    await expect
+      .poll(async () => (await stateLine.textContent()) ?? "", { timeout: 30_000 })
+      .toContain("App running");
+    await page.screenshot({ path: join(evidenceDir, "44-project-running.png") });
+
+    // Stopping it is the same capability, and the control comes back.
+    const stopRun = page.getByTestId("stop-run");
+    expect(await stopRun.getAttribute("data-capability")).toBe("workspace.command");
+    await stopRun.click();
+    await page.getByTestId("run-control").waitFor({ timeout: 45_000 });
+
+    // --- Verification is honest before anything has run ---------------------
+    await page.getByTestId("panel-toggle").click();
+    await page.getByTestId("inspector-tab-verification").click();
+    const runVerification = page.getByTestId("run-verification");
+    await runVerification.waitFor();
+    expect(await runVerification.getAttribute("data-capability")).toBe("workspace.command");
+    expect(await runVerification.getAttribute("data-permitted")).toBe("true");
+    expect(await page.getByTestId("checks-empty").textContent()).toContain("No checks observed");
+
+    await app.close();
+  });
+
+  it("dims a stale check, says what it proved, and keeps it out of the passing tally", async () => {
+    expect(runtimeMissionId).toMatch(/^msn_/);
+    const rows = await sql(
+      `select sha from checkpoints
+        where mission_id = $1 and sha is not null
+        order by created_at desc limit 1`,
+      [runtimeMissionId]
+    );
+    const currentSha = rows[0]?.sha as string | undefined;
+    expect(currentSha).toBeTruthy();
+
+    // A check that proved a revision the workstream has moved past.
+    await recordCheck({
+      missionId: runtimeMissionId,
+      name: "unit tests",
+      origin: "participant",
+      outcome: "passed",
+      command: "pnpm test",
+      checkpointSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      exitCode: 0,
+      durationMs: 8_420,
+      byCreator: true
+    });
+
+    const { app, page } = await launchApp();
+    await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
+    await page.getByTestId("project-row").filter({ hasText: runtimeRepoName }).click();
+    const stateLine = page.getByTestId("state-line");
+    // Everything that was proved is history, and the room says exactly that.
+    await expect
+      .poll(async () => (await stateLine.textContent()) ?? "", { timeout: 30_000 })
+      .toContain("Verification stale");
+
+    // Now one that proves the revision that is actually there.
+    await recordCheck({
+      missionId: runtimeMissionId,
+      name: "typecheck",
+      origin: "harness",
+      outcome: "passed",
+      command: "pnpm typecheck",
+      checkpointSha: currentSha ?? null,
+      exitCode: 0,
+      durationMs: 3_100,
+      byCreator: false
+    });
+    await expect
+      .poll(async () => (await stateLine.textContent()) ?? "", { timeout: 30_000 })
+      .toContain("Ready for review");
+    // Two checks are recorded; exactly one of them counts.
+    expect(await stateLine.textContent()).toContain("1 check passed");
+
+    await page.getByTestId("panel-toggle").click();
+    await page.getByTestId("inspector-tab-verification").click();
+    await page.getByTestId("ledger").waitFor({ timeout: 15_000 });
+    await expect.poll(async () => page.getByTestId("ledger-entry").count(), { timeout: 15_000 }).toBe(2);
+
+    const stale = page.locator('[data-testid="ledger-entry"][data-stale="true"]');
+    expect(await stale.count()).toBe(1);
+    const staleText = (await stale.textContent()) ?? "";
+    expect(staleText).toContain("unit tests");
+    expect(staleText).toContain("since changed");
+    expect(staleText).toContain("deadbeef");
+    // Origin and cost are on the row, not implied.
+    expect(staleText).toContain("Run by");
+    expect(staleText).toContain("exit 0");
+    const current = page.locator('[data-testid="ledger-entry"][data-stale="false"]');
+    expect(await current.textContent()).toContain("Observed from Claude Code");
+
+    // The summary counts the current one only.
+    const summary = (await page.getByTestId("checks-summary").textContent()) ?? "";
+    expect(summary).toContain("1 check passed");
+    expect(summary).toContain("1 proved an earlier revision");
+
+    // Dimmed, not merely labelled — and resolved against the tokens themselves
+    // rather than their current values, so this keeps its meaning if a token
+    // changes and fails if the row stops reading from one (DESIGN.md#tokens).
+    const tokenColor = (token: string) =>
+      page.evaluate((name) => {
+        const probe = document.createElement("span");
+        probe.style.color = `var(${name})`;
+        document.body.appendChild(probe);
+        const resolved = getComputedStyle(probe).color;
+        probe.remove();
+        return resolved;
+      }, token);
+    const faint = await tokenColor("--text-3");
+    const verified = await tokenColor("--ok");
+
+    const colorOf = (row: typeof stale, part: string) =>
+      row.locator(part).evaluate((element) => getComputedStyle(element).color);
+
+    expect(await colorOf(stale, ".ledger-name")).toBe(faint);
+    expect(await colorOf(stale, ".ledger-outcome")).toBe(faint);
+    // Sage is for verified evidence only, so a stale pass must not wear it.
+    expect(await colorOf(stale, ".ledger-outcome")).not.toBe(verified);
+    expect(await colorOf(current, ".ledger-outcome")).toBe(verified);
+
+    await page.screenshot({ path: join(evidenceDir, "43-verification-ledger.png") });
+    await app.close();
+  });
+
+  it("disables a declared command for a participant without the capability, and says where a workspace can be prepared", async () => {
+    expect(runtimeMissionId).toMatch(/^msn_/);
+    const token = await mintToken();
+    const invited = await fetch(`${CP_URL}/missions/${runtimeMissionId}/invitations`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ role: "contributor" })
+    });
+    expect(invited.ok).toBe(true);
+    const invitation = (await invited.json()) as { token: string };
+
+    // A second person, on a machine with no checkout of this repository.
+    const mayaDir = mkdtempSync(join(tmpdir(), "novus-e2e-maya-"));
+    const { app, page } = await launchApp({ dataDir: mayaDir, identity: "maya" });
+    await page.getByTestId("setup").waitFor();
+    await page.getByTestId("sign-in-button").click();
+    await page.getByTestId("github-connected").waitFor({ timeout: 30_000 });
+    await page.getByTestId("finish-setup").click();
+    await page.getByTestId("project-shell").waitFor();
+    await page.getByTestId("join-mission").click();
+    await page.getByTestId("join-token").fill(invitation.token);
+    await page.getByTestId("join-submit").click();
+    await page.getByTestId("join-dialog").waitFor({ state: "detached", timeout: 20_000 });
+
+    const projectRow = page.getByTestId("project-row").filter({ hasText: runtimeRepoName });
+    await projectRow.waitFor({ timeout: 20_000 });
+    await projectRow.click();
+
+    // The action stays visible and disabled, and names the capability it needs
+    // (DESIGN.md#transient-states; AGENTS.md rule 13 — the server enforces it
+    // regardless of what this button looks like).
+    await page.getByTestId("panel-toggle").click();
+    await page.getByTestId("inspector-tab-verification").click();
+    const runVerification = page.getByTestId("run-verification");
+    await runVerification.waitFor();
+    await expect
+      .poll(async () => runVerification.getAttribute("data-permitted"), { timeout: 20_000 })
+      .toBe("false");
+    expect(await runVerification.isDisabled()).toBe(true);
+    expect(await runVerification.getAttribute("title")).toContain("workspace.command");
+
+    // And the workspace itself can only be prepared where the repository is.
+    await page.getByTestId("inspector-close").click();
+    await page.getByTestId("run-control").click();
+    await page.getByTestId("run-menu-setup").click();
+    const elsewhere = page.getByTestId("setup-elsewhere");
+    await elsewhere.waitFor();
+    const elsewhereText = (await elsewhere.textContent()) ?? "";
+    expect(elsewhereText).toContain("only be prepared on the machine that holds the repository");
+    expect(elsewhereText).toContain("not access to that machine");
+    // Nothing to write from here, so there is no control offering to.
+    expect(await page.getByTestId("setup-save").count()).toBe(0);
+    // Named for what it actually shows. The local-file consent frame needs a
+    // real proposal, so it belongs to the change that lands the runner half.
+    await page.screenshot({ path: join(evidenceDir, "41-workspace-elsewhere.png") });
+
+    await app.close();
   });
 });

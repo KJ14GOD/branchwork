@@ -3,6 +3,8 @@ import type { Mission, MissionDetailResponse, Organization, User } from "@novus/
 import { novus } from "../bridge";
 import { AddProjectDialog, type PickedRepository } from "../components/add-project-dialog";
 import { HumanMark } from "../components/identity";
+import { RunControl } from "../components/run-control";
+import { WorkspaceSetupDialog } from "../components/workspace-setup";
 import { truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
 import { Inspector, type InspectorSection } from "../components/inspector";
@@ -164,6 +166,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
+  /** The setup dialog is held here because two surfaces open the same one: the
+   *  state line's action inside the room, and the Run control beside it. */
+  const [setupOpen, setSetupOpen] = useState(false);
   /** The docked evidence panel. Held here because its toggle lives in the top
    *  bar and because the panel outlives the workstream tab beneath it. */
   const [inspector, setInspector] = useState<InspectorSection | null>(null);
@@ -293,6 +298,12 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedProject]);
 
+  // A dialog about one workstream's workspace must not survive a move to
+  // another workstream.
+  useEffect(() => {
+    setSetupOpen(false);
+  }, [selection?.missionId]);
+
   const closeDialog = useCallback(() => {
     setDialogOpen(false);
     // Focus returns to what opened the dialog (DESIGN.md#keyboard).
@@ -387,6 +398,12 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         </button>
         <span className="brand">Novus</span>
         <span className="spacer" />
+        {/* The room's workspace controls: one Run control beside the evidence
+            toggle, in the corner that belongs to the mission. Not a toolbar,
+            and not a second navigation (DESIGN.md#component-behavior). */}
+        {openMission && (
+          <RunControl detail={openMission} onSetup={() => setSetupOpen(true)} />
+        )}
         <button
           className={inspector ? "icon-button active" : "icon-button"}
           onClick={() =>
@@ -554,6 +571,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               details={details}
               selectedMissionId={selection.missionId}
               onInspector={setInspector}
+              onSetup={() => setSetupOpen(true)}
               onSelectTab={handleSelectTab}
               onDetail={handleDetail}
               onCreated={handleCreated}
@@ -576,6 +594,18 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           onOpen={openPicked}
           onLocalAdded={refresh}
           onClose={closeDialog}
+        />
+      )}
+
+      {setupOpen && openMission && selectedProject && (
+        <WorkspaceSetupDialog
+          key={openMission.mission.missionId}
+          missionId={openMission.mission.missionId}
+          /* A workspace is prepared where the repository is. Anywhere else the
+             dialog says so rather than offering a control that cannot work
+             (D-042). */
+          preparableHere={selectedProject.provider === "local" && selectedProject.onThisMachine}
+          onClose={() => setSetupOpen(false)}
         />
       )}
       </div>

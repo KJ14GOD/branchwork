@@ -11,6 +11,7 @@ import { z } from "zod";
 import type { ControlPlaneClient } from "./api-client";
 import { startTurn, type RunningTurn, type TurnResult } from "./execution";
 import { EventOutbox } from "./outbox";
+import { createWorkspaceRuntime, type WorkspaceCommandContext } from "./workspace";
 
 /**
  * OWNER: the runner plane's desktop half (D-035).
@@ -112,6 +113,17 @@ interface ActiveTurn {
   turn: RunningTurn;
 }
 
+/**
+ * What a workspace command carries. A name selects one of the commands the
+ * project declared; its absence means the project's default run command, or
+ * every configured check. There is deliberately nothing here that could name a
+ * command the repository did not declare (D-042).
+ */
+const WorkspacePayloadSchema = z.object({
+  name: z.string().min(1).max(80).nullable().optional(),
+  workspaceId: z.string().min(1).nullable().optional()
+});
+
 const StartPayloadSchema = z.object({
   directionId: z.string().optional(),
   body: z.string().default(""),
@@ -142,9 +154,22 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   const inFlight = new Set<string>();
   const chains = new Map<string, Promise<void>>();
 
+  /**
+   * The workspace runtime: setup, run, and verification commands, their
+   * environments, their ports, and their processes. Its observations belong to
+   * the workstream rather than to any turn, so they are reported with no
+   * execution — a setup command can precede the first turn and a run command
+   * outlives one (D-041).
+   */
+  const workspace = createWorkspaceRuntime({
+    host: { userDataPath: host.userDataPath, repositoryPath: host.repositoryPath },
+    emit: (workstreamId, event) => outboxFor(workstreamId).append(null, event)
+  });
+
   let discovering = false;
   let polling = false;
   let stopped = false;
+  let reconciled = false;
 
   const discoverTimer = setInterval(() => void discover(), DISCOVER_EVERY_MS);
   const pollTimer = setInterval(() => void poll(), POLL_EVERY_MS);
@@ -227,7 +252,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     if (existing) return existing;
     const created = new EventOutbox({
       filePath: join(userData, "runner-outbox", `${workstreamId}.json`),
-      deliver: async (executionId: string, batch: SequencedRunnerEvent[]) => {
+      deliver: async (executionId: string | null, batch: SequencedRunnerEvent[]) => {
         const enrolment = enrolments.get(workstreamId);
         if (!enrolment) throw new Error("this machine is no longer enrolled for that workstream");
         const response = await runnerFetch(enrolment, "/runner/events", "POST", { executionId, events: batch });
@@ -288,6 +313,13 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         });
         persistEnrolments();
       }
+      // Once this machine knows which workstreams are its own, it says what
+      // is actually true about the processes the last run recorded — nothing
+      // is presented as still running just because a file says so.
+      if (!reconciled && enrolments.size > 0) {
+        reconciled = true;
+        workspace.reconcile();
+      }
     } catch (error) {
       // Offline or unauthorized: try again on the next tick rather than
       // tearing down an enrolment that is probably still good.
@@ -345,12 +377,17 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   ): void {
     if (inFlight.has(command.commandId)) return;
     inFlight.add(command.commandId);
-    const previous = chains.get(workstream.workstreamId) ?? Promise.resolve();
+    // An interrupt cannot queue behind the thing it interrupts. A running check
+    // or a live dev server holds the lane for as long as it lasts, so a stop
+    // that waited its turn would never arrive — and it must not take the lane
+    // over either, or whatever was already queued would lose its place.
+    const interrupt = command.kind === "stop_command";
+    const previous = interrupt ? Promise.resolve() : (chains.get(workstream.workstreamId) ?? Promise.resolve());
     const next = previous
       .then(() => handle(command, workstream, enrolment))
       .catch((error: unknown) => console.error("[runner] command failed:", messageOf(error)))
       .finally(() => inFlight.delete(command.commandId));
-    chains.set(workstream.workstreamId, next);
+    if (!interrupt) chains.set(workstream.workstreamId, next);
   }
 
   async function handle(
@@ -417,6 +454,15 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       // workstream is already at one, so there is nothing to interrupt.
       return;
     }
+    if (
+      command.kind === "run_setup" ||
+      command.kind === "run_command" ||
+      command.kind === "stop_command" ||
+      command.kind === "run_verification"
+    ) {
+      await runWorkspaceCommand(command, workstream);
+      return;
+    }
 
     const executionId = command.executionId;
     if (!executionId) throw new Error("the command named no execution");
@@ -439,6 +485,31 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });
+  }
+
+  /**
+   * One of the four commands the project itself declared. The control plane
+   * authorized it and named which one; which *command line* that name means is
+   * read from the repository, here, and nowhere else.
+   */
+  async function runWorkspaceCommand(
+    command: RunnerCommand,
+    workstream: z.infer<typeof RunnerCommandsResponseSchema>["workstream"]
+  ): Promise<void> {
+    const payload = WorkspacePayloadSchema.safeParse(command.payload);
+    if (!payload.success) throw new Error("the command payload was malformed");
+    const context: WorkspaceCommandContext = {
+      missionId: workstream.missionId,
+      workstreamId: workstream.workstreamId,
+      providerRepoId: workstream.providerRepoId,
+      missionBranch: workstream.missionBranch,
+      workspaceId: payload.data.workspaceId ?? null
+    };
+    const name = payload.data.name ?? null;
+    if (command.kind === "run_setup") return workspace.runSetup(context);
+    if (command.kind === "run_command") return workspace.runCommand(context, name);
+    if (command.kind === "stop_command") return workspace.stopCommand(context, name);
+    return workspace.runVerification(context, name);
   }
 
   interface TurnArgs {
@@ -556,6 +627,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     }
     active.clear();
     openExecutions.clear();
+
+    // No run command outlives the app that started it, and each one reports
+    // its own exit on the way out (D-034).
+    await workspace.shutdown(reason);
 
     await Promise.allSettled([...outboxes.values()].map((outbox) => outbox.flush()));
   }

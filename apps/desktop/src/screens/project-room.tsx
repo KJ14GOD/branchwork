@@ -57,6 +57,7 @@ export function ProjectRoom({
   details,
   selectedMissionId,
   onInspector,
+  onSetup,
   onSelectTab,
   onDetail,
   onCreated
@@ -67,6 +68,8 @@ export function ProjectRoom({
   /** Opening the evidence panel is the shell's job — it owns the panel and the
    *  control that shows it. The room only ever asks for a section. */
   onInspector: (section: InspectorSection | null) => void;
+  /** The setup dialog is the shell's too: the Run control opens the same one. */
+  onSetup: () => void;
   onSelectTab: (missionId: string | null) => void;
   onDetail: (detail: MissionDetailResponse) => void;
   onCreated: (mission: Mission) => void;
@@ -380,6 +383,16 @@ export function ProjectRoom({
                   {stateLine.action.label}
                 </button>
               )}
+              {stateLine.action?.kind === "setup" && (
+                <button className="btn btn-secondary" onClick={onSetup} data-testid="state-setup">
+                  {stateLine.action.label}
+                </button>
+              )}
+              {/* Stop and Open preview are deliberately absent here: while a
+                  run command is alive they live on the Run control, which is
+                  where every run verb lives (DESIGN.md#component-behavior).
+                  Rendering them twice in one viewport would be two competing
+                  copies of one action, not one next step. */}
             </>
           ) : (
             <>
@@ -583,7 +596,10 @@ export function ProjectRoom({
                 </div>
               )}
 
-              {feed.blocks.length === 0 && !feed.setup && (
+              {/* A workstream that exists but has produced nothing says so.
+                  The technical setup row is not activity, so it does not
+                  suppress the sentence (DESIGN.md#transient-states). */}
+              {feed.blocks.length === 0 && (
                 <p className="quiet" data-testid="feed-empty">
                   Nothing has happened here yet.
                 </p>

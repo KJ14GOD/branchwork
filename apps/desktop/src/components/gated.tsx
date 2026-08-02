@@ -20,6 +20,7 @@ export function GatedAction({
   children,
   variant = "secondary",
   busy,
+  label,
   testid
 }: {
   capability: Capability;
@@ -32,6 +33,9 @@ export function GatedAction({
   children: ReactNode;
   variant?: "primary" | "secondary" | "text";
   busy?: boolean;
+  /** The accessible name, when the children are markup rather than one string
+   *  — a screen reader must hear the command, not "[object Object]". */
+  label?: string;
   testid?: string;
 }) {
   const permitted = capabilities.includes(capability);
@@ -40,6 +44,7 @@ export function GatedAction({
     : holderLogin
       ? `${denialReason} ${holderLogin} has the baton.`
       : denialReason;
+  const name = typeof children === "string" ? children : label;
 
   return (
     <button
@@ -47,7 +52,7 @@ export function GatedAction({
       onClick={onClick}
       disabled={!permitted || busy}
       title={tooltip}
-      aria-label={tooltip ? `${String(children)} — ${tooltip}` : undefined}
+      aria-label={tooltip ? (name ? `${name} — ${tooltip}` : tooltip) : name}
       data-testid={testid}
       data-capability={capability}
       data-permitted={permitted ? "true" : "false"}

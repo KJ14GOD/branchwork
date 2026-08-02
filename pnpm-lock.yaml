@@ -57,6 +57,9 @@ importers:
       simple-icons:
         specifier: ^16.27.1
         version: 16.27.1
+      smol-toml:
+        specifier: ^1.7.1
+        version: 1.7.1
       zod:
         specifier: ^3.25.0
         version: 3.25.76
@@ -1542,6 +1545,10 @@ packages:
   simple-icons@16.27.1:
     resolution: {integrity: sha512-slZF8iKxkv7Lb9SF3L1AcIl5iYLNvDrKKm8yV69cG66XvxJ12SX+bYTgxRwCY4bXSmklGXoXaKEyVmEypOCeqw==}
     engines: {node: '>=0.12.18'}
+
+  smol-toml@1.7.1:
+    resolution: {integrity: sha512-PPlsspAZ4jbMBu5DMFhfUGDQLu/vrL4SyBROVS37x8ynnVmFIs1VPBz1Co8Xks3TvpIaZXmU85y4DrQ+UyVFoQ==}
+    engines: {node: '>= 18'}
 
   sonic-boom@4.2.1:
     resolution: {integrity: sha512-w6AxtubXa2wTXAUsZMMWERrsIRAdrK0Sc+FUytWvYAhBJLyuI4llrMIC1DtlNSdI99EI86KZum2MMq3EAZlF9Q==}
@@ -3185,6 +3192,8 @@ snapshots:
   siginfo@2.0.0: {}
 
   simple-icons@16.27.1: {}
+
+  smol-toml@1.7.1: {}
 
   sonic-boom@4.2.1:
     dependencies:

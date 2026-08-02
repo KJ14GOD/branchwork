@@ -13,6 +13,7 @@
   "dependencies": {
     "@novus/contracts": "workspace:*",
     "simple-icons": "^16.27.1",
+    "smol-toml": "^1.7.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {

@@ -132,9 +132,15 @@ alter table events add column if not exists cause_direction_id text;
 alter table events add column if not exists cause_lease_id text;
 alter table events add column if not exists origin_seq bigint;
 alter table events add column if not exists actor_login text;
--- A runner event replayed after a partition lands exactly once.
-create unique index if not exists events_execution_origin_seq
-  on events (execution_id, origin_seq) where origin_seq is not null;
+-- A runner event replayed after a partition lands exactly once. The key is the
+-- scope the report belongs to: an execution when there is one, the workstream
+-- when the report is about the workspace itself. Keying on execution_id alone
+-- would stop de-duplicating entirely for workspace reports, because Postgres
+-- treats NULL keys as distinct from one another.
+drop index if exists events_execution_origin_seq;
+create unique index if not exists events_origin_scope_seq
+  on events (coalesce(execution_id, workstream_id), origin_seq)
+  where origin_seq is not null;
 
 -- ---------------------------------------------------------------------------
 -- Invitations (PRODUCT.md#domain-model). Single-use, expiring, mission-scoped;

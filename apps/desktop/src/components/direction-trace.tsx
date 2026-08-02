@@ -39,6 +39,21 @@ const ABSORBED_KINDS = new Set([
   "execution.starting"
 ]);
 
+/**
+ * The workspace runtime's own events. A run command is not an execution and no
+ * direction caused it, so nothing here hangs off a direction thread — and a
+ * thread with no author, no words, and one disclosure is exactly the lone
+ * fragment signature element 2 exists to prevent. The room reports these live
+ * in the state line and on the Run control; the record keeps them in history.
+ */
+const WORKSPACE_RUNTIME_KINDS = new Set([
+  "workspace.command_requested",
+  "workspace.stop_requested",
+  "workspace.readiness",
+  "process.started",
+  "process.exited"
+]);
+
 type Tone = "neutral" | "warn" | "danger" | "ok";
 
 type Segment =
@@ -267,6 +282,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       setupAt = setupAt ?? event.occurredAt;
       continue;
     }
+    if (WORKSPACE_RUNTIME_KINDS.has(event.kind)) continue;
     if (event.kind.startsWith("control.") || event.kind.startsWith("handoff.")) {
       const line = controlLine(event);
       if (line) {

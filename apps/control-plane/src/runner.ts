@@ -17,8 +17,16 @@ import { withTransaction } from "./db.ts";
 import { markDirectionApplied } from "./directions.ts";
 import { dispatchQueuedForController } from "./executions.ts";
 import { nextSeq, recordEvent, recordEventAtSeq } from "./events.ts";
-import { newCheckId, newCheckpointId, newFileChangeId, newRunnerId, newSecretToken } from "./ids.ts";
+import {
+  newCheckId,
+  newCheckpointId,
+  newFileChangeId,
+  newRunnerId,
+  newSecretToken,
+  newWorkspaceId
+} from "./ids.ts";
 import type { RouteDeps } from "./routes.ts";
+import { ensureWorkspace } from "./workspace.ts";
 
 /**
  * OWNER: the runner plane's control-plane half (D-035). Paths owned here:
@@ -261,14 +269,233 @@ async function recordCheckpoint(
   }
 }
 
+/**
+ * A timestamp the runner observed, or null. The wire shape is a bounded string
+ * (the contract does not parse dates), so an unparseable value is recorded as
+ * "not known" rather than allowed to abort the batch it arrived in: one
+ * malformed field must not lose the outcome it was attached to.
+ */
+function observedAt(value: string): Date | null {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * Who asked for the command this report is about, or null when nothing asked —
+ * a harness-run check, or a process the runner restarted on its own. Read from
+ * the durable command the control plane enqueued, never from the report: the
+ * runner does not get to name a requester.
+ *
+ * The fallback to a nameless command is the "run the default" case: the
+ * request omitted a name, the project's configuration chose one, and the
+ * process reports the concrete name it actually ran.
+ */
+async function requesterOf(
+  client: pg.PoolClient,
+  workstreamId: string,
+  kind: "run_setup" | "run_command" | "run_verification",
+  name: string
+): Promise<string | null> {
+  const result = await client.query(
+    `select payload->>'requestedBy' as requested_by
+       from runner_commands
+      where wst_id = $1 and kind = $2
+        and (payload->>'name' = $3 or payload->>'name' is null)
+      order by (payload->>'name' is not distinct from $3) desc, seq desc
+      limit 1`,
+    [workstreamId, kind, name]
+  );
+  return (result.rows[0]?.requested_by as string | null | undefined) ?? null;
+}
+
+/**
+ * The workspace-scoped half of ingest: what the runner reports about the
+ * machine rather than about a turn. Returns true when it handled the event.
+ *
+ * These four are the only reports that are meaningful with no execution — a
+ * run command is not an execution (D-042) — and they arrive with none. The
+ * replay guard is the same one every other report gets: the unique index is
+ * keyed on coalesce(execution, workstream), so a workspace batch de-duplicates
+ * against the workstream. Readiness, a started process and an exit are
+ * additionally idempotent on their own; a completed check is not, and relies
+ * on that guard alone.
+ */
+async function applyWorkspaceSideEffects(
+  client: pg.PoolClient,
+  ctx: RunnerContext,
+  event: RunnerEvent
+): Promise<boolean> {
+  switch (event.kind) {
+    case "workspace.readiness": {
+      const payload = event.payload;
+      await client.query(
+        `insert into workspaces (wsp_id, org_id, mission_id, wst_id, runner_id, readiness,
+                                 port_range_start, port_range_end, setup_error, configured_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                 case when $6 = 'ready' then now() else null end)
+         on conflict (wst_id) do update
+            set readiness = excluded.readiness,
+                runner_id = excluded.runner_id,
+                -- A range is allocated once for the workstream; a later report
+                -- that omits it must not forget the ports already in use.
+                port_range_start = coalesce(excluded.port_range_start, workspaces.port_range_start),
+                port_range_end = coalesce(excluded.port_range_end, workspaces.port_range_end),
+                -- Assigned, not coalesced: a successful setup clears the
+                -- failure that came before it.
+                setup_error = excluded.setup_error,
+                configured_at = case
+                  when excluded.readiness = 'ready' then coalesce(workspaces.configured_at, now())
+                  else workspaces.configured_at end,
+                updated_at = now()`,
+        [
+          newWorkspaceId(),
+          ctx.orgId,
+          ctx.missionId,
+          ctx.workstreamId,
+          ctx.runnerId,
+          payload.readiness,
+          payload.portRangeStart,
+          payload.portRangeEnd,
+          payload.setupError
+        ]
+      );
+      return true;
+    }
+    case "process.started": {
+      const payload = event.payload;
+      const workspaceId = await ensureWorkspace(client, {
+        orgId: ctx.orgId,
+        missionId: ctx.missionId,
+        workstreamId: ctx.workstreamId,
+        runnerId: ctx.runnerId
+      });
+      const startedBy = await requesterOf(
+        client,
+        ctx.workstreamId,
+        payload.kind === "setup" ? "run_setup" : payload.kind === "run" ? "run_command" : "run_verification",
+        payload.name
+      );
+      // Two unique indexes can refuse this row: the primary key on a replayed
+      // report, and one-live-process-per-name when a runner starts a second
+      // copy of something already running. Neither is worth losing the rest of
+      // the batch over — the event itself is already in the log.
+      //
+      // A repeat report for the same process is how a preview URL discovered
+      // after start-up arrives; `previewUrl` rides on no other event. So the
+      // conflict is an upsert of what a late report can legitimately add, and
+      // only while the process is still live: a finished one is never revived,
+      // and a null in a later report never erases what an earlier one knew.
+      await client.query("savepoint process_started");
+      try {
+        await client.query(
+          `insert into workspace_processes (prc_id, org_id, mission_id, wst_id, wsp_id, kind, name,
+                                            command, state, started_by, runner_id, preview_url, port)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, 'running', $9, $10, $11, $12)
+           on conflict (prc_id) do update
+             set preview_url = coalesce(excluded.preview_url, workspace_processes.preview_url),
+                 port = coalesce(excluded.port, workspace_processes.port)
+             where workspace_processes.state in ('starting', 'running')`,
+          [
+            payload.processId,
+            ctx.orgId,
+            ctx.missionId,
+            ctx.workstreamId,
+            workspaceId,
+            payload.kind,
+            payload.name,
+            payload.command,
+            startedBy,
+            ctx.runnerId,
+            payload.previewUrl,
+            payload.port
+          ]
+        );
+        await client.query("release savepoint process_started");
+      } catch (error) {
+        if ((error as { code?: string }).code !== "23505") throw error;
+        await client.query("rollback to savepoint process_started");
+      }
+      return true;
+    }
+    case "process.exited": {
+      const payload = event.payload;
+      // Monotonic, like execution state above: a process that has already
+      // ended never returns to running, so a late or duplicated exit changes
+      // nothing. Scoped to this runner's workstream — a credential is one lane.
+      await client.query(
+        `update workspace_processes
+            set state = $3, exit_code = $4, failure_reason = $5, ended_at = now()
+          where prc_id = $1 and wst_id = $2
+            and state in ('starting', 'running')`,
+        [
+          payload.processId,
+          ctx.workstreamId,
+          payload.state,
+          payload.exitCode,
+          payload.failureReason
+        ]
+      );
+      return true;
+    }
+    case "verification.completed": {
+      const payload = event.payload;
+      const requestedBy = await requesterOf(
+        client,
+        ctx.workstreamId,
+        "run_verification",
+        payload.name
+      );
+      await client.query(
+        `insert into verification_checks (chk_id, org_id, mission_id, exe_id, name, category, outcome,
+                                          origin, requested_by, command, exit_code, output, truncated,
+                                          environment, runner_id, started_at, completed_at, duration_ms,
+                                          checkpoint_sha)
+         values ($1, $2, $3, null, $4, $5, $6, 'participant', $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                 $16, $17)`,
+        [
+          newCheckId(),
+          ctx.orgId,
+          ctx.missionId,
+          payload.name,
+          payload.category,
+          payload.outcome,
+          requestedBy,
+          payload.command,
+          payload.exitCode,
+          payload.output,
+          payload.truncated,
+          // Composed by the server from the runner's label, never taken from
+          // the report and never a filesystem path.
+          environmentOf(ctx),
+          ctx.runnerId,
+          observedAt(payload.startedAt),
+          observedAt(payload.completedAt),
+          payload.durationMs,
+          // The revision this check proves. Staleness is derived against the
+          // workstream's head at read time, never stored (D-037).
+          payload.checkpointSha
+        ]
+      );
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
 /** The durable consequence of one reported event, applied after it was
  *  recorded and only when it was not a de-duplicated replay. */
 async function applySideEffects(
   client: pg.PoolClient,
   ctx: RunnerContext,
-  execution: ExecutionRow,
+  /** Null for a workspace-scoped report: a run command is not an execution. */
+  execution: ExecutionRow | null,
   event: RunnerEvent
 ): Promise<void> {
+  if (await applyWorkspaceSideEffects(client, ctx, event)) return;
+  // Everything below is a claim about a turn. Without one there is nothing to
+  // move; the event stays in the log and no projected state changes.
+  if (!execution) return;
   switch (event.kind) {
     case "execution.starting":
       await setExecutionState(client, execution.exe_id, "starting");
@@ -375,7 +602,11 @@ async function applySideEffects(
 async function ingest(
   db: Db,
   ctx: RunnerContext,
-  execution: ExecutionRow,
+  /** Null for a workspace-scoped report, which belongs to the machine rather
+   *  than to a turn. De-duplication still holds: the unique index is keyed on
+   *  coalesce(execution, workstream), so such a batch dedupes against the
+   *  workstream's own sequence instead of an execution's. */
+  execution: ExecutionRow | null,
   reported: SequencedRunnerEvent[]
 ): Promise<{ accepted: number; duplicates: number }> {
   // Ascending origin sequence, whatever order the delivery arrived in: a
@@ -390,7 +621,7 @@ async function ingest(
       const cause =
         item.event.kind === "direction.applied"
           ? item.event.payload.directionId
-          : execution.starting_direction_id;
+          : execution?.starting_direction_id ?? null;
       const actor = attribute(item.event, ctx);
       const seq = await nextSeq(client, ctx.missionId);
       const eventId = await recordEventAtSeq(
@@ -399,7 +630,7 @@ async function ingest(
           orgId: ctx.orgId,
           missionId: ctx.missionId,
           workstreamId: ctx.workstreamId,
-          executionId: execution.exe_id,
+          executionId: execution?.exe_id ?? null,
           kind: item.event.kind,
           actorKind: actor.kind,
           actorId: actor.id,
@@ -418,10 +649,15 @@ async function ingest(
       accepted += 1;
       await applySideEffects(client, ctx, execution, item.event);
     }
-    await client.query(
-      "update executions set last_origin_seq = greatest(last_origin_seq, $2) where exe_id = $1",
-      [execution.exe_id, highest]
-    );
+    // Only an execution-scoped report advances an execution's cursor. A
+    // workspace report counts on the workstream's own sequence, and writing it
+    // here would corrupt the resume point of whatever turn ran last.
+    if (execution) {
+      await client.query(
+        "update executions set last_origin_seq = greatest(last_origin_seq, $2) where exe_id = $1",
+        [execution.exe_id, highest]
+      );
+    }
     return { accepted, duplicates };
   });
 }
@@ -657,14 +893,22 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
     const body = ReportRunnerEventsInputSchema.safeParse(request.body);
     if (!body.success) return deps.sendError(reply, 422, "invalid_events", "Malformed runner report.");
 
-    const execution = await deps.db.query(
-      "select exe_id, wst_id, state, starting_direction_id from executions where exe_id = $1 and wst_id = $2",
-      [body.data.executionId, ctx.workstreamId]
-    );
-    const row = execution.rows[0] as ExecutionRow | undefined;
-    if (!row) return deps.sendError(reply, 404, "not_found", "No such execution on this runner.");
+    // A workspace-scoped report names no execution: a setup or run command is
+    // not part of any turn, and can happen before a turn has ever existed.
+    // There is nothing to resolve and nothing to refuse. When an execution
+    // *is* named it must still be one of this runner's — a credential is
+    // scoped to a single lane, and that is not a check to lose here.
+    let execution: ExecutionRow | null = null;
+    if (body.data.executionId !== null) {
+      const found = await deps.db.query(
+        "select exe_id, wst_id, state, starting_direction_id from executions where exe_id = $1 and wst_id = $2",
+        [body.data.executionId, ctx.workstreamId]
+      );
+      execution = (found.rows[0] as ExecutionRow | undefined) ?? null;
+      if (!execution) return deps.sendError(reply, 404, "not_found", "No such execution on this runner.");
+    }
 
-    const { accepted, duplicates } = await ingest(deps.db, ctx, row, body.data.events);
+    const { accepted, duplicates } = await ingest(deps.db, ctx, execution, body.data.events);
     return { ok: true, accepted, duplicates };
   });
 

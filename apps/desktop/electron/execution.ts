@@ -1,7 +1,6 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   DEFAULT_EFFORT,
@@ -12,6 +11,7 @@ import {
 } from "@novus/contracts";
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
 import { HarnessStream } from "./harness-stream";
+import { harnessEnv } from "./workspace-env";
 
 /**
  * The Claude Code adapter (D-017, D-032): one direction becomes one supervised
@@ -31,14 +31,6 @@ import { HarnessStream } from "./harness-stream";
  * No Electron import: the app supplies the worktree root, the repository path,
  * and whether it is packaged, which keeps the whole turn testable.
  */
-
-/** Where a harness CLI installed outside the login shell's PATH usually lives. */
-const PROBE_PATH = [
-  process.env.PATH ?? "",
-  join(homedir(), ".local", "bin"),
-  "/opt/homebrew/bin",
-  "/usr/local/bin"
-].join(":");
 
 /** Server-allocated branch names only; a direction never names a branch. */
 const MISSION_BRANCH = /^novus\/m-[0-9a-z]+$/;
@@ -315,7 +307,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
       try {
         spawned = spawn("claude", args, {
           cwd: worktreePath,
-          env: { ...process.env, PATH: PROBE_PATH },
+          // The harness environment, not this process's (D-041): the user's own
+          // local Claude Code login still works, and nothing a project declared
+          // as a secret is in it.
+          env: harnessEnv(),
           stdio: ["ignore", "pipe", "pipe"],
           // Its own process group, so a stop reaches the tools it started.
           detached: true

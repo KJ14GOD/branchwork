@@ -1609,10 +1609,41 @@ body {
   color: var(--text-3);
 }
 
+.ledger-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 32px;
+  margin-bottom: var(--s-2);
+}
+
+.ledger-head .inspector-summary {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
 .ledger-origin {
   font: var(--type-meta);
   color: var(--text-2);
   margin-top: var(--s-1);
+}
+
+/* The revision a check proves, its exit code, and how long it took. */
+.ledger-facts {
+  font: 400 12px/18px var(--font-mono);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  margin-top: var(--s-1);
+}
+
+/* A check that proved an earlier revision is history: it dims to --text-3 and
+   never keeps the --ok of a pass it can no longer vouch for. */
+.ledger-entry.stale .ledger-name,
+.ledger-entry.stale .ledger-outcome,
+.ledger-entry.stale .ledger-origin,
+.ledger-entry.stale .ledger-facts {
+  color: var(--text-3);
 }
 
 .check-output {
@@ -1621,6 +1652,290 @@ body {
   white-space: pre-wrap;
   user-select: text;
   padding-top: var(--s-1);
+}
+
+/* ---------- The Run control (DESIGN.md#component-behavior) ---------- */
+
+/* One control in the corner that belongs to the mission, beside the evidence
+   toggle. Its menu hangs from it; nothing here is a toolbar. */
+.run-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.run-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.run-trigger.active {
+  background: var(--selected);
+}
+
+/* While a run command is alive the control says which one, and offers Stop. */
+.run-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.run-live-name {
+  font: var(--type-meta);
+  color: var(--text-1);
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-menu {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  min-width: 320px;
+  max-width: 420px;
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  box-shadow: var(--elev-1);
+  padding: var(--s-1);
+  z-index: 30;
+}
+
+.run-menu-item {
+  display: block;
+}
+
+/* Menu rows are the shared Button primitive, laid out as full-width rows —
+   no second button shape exists in the product. */
+.run-menu .btn {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  width: 100%;
+  min-height: 28px;
+  text-align: left;
+  color: var(--text-1);
+}
+
+.run-menu .btn:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.run-item-label {
+  flex: none;
+  font: var(--type-row);
+  color: inherit;
+}
+
+.run-item-command {
+  flex: 1;
+  min-width: 0;
+  font: var(--type-meta);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-item-note {
+  flex: none;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.run-menu-note {
+  font: var(--type-meta);
+  color: var(--text-2);
+  padding: var(--s-2);
+}
+
+.run-menu-foot {
+  border-top: 1px solid var(--edge);
+  margin-top: var(--s-1);
+  padding-top: var(--s-1);
+}
+
+/* A refusal belongs at the control that was refused, not in a toast. */
+.run-note {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 320px;
+  max-width: 420px;
+  padding: var(--s-2) var(--s-3);
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  box-shadow: var(--elev-1);
+  font: var(--type-meta);
+  user-select: text;
+}
+
+/* ---------- Set up workspace ---------- */
+
+/* Written against .dialog so the shared dialog rules below cannot win on
+   source order; this dialog is wider and sized to its content. */
+.dialog.setup-dialog {
+  width: 640px;
+}
+
+.setup-dialog .setup-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: var(--s-4);
+  /* A bounded dialog, not a hollow one: it is as tall as what it has to say. */
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.setup-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.setup-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.setup-lead {
+  font: var(--type-body);
+  color: var(--text-1);
+  max-width: 720px;
+}
+
+.setup-note {
+  font: var(--type-meta);
+  color: var(--text-2);
+  max-width: 720px;
+}
+
+.setup-signals {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.setup-blockers {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.setup-blockers li {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 24px;
+  font: var(--type-row);
+  color: var(--text-1);
+}
+
+.setup-command {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 32px;
+}
+
+.setup-command-name {
+  flex: none;
+  min-width: 96px;
+  font: var(--type-row);
+  color: var(--text-1);
+}
+
+.setup-command .input {
+  flex: 1;
+  min-width: 0;
+  font: 400 13px/20px var(--font-mono);
+}
+
+/* One column for the row's flags, so every command field ends on the same
+   vertical line however many notes a row carries. */
+.setup-flags {
+  flex: none;
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  min-width: 128px;
+}
+
+.setup-suggested {
+  flex: none;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+/* Filenames only. What is in them never crosses the bridge (D-041). */
+.file-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  min-height: 32px;
+  padding: var(--s-1) 0;
+  font: var(--type-row);
+}
+
+.file-path {
+  flex: none;
+  color: var(--text-1);
+  user-select: text;
+}
+
+.file-facts {
+  flex: 1;
+  min-width: 0;
+  font: var(--type-meta);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-action,
+.file-outcome {
+  flex: none;
+  margin-left: auto;
+}
+
+.file-outcome {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+/* The consent step: the consequence in one sentence, then the two answers. */
+.file-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: 1 0 100%;
+  min-height: 32px;
+}
+
+.file-question {
+  flex: 1;
+  min-width: 0;
+  font: var(--type-meta);
+  color: var(--text-1);
 }
 
 /* ---------- Add project dialog ---------- */

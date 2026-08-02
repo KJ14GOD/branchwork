@@ -829,7 +829,11 @@ export const SequencedRunnerEventSchema = z.object({
 export type SequencedRunnerEvent = z.infer<typeof SequencedRunnerEventSchema>;
 
 export const ReportRunnerEventsInputSchema = z.object({
-  executionId: z.string().startsWith("exe_"),
+  /** Null for a workspace-scoped report: a setup or run command is not part of
+   *  any turn and can happen before a turn has ever existed. The runner's
+   *  sequence is then per workstream rather than per execution, and the server
+   *  de-duplicates on whichever of the two the report belongs to. */
+  executionId: z.string().startsWith("exe_").nullable(),
   events: z.array(SequencedRunnerEventSchema).min(1).max(50)
 });
 export type ReportRunnerEventsInput = z.infer<typeof ReportRunnerEventsInputSchema>;
