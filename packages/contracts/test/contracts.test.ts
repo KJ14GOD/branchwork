@@ -26,7 +26,14 @@ describe("contracts", () => {
       primaryState: "new_mission",
       createdBy: "usr_abc",
       createdByLogin: "kartik",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      repository: {
+        repoId: "rep_abc",
+        provider: "github",
+        providerRepoId: "9001",
+        name: "novus/demo-app",
+        defaultBranch: "main"
+      }
     });
     expect(parsed.success).toBe(true);
   });

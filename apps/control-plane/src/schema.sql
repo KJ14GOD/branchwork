@@ -41,6 +41,18 @@ create table if not exists auth_flows (
   user_id       text references users(user_id)
 );
 
+create table if not exists repositories (
+  repo_id           text primary key,
+  org_id            text not null references organizations(org_id),
+  provider          text not null check (provider = 'github'),
+  provider_repo_id  text not null,
+  name              text not null,
+  default_branch    text not null,
+  connected_by      text not null references users(user_id),
+  created_at        timestamptz not null default now(),
+  unique (org_id, provider, provider_repo_id)
+);
+
 create table if not exists missions (
   mission_id        text primary key,
   org_id            text not null references organizations(org_id),
@@ -51,6 +63,27 @@ create table if not exists missions (
   created_at        timestamptz not null default now()
 );
 create index if not exists missions_by_org on missions (org_id, created_at desc);
+-- Additive columns for the repository slice (schema.sql is rerunnable):
+alter table missions add column if not exists repo_id text references repositories(repo_id);
+alter table missions add column if not exists creation_key text;
+create unique index if not exists missions_creation_key on missions (org_id, creation_key)
+  where creation_key is not null;
+
+create table if not exists workstreams (
+  wst_id         text primary key,
+  mission_id     text not null references missions(mission_id),
+  name           text not null,
+  approach_flag  boolean not null default false,
+  base_ref       text not null,
+  base_sha       text not null check (base_sha ~ '^[0-9a-f]{40}$'),
+  mission_branch text not null,
+  branch_status  text not null check (branch_status in ('pending', 'created', 'failed')),
+  branch_error   text,
+  created_at     timestamptz not null default now()
+);
+create unique index if not exists workstreams_one_per_mission on workstreams (mission_id);
+-- One branch name per repository: the branch belongs to the repo, via the mission.
+create unique index if not exists workstreams_branch_unique on workstreams (mission_branch, mission_id);
 
 create table if not exists participants (
   mission_id  text not null references missions(mission_id),

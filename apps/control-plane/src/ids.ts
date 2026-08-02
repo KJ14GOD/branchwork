@@ -12,6 +12,8 @@ function opaque(length: number): string {
 }
 
 export const newUserId = () => `usr_${opaque(20)}`;
+export const newRepoId = () => `rep_${opaque(20)}`;
+export const newWorkstreamId = () => `wst_${opaque(20)}`;
 export const newOrgId = () => `org_${opaque(20)}`;
 export const newMissionId = () => `msn_${opaque(20)}`;
 export const newEventId = () => `evt_${opaque(20)}`;
