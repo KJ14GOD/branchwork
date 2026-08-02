@@ -6,7 +6,7 @@ import { MissionView } from "./mission-view";
 
 type LoadState =
   | { kind: "loading" }
-  | { kind: "offline" }
+  | { kind: "offline"; stale: Mission[] } // last-known rows stay readable (DESIGN offline rule)
   | { kind: "loaded"; missions: Mission[] };
 
 function relativeTime(iso: string): string {
@@ -29,7 +29,12 @@ export function MissionsSurface({ user, org }: { user: User; org: Organization }
   const refresh = useCallback(async () => {
     const result = await novus().missions.list();
     if (result.ok) setLoad({ kind: "loaded", missions: result.value });
-    else if (result.code === "offline") setLoad({ kind: "offline" });
+    else if (result.code === "offline") {
+      setLoad((prev) => ({
+        kind: "offline",
+        stale: prev.kind === "loaded" ? prev.missions : prev.kind === "offline" ? prev.stale : []
+      }));
+    }
     else setLoad({ kind: "loaded", missions: [] });
   }, []);
 
@@ -99,26 +104,29 @@ export function MissionsSurface({ user, org }: { user: User; org: Organization }
             </div>
           )}
 
-          {load.kind === "loaded" && load.missions.length > 0 && (
+          {(load.kind === "loaded" ? load.missions : load.kind === "offline" ? load.stale : []).length > 0 && (
             <div className="scroll">
               <div className="group-label">Waiting</div>
-              {load.missions.map((mission) => (
-                <button
-                  key={mission.missionId}
-                  className="row"
-                  onClick={() => openMission(mission.missionId)}
-                  data-testid="mission-row"
-                >
-                  <span className="status-dot neutral" />
-                  <span>{mission.goal}</span>
-                  {mission.repository && (
-                    <span className="row-repo" data-testid="row-repo">{mission.repository.name}</span>
-                  )}
-                  <span className="row-meta">{STATE_LABELS[mission.primaryState]}</span>
-                  <span className="spacer" style={{ flex: 1 }} />
-                  <span className="row-meta">{relativeTime(mission.createdAt)}</span>
-                </button>
-              ))}
+              {(load.kind === "loaded" ? load.missions : load.kind === "offline" ? load.stale : []).map(
+                (mission) => (
+                  <button
+                    key={mission.missionId}
+                    className="row"
+                    onClick={() => openMission(mission.missionId)}
+                    disabled={load.kind === "offline"}
+                    data-testid="mission-row"
+                  >
+                    <span className="status-dot neutral" />
+                    <span>{mission.goal}</span>
+                    {mission.repository && (
+                      <span className="row-repo" data-testid="row-repo">{mission.repository.name}</span>
+                    )}
+                    <span className="row-meta">{STATE_LABELS[mission.primaryState]}</span>
+                    <span className="spacer" style={{ flex: 1 }} />
+                    <span className="row-meta">{relativeTime(mission.createdAt)}</span>
+                  </button>
+                )
+              )}
             </div>
           )}
         </div>

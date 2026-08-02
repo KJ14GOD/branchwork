@@ -174,27 +174,38 @@ export async function createMission(
   const available = listed.find((repo) => repo.providerRepoId === input.providerRepoId);
   if (!available) throw new MissionCreationError("unknown_repository", "That repository isn't available.");
 
-  const missionId = newMissionId();
-  let created: string;
-  try {
-    created = await createMissionTx(db, ctx, input, available, missionId);
-  } catch (error) {
-    const unique = (error as { code?: string; constraint?: string }) ?? {};
-    if (unique.code === "23505" && (unique.constraint ?? "").includes("creation_key")) {
-      // Concurrent submissions with the same creationKey: return the winner's mission.
-      const winner = await db.query(
-        "select mission_id from missions where org_id = $1 and creation_key = $2",
-        [ctx.orgId, input.creationKey]
-      );
-      if (!winner.rows[0]) throw error;
-      created = winner.rows[0].mission_id as string;
-    } else if (unique.code === "23505" && (unique.constraint ?? "").startsWith("repositories_")) {
-      // First-mission-on-a-repo race: the repo now exists; one retry resolves it.
-      created = await createMissionTx(db, ctx, input, available, missionId);
-    } else {
-      throw error;
+  // Concurrent duplicates can violate either the creation-key index or, when
+  // the burst is a repository's first mission, the repositories index — and a
+  // retry can then hit the other one (Reviewer F). A bounded loop settles every
+  // combination deterministically on the winner's mission.
+  let created: string | undefined;
+  for (let attempt = 0; attempt < 3 && created === undefined; attempt += 1) {
+    try {
+      created = await createMissionTx(db, ctx, input, available, newMissionId());
+    } catch (error) {
+      const unique = (error as { code?: string; constraint?: string }) ?? {};
+      const constraint = unique.constraint ?? "";
+      if (unique.code !== "23505") throw error;
+      if (constraint.includes("repo_branch_unique")) {
+        throw new MissionCreationError("branch_collision", "Branch naming collided; try creating again.");
+      }
+      if (constraint.includes("creation_key")) {
+        const winner = await db.query(
+          "select mission_id from missions where org_id = $1 and creation_key = $2",
+          [ctx.orgId, input.creationKey]
+        );
+        if (winner.rows[0]) {
+          created = winner.rows[0].mission_id as string;
+          continue;
+        }
+        // Winner not committed yet — loop; the tx duplicate-check will find it.
+      } else if (!constraint.startsWith("repositories_")) {
+        throw error;
+      }
+      if (attempt === 2) throw error;
     }
   }
+  if (created === undefined) throw new Error("mission creation did not settle");
 
   await attemptBranchCreation(db, provider, ctx, created);
 
