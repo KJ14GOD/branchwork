@@ -8,7 +8,7 @@ Last reviewed: 2026-08-01
 
 ## Current milestone
 
-**First vertical slice.** The documentation foundation and feasibility spikes are complete. The current milestone delivered the first production-shaped slice: launch the Novus desktop application, authenticate one user, create one mission, persist it and its initial event in PostgreSQL, and reconstruct it after a full relaunch. Everything beyond that slice remains Not started.
+**Project-first shell with real local execution (D-032).** Live today, end to end in the desktop app: sign in with GitHub, see your real repositories through the GitHub App or add a local folder, open a project, start a workstream by typing the first message, and watch a real Claude Code turn work in a dedicated mission worktree and land an attributed checkpoint commit — reconstructed from PostgreSQL after a full relaunch. Multiplayer, cloud execution, verification, review, and receipts remain Not started.
 
 ## Status rules
 
@@ -32,7 +32,7 @@ The previous prototype was removed in full (commit `50c4851`); none of its behav
 | Control leases, requests, handoffs | Not started |
 | Direction lifecycle | Not started |
 | Workstreams and executions | Partial — workstream records exist (base ref/SHA, mission branch, branch status; one per mission as a V0 constraint); executions not started |
-| Harness adapters (Claude Code, Codex) | Partial — local Claude Code execution machinery built (D-032): one direction = one headless turn in a dedicated mission worktree (never the user's checkout), stream-json parsed to attributed harness events reported as claims, checkpoint commits at turn boundaries per D-025, stop via SIGTERM, deterministic fake-harness mode for e2e. Not yet surfaced in UI or proven live; Codex not started |
+| Harness adapters (Claude Code, Codex) | Partial — **Claude Code proven live 2026-08-02**: a direction typed into the chat composer of the real desktop app ran a real headless Claude Code turn in a dedicated mission worktree against a real local git repository; its activity streamed into the room as attributed events and its work landed as an attributed checkpoint commit on the mission branch (`novus/m-ptxm43ke`, `HELLO.md` containing `hello`, verified with `git show` on the branch; evidence `11-live-claude-turn.png`). Stop via SIGTERM implemented but not live-exercised; only the local surface exists (no cloud runner); Codex not started |
 | Execution providers and cloud workspaces | Not started |
 | Runner protocol (events, commands, reconnection) | Not started |
 | Presence | Not started |
