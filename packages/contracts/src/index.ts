@@ -817,6 +817,61 @@ export const ProcessLogChunkSchema = z.object({
 });
 export type ProcessLogChunk = z.infer<typeof ProcessLogChunkSchema>;
 
+// --- Reading the workspace's files (D-048) -----------------------------------
+// The worktree is on this machine, so browsing it is a local act like every
+// other one in this block: there is no control-plane route and no runner
+// command, and a path is resolved against the worktree and refused if it leaves
+// it. Contents cross this bridge to be *shown*; they are never reported, never
+// an event, and never evidence.
+
+/** A path inside the worktree, as a person and git both write one. */
+export const WorkspacePathSchema = z
+  .string()
+  .max(400)
+  .refine((value) => !value.startsWith("/") && !value.split("/").includes(".."), {
+    message: "must be a relative path inside the workspace"
+  });
+
+export const WorkspaceEntrySchema = z.object({
+  /** Relative to the worktree; `""` is the worktree itself. */
+  path: WorkspacePathSchema,
+  name: z.string().min(1),
+  kind: z.enum(["file", "directory"]),
+  /** Lowercase, no dot. Empty for a directory or a file without one. */
+  extension: z.string().max(20)
+});
+export type WorkspaceEntry = z.infer<typeof WorkspaceEntrySchema>;
+
+export const ListWorkspaceFilesInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  /** The directory to list. Omitted for the worktree's own top level. */
+  path: WorkspacePathSchema.optional()
+});
+
+/** What a file holds, for showing. Bounded: this opens a pane, not a stream. */
+export const WorkspaceFileSchema = z.object({
+  path: WorkspacePathSchema,
+  /** Null when the file is not text — a pane cannot honestly show one. */
+  text: z.string().nullable(),
+  binary: z.boolean(),
+  truncated: z.boolean(),
+  bytes: z.number().int().nonnegative()
+});
+export type WorkspaceFile = z.infer<typeof WorkspaceFileSchema>;
+
+export const ReadWorkspaceFileInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  path: WorkspacePathSchema
+});
+
+export const WriteWorkspaceFileInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  path: WorkspacePathSchema,
+  /** Bounded for the same reason reading is: this is an editor pane, not an
+   *  upload channel. */
+  text: z.string().max(2_000_000)
+});
+
 // --- The interactive terminal (D-042) ---------------------------------------
 // An interactive shell on a local workspace belongs to the person whose machine
 // hosts it, and to nobody else. It is not lease-granted and not role-granted:
@@ -1475,6 +1530,14 @@ export interface NovusBridge {
     /** Opens a loopback preview in the operating system's browser. No shell
      *  command is involved and nothing but loopback http/https is accepted. */
     openPreview(input: { missionId: string; url: string }): Promise<IpcResult<null>>;
+    /**
+     * The workspace's own files (D-048). Local, like the terminal: the worktree
+     * is on this machine, every path is resolved against it and refused if it
+     * leaves, and what comes back is shown rather than reported.
+     */
+    listFiles(input: { missionId: string; path?: string }): Promise<IpcResult<WorkspaceEntry[]>>;
+    readFile(input: { missionId: string; path: string }): Promise<IpcResult<WorkspaceFile>>;
+    writeFile(input: { missionId: string; path: string; text: string }): Promise<IpcResult<null>>;
   };
   /**
    * The interactive terminal (D-042). Every verb here is local: a session is

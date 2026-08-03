@@ -74,7 +74,10 @@ const novus: NovusBridge = {
     secrets: (missionId) => ipcRenderer.invoke("novus:workspace:secrets", missionId),
     supplySecret: (input) => ipcRenderer.invoke("novus:workspace:supply-secret", input),
     forgetSecret: (input) => ipcRenderer.invoke("novus:workspace:forget-secret", input),
-    openPreview: (input) => ipcRenderer.invoke("novus:workspace:open-preview", input)
+    openPreview: (input) => ipcRenderer.invoke("novus:workspace:open-preview", input),
+    listFiles: (input) => ipcRenderer.invoke("novus:workspace:list-files", input),
+    readFile: (input) => ipcRenderer.invoke("novus:workspace:read-file", input),
+    writeFile: (input) => ipcRenderer.invoke("novus:workspace:write-file", input)
   },
   // Local only, by construction: every verb here reaches this machine's own
   // main process and there is no shell verb in the runner protocol for any of

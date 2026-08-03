@@ -182,6 +182,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** Reopening returns to whatever section you were last reading. */
   const lastSection = useRef<InspectorSection>("overview");
+  /** The file taking the room's canvas, if one is (D-048). Held here because
+   *  the panel names it and the room shows it, and neither owns the other. */
+  const [openFile, setOpenFile] = useState<string | null>(null);
   /** Which projects are showing their workstreams. Disclosure is the reader's
    *  choice and survives selection moving elsewhere. */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -315,6 +318,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   // another workstream.
   useEffect(() => {
     setSetupOpen(false);
+    setOpenFile(null);
   }, [selection?.missionId]);
 
   const closeDialog = useCallback(() => {
@@ -596,7 +600,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               onDetail={handleDetail}
               onCreated={handleCreated}
               terminalOpen={terminalOpen}
-              onHideTerminal={() => setTerminalOpen(false)}
+              openFile={openFile}
+              onCloseFile={() => setOpenFile(null)}
             />
           ) : (
             <div className="empty room-empty" data-testid="no-projects">
@@ -639,6 +644,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           detail={openMission}
           section={inspector}
           onSection={setInspector}
+          openPath={openFile}
+          onOpenFile={setOpenFile}
           onClose={() => setInspector(null)}
           onDetail={handleDetail}
           onRevoke={() => void novus().control.revoke(openMission.mission.missionId)}

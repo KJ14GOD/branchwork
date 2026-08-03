@@ -165,6 +165,12 @@ function stateOf(session: TerminalSession): { tone: string; label: string } {
 interface Pane {
   terminal: Terminal;
   fit: FitAddon;
+  /** The element this pane's emulator was opened into, owned by the pane and
+   *  never shared. `Terminal.open` builds its DOM once and returns early on
+   *  every later call, so a pane that is detached from the screen can never be
+   *  re-opened into it — the second switch back would show an empty box. Each
+   *  pane keeps its own host, and switching tabs hides one and shows another. */
+  host: HTMLDivElement;
   /** True once the session's existing scrollback has been written in, so a
    *  re-mount does not print everything twice. */
   seeded: boolean;
@@ -184,7 +190,10 @@ function usePanes(missionId: string) {
   useEffect(() => {
     const held = panes.current;
     return () => {
-      for (const pane of held.values()) pane.terminal.dispose();
+      for (const pane of held.values()) {
+        pane.terminal.dispose();
+        pane.host.remove();
+      }
       held.clear();
     };
   }, [missionId]);
@@ -211,13 +220,7 @@ const VIEWS: { view: DockView; label: string }[] = [
   { view: "verification", label: "Checks" }
 ];
 
-export function RuntimeDock({
-  missionId,
-  onHide
-}: {
-  missionId: string;
-  onHide: () => void;
-}) {
+export function RuntimeDock({ missionId }: { missionId: string }) {
   const [view, setView] = useState<DockView>("terminal");
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -256,7 +259,9 @@ export function RuntimeDock({
       // which is the half a hand-written key map kept getting wrong.
       terminal.onData((data) => void novus().terminal.write({ sessionId, data }));
       terminal.onResize(({ cols, rows }) => void novus().terminal.resize({ sessionId, cols, rows }));
-      const pane: Pane = { terminal, fit, seeded: false };
+      const host = document.createElement("div");
+      host.className = "terminal-pane";
+      const pane: Pane = { terminal, fit, host, seeded: false };
       panes.current.set(sessionId, pane);
       return pane;
     },
@@ -314,16 +319,17 @@ export function RuntimeDock({
     });
   }, [panes]);
 
-  // The active pane is attached to the screen and sized to it. Attaching is
-  // idempotent: a pane already in this element is left where it is.
+  // Every pane that has been opened stays in the screen; only the active one is
+  // shown. Panes are never detached and re-opened, because an emulator builds
+  // its DOM once — detaching one is how switching back to an earlier tab used
+  // to leave a blank rectangle where a running shell was.
   useEffect(() => {
     const screen = screenRef.current;
     if (!screen || activeId === null || view !== "terminal") return;
     const pane = paneFor(activeId);
-    if (pane.terminal.element?.parentElement !== screen) {
-      screen.replaceChildren();
-      pane.terminal.open(screen);
-    }
+    if (pane.host.parentElement !== screen) screen.append(pane.host);
+    for (const [sessionId, other] of panes.current) other.host.hidden = sessionId !== activeId;
+    if (pane.terminal.element === undefined) pane.terminal.open(pane.host);
     /** Sizing is only meaningful once the element has been laid out. Fitting
      *  against a box the browser has not measured yet yields a one-row
      *  terminal, and the PTY is then *told* it is one row — so the shell wraps
@@ -355,7 +361,7 @@ export function RuntimeDock({
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [activeId, paneFor, heightVh, view]);
+  }, [activeId, paneFor, panes, heightVh, view]);
 
   const active = sessions.find((session) => session.sessionId === activeId) ?? null;
 
@@ -387,10 +393,21 @@ export function RuntimeDock({
       setError(result.message);
       return;
     }
-    panes.current.get(sessionId)?.terminal.dispose();
+    const pane = panes.current.get(sessionId);
+    pane?.terminal.dispose();
+    pane?.host.remove();
     panes.current.delete(sessionId);
-    setSessions((previous) => previous.filter((session) => session.sessionId !== sessionId));
-    setActiveId((current) => (current === sessionId ? null : current));
+    const remaining = sessions.filter((session) => session.sessionId !== sessionId);
+    setSessions(remaining);
+    // A closed tab hands the screen to its neighbour; closing the last one
+    // starts a fresh shell rather than leaving a dock with nothing in it, for
+    // the same reason opening the dock opens a session.
+    if (remaining.length === 0) {
+      setActiveId(null);
+      void create("shell");
+    } else if (activeId === sessionId) {
+      setActiveId(remaining[remaining.length - 1]?.sessionId ?? null);
+    }
   };
 
   const rename = async (sessionId: string, name: string) => {
@@ -532,20 +549,18 @@ export function RuntimeDock({
 
         <span className="terminal-head-spacer" />
 
+        {/* The dock closes from the same toggle that opened it. A second control
+            that only does what the toggle does is a word on screen doing no
+            work. */}
         {view === "terminal" && active && (
-          <>
-            <button
-              className="btn btn-text"
-              onClick={() => setRenaming(active.sessionId)}
-              data-testid="terminal-rename-action"
-            >
-              Rename
-            </button>
-          </>
+          <button
+            className="btn btn-text"
+            onClick={() => setRenaming(active.sessionId)}
+            data-testid="terminal-rename-action"
+          >
+            Rename
+          </button>
         )}
-        <button className="btn btn-text" onClick={onHide} data-testid="terminal-hide">
-          Hide
-        </button>
       </div>
 
       {error && (
@@ -556,29 +571,19 @@ export function RuntimeDock({
 
       {view !== "terminal" ? (
         <ProcessLogView missionId={missionId} kind={view} />
-      ) : active === null ? (
-        // Only reached while the first session is starting, or after the last
-        // one was closed by hand.
-        <div className="terminal-empty" data-testid="terminal-empty">
-          <button
-            className="btn btn-secondary"
-            onClick={() => void create("shell")}
-            disabled={busy}
-            data-testid="terminal-empty-new"
-          >
-            New terminal
-          </button>
-        </div>
       ) : (
         <>
+          {/* The screen, always. Showing the terminal is the request, so a
+              session is already starting when this renders empty — offering a
+              button that opens a terminal is a door in front of a door. */}
           <div
             className="terminal-screen"
             ref={screenRef}
             role="group"
-            aria-label={`${active.name} — ${stateOf(active).label}`}
+            aria-label={active === null ? "Terminal" : `${active.name} — ${stateOf(active).label}`}
             data-testid="terminal-screen"
           />
-          {active.state === "exited" && (
+          {active?.state === "exited" && (
             <p className="terminal-ended" data-testid="terminal-ended">
               This session ended{active.exitCode === null ? "" : ` with code ${active.exitCode}`}. Start a
               new one to keep working.

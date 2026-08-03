@@ -2258,13 +2258,15 @@ body {
   background: var(--hover);
 }
 
+/* The switch and the session tabs sit on one row, kept as short as a row of
+   controls can be: every pixel it takes is a pixel of terminal. */
 .terminal-head {
   flex: none;
   display: flex;
   align-items: center;
   gap: var(--s-2);
   min-height: 32px;
-  padding: var(--s-2) var(--s-6) 0;
+  padding: var(--s-1) var(--s-3);
 }
 
 .terminal-tabs {
@@ -2351,14 +2353,7 @@ body {
 
 .terminal-error {
   flex: none;
-  padding: 0 var(--s-6);
-}
-
-.terminal-empty {
-  flex: 1;
-  display: flex;
-  align-items: flex-start;
-  padding: var(--s-4) var(--s-6) var(--s-5);
+  padding: 0 var(--s-3);
 }
 
 /* A plus, sized like the tabs beside it. */
@@ -2386,13 +2381,28 @@ body {
   color: var(--text-3);
 }
 
-/* The emulator's own element fills this region; xterm owns the scrolling
-   inside it, which is why nothing here sets overflow (D-046). */
+/* The emulator's own element fills this region edge to edge; xterm owns the
+   scrolling inside it, which is why nothing here sets overflow (D-046). The
+   dock is short by design, and framing the screen in the dock's own padding
+   spent that height on margin and made the terminal a small window inside a
+   small window. Only a left gutter remains, so the first column is not welded
+   to the edge. */
 .terminal-screen {
   flex: 1;
   min-height: 0;
-  padding: var(--s-2) var(--s-6) var(--s-4);
+  padding-left: var(--s-3);
+  background: var(--term-bg);
   overflow: hidden;
+}
+
+/* One host per session, all of them kept in the screen; the inactive ones are
+   hidden rather than detached, because an emulator builds its DOM once. */
+.terminal-pane {
+  height: 100%;
+}
+
+.terminal-pane[hidden] {
+  display: none;
 }
 
 /* xterm ships a stylesheet with its own background. Overridden here so the
@@ -2413,7 +2423,8 @@ body {
 }
 
 .terminal-ended {
-  margin-top: var(--s-3);
+  flex: none;
+  padding: var(--s-1) var(--s-3);
   font: var(--type-meta);
   color: var(--text-2);
 }
@@ -2433,14 +2444,6 @@ body {
 
   .terminal-grip {
     display: none;
-  }
-
-  .terminal-head,
-  .terminal-error,
-  .terminal-empty,
-  .terminal-screen {
-    padding-left: var(--s-5);
-    padding-right: var(--s-5);
   }
 }
 
@@ -2555,4 +2558,207 @@ body {
 .dock-error {
   flex: none;
   padding: 0 var(--s-6);
+}
+
+/* --- The workspace's files (D-048) ---------------------------------------- */
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 30px;
+  padding-right: var(--s-3);
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font: var(--type-row);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tree-row:hover {
+  background: var(--hover);
+}
+
+.tree-row.selected {
+  background: var(--selected);
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-folder {
+  flex: none;
+  color: var(--text-3);
+}
+
+.tree-folder.open {
+  color: var(--text-2);
+}
+
+/* A file's type is a fact about the file, not something Novus is saying, which
+   is why these are the one other place hues live outside their semantic tokens
+   (D-046, D-048). Two-to-four letters rather than a glyph set: the extension is
+   already the answer and never goes stale. */
+.tree-badge {
+  flex: none;
+  width: 26px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font: var(--type-micro);
+  font-family: var(--font-mono);
+  text-transform: lowercase;
+  letter-spacing: 0;
+  overflow: hidden;
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+
+.family-code { color: var(--term-blue); background: color-mix(in srgb, var(--term-blue) 14%, transparent); }
+.family-web { color: var(--term-magenta); background: color-mix(in srgb, var(--term-magenta) 14%, transparent); }
+.family-data { color: var(--term-yellow); background: color-mix(in srgb, var(--term-yellow) 14%, transparent); }
+.family-doc { color: var(--term-cyan); background: color-mix(in srgb, var(--term-cyan) 14%, transparent); }
+.family-config { color: var(--term-green); background: color-mix(in srgb, var(--term-green) 14%, transparent); }
+.family-asset { color: var(--term-bright-magenta); background: color-mix(in srgb, var(--term-bright-magenta) 12%, transparent); }
+
+/* A file takes the canvas: read at full measure or not at all. */
+.file-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex: none;
+  padding: var(--s-3) var(--s-6);
+  border-bottom: 1px solid var(--edge);
+}
+
+.file-name {
+  font: var(--type-row);
+  font-family: var(--font-mono);
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-meta {
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.file-modes {
+  display: inline-flex;
+  gap: var(--s-1);
+}
+
+.file-error {
+  flex: none;
+  padding: var(--s-2) var(--s-6) 0;
+}
+
+.file-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--s-6);
+}
+
+.file-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s-4) 0 var(--s-6);
+}
+
+.file-editor {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-1);
+  font: var(--type-row);
+  font-family: var(--font-mono);
+  padding: var(--s-4) 0 var(--s-6);
+  tab-size: 2;
+}
+
+/* --- Markdown (D-048) ------------------------------------------------------ */
+
+.md {
+  max-width: 72ch;
+  color: var(--text-1);
+  font: var(--type-body);
+}
+
+.md-h1 { font: var(--type-mission); margin: var(--s-5) 0 var(--s-3); }
+.md-h2 { font: var(--type-title); margin: var(--s-5) 0 var(--s-3); }
+.md-h3 { font: var(--type-section); margin: var(--s-4) 0 var(--s-2); }
+.md-h4 { font: var(--type-body); font-weight: 600; margin: var(--s-4) 0 var(--s-2); }
+.md-p { margin: 0 0 var(--s-3); }
+.md-list { margin: 0 0 var(--s-3); padding-left: var(--s-5); }
+.md-list li { margin-bottom: var(--s-1); }
+
+.md-code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.md-pre {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 20px;
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-button);
+  padding: var(--s-3);
+  margin: 0 0 var(--s-4);
+  overflow-x: auto;
+}
+
+.md-quote {
+  margin: 0 0 var(--s-3);
+  padding-left: var(--s-3);
+  border-left: 1px solid var(--edge-hover);
+  color: var(--text-2);
+}
+
+.md-rule {
+  border: none;
+  border-top: 1px solid var(--edge);
+  margin: var(--s-5) 0;
+}
+
+/* A link in repository content is somebody else's URL, so it reads as text
+   carrying its destination rather than as something that navigates. */
+.md-link {
+  color: var(--text-1);
+  text-decoration: underline;
+  text-decoration-color: var(--edge-hover);
+  text-underline-offset: 3px;
+  cursor: help;
 }

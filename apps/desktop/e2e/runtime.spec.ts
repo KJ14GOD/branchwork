@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { NovusBridge } from "@novus/contracts";
@@ -230,6 +230,14 @@ async function openDock(target: Page): Promise<void> {
   await target.getByTestId("terminal-dock").waitFor({ timeout: 20_000 });
 }
 
+/** Shows the evidence panel if it is not already showing. */
+async function openPanel(target: Page): Promise<void> {
+  if ((await target.getByTestId("inspector").count()) === 0) {
+    await target.getByTestId("panel-toggle").click();
+  }
+  await target.getByTestId("inspector").waitFor({ timeout: 20_000 });
+}
+
 const shot = (target: Page, name: string) =>
   target.screenshot({ path: join(evidenceDir, name) }).catch(() => undefined);
 
@@ -336,11 +344,13 @@ afterAll(async () => {
 
 describe("the terminal, through the interface", () => {
   it("opens in the mission worktree and never in the user's own checkout", async () => {
-    // Showing the dock is the request, so a session is already open by the time
-    // it appears — no button in front of the button.
+    // Showing the dock is the request: the screen is there at once and a
+    // session opens into it — no button in front of the button.
     await openDock(page);
     await page.getByTestId("terminal-screen").waitFor({ timeout: 20_000 });
-    expect(await page.getByTestId("terminal-tab").count()).toBeGreaterThan(0);
+    await expect
+      .poll(() => page.getByTestId("terminal-tab").count(), { timeout: 20_000 })
+      .toBeGreaterThan(0);
 
     // Typed at the keyboard, into the emulator, into the PTY.
     const shown = await runInPane(page, missionId, `pwd; echo ${typed("WHERE")}`, printed("WHERE"));
@@ -410,6 +420,14 @@ describe("the terminal, through the interface", () => {
     );
     expect(new Set(names).size).toBe(2);
 
+    // Back to the first tab, and its session is still on screen. An emulator
+    // builds its DOM once, so a pane that is detached to make room for another
+    // one comes back empty — a running shell apparently thrown away by the act
+    // of looking at a second one.
+    await page.getByTestId("terminal-tab").first().getByRole("tab").click();
+    const returned = await untilPane(page, "the first session again", printed("INTERRUPTED"));
+    expect(returned).toContain(printed("INTERRUPTED"));
+
     await page.getByTestId("terminal-rename-action").click();
     await page.getByTestId("terminal-rename").fill("build log");
     await page.keyboard.press("Enter");
@@ -436,7 +454,9 @@ describe("the terminal, through the interface", () => {
     await runInPane(page, missionId, `echo ${typed("SURVIVES")}`, printed("SURVIVES"));
     await untilPane(page, "the witness on screen", printed("SURVIVES"));
 
-    await page.getByTestId("terminal-hide").click();
+    // The toggle that opened the dock closes it; there is no second control
+    // that only does what the toggle does.
+    await page.getByTestId("terminal-toggle").click();
     await expect.poll(() => page.getByTestId("terminal-dock").count(), { timeout: 10_000 }).toBe(0);
 
     await page.getByTestId("terminal-toggle").click();
@@ -598,10 +618,9 @@ describe("setup and verification, through the interface", () => {
     expect(check?.checkpointSha).toBe(git(worktree, ["rev-parse", "HEAD"]));
     expect(check?.stale).toBe(false);
 
-    await page.getByTestId("panel-toggle").click();
+    await openPanel(page);
     await page.getByTestId("inspector-tab-verification").click();
     await shot(page, "53-verification-ledger.png");
-    await page.getByTestId("panel-toggle").click();
   }, 180_000);
 
   it("records a failing check as failed with its exit code, and never as verified", async () => {
@@ -632,6 +651,67 @@ describe("setup and verification, through the interface", () => {
     await shot(page, "54-verification-failed.png");
   }, 180_000);
 
+  it("browses the workspace's files, opens one over the canvas, and edits markdown", async () => {
+    await openPanel(page);
+    await page.getByTestId("inspector-tab-files").click();
+    await page.getByTestId("file-tree").waitFor({ timeout: 20_000 });
+
+    // The project's own files, and not its bookkeeping: `.git` is never listed.
+    const listed = await page
+      .getByTestId("tree-row")
+      .evaluateAll((rows) => rows.map((row) => (row as HTMLElement).dataset.path ?? ""));
+    expect(listed).toContain("README.md");
+    expect(listed).toContain(".novus");
+    expect(listed).not.toContain(".git");
+
+    // Opening one takes the canvas; the trace is not beside it, it is behind it.
+    await page.getByTestId("tree-row").filter({ hasText: "README.md" }).first().click();
+    await page.getByTestId("file-view").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("chat").count()).toBe(0);
+
+    // Markdown arrives rendered, and it is rendered as elements rather than as
+    // markup built from the file's own text.
+    await page.getByTestId("markdown").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("markdown").innerText()).toContain("runtime fixture");
+
+    // Edit shows the source, and a save reaches the worktree.
+    await page.getByTestId("file-edit").click();
+    const editor = page.getByTestId("file-source");
+    await editor.waitFor({ timeout: 20_000 });
+    expect(await editor.inputValue()).toContain("# runtime fixture");
+    await editor.fill("# runtime fixture\n\nEdited from the file pane.\n");
+    await page.getByTestId("file-save").click();
+    await expect
+      .poll(() => page.getByTestId("file-save").count(), { timeout: 20_000 })
+      .toBe(0);
+
+    const worktree = join(userDataDir, "worktrees", missionId);
+    expect(readFileSync(join(worktree, "README.md"), "utf8")).toContain("Edited from the file pane");
+    await shot(page, "56-file-view-markdown.png");
+
+    // Closing gives the trace back, exactly as it was.
+    await page.getByTestId("file-preview").click();
+    expect(await page.getByTestId("markdown").innerText()).toContain("Edited from the file pane");
+    await page.getByTestId("file-close").click();
+    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
+    await shot(page, "57-files-panel.png");
+  }, 180_000);
+
+  it("refuses a path that would leave the workspace", async () => {
+    // The tree cannot ask for one, so this asks the bridge directly — which is
+    // where the refusal has to live for it to mean anything (D-048).
+    const refusals = await page.evaluate(async (mission) => {
+      const attempts = ["../../../../etc/passwd", "/etc/passwd", "..", "a/../../../etc/hosts"];
+      const said: string[] = [];
+      for (const path of attempts) {
+        const result = await window.novus.workspace.readFile({ missionId: mission, path });
+        said.push(result.ok ? "READ" : result.message);
+      }
+      return said;
+    }, missionId);
+    for (const said of refusals) expect(said).not.toBe("READ");
+  }, 60_000);
+
   it("does not present a terminal from a previous run as still alive", async () => {
     await app.close();
     const relaunched = await launch(userDataDir);
@@ -655,7 +735,9 @@ describe("setup and verification, through the interface", () => {
 
     await openDock(page);
     await page.getByTestId("terminal-screen").waitFor({ timeout: 20_000 });
-    expect(await page.getByTestId("terminal-tab").count()).toBe(1);
+    await expect
+      .poll(() => page.getByTestId("terminal-tab").count(), { timeout: 20_000 })
+      .toBe(1);
 
     // The check the previous run recorded is still there, and still says what
     // revision it proved.

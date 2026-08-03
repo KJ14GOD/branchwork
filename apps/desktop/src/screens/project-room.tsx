@@ -22,6 +22,7 @@ import {
 import { GatedAction } from "../components/gated";
 import { HumanMark } from "../components/identity";
 import type { InspectorSection } from "../components/inspector";
+import { FileView } from "../components/file-view";
 import { RuntimeDock } from "../components/runtime-dock";
 import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
 import type { Project } from "./project-shell";
@@ -63,7 +64,8 @@ export function ProjectRoom({
   onDetail,
   onCreated,
   terminalOpen,
-  onHideTerminal
+  openFile,
+  onCloseFile
 }: {
   project: Project;
   details: Record<string, MissionDetailResponse>;
@@ -77,9 +79,13 @@ export function ProjectRoom({
   onDetail: (detail: MissionDetailResponse) => void;
   onCreated: (mission: Mission) => void;
   /** The bottom terminal dock. Its toggle sits with the other workspace
-   *  controls, so the shell owns the state and the room only renders it. */
+   *  controls, so the shell owns the state and the room only renders it — the
+   *  same toggle closes it, which is why the dock carries no Hide of its own. */
   terminalOpen: boolean;
-  onHideTerminal: () => void;
+  /** A file the reader opened from the panel; it takes the canvas while it is
+   *  open, and the trace is exactly as it was when it closes (D-048). */
+  openFile: string | null;
+  onCloseFile: () => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -461,6 +467,9 @@ export function ProjectRoom({
         </p>
       )}
 
+      {openFile !== null && selectedMissionId !== null ? (
+        <FileView missionId={selectedMissionId} path={openFile} onClose={onCloseFile} />
+      ) : (
       <div className="feed-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="feed" data-testid="chat">
           {isDraft ? (
@@ -614,6 +623,7 @@ export function ProjectRoom({
           )}
         </div>
       </div>
+      )}
 
       <Composer
         key={selectedMissionId ?? "draft"}
@@ -633,7 +643,7 @@ export function ProjectRoom({
           rather than replacing it; below the single-column threshold it takes
           the room (DESIGN.md#component-behavior). */}
       {terminalOpen && executionAvailable && selectedMissionId !== null && (
-        <RuntimeDock missionId={selectedMissionId} onHide={onHideTerminal} />
+        <RuntimeDock missionId={selectedMissionId} />
       )}
 
       </div>

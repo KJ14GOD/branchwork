@@ -5,16 +5,19 @@ import {
   DirectionResolutionSchema,
   ForgetSecretInputSchema,
   IpcDirectInputSchema,
+  ListWorkspaceFilesInputSchema,
   MissionRoleSchema,
   OpenPreviewInputSchema,
   OpenTerminalInputSchema,
   PrepareLocalFilesInputSchema,
+  ReadWorkspaceFileInputSchema,
   SaveWorkspaceSettingsInputSchema,
   SupplySecretInputSchema,
   TerminalRenameInputSchema,
   TerminalResizeInputSchema,
   TerminalWriteInputSchema,
   WorkspaceCommandInputSchema,
+  WriteWorkspaceFileInputSchema,
   type IpcAuthStatus,
   type IpcResult
 } from "@novus/contracts";
@@ -34,6 +37,7 @@ import {
   closeTerminal,
   forgetSecret,
   inspectWorkspace,
+  listFiles,
   listTerminals,
   onProcessLog,
   onTerminalOutput,
@@ -41,6 +45,7 @@ import {
   openTerminal,
   prepareLocalFiles,
   processLogsFor,
+  readFile,
   renameTerminal,
   resizeTerminal,
   saveWorkspaceSettings,
@@ -48,6 +53,7 @@ import {
   shutdownTerminals,
   supplySecret,
   terminalScrollback,
+  writeFile,
   writeTerminal,
   type WorkspaceTarget
 } from "./workspace";
@@ -553,6 +559,27 @@ function registerIpc(): void {
     const parsed = MissionIdSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
     return call(async () => processLogsFor((await targetFor(parsed.data)).workstreamId));
+  });
+
+  ipcMain.handle("novus:workspace:list-files", async (_event, raw: unknown) => {
+    const parsed = ListWorkspaceFilesInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed folder." };
+    return call(async () => listFiles(await targetFor(parsed.data.missionId), parsed.data.path));
+  });
+
+  ipcMain.handle("novus:workspace:read-file", async (_event, raw: unknown) => {
+    const parsed = ReadWorkspaceFileInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed path." };
+    return call(async () => readFile(await targetFor(parsed.data.missionId), parsed.data.path));
+  });
+
+  ipcMain.handle("novus:workspace:write-file", async (_event, raw: unknown) => {
+    const parsed = WriteWorkspaceFileInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed edit." };
+    return call(async () => {
+      await writeFile(await targetFor(parsed.data.missionId), parsed.data.path, parsed.data.text);
+      return null;
+    });
   });
 
   ipcMain.handle("novus:workspace:open-preview", async (_event, raw: unknown) => {

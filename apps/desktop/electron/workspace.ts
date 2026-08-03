@@ -9,6 +9,8 @@ import {
   type RunnerEvent,
   type SecretState,
   type SettingsScope,
+  type WorkspaceEntry,
+  type WorkspaceFile,
   type TerminalChunk,
   type TerminalKind,
   type TerminalSession,
@@ -33,6 +35,7 @@ import {
   type Invocation
 } from "./workspace-processes";
 import { TerminalError, TerminalSessions } from "./workspace-terminal";
+import { listWorkspaceTree, readWorkspaceFile, writeWorkspaceFile } from "./workspace-tree";
 
 /**
  * OWNER: the workspace runtime's desktop half (D-040, D-041).
@@ -379,6 +382,44 @@ export function onProcessLog(listener: (chunk: ProcessLogChunk) => void): () => 
  *  ended. Empty after a relaunch: output is not written down. */
 export function processLogsFor(workstreamId: string): ProcessLog[] {
   return supervisorsByWorkstream.get(workstreamId)?.processLogs() ?? [];
+}
+
+// --- The workspace's own files -------------------------------------------------
+// Local, like the terminal: the worktree is on this machine, and browsing it is
+// an act by the person sitting at it (D-048).
+
+export async function listFiles(
+  target: WorkspaceTarget,
+  path: string | undefined,
+  host?: WorkspaceHost
+): Promise<WorkspaceEntry[]> {
+  return named(async () => {
+    const resolved = await resolve(target, host);
+    return listWorkspaceTree(resolved.worktree, path ?? "");
+  });
+}
+
+export async function readFile(
+  target: WorkspaceTarget,
+  path: string,
+  host?: WorkspaceHost
+): Promise<WorkspaceFile> {
+  return named(async () => {
+    const resolved = await resolve(target, host);
+    return readWorkspaceFile(resolved.worktree, path);
+  });
+}
+
+export async function writeFile(
+  target: WorkspaceTarget,
+  path: string,
+  text: string,
+  host?: WorkspaceHost
+): Promise<void> {
+  await named(async () => {
+    const resolved = await resolve(target, host);
+    writeWorkspaceFile(resolved.worktree, path, text);
+  });
 }
 
 // --- The interactive terminal -------------------------------------------------

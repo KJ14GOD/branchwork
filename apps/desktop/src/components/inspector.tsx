@@ -11,6 +11,7 @@ import { novus } from "../bridge";
 import { clockTime, plural, shortSha } from "../format";
 import { changedFiles, checkTallies } from "./derive";
 import { GatedAction } from "./gated";
+import { FileTree } from "./file-tree";
 import { HumanMark, ParticipantStack, roleLabel } from "./identity";
 
 function CloseGlyph() {
@@ -21,9 +22,10 @@ function CloseGlyph() {
   );
 }
 
-export type InspectorSection = "overview" | "changes" | "verification";
+export type InspectorSection = "files" | "overview" | "changes" | "verification";
 
 const SECTIONS: { id: InspectorSection; label: string }[] = [
+  { id: "files", label: "All files" },
   { id: "overview", label: "Overview" },
   { id: "changes", label: "Changes" },
   { id: "verification", label: "Verification" }
@@ -342,6 +344,8 @@ export function Inspector({
   detail,
   section,
   onSection,
+  openPath,
+  onOpenFile,
   onClose,
   onDetail,
   onRevoke
@@ -349,6 +353,9 @@ export function Inspector({
   detail: MissionDetailResponse;
   section: InspectorSection;
   onSection: (section: InspectorSection) => void;
+  /** The file currently taking the room's canvas, so the tree can mark it. */
+  openPath: string | null;
+  onOpenFile: (path: string) => void;
   onClose: () => void;
   onDetail: (detail: MissionDetailResponse) => void;
   onRevoke: () => void;
@@ -471,6 +478,10 @@ export function Inspector({
         </div>
 
         <div className="inspector-scroll">
+          {section === "files" && (
+            <FileTree missionId={detail.mission.missionId} openPath={openPath} onOpenFile={onOpenFile} />
+          )}
+
           {section === "overview" && (
             <div data-testid="inspector-overview">
               <div className="kv" data-testid="repo-block">
