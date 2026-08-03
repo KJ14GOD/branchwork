@@ -187,14 +187,28 @@ describe("a session", () => {
     expect(sessions.scrollback(listed[0]?.sessionId ?? "")).toContain("NOVUS_TERMINAL_MARKER");
   }, 20_000);
 
-  it("names itself after its kind when nobody named it, and can be renamed", () => {
-    const first = open({ kind: "test" });
-    const second = open({ kind: "test" });
-    expect(first.name).toBe("test");
-    expect(second.name).toBe("test 2");
+  it("names a tab after the repository and numbers it from one (D-049)", () => {
+    // The label the caller passes is the repository's own short name, so the
+    // tabs of a mission read `branchwork 1`, `branchwork 2` — the one fact
+    // that is true of every session here and that the reader already thinks in.
+    const first = open({ label: "branchwork" });
+    const second = open({ label: "branchwork" });
+    expect(first.name).toBe("branchwork 1");
+    expect(second.name).toBe("branchwork 2");
 
+    // A closed tab does not free its number while its session is still known,
+    // so two tabs never carry the same label.
+    const third = open({ label: "branchwork" });
+    expect(third.name).toBe("branchwork 3");
+
+    // No label to hand — a caller with a workstream and no repository record —
+    // and the kind stands in, numbered the same way.
+    expect(open({ kind: "test" }).name).toBe("test 1");
+
+    // A name a caller passes is still honoured, and renaming still works at
+    // this layer even though nothing in the interface offers it (D-049).
+    expect(open({ name: "  build log  " }).name).toBe("build log");
     expect(sessions.rename(first.sessionId, "  unit tests  ").name).toBe("unit tests");
-    expect(sessions.list(WORKSTREAM_ID)[0]?.name).toBe("unit tests");
     expect(() => sessions.rename(first.sessionId, "   ")).toThrow(TerminalError);
   });
 

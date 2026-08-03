@@ -345,12 +345,34 @@ afterAll(async () => {
 describe("the terminal, through the interface", () => {
   it("opens in the mission worktree and never in the user's own checkout", async () => {
     // Showing the dock is the request: the screen is there at once and a
-    // session opens into it — no button in front of the button.
+    // session opens into it — no button in front of the button, and no view
+    // switch in front of the shell (D-049).
     await openDock(page);
     await page.getByTestId("terminal-screen").waitFor({ timeout: 20_000 });
     await expect
       .poll(() => page.getByTestId("terminal-tab").count(), { timeout: 20_000 })
       .toBeGreaterThan(0);
+    expect(await page.getByTestId("dock-view").count()).toBe(0);
+
+    // The tab carries the repository's own name and its number, so a person
+    // reading a row of tabs knows what they are looking at without opening one.
+    expect(await page.getByTestId("terminal-tab").first().getAttribute("data-name")).toBe(
+      `${repoName} 1`
+    );
+
+    // Nothing renames a tab by hand any more: the name is derived, so the
+    // control that maintained it is gone (D-049).
+    expect(await page.getByTestId("terminal-rename-action").count()).toBe(0);
+    expect(await page.getByTestId("terminal-rename").count()).toBe(0);
+
+    // The shell has the keyboard the moment it opens: typing works without
+    // clicking into the pane first.
+    await awaitPrompt(page, missionId);
+    await page.keyboard.type(`echo ${typed("FOCUSED")}`);
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(() => sessionOutput(page, missionId), { timeout: 30_000 })
+      .toContain(printed("FOCUSED"));
 
     // Typed at the keyboard, into the emulator, into the PTY.
     const shown = await runInPane(page, missionId, `pwd; echo ${typed("WHERE")}`, printed("WHERE"));
@@ -394,7 +416,7 @@ describe("the terminal, through the interface", () => {
     await shot(page, "46-terminal-colour-and-clear.png");
   }, 120_000);
 
-  it("takes a control key, a second tab, a rename, and a close", async () => {
+  it("takes a control key, a second numbered tab, a switch back, and a close", async () => {
     // Ctrl-C reaches the shell as an interrupt rather than the application as
     // a copy: a long-running command ends and the prompt comes back.
     await runInPane(page, missionId, `echo ${typed("READY")}`, printed("READY"));
@@ -413,12 +435,24 @@ describe("the terminal, through the interface", () => {
     await expect
       .poll(() => page.getByTestId("terminal-tab").count(), { timeout: 20_000 })
       .toBe(before + 1);
-    // Two tabs, two distinct names: a session that exited must not lend its
-    // name to the next one.
+    // Two tabs, both named after the repository and numbered in order: `+`
+    // makes the next one rather than a second tab called the same thing
+    // (D-049). A session that exited must not lend its number to the next one.
     const names = await page.getByTestId("terminal-tab").evaluateAll((tabs) =>
       tabs.map((tab) => (tab as HTMLElement).dataset.name ?? "")
     );
     expect(new Set(names).size).toBe(2);
+    expect(names).toEqual([`${repoName} 1`, `${repoName} 2`]);
+
+    // The new tab is the selected one, and it has the keyboard: `+` is a
+    // request to type in a new shell, not to look at one.
+    expect(await page.getByTestId("terminal-tab").last().getAttribute("class")).toContain("active");
+    await awaitPrompt(page, missionId);
+    await page.keyboard.type(`echo ${typed("SECOND")}`);
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(() => sessionOutput(page, missionId), { timeout: 30_000 })
+      .toContain(printed("SECOND"));
 
     // Back to the first tab, and its session is still on screen. An emulator
     // builds its DOM once, so a pane that is detached to make room for another
@@ -428,15 +462,7 @@ describe("the terminal, through the interface", () => {
     const returned = await untilPane(page, "the first session again", printed("INTERRUPTED"));
     expect(returned).toContain(printed("INTERRUPTED"));
 
-    await page.getByTestId("terminal-rename-action").click();
-    await page.getByTestId("terminal-rename").fill("build log");
-    await page.keyboard.press("Enter");
-    await expect
-      .poll(() => page.getByTestId("terminal-tab").filter({ hasText: "build log" }).count(), {
-        timeout: 20_000
-      })
-      .toBe(1);
-    await shot(page, "47-terminal-tabs-and-rename.png");
+    await shot(page, "47-terminal-tabs.png");
 
     await page.getByTestId("terminal-tab").last().getByTestId("terminal-tab-close").click();
     await expect
@@ -563,14 +589,46 @@ describe("setup and verification, through the interface", () => {
     await shot(page, "51-workspace-ready.png");
   }, 180_000);
 
-  it("shows setup output in the runtime dock, and keeps it after the process ended", async () => {
+  it("keeps setup output after the process ended, with the dock now the terminal alone", async () => {
+    // The dock's four-way switch is gone (D-049): pressing the terminal control
+    // lands in a shell, not on a page about terminals.
     await openDock(page);
-    await page.getByTestId("dock-view").filter({ hasText: "Setup" }).click();
+    expect(await page.getByTestId("dock-view").count()).toBe(0);
+    await page.getByTestId("terminal-screen").waitFor({ timeout: 20_000 });
+    await shot(page, "52-terminal-only-dock.png");
+
+    // What the switch used to show is still kept, in full, on the machine that
+    // ran it: a process that ended keeps its output and its exit code. This is
+    // the guarantee D-045 exists for, and it is asserted at the bridge because
+    // the surface it was read on is the thing that moved.
+    const setup = await page.evaluate(async (mission) => {
+      const result = await window.novus.workspace.logs(mission);
+      if (!result.ok) throw new Error(result.message);
+      const log = result.value.filter((entry) => entry.kind === "setup").at(-1);
+      return log
+        ? { state: log.state, exitCode: log.exitCode, endedAt: log.endedAt, command: log.command }
+        : null;
+    }, missionId);
+    expect(setup?.state).toBe("exited");
+    expect(setup?.exitCode).toBe(0);
+    expect(setup?.endedAt).not.toBeNull();
+    // The command as declared, not an expanded one: this record is what a
+    // reader would be shown, and it is still here after the process ended.
+    // (This project's setup command redirects its only line to a file, so an
+    // empty `output` here is the command being quiet, not the record being
+    // lost — `workspace-processes.test.ts` holds the output-retention case.)
+    expect(setup?.command).toContain("prepared.txt");
+
+    // And it is readable again, on the surface it moved to (D-050): the panel
+    // is where a person already goes to inspect the runner, the diff, and the
+    // ledger, and a build log is that.
+    await openPanel(page);
+    await page.getByTestId("inspector-tab-output").click();
+    await page.getByTestId("output-kind").filter({ hasText: "Setup" }).click();
     await page.getByTestId("dock-summary").waitFor({ timeout: 20_000 });
     expect(await page.getByTestId("dock-state").innerText()).toContain("exited 0");
-    await shot(page, "52-runtime-dock-setup.png");
-    await page.getByTestId("dock-view").filter({ hasText: "Terminal" }).click();
-  }, 60_000);
+    await shot(page, "58-output-in-the-panel.png");
+  }, 90_000);
 
   it("runs a declared check on a click, binds its evidence to the revision it proved, and goes stale", async () => {
     const before = await page.evaluate(async (mission) => {
@@ -651,6 +709,30 @@ describe("setup and verification, through the interface", () => {
     await shot(page, "54-verification-failed.png");
   }, 180_000);
 
+  it("keeps setup, the app, and checks reachable from their own surfaces", async () => {
+    // Removing the dock's switch removed a navigation, not three capabilities
+    // (D-049). Each is invoked where it belongs: setup and the project's own
+    // commands from `Run ▾`, and a check's attributed result from the evidence
+    // panel's ledger — which is where the durable record always lived.
+    await page.getByTestId("run-control").click();
+    await page.getByTestId("run-menu").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("run-menu-setup").count()).toBe(1);
+    expect(await page.getByTestId("run-item").filter({ hasText: "unit" }).count()).toBeGreaterThan(0);
+
+    // Set up workspace opens the same dialog the mission state action opens.
+    await page.getByTestId("run-menu-setup").click();
+    await page.getByTestId("workspace-setup").waitFor({ timeout: 20_000 });
+    await page.getByTestId("setup-close").click();
+    await expect.poll(() => page.getByTestId("workspace-setup").count(), { timeout: 20_000 }).toBe(0);
+
+    // Checks: the ledger, carrying the two this suite ran.
+    await openPanel(page);
+    await page.getByTestId("inspector-tab-verification").click();
+    await page.getByTestId("inspector-verification").waitFor({ timeout: 20_000 });
+    await page.getByTestId("ledger").waitFor({ timeout: 20_000 });
+    await shot(page, "58-checks-in-the-evidence-panel.png");
+  }, 90_000);
+
   it("browses the workspace's files, opens one over the canvas, and edits markdown", async () => {
     await openPanel(page);
     await page.getByTestId("inspector-tab-files").click();
@@ -664,10 +746,16 @@ describe("setup and verification, through the interface", () => {
     expect(listed).toContain(".novus");
     expect(listed).not.toContain(".git");
 
-    // Opening one takes the canvas; the trace is not beside it, it is behind it.
+    // Opening one gives it its own tab beside the workstream's, and the room
+    // shows the file with none of the workstream's header above it.
     await page.getByTestId("tree-row").filter({ hasText: "README.md" }).first().click();
     await page.getByTestId("file-view").waitFor({ timeout: 20_000 });
     expect(await page.getByTestId("chat").count()).toBe(0);
+    expect(await page.getByTestId("room-goal").count()).toBe(0);
+    expect(await page.getByTestId("state-line").count()).toBe(0);
+    expect(
+      await page.getByTestId("file-tab").last().getAttribute("data-path")
+    ).toBe("README.md");
 
     // Markdown arrives rendered, and it is rendered as elements rather than as
     // markup built from the file's own text.
@@ -689,12 +777,22 @@ describe("setup and verification, through the interface", () => {
     expect(readFileSync(join(worktree, "README.md"), "utf8")).toContain("Edited from the file pane");
     await shot(page, "56-file-view-markdown.png");
 
-    // Closing gives the trace back, exactly as it was.
     await page.getByTestId("file-preview").click();
     expect(await page.getByTestId("markdown").innerText()).toContain("Edited from the file pane");
-    await page.getByTestId("file-close").click();
-    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
     await shot(page, "57-files-panel.png");
+
+    // A source file gets line numbers and highlighting rather than flat text.
+    await page.getByTestId("tree-row").filter({ hasText: "prepared.txt" }).first().click();
+    await page.getByTestId("file-tab").filter({ hasText: "prepared.txt" }).waitFor({ timeout: 20_000 });
+    // Two files open at once, each its own tab, switched between like any other.
+    expect(await page.getByTestId("file-tab").count()).toBe(2);
+
+    // Closing a file tab returns to the workstream, exactly as it was.
+    await page.getByTestId("file-tab").last().getByTestId("file-tab-close").click();
+    await page.getByTestId("file-tab").first().getByTestId("file-tab-close").click();
+    await expect.poll(() => page.getByTestId("file-tab").count(), { timeout: 20_000 }).toBe(0);
+    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
+    await page.getByTestId("room-goal").waitFor({ timeout: 20_000 });
   }, 180_000);
 
   it("refuses a path that would leave the workspace", async () => {

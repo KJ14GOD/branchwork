@@ -61,6 +61,28 @@ export interface WorkspaceTarget {
   /** The registered local repository this workstream came from. */
   localId: string;
   missionBranch: string;
+  /** The repository's own short name, for anything this machine labels with
+   *  the work rather than with itself — terminal tabs, so far. Optional
+   *  because a caller may have a workstream and no repository record to hand. */
+  repositoryLabel?: string | undefined;
+}
+
+/**
+ * The repository's short name, from the one string both kinds of repository
+ * carry: `KJ14GOD/branchwork` and `/Users/someone/code/robinhood-agentic` both
+ * end in the name a person calls the project, so the last segment is it.
+ *
+ * The owner and the path in front of it are not dropped carelessly — they are
+ * dropped because this labels a tab three characters from another tab, where
+ * `KJ14GOD/branchwork 2` says nothing the room's own header does not already
+ * say and costs the width the number needs.
+ */
+export function repositoryLabel(name: string): string {
+  const last = name
+    .split(/[/\\]/)
+    .filter((segment) => segment !== "" && segment !== "." && segment !== "..")
+    .pop();
+  return (last ?? name).replace(/\.git$/, "").trim();
 }
 
 /** Server-allocated branch names only; nothing else is ever checked out. */
@@ -512,6 +534,7 @@ export async function openTerminal(
       sourceRepo: resolved.repositoryPath,
       env,
       name: input.name,
+      label: target.repositoryLabel,
       kind: input.kind,
       cols: input.cols,
       rows: input.rows

@@ -2,9 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import type { ProcessKind, TerminalKind, TerminalSession } from "@novus/contracts";
+import type { TerminalKind, TerminalSession } from "@novus/contracts";
 import { novus } from "../bridge";
-import { ProcessLogView } from "./process-log";
 
 /**
  * The terminal (DESIGN.md#component-behavior). A bottom dock in the room,
@@ -203,30 +202,22 @@ function usePanes(missionId: string) {
 
 // --- The dock ---------------------------------------------------------------------
 
-/** What the dock is showing. Terminal sessions and the three kinds of project
- *  process, which are the four things that produce local output. */
-type DockView = "terminal" | ProcessKind;
-
 /**
- * The dock shows *logs*; the evidence panel shows the claims they support. The
- * two used the word "Verification" for both, which made one word mean the
- * durable attributed record in one place and a raw local log in another
- * (D-047). Only the panel says Verification now.
+ * The dock is the terminal (D-049).
+ *
+ * It carried a four-way switch — Terminal, Setup, App, Checks — so pressing the
+ * terminal control landed on a *page about* terminals with the shell one click
+ * further away. Every other view had its own contextual surface already: setup
+ * is the setup dialog the mission state and `Run ▾` both open, the app is
+ * `Run ▾` with Stop and Open preview, and a check's attributed result is the
+ * evidence panel's ledger. A switch in front of a shell is a navigation nobody
+ * asked for on the one surface where the request is unambiguous.
  */
-const VIEWS: { view: DockView; label: string }[] = [
-  { view: "terminal", label: "Terminal" },
-  { view: "setup", label: "Setup" },
-  { view: "run", label: "App" },
-  { view: "verification", label: "Checks" }
-];
-
 export function RuntimeDock({ missionId }: { missionId: string }) {
-  const [view, setView] = useState<DockView>("terminal");
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [renaming, setRenaming] = useState<string | null>(null);
   const [heightVh, setHeightVh] = useState(DEFAULT_HEIGHT_VH);
 
   const screenRef = useRef<HTMLDivElement>(null);
@@ -325,7 +316,7 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
   // to leave a blank rectangle where a running shell was.
   useEffect(() => {
     const screen = screenRef.current;
-    if (!screen || activeId === null || view !== "terminal") return;
+    if (!screen || activeId === null) return;
     const pane = paneFor(activeId);
     if (pane.host.parentElement !== screen) screen.append(pane.host);
     for (const [sessionId, other] of panes.current) other.host.hidden = sessionId !== activeId;
@@ -361,7 +352,7 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [activeId, paneFor, panes, heightVh, view]);
+  }, [activeId, paneFor, panes, heightVh]);
 
   const active = sessions.find((session) => session.sessionId === activeId) ?? null;
 
@@ -383,6 +374,9 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
       return;
     }
     setSessions((previous) => [...previous, result.value]);
+    // Selected and focused, because opening a shell is asking to type in it.
+    // The attach effect below focuses whichever pane becomes active, and this
+    // is the same act one render earlier.
     setActiveId(result.value.sessionId);
   };
 
@@ -408,20 +402,6 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
     } else if (activeId === sessionId) {
       setActiveId(remaining[remaining.length - 1]?.sessionId ?? null);
     }
-  };
-
-  const rename = async (sessionId: string, name: string) => {
-    setRenaming(null);
-    const trimmed = name.trim();
-    if (trimmed === "") return;
-    const result = await novus().terminal.rename({ sessionId, name: trimmed });
-    if (!result.ok) {
-      setError(result.message);
-      return;
-    }
-    setSessions((previous) =>
-      previous.map((session) => (session.sessionId === sessionId ? { ...session, name: trimmed } : session))
-    );
   };
 
   /** Dragging the top edge. The height stays a proportion of the viewport, the
@@ -459,47 +439,17 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
         data-testid="terminal-grip"
       />
 
+      {/* One row: the sessions and a `+`. The dock closes from the same toggle
+          that opened it, and a tab is named from the repository rather than by
+          hand — a second control that only does what another control does, and
+          a label a person has to maintain, are both words on screen doing no
+          work (D-049). */}
       <div className="terminal-head">
-        {/* One dock, four views. Detailed local output lives here; the trace
-            above shows the milestone and the evidence panel shows the bounded
-            result that supports a claim — never the same output three times
-            (D-045). */}
-        <div className="dock-views" role="tablist" aria-label="Runtime views">
-          {VIEWS.map((entry) => (
-            <button
-              key={entry.view}
-              role="tab"
-              aria-selected={view === entry.view}
-              className={view === entry.view ? "dock-view active" : "dock-view"}
-              onClick={() => setView(entry.view)}
-              data-testid="dock-view"
-              data-view={entry.view}
-            >
-              {entry.label}
-            </button>
-          ))}
-        </div>
-
-        {view === "terminal" && (
         <div className="terminal-tabs" role="tablist" aria-label="Terminal sessions">
           {sessions.map((session) => {
             const tone = stateOf(session);
             const selected = session.sessionId === activeId;
-            return renaming === session.sessionId ? (
-              <input
-                key={session.sessionId}
-                className="input terminal-rename"
-                defaultValue={session.name}
-                autoFocus
-                aria-label={`Rename ${session.name}`}
-                onBlur={(event) => void rename(session.sessionId, event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void rename(session.sessionId, event.currentTarget.value);
-                  else if (event.key === "Escape") setRenaming(null);
-                }}
-                data-testid="terminal-rename"
-              />
-            ) : (
+            return (
               <span
                 key={session.sessionId}
                 className={selected ? "terminal-tab active" : "terminal-tab"}
@@ -513,7 +463,6 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
                   aria-selected={selected}
                   className="terminal-tab-open"
                   onClick={() => setActiveId(session.sessionId)}
-                  onDoubleClick={() => setRenaming(session.sessionId)}
                   title={`${session.name} — ${tone.label}`}
                 >
                   <TerminalGlyph />
@@ -545,22 +494,8 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
             +
           </button>
         </div>
-        )}
 
         <span className="terminal-head-spacer" />
-
-        {/* The dock closes from the same toggle that opened it. A second control
-            that only does what the toggle does is a word on screen doing no
-            work. */}
-        {view === "terminal" && active && (
-          <button
-            className="btn btn-text"
-            onClick={() => setRenaming(active.sessionId)}
-            data-testid="terminal-rename-action"
-          >
-            Rename
-          </button>
-        )}
       </div>
 
       {error && (
@@ -569,27 +504,21 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
         </p>
       )}
 
-      {view !== "terminal" ? (
-        <ProcessLogView missionId={missionId} kind={view} />
-      ) : (
-        <>
-          {/* The screen, always. Showing the terminal is the request, so a
-              session is already starting when this renders empty — offering a
-              button that opens a terminal is a door in front of a door. */}
-          <div
-            className="terminal-screen"
-            ref={screenRef}
-            role="group"
-            aria-label={active === null ? "Terminal" : `${active.name} — ${stateOf(active).label}`}
-            data-testid="terminal-screen"
-          />
-          {active?.state === "exited" && (
-            <p className="terminal-ended" data-testid="terminal-ended">
-              This session ended{active.exitCode === null ? "" : ` with code ${active.exitCode}`}. Start a
-              new one to keep working.
-            </p>
-          )}
-        </>
+      {/* The screen, always. Showing the terminal is the request, so a session
+          is already starting when this renders empty — offering a button that
+          opens a terminal is a door in front of a door. */}
+      <div
+        className="terminal-screen"
+        ref={screenRef}
+        role="group"
+        aria-label={active === null ? "Terminal" : `${active.name} — ${stateOf(active).label}`}
+        data-testid="terminal-screen"
+      />
+      {active?.state === "exited" && (
+        <p className="terminal-ended" data-testid="terminal-ended">
+          This session ended{active.exitCode === null ? "" : ` with code ${active.exitCode}`}. Start a new
+          one to keep working.
+        </p>
       )}
     </section>
   );

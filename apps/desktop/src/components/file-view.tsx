@@ -1,21 +1,22 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { WorkspaceFile } from "@novus/contracts";
 import { novus } from "../bridge";
+import { tokenizeLines } from "./highlight";
 import { Markdown } from "./markdown";
 
 /**
- * One file, taking the room's canvas (D-048).
+ * One file, as its own tab in the room (D-048).
  *
- * It replaces the trace rather than sitting beside it, because a file is read
- * at full measure or not at all — a column of code in a third of the window is
- * the generic-IDE shape the product refuses, and a person opening a file has
- * said what they want to look at. Closing it returns the trace exactly as it
- * was; nothing about the mission stops while a file is open.
+ * It is a sibling of the workstream tabs rather than something layered inside
+ * one, because that is what it is: another thing you are looking at, at the
+ * same level, switched between the same way. While a file tab is selected the
+ * mission's own header is not shown at all — the title, the state line, and the
+ * authority row are answers about the workstream, and repeating them above a
+ * source file is chrome the reader did not ask for and cannot act on. Switching
+ * back to the workstream tab brings all of it back untouched.
  *
- * Markdown gets **Preview** and **Edit**, because a project's documentation is
- * the file people most often open and most often want to fix a line of.
- * Everything else is shown as its source. Preview never produces HTML from the
- * file's content (see `markdown.tsx`).
+ * The composer stays. Reading a file is not a reason to stop being able to
+ * direct, and it is very often the reason to start.
  */
 
 type Load =
@@ -27,26 +28,77 @@ type Mode = "preview" | "edit";
 
 const isMarkdown = (path: string): boolean => /\.mdx?$/i.test(path);
 
+function extensionOf(path: string): string {
+  const name = path.split("/").pop() ?? path;
+  const dot = name.lastIndexOf(".");
+  return dot === -1 ? "" : name.slice(dot + 1).toLowerCase();
+}
+
 function humanBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function FileView({
-  missionId,
-  path,
-  onClose
-}: {
-  missionId: string;
-  path: string;
-  onClose: () => void;
-}) {
+function CopyGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="5.75" y="5.75" width="8.5" height="8.5" rx="1.5" />
+      <path d="M10.25 5.75v-2a1.5 1.5 0 0 0-1.5-1.5h-5a1.5 1.5 0 0 0-1.5 1.5v5a1.5 1.5 0 0 0 1.5 1.5h2" />
+    </svg>
+  );
+}
+
+/** Highlighted source with its line numbers. Memoised on the text, because
+ *  tokenising a 60KB file on every keystroke elsewhere in the room is work
+ *  nobody asked for. */
+function Source({ text, extension }: { text: string; extension: string }) {
+  const lines = useMemo(() => tokenizeLines(text, extension), [text, extension]);
+  return (
+    <div className="code" data-testid="file-source-view">
+      <div className="code-gutter" aria-hidden="true">
+        {lines.map((_line, at) => (
+          <span key={at}>{at + 1}</span>
+        ))}
+      </div>
+      <pre className="code-body mono">
+        {lines.map((line, at) => (
+          <div className="code-line" key={at}>
+            {line.length === 0 ? (
+              "\n"
+            ) : (
+              <>
+                {line.map((token, position) => (
+                  <span key={position} className={`tok-${token.kind}`}>
+                    {token.text}
+                  </span>
+                ))}
+                {"\n"}
+              </>
+            )}
+          </div>
+        ))}
+      </pre>
+    </div>
+  );
+}
+
+export function FileView({ missionId, path }: { missionId: string; path: string }) {
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [mode, setMode] = useState<Mode>("preview");
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const read = useCallback(async () => {
     setLoad({ kind: "loading" });
@@ -64,6 +116,7 @@ export function FileView({
   const file = load.kind === "read" ? load.file : null;
   const body = draft ?? file?.text ?? "";
   const dirty = draft !== null && draft !== (file?.text ?? "");
+  const readable = file !== null && file.text !== null && !file.binary;
 
   const save = async () => {
     if (draft === null || saving) return;
@@ -78,21 +131,31 @@ export function FileView({
     await read();
   };
 
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setSaveError("This machine would not let Novus write to the clipboard.");
+    }
+  };
+
   return (
     <section className="file-view" aria-label={path} data-testid="file-view" data-path={path}>
+      {/* The path as a chip where the content starts, with the one action a
+          reader reaches for first. */}
       <header className="file-head">
-        <span className="file-name mono" title={path}>
+        <span className="file-chip mono" title={path}>
           {path}
         </span>
-        {file && !file.binary && file.text !== null && (
-          <span className="file-meta">{humanBytes(file.bytes)}</span>
-        )}
+        {readable && <span className="file-meta">{humanBytes(file.bytes)}</span>}
         <span className="head-spacer" />
 
-        {isMarkdown(path) && file?.text !== null && file?.binary === false && (
-          <span className="segment file-modes" role="group" aria-label="How to show this file">
+        {isMarkdown(path) && readable && (
+          <span className="file-modes" role="group" aria-label="How to show this file">
             <button
-              className="btn btn-secondary"
+              className={mode === "preview" ? "dock-view active" : "dock-view"}
               aria-pressed={mode === "preview"}
               onClick={() => setMode("preview")}
               data-testid="file-preview"
@@ -100,7 +163,7 @@ export function FileView({
               Preview
             </button>
             <button
-              className="btn btn-secondary"
+              className={mode === "edit" ? "dock-view active" : "dock-view"}
               aria-pressed={mode === "edit"}
               onClick={() => setMode("edit")}
               data-testid="file-edit"
@@ -121,9 +184,18 @@ export function FileView({
           </button>
         )}
 
-        <button className="btn btn-text" onClick={onClose} data-testid="file-close">
-          Close
-        </button>
+        {readable && (
+          <button
+            className="icon-button"
+            onClick={() => void copy()}
+            aria-label={`Copy ${path}`}
+            title={copied ? "Copied" : "Copy the file's contents"}
+            data-testid="file-copy"
+            data-copied={copied ? "true" : "false"}
+          >
+            <CopyGlyph />
+          </button>
+        )}
       </header>
 
       {saveError && (
@@ -151,12 +223,12 @@ export function FileView({
             the terminal.
           </p>
         )}
-        {file?.text !== null && file?.binary === false && (
-          mode === "preview" && isMarkdown(path) ? (
+        {readable &&
+          (isMarkdown(path) && mode === "preview" ? (
             <div className="file-scroll">
               <Markdown source={body} />
             </div>
-          ) : (
+          ) : isMarkdown(path) ? (
             <textarea
               className="file-editor mono"
               value={body}
@@ -165,8 +237,11 @@ export function FileView({
               aria-label={`${path} source`}
               data-testid="file-source"
             />
-          )
-        )}
+          ) : (
+            <div className="file-scroll">
+              <Source text={body} extension={extensionOf(path)} />
+            </div>
+          ))}
       </div>
     </section>
   );

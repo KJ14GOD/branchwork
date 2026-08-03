@@ -47,6 +47,7 @@ import {
   processLogsFor,
   readFile,
   renameTerminal,
+  repositoryLabel,
   resizeTerminal,
   saveWorkspaceSettings,
   secretsFor,
@@ -470,7 +471,10 @@ function registerIpc(): void {
       missionId,
       workstreamId: workstream.workstreamId,
       localId: repository.providerRepoId,
-      missionBranch: workstream.missionBranch
+      missionBranch: workstream.missionBranch,
+      // `name` is `owner/name` for a GitHub repository and the folder's own
+      // name for one on this Mac; both end in what the project is called.
+      repositoryLabel: repositoryLabel(repository.name)
     };
   };
 

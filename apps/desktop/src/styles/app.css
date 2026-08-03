@@ -2231,7 +2231,13 @@ body {
 /* A bottom dock in the room: it shares the room's width, shortens the trace
    rather than replacing it, and is closed by default. Its height is a
    proportion of the viewport — the same measure the composer's own ceiling
-   uses — so resizing mints no new value. */
+   uses — so resizing mints no new value.
+
+   One plane, from the tabs to the last row of output (D-049): the dock sits on
+   the terminal's own ground, so its chrome and its screen are the same surface
+   and the only edge in it is the one that separates it from the room. Chrome in
+   a different colour above a shell reads as a window inside a window, which is
+   what it looked like. */
 .terminal-dock {
   flex: none;
   position: relative;
@@ -2239,7 +2245,7 @@ body {
   flex-direction: column;
   min-height: 20vh;
   max-height: 60vh;
-  background: var(--surface-1);
+  background: var(--term-bg);
   border-top: 1px solid var(--edge);
 }
 
@@ -2258,8 +2264,9 @@ body {
   background: var(--hover);
 }
 
-/* The switch and the session tabs sit on one row, kept as short as a row of
-   controls can be: every pixel it takes is a pixel of terminal. */
+/* The session tabs and the `+`, on one row kept as short as a row of controls
+   can be: every pixel it takes is a pixel of terminal. It carries no
+   background and no edge of its own — it is the top of the same plane. */
 .terminal-head {
   flex: none;
   display: flex;
@@ -2345,11 +2352,6 @@ body {
 }
 
 
-
-.terminal-rename {
-  width: 20ch;
-  min-height: 28px;
-}
 
 .terminal-error {
   flex: none;
@@ -2439,7 +2441,6 @@ body {
     max-height: none;
     height: auto !important;
     border-top: none;
-    background: var(--surface-2);
   }
 
   .terminal-grip {
@@ -2447,37 +2448,10 @@ body {
   }
 }
 
-/* The runtime dock's view switch and its process-output views (D-045). One
-   dock, four views: terminal sessions, and the three kinds of project process.
-   Detailed local output lives here; the trace shows the milestone and the
-   evidence panel shows the bounded result that supports a claim. */
-.dock-views {
-  display: flex;
-  align-items: center;
-  gap: var(--s-1);
-  flex: none;
-}
-
-.dock-view {
-  border: none;
-  background: transparent;
-  color: var(--text-2);
-  font: var(--type-meta);
-  padding: var(--s-1) var(--s-2);
-  border-radius: var(--r-control);
-  cursor: pointer;
-}
-
-.dock-view:hover {
-  background: var(--hover);
-  color: var(--text-1);
-}
-
-.dock-view.active {
-  background: var(--selected);
-  color: var(--text-1);
-}
-
+/* The process-output views (D-045): setup, the app, and a check's run, each
+   with its output kept after the process ended. The dock's four-way switch is
+   gone — the dock is the terminal (D-049) — and these styles stand with the
+   view itself, waiting for the contextual surface each kind belongs to. */
 .dock-runs {
   display: flex;
   align-items: center;
@@ -2633,7 +2607,60 @@ body {
 .family-config { color: var(--term-green); background: color-mix(in srgb, var(--term-green) 14%, transparent); }
 .family-asset { color: var(--term-bright-magenta); background: color-mix(in srgb, var(--term-bright-magenta) 12%, transparent); }
 
-/* A file takes the canvas: read at full measure or not at all. */
+/* A file is its own tab beside the workstream's, marked as a file. */
+.file-tab {
+  display: inline-flex;
+  align-items: center;
+  padding-right: 2px;
+  border-bottom: 2px solid transparent;
+}
+
+.file-tab.active {
+  border-bottom-color: var(--accent);
+}
+
+.file-tab-open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: var(--type-row);
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-3);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.file-tab.active .file-tab-open,
+.file-tab:hover .file-tab-open {
+  color: var(--text-1);
+}
+
+.file-tab-name {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font: var(--type-row);
+  line-height: 1;
+  padding: 2px var(--s-1);
+  border-radius: var(--r-control);
+  cursor: pointer;
+}
+
+.file-tab-close:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+/* A file takes the room: read at full measure or not at all, and with none of
+   the workstream's own header above it. */
 .file-view {
   flex: 1;
   min-height: 0;
@@ -2647,13 +2674,19 @@ body {
   gap: var(--s-3);
   flex: none;
   padding: var(--s-3) var(--s-6);
-  border-bottom: 1px solid var(--edge);
 }
 
-.file-name {
-  font: var(--type-row);
+/* The path where the content starts, the way a person refers to a file. */
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  font: var(--type-meta);
   font-family: var(--font-mono);
   color: var(--text-1);
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  padding: var(--s-1) var(--s-2);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -2666,6 +2699,10 @@ body {
 .file-modes {
   display: inline-flex;
   gap: var(--s-1);
+}
+
+.icon-button[data-copied="true"] {
+  color: var(--ok);
 }
 
 .file-error {
@@ -2761,4 +2798,60 @@ body {
   text-decoration-color: var(--edge-hover);
   text-underline-offset: 3px;
   cursor: help;
+}
+
+/* --- Source, with its line numbers (D-048) --------------------------------- */
+
+.code {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  font: var(--type-row);
+  font-family: var(--font-mono);
+  min-width: 0;
+}
+
+.code-gutter {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  text-align: right;
+  color: var(--text-3);
+  user-select: none;
+  min-width: 4ch;
+}
+
+.code-body {
+  margin: 0;
+  min-width: 0;
+  flex: 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-1);
+}
+
+.code-line {
+  min-height: 20px;
+}
+
+/* Highlighting reuses the terminal's palette, for the same reason it exists:
+   these are colours about somebody else's code, not Novus saying anything
+   (D-046, D-048). */
+.tok-comment { color: var(--text-3); font-style: italic; }
+.tok-string { color: var(--term-green); }
+.tok-number { color: var(--term-yellow); }
+.tok-keyword { color: var(--term-magenta); }
+.tok-type { color: var(--term-cyan); }
+.tok-call { color: var(--term-blue); }
+.tok-punctuation { color: var(--text-2); }
+
+/* The panel's own output switch (D-050). The dock is the terminal and its
+   request is unambiguous; a build log belongs where a person already goes to
+   inspect the runner, the diff, and the ledger. */
+.output-kinds {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+  padding: 0 0 var(--s-2);
 }

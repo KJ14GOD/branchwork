@@ -9,6 +9,7 @@ import {
   createWorkspaceRuntime,
   inspectWorkspace,
   prepareLocalFiles,
+  repositoryLabel,
   saveWorkspaceSettings,
   worktreeFor,
   type PinnedCommand,
@@ -363,4 +364,20 @@ describe("after a relaunch", () => {
     expect(events[0]?.workstreamId).toBe(WORKSTREAM_ID);
     await first.shutdown("test over");
   }, 30_000);
+});
+
+describe("what a terminal tab is called", () => {
+  it("takes the repository's own short name, from either kind of repository", () => {
+    // A GitHub repository's `name` is `owner/name`; a folder on this Mac is
+    // registered under its own name, and a path is one too. Both end in what
+    // the project is called, which is the only part a tab has room for.
+    expect(repositoryLabel("KJ14GOD/branchwork")).toBe("branchwork");
+    expect(repositoryLabel("robinhood-agentic")).toBe("robinhood-agentic");
+    expect(repositoryLabel("/Users/someone/code/robinhood-agentic")).toBe("robinhood-agentic");
+    expect(repositoryLabel("/Users/someone/code/robinhood-agentic/")).toBe("robinhood-agentic");
+    expect(repositoryLabel("git@github.com:KJ14GOD/branchwork.git")).toBe("branchwork");
+    // Nothing usable to shorten: the name stands as it is rather than becoming
+    // an empty tab.
+    expect(repositoryLabel("/")).toBe("/");
+  });
 });

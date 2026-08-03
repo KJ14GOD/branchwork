@@ -23,6 +23,25 @@ import { GatedAction } from "../components/gated";
 import { HumanMark } from "../components/identity";
 import type { InspectorSection } from "../components/inspector";
 import { FileView } from "../components/file-view";
+
+/** The mark that says a tab is a file rather than a workstream. */
+function FileGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="13"
+      height="13"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 1.75H4.75a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h6.5a1 1 0 0 0 1-1V5z" />
+      <path d="M9 1.75V5h3.25" />
+    </svg>
+  );
+}
 import { RuntimeDock } from "../components/runtime-dock";
 import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
 import type { Project } from "./project-shell";
@@ -64,7 +83,9 @@ export function ProjectRoom({
   onDetail,
   onCreated,
   terminalOpen,
-  openFile,
+  openFiles,
+  activeFile,
+  onSelectFile,
   onCloseFile
 }: {
   project: Project;
@@ -82,10 +103,13 @@ export function ProjectRoom({
    *  controls, so the shell owns the state and the room only renders it — the
    *  same toggle closes it, which is why the dock carries no Hide of its own. */
   terminalOpen: boolean;
-  /** A file the reader opened from the panel; it takes the canvas while it is
-   *  open, and the trace is exactly as it was when it closes (D-048). */
-  openFile: string | null;
-  onCloseFile: () => void;
+  /** Files the reader opened from the panel. Each is a tab beside the
+   *  workstream's own, and while one is selected the room shows that file and
+   *  nothing about the workstream above it (D-048). */
+  openFiles: string[];
+  activeFile: string | null;
+  onSelectFile: (path: string | null) => void;
+  onCloseFile: (path: string) => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -337,7 +361,10 @@ export function ProjectRoom({
             role="tab"
             aria-selected={mission.missionId === selectedMissionId}
             className={mission.missionId === selectedMissionId ? "tab active" : "tab"}
-            onClick={() => onSelectTab(mission.missionId)}
+            onClick={() => {
+              onSelectFile(null);
+              onSelectTab(mission.missionId);
+            }}
             title={mission.goal}
             data-testid="ws-tab"
           >
@@ -349,6 +376,34 @@ export function ProjectRoom({
             New
           </button>
         )}
+        {openFiles.map((file) => (
+          <span
+            key={file}
+            className={file === activeFile ? "tab file-tab active" : "tab file-tab"}
+            data-testid="file-tab"
+            data-path={file}
+          >
+            <button
+              role="tab"
+              aria-selected={file === activeFile}
+              className="file-tab-open"
+              onClick={() => onSelectFile(file)}
+              title={file}
+            >
+              <FileGlyph />
+              <span className="file-tab-name">{file.split("/").pop() ?? file}</span>
+            </button>
+            <button
+              className="file-tab-close"
+              onClick={() => onCloseFile(file)}
+              aria-label={`Close ${file}`}
+              title={`Close ${file}`}
+              data-testid="file-tab-close"
+            >
+              ×
+            </button>
+          </span>
+        ))}
         <button
           className="tab tab-new"
           onClick={() => onSelectTab(null)}
@@ -360,6 +415,7 @@ export function ProjectRoom({
         </button>
       </div>
 
+      {activeFile === null && (
       <header className="room-header">
         <h1 className="mission-title" data-testid="room-goal" title={title}>
           {title}
@@ -460,6 +516,7 @@ export function ProjectRoom({
           )}
         </div>
       </header>
+      )}
 
       {actionError && (
         <p className="inline-error room-error" role="alert" data-testid="action-error">
@@ -467,8 +524,8 @@ export function ProjectRoom({
         </p>
       )}
 
-      {openFile !== null && selectedMissionId !== null ? (
-        <FileView missionId={selectedMissionId} path={openFile} onClose={onCloseFile} />
+      {activeFile !== null && selectedMissionId !== null ? (
+        <FileView missionId={selectedMissionId} path={activeFile} />
       ) : (
       <div className="feed-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="feed" data-testid="chat">

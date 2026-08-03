@@ -392,8 +392,11 @@ describe("the Mission Room", () => {
     // keeps who holds the baton; who is here lives in the panel's own header.
     const controller = first.page.getByTestId("controller");
     await controller.waitFor();
+    // Control is *named*, not marked (D-047): the sentence is the signature,
+    // and the filled square that used to sit beside it said nothing this does
+    // not — it was just the loudest thing in the window.
     expect(await controller.textContent()).toContain("baton");
-    expect(await first.page.getByTestId("baton").count()).toBeGreaterThan(0);
+    expect(await first.page.getByTestId("baton").count()).toBe(0);
 
     // The state line names a PRODUCT.md state and what happens next.
     const stateLine = first.page.getByTestId("state-line");

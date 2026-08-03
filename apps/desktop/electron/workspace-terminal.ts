@@ -187,6 +187,16 @@ export interface OpenSessionRequest {
   /** Built by `terminalEnv()`; this module never adds to it. */
   env: Record<string, string>;
   name?: string | undefined;
+  /**
+   * What the tabs of this workstream are called, before their number: the
+   * repository this mission works in, by its own short name.
+   *
+   * A tab named `shell 2` says only that a person opened a second one. The
+   * repository is the one fact that is true of every session here and that a
+   * reader is already thinking in, and it costs nothing to say. Absent — a
+   * caller that has no repository to hand — the session kind stands in.
+   */
+  label?: string | undefined;
   kind?: TerminalKind | undefined;
   cols?: number | undefined;
   rows?: number | undefined;
@@ -308,7 +318,7 @@ export class TerminalSessions {
     const live: Live = {
       sessionId,
       workstreamId: request.workstreamId,
-      name: cleanName(request.name) ?? defaultName(kind, this.nextOrdinal(request.workstreamId, kind)),
+      name: cleanName(request.name) ?? this.autoName(request.workstreamId, cleanName(request.label) ?? kind),
       kind,
       state: "running",
       exitCode: null,
@@ -411,18 +421,21 @@ export class TerminalSessions {
     return configured ?? nodePtyHost();
   }
 
-  /** The next free number for this kind, counting every session still known —
-   *  running or exited — so two tabs never carry the same label. */
-  private nextOrdinal(workstreamId: string, kind: TerminalKind): number {
+  /** The next free name under this label, counting every session still known —
+   *  running or exited — so two tabs never carry the same one. The first is
+   *  `{label} 1` rather than a bare label: a numbered series that starts
+   *  unnumbered reads as a different kind of thing than the tabs beside it. */
+  private autoName(workstreamId: string, label: string): string {
     const taken = new Set(
       [...this.sessions.values()]
         .filter((live) => live.workstreamId === workstreamId)
         .map((live) => live.name)
     );
     for (let ordinal = 1; ordinal <= MAX_SESSIONS_PER_WORKSTREAM * 2 + 1; ordinal += 1) {
-      if (!taken.has(defaultName(kind, ordinal))) return ordinal;
+      const candidate = `${label} ${ordinal}`;
+      if (!taken.has(candidate)) return candidate;
     }
-    return taken.size + 1;
+    return `${label} ${taken.size + 1}`;
   }
 
   private require(sessionId: string): Live {
@@ -670,10 +683,6 @@ function cleanName(name: string | undefined): string | null {
   // Control characters in a tab label are a rendering trick, not a name.
   const cleaned = name.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, MAX_NAME);
   return cleaned === "" ? null : cleaned;
-}
-
-function defaultName(kind: TerminalKind, ordinal: number): string {
-  return ordinal === 1 ? kind : `${kind} ${ordinal}`;
 }
 
 function clamp(value: number, low: number, high: number): number {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  ProcessKind,
   FileChange,
   FileDiffResponse,
   Invitation,
@@ -12,6 +13,7 @@ import { clockTime, plural, shortSha } from "../format";
 import { changedFiles, checkTallies } from "./derive";
 import { GatedAction } from "./gated";
 import { FileTree } from "./file-tree";
+import { ProcessLogView } from "./process-log";
 import { HumanMark, ParticipantStack, roleLabel } from "./identity";
 
 function CloseGlyph() {
@@ -22,13 +24,26 @@ function CloseGlyph() {
   );
 }
 
-export type InspectorSection = "files" | "overview" | "changes" | "verification";
+export type InspectorSection = "files" | "overview" | "changes" | "verification" | "output";
 
 const SECTIONS: { id: InspectorSection; label: string }[] = [
   { id: "files", label: "All files" },
   { id: "overview", label: "Overview" },
   { id: "changes", label: "Changes" },
-  { id: "verification", label: "Verification" }
+  { id: "verification", label: "Verification" },
+  { id: "output", label: "Output" }
+];
+
+/**
+ * Which kind of process output is showing (D-050). This switch lives here and
+ * not in the dock: the dock is the terminal, and the request that opens it is
+ * unambiguous (D-049). The panel is where a person goes to *inspect* — the
+ * runner, the environment, the diff, the ledger — and a build log is that.
+ */
+const OUTPUT_KINDS: { kind: ProcessKind; label: string }[] = [
+  { kind: "setup", label: "Setup" },
+  { kind: "run", label: "App" },
+  { kind: "verification", label: "Checks" }
 ];
 
 type DiffLoad =
@@ -346,6 +361,7 @@ export function Inspector({
   onSection,
   openPath,
   onOpenFile,
+  hostedHere,
   onClose,
   onDetail,
   onRevoke
@@ -356,11 +372,15 @@ export function Inspector({
   /** The file currently taking the room's canvas, so the tree can mark it. */
   openPath: string | null;
   onOpenFile: (path: string) => void;
+  /** False when this workstream's repository is not checked out here. Output
+   *  and files are read from the machine that holds it and nowhere else. */
+  hostedHere: boolean;
   onClose: () => void;
   onDetail: (detail: MissionDetailResponse) => void;
   onRevoke: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const [outputKind, setOutputKind] = useState<ProcessKind>("setup");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, DiffLoad>>({});
   const [retrying, setRetrying] = useState(false);
@@ -462,7 +482,9 @@ export function Inspector({
 
         <div className="inspector-head">
           <div className="inspector-tabs" role="tablist" aria-label="Inspector sections">
-            {SECTIONS.map((option) => (
+            {SECTIONS.filter(
+              (option) => hostedHere || (option.id !== "output" && option.id !== "files")
+            ).map((option) => (
               <button
                 key={option.id}
                 role="tab"
@@ -478,6 +500,27 @@ export function Inspector({
         </div>
 
         <div className="inspector-scroll">
+          {section === "output" && (
+            <>
+              <div className="output-kinds" role="tablist" aria-label="Which output">
+                {OUTPUT_KINDS.map((entry) => (
+                  <button
+                    key={entry.kind}
+                    role="tab"
+                    aria-selected={outputKind === entry.kind}
+                    className={outputKind === entry.kind ? "dock-view active" : "dock-view"}
+                    onClick={() => setOutputKind(entry.kind)}
+                    data-testid="output-kind"
+                    data-kind={entry.kind}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+              </div>
+              <ProcessLogView missionId={detail.mission.missionId} kind={outputKind} />
+            </>
+          )}
+
           {section === "files" && (
             <FileTree missionId={detail.mission.missionId} openPath={openPath} onOpenFile={onOpenFile} />
           )}
