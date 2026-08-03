@@ -181,6 +181,9 @@ create table if not exists control_leases (
 -- Exactly one current holder per workstream.
 create unique index if not exists control_leases_one_current
   on control_leases (wst_id) where state in ('held', 'releasing');
+-- When the holder last exercised their authority. A lease is a grant, not a
+-- connection: it survives disconnection and lapses only on genuine absence.
+alter table control_leases add column if not exists last_heartbeat_at timestamptz;
 
 create table if not exists control_requests (
   req_id       text primary key,

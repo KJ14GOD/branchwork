@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { IpcAuthStatus, NovusBridge } from "@novus/contracts";
+import type { IpcAuthStatus, NovusBridge, TerminalChunk } from "@novus/contracts";
 
 /**
  * The complete renderer surface. No Node, no Electron internals, no session
@@ -64,6 +64,22 @@ const novus: NovusBridge = {
     prepareLocalFiles: (input) => ipcRenderer.invoke("novus:workspace:prepare-local-files", input),
     command: (input) => ipcRenderer.invoke("novus:workspace:command", input),
     stop: (input) => ipcRenderer.invoke("novus:workspace:stop", input)
+  },
+  // Local only, by construction: every verb here reaches this machine's own
+  // main process and there is no shell verb in the runner protocol for any of
+  // it to travel through (D-042).
+  terminal: {
+    list: (missionId) => ipcRenderer.invoke("novus:terminal:list", missionId),
+    open: (input) => ipcRenderer.invoke("novus:terminal:open", input),
+    write: (input) => ipcRenderer.invoke("novus:terminal:write", input),
+    resize: (input) => ipcRenderer.invoke("novus:terminal:resize", input),
+    rename: (input) => ipcRenderer.invoke("novus:terminal:rename", input),
+    close: (sessionId) => ipcRenderer.invoke("novus:terminal:close", sessionId),
+    onOutput: (listener: (chunk: TerminalChunk) => void) => {
+      const wrapped = (_event: unknown, chunk: TerminalChunk) => listener(chunk);
+      ipcRenderer.on("novus:terminal-output", wrapped);
+      return () => ipcRenderer.removeListener("novus:terminal-output", wrapped);
+    }
   }
 };
 

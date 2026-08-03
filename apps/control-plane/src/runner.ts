@@ -18,6 +18,11 @@ import { markDirectionApplied } from "./directions.ts";
 import { dispatchQueuedForController } from "./executions.ts";
 import { nextSeq, recordEvent, recordEventAtSeq } from "./events.ts";
 import {
+  CloneCredentialError,
+  CloneCredentialRequestSchema,
+  issueCloneCredential
+} from "./repo-clone.ts";
+import {
   newCheckId,
   newCheckpointId,
   newFileChangeId,
@@ -36,6 +41,7 @@ import { ensureWorkspace } from "./workspace.ts";
  *   POST   /runner/commands/:commandId                  (runner credential: ack | complete | fail)
  *   POST   /runner/events                               (runner credential: sequenced, deduped)
  *   POST   /runner/heartbeat                            (runner credential)
+ *   POST   /runner/clone-credential                     (runner credential: repository-scoped, short-lived)
  *
  * The credential is the only thing that may write `harness.*`, `runner.*`,
  * `execution.*`, `workspace.*`, or verification evidence. A normal user
@@ -691,21 +697,11 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
       return deps.sendError(reply, 422, "invalid_label", "A runner label can't be a filesystem path.");
     }
 
-    const repository = await deps.db.query(
-      `select repo.provider from workstreams w
-         join repositories repo on repo.repo_id = w.repo_id
-        where w.wst_id = $1`,
-      [params.data.workstreamId]
-    );
-    if (repository.rows[0]?.provider !== "local") {
-      return deps.sendError(
-        reply,
-        409,
-        "runner_not_local",
-        "Only a local repository runs on this machine; cloud runners aren't built yet."
-      );
-    }
-
+    // No provider gate. A local repository is already on the machine that
+    // registered it; a GitHub repository is fetched by the runner itself with a
+    // repository-scoped credential (/runner/clone-credential), after which it
+    // is the same worktree, the same runner, and the same workspace runtime.
+    // This is still the local runner — cloud runners remain unbuilt.
     const credential = newSecretToken();
     const runnerId = newRunnerId();
     const registration = await withTransaction(deps.db, async (client) => {
@@ -916,5 +912,39 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
     const ctx = await requireRunner(request, reply);
     if (!ctx) return;
     return { ok: true };
+  });
+
+  /**
+   * The credential a runner uses to fetch its GitHub repository onto the
+   * machine it runs on (ARCHITECTURE.md#secret-placement: repository access is
+   * "issued per workspace, held by the runner supervisor").
+   *
+   * Only over the runner credential — a user session authenticates as a person
+   * and gets 401 here — and only for the workstream that credential is scoped
+   * to, which the runner does not get to name. Nothing durable records what is
+   * returned: no row, no event, no log line.
+   */
+  app.post("/runner/clone-credential", async (request, reply) => {
+    const ctx = await requireRunner(request, reply);
+    if (!ctx) return;
+    const body = CloneCredentialRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return deps.sendError(reply, 400, "bad_request", "Malformed clone-credential request.");
+    }
+    // A runner that believes it is somewhere else is refused, not corrected.
+    if (body.data.workstreamId !== undefined && body.data.workstreamId !== ctx.workstreamId) {
+      return deps.sendError(reply, 404, "not_found", "No such workstream for this runner.");
+    }
+    try {
+      return await issueCloneCredential(deps.db, deps.provider, {
+        orgId: ctx.orgId,
+        workstreamId: ctx.workstreamId
+      });
+    } catch (error) {
+      if (error instanceof CloneCredentialError) {
+        return deps.sendError(reply, error.status, error.code, error.message);
+      }
+      throw error;
+    }
   });
 }

@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "packageManager": "pnpm@10.12.1",
   "pnpm": {
-    "onlyBuiltDependencies": ["electron", "esbuild"]
+    "onlyBuiltDependencies": ["@homebridge/node-pty-prebuilt-multiarch", "electron", "esbuild"]
   },
   "scripts": {
     "db:up": "docker start novus-pg 2>/dev/null || docker run -d --name novus-pg -e POSTGRES_PASSWORD=novus -e POSTGRES_USER=novus -e POSTGRES_DB=novus -p 5433:5432 postgres:16",

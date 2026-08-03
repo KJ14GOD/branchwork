@@ -22,6 +22,7 @@ import {
 import { GatedAction } from "../components/gated";
 import { Baton, HumanMark } from "../components/identity";
 import type { InspectorSection } from "../components/inspector";
+import { TerminalDrawer } from "../components/terminal-drawer";
 import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
 import type { Project } from "./project-shell";
 
@@ -60,7 +61,9 @@ export function ProjectRoom({
   onSetup,
   onSelectTab,
   onDetail,
-  onCreated
+  onCreated,
+  terminalOpen,
+  onHideTerminal
 }: {
   project: Project;
   details: Record<string, MissionDetailResponse>;
@@ -73,6 +76,10 @@ export function ProjectRoom({
   onSelectTab: (missionId: string | null) => void;
   onDetail: (detail: MissionDetailResponse) => void;
   onCreated: (mission: Mission) => void;
+  /** The bottom terminal dock. Its toggle sits with the other workspace
+   *  controls, so the shell owns the state and the room only renders it. */
+  terminalOpen: boolean;
+  onHideTerminal: () => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -640,6 +647,13 @@ export function ProjectRoom({
         isController={isController || isDraft}
         onSubmit={submit}
       />
+
+      {/* The bottom dock. It shares the room's width and shortens the trace
+          rather than replacing it; below the single-column threshold it takes
+          the room (DESIGN.md#component-behavior). */}
+      {terminalOpen && executionAvailable && selectedMissionId !== null && (
+        <TerminalDrawer missionId={selectedMissionId} onHide={onHideTerminal} />
+      )}
 
       </div>
 

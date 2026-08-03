@@ -4,6 +4,7 @@ import { novus } from "../bridge";
 import { AddProjectDialog, type PickedRepository } from "../components/add-project-dialog";
 import { HumanMark } from "../components/identity";
 import { RunControl } from "../components/run-control";
+import { TerminalToggle } from "../components/terminal-drawer";
 import { WorkspaceSetupDialog } from "../components/workspace-setup";
 import { truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
@@ -172,6 +173,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** The docked evidence panel. Held here because its toggle lives in the top
    *  bar and because the panel outlives the workstream tab beneath it. */
   const [inspector, setInspector] = useState<InspectorSection | null>(null);
+  /** The bottom terminal dock, closed by default. Held here for the same
+   *  reason: its toggle sits with the other workspace controls. */
+  const [terminalOpen, setTerminalOpen] = useState(false);
   /** Reopening returns to whatever section you were last reading. */
   const lastSection = useRef<InspectorSection>("overview");
   /** Which projects are showing their workstreams. Disclosure is the reader's
@@ -404,6 +408,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         {openMission && openMission.mission.repository?.provider === "local" && (
           <RunControl detail={openMission} onSetup={() => setSetupOpen(true)} />
         )}
+        {/* Beside Run and the evidence toggle, never a second navigation. It
+            stays visible and disabled when the workspace is on someone else's
+            machine, saying why in words (D-042). */}
+        <TerminalToggle
+          open={terminalOpen}
+          onToggle={() => setTerminalOpen((open) => !open)}
+          availableHere={
+            selectedProject?.provider === "local" && selectedProject.onThisMachine
+          }
+          disabled={!selectedProject || selection?.missionId === null}
+        />
         <button
           className={inspector ? "icon-button active" : "icon-button"}
           onClick={() =>
@@ -575,6 +590,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               onSelectTab={handleSelectTab}
               onDetail={handleDetail}
               onCreated={handleCreated}
+              terminalOpen={terminalOpen}
+              onHideTerminal={() => setTerminalOpen(false)}
             />
           ) : (
             <div className="empty room-empty" data-testid="no-projects">

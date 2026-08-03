@@ -5,8 +5,12 @@ import {
   DirectionResolutionSchema,
   IpcDirectInputSchema,
   MissionRoleSchema,
+  OpenTerminalInputSchema,
   PrepareLocalFilesInputSchema,
   SaveWorkspaceSettingsInputSchema,
+  TerminalRenameInputSchema,
+  TerminalResizeInputSchema,
+  TerminalWriteInputSchema,
   WorkspaceCommandInputSchema,
   type IpcAuthStatus,
   type IpcResult
@@ -18,9 +22,17 @@ import { probeHarnesses } from "./harness-probe";
 import { ensureLocalBranch, pathForLocalRepo, pickLocalRepository, resolveLocalBase } from "./local-repos";
 import { startRunnerAgent, type RunnerAgent } from "./runner-agent";
 import {
+  closeTerminal,
   inspectWorkspace,
+  listTerminals,
+  onTerminalOutput,
+  openTerminal,
   prepareLocalFiles,
+  renameTerminal,
+  resizeTerminal,
   saveWorkspaceSettings,
+  shutdownTerminals,
+  writeTerminal,
   type WorkspaceTarget
 } from "./workspace";
 import { SessionStore } from "./session-store";
@@ -485,6 +497,70 @@ function registerIpc(): void {
     return result;
   });
 
+  // --- The interactive terminal (D-042) -------------------------------------
+  // Local only. These channels reach `workspace.ts` directly and never the
+  // control plane: there is no shell verb in the runner protocol, so an
+  // interactive shell on this machine is unreachable from anywhere else by
+  // construction. `targetFor` above already refuses a workstream whose
+  // repository is not on this machine, which is the same refusal the room
+  // states in words rather than hiding the control.
+
+  ipcMain.handle("novus:terminal:list", async (_event, raw: unknown) => {
+    const parsed = MissionIdSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(async () => listTerminals((await targetFor(parsed.data)).workstreamId));
+  });
+
+  ipcMain.handle("novus:terminal:open", async (_event, raw: unknown) => {
+    const parsed = OpenTerminalInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal request." };
+    return call(async () =>
+      openTerminal(await targetFor(parsed.data.missionId), {
+        name: parsed.data.name,
+        kind: parsed.data.kind,
+        cols: parsed.data.cols,
+        rows: parsed.data.rows
+      })
+    );
+  });
+
+  ipcMain.handle("novus:terminal:write", async (_event, raw: unknown) => {
+    const parsed = TerminalWriteInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal input." };
+    return call(async () => {
+      writeTerminal(parsed.data.sessionId, parsed.data.data);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:terminal:resize", async (_event, raw: unknown) => {
+    const parsed = TerminalResizeInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal size." };
+    return call(async () => {
+      resizeTerminal(parsed.data.sessionId, parsed.data.cols, parsed.data.rows);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:terminal:rename", async (_event, raw: unknown) => {
+    const parsed = TerminalRenameInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal name." };
+    return call(async () => renameTerminal(parsed.data.sessionId, parsed.data.name));
+  });
+
+  ipcMain.handle("novus:terminal:close", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("trm_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal id." };
+    return call(async () => {
+      await closeTerminal(parsed.data);
+      return null;
+    });
+  });
+
+  // Raw output goes to this window and stops there: it is never an event, never
+  // reported to the control plane, and never evidence (D-041).
+  onTerminalOutput((chunk) => window?.webContents.send("novus:terminal-output", chunk));
+
   // --- Evidence -------------------------------------------------------------
 
   ipcMain.handle("novus:evidence:file-diff", async (_event, raw: unknown) => {
@@ -536,15 +612,19 @@ app.whenReady().then(async () => {
 // in-flight turn, records the interruption as an explicit outcome, and flushes
 // the outbox — a room never hangs on "running" forever, and no orphan process
 // is left behind (D-034).
+// An interactive terminal is held to the same rule for the same reason: a PTY
+// this process opened must not survive it, so quitting kills every session and
+// its whole process tree before the app exits.
 let quitting = false;
 app.on("before-quit", (event) => {
-  if (quitting || !runner) return;
+  if (quitting) return;
   quitting = true;
   event.preventDefault();
-  runner
-    .shutdown("The host desktop closed while the agent was working.")
-    .catch(() => undefined)
-    .finally(() => app.exit(0));
+  const exit = () => app.exit(0);
+  Promise.allSettled([
+    shutdownTerminals(),
+    runner?.shutdown("The host desktop closed while the agent was working.") ?? Promise.resolve()
+  ]).then(exit, exit);
 });
 
 app.on("window-all-closed", () => {

@@ -4,6 +4,9 @@ import type {
   PreparedFile,
   RunnerEvent,
   SettingsScope,
+  TerminalChunk,
+  TerminalKind,
+  TerminalSession,
   WorkspaceProposal,
   WorkspaceSettings
 } from "@novus/contracts";
@@ -15,12 +18,13 @@ import { gitExec, type GitExec } from "./workspace-git";
 import { inspectProject } from "./workspace-inspect";
 import { createPortAllocator, type PortAllocator, type PortRange } from "./workspace-ports";
 import { emptySecretStore, fileSecretStore, type SecretStore } from "./workspace-secrets";
-import { projectEnv } from "./workspace-env";
+import { projectEnv, terminalEnv } from "./workspace-env";
 import {
   reconcileRecordedProcesses,
   WorkspaceCommandError,
   WorkspaceProcesses
 } from "./workspace-processes";
+import { TerminalError, TerminalSessions } from "./workspace-terminal";
 
 /**
  * OWNER: the workspace runtime's desktop half (D-040, D-041).
@@ -177,6 +181,7 @@ async function named<T>(work: () => Promise<T>): Promise<T> {
   } catch (error) {
     if (error instanceof WorkspaceConfigError) throw new ApiError("workspace_config", error.message, 409);
     if (error instanceof WorkspaceCommandError) throw new ApiError("workspace_command", error.message, 409);
+    if (error instanceof TerminalError) throw new ApiError("terminal", error.message, 409);
     throw error;
   }
 }
@@ -229,6 +234,119 @@ export async function prepareLocalFiles(
       paths
     });
   });
+}
+
+// --- The interactive terminal -------------------------------------------------
+// Local IPC only, exactly like `inspectWorkspace` and `prepareLocalFiles` above:
+// a session is opened by the person sitting at the machine that holds the
+// repository. It is deliberately *not* part of the runner half below — there is
+// no shell kind in the runner protocol and none is added, so an interactive
+// shell is unreachable from the control plane by construction rather than by a
+// check somebody could get wrong (D-042).
+
+let sessions: TerminalSessions | null = null;
+
+function terminals(): TerminalSessions {
+  sessions ??= new TerminalSessions();
+  return sessions;
+}
+
+/** Streamed output for every session on this machine. The listener is in this
+ *  process; nothing here is reported anywhere. */
+export function onTerminalOutput(listener: (chunk: TerminalChunk) => void): () => void {
+  return terminals().onOutput(listener);
+}
+
+/**
+ * Opens a session in the workstream's worktree, under the terminal environment
+ * D-041 describes: the project's environment, plus the user's own login-shell
+ * profile beneath it, plus the one variable only this environment gets —
+ * `NOVUS_WORKSPACE_DIR`, because a terminal is the one place a person needs to
+ * know where they are.
+ */
+export async function openTerminal(
+  target: WorkspaceTarget,
+  input: { name?: string | undefined; kind?: TerminalKind | undefined; cols?: number | undefined; rows?: number | undefined },
+  host?: WorkspaceHost
+): Promise<TerminalSession> {
+  return named(async () => {
+    const resolved = await resolve(target, host);
+    const settings = loadWorkspaceSettings(resolved.worktree).effective;
+    const ports = createPortAllocator({
+      filePath: join(resolved.host.userDataPath, "workspace-ports.json")
+    });
+    const range = await ports.rangeFor(target.workstreamId);
+    const env = terminalEnv({
+      workspace: {
+        workspaceId: target.workstreamId,
+        missionBranch: target.missionBranch,
+        port: range.start,
+        portRangeStart: range.start,
+        portRangeEnd: range.end
+      },
+      settings,
+      secrets: resolved.secrets.values(target.localId, settings.secretNames),
+      profile: await terminals().profile(),
+      workspaceDir: resolved.worktree
+    });
+    return terminals().open({
+      workstreamId: target.workstreamId,
+      worktree: resolved.worktree,
+      sourceRepo: resolved.repositoryPath,
+      env,
+      name: input.name,
+      kind: input.kind,
+      cols: input.cols,
+      rows: input.rows
+    });
+  });
+}
+
+/** This workstream's sessions on this machine. Empty after a relaunch: nothing
+ *  about a session is written down, because a PTY cannot survive the process
+ *  that owned it and a dead tab shown as live would be a lie. */
+export function listTerminals(workstreamId: string): TerminalSession[] {
+  return terminals().list(workstreamId);
+}
+
+export function writeTerminal(sessionId: string, data: string): void {
+  try {
+    terminals().write(sessionId, data);
+  } catch (error) {
+    throw terminalApiError(error);
+  }
+}
+
+export function resizeTerminal(sessionId: string, cols: number, rows: number): void {
+  try {
+    terminals().resize(sessionId, cols, rows);
+  } catch (error) {
+    throw terminalApiError(error);
+  }
+}
+
+export function renameTerminal(sessionId: string, name: string): TerminalSession {
+  try {
+    return terminals().rename(sessionId, name);
+  } catch (error) {
+    throw terminalApiError(error);
+  }
+}
+
+export async function closeTerminal(sessionId: string): Promise<void> {
+  await terminals().close(sessionId);
+}
+
+/** Called when the application quits: every session is killed and nothing is
+ *  left behind (D-034). */
+export async function shutdownTerminals(): Promise<void> {
+  const current = sessions;
+  sessions = null;
+  if (current) await current.shutdown();
+}
+
+function terminalApiError(error: unknown): unknown {
+  return error instanceof TerminalError ? new ApiError("terminal", error.message, 409) : error;
 }
 
 // --- The runner half ----------------------------------------------------------
@@ -437,4 +555,4 @@ function pickRun(settings: WorkspaceSettings, name: string | null): WorkspaceSet
   return chosen;
 }
 
-export { WorkspaceCommandError, WorkspaceConfigError };
+export { TerminalError, WorkspaceCommandError, WorkspaceConfigError };

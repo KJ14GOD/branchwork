@@ -534,6 +534,81 @@ export const WorkspaceCommandInputSchema = z.object({
   name: CommandName.optional()
 });
 
+// --- The interactive terminal (D-042) ---------------------------------------
+// An interactive shell on a local workspace belongs to the person whose machine
+// hosts it, and to nobody else. It is not lease-granted and not role-granted:
+// there is no shell kind in `RunnerCommandKindSchema` and none is added, so the
+// restriction is structural rather than presentational and a crafted request
+// has nothing to reach. These shapes cross the local IPC bridge only.
+
+/** What a session is for. Distinguished so a tab says what it is, never so a
+ *  kind grants anything: every kind is the same shell with the same authority. */
+export const TerminalKindSchema = z.enum(["shell", "run", "test", "log"]);
+export type TerminalKind = z.infer<typeof TerminalKindSchema>;
+
+/** A PTY does not survive the process that owned it, so there is no third
+ *  state: after a relaunch a session is simply gone, never a dead tab shown
+ *  as live. */
+export const TerminalSessionStateSchema = z.enum(["running", "exited"]);
+export type TerminalSessionState = z.infer<typeof TerminalSessionStateSchema>;
+
+export const TerminalSessionSchema = z.object({
+  sessionId: z.string().startsWith("trm_"),
+  /** Sessions belong to a workstream, like every other workspace process. */
+  workstreamId: z.string().startsWith("wst_"),
+  name: z.string().min(1).max(60),
+  kind: TerminalKindSchema,
+  state: TerminalSessionStateSchema,
+  exitCode: z.number().int().nullable(),
+  startedAt: z.string().datetime(),
+  endedAt: z.string().datetime().nullable(),
+  /**
+   * The session's bounded local scrollback, so reopening the drawer shows what
+   * already happened. It crosses the local IPC bridge and stops there: raw
+   * terminal output is never written into an event, never reported to the
+   * control plane, and never becomes evidence (D-041, D-042).
+   */
+  scrollback: z.string()
+});
+export type TerminalSession = z.infer<typeof TerminalSessionSchema>;
+
+/** One streamed piece of a session's output. `state` rides along so the last
+ *  chunk of a session is also the news that it ended. */
+export const TerminalChunkSchema = z.object({
+  sessionId: z.string().startsWith("trm_"),
+  data: z.string(),
+  state: TerminalSessionStateSchema,
+  exitCode: z.number().int().nullable()
+});
+export type TerminalChunk = z.infer<typeof TerminalChunkSchema>;
+
+export const OpenTerminalInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  name: z.string().trim().min(1).max(60).optional(),
+  kind: TerminalKindSchema.default("shell"),
+  cols: z.number().int().min(2).max(1000).optional(),
+  rows: z.number().int().min(1).max(500).optional()
+});
+
+const TerminalSessionId = z.string().startsWith("trm_");
+
+export const TerminalWriteInputSchema = z.object({
+  sessionId: TerminalSessionId,
+  /** Keystrokes, bounded: an input channel is not a file-transfer channel. */
+  data: z.string().max(8_192)
+});
+
+export const TerminalResizeInputSchema = z.object({
+  sessionId: TerminalSessionId,
+  cols: z.number().int().min(2).max(1000),
+  rows: z.number().int().min(1).max(500)
+});
+
+export const TerminalRenameInputSchema = z.object({
+  sessionId: TerminalSessionId,
+  name: z.string().trim().min(1).max(60)
+});
+
 // --- Control (PRODUCT.md#control) -------------------------------------------
 
 export const ControlRequestSchema = z.object({
@@ -1072,5 +1147,31 @@ export interface NovusBridge {
       name?: string;
     }): Promise<IpcResult<null>>;
     stop(input: { missionId: string; name: string }): Promise<IpcResult<null>>;
+  };
+  /**
+   * The interactive terminal (D-042). Every verb here is local: a session is
+   * created by the machine that holds the repository, exactly like
+   * `workspace.inspect` and `workspace.prepareLocalFiles`. Nothing in this
+   * block has a control-plane route or a runner command behind it, and none is
+   * added — controlling a mission is not unrestricted access to the host
+   * machine, and the restriction is structural so there is nothing to
+   * authorize incorrectly.
+   */
+  terminal: {
+    /** This workstream's sessions on this machine. Empty after a relaunch,
+     *  because a PTY does not outlive the process that owned it. */
+    list(missionId: string): Promise<IpcResult<TerminalSession[]>>;
+    open(input: {
+      missionId: string;
+      name?: string;
+      kind: TerminalKind;
+      cols?: number;
+      rows?: number;
+    }): Promise<IpcResult<TerminalSession>>;
+    write(input: { sessionId: string; data: string }): Promise<IpcResult<null>>;
+    resize(input: { sessionId: string; cols: number; rows: number }): Promise<IpcResult<null>>;
+    rename(input: { sessionId: string; name: string }): Promise<IpcResult<TerminalSession>>;
+    close(sessionId: string): Promise<IpcResult<null>>;
+    onOutput(listener: (chunk: TerminalChunk) => void): () => void;
   };
 }

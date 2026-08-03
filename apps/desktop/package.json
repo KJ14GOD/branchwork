@@ -11,6 +11,7 @@
     "e2e": "vitest run --config e2e/vitest.config.ts"
   },
   "dependencies": {
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",
     "@novus/contracts": "workspace:*",
     "simple-icons": "^16.27.1",
     "smol-toml": "^1.7.1",

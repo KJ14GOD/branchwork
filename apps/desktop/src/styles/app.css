@@ -2253,3 +2253,188 @@ body {
   padding: 0;
   border-top: none;
 }
+
+/* ---------- The terminal (DESIGN.md#component-behavior, D-042) ---------- */
+
+/* A bottom dock in the room: it shares the room's width, shortens the trace
+   rather than replacing it, and is closed by default. Its height is a
+   proportion of the viewport — the same measure the composer's own ceiling
+   uses — so resizing mints no new value. */
+.terminal-dock {
+  flex: none;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 20vh;
+  max-height: 60vh;
+  background: var(--surface-1);
+  border-top: 1px solid var(--edge);
+}
+
+/* The drag edge. Two pointer-target rows tall, and invisible until reached. */
+.terminal-grip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--s-2);
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.terminal-grip:hover {
+  background: var(--hover);
+}
+
+.terminal-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 32px;
+  padding: var(--s-2) var(--s-6) 0;
+}
+
+.terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.terminal-head-spacer {
+  flex: 1;
+}
+
+/* A tab says what it is and what it is doing: kind in words, state as a dot
+   plus text, never colour alone (DESIGN.md#status-semantics). */
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 28px;
+  padding: 0 var(--s-2);
+  font: var(--type-row);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-control);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.terminal-tab:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.terminal-tab.active {
+  background: var(--selected);
+  color: var(--text-1);
+}
+
+.terminal-tab-name {
+  max-width: 20ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* shell / run / test / log, told apart in words at the micro step rather than
+   by a badge shape. */
+.terminal-tab-kind {
+  font: var(--type-micro);
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.terminal-tab-state {
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.terminal-new {
+  white-space: nowrap;
+}
+
+.terminal-rename {
+  width: 20ch;
+  min-height: 28px;
+}
+
+.terminal-error {
+  flex: none;
+  padding: 0 var(--s-6);
+}
+
+/* Measured, never assumed: ten characters wide, laid out but not shown, so the
+   PTY can be told the size the reader actually has. */
+.terminal-metric {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  font: var(--type-row);
+  font-family: var(--font-mono);
+  white-space: pre;
+}
+
+.terminal-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-6) var(--s-5);
+  font: var(--type-body);
+  color: var(--text-1);
+}
+
+/* The one region in the dock that scrolls. */
+.terminal-screen {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s-2) var(--s-6) var(--s-4);
+  cursor: text;
+}
+
+.terminal-text {
+  font: var(--type-row);
+  font-family: var(--font-mono);
+  color: var(--text-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.terminal-ended {
+  margin-top: var(--s-3);
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+@media (max-width: 900px) {
+  /* Below the single-column threshold the dock becomes a dedicated full-room
+     view, the way Changes and Verification do. */
+  .terminal-dock {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    max-height: none;
+    height: auto !important;
+    border-top: none;
+    background: var(--surface-2);
+  }
+
+  .terminal-grip {
+    display: none;
+  }
+
+  .terminal-head,
+  .terminal-error,
+  .terminal-empty,
+  .terminal-screen {
+    padding-left: var(--s-5);
+    padding-right: var(--s-5);
+  }
+}

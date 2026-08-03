@@ -1,5 +1,6 @@
 import { createSign } from "node:crypto";
 import type { AvailableRepository, BaseRevision } from "@novus/contracts";
+import type { CloneCredential, CloneCredentialMinter } from "./repo-clone.ts";
 import {
   BranchConflictError,
   ProviderTransientError,
@@ -22,9 +23,10 @@ interface CachedRepo {
  * Identity OAuth is never used here. Same interface and idempotency
  * semantics the fake enforces; V0 binds to the app's first installation.
  */
-export class GithubAppRepositoryProvider implements RepositoryProvider {
+export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCredentialMinter {
   readonly kind = "fake" as const; // narrow union kept until the contract widens; behavior is live
   private token: { value: string; expiresAt: number } | null = null;
+  private installation: number | null = null;
   private repoCache = new Map<string, CachedRepo>();
 
   private readonly appId: string;
@@ -43,22 +45,68 @@ export class GithubAppRepositoryProvider implements RepositoryProvider {
     return `${unsigned}.${signature}`;
   }
 
-  private async installationToken(): Promise<string> {
-    if (this.token && this.token.expiresAt > Date.now() + 60_000) return this.token.value;
-    const headers = { authorization: `Bearer ${this.appJwt()}`, accept: "application/vnd.github+json" };
-    const installations = await fetch(`${API}/app/installations?per_page=1`, { headers });
+  private appHeaders(): Record<string, string> {
+    return { authorization: `Bearer ${this.appJwt()}`, accept: "application/vnd.github+json" };
+  }
+
+  /** V0 binds to the app's first installation; remembered so minting a
+   *  per-repository token is one request rather than two. */
+  private async installationId(): Promise<number> {
+    if (this.installation !== null) return this.installation;
+    const installations = await fetch(`${API}/app/installations?per_page=1`, { headers: this.appHeaders() });
     if (!installations.ok) throw new ProviderTransientError(`installation lookup failed (${installations.status})`);
     const list = (await installations.json()) as { id: number }[];
     const installation = list[0];
     if (!installation) throw new ProviderTransientError("the GitHub App has no installation yet");
-    const minted = await fetch(`${API}/app/installations/${installation.id}/access_tokens`, {
+    this.installation = installation.id;
+    return installation.id;
+  }
+
+  private async installationToken(): Promise<string> {
+    if (this.token && this.token.expiresAt > Date.now() + 60_000) return this.token.value;
+    const minted = await fetch(`${API}/app/installations/${await this.installationId()}/access_tokens`, {
       method: "POST",
-      headers
+      headers: this.appHeaders()
     });
     if (!minted.ok) throw new ProviderTransientError(`installation token failed (${minted.status})`);
     const body = (await minted.json()) as { token: string; expires_at: string };
     this.token = { value: body.token, expiresAt: Date.parse(body.expires_at) };
     return body.token;
+  }
+
+  /**
+   * A credential for **one** repository, read-only, ~1h, minted fresh for the
+   * operation that asked and never cached
+   * (ARCHITECTURE.md#secret-placement). The control-plane-wide installation
+   * token above is deliberately not what a runner receives: a runner sees one
+   * repository, exactly as it sees one mission.
+   *
+   * Read, not write: nothing on the runner pushes today — a checkpoint is a
+   * local commit — so this is the narrowest permission that does the job.
+   */
+  async mintCloneCredential(providerRepoId: string): Promise<CloneCredential> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const numericId = Number(repo.providerRepoId);
+    if (!Number.isSafeInteger(numericId)) throw new UnknownRepositoryError();
+    const minted = await fetch(`${API}/app/installations/${await this.installationId()}/access_tokens`, {
+      method: "POST",
+      headers: { ...this.appHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        repository_ids: [numericId],
+        permissions: { contents: "read", metadata: "read" }
+      })
+    });
+    if (minted.status === 404) throw new UnknownRepositoryError();
+    if (!minted.ok) throw new ProviderTransientError(`repository credential failed (${minted.status})`);
+    const body = (await minted.json()) as { token: string; expires_at: string };
+    return {
+      // Plain: the token goes to the runner separately and is injected per
+      // operation, never baked into a remote that would persist in a config.
+      remoteUrl: `https://github.com/${repo.fullName}.git`,
+      username: "x-access-token",
+      token: body.token,
+      expiresAt: body.expires_at
+    };
   }
 
   private async rest(path: string, init: RequestInit = {}): Promise<Response> {
