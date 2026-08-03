@@ -20,7 +20,7 @@ import {
   buildFeed
 } from "../components/direction-trace";
 import { GatedAction } from "../components/gated";
-import { Baton, HumanMark } from "../components/identity";
+import { HumanMark } from "../components/identity";
 import type { InspectorSection } from "../components/inspector";
 import { RuntimeDock } from "../components/runtime-dock";
 import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
@@ -362,10 +362,6 @@ export function ProjectRoom({
         <div className="state-line" role="status" aria-live="polite" data-testid="state-line">
           {stateLine ? (
             <>
-              <span
-                className={`status-dot ${stateLine.tone}${stateLine.working ? " breath" : ""}`}
-                data-testid={stateLine.working ? "working" : "state-dot"}
-              />
               <span className="state-name">{stateLine.name}</span>
               <span className="state-detail">— {stateLine.detail}</span>
               {stateLine.suffix && <span className="state-detail">· {stateLine.suffix}</span>}
@@ -405,7 +401,6 @@ export function ProjectRoom({
             </>
           ) : (
             <>
-              <span className="status-dot neutral" />
               <span className="state-name">Ready</span>
               <span className="state-detail">
                 {isDraft ? "— the first direction creates this workstream" : "— loading this workstream"}
@@ -427,14 +422,12 @@ export function ProjectRoom({
                 {controller ? (
                   <>
                     <HumanMark login={controller.login} name={controller.name} />
-                    <Baton holderUserId={controller.userId} />
                     <span className="controller-name">
                       {isController ? "You have the baton" : `${controller.name ?? controller.login} has the baton`}
                     </span>
                   </>
                 ) : (
                   <>
-                    <span className="status-dot warn" />
                     <span className="controller-name">No one holds the baton</span>
                   </>
                 )}
@@ -479,7 +472,6 @@ export function ProjectRoom({
                   className={feed.setup.danger ? "workspace-row danger" : "workspace-row"}
                   data-testid="setup-row"
                 >
-                  <span className="status-dot neutral" />
                   <span>{feed.setup.label}</span>
                   <button
                     className="btn btn-text workspace-row-action"
@@ -511,7 +503,6 @@ export function ProjectRoom({
                 .filter((request) => request.state === "open")
                 .map((request) => (
                   <div className="authority-card" key={request.requestId} data-testid="control-request">
-                    <span className="status-dot warn" />
                     <HumanMark login={request.requesterLogin} />
                     <span className="authority-text">
                       <strong>{request.requesterLogin}</strong> requests control
@@ -563,7 +554,6 @@ export function ProjectRoom({
 
               {liveOffer && offerIsLive && (
                 <div className="authority-card" data-testid="handoff-offer">
-                  <span className="status-dot warn" />
                   <HumanMark login={liveOffer.fromLogin} />
                   <span className="authority-text">
                     <strong>{liveOffer.fromLogin}</strong> offers control to{" "}

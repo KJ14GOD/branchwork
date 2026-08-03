@@ -198,11 +198,17 @@ function usePanes(missionId: string) {
  *  process, which are the four things that produce local output. */
 type DockView = "terminal" | ProcessKind;
 
+/**
+ * The dock shows *logs*; the evidence panel shows the claims they support. The
+ * two used the word "Verification" for both, which made one word mean the
+ * durable attributed record in one place and a raw local log in another
+ * (D-047). Only the panel says Verification now.
+ */
 const VIEWS: { view: DockView; label: string }[] = [
   { view: "terminal", label: "Terminal" },
   { view: "setup", label: "Setup" },
-  { view: "run", label: "Running" },
-  { view: "verification", label: "Verification" }
+  { view: "run", label: "App" },
+  { view: "verification", label: "Checks" }
 ];
 
 export function RuntimeDock({
@@ -258,7 +264,10 @@ export function RuntimeDock({
   );
 
   // What already happened arrives with the session list, because the dock is
-  // unmounted while it is closed and a session keeps running regardless.
+  // unmounted while it is closed and a session keeps running regardless. If
+  // there is nothing open, one is started: showing the terminal is the request,
+  // and a pane offering a button that opens a terminal is a door in front of a
+  // door.
   useEffect(() => {
     let live = true;
     void (async () => {
@@ -269,6 +278,17 @@ export function RuntimeDock({
         return;
       }
       setSessions(result.value);
+      if (result.value.length === 0) {
+        const opened = await novus().terminal.open({ missionId, kind: "shell" });
+        if (!live) return;
+        if (!opened.ok) {
+          setError(opened.message);
+          return;
+        }
+        setSessions([opened.value]);
+        setActiveId(opened.value.sessionId);
+        return;
+      }
       setActiveId((current) => current ?? result.value[result.value.length - 1]?.sessionId ?? null);
     })();
     return () => {
@@ -463,32 +483,49 @@ export function RuntimeDock({
                 data-testid="terminal-rename"
               />
             ) : (
-              <button
+              <span
                 key={session.sessionId}
-                role="tab"
-                aria-selected={selected}
                 className={selected ? "terminal-tab active" : "terminal-tab"}
-                onClick={() => setActiveId(session.sessionId)}
-                onDoubleClick={() => setRenaming(session.sessionId)}
-                title={`${session.name} — ${session.kind}, ${tone.label}`}
                 data-testid="terminal-tab"
                 data-kind={session.kind}
                 data-name={session.name}
+                data-state={tone.label}
               >
-                <span className={`status-dot ${tone.tone}`} />
-                <span className="terminal-tab-name">{session.name}</span>
-                <span className="terminal-tab-kind">{session.kind}</span>
-                <span className="terminal-tab-state">{tone.label}</span>
-              </button>
+                <button
+                  role="tab"
+                  aria-selected={selected}
+                  className="terminal-tab-open"
+                  onClick={() => setActiveId(session.sessionId)}
+                  onDoubleClick={() => setRenaming(session.sessionId)}
+                  title={`${session.name} — ${tone.label}`}
+                >
+                  <TerminalGlyph />
+                  <span className="terminal-tab-name">{session.name}</span>
+                </button>
+                {/* A tab closes from the tab, the way every terminal does. The
+                    kind and the state were words nobody reads twice, on the row
+                    with the least room to spare. */}
+                <button
+                  className="terminal-tab-close"
+                  onClick={() => void end(session.sessionId)}
+                  aria-label={`Close ${session.name}`}
+                  title={`Close ${session.name}`}
+                  data-testid="terminal-tab-close"
+                >
+                  ×
+                </button>
+              </span>
             );
           })}
           <button
-            className="btn btn-text terminal-new"
+            className="terminal-new"
             onClick={() => void create("shell")}
             disabled={busy}
+            aria-label="New terminal"
+            title="New terminal"
             data-testid="terminal-new"
           >
-            + New terminal
+            +
           </button>
         </div>
         )}
@@ -503,13 +540,6 @@ export function RuntimeDock({
               data-testid="terminal-rename-action"
             >
               Rename
-            </button>
-            <button
-              className="btn btn-text"
-              onClick={() => void end(active.sessionId)}
-              data-testid="terminal-end"
-            >
-              End session
             </button>
           </>
         )}
@@ -527,8 +557,9 @@ export function RuntimeDock({
       {view !== "terminal" ? (
         <ProcessLogView missionId={missionId} kind={view} />
       ) : active === null ? (
+        // Only reached while the first session is starting, or after the last
+        // one was closed by hand.
         <div className="terminal-empty" data-testid="terminal-empty">
-          <p>No terminal open — a session lives only as long as this Novus window does.</p>
           <button
             className="btn btn-secondary"
             onClick={() => void create("shell")}

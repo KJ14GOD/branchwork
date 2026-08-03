@@ -3,53 +3,56 @@
    change in the same commit. V0 is dark-only. */
 
 :root {
-  /* Color */
-  --bg: #141517;
-  --surface-1: #1c1d20;
-  --surface-2: #232428;
-  --edge: rgba(255, 255, 255, 0.08);
-  --edge-hover: rgba(255, 255, 255, 0.12);
-  --text-1: #eceae6;
-  --text-2: #a8a49d;
-  --text-3: #918c84;
-  --accent: #e5e2dc;
-  --accent-pressed: #cfccc5;
+  /* Color. The application background is near-black rather than graphite, so
+     surfaces, text, and edges all have somewhere to rise from: a background
+     that is already grey leaves every layer above it competing for the same
+     narrow band, which is what made the product read flat. */
+  --bg: #08080a;
+  --surface-1: #131316;
+  --surface-2: #1d1d21;
+  --edge: rgba(255, 255, 255, 0.11);
+  --edge-hover: rgba(255, 255, 255, 0.2);
+  --text-1: #f7f5f2;
+  --text-2: #b6b1a8;
+  --text-3: #8b867d;
+  --accent: #f2efe9;
+  --accent-pressed: #d8d4cd;
   --ok: #8fae8b;
   --warn: #d9a47e;
   --danger: #c97b6f;
   --alt: #9c8db8;
 
   /* Interaction states */
-  --hover: rgba(255, 255, 255, 0.04);
-  --selected: rgba(255, 255, 255, 0.06);
-  --pressed: rgba(255, 255, 255, 0.06);
+  --hover: rgba(255, 255, 255, 0.06);
+  --selected: rgba(255, 255, 255, 0.09);
+  --pressed: rgba(255, 255, 255, 0.09);
 
   /* Terminal palette (D-046) — the one place hues appear outside their
      semantic tokens, because these are a *foreign program's* colours, not
      Novus saying anything. Muted and warm so a build log reads as part of the
      product rather than a neon window cut into it. Canonical in
      DESIGN.md#tokens. */
-  --term-bg: #17181b;
-  --term-fg: #eceae6;
-  --term-cursor: #e5e2dc;
-  --term-cursor-text: #17181b;
-  --term-selection: rgba(255, 255, 255, 0.16);
-  --term-black: #3a3b40;
-  --term-red: #c97b6f;
-  --term-green: #8fae8b;
-  --term-yellow: #d9a47e;
-  --term-blue: #7f9cc0;
-  --term-magenta: #9c8db8;
-  --term-cyan: #7fada8;
-  --term-white: #cdc9c2;
-  --term-bright-black: #5c5d63;
-  --term-bright-red: #dc9488;
-  --term-bright-green: #a8c6a4;
-  --term-bright-yellow: #efbe98;
-  --term-bright-blue: #9bb6d8;
-  --term-bright-magenta: #b6a7d1;
-  --term-bright-cyan: #99c6c1;
-  --term-bright-white: #f2f0ec;
+  --term-bg: #0d0d10;
+  --term-fg: #f2efe9;
+  --term-cursor: #f2efe9;
+  --term-cursor-text: #0d0d10;
+  --term-selection: rgba(255, 255, 255, 0.22);
+  --term-black: #3f4046;
+  --term-red: #f08a7a;
+  --term-green: #9fd39a;
+  --term-yellow: #f2c48a;
+  --term-blue: #8fb8e8;
+  --term-magenta: #c3a6e8;
+  --term-cyan: #85d3cc;
+  --term-white: #ddd8d0;
+  --term-bright-black: #6b6c74;
+  --term-bright-red: #ffa695;
+  --term-bright-green: #bce8b7;
+  --term-bright-yellow: #ffd9a6;
+  --term-bright-blue: #accfff;
+  --term-bright-magenta: #dcc2ff;
+  --term-bright-cyan: #a3ece5;
+  --term-bright-white: #ffffff;
 
   /* Type scale (size/line-height, weight) — no other sizes exist */
   --font-ui: "Inter", system-ui, -apple-system, sans-serif;

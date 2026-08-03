@@ -336,9 +336,11 @@ afterAll(async () => {
 
 describe("the terminal, through the interface", () => {
   it("opens in the mission worktree and never in the user's own checkout", async () => {
+    // Showing the dock is the request, so a session is already open by the time
+    // it appears — no button in front of the button.
     await openDock(page);
-    await page.getByTestId("terminal-empty-new").click();
     await page.getByTestId("terminal-screen").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("terminal-tab").count()).toBeGreaterThan(0);
 
     // Typed at the keyboard, into the emulator, into the PTY.
     const shown = await runInPane(page, missionId, `pwd; echo ${typed("WHERE")}`, printed("WHERE"));
@@ -396,8 +398,11 @@ describe("the terminal, through the interface", () => {
     // shell rather than the application.
     await runInPane(page, missionId, `echo ${typed("INTERRUPTED")}`, printed("INTERRUPTED"));
 
+    const before = await page.getByTestId("terminal-tab").count();
     await page.getByTestId("terminal-new").click();
-    await expect.poll(() => page.getByTestId("terminal-tab").count(), { timeout: 20_000 }).toBe(2);
+    await expect
+      .poll(() => page.getByTestId("terminal-tab").count(), { timeout: 20_000 })
+      .toBe(before + 1);
     // Two tabs, two distinct names: a session that exited must not lend its
     // name to the next one.
     const names = await page.getByTestId("terminal-tab").evaluateAll((tabs) =>
@@ -415,8 +420,10 @@ describe("the terminal, through the interface", () => {
       .toBe(1);
     await shot(page, "47-terminal-tabs-and-rename.png");
 
-    await page.getByTestId("terminal-end").click();
-    await expect.poll(() => page.getByTestId("terminal-tab").count(), { timeout: 20_000 }).toBe(1);
+    await page.getByTestId("terminal-tab").last().getByTestId("terminal-tab-close").click();
+    await expect
+      .poll(() => page.getByTestId("terminal-tab").count(), { timeout: 20_000 })
+      .toBe(before);
   }, 180_000);
 
   it("keeps its output when the dock is hidden and shown again", async () => {
@@ -424,11 +431,7 @@ describe("the terminal, through the interface", () => {
     // drawer being closed, so it opens its own rather than inheriting whatever
     // an earlier case happened to leave behind.
     await openDock(page);
-    if ((await page.getByTestId("terminal-empty").count()) > 0) {
-      await page.getByTestId("terminal-empty-new").click();
-    } else {
-      await page.getByTestId("terminal-new").click();
-    }
+    await page.getByTestId("terminal-new").click();
     await page.getByTestId("terminal-screen").waitFor({ timeout: 20_000 });
     await runInPane(page, missionId, `echo ${typed("SURVIVES")}`, printed("SURVIVES"));
     await untilPane(page, "the witness on screen", printed("SURVIVES"));
@@ -641,12 +644,18 @@ describe("setup and verification, through the interface", () => {
     await projectRow.click();
     await page.getByTestId("ws-tab").first().waitFor({ timeout: 30_000 });
 
+    // A PTY cannot outlive the process that owned it. Before the dock is
+    // opened there are no sessions at all — no dead tab is presented as live —
+    // and opening it starts a fresh one rather than resurrecting anything.
+    const carriedOver = await page.evaluate(async (mission) => {
+      const result = await window.novus.terminal.list(mission);
+      return result.ok ? result.value.length : -1;
+    }, missionId);
+    expect(carriedOver).toBe(0);
+
     await openDock(page);
-    // A PTY cannot outlive the process that owned it, so after a relaunch
-    // there are no sessions at all — which is the honest answer, and better
-    // than a dead tab presented as live.
-    await page.getByTestId("terminal-empty").waitFor({ timeout: 20_000 });
-    expect(await page.getByTestId("terminal-tab").count()).toBe(0);
+    await page.getByTestId("terminal-screen").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("terminal-tab").count()).toBe(1);
 
     // The check the previous run recorded is still there, and still says what
     // revision it proved.

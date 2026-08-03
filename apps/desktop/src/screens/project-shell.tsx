@@ -449,7 +449,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
 
       {offline && (
         <div className="notice-bar" data-testid="offline" aria-live="polite">
-          <span className="status-dot warn" />
           Can&apos;t reach Novus — retrying.
         </div>
       )}
@@ -470,7 +469,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                     title={mission.goal}
                     data-testid="attention-row"
                   >
-                    <span className="status-dot warn" />
                     <span className="side-name">{truncateLabel(mission.goal, 24)}</span>
                   </button>
                 ))}

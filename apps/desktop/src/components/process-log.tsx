@@ -19,8 +19,8 @@ import { novus } from "../bridge";
 
 const KIND_LABEL: Record<ProcessKind, string> = {
   setup: "Setup",
-  run: "Running",
-  verification: "Verification"
+  run: "The app",
+  verification: "Checks"
 };
 
 /** How a process ended, in words. A deadline and a cancellation are not
@@ -46,13 +46,6 @@ export function endingLabel(log: ProcessLog): string {
   }
 }
 
-function toneOf(log: ProcessLog): string {
-  if (log.state === "starting") return "warn";
-  if (log.state === "running") return "active";
-  if (log.ending === "cancelled") return "neutral";
-  if (log.state === "failed" || (log.exitCode !== null && log.exitCode !== 0)) return "danger";
-  return "neutral";
-}
 
 export function ProcessLogView({ missionId, kind }: { missionId: string; kind: ProcessKind }) {
   const [logs, setLogs] = useState<ProcessLog[]>([]);
@@ -161,7 +154,6 @@ export function ProcessLogView({ missionId, kind }: { missionId: string; kind: P
               onClick={() => setSelected(log.processId)}
               data-testid="dock-run"
             >
-              <span className={`status-dot ${toneOf(log)}`} />
               <span className="dock-run-name">{log.name}</span>
               <span className="dock-run-state">{endingLabel(log)}</span>
             </button>
@@ -170,7 +162,6 @@ export function ProcessLogView({ missionId, kind }: { missionId: string; kind: P
       )}
 
       <div className="dock-summary" data-testid="dock-summary">
-        <span className={`status-dot ${toneOf(active)}`} />
         <span className="dock-command mono">{active.command}</span>
         <span className="dock-state" data-testid="dock-state">
           {endingLabel(active)}

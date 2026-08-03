@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import { siClaudecode } from "simple-icons";
 import type { Participant } from "@novus/contracts";
 import { initials } from "../format";
@@ -50,73 +49,18 @@ export function HarnessMark({ large }: { large?: boolean }) {
   );
 }
 
-/**
- * The baton (DESIGN.md signature element 1): one small solid --accent squircle
- * beside the controller's name, everywhere the controller appears. It moves in
- * one 240ms motion when control actually transfers — never on first paint,
- * because nothing animates unprompted (DESIGN.md#motion).
- */
-export function Baton({ holderUserId, animate }: { holderUserId: string; animate?: boolean }) {
-  const previous = useRef<string | null>(null);
-  const [moving, setMoving] = useState(false);
-
-  useEffect(() => {
-    if (previous.current !== null && previous.current !== holderUserId) {
-      setMoving(true);
-      const timer = setTimeout(() => setMoving(false), 240);
-      previous.current = holderUserId;
-      return () => clearTimeout(timer);
-    }
-    previous.current = holderUserId;
-    return undefined;
-  }, [holderUserId]);
-
-  return (
-    <span
-      className={moving || animate ? "baton baton-moving" : "baton"}
-      title="Holds the baton"
-      role="img"
-      aria-label="Holds the baton"
-      data-testid="baton"
-    />
-  );
-}
 
 /**
  * The room header's only aggregate view of presence (DESIGN.md signature
  * element 4): up to five marks, then an overflow count. Everyone else appears
  * where they acted, inline in the trace.
  */
-export function ParticipantStack({
-  participants,
-  attention
-}: {
-  participants: Participant[];
-  /** A quiet --warn dot while a control request is open. */
-  attention?: boolean;
-}) {
+export function ParticipantStack({ participants }: { participants: Participant[] }) {
   const shown = participants.slice(0, 5);
   const overflow = participants.length - shown.length;
-  const holder = participants.find((participant) => participant.isController)?.userId ?? null;
-
-  // The baton moves between two different mark instances here, so the stack —
-  // not the mark — is what notices the transfer and plays the 240ms motion.
-  const previousHolder = useRef<string | null>(null);
-  const [transferring, setTransferring] = useState(false);
-  useEffect(() => {
-    if (previousHolder.current !== null && previousHolder.current !== holder) {
-      setTransferring(true);
-      const timer = setTimeout(() => setTransferring(false), 240);
-      previousHolder.current = holder;
-      return () => clearTimeout(timer);
-    }
-    previousHolder.current = holder;
-    return undefined;
-  }, [holder]);
 
   return (
-    <span className="participant-stack" data-testid="participant-stack">
-      {attention && <span className="status-dot warn" title="Someone is asking for control" />}
+    <span className="stack" data-testid="participant-stack">
       {shown.map((participant) => (
         <span
           key={participant.userId}
@@ -126,9 +70,6 @@ export function ParticipantStack({
           }`}
         >
           <HumanMark login={participant.login} name={participant.name} />
-          {participant.isController && (
-            <Baton holderUserId={participant.userId} animate={transferring} />
-          )}
         </span>
       ))}
       {overflow > 0 && (

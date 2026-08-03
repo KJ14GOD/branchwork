@@ -127,7 +127,6 @@ function SecretRows({ missionId }: { missionId: string }) {
       <ul className="file-list" data-testid="secret-list">
         {state.names.map((entry) => (
           <li className="file-row" key={entry.name} data-testid="secret-row" data-name={entry.name}>
-            <span className={`status-dot ${entry.supplied ? "ok" : "warn"}`} />
             <span className="mono file-path">{entry.name}</span>
             <span className="file-note" data-testid="secret-state">
               {entry.supplied ? "supplied on this machine" : "not supplied"}
@@ -187,7 +186,6 @@ function SecretRows({ missionId }: { missionId: string }) {
         ))}
         {state.orphaned.map((name) => (
           <li className="file-row" key={name} data-testid="secret-orphan">
-            <span className="status-dot neutral" />
             <span className="mono file-path">{name}</span>
             <span className="file-note">held here, no longer declared</span>
             <button className="btn btn-text" onClick={() => void forget(name)} data-testid="secret-forget">
@@ -386,7 +384,6 @@ export function WorkspaceSetupDialog({
                   <ul className="setup-blockers" data-testid="setup-blockers">
                     {proposal.blockers.map((blocker) => (
                       <li key={blocker}>
-                        <span className="status-dot warn" />
                         {blocker}
                       </li>
                     ))}

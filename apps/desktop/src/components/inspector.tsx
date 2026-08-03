@@ -11,7 +11,7 @@ import { novus } from "../bridge";
 import { clockTime, plural, shortSha } from "../format";
 import { changedFiles, checkTallies } from "./derive";
 import { GatedAction } from "./gated";
-import { Baton, HumanMark, ParticipantStack, roleLabel } from "./identity";
+import { HumanMark, ParticipantStack, roleLabel } from "./identity";
 
 function CloseGlyph() {
   return (
@@ -434,7 +434,6 @@ export function Inspector({
         <div className="inspector-identity">
           <ParticipantStack
             participants={detail.participants}
-            attention={detail.control.openRequests.length > 0}
           />
           <span className="inspector-controller" data-testid="panel-controller">
             {/* The baton lives on the controller's mark in the stack beside this
@@ -445,7 +444,6 @@ export function Inspector({
                 : `${detail.control.holderLogin} has control`
             ) : (
               <>
-                <span className="status-dot warn" />
                 No controller
               </>
             )}
@@ -525,7 +523,6 @@ export function Inspector({
                 <span className="kv-value" data-testid="runner-status">
                   {detail.runner ? (
                     <>
-                      <span className={detail.runner.online ? "status-dot active" : "status-dot danger"} />
                       {detail.runner.label} · {detail.runner.online ? "online" : "offline"}
                       {!detail.runner.online && detail.runner.lastSeenAt
                         ? ` · last heard ${clockTime(detail.runner.lastSeenAt)}`
@@ -543,7 +540,6 @@ export function Inspector({
                   <li key={participant.userId} className="participant-row">
                     <HumanMark login={participant.login} name={participant.name} />
                     <span className="participant-name">{participant.name ?? participant.login}</span>
-                    {participant.isController && <Baton holderUserId={participant.userId} />}
                     <span className="participant-role">{roleLabel(participant.role)}</span>
                   </li>
                 ))}

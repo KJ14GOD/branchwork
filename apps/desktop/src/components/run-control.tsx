@@ -150,7 +150,6 @@ export function RunControl({
     <span className="run-control" ref={wrapRef}>
       {running ? (
         <span className="run-live" data-testid="run-live">
-          <span className="status-dot active" />
           <span className="mono run-live-name" title={running.command}>
             {running.name}
             {running.port === null ? "" : ` :${running.port}`}

@@ -6,7 +6,7 @@ import type {
   VerificationCheck
 } from "@novus/contracts";
 import { clockTime, plural, shortSha } from "../format";
-import { Baton, HarnessMark, HumanMark } from "./identity";
+import { HarnessMark, HumanMark } from "./identity";
 
 /**
  * The direction thread (DESIGN.md signature element 2). One coherent trace per
@@ -571,7 +571,6 @@ function SegmentView({
     case "outcome":
       return (
         <div className={`trace-outcome tone-${segment.tone}`} data-testid="trace-outcome">
-          <span className="status-dot neutral" />
           {segment.text}
         </div>
       );
@@ -638,7 +637,7 @@ export function TraceView({
           {block.authorLogin && <HumanMark login={block.authorLogin} />}
           <span className="trace-author">{block.authorLogin ?? "Unattributed"}</span>
           {block.authorUserId && block.authorUserId === controllerUserId && (
-            <Baton holderUserId={block.authorUserId} />
+            <span className="trace-controller">holds the baton</span>
           )}
           {block.at && <span className="trace-time">{clockTime(block.at)}</span>}
         </header>
@@ -655,14 +654,12 @@ export function TraceView({
           presented to them as something to approve. */}
       {waiting && ownedByController && (
         <div className="trace-waiting-row" data-testid="direction-queued">
-          <span className="status-dot warn" />
           <span>Queued — applies at the next safe point</span>
           {actions}
         </div>
       )}
       {waiting && !ownedByController && (
         <div className="trace-waiting-row" data-testid="direction-waiting">
-          <span className="status-dot warn" />
           <span>
             {viewerIsController
               ? "Waiting for you — apply or reject it here"
@@ -675,7 +672,6 @@ export function TraceView({
       )}
       {settled && direction && (
         <div className="trace-waiting-row" data-testid="direction-settled">
-          <span className="status-dot neutral" />
           <span>
             {direction.state === "rejected" &&
               (block.resolvedBy ? `Rejected by ${block.resolvedBy}` : "Rejected")}
@@ -725,7 +721,6 @@ export function ControlEventRow({ block }: { block: ControlBlock }) {
   return (
     <div className="control-event" data-testid="control-event">
       {block.login && <HumanMark login={block.login} />}
-      {block.baton && <Baton holderUserId={block.key} />}
       <span>{block.text}</span>
       <span className="trace-time">{clockTime(block.at)}</span>
     </div>

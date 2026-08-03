@@ -198,18 +198,10 @@ body {
   border-color: var(--edge-hover);
 }
 
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  flex: none;
-}
-
-.status-dot.neutral { background: var(--text-3); }
-.status-dot.active { background: var(--accent); }
-.status-dot.ok { background: var(--ok); }
-.status-dot.warn { background: var(--warn); }
-.status-dot.danger { background: var(--danger); }
+/* Status is words, not a coloured dot beside them (D-047). The dots were
+   scattered across every surface, carried less than the text they sat next to,
+   and were the first thing the eye found on a screen whose subject is a
+   mission. */
 
 /* Identity marks: humans are circles, machines are rounded squares. */
 .mark {
@@ -245,30 +237,10 @@ body {
   height: 12px;
 }
 
-/* The baton (DESIGN.md signature element 1): one small solid --accent
-   squircle, the product-wide answer to "who is in control?". */
-.baton {
-  width: 16px;
-  height: 16px;
-  flex: none;
-  border-radius: var(--r-control);
-  background: var(--accent);
-}
+/* Control is named in words where it matters — "You have the baton", "Maya
+   has the baton" — rather than by a filled mark beside a name (D-047). */
 
-.baton-moving {
-  animation: baton-arrive var(--m-overlay) var(--ease) 1;
-}
 
-@keyframes baton-arrive {
-  from {
-    transform: translateX(-12px);
-    opacity: 0.2;
-  }
-  to {
-    transform: none;
-    opacity: 1;
-  }
-}
 
 .participant-stack {
   display: inline-flex;
@@ -951,7 +923,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
-  border-left: 1px solid var(--accent);
+  border-left: 1px solid var(--edge-hover);
   padding-left: var(--s-4);
 }
 
@@ -2309,53 +2281,68 @@ body {
 
 /* A tab says what it is and what it is doing: kind in words, state as a dot
    plus text, never colour alone (DESIGN.md#status-semantics). */
+/* A tab is a glyph, a name, and a close — nothing else. The kind and the
+   state were words nobody reads twice, sitting on the row with the least room
+   (D-047). */
 .terminal-tab {
   display: inline-flex;
   align-items: center;
-  gap: var(--s-2);
   min-height: 28px;
-  padding: 0 var(--s-2);
-  font: var(--type-row);
-  color: var(--text-2);
-  background: transparent;
-  border: none;
   border-radius: var(--r-control);
-  cursor: pointer;
+  padding-right: 2px;
   white-space: nowrap;
 }
 
 .terminal-tab:hover {
   background: var(--hover);
-  color: var(--text-1);
 }
 
 .terminal-tab.active {
-  background: var(--selected);
+  background: var(--surface-2);
+}
+
+.terminal-tab-open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: var(--type-row);
+  padding: 0 var(--s-2);
+  min-height: 28px;
+  border-radius: var(--r-control);
+  cursor: pointer;
+}
+
+.terminal-tab.active .terminal-tab-open,
+.terminal-tab:hover .terminal-tab-open {
   color: var(--text-1);
 }
 
 .terminal-tab-name {
-  max-width: 20ch;
+  max-width: 24ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* shell / run / test / log, told apart in words at the micro step rather than
-   by a badge shape. */
-.terminal-tab-kind {
-  font: var(--type-micro);
-  text-transform: uppercase;
+.terminal-tab-close {
+  border: none;
+  background: transparent;
   color: var(--text-3);
+  font: var(--type-row);
+  line-height: 1;
+  padding: 2px var(--s-1);
+  border-radius: var(--r-control);
+  cursor: pointer;
 }
 
-.terminal-tab-state {
-  font: var(--type-meta);
-  color: var(--text-3);
+.terminal-tab-close:hover {
+  background: var(--hover);
+  color: var(--text-1);
 }
 
-.terminal-new {
-  white-space: nowrap;
-}
+
 
 .terminal-rename {
   width: 20ch;
@@ -2370,12 +2357,33 @@ body {
 .terminal-empty {
   flex: 1;
   display: flex;
-  flex-direction: column;
   align-items: flex-start;
-  gap: var(--s-3);
   padding: var(--s-4) var(--s-6) var(--s-5);
+}
+
+/* A plus, sized like the tabs beside it. */
+.terminal-new {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
   font: var(--type-body);
+  line-height: 1;
+  border-radius: var(--r-control);
+  cursor: pointer;
+}
+
+.terminal-new:hover:not(:disabled) {
+  background: var(--hover);
   color: var(--text-1);
+}
+
+/* Who holds the baton, said rather than marked. */
+.trace-controller {
+  font: var(--type-meta);
+  color: var(--text-3);
 }
 
 /* The emulator's own element fills this region; xterm owns the scrolling
