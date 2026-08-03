@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TerminalKind, TerminalSession } from "@novus/contracts";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal, type ITheme } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
+import type { ProcessKind, TerminalKind, TerminalSession } from "@novus/contracts";
 import { novus } from "../bridge";
+import { ProcessLogView } from "./process-log";
 
 /**
  * The terminal (DESIGN.md#component-behavior). A bottom dock in the room,
@@ -14,9 +18,17 @@ import { novus } from "../bridge";
  * all, so there is nothing here a remote participant could reach even if this
  * component rendered the button enabled.
  *
- * Deliberately not a terminal emulator. Output is plain monospace text in a
- * bounded scroll region with escape sequences stripped: enough to read what a
- * command said, and one dependency the product does not need yet.
+ * Rendering is `@xterm/xterm` rather than a parser of our own (D-046). The
+ * custom renderer this replaces stripped escape sequences and printed the
+ * remainder, which cannot show an alternate screen, cannot place a cursor,
+ * cannot clear, and cannot colour — so `vim`, `less`, a pager, a progress bar,
+ * and every coloured build log rendered as debris. A terminal that cannot run
+ * the programs people run is not a terminal, and the honest way to have one is
+ * to use an emulator somebody maintains.
+ *
+ * Output still stops here. It reaches this window from this machine's own main
+ * process and goes nowhere else: never an event, never the control plane,
+ * never evidence (D-041).
  */
 
 /** What the room says when the workspace is somewhere else. One sentence,
@@ -24,9 +36,9 @@ import { novus } from "../bridge";
 export const TERMINAL_ELSEWHERE =
   "A terminal opens only on the machine hosting this workspace — controlling the mission is not unrestricted access to the host machine.";
 
-/** What the renderer keeps per session. The main process bounds its own
- *  scrollback; this is the same bound on the display side. */
-const MAX_BUFFER = 200 * 1024;
+/** Lines kept per pane. Bounded and local, like the scrollback the main
+ *  process keeps (DESIGN.md: scrollback is bounded and local). */
+const SCROLLBACK_LINES = 5_000;
 
 const MIN_HEIGHT_VH = 20;
 const MAX_HEIGHT_VH = 60;
@@ -89,96 +101,57 @@ export function TerminalToggle({
   );
 }
 
-// --- Output ---------------------------------------------------------------------
-
-// Escape sequences are removed rather than interpreted. CSI covers colour and
-// cursor movement, OSC covers the title strings a shell sets, and the short
-// form covers the remaining two-character escapes.
-const CSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
-const OSC = /\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g;
-const SHORT_ESCAPE = /\u001b[@-Z\\-_]/g;
-const BACKSPACE = /[^\n\b]\b/g;
-/** Whatever is left that a text node cannot honestly show. */
-const OTHER_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
+// --- Theme ----------------------------------------------------------------------
 
 /**
- * Raw PTY bytes rendered as plain text. A carriage return overwrites its line
- * the way a terminal would, so a progress line replaces itself instead of
- * stacking; a backspace erases the character before it; anything still not
- * printable is dropped, because a control character in a text node is a
- * rendering trick rather than output.
+ * One design token's resolved value, or undefined.
+ *
+ * Deliberately no fallback. A literal colour here would be exactly the local
+ * design value AGENTS.md rule 14 forbids, and the gate greps for one — so a
+ * token that is somehow absent yields nothing and the emulator keeps its own
+ * default for that slot, which is a worse-looking terminal and not a wrong one.
  */
-export function renderTerminalText(raw: string): string {
-  const stripped = raw.replace(OSC, "").replace(CSI, "").replace(SHORT_ESCAPE, "");
-  return stripped
-    .split("\n")
-    .map((line) => {
-      const overwritten = line
-        .split("\r")
-        // Each segment starts again at column zero and overwrites what is
-        // already there; whatever it does not cover stays visible.
-        .reduce((current, segment) => segment + current.slice(segment.length), "");
-      let erased = overwritten;
-      let previous = "";
-      while (erased !== previous) {
-        previous = erased;
-        erased = erased.replace(BACKSPACE, "");
-      }
-      return erased.replace(OTHER_CONTROL, "");
-    })
-    .join("\n");
+function token(name: string): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value === "" ? undefined : value;
 }
 
-/** The bytes a key press sends. Enough for a real shell: control characters,
- *  the arrows, and the editing keys a person actually uses. */
-export function keyToBytes(event: {
-  key: string;
-  ctrlKey: boolean;
-  altKey: boolean;
-  metaKey: boolean;
-}): string | null {
-  // The Command key belongs to the application, never to the shell.
-  if (event.metaKey) return null;
-  if (event.ctrlKey && event.key.length === 1) {
-    const upper = event.key.toUpperCase();
-    const code = upper.charCodeAt(0);
-    if (code >= 64 && code <= 95) return String.fromCharCode(code - 64);
-    if (upper === "?") return "\u007f";
-    if (upper === " ") return "\u0000";
-    return null;
+/** The `ITheme` slot for each terminal token. Written as pairs so the mapping
+ *  is one list to read rather than twenty near-identical lines. */
+const THEME_TOKENS: [keyof ITheme, string][] = [
+  ["background", "--term-bg"],
+  ["foreground", "--term-fg"],
+  ["cursor", "--term-cursor"],
+  ["cursorAccent", "--term-cursor-text"],
+  ["selectionBackground", "--term-selection"],
+  ["black", "--term-black"],
+  ["red", "--term-red"],
+  ["green", "--term-green"],
+  ["yellow", "--term-yellow"],
+  ["blue", "--term-blue"],
+  ["magenta", "--term-magenta"],
+  ["cyan", "--term-cyan"],
+  ["white", "--term-white"],
+  ["brightBlack", "--term-bright-black"],
+  ["brightRed", "--term-bright-red"],
+  ["brightGreen", "--term-bright-green"],
+  ["brightYellow", "--term-bright-yellow"],
+  ["brightBlue", "--term-bright-blue"],
+  ["brightMagenta", "--term-bright-magenta"],
+  ["brightCyan", "--term-bright-cyan"],
+  ["brightWhite", "--term-bright-white"]
+];
+
+/** The emulator's palette, read from the token system rather than written
+ *  here, so a theme change moves the terminal with everything else (D-046). */
+function terminalTheme(): ITheme {
+  const theme: Record<string, string> = {};
+  for (const [slot, name] of THEME_TOKENS) {
+    const value = token(name);
+    if (value !== undefined) theme[slot] = value;
   }
-  switch (event.key) {
-    case "Enter":
-      return "\r";
-    case "Backspace":
-      return "\u007f";
-    case "Tab":
-      return "\t";
-    case "Escape":
-      return "\u001b";
-    case "ArrowUp":
-      return "\u001b[A";
-    case "ArrowDown":
-      return "\u001b[B";
-    case "ArrowRight":
-      return "\u001b[C";
-    case "ArrowLeft":
-      return "\u001b[D";
-    case "Home":
-      return "\u001b[H";
-    case "End":
-      return "\u001b[F";
-    case "Delete":
-      return "\u001b[3~";
-    case "PageUp":
-      return "\u001b[5~";
-    case "PageDown":
-      return "\u001b[6~";
-    default:
-      break;
-  }
-  if (event.key.length === 1) return event.altKey ? `\u001b${event.key}` : event.key;
-  return null;
+  return theme as ITheme;
 }
 
 function stateOf(session: TerminalSession): { tone: string; label: string } {
@@ -187,17 +160,60 @@ function stateOf(session: TerminalSession): { tone: string; label: string } {
   return { tone: "danger", label: `failed ${session.exitCode}` };
 }
 
+// --- One pane --------------------------------------------------------------------
+
+interface Pane {
+  terminal: Terminal;
+  fit: FitAddon;
+  /** True once the session's existing scrollback has been written in, so a
+   *  re-mount does not print everything twice. */
+  seeded: boolean;
+}
+
+/**
+ * The panes for this drawer, kept outside React state.
+ *
+ * A `Terminal` owns a canvas and a scrollback buffer; letting React recreate
+ * one on re-render would clear the screen every time a tab's status changed.
+ * Panes are created once per session and disposed when that session is closed
+ * or the drawer unmounts.
+ */
+function usePanes(missionId: string) {
+  const panes = useRef(new Map<string, Pane>());
+
+  useEffect(() => {
+    const held = panes.current;
+    return () => {
+      for (const pane of held.values()) pane.terminal.dispose();
+      held.clear();
+    };
+  }, [missionId]);
+
+  return panes;
+}
+
 // --- The dock ---------------------------------------------------------------------
 
-export function TerminalDrawer({
+/** What the dock is showing. Terminal sessions and the three kinds of project
+ *  process, which are the four things that produce local output. */
+type DockView = "terminal" | ProcessKind;
+
+const VIEWS: { view: DockView; label: string }[] = [
+  { view: "terminal", label: "Terminal" },
+  { view: "setup", label: "Setup" },
+  { view: "run", label: "Running" },
+  { view: "verification", label: "Verification" }
+];
+
+export function RuntimeDock({
   missionId,
   onHide
 }: {
   missionId: string;
   onHide: () => void;
 }) {
+  const [view, setView] = useState<DockView>("terminal");
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
-  const [buffers, setBuffers] = useState<Record<string, string>>({});
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -205,10 +221,41 @@ export function TerminalDrawer({
   const [heightVh, setHeightVh] = useState(DEFAULT_HEIGHT_VH);
 
   const screenRef = useRef<HTMLDivElement>(null);
-  const metricRef = useRef<HTMLSpanElement>(null);
-  const pinnedRef = useRef(true);
+  const panes = usePanes(missionId);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
+
+  /** Builds the pane for a session, or returns the one that already exists. */
+  const paneFor = useCallback(
+    (sessionId: string): Pane => {
+      const existing = panes.current.get(sessionId);
+      if (existing) return existing;
+      const terminal = new Terminal({
+        // A real emulator's own defaults, with the product's type and palette.
+        fontFamily: token("--font-mono"),
+        fontSize: 13,
+        lineHeight: 1.35,
+        theme: terminalTheme(),
+        scrollback: SCROLLBACK_LINES,
+        cursorBlink: false,
+        allowProposedApi: false,
+        // Novus never writes into the terminal on the program's behalf: what
+        // appears is what the PTY sent.
+        convertEol: false
+      });
+      const fit = new FitAddon();
+      terminal.loadAddon(fit);
+      // Keystrokes go straight to the PTY. The emulator owns the encoding —
+      // application cursor mode, function keys, bracketed paste, all of it —
+      // which is the half a hand-written key map kept getting wrong.
+      terminal.onData((data) => void novus().terminal.write({ sessionId, data }));
+      terminal.onResize(({ cols, rows }) => void novus().terminal.resize({ sessionId, cols, rows }));
+      const pane: Pane = { terminal, fit, seeded: false };
+      panes.current.set(sessionId, pane);
+      return pane;
+    },
+    [panes]
+  );
 
   // What already happened arrives with the session list, because the dock is
   // unmounted while it is closed and a session keeps running regardless.
@@ -222,7 +269,6 @@ export function TerminalDrawer({
         return;
       }
       setSessions(result.value);
-      setBuffers(Object.fromEntries(result.value.map((session) => [session.sessionId, session.scrollback])));
       setActiveId((current) => current ?? result.value[result.value.length - 1]?.sessionId ?? null);
     })();
     return () => {
@@ -230,17 +276,12 @@ export function TerminalDrawer({
     };
   }, [missionId]);
 
-  // Output is streamed from this machine's own main process and rendered here.
-  // It goes nowhere else: it is never an event and never evidence (D-041).
+  // Output is streamed from this machine's own main process and written into
+  // the pane. It goes nowhere else (D-041).
   useEffect(() => {
     return novus().terminal.onOutput((chunk) => {
-      setBuffers((previous) => {
-        const grown = (previous[chunk.sessionId] ?? "") + chunk.data;
-        return {
-          ...previous,
-          [chunk.sessionId]: grown.length > MAX_BUFFER ? grown.slice(grown.length - MAX_BUFFER) : grown
-        };
-      });
+      const pane = panes.current.get(chunk.sessionId);
+      if (pane && chunk.data !== "") pane.terminal.write(chunk.data);
       if (chunk.state === "exited") {
         setSessions((previous) =>
           previous.map((session) =>
@@ -251,60 +292,72 @@ export function TerminalDrawer({
         );
       }
     });
-  }, []);
+  }, [panes]);
+
+  // The active pane is attached to the screen and sized to it. Attaching is
+  // idempotent: a pane already in this element is left where it is.
+  useEffect(() => {
+    const screen = screenRef.current;
+    if (!screen || activeId === null || view !== "terminal") return;
+    const pane = paneFor(activeId);
+    if (pane.terminal.element?.parentElement !== screen) {
+      screen.replaceChildren();
+      pane.terminal.open(screen);
+    }
+    /** Sizing is only meaningful once the element has been laid out. Fitting
+     *  against a box the browser has not measured yet yields a one-row
+     *  terminal, and the PTY is then *told* it is one row — so the shell wraps
+     *  and scrolls everything a person wanted to read straight off the top. */
+    const fitWhenLaidOut = () => {
+      if (screen.clientHeight <= 0 || screen.clientWidth <= 0) return;
+      try {
+        pane.fit.fit();
+      } catch {
+        /* the pane was disposed between the frame and this callback */
+      }
+    };
+    fitWhenLaidOut();
+    const frame = requestAnimationFrame(fitWhenLaidOut);
+    pane.terminal.focus();
+
+    if (!pane.seeded) {
+      pane.seeded = true;
+      void (async () => {
+        const result = await novus().terminal.scrollback(activeId);
+        if (result.ok && result.value !== "") pane.terminal.write(result.value);
+      })();
+    }
+
+    if (typeof ResizeObserver === "undefined") return () => cancelAnimationFrame(frame);
+    const observer = new ResizeObserver(fitWhenLaidOut);
+    observer.observe(screen);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [activeId, paneFor, heightVh, view]);
 
   const active = sessions.find((session) => session.sessionId === activeId) ?? null;
-  const text = useMemo(
-    () => (activeId === null ? "" : renderTerminalText(buffers[activeId] ?? "")),
-    [activeId, buffers]
-  );
-
-  // Stay at the bottom on new output unless the reader scrolled up, the same
-  // rule the trace above keeps.
-  useEffect(() => {
-    const element = screenRef.current;
-    if (element && pinnedRef.current) element.scrollTop = element.scrollHeight;
-  }, [text]);
-
-  /** The PTY is told the size the reader can actually see, measured from one
-   *  monospace character rather than guessed. */
-  const measure = useCallback(() => {
-    const screen = screenRef.current;
-    const metric = metricRef.current;
-    const sessionId = activeRef.current;
-    if (!screen || !metric || sessionId === null) return;
-    const box = metric.getBoundingClientRect();
-    const charWidth = box.width / 10;
-    const lineHeight = box.height;
-    if (charWidth <= 0 || lineHeight <= 0) return;
-    const cols = Math.max(2, Math.floor(screen.clientWidth / charWidth));
-    const rows = Math.max(1, Math.floor(screen.clientHeight / lineHeight));
-    void novus().terminal.resize({ sessionId, cols, rows });
-  }, []);
-
-  useEffect(() => {
-    measure();
-    const element = screenRef.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => measure());
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [measure, activeId, heightVh]);
 
   const create = async (kind: TerminalKind) => {
     if (busy) return;
     setBusy(true);
     setError(null);
-    const result = await novus().terminal.open({ missionId, kind });
+    // The size the reader can actually see, so a program that reads its
+    // dimensions at start-up gets the right answer rather than 80×24.
+    const current = activeId === null ? null : panes.current.get(activeId);
+    const result = await novus().terminal.open({
+      missionId,
+      kind,
+      ...(current ? { cols: current.terminal.cols, rows: current.terminal.rows } : {})
+    });
     setBusy(false);
     if (!result.ok) {
       setError(result.message);
       return;
     }
     setSessions((previous) => [...previous, result.value]);
-    setBuffers((previous) => ({ ...previous, [result.value.sessionId]: result.value.scrollback }));
     setActiveId(result.value.sessionId);
-    pinnedRef.current = true;
   };
 
   const end = async (sessionId: string) => {
@@ -314,12 +367,9 @@ export function TerminalDrawer({
       setError(result.message);
       return;
     }
+    panes.current.get(sessionId)?.terminal.dispose();
+    panes.current.delete(sessionId);
     setSessions((previous) => previous.filter((session) => session.sessionId !== sessionId));
-    setBuffers((previous) => {
-      const next = { ...previous };
-      delete next[sessionId];
-      return next;
-    });
     setActiveId((current) => (current === sessionId ? null : current));
   };
 
@@ -335,29 +385,6 @@ export function TerminalDrawer({
     setSessions((previous) =>
       previous.map((session) => (session.sessionId === sessionId ? { ...session, name: trimmed } : session))
     );
-  };
-
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (activeId === null || active?.state !== "running") return;
-    const bytes = keyToBytes(event);
-    if (bytes === null) return;
-    event.preventDefault();
-    pinnedRef.current = true;
-    void novus().terminal.write({ sessionId: activeId, data: bytes });
-  };
-
-  const onPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
-    if (activeId === null || active?.state !== "running") return;
-    const pasted = event.clipboardData.getData("text");
-    if (pasted === "") return;
-    event.preventDefault();
-    void novus().terminal.write({ sessionId: activeId, data: pasted });
-  };
-
-  const onScroll = () => {
-    const element = screenRef.current;
-    if (!element) return;
-    pinnedRef.current = element.scrollTop + element.clientHeight >= element.scrollHeight - 24;
   };
 
   /** Dragging the top edge. The height stays a proportion of the viewport, the
@@ -383,7 +410,7 @@ export function TerminalDrawer({
     <section
       className="terminal-dock"
       style={{ height: `${heightVh}vh` }}
-      aria-label="Terminal"
+      aria-label="Runtime"
       data-testid="terminal-dock"
     >
       <div
@@ -396,6 +423,27 @@ export function TerminalDrawer({
       />
 
       <div className="terminal-head">
+        {/* One dock, four views. Detailed local output lives here; the trace
+            above shows the milestone and the evidence panel shows the bounded
+            result that supports a claim — never the same output three times
+            (D-045). */}
+        <div className="dock-views" role="tablist" aria-label="Runtime views">
+          {VIEWS.map((entry) => (
+            <button
+              key={entry.view}
+              role="tab"
+              aria-selected={view === entry.view}
+              className={view === entry.view ? "dock-view active" : "dock-view"}
+              onClick={() => setView(entry.view)}
+              data-testid="dock-view"
+              data-view={entry.view}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+
+        {view === "terminal" && (
         <div className="terminal-tabs" role="tablist" aria-label="Terminal sessions">
           {sessions.map((session) => {
             const tone = stateOf(session);
@@ -425,6 +473,7 @@ export function TerminalDrawer({
                 title={`${session.name} — ${session.kind}, ${tone.label}`}
                 data-testid="terminal-tab"
                 data-kind={session.kind}
+                data-name={session.name}
               >
                 <span className={`status-dot ${tone.tone}`} />
                 <span className="terminal-tab-name">{session.name}</span>
@@ -442,10 +491,11 @@ export function TerminalDrawer({
             + New terminal
           </button>
         </div>
+        )}
 
         <span className="terminal-head-spacer" />
 
-        {active && (
+        {view === "terminal" && active && (
           <>
             <button
               className="btn btn-text"
@@ -474,13 +524,9 @@ export function TerminalDrawer({
         </p>
       )}
 
-      {/* One character, measured rather than assumed, so the PTY is told the
-          size the reader can actually see. */}
-      <span className="terminal-metric mono" ref={metricRef} aria-hidden="true">
-        MMMMMMMMMM
-      </span>
-
-      {active === null ? (
+      {view !== "terminal" ? (
+        <ProcessLogView missionId={missionId} kind={view} />
+      ) : active === null ? (
         <div className="terminal-empty" data-testid="terminal-empty">
           <p>No terminal open — a session lives only as long as this Novus window does.</p>
           <button
@@ -493,25 +539,21 @@ export function TerminalDrawer({
           </button>
         </div>
       ) : (
-        <div
-          className="terminal-screen"
-          ref={screenRef}
-          tabIndex={0}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          onScroll={onScroll}
-          role="group"
-          aria-label={`${active.name} — ${stateOf(active).label}`}
-          data-testid="terminal-screen"
-        >
-          <pre className="terminal-text mono">{text}</pre>
+        <>
+          <div
+            className="terminal-screen"
+            ref={screenRef}
+            role="group"
+            aria-label={`${active.name} — ${stateOf(active).label}`}
+            data-testid="terminal-screen"
+          />
           {active.state === "exited" && (
             <p className="terminal-ended" data-testid="terminal-ended">
               This session ended{active.exitCode === null ? "" : ` with code ${active.exitCode}`}. Start a
               new one to keep working.
             </p>
           )}
-        </div>
+        </>
       )}
     </section>
   );

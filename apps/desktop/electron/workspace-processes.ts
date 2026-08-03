@@ -1,27 +1,44 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
+import { uptime } from "node:os";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
-import type { ProcessKind, RunnerEvent, VerificationCheck } from "@novus/contracts";
+import {
+  MIN_SECRET_LENGTH,
+  type CommandEnding,
+  type DeclaredCommand,
+  type ProcessKind,
+  type ProcessLog,
+  type ProcessLogChunk,
+  type ProcessReadiness,
+  type ResolvedReadiness,
+  type RunnerEvent
+} from "@novus/contracts";
 import { z } from "zod";
 import { headSha, type GitExec } from "./workspace-git";
 
 /**
- * Process supervision for a workspace (D-041, D-042; the rules are in
+ * Process supervision for a workspace (D-041 … D-045; the rules are in
  * ARCHITECTURE.md#workspace-configuration-environments-and-processes).
  *
  * Setup commands are finite, run commands are long-lived, verification
  * commands are finite and cancellable, and every one of them:
  *
+ *  - runs the **snapshot** a participant authorized, never a command line read
+ *    back out of a file that may have changed since (D-043);
  *  - runs in the workstream's worktree and never in the user's own checkout.
  *    That is asserted on every spawn rather than assumed from how the caller
  *    was written;
- *  - gets its own process group, so a stop, a restart, or the application
+ *  - gets its own process group, so a stop, a deadline, or the application
  *    quitting reaches the whole tree instead of orphaning whatever the command
  *    started;
  *  - has its output bounded and redacted before it can become evidence — both
  *    the machine-local paths the room must never learn and any secret value
- *    this machine holds;
+ *    this machine holds — and kept locally afterwards, so a process that ended
+ *    is still inspectable;
+ *  - reports how it ended, by name: an exit code, a signal, a deadline, or a
+ *    cancellation are four different endings and the room says which;
  *  - reports through named events, including the one nobody enjoys: after a
  *    relaunch a process that is not actually alive is reported as gone, never
  *    presented as still running.
@@ -32,34 +49,30 @@ import { headSha, type GitExec } from "./workspace-git";
 
 /** How long a stopped process gets to unwind before it is killed outright. */
 const SIGKILL_AFTER_MS = 5_000;
-/** A finite command that has not ended by now is not going to. */
-const FINITE_TIMEOUT_MS = 30 * 60_000;
 /** The contract's ceiling for reported check output. */
 const MAX_OUTPUT = 4_000;
-/** Below this length a "secret" is a word, and redacting it would shred every
- *  line of output that happens to contain it. */
-const MIN_REDACTABLE = 6;
+/** What the runtime dock keeps per process on this machine. Larger than the
+ *  reported bound, because reading a build log is the dock's whole job. */
+const MAX_LOG = 200 * 1024;
+/** How many finished processes stay inspectable before the oldest is dropped. */
+const MAX_RETAINED_LOGS = 40;
+/** Output is coalesced on this interval so a chatty command cannot turn into an
+ *  IPC storm. */
+const FLUSH_MS = 32;
 const MAX_REASON = 400;
+/** How often a declared readiness signal is asked. */
+const PROBE_EVERY_MS = 400;
+/** One probe's own patience, so a hung socket cannot outlast the deadline. */
+const PROBE_TIMEOUT_MS = 2_000;
 
-export interface CommandSpec {
-  name: string;
-  /** As the project declared it; never an expanded secret. */
-  command: string;
-  /** Relative to the worktree. */
-  cwd?: string | undefined;
+export interface Invocation {
+  /** Exactly what was authorized. Nothing here is re-read from the repository. */
+  command: DeclaredCommand;
+  /** Built by `projectEnv()`; this module never adds to it. */
   env: Record<string, string>;
-}
-
-export interface LongRunSpec extends CommandSpec {
-  port: number | null;
-  /** What the project says its preview looks like; `{port}` is substituted. */
-  previewUrl?: string | undefined;
-  /** Whether the project allows a second run command to be alive at once. */
-  allowConcurrent: boolean;
-}
-
-export interface VerificationSpec extends CommandSpec {
-  category: VerificationCheck["category"];
+  /** The port a run command was actually given — declared, or allocated for
+   *  this workstream. */
+  port?: number | null;
 }
 
 export interface SupervisorOptions {
@@ -79,6 +92,19 @@ export interface SupervisorOptions {
   emit: (event: RunnerEvent) => void;
   /** Where running processes are recorded, so a relaunch can be honest. */
   recordPath: string;
+  /** Asks a declared readiness signal whether the application is up.
+   *  Injectable so readiness is testable without a real server. */
+  probe?: ReadinessProbe;
+}
+
+/** True when the declared signal answered. Never throws: an unreachable
+ *  application is an answer, not an exception. */
+export type ReadinessProbe = (target: ReadinessTarget) => Promise<boolean>;
+
+export interface ReadinessTarget {
+  kind: "http" | "port";
+  url: string | null;
+  port: number | null;
 }
 
 interface Supervised {
@@ -87,6 +113,9 @@ interface Supervised {
   name: string;
   child: ChildProcess;
   escalation: NodeJS.Timeout | null;
+  /** Set the moment an ending is decided, so whichever of the exit paths
+   *  arrives first cannot be overwritten by a later guess. */
+  ending: CommandEnding | null;
   stopReason: string | null;
   finished: Promise<CommandOutcome>;
 }
@@ -97,8 +126,7 @@ export interface CommandOutcome {
   output: string;
   truncated: boolean;
   spawnError: string | null;
-  timedOut: boolean;
-  stopped: boolean;
+  ending: CommandEnding;
 }
 
 export class WorkspaceCommandError extends Error {
@@ -108,11 +136,24 @@ export class WorkspaceCommandError extends Error {
   }
 }
 
+/** One process's local record: what it is, how it ended, and what it printed. */
+interface LogEntry {
+  log: ProcessLog;
+  pending: string;
+  flush: NodeJS.Timeout | null;
+}
+
 export class WorkspaceProcesses {
   private readonly options: SupervisorOptions;
   /** Keyed by kind and name: a project may reasonably call both a run command
    *  and a check `test`, and one must never displace the other. */
   private readonly live = new Map<string, Supervised>();
+  /** Insertion-ordered, so dropping the oldest is dropping the first. */
+  private readonly logs = new Map<string, LogEntry>();
+  private readonly listeners = new Set<(chunk: ProcessLogChunk) => void>();
+  /** Every preview URL a process of this workstream actually reported. The
+   *  preview bridge opens one of these and nothing else (D-045). */
+  private readonly previews = new Set<string>();
 
   constructor(options: SupervisorOptions) {
     this.options = options;
@@ -126,12 +167,29 @@ export class WorkspaceProcesses {
     return [...this.live.values()].map((supervised) => supervised.name);
   }
 
+  /** Everything this workstream has run, still readable after it ended. */
+  processLogs(): ProcessLog[] {
+    return [...this.logs.values()].map((entry) => ({ ...entry.log }));
+  }
+
+  /** What this workstream reported as openable. */
+  previewUrls(): string[] {
+    return [...this.previews];
+  }
+
+  onLog(listener: (chunk: ProcessLogChunk) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
   /**
    * The project's setup command. Readiness moves to `configuring` while it
    * runs and to `ready` or `failed` when it ends — never to `ready` on a
    * non-zero exit, whatever the command printed on its way out.
    */
-  async runSetup(spec: CommandSpec, ports: { start: number | null; end: number | null }): Promise<void> {
+  async runSetup(invocation: Invocation, ports: { start: number | null; end: number | null }): Promise<void> {
     this.report({
       kind: "workspace.readiness",
       payload: {
@@ -144,7 +202,7 @@ export class WorkspaceProcesses {
 
     let outcome: CommandOutcome;
     try {
-      outcome = await this.run("setup", spec, { finite: true, port: null, previewUrl: undefined });
+      outcome = await this.run(invocation, { finite: true });
     } catch (error) {
       const reason = this.clean(messageOf(error)).slice(0, MAX_REASON);
       this.report({
@@ -174,11 +232,13 @@ export class WorkspaceProcesses {
   /**
    * A long-lived run command. It is not tied to any harness turn: an agent
    * finishing does not stop the app, and the app running does not block
-   * direction (PRODUCT.md, *App running*).
+   * direction (PRODUCT.md, *App running*). It has no deadline of any kind —
+   * the whole point of a run command is that it keeps going.
    */
-  async startRun(spec: LongRunSpec): Promise<void> {
-    if (this.live.has(key("run", spec.name))) return; // already alive: starting it again is a no-op
-    if (!spec.allowConcurrent) {
+  async startRun(invocation: Invocation, allowConcurrent: boolean): Promise<void> {
+    const name = invocation.command.name;
+    if (this.live.has(key("run", name))) return; // already alive: starting it again is a no-op
+    if (!allowConcurrent) {
       const other = [...this.live.values()].find((supervised) => supervised.kind === "run");
       if (other) {
         throw new WorkspaceCommandError(
@@ -189,7 +249,7 @@ export class WorkspaceProcesses {
     // Awaiting the spawn, not the server: a long-lived command resolves as soon
     // as it is running, so the command that asked for it is acknowledged while
     // the process carries on independently of any harness turn.
-    await this.run("run", spec, { finite: false, port: spec.port, previewUrl: spec.previewUrl });
+    await this.run(invocation, { finite: false });
   }
 
   /**
@@ -197,19 +257,20 @@ export class WorkspaceProcesses {
    * starts: a check that began while the agent was still writing must not claim
    * a revision that did not exist when it ran (D-037).
    */
-  async runVerification(spec: VerificationSpec): Promise<void> {
+  async runVerification(invocation: Invocation): Promise<void> {
+    const spec = invocation.command;
     const checkpointSha = await headSha(this.options.git, this.options.worktree);
     const startedAt = new Date();
     let outcome: CommandOutcome;
     try {
-      outcome = await this.run("verification", spec, { finite: true, port: null, previewUrl: undefined });
+      outcome = await this.run(invocation, { finite: true });
     } catch (error) {
       const completedAt = new Date();
       this.report({
         kind: "verification.completed",
         payload: {
           name: spec.name,
-          category: spec.category,
+          category: spec.category ?? "test",
           outcome: "errored",
           command: this.clean(spec.command).slice(0, MAX_REASON),
           exitCode: null,
@@ -218,7 +279,8 @@ export class WorkspaceProcesses {
           startedAt: startedAt.toISOString(),
           completedAt: completedAt.toISOString(),
           durationMs: completedAt.getTime() - startedAt.getTime(),
-          checkpointSha
+          checkpointSha,
+          ending: "spawn_failed"
         }
       });
       throw error;
@@ -229,16 +291,17 @@ export class WorkspaceProcesses {
       kind: "verification.completed",
       payload: {
         name: spec.name,
-        category: spec.category,
+        category: spec.category ?? "test",
         outcome: verdict(outcome),
         command: this.clean(spec.command).slice(0, MAX_REASON),
         exitCode: outcome.exitCode,
-        output: outcome.output === "" ? null : outcome.output,
+        output: outcome.output === "" ? null : outcome.output.slice(-MAX_OUTPUT),
         truncated: outcome.truncated,
         startedAt: startedAt.toISOString(),
         completedAt: completedAt.toISOString(),
         durationMs: completedAt.getTime() - startedAt.getTime(),
-        checkpointSha
+        checkpointSha,
+        ending: outcome.ending
       }
     });
   }
@@ -246,7 +309,7 @@ export class WorkspaceProcesses {
   /** Stops the named process and everything it started. */
   async stop(name: string, reason: string): Promise<void> {
     const matching = [...this.live.values()].filter((supervised) => supervised.name === name);
-    for (const supervised of matching) this.signal(supervised, reason);
+    for (const supervised of matching) this.signal(supervised, "cancelled", reason);
     await Promise.allSettled(matching.map((supervised) => supervised.finished));
   }
 
@@ -254,39 +317,46 @@ export class WorkspaceProcesses {
    *  command outlives the app that started it (D-034). */
   async stopAll(reason: string): Promise<void> {
     const all = [...this.live.values()];
-    for (const supervised of all) this.signal(supervised, reason);
+    for (const supervised of all) this.signal(supervised, "cancelled", reason);
     await Promise.allSettled(all.map((supervised) => supervised.finished));
+    for (const entry of this.logs.values()) {
+      if (entry.flush) clearTimeout(entry.flush);
+      entry.flush = null;
+    }
   }
 
   // --- Spawning --------------------------------------------------------------
 
-  private async run(
-    kind: ProcessKind,
-    spec: CommandSpec,
-    shape: { finite: boolean; port: number | null; previewUrl: string | undefined }
-  ): Promise<CommandOutcome> {
-    const cwd = this.resolveCwd(spec.cwd);
+  private async run(invocation: Invocation, shape: { finite: boolean }): Promise<CommandOutcome> {
+    const spec = invocation.command;
+    const cwd = this.resolveCwd(spec.cwd ?? undefined);
     const processId = `prc_${randomBytes(9).toString("hex")}`;
+    const port = invocation.port ?? spec.port ?? null;
+    const declaredReadiness = shape.finite ? null : spec.readiness;
+    const awaiting = declaredReadiness !== null && declaredReadiness.kind !== "process";
 
     let child: ChildProcess;
     try {
-      child = spawnShell(spec.command, cwd, spec.env);
+      child = spawnShell(spec.command, cwd, invocation.env);
     } catch (error) {
       const reason = this.clean(messageOf(error)).slice(0, MAX_REASON);
+      this.openLog(processId, spec, port, "not_required");
       this.report({
         kind: "process.started",
         payload: {
           processId,
-          kind,
+          kind: spec.kind,
           name: spec.name,
           command: this.clean(spec.command).slice(0, MAX_REASON),
-          port: shape.port,
-          previewUrl: null
+          port,
+          previewUrl: null,
+          readiness: "not_required"
         }
       });
+      this.closeLog(processId, "failed", null, "spawn_failed", reason);
       this.report({
         kind: "process.exited",
-        payload: { processId, state: "failed", exitCode: null, failureReason: reason }
+        payload: { processId, state: "failed", ending: "spawn_failed", exitCode: null, failureReason: reason }
       });
       return {
         exitCode: null,
@@ -294,55 +364,63 @@ export class WorkspaceProcesses {
         output: "",
         truncated: false,
         spawnError: reason,
-        timedOut: false,
-        stopped: false
+        ending: "spawn_failed"
       };
     }
 
-    const preview = previewFor(shape.previewUrl, shape.port);
+    const preview = previewFor(spec.previewUrl ?? undefined, port);
+    this.openLog(processId, spec, port, awaiting ? "pending" : "not_required");
+    if (!shape.finite) this.setLogPreview(processId, preview.url);
     this.report({
       kind: "process.started",
       payload: {
         processId,
-        kind,
+        kind: spec.kind,
         name: spec.name,
         command: this.clean(spec.command).slice(0, MAX_REASON),
-        port: shape.port,
-        previewUrl: preview.url
+        port,
+        previewUrl: preview.url,
+        readiness: awaiting ? "pending" : "not_required"
       }
     });
 
     const supervised: Supervised = {
       processId,
-      kind,
+      kind: spec.kind,
       name: spec.name,
       child,
       escalation: null,
+      ending: null,
       stopReason: null,
       finished: Promise.resolve(emptyOutcome())
     };
-    supervised.finished = this.watch(supervised, spec, shape, preview);
-    this.live.set(key(kind, spec.name), supervised);
-    this.recordStart(processId, spec, kind, child.pid ?? null);
+    supervised.finished = this.watch(supervised, invocation, shape, preview, port);
+    this.live.set(key(spec.kind, spec.name), supervised);
+    this.recordStart(processId, spec, child.pid ?? null);
 
     if (shape.finite) return supervised.finished;
     // A long-lived command is reported when it starts; the caller does not wait
-    // for it to end, and the exit event arrives whenever it does.
+    // for it to end. Its declared readiness signal is asked in the background —
+    // a process existing is not a claim that an application is serving.
+    if (awaiting && declaredReadiness !== null) {
+      void this.awaitReadiness(supervised, declaredReadiness, port, preview.url);
+    }
     return emptyOutcome();
   }
 
   private watch(
     supervised: Supervised,
-    spec: CommandSpec,
-    shape: { finite: boolean; port: number | null; previewUrl: string | undefined },
-    preview: Preview
+    invocation: Invocation,
+    shape: { finite: boolean },
+    preview: Preview,
+    port: number | null
   ): Promise<CommandOutcome> {
+    const spec = invocation.command;
     return new Promise<CommandOutcome>((settle) => {
       const child = supervised.child;
       let output = "";
       let truncated = false;
       let spawnError: string | null = null;
-      let timedOut = false;
       // A URL the project *declared* is the project's own statement and stands.
       // A URL Novus derived from the port it handed out is a guess, and the
       // server's own "Local: …" line is better evidence than a guess. A finite
@@ -350,20 +428,29 @@ export class WorkspaceProcesses {
       let previewSettled = preview.declared || shape.finite;
       let done = false;
 
-      const timeout = shape.finite
-        ? setTimeout(() => {
-            timedOut = true;
-            this.signal(supervised, "It ran past the time Novus waits for a finite command.");
-          }, FINITE_TIMEOUT_MS)
-        : null;
-      timeout?.unref?.();
+      // The deadline the participant authorized, and nothing else. A run
+      // command's `timeoutMs` is null by construction, so it never gets one.
+      const deadline = spec.timeoutMs;
+      const timeout =
+        shape.finite && deadline !== null
+          ? setTimeout(() => {
+              this.signal(
+                supervised,
+                "timeout",
+                `It ran past the ${describeMinutes(deadline)} this project allows for ${spec.name}.`
+              );
+            }, deadline)
+          : null;
+      // Deliberately not unref'd: a deadline that the event loop is allowed to
+      // skip is not a deadline. It is cleared on every exit path below.
 
       const absorb = (chunk: Buffer): void => {
         const text = this.clean(chunk.toString());
+        this.appendLog(supervised.processId, text);
         output += text;
-        if (output.length > MAX_OUTPUT) {
+        if (output.length > MAX_OUTPUT * 2) {
           // The tail is what says how a command ended, so that is what is kept.
-          output = output.slice(output.length - MAX_OUTPUT);
+          output = output.slice(output.length - MAX_OUTPUT * 2);
           truncated = true;
         }
         if (!previewSettled) {
@@ -373,15 +460,19 @@ export class WorkspaceProcesses {
             // The only in-contract way to deliver a URL a server printed after
             // it started: the same process, now with one more true fact about
             // it.
+            this.setLogPreview(supervised.processId, discovered);
             this.report({
               kind: "process.started",
               payload: {
                 processId: supervised.processId,
-                kind: supervised.kind,
+                kind: spec.kind,
                 name: spec.name,
                 command: this.clean(spec.command).slice(0, MAX_REASON),
-                port: shape.port,
-                previewUrl: discovered
+                port,
+                previewUrl: discovered,
+                readiness: this.logs.get(supervised.processId)?.log.readiness === "pending"
+                  ? "pending"
+                  : "not_required"
               }
             });
           }
@@ -396,32 +487,28 @@ export class WorkspaceProcesses {
         done = true;
         if (timeout) clearTimeout(timeout);
         if (supervised.escalation) clearTimeout(supervised.escalation);
-        this.live.delete(key(supervised.kind, spec.name));
+        this.live.delete(key(spec.kind, spec.name));
         this.recordEnd(supervised.processId);
 
-        const outcome: CommandOutcome = {
-          exitCode,
-          signal,
-          output,
-          truncated,
-          spawnError,
-          timedOut,
-          stopped: supervised.stopReason !== null
-        };
-        const failure = describeFailure(outcome);
+        const ending =
+          supervised.ending ??
+          (spawnError !== null
+            ? "spawn_failed"
+            : signal !== null
+              ? "signal"
+              : "exit");
+        const outcome: CommandOutcome = { exitCode, signal, output, truncated, spawnError, ending };
+        const failure = describeFailure(outcome, supervised.stopReason);
+        const state = ending === "cancelled" ? "stopped" : failure === null ? "exited" : "failed";
+        // A cancelled process is not a failure, but it still owes the room the
+        // reason it stopped — "stopped" with no explanation is a room that
+        // cannot say who did what.
+        const said = ending === "cancelled" ? supervised.stopReason : failure;
+        const reason = said === null ? null : this.clean(said).slice(0, MAX_REASON);
+        this.closeLog(supervised.processId, state, exitCode, ending, reason);
         this.report({
           kind: "process.exited",
-          payload: {
-            processId: supervised.processId,
-            state: outcome.stopped ? "stopped" : failure === null ? "exited" : "failed",
-            exitCode,
-            failureReason:
-              outcome.stopped && supervised.stopReason !== null
-                ? this.clean(supervised.stopReason).slice(0, MAX_REASON)
-                : failure === null
-                  ? null
-                  : this.clean(failure).slice(0, MAX_REASON)
-          }
+          payload: { processId: supervised.processId, state, ending, exitCode, failureReason: reason }
         });
         settle(outcome);
       };
@@ -432,12 +519,87 @@ export class WorkspaceProcesses {
         spawnError = this.clean(messageOf(error)).slice(0, MAX_REASON);
         finish(null, null);
       });
+      // Both, first one wins. `close` waits for the stdio streams, and a
+      // grandchild that inherited the pipe holds them open after the shell
+      // itself is gone — waiting only for `close` is how a quit hangs forever.
+      child.on("exit", (code, signal) => finish(code, signal));
       child.on("close", (code, signal) => finish(code, signal));
     });
   }
 
-  /** SIGTERM to the whole group, then SIGKILL if it is still there. */
-  private signal(supervised: Supervised, reason: string): void {
+  /**
+   * Asks the declared readiness signal until it answers or its own deadline
+   * passes. Either way the process keeps running: a health check that never
+   * answered is a fact about the application, and killing somebody's server
+   * over it is a decision only the project may make (`stopOnFailure`).
+   */
+  private async awaitReadiness(
+    supervised: Supervised,
+    readiness: ResolvedReadiness,
+    port: number | null,
+    fallbackPreview: string | null
+  ): Promise<void> {
+    const probe = this.options.probe ?? defaultProbe;
+    const target = readinessTarget(readiness, port);
+    if (target === null) {
+      this.settleReadiness(supervised, "unreachable", null, "This readiness signal named nothing to check.");
+      return;
+    }
+    const deadline = Date.now() + readiness.timeoutSeconds * 1_000;
+    while (Date.now() < deadline) {
+      if (!this.live.has(key(supervised.kind, supervised.name))) return; // it ended first
+      let answered = false;
+      try {
+        answered = await probe(target);
+      } catch {
+        answered = false;
+      }
+      if (answered) {
+        this.settleReadiness(supervised, "ready", target.kind === "http" ? target.url : fallbackPreview, null);
+        return;
+      }
+      await pause(PROBE_EVERY_MS);
+    }
+    if (!this.live.has(key(supervised.kind, supervised.name))) return;
+    this.settleReadiness(
+      supervised,
+      "unreachable",
+      null,
+      `It did not answer ${target.kind === "http" ? target.url ?? "its health URL" : `port ${target.port ?? "?"}`} within ${readiness.timeoutSeconds}s.`
+    );
+    if (readiness.stopOnFailure) {
+      this.signal(supervised, "cancelled", "This project asks Novus to stop a run command that never became ready.");
+    }
+  }
+
+  private settleReadiness(
+    supervised: Supervised,
+    readiness: "ready" | "unreachable",
+    previewUrl: string | null,
+    detail: string | null
+  ): void {
+    if (previewUrl !== null) this.setLogPreview(supervised.processId, previewUrl);
+    const entry = this.logs.get(supervised.processId);
+    if (entry) {
+      entry.log.readiness = readiness;
+      this.emitChunk(entry, "");
+    }
+    this.report({
+      kind: "process.readiness",
+      payload: {
+        processId: supervised.processId,
+        readiness,
+        previewUrl,
+        detail: detail === null ? null : this.clean(detail).slice(0, MAX_REASON)
+      }
+    });
+  }
+
+  /** SIGTERM to the whole group, then SIGKILL if it is still there. The ending
+   *  is fixed here, before the exit arrives, so the reason a process stopped is
+   *  the reason Novus decided and not one inferred from a signal afterwards. */
+  private signal(supervised: Supervised, ending: CommandEnding, reason: string): void {
+    supervised.ending ??= ending;
     supervised.stopReason ??= reason;
     killTree(supervised.child, "SIGTERM");
     if (supervised.escalation) clearTimeout(supervised.escalation);
@@ -471,6 +633,116 @@ export class WorkspaceProcesses {
     return target;
   }
 
+  // --- The local log --------------------------------------------------------
+
+  private openLog(
+    processId: string,
+    spec: DeclaredCommand,
+    port: number | null,
+    readiness: ProcessReadiness
+  ): void {
+    void port;
+    if (this.logs.size >= MAX_RETAINED_LOGS) {
+      for (const [id, entry] of this.logs) {
+        if (entry.log.state === "starting" || entry.log.state === "running") continue;
+        if (entry.flush) clearTimeout(entry.flush);
+        this.logs.delete(id);
+        break;
+      }
+    }
+    this.logs.set(processId, {
+      log: {
+        processId,
+        workstreamId: this.options.workstreamId,
+        kind: spec.kind,
+        name: spec.name,
+        command: this.clean(spec.command).slice(0, MAX_REASON),
+        state: readiness === "pending" ? "starting" : "running",
+        readiness,
+        exitCode: null,
+        ending: null,
+        failureReason: null,
+        previewUrl: null,
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        output: "",
+        truncated: false
+      },
+      pending: "",
+      flush: null
+    });
+  }
+
+  private appendLog(processId: string, text: string): void {
+    const entry = this.logs.get(processId);
+    if (!entry || text === "") return;
+    const grown = entry.log.output + text;
+    if (grown.length > MAX_LOG) {
+      entry.log.output = grown.slice(grown.length - MAX_LOG);
+      entry.log.truncated = true;
+    } else {
+      entry.log.output = grown;
+    }
+    entry.pending += text;
+    if (entry.flush !== null) return;
+    entry.flush = setTimeout(() => {
+      entry.flush = null;
+      const chunk = entry.pending;
+      entry.pending = "";
+      if (chunk !== "") this.emitChunk(entry, chunk);
+    }, FLUSH_MS);
+    entry.flush.unref?.();
+  }
+
+  private setLogPreview(processId: string, url: string | null): void {
+    if (url !== null) this.previews.add(url);
+    const entry = this.logs.get(processId);
+    if (entry) entry.log.previewUrl = url;
+  }
+
+  private closeLog(
+    processId: string,
+    state: ProcessLog["state"],
+    exitCode: number | null,
+    ending: CommandEnding,
+    failureReason: string | null
+  ): void {
+    const entry = this.logs.get(processId);
+    if (!entry) return;
+    if (entry.flush) {
+      clearTimeout(entry.flush);
+      entry.flush = null;
+    }
+    entry.log.state = state;
+    entry.log.exitCode = exitCode;
+    entry.log.ending = ending;
+    entry.log.failureReason = failureReason;
+    entry.log.endedAt = new Date().toISOString();
+    if (entry.log.readiness === "pending") entry.log.readiness = "not_required";
+    const tail = entry.pending;
+    entry.pending = "";
+    this.emitChunk(entry, tail);
+  }
+
+  private emitChunk(entry: LogEntry, data: string): void {
+    const chunk: ProcessLogChunk = {
+      processId: entry.log.processId,
+      workstreamId: entry.log.workstreamId,
+      data,
+      state: entry.log.state,
+      readiness: entry.log.readiness,
+      exitCode: entry.log.exitCode,
+      ending: entry.log.ending
+    };
+    for (const listener of this.listeners) {
+      try {
+        listener(chunk);
+      } catch {
+        /* a broken listener must not take the process down with it */
+      }
+    }
+  }
+
   // --- Reporting -------------------------------------------------------------
 
   /** Every reported string passes through here: machine-local paths become
@@ -485,13 +757,13 @@ export class WorkspaceProcesses {
 
   // --- The record a relaunch reads ------------------------------------------
 
-  private recordStart(processId: string, spec: CommandSpec, kind: ProcessKind, pid: number | null): void {
+  private recordStart(processId: string, spec: DeclaredCommand, pid: number | null): void {
     if (pid === null) return;
     const records = readRecords(this.options.recordPath);
     records[processId] = {
       processId,
       workstreamId: this.options.workstreamId,
-      kind,
+      kind: spec.kind,
       name: spec.name,
       pid,
       startedAt: new Date().toISOString()
@@ -505,6 +777,79 @@ export class WorkspaceProcesses {
     delete records[processId];
     writeRecords(this.options.recordPath, records);
   }
+}
+
+// --- Readiness ----------------------------------------------------------------
+
+/**
+ * The only hostnames a preview may carry. Literal strings, matched after
+ * `new URL` has normalised the authority — a name that merely *resolves* to
+ * loopback (`localtest.me`, `*.nip.io`, an attacker's own A record) is somebody
+ * else's host with a friendly spelling, and resolving it here would introduce a
+ * second moment for the answer to change.
+ *
+ * `0.0.0.0` is deliberately absent: it is what a server binds to, not somewhere
+ * a browser goes. `detectPreviewUrl` already rewrites it to `localhost`, so
+ * nothing legitimate needs it.
+ */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** What a declared signal actually asks, with `{port}` filled in. Null when the
+ *  project named a signal but nothing to check. */
+export function readinessTarget(readiness: ResolvedReadiness, port: number | null): ReadinessTarget | null {
+  if (readiness.kind === "process") return null;
+  if (readiness.kind === "port") {
+    const chosen = readiness.port ?? port;
+    return chosen === null ? null : { kind: "port", url: null, port: chosen };
+  }
+  const template = readiness.url;
+  if (template === null || template === "") return null;
+  const filled = port === null ? template : template.split("{port}").join(String(port));
+  if (filled.includes("{port}")) return null;
+  return { kind: "http", url: filled, port };
+}
+
+/** The probe that actually runs on this machine. Loopback only: this is a
+ *  readiness check for a local application, never a general-purpose fetcher. */
+export const defaultProbe: ReadinessProbe = async (target) => {
+  if (target.kind === "port") {
+    return target.port === null ? false : await portAnswers(target.port);
+  }
+  const url = target.url === null ? null : parseLoopbackHttpUrl(target.url);
+  if (url === null) return false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    // Any answer is an answer: a 404 from a server that is listening still
+    // proves the server is listening, which is the question being asked.
+    await fetch(url.toString(), { signal: controller.signal, redirect: "manual" });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+function portAnswers(port: number): Promise<boolean> {
+  return new Promise((settle) => {
+    const socket = connect({ host: "127.0.0.1", port });
+    const done = (answer: boolean): void => {
+      socket.destroy();
+      settle(answer);
+    };
+    socket.setTimeout(PROBE_TIMEOUT_MS);
+    socket.once("connect", () => done(true));
+    socket.once("timeout", () => done(false));
+    socket.once("error", () => done(false));
+  });
+}
+
+function pause(ms: number): Promise<void> {
+  return new Promise((settle) => {
+    const timer = setTimeout(settle, ms);
+    timer.unref?.();
+  });
 }
 
 // --- Relaunch reconciliation --------------------------------------------------
@@ -547,6 +892,10 @@ function writeRecords(path: string, records: Record<string, ProcessRecord>): voi
  * Novus can no longer read its output, no longer knows what it is doing, and
  * would otherwise leave a stranger holding the workstream's port. Either way
  * the room hears the truth rather than a stale "running".
+ *
+ * Only the *group* is signalled, and only when the recorded pid still leads one
+ * of its own: a bare pid after a reboot may belong to somebody else's process,
+ * and Novus does not kill a stranger to tidy its own bookkeeping.
  */
 export function reconcileRecordedProcesses(
   recordPath: string,
@@ -555,17 +904,20 @@ export function reconcileRecordedProcesses(
 ): ProcessRecord[] {
   const records = Object.values(readRecords(recordPath));
   if (records.length === 0) return [];
+  const bootedAt = Date.now() - uptime() * 1000;
   for (const record of records) {
-    const alive = isAlive(record.pid);
+    // A pid recorded before this machine booted is not this process any more —
+    // pids restart low, and Novus does not signal a stranger to tidy its own
+    // bookkeeping. It is still reported as gone, because it is.
+    const sameBoot = Date.parse(record.startedAt) >= bootedAt;
+    const alive = sameBoot && isAlive(record.pid);
     if (alive) {
       try {
+        // The negative pid is the whole safety property: it only signals when
+        // this pid is still a process-group leader, which is what Novus made it.
         process.kill(-record.pid, "SIGTERM");
       } catch {
-        try {
-          process.kill(record.pid, "SIGTERM");
-        } catch {
-          /* it went away between the check and the signal */
-        }
+        /* the group is gone, or this pid is no longer a leader — leave it alone */
       }
     }
     emit(record.workstreamId, {
@@ -573,6 +925,7 @@ export function reconcileRecordedProcesses(
       payload: {
         processId: record.processId,
         state: "stopped",
+        ending: "cancelled",
         exitCode: null,
         failureReason: alive
           ? "Novus restarted and could no longer supervise this process, so it was stopped."
@@ -597,15 +950,19 @@ export function processIsAlive(pid: number): boolean {
 // --- Output handling ----------------------------------------------------------
 
 /**
- * Removes any secret value from text before it can be reported. Short values
- * are left alone: below a handful of characters a "secret" is a common word,
- * and blanking every occurrence would destroy the output without protecting
- * anything.
+ * Removes any secret value from text before it can be reported.
+ *
+ * Values shorter than `MIN_SECRET_LENGTH` are not stored at all — the entry
+ * path refuses them by name (D-044) — so this floor is a second line rather
+ * than a silent exception: if one ever reached the store from an older build,
+ * redacting it would shred every line of output containing that common word
+ * without protecting anything, and the honest answer is that Novus does not
+ * accept a secret it cannot redact.
  */
 export function redact(text: string, secrets: readonly string[]): string {
   let out = text;
   for (const secret of secrets) {
-    if (secret.length < MIN_REDACTABLE) continue;
+    if (secret.length < MIN_SECRET_LENGTH) continue;
     out = out.split(secret).join("[redacted]");
   }
   return out;
@@ -658,6 +1015,33 @@ export function detectPreviewUrl(text: string): string | null {
   return found.replace("0.0.0.0", "localhost").slice(0, 300);
 }
 
+/**
+ * A loopback `http`/`https` URL, or null.
+ *
+ * This is the one gate between "a project printed a string" and "Novus asked
+ * the operating system to open it", so it is deliberately narrow: only those
+ * two schemes, only a loopback host, and never a URL carrying credentials —
+ * `http://localhost@evil.example` has the authority `evil.example` and a
+ * `startsWith("http://localhost")` check would wave it straight through.
+ */
+export function parseLoopbackHttpUrl(candidate: string): URL | null {
+  // Refused before parsing rather than after: the URL parser silently strips
+  // or percent-encodes whitespace and control characters, so a string carrying
+  // one would come back looking well-formed instead of being rejected.
+  if (/[\s\u0000-\u001f\u007f]/.test(candidate)) return null;
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username !== "" || url.password !== "") return null;
+  const host = url.hostname.toLowerCase();
+  if (!LOOPBACK_HOSTS.has(host)) return null;
+  return url;
+}
+
 // --- Shared plumbing ----------------------------------------------------------
 
 /**
@@ -684,34 +1068,50 @@ function key(kind: ProcessKind, name: string): string {
   return `${kind}:${name}`;
 }
 
+/**
+ * Both the group and the process itself, unconditionally.
+ *
+ * A group signal reaches only what is still in that group, and the direct child
+ * is signalled separately rather than as a fallback: making the second call
+ * conditional on the first throwing means a group that partly went away leaves
+ * the shell running. Neither call is expected to succeed every time, so both
+ * failures are absorbed.
+ */
 function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  try {
-    if (child.pid) process.kill(-child.pid, signal);
-  } catch {
-    // The group is already gone, or the platform refused; fall back to the
-    // process itself rather than leaving it running.
+  const pid = child.pid;
+  if (pid) {
     try {
-      child.kill(signal);
+      process.kill(-pid, signal);
     } catch {
-      /* already exited */
+      /* the group is gone, or this platform has none */
     }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    /* already exited */
   }
 }
 
-function describeFailure(outcome: CommandOutcome): string | null {
-  if (outcome.spawnError !== null) return `It could not start: ${outcome.spawnError}`;
-  if (outcome.timedOut) return "It ran past the time Novus waits for a finite command.";
-  if (outcome.stopped) return null;
+function describeMinutes(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes >= 1) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return `${Math.max(1, Math.round(ms / 1000))} seconds`;
+}
+
+export function describeFailure(outcome: CommandOutcome, stopReason?: string | null): string | null {
+  if (outcome.ending === "spawn_failed") return `It could not start: ${outcome.spawnError ?? "unknown"}`;
+  if (outcome.ending === "timeout") return stopReason ?? "It ran past the time this project allows.";
+  if (outcome.ending === "cancelled") return null;
   if (outcome.signal !== null) return `It was killed by ${outcome.signal}.`;
   if (outcome.exitCode !== 0 && outcome.exitCode !== null) return `It exited with code ${outcome.exitCode}.`;
   return null;
 }
 
 function verdict(outcome: CommandOutcome): "passed" | "failed" | "errored" {
-  if (outcome.spawnError !== null || outcome.timedOut) return "errored";
-  // A cancelled check produced no verdict; calling it a pass or a fail would be
-  // inventing evidence.
-  if (outcome.stopped) return "errored";
+  // A check that ran out of time, was cancelled, or never started produced no
+  // verdict. Calling any of those a pass or a fail would be inventing evidence.
+  if (outcome.ending !== "exit") return "errored";
   return outcome.exitCode === 0 ? "passed" : "failed";
 }
 
@@ -722,8 +1122,7 @@ function emptyOutcome(): CommandOutcome {
     output: "",
     truncated: false,
     spawnError: null,
-    timedOut: false,
-    stopped: false
+    ending: "exit"
   };
 }
 

@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   ApiErrorSchema,
+  DeclaredCommandSchema,
   RunnerCommandsResponseSchema,
   type MissionDetailResponse,
   type RunnerCommand,
@@ -13,7 +14,7 @@ import { z } from "zod";
 import type { ControlPlaneClient } from "./api-client";
 import { startTurn, type RunningTurn, type TurnResult } from "./execution";
 import { EventOutbox } from "./outbox";
-import { createWorkspaceRuntime, type WorkspaceCommandContext } from "./workspace";
+import { createWorkspaceRuntime, type PinnedCommand, type WorkspaceCommandContext } from "./workspace";
 import {
   clonedRepositoryRoot,
   ensureRepositoryClone,
@@ -35,6 +36,9 @@ import {
 export interface RunnerAgent {
   /** Re-scan missions for local workstreams that need a runner registered. */
   discoverNow(): void;
+  /** Re-read one project's configuration and publish what it declares, so a
+   *  participant who has just saved settings does not wait for a poll. */
+  republish(missionId: string): void;
   /** Poll for commands immediately, rather than waiting for the next tick. */
   pollNow(): void;
   /**
@@ -136,7 +140,14 @@ interface ActiveTurn {
  */
 const WorkspacePayloadSchema = z.object({
   name: z.string().min(1).max(80).nullable().optional(),
-  workspaceId: z.string().min(1).nullable().optional()
+  workspaceId: z.string().min(1).nullable().optional(),
+  /**
+   * The snapshot the control plane authorized (D-043). The runner executes
+   * this, rather than re-reading a configuration file that a harness turn may
+   * have edited since the participant pressed the control. Absent only for
+   * `stop_command`, which names a process rather than a command line.
+   */
+  command: DeclaredCommandSchema.nullable().optional()
 });
 
 /**
@@ -184,6 +195,9 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   /** Repositories this machine could not fetch: when to try again, and what was
    *  last said about why, so one unreachable repository is one event. */
   const checkoutRetry = new Map<string, { after: number; attempts: number; reason: string }>();
+  /** The last configuration problem said out loud per workstream, so a broken
+   *  settings file is one warning rather than one every discovery pass. */
+  const announcedProblem = new Map<string, string>();
 
   /**
    * The workspace runtime: setup, run, and verification commands, their
@@ -208,9 +222,31 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
 
   return {
     discoverNow: () => void discover(),
+    republish: (missionId) => void republishFor(missionId),
     pollNow: () => void poll(),
     shutdown
   };
+
+  async function republishFor(missionId: string): Promise<void> {
+    const workstreamId = workstreamByMission.get(missionId);
+    if (workstreamId === undefined || !enrolments.has(workstreamId)) {
+      void discover();
+      return;
+    }
+    try {
+      const detail = await deps.api.getMission(missionId);
+      const repository = detail.mission.repository;
+      if (!repository || !detail.workstream) return;
+      announcedProblem.delete(workstreamId);
+      const missionBranch = detail.workstream.missionBranch;
+      const workspaceId = detail.workspace?.workspaceId ?? null;
+      chain(workstreamId, () =>
+        announceCommands({ missionId, workstreamId, providerRepoId: repository.providerRepoId, missionBranch, workspaceId })
+      );
+    } catch (error) {
+      console.warn("[runner] could not re-read this project's configuration:", messageOf(error));
+    }
+  }
 
   // --- Credential custody ---------------------------------------------------
 
@@ -359,6 +395,23 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         if (needsCheckout) {
           await ensureCheckout(workstreamId, repository.providerRepoId, detail.workstream.missionBranch);
         }
+        // Queued on this workstream's own chain, and not awaited here.
+        // Publishing reads the project and creates the worktree if it is not
+        // there, which is real work on the same files a turn uses — so it takes
+        // its turn in the lane rather than running beside one. Not awaiting it
+        // keeps discovery from delaying the first poll, which is how a command
+        // that is already queued gets picked up.
+        const missionBranch = detail.workstream.missionBranch;
+        const workspaceId = detail.workspace?.workspaceId ?? null;
+        chain(workstreamId, () =>
+          announceCommands({
+            missionId: mission.missionId,
+            workstreamId,
+            providerRepoId: repository.providerRepoId,
+            missionBranch,
+            workspaceId
+          })
+        );
       }
       // Once this machine knows which workstreams are its own, it says what
       // is actually true about the processes the last run recorded — nothing
@@ -374,6 +427,38 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     } finally {
       discovering = false;
       if (!stopped) void poll();
+    }
+  }
+
+  /** Queues work behind whatever this workstream is already doing. One lane per
+   *  workstream is what keeps a turn, a command, and a configuration read from
+   *  touching the same worktree at the same time. */
+  function chain(workstreamId: string, work: () => Promise<void>): void {
+    const previous = chains.get(workstreamId) ?? Promise.resolve();
+    const next = previous
+      .then(work)
+      .catch((error: unknown) => console.warn("[runner]", messageOf(error)));
+    chains.set(workstreamId, next);
+  }
+
+  /**
+   * Reads the project's configuration and publishes what it declares (D-043).
+   *
+   * This is what makes the Run control work for somebody who is not at this
+   * machine: they read the list from the control plane rather than from a disk
+   * they cannot see. It is also what gives the control plane a snapshot to pin
+   * an authorization to. Failure is quiet on purpose — a project with a broken
+   * `.novus/settings.toml` says so through the setup surface, and a discovery
+   * pass is not the place to relitigate it every fifteen seconds.
+   */
+  async function announceCommands(context: WorkspaceCommandContext): Promise<void> {
+    try {
+      await workspace.publishDeclared(context);
+    } catch (error) {
+      const reason = messageOf(error);
+      if (announcedProblem.get(context.workstreamId) === reason) return;
+      announcedProblem.set(context.workstreamId, reason);
+      console.warn("[runner] could not read this project's configuration:", reason);
     }
   }
 
@@ -637,10 +722,11 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       workspaceId: payload.data.workspaceId ?? null
     };
     const name = payload.data.name ?? null;
-    if (command.kind === "run_setup") return workspace.runSetup(context);
-    if (command.kind === "run_command") return workspace.runCommand(context, name);
+    const pinned: PinnedCommand = { name, snapshot: payload.data.command ?? null };
+    if (command.kind === "run_setup") return workspace.runSetup(context, pinned);
+    if (command.kind === "run_command") return workspace.runCommand(context, pinned);
     if (command.kind === "stop_command") return workspace.stopCommand(context, name);
-    return workspace.runVerification(context, name);
+    return workspace.runVerification(context, pinned);
   }
 
   interface TurnArgs {

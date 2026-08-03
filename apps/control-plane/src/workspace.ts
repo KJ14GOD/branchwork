@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { WorkspaceCommandInputSchema, type ProcessKind } from "@novus/contracts";
+import { DeclaredCommandSchema, WorkspaceCommandInputSchema, type DeclaredCommand, type ProcessKind } from "@novus/contracts";
 import { z } from "zod";
 import type pg from "pg";
 import { missionAccess, require as requireCapability } from "./authz.ts";
@@ -24,6 +24,32 @@ import type { RouteDeps } from "./routes.ts";
  * resolved by the runner (ARCHITECTURE.md#workspace-configuration-environments-and-processes).
  */
 
+/**
+ * The commands this workspace's runner last published (D-043).
+ *
+ * The control plane still does not know how to build anything: it never parses
+ * `.novus/settings.toml` and cannot. What it holds is a list a runner handed it,
+ * which it hands back verbatim with the command it enqueues — so the runner runs
+ * the snapshot a participant authorized rather than re-reading a file that a
+ * harness turn may have edited in between.
+ */
+async function declaredFor(client: pg.PoolClient, workstreamId: string): Promise<DeclaredCommand[]> {
+  const result = await client.query("select declared from workspaces where wst_id = $1", [workstreamId]);
+  const parsed = DeclaredCommandSchema.array().safeParse(result.rows[0]?.declared ?? []);
+  return parsed.success ? parsed.data : [];
+}
+
+/**
+ * Which declared command a request names. Setup has exactly one; a run or a
+ * check with no name means the project's default, which is the first the runner
+ * published of that kind, because that is the order the room shows them in.
+ */
+function pick(declared: DeclaredCommand[], kind: ProcessKind, name: string | null): DeclaredCommand | null {
+  const ofKind = declared.filter((command) => command.kind === kind);
+  if (name === null) return ofKind[0] ?? null;
+  return ofKind.find((command) => command.name === name) ?? null;
+}
+
 /** A state the database should make impossible; raised rather than papered over. */
 export class WorkspaceStateError extends Error {
   readonly code = "workspace_state";
@@ -44,7 +70,7 @@ const CommandNameSchema = WorkspaceCommandInputSchema.shape.name.unwrap();
 const StopInputSchema = z.object({ name: CommandNameSchema });
 
 /** What a request became. `already_queued` is a double-click, not an error. */
-type Enqueued = "enqueued" | "already_queued" | "no_runner";
+type Enqueued = "enqueued" | "already_queued" | "no_runner" | "not_declared";
 
 /**
  * The machine this workstream's work happens on. The rule matches the one
@@ -116,6 +142,9 @@ async function enqueueWorkspaceCommand(
     runnerId: string;
     kind: "run_setup" | "run_command" | "run_verification" | "stop_command";
     name: string | null;
+    /** The exact command being authorized. Null only for `stop_command`, which
+     *  names a live process rather than a command line. */
+    command: DeclaredCommand | null;
     requestedBy: string;
   }
 ): Promise<Enqueued> {
@@ -143,8 +172,9 @@ async function enqueueWorkspaceCommand(
       // The requester travels with the command because a check has to record
       // who asked for it: a participant-run check is attributed evidence, not
       // an anonymous green row (D-037). `exe_id` is null above — a run command
-      // is not an execution.
-      JSON.stringify({ name: args.name, requestedBy: args.requestedBy }),
+      // is not an execution. The snapshot travels with it because the runner
+      // must execute what was authorized, not what the file says later (D-043).
+      JSON.stringify({ name: args.name, command: args.command, requestedBy: args.requestedBy }),
       `${args.kind}:${args.name ?? "*"}:${commandId}`
     ]
   );
@@ -214,13 +244,21 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: RouteDeps): 
       });
 
       const name = body.data.name ?? null;
+      // Pinned here, at the moment of authorization. A name that this project
+      // does not declare is refused rather than sent onward hopefully — and a
+      // workspace whose configuration has never been read has nothing to pin,
+      // which is also a refusal rather than a guess (D-043).
+      const command = pick(await declaredFor(client, workstreamId), body.data.kind, name);
+      if (command === null) return "not_declared" as const;
+
       const enqueued = await enqueueWorkspaceCommand(client, {
         orgId: access.orgId,
         missionId: access.missionId,
         workstreamId,
         runnerId,
         kind: COMMAND_KIND[body.data.kind],
-        name,
+        name: command.name,
+        command,
         requestedBy: ctx.userId
       });
       if (enqueued === "enqueued") {
@@ -233,7 +271,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: RouteDeps): 
           actorId: ctx.userId,
           actorLogin: ctx.login,
           causeLeaseId: access.leaseId,
-          payload: { kind: body.data.kind, name }
+          // The digest is what makes the record answer "which command was
+          // this?" months later, when the file has moved on.
+          payload: { kind: body.data.kind, name: command.name, digest: command.digest }
         });
       }
       return enqueued;
@@ -245,6 +285,14 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: RouteDeps): 
         409,
         "no_runner",
         "No machine is running this workstream, so there's nothing to run the command on."
+      );
+    }
+    if (outcome === "not_declared") {
+      return deps.sendError(
+        reply,
+        409,
+        "not_declared",
+        "This project has not declared that command, so there is nothing Novus can honestly run."
       );
     }
     return { ok: true };
@@ -278,6 +326,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: RouteDeps): 
         runnerId,
         kind: "stop_command",
         name: body.data.name,
+        // Stopping names a live process rather than a command line, so there is
+        // nothing to pin: what it does is bounded by what is already running.
+        command: null,
         requestedBy: ctx.userId
       });
       if (enqueued === "enqueued") {

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
-import type { SequencedRunnerEvent } from "@novus/contracts";
+import type { DeclaredCommand, SequencedRunnerEvent } from "@novus/contracts";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
 
 /**
@@ -94,8 +94,50 @@ async function createLane(label = "kartik-macbook"): Promise<Lane> {
   });
   expect(enrolled.statusCode).toBe(200);
   const runner = enrolled.json();
-  return { ...lane, credential: runner.credential as string, runnerId: runner.runnerId as string };
+  const credential = runner.credential as string;
+  // A runner's first act on a workstream is to say what the project declares.
+  // Nothing can be authorized before that, because there is nothing to pin an
+  // authorization to (D-043) — so every lane starts the way a real one does.
+  await report(credential, null, [
+    { originSeq: DECLARED_SEQ, event: { kind: "workspace.declared", payload: { commands: DECLARED } } }
+  ]);
+  return { ...lane, credential, runnerId: runner.runnerId as string };
 }
+
+/** The three commands this suite's imaginary project declares, sealed the way
+ *  the runner seals them. The digests are fixed strings: the control plane
+ *  never recomputes one, it only carries it. */
+function declare(
+  kind: "setup" | "run" | "verification",
+  name: string,
+  command: string,
+  extra: Partial<DeclaredCommand> = {}
+): DeclaredCommand {
+  return {
+    kind,
+    name,
+    command,
+    cwd: null,
+    timeoutMs: kind === "run" ? null : 900_000,
+    category: kind === "verification" ? "test" : null,
+    port: null,
+    previewUrl: null,
+    readiness: null,
+    digest: createHash("sha256").update(`${kind}:${name}:${command}`).digest("hex").slice(0, 16),
+    ...extra
+  };
+}
+
+const DECLARED: DeclaredCommand[] = [
+  declare("setup", "setup", "pnpm install"),
+  declare("run", "dev", "pnpm dev"),
+  declare("run", "worker", "pnpm worker"),
+  declare("verification", "unit", "pnpm test"),
+  declare("verification", "lint", "pnpm lint")
+];
+/** Ahead of every sequence the tests use, so publishing never collides with a
+ *  report a test writes itself. */
+const DECLARED_SEQ = 900;
 
 /** Invitation and redemption is the only way a second person participates. */
 async function addParticipant(missionId: string, who: string, role: string): Promise<SignedIn> {
@@ -291,7 +333,8 @@ function completedCheck(
         startedAt: "2026-08-02T10:00:00.000Z",
         completedAt: "2026-08-02T10:00:04.500Z",
         durationMs: 4500,
-        checkpointSha: args.checkpointSha
+        checkpointSha: args.checkpointSha,
+        ending: "exit"
       }
     }
   };
@@ -321,6 +364,15 @@ describe("D-042: who may run a declared command", () => {
     // the command; a run command is not an execution, so there is no exe_id.
     expect(verification[0]?.payload.requestedBy).toBe(kartik.userId);
     expect(verification[0]?.exe_id).toBeNull();
+    // And the exact command being authorized travels with it, so the runner
+    // executes what this person saw rather than whatever the file says by the
+    // time it gets there (D-043).
+    expect(verification[0]?.payload.command).toMatchObject({
+      kind: "verification",
+      name: "unit",
+      command: "pnpm test",
+      digest: DECLARED.find((entry) => entry.name === "unit")?.digest
+    });
 
     // Touching the workspace creates it, honestly unconfigured.
     const workspace = await harness.db.query("select * from workspaces where wst_id = $1", [
@@ -335,7 +387,13 @@ describe("D-042: who may run a declared command", () => {
     );
     expect(requested?.actor_kind).toBe("user");
     expect(requested?.actor_login).toBe(kartik.login);
-    expect(requested?.payload).toEqual({ kind: "verification", name: "unit" });
+    // The digest is what lets the record answer "which command was this?"
+    // months later, when the configuration has moved on.
+    expect(requested?.payload).toEqual({
+      kind: "verification",
+      name: "unit",
+      digest: DECLARED.find((entry) => entry.name === "unit")?.digest
+    });
   });
 
   it("refuses a contributor who does not hold the lease, and enqueues nothing", async () => {
@@ -539,7 +597,8 @@ describe("what the runner reports about the machine", () => {
             name: "dev",
             command: "pnpm dev",
             port: 4100,
-            previewUrl: "http://localhost:4100"
+            previewUrl: "http://localhost:4100",
+            readiness: "not_required"
           }
         }
       }
@@ -565,7 +624,7 @@ describe("what the runner reports about the machine", () => {
         originSeq: 2,
         event: {
           kind: "process.exited",
-          payload: { processId, state: "exited", exitCode: 0, failureReason: null }
+          payload: { processId, state: "exited", exitCode: 0, ending: "exit", failureReason: null }
         }
       }
     ]);
@@ -583,7 +642,7 @@ describe("what the runner reports about the machine", () => {
         originSeq: 3,
         event: {
           kind: "process.exited",
-          payload: { processId, state: "failed", exitCode: 137, failureReason: "killed" }
+          payload: { processId, state: "failed", exitCode: 137, ending: "exit", failureReason: "killed" }
         }
       }
     ]);
@@ -605,7 +664,15 @@ describe("what the runner reports about the machine", () => {
       originSeq: seq,
       event: {
         kind: "process.started",
-        payload: { processId, kind: "run", name: "dev", command: "pnpm dev", port, previewUrl }
+        payload: {
+          processId,
+          kind: "run",
+          name: "dev",
+          command: "pnpm dev",
+          port,
+          previewUrl,
+          readiness: "not_required"
+        }
       }
     });
 
@@ -658,7 +725,8 @@ describe("what the runner reports about the machine", () => {
             name: "dev",
             command: "pnpm dev",
             port: null,
-            previewUrl: null
+            previewUrl: null,
+            readiness: "not_required"
           }
         }
       },
@@ -666,7 +734,7 @@ describe("what the runner reports about the machine", () => {
         originSeq: 2,
         event: {
           kind: "process.exited",
-          payload: { processId, state: "exited", exitCode: 0, failureReason: null }
+          payload: { processId, state: "exited", exitCode: 0, ending: "exit", failureReason: null }
         }
       }
     ]);
@@ -688,7 +756,8 @@ describe("what the runner reports about the machine", () => {
             name: "dev",
             command: "pnpm dev",
             port: 4100,
-            previewUrl: "http://localhost:4100"
+            previewUrl: "http://localhost:4100",
+            readiness: "not_required"
           }
         }
       }
@@ -726,7 +795,8 @@ describe("what the runner reports about the machine", () => {
             name: "dev",
             command: "pnpm dev",
             port: null,
-            previewUrl: null
+            previewUrl: null,
+            readiness: "not_required"
           }
         }
       }
@@ -800,7 +870,8 @@ describe("what the runner reports about the machine", () => {
             name: "unit",
             command: "pnpm test",
             port: null,
-            previewUrl: null
+            previewUrl: null,
+            readiness: "not_required"
           }
         }
       },

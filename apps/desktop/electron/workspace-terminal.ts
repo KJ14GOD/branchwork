@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
@@ -48,8 +48,14 @@ const MAX_PENDING = 64 * 1024;
 /** A drawer is a handful of named tabs, not a session farm. */
 const MAX_SESSIONS_PER_WORKSTREAM = 8;
 const MAX_NAME = 60;
+/** What a reader sees where output was dropped. Written as its own line so a
+ *  gap is visible rather than spliced into the middle of a word. */
+const GAP_MARKER = "\r\n[Novus dropped output that arrived faster than it could be shown]\r\n";
 /** What a login shell is allowed to hand back, so a pathological profile
  *  cannot become the environment of every terminal afterwards. */
+/** A close signals this many descendants at most; beyond it something is
+ *  wrong that a terminal close is not going to fix. */
+const MAX_DESCENDANTS = 200;
 const MAX_PROFILE_VARS = 300;
 const MAX_PROFILE_VALUE = 8_000;
 const PROFILE_TIMEOUT_MS = 3_000;
@@ -250,15 +256,29 @@ export class TerminalSessions {
     return live ? view(live) : null;
   }
 
+  /** What a session has printed so far. Fetched once when a pane opens rather
+   *  than riding on every list and rename: 200KB per reply, for a call that
+   *  changes eight characters, is a cost nobody asked for. */
+  scrollback(sessionId: string): string {
+    return this.sessions.get(sessionId)?.scrollback ?? "";
+  }
+
   open(request: OpenSessionRequest): TerminalSession {
     const cwd = assertWorktree(request.worktree, request.sourceRepo);
+    // Every session of this workstream, not only the running ones: an exited
+    // tab is still on screen and still holds its scrollback, so counting only
+    // the live ones both mints a duplicate name and walks past the cap.
     const existing = [...this.sessions.values()].filter(
-      (live) => live.workstreamId === request.workstreamId && live.state === "running"
+      (live) => live.workstreamId === request.workstreamId
     );
     if (existing.length >= MAX_SESSIONS_PER_WORKSTREAM) {
-      throw new TerminalError(
-        `This workstream already has ${MAX_SESSIONS_PER_WORKSTREAM} terminals open. Close one first.`
-      );
+      const spent = existing.find((live) => live.state === "exited");
+      if (spent === undefined) {
+        throw new TerminalError(
+          `This workstream already has ${MAX_SESSIONS_PER_WORKSTREAM} terminals open. Close one first.`
+        );
+      }
+      this.forget(spent);
     }
 
     const kind: TerminalKind = request.kind ?? "shell";
@@ -288,7 +308,7 @@ export class TerminalSessions {
     const live: Live = {
       sessionId,
       workstreamId: request.workstreamId,
-      name: cleanName(request.name) ?? defaultName(kind, existing.length + 1),
+      name: cleanName(request.name) ?? defaultName(kind, this.nextOrdinal(request.workstreamId, kind)),
       kind,
       state: "running",
       exitCode: null,
@@ -341,27 +361,46 @@ export class TerminalSessions {
     return view(live);
   }
 
-  /** Ends the session and everything it started. Resolves once it is gone. */
+  /**
+   * Ends the session and everything it started. Resolves once it is gone, or
+   * once Novus has stopped waiting for it.
+   *
+   * The wait is bounded on purpose. `ended` settles from the PTY's own exit,
+   * and a child that ignores SIGKILL — an uninterruptible read, a wedged
+   * kernel extension — would otherwise leave this promise pending forever, and
+   * with it the End-session button, and with it `before-quit`. A terminal that
+   * will not die is a fact to report, not a reason to hang the application.
+   */
   async close(sessionId: string): Promise<void> {
     const live = this.sessions.get(sessionId);
     if (!live) return;
     this.signal(live);
-    await live.ended;
-    this.sessions.delete(sessionId);
+    await Promise.race([live.ended, deadline(SIGKILL_AFTER_MS * 2)]);
+    this.forget(live);
   }
 
   /** Called when the application is quitting: no shell outlives the app that
-   *  started it, and nothing is left behind (D-034). */
+   *  started it, and nothing is left behind (D-034). Bounded for the same
+   *  reason `close` is. */
   async shutdown(): Promise<void> {
     const all = [...this.sessions.values()];
     for (const live of all) this.signal(live);
-    await Promise.allSettled(all.map((live) => live.ended));
-    for (const live of all) {
-      if (live.flush) clearTimeout(live.flush);
-      if (live.escalation) clearTimeout(live.escalation);
-    }
+    await Promise.race([
+      Promise.allSettled(all.map((live) => live.ended)),
+      deadline(SIGKILL_AFTER_MS * 2)
+    ]);
+    for (const live of all) this.forget(live);
     this.sessions.clear();
     this.listeners.clear();
+  }
+
+  /** Drops a session and every timer it owns. */
+  private forget(live: Live): void {
+    if (live.flush) clearTimeout(live.flush);
+    if (live.escalation) clearTimeout(live.escalation);
+    live.flush = null;
+    live.escalation = null;
+    this.sessions.delete(live.sessionId);
   }
 
   // --- Internals ---------------------------------------------------------------
@@ -372,6 +411,20 @@ export class TerminalSessions {
     return configured ?? nodePtyHost();
   }
 
+  /** The next free number for this kind, counting every session still known —
+   *  running or exited — so two tabs never carry the same label. */
+  private nextOrdinal(workstreamId: string, kind: TerminalKind): number {
+    const taken = new Set(
+      [...this.sessions.values()]
+        .filter((live) => live.workstreamId === workstreamId)
+        .map((live) => live.name)
+    );
+    for (let ordinal = 1; ordinal <= MAX_SESSIONS_PER_WORKSTREAM * 2 + 1; ordinal += 1) {
+      if (!taken.has(defaultName(kind, ordinal))) return ordinal;
+    }
+    return taken.size + 1;
+  }
+
   private require(sessionId: string): Live {
     const live = this.sessions.get(sessionId);
     if (!live) throw new TerminalError("That terminal is not open on this machine.");
@@ -380,7 +433,17 @@ export class TerminalSessions {
 
   private absorb(live: Live, data: string): void {
     live.scrollback = bound(live.scrollback + data, MAX_SCROLLBACK);
-    live.pending = bound(live.pending + data, MAX_PENDING);
+    const grown = live.pending + data;
+    if (grown.length > MAX_PENDING) {
+      // The stream is bounded like the scrollback, but unlike the scrollback a
+      // reader cannot tell a truncated stream from a quiet one. So it says so:
+      // a hole in a terminal that announces itself is honest, and a hole that
+      // does not is the pane and the scrollback silently disagreeing.
+      const kept = grown.slice(grown.length - MAX_PENDING);
+      live.pending = `${GAP_MARKER}${kept}`;
+    } else {
+      live.pending = grown;
+    }
     if (live.flush !== null) return;
     live.flush = setTimeout(() => {
       live.flush = null;
@@ -448,8 +511,7 @@ function view(live: Live): TerminalSession {
     state: live.state,
     exitCode: live.exitCode,
     startedAt: live.startedAt,
-    endedAt: live.endedAt,
-    scrollback: live.scrollback
+    endedAt: live.endedAt
   };
 }
 
@@ -496,18 +558,82 @@ export function shellFor(
  * hang-up a closing terminal window delivers: a shell receiving SIGHUP hangs up
  * its jobs before it exits.
  *
- * So both go out. SIGHUP to the session leader, for the usual case where the
- * session is a shell with jobs; SIGTERM to the foreground group, for the case
- * where it is not a shell at all. SIGKILL follows on the escalation.
+ * That covers a job the shell still owns. It does not cover one that left —
+ * `( sleep 300 & )` in a subshell, or anything `disown`ed or `nohup`ed — which
+ * is in neither the shell's group nor its job table, and which a group signal
+ * therefore misses entirely. (Also observed: it survived.) So the descendants
+ * are enumerated and signalled by name as well.
+ *
+ * Three things go out, then: SIGHUP to the session leader, for the usual case
+ * where the session is a shell with jobs; SIGTERM to the foreground group, for
+ * the case where it is not a shell at all; and SIGTERM to every descendant this
+ * machine can still see. SIGKILL follows the same three on the escalation.
  */
 function hangUp(live: Live): void {
+  const descendants = live.pid === null ? [] : descendantsOf(live.pid);
   send(live, live.pid, "SIGHUP");
   send(live, live.pid === null ? null : -live.pid, "SIGTERM");
+  for (const pid of descendants) bareKill(pid, "SIGTERM");
 }
 
 function killTree(live: Live, signal: NodeJS.Signals): void {
+  const descendants = live.pid === null ? [] : descendantsOf(live.pid);
   send(live, live.pid === null ? null : -live.pid, signal);
   send(live, live.pid, signal);
+  for (const pid of descendants) bareKill(pid, signal);
+}
+
+/**
+ * Every process descended from this one, as the operating system currently
+ * reports it. Best effort by design: on a machine where `ps` is unavailable or
+ * slow the answer is an empty list and the group signals above still do their
+ * ordinary work.
+ */
+export function descendantsOf(pid: number, table: string | null = processTable()): number[] {
+  if (table === null) return [];
+  const children = new Map<number, number[]>();
+  for (const line of table.split("\n")) {
+    const matched = /^\s*(\d+)\s+(\d+)/.exec(line);
+    if (!matched) continue;
+    const child = Number(matched[1]);
+    const parent = Number(matched[2]);
+    if (child === parent) continue;
+    children.set(parent, [...(children.get(parent) ?? []), child]);
+  }
+  const found: number[] = [];
+  const queue = [pid];
+  // Bounded so a cycle in a malformed table cannot spin, and so a runaway
+  // process farm cannot turn a close into a long operation.
+  while (queue.length > 0 && found.length < MAX_DESCENDANTS) {
+    const next = queue.shift();
+    if (next === undefined) continue;
+    for (const child of children.get(next) ?? []) {
+      if (found.includes(child) || child === pid) continue;
+      found.push(child);
+      queue.push(child);
+    }
+  }
+  // Deepest first: a parent that dies before its children can leave them
+  // reparented and unreachable by this list.
+  return found.reverse();
+}
+
+function processTable(): string | null {
+  if (process.platform === "win32") return null;
+  try {
+    const listed = spawnSync("ps", ["-Ao", "pid=,ppid="], { encoding: "utf8", timeout: 2_000 });
+    return listed.status === 0 ? listed.stdout : null;
+  } catch {
+    return null;
+  }
+}
+
+function bareKill(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    /* already gone, or not ours to signal */
+  }
 }
 
 function send(live: Live, pid: number | null, signal: NodeJS.Signals): void {
@@ -527,6 +653,14 @@ function send(live: Live, pid: number | null, signal: NodeJS.Signals): void {
 }
 
 /** Oldest dropped: what a person wants to read is the end. */
+/** A wait that never becomes the reason an application will not quit. */
+function deadline(ms: number): Promise<void> {
+  return new Promise((settle) => {
+    const timer = setTimeout(settle, ms);
+    timer.unref?.();
+  });
+}
+
 function bound(text: string, max: number): string {
   return text.length <= max ? text : text.slice(text.length - max);
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { SettingsScope, WorkspaceProposal } from "@novus/contracts";
+import { MIN_SECRET_LENGTH, type SecretState, type SettingsScope, type WorkspaceProposal } from "@novus/contracts";
 import { novus } from "../bridge";
 import { draftFrom, settingsToSave, type SetupDraft } from "./workspace-config";
 
@@ -49,6 +49,161 @@ const SCOPES: { id: SettingsScope; label: string; note: string }[] = [
     note: "Written to .novus/settings.local.toml — gitignored, and layered over the shared file here only."
   }
 ];
+
+/**
+ * Supplying a project's secret values (D-044).
+ *
+ * The narrowest flow that is actually useful: the *names* the project declared,
+ * whether this machine has each one, and one field to supply or replace it.
+ * Nothing reads a value back — there is no verb that could — so a supplied
+ * value shows as "supplied" and never as characters, not even masked ones,
+ * because a mask is still a length.
+ *
+ * A machine whose operating system offers no credential storage is told so and
+ * offered nothing: Novus does not write a plaintext secret to disk, and an
+ * unprepared workspace is a state the product already knows how to say.
+ */
+function SecretRows({ missionId }: { missionId: string }) {
+  const [state, setState] = useState<SecretState | null>(null);
+  const [entering, setEntering] = useState<string | null>(null);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const result = await novus().workspace.secrets(missionId);
+    if (result.ok) setState(result.value);
+    else setError(result.message);
+  }, [missionId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const supplyValue = async (name: string) => {
+    setBusy(true);
+    setError(null);
+    const result = await novus().workspace.supplySecret({ missionId, name, value });
+    setBusy(false);
+    // Cleared whatever happened: this component never holds a value longer
+    // than the moment it takes to hand it to the main process.
+    setValue("");
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    setEntering(null);
+    setState(result.value);
+  };
+
+  const forget = async (name: string) => {
+    setError(null);
+    const result = await novus().workspace.forgetSecret({ missionId, name });
+    if (result.ok) setState(result.value);
+    else setError(result.message);
+  };
+
+  if (state === null) return <p className="quiet">Reading what this machine holds…</p>;
+
+  if (!state.encryptionAvailable) {
+    return (
+      <p className="inline-error" data-testid="secrets-unavailable">
+        This operating system offers no credential storage, so Novus will not hold a secret value here.
+        Supply these variables another way, or run this workspace on a machine that can encrypt them.
+      </p>
+    );
+  }
+
+  if (state.names.length === 0 && state.orphaned.length === 0) {
+    return (
+      <p className="quiet" data-testid="secrets-empty">
+        None — this project named no secret variables.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <ul className="file-list" data-testid="secret-list">
+        {state.names.map((entry) => (
+          <li className="file-row" key={entry.name} data-testid="secret-row" data-name={entry.name}>
+            <span className={`status-dot ${entry.supplied ? "ok" : "warn"}`} />
+            <span className="mono file-path">{entry.name}</span>
+            <span className="file-note" data-testid="secret-state">
+              {entry.supplied ? "supplied on this machine" : "not supplied"}
+            </span>
+            {entering === entry.name ? (
+              <span className="inline-actions">
+                <input
+                  className="input"
+                  type="password"
+                  autoFocus
+                  value={value}
+                  placeholder={`Value for ${entry.name}`}
+                  aria-label={`Value for ${entry.name}`}
+                  onChange={(event) => setValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void supplyValue(entry.name);
+                    else if (event.key === "Escape") {
+                      setEntering(null);
+                      setValue("");
+                    }
+                  }}
+                  data-testid="secret-input"
+                />
+                <button
+                  className="btn btn-secondary"
+                  disabled={busy || value.length < MIN_SECRET_LENGTH}
+                  onClick={() => void supplyValue(entry.name)}
+                  data-testid="secret-save"
+                >
+                  Save
+                </button>
+              </span>
+            ) : (
+              <span className="inline-actions">
+                <button
+                  className="btn btn-text"
+                  onClick={() => {
+                    setEntering(entry.name);
+                    setValue("");
+                  }}
+                  data-testid="secret-supply"
+                >
+                  {entry.supplied ? "Replace" : "Supply"}
+                </button>
+                {entry.supplied && (
+                  <button
+                    className="btn btn-text"
+                    onClick={() => void forget(entry.name)}
+                    data-testid="secret-forget"
+                  >
+                    Forget
+                  </button>
+                )}
+              </span>
+            )}
+          </li>
+        ))}
+        {state.orphaned.map((name) => (
+          <li className="file-row" key={name} data-testid="secret-orphan">
+            <span className="status-dot neutral" />
+            <span className="mono file-path">{name}</span>
+            <span className="file-note">held here, no longer declared</span>
+            <button className="btn btn-text" onClick={() => void forget(name)} data-testid="secret-forget">
+              Forget
+            </button>
+          </li>
+        ))}
+      </ul>
+      {error && (
+        <p className="inline-error" role="alert" data-testid="secret-error">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
 
 export function WorkspaceSetupDialog({
   missionId,
@@ -371,6 +526,22 @@ export function WorkspaceSetupDialog({
                       />
                     ))}
                   </ul>
+                )}
+              </section>
+
+              <section className="setup-section" data-testid="setup-secrets">
+                <h3 className="setup-label">Values only this machine has</h3>
+                <p className="setup-note">
+                  A value is held in this operating system&apos;s credential store, injected only into the
+                  project commands the configuration selects it for, and never sent to Novus, written into
+                  an event, or shown again — not even to you.
+                </p>
+                {preparableHere ? (
+                  <SecretRows missionId={missionId} />
+                ) : (
+                  <p className="quiet" data-testid="secrets-elsewhere">
+                    A value is supplied on the machine hosting this workspace, and nowhere else.
+                  </p>
                 )}
               </section>
 

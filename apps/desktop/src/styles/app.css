@@ -2367,17 +2367,6 @@ body {
   padding: 0 var(--s-6);
 }
 
-/* Measured, never assumed: ten characters wide, laid out but not shown, so the
-   PTY can be told the size the reader actually has. */
-.terminal-metric {
-  position: absolute;
-  visibility: hidden;
-  pointer-events: none;
-  font: var(--type-row);
-  font-family: var(--font-mono);
-  white-space: pre;
-}
-
 .terminal-empty {
   flex: 1;
   display: flex;
@@ -2389,22 +2378,30 @@ body {
   color: var(--text-1);
 }
 
-/* The one region in the dock that scrolls. */
+/* The emulator's own element fills this region; xterm owns the scrolling
+   inside it, which is why nothing here sets overflow (D-046). */
 .terminal-screen {
   flex: 1;
   min-height: 0;
-  overflow: auto;
   padding: var(--s-2) var(--s-6) var(--s-4);
-  cursor: text;
+  overflow: hidden;
 }
 
-.terminal-text {
-  font: var(--type-row);
-  font-family: var(--font-mono);
-  color: var(--text-1);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  user-select: text;
+/* xterm ships a stylesheet with its own background. Overridden here so the
+   pane sits on the product's surface rather than a black rectangle cut into
+   the dock; every value is a token. */
+.terminal-screen .xterm,
+.terminal-screen .xterm-viewport,
+.terminal-screen .xterm-screen {
+  background-color: var(--term-bg);
+}
+
+.terminal-screen .xterm {
+  height: 100%;
+}
+
+.terminal-screen .xterm-viewport {
+  overflow-y: auto;
 }
 
 .terminal-ended {
@@ -2437,4 +2434,117 @@ body {
     padding-left: var(--s-5);
     padding-right: var(--s-5);
   }
+}
+
+/* The runtime dock's view switch and its process-output views (D-045). One
+   dock, four views: terminal sessions, and the three kinds of project process.
+   Detailed local output lives here; the trace shows the milestone and the
+   evidence panel shows the bounded result that supports a claim. */
+.dock-views {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+}
+
+.dock-view {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: var(--type-meta);
+  padding: var(--s-1) var(--s-2);
+  border-radius: var(--r-control);
+  cursor: pointer;
+}
+
+.dock-view:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.dock-view.active {
+  background: var(--selected);
+  color: var(--text-1);
+}
+
+.dock-runs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+  padding: 0 var(--s-6);
+  overflow-x: auto;
+}
+
+.dock-run {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  border: none;
+  background: transparent;
+  border-radius: var(--r-control);
+  padding: var(--s-1) var(--s-2);
+  font: var(--type-meta);
+  color: var(--text-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.dock-run.active {
+  background: var(--selected);
+  color: var(--text-1);
+}
+
+.dock-run-state {
+  color: var(--text-3);
+}
+
+.dock-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: none;
+  padding: var(--s-2) var(--s-6) 0;
+  font: var(--type-meta);
+  color: var(--text-2);
+  min-width: 0;
+}
+
+.dock-command {
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-state,
+.dock-reason {
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.dock-output {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: var(--s-2) var(--s-6) var(--s-4);
+  font: var(--type-row);
+  font-family: var(--font-mono);
+  color: var(--text-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.dock-empty {
+  flex: 1;
+  padding: var(--s-4) var(--s-6);
+  font: var(--type-body);
+  color: var(--text-2);
+}
+
+.dock-error {
+  flex: none;
+  padding: 0 var(--s-6);
 }

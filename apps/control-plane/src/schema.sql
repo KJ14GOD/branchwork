@@ -468,3 +468,35 @@ alter table runner_commands drop constraint if exists runner_commands_kind_check
 alter table runner_commands add constraint runner_commands_kind_check
   check (kind in ('start_execution', 'apply_direction', 'stop_execution', 'boundary_request',
                   'run_setup', 'run_command', 'stop_command', 'run_verification'));
+
+-- ---------------------------------------------------------------------------
+-- Declared commands, readiness, and how a command ended (D-043, D-045).
+-- ---------------------------------------------------------------------------
+
+-- What the project declared, exactly as the runner read it. The control plane
+-- never parses `.novus/settings.toml` and does not start now: this is an opaque
+-- list it was handed, stored so every participant's Run control offers the same
+-- commands and so an authorization can be pinned to the snapshot it authorized.
+alter table workspaces add column if not exists declared jsonb not null default '[]'::jsonb;
+alter table workspaces add column if not exists declared_at timestamptz;
+
+-- A process existing is not a claim that an application is serving. `pending`
+-- is a run command whose declared readiness signal has not answered yet, which
+-- the room shows as Starting rather than Running.
+alter table workspace_processes add column if not exists readiness text not null default 'not_required';
+alter table workspace_processes drop constraint if exists workspace_processes_readiness_check;
+alter table workspace_processes add constraint workspace_processes_readiness_check
+  check (readiness in ('not_required', 'pending', 'ready', 'unreachable'));
+
+-- Why it stopped. A deadline, a cancellation, and a non-zero exit are three
+-- different endings, and a room that cannot tell them apart cannot say what
+-- happened.
+alter table workspace_processes add column if not exists ending text;
+alter table workspace_processes drop constraint if exists workspace_processes_ending_check;
+alter table workspace_processes add constraint workspace_processes_ending_check
+  check (ending is null or ending in ('exit', 'signal', 'timeout', 'cancelled', 'spawn_failed'));
+
+alter table verification_checks add column if not exists ending text;
+alter table verification_checks drop constraint if exists verification_checks_ending_check;
+alter table verification_checks add constraint verification_checks_ending_check
+  check (ending is null or ending in ('exit', 'signal', 'timeout', 'cancelled', 'spawn_failed'));

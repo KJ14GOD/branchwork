@@ -2,15 +2,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RunnerEvent } from "@novus/contracts";
+import type { DeclaredCommand, RunnerEvent } from "@novus/contracts";
 import { createSanitizer } from "../electron/evidence";
+import { commandDigest } from "../electron/workspace-commands";
 import { gitExec, headSha } from "../electron/workspace-git";
 import {
   detectPreviewUrl,
   processIsAlive,
   reconcileRecordedProcesses,
   WorkspaceCommandError,
-  WorkspaceProcesses
+  WorkspaceProcesses,
+  type Invocation
 } from "../electron/workspace-processes";
 
 /**
@@ -67,6 +69,53 @@ async function waitFor(what: string, predicate: () => boolean, timeoutMs = 10_00
 
 const env = (): Record<string, string> => ({ PATH: process.env.PATH ?? "/usr/bin:/bin" });
 
+/**
+ * The old inline specs, sealed into the snapshots the supervisor now takes.
+ *
+ * That is the real change these helpers stand for: the supervisor no longer
+ * resolves a name against a settings file, it runs a `DeclaredCommand` the
+ * control plane already pinned (D-043). Tests build one the same way the runner
+ * does, so what is exercised is the shape that actually travels.
+ */
+interface OldSpec {
+  name: string;
+  command: string;
+  cwd?: string;
+  env: Record<string, string>;
+  category?: DeclaredCommand["category"];
+  port?: number | null;
+  previewUrl?: string | null;
+  readiness?: DeclaredCommand["readiness"];
+  timeoutMs?: number | null;
+  allowConcurrent?: boolean;
+}
+
+function seal(kind: DeclaredCommand["kind"], spec: OldSpec, timeoutMs: number | null): Invocation {
+  const command: Omit<DeclaredCommand, "digest"> = {
+    kind,
+    name: spec.name,
+    command: spec.command,
+    cwd: spec.cwd ?? null,
+    timeoutMs: spec.timeoutMs === undefined ? timeoutMs : spec.timeoutMs,
+    category: spec.category ?? null,
+    port: spec.port ?? null,
+    previewUrl: spec.previewUrl ?? null,
+    readiness: spec.readiness ?? null
+  };
+  return { command: { ...command, digest: commandDigest(command) }, env: spec.env, port: spec.port ?? null };
+}
+
+/** Long enough that nothing here trips it by accident; short enough that a test
+ *  which *wants* a deadline can pass its own in milliseconds. */
+const TEST_TIMEOUT_MS = 5 * 60_000;
+
+const setupOf = (spec: OldSpec): Invocation => seal("setup", spec, TEST_TIMEOUT_MS);
+const checkOf = (spec: OldSpec): Invocation => seal("verification", spec, TEST_TIMEOUT_MS);
+/** A run command has no deadline at all, by design (D-034). */
+const runOf = (spec: OldSpec): Invocation => seal("run", spec, null);
+const concurrency = (spec: OldSpec): boolean => spec.allowConcurrent === true;
+
+
 beforeEach(async () => {
   repo = mkdtempSync(join(tmpdir(), "novus-proc-repo-"));
   worktree = mkdtempSync(join(tmpdir(), "novus-proc-worktree-"));
@@ -87,10 +136,7 @@ afterEach(async () => {
 
 describe("setup", () => {
   it("moves readiness to ready and reports the process", async () => {
-    await supervisor.runSetup(
-      { name: "setup", command: "echo installed > installed.txt", env: env() },
-      { start: 3100, end: 3109 }
-    );
+    await supervisor.runSetup(setupOf({ name: "setup", command: "echo installed > installed.txt", env: env() }), { start: 3100, end: 3109 });
 
     expect(of("workspace.readiness").map((payload) => payload.readiness)).toEqual(["configuring", "ready"]);
     expect(of("workspace.readiness")[1]?.setupError).toBeNull();
@@ -104,10 +150,7 @@ describe("setup", () => {
   });
 
   it("fails readiness by name when the command exits non-zero", async () => {
-    await supervisor.runSetup(
-      { name: "setup", command: "echo 'no lockfile' >&2; exit 3", env: env() },
-      { start: 3100, end: 3109 }
-    );
+    await supervisor.runSetup(setupOf({ name: "setup", command: "echo 'no lockfile' >&2; exit 3", env: env() }), { start: 3100, end: 3109 });
     const readiness = of("workspace.readiness")[1];
     expect(readiness?.readiness).toBe("failed");
     expect(readiness?.setupError).toContain("exited with code 3");
@@ -116,10 +159,7 @@ describe("setup", () => {
 
   it("refuses a working directory outside the workspace", async () => {
     await expect(
-      supervisor.runSetup(
-        { name: "setup", command: "echo hi", cwd: "../elsewhere", env: env() },
-        { start: null, end: null }
-      )
+      supervisor.runSetup(setupOf({ name: "setup", command: "echo hi", cwd: "../elsewhere", env: env() }), { start: null, end: null })
     ).rejects.toBeInstanceOf(WorkspaceCommandError);
     expect(of("workspace.readiness")[1]?.readiness).toBe("failed");
   });
@@ -127,7 +167,7 @@ describe("setup", () => {
 
 describe("where a command runs", () => {
   it("runs in the worktree and never in the user's own checkout", async () => {
-    await supervisor.runSetup({ name: "setup", command: "pwd > where.txt", env: env() }, { start: null, end: null });
+    await supervisor.runSetup(setupOf({ name: "setup", command: "pwd > where.txt", env: env() }), { start: null, end: null });
     expect(readFileSync(join(worktree, "where.txt"), "utf8").trim()).toContain("novus-proc-worktree-");
     expect(existsSync(join(repo, "where.txt"))).toBe(false);
   });
@@ -135,7 +175,7 @@ describe("where a command runs", () => {
   it("refuses outright when the workspace would be the user's own checkout", async () => {
     const wrong = makeSupervisor({ worktree: repo, sourceRepo: repo });
     await expect(
-      wrong.runSetup({ name: "setup", command: "echo hi", env: env() }, { start: null, end: null })
+      wrong.runSetup(setupOf({ name: "setup", command: "echo hi", env: env() }), { start: null, end: null })
     ).rejects.toThrow(/your own checkout/);
     expect(existsSync(join(repo, "where.txt"))).toBe(false);
   });
@@ -143,7 +183,7 @@ describe("where a command runs", () => {
 
 describe("a long-lived run command", () => {
   it("starts, is reported running, and takes its whole tree down when stopped", async () => {
-    await supervisor.startRun({
+    await supervisor.startRun(runOf({
       name: "dev",
       // The shell backgrounds a child, so a stop that only reaches the shell
       // would leave `sleep` behind — which is the orphan this test exists for.
@@ -151,7 +191,15 @@ describe("a long-lived run command", () => {
       env: env(),
       port: 3100,
       allowConcurrent: false
-    });
+    }), concurrency({
+      name: "dev",
+      // The shell backgrounds a child, so a stop that only reaches the shell
+      // would leave `sleep` behind — which is the orphan this test exists for.
+      command: "sleep 45 & echo $! > child.pid; wait",
+      env: env(),
+      port: 3100,
+      allowConcurrent: false
+    }));
     expect(supervisor.isRunning("dev")).toBe(true);
     await waitFor("the grandchild to be recorded", () => existsSync(join(worktree, "child.pid")));
     const grandchild = Number(readFileSync(join(worktree, "child.pid"), "utf8").trim());
@@ -174,9 +222,9 @@ describe("a long-lived run command", () => {
       port: 3100,
       allowConcurrent: false
     };
-    await supervisor.startRun(spec);
+    await supervisor.startRun(runOf(spec), concurrency(spec));
     await supervisor.stop("dev", "Stopped by a participant.");
-    await supervisor.startRun(spec);
+    await supervisor.startRun(runOf(spec), concurrency(spec));
     expect(supervisor.isRunning("dev")).toBe(true);
     expect(of("process.started").length).toBe(2);
     // A restart is a new process, not the old one resurrected.
@@ -186,42 +234,61 @@ describe("a long-lived run command", () => {
 
   it("starting the same command twice while it is alive changes nothing", async () => {
     const spec = { name: "dev", command: "sleep 30", env: env(), port: 3100, allowConcurrent: false };
-    await supervisor.startRun(spec);
-    await supervisor.startRun(spec);
+    await supervisor.startRun(runOf(spec), concurrency(spec));
+    await supervisor.startRun(runOf(spec), concurrency(spec));
     expect(of("process.started").length).toBe(1);
   }, 20_000);
 
   it("refuses a second run command by name unless the project allowed it", async () => {
-    await supervisor.startRun({
+    await supervisor.startRun(runOf({
       name: "dev",
       command: "sleep 30",
       env: env(),
       port: 3100,
       allowConcurrent: false
-    });
+    }), concurrency({
+      name: "dev",
+      command: "sleep 30",
+      env: env(),
+      port: 3100,
+      allowConcurrent: false
+    }));
     await expect(
-      supervisor.startRun({ name: "worker", command: "sleep 30", env: env(), port: 3101, allowConcurrent: false })
+      supervisor.startRun(runOf({ name: "worker", command: "sleep 30", env: env(), port: 3101, allowConcurrent: false }), concurrency({ name: "worker", command: "sleep 30", env: env(), port: 3101, allowConcurrent: false }))
     ).rejects.toThrow(/two run commands at once/);
 
-    await supervisor.startRun({
+    await supervisor.startRun(runOf({
       name: "worker",
       command: "sleep 30",
       env: env(),
       port: 3101,
       allowConcurrent: true
-    });
+    }), concurrency({
+      name: "worker",
+      command: "sleep 30",
+      env: env(),
+      port: 3101,
+      allowConcurrent: true
+    }));
     expect(supervisor.runningNames.sort()).toEqual(["dev", "worker"]);
   }, 20_000);
 
   it("uses the preview URL the project declared, substituting the allocated port", async () => {
-    await supervisor.startRun({
+    await supervisor.startRun(runOf({
       name: "dev",
       command: "sleep 0.2; echo '  ➜  Local:   http://localhost:5173/'; sleep 3",
       env: env(),
       port: 3100,
       previewUrl: "http://127.0.0.1:{port}",
       allowConcurrent: false
-    });
+    }), concurrency({
+      name: "dev",
+      command: "sleep 0.2; echo '  ➜  Local:   http://localhost:5173/'; sleep 3",
+      env: env(),
+      port: 3100,
+      previewUrl: "http://127.0.0.1:{port}",
+      allowConcurrent: false
+    }));
     expect(of("process.started")[0]?.previewUrl).toBe("http://127.0.0.1:3100");
     // The project said where its preview is. Whatever the server prints does
     // not overrule the project's own statement.
@@ -230,13 +297,19 @@ describe("a long-lived run command", () => {
   }, 20_000);
 
   it("replaces its own guess with the URL the server actually printed", async () => {
-    await supervisor.startRun({
+    await supervisor.startRun(runOf({
       name: "dev",
       command: "sleep 0.2; echo '  ➜  Local:   http://localhost:5173/'; sleep 5",
       env: env(),
       port: 3100,
       allowConcurrent: false
-    });
+    }), concurrency({
+      name: "dev",
+      command: "sleep 0.2; echo '  ➜  Local:   http://localhost:5173/'; sleep 5",
+      env: env(),
+      port: 3100,
+      allowConcurrent: false
+    }));
     // No declaration, so this is Novus guessing from the port it handed out.
     expect(of("process.started")[0]?.previewUrl).toBe("http://localhost:3100");
 
@@ -248,13 +321,19 @@ describe("a long-lived run command", () => {
   }, 20_000);
 
   it("reports a command that could not start rather than leaving it pending", async () => {
-    await supervisor.startRun({
+    await supervisor.startRun(runOf({
       name: "dev",
       command: "definitely-not-a-real-binary --serve",
       env: env(),
       port: 3100,
       allowConcurrent: false
-    });
+    }), concurrency({
+      name: "dev",
+      command: "definitely-not-a-real-binary --serve",
+      env: env(),
+      port: 3100,
+      allowConcurrent: false
+    }));
     await waitFor("the failure", () => of("process.exited").length === 1);
     expect(of("process.exited")[0]?.state).toBe("failed");
     expect(supervisor.isRunning("dev")).toBe(false);
@@ -264,12 +343,12 @@ describe("a long-lived run command", () => {
 describe("verification", () => {
   it("carries the revision the workspace was on when the check started", async () => {
     const before = await headSha(gitExec, worktree);
-    const running = supervisor.runVerification({
+    const running = supervisor.runVerification(checkOf({
       name: "test",
       command: "sleep 0.6; exit 0",
       category: "test",
       env: env()
-    });
+    }));
 
     // The agent commits while the check is running. The check proves the
     // revision it started on, not whatever the tree has become.
@@ -290,12 +369,12 @@ describe("verification", () => {
   }, 20_000);
 
   it("records a failing check as failed, with its output and exit code", async () => {
-    await supervisor.runVerification({
+    await supervisor.runVerification(checkOf({
       name: "test",
       command: "echo '2 failing'; exit 1",
       category: "test",
       env: env()
-    });
+    }));
     const check = of("verification.completed")[0];
     expect(check?.outcome).toBe("failed");
     expect(check?.exitCode).toBe(1);
@@ -304,12 +383,12 @@ describe("verification", () => {
   }, 20_000);
 
   it("reports a cancelled check as errored rather than inventing a verdict", async () => {
-    const running = supervisor.runVerification({
+    const running = supervisor.runVerification(checkOf({
       name: "test",
       command: "sleep 20",
       category: "test",
       env: env()
-    });
+    }));
     await waitFor("the check to start", () => supervisor.isRunning("test"));
     await supervisor.stop("test", "Cancelled by a participant.");
     await running;
@@ -317,8 +396,8 @@ describe("verification", () => {
   }, 20_000);
 
   it("does not displace a run command that happens to share its name", async () => {
-    await supervisor.startRun({ name: "test", command: "sleep 30", env: env(), port: 3100, allowConcurrent: true });
-    await supervisor.runVerification({ name: "test", command: "exit 0", category: "test", env: env() });
+    await supervisor.startRun(runOf({ name: "test", command: "sleep 30", env: env(), port: 3100, allowConcurrent: true }), concurrency({ name: "test", command: "sleep 30", env: env(), port: 3100, allowConcurrent: true }));
+    await supervisor.runVerification(checkOf({ name: "test", command: "exit 0", category: "test", env: env() }));
     // The check ended; the run command with the same name is still alive and
     // still stoppable.
     expect(of("verification.completed")[0]?.outcome).toBe("passed");
@@ -328,12 +407,12 @@ describe("verification", () => {
   }, 20_000);
 
   it("bounds long output and says it was truncated", async () => {
-    await supervisor.runVerification({
+    await supervisor.runVerification(checkOf({
       name: "test",
       command: "for i in $(seq 1 2000); do echo 'a line of test output that goes on and on'; done",
       category: "test",
       env: env()
-    });
+    }));
     const check = of("verification.completed")[0];
     expect(check?.truncated).toBe(true);
     expect((check?.output ?? "").length).toBeLessThanOrEqual(4_000);
@@ -343,19 +422,19 @@ describe("verification", () => {
 describe("what reaches the room", () => {
   it("keeps a secret value out of every reported payload", async () => {
     secrets = ["postgres://user:hunter2-and-then-some@localhost/app"];
-    await supervisor.runVerification({
+    await supervisor.runVerification(checkOf({
       name: "test",
       command: `echo "connecting to ${secrets[0] ?? ""}"; exit 0`,
       category: "test",
       env: { ...env(), DATABASE_URL: secrets[0] ?? "" }
-    });
+    }));
     const reported = JSON.stringify(events);
     expect(reported).not.toContain("hunter2");
     expect(reported).toContain("[redacted]");
   }, 20_000);
 
   it("names no absolute path on this machine", async () => {
-    await supervisor.runVerification({ name: "test", command: "pwd", category: "test", env: env() });
+    await supervisor.runVerification(checkOf({ name: "test", command: "pwd", category: "test", env: env() }));
     const reported = JSON.stringify(events);
     expect(reported).not.toContain(worktree);
     expect(reported).toContain("the mission worktree");
@@ -404,7 +483,7 @@ describe("after a relaunch", () => {
   it("says a survivor was stopped rather than pretending to supervise it", async () => {
     // A real process this launch never started, standing in for one that
     // outlived the app.
-    await supervisor.startRun({ name: "dev", command: "sleep 40", env: env(), port: 3100, allowConcurrent: false });
+    await supervisor.startRun(runOf({ name: "dev", command: "sleep 40", env: env(), port: 3100, allowConcurrent: false }), concurrency({ name: "dev", command: "sleep 40", env: env(), port: 3100, allowConcurrent: false }));
     const recordPath = join(userData, "workspace-processes.json");
     const records = JSON.parse(readFileSync(recordPath, "utf8")) as Record<string, { pid: number }>;
     const pid = Object.values(records)[0]?.pid ?? 0;

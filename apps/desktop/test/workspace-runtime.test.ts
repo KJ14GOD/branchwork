@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WorkspaceSettingsSchema, type RunnerEvent } from "@novus/contracts";
+import { WorkspaceSettingsSchema, type DeclaredCommand, type RunnerEvent } from "@novus/contracts";
 import { gitExec } from "../electron/workspace-git";
 import type { SecretStore } from "../electron/workspace-secrets";
 import {
@@ -11,8 +11,10 @@ import {
   prepareLocalFiles,
   saveWorkspaceSettings,
   worktreeFor,
+  type PinnedCommand,
   type WorkspaceCommandContext,
   type WorkspaceHost,
+  type WorkspaceRuntime,
   type WorkspaceTarget
 } from "../electron/workspace";
 
@@ -164,6 +166,28 @@ describe("the worktree", () => {
   }, 20_000);
 });
 
+/**
+ * The snapshot the control plane would pin, taken from what the runner itself
+ * published (D-043).
+ *
+ * This is the same round trip production makes: the runner reads the project
+ * and announces what it declares, the control plane hands one of those back
+ * with the command it authorizes, and the runner runs *that*. Resolving the
+ * name here instead would test a path the product does not have.
+ */
+async function pin(
+  running: WorkspaceRuntime,
+  kind: DeclaredCommand["kind"],
+  name?: string
+): Promise<PinnedCommand> {
+  await running.publishDeclared(context);
+  const declared = of("workspace.declared")
+    .flatMap((payload) => payload.commands)
+    .filter((command) => command.kind === kind);
+  const snapshot = (name === undefined ? declared[0] : declared.find((c) => c.name === name)) ?? null;
+  return { name: name ?? snapshot?.name ?? null, snapshot };
+}
+
 describe("a proposal is not a command", () => {
   it("runs nothing on inspection, and runs only what was saved and then invoked", async () => {
     // The project's manifest names a script that would leave a witness behind.
@@ -188,19 +212,30 @@ describe("a proposal is not a command", () => {
       WorkspaceSettingsSchema.parse({ setup: { command: "touch confirmed.txt" } }),
       host()
     );
-    await runtime().runSetup(context);
+    const started = runtime();
+    await started.runSetup(context, await pin(started, "setup"));
     expect(existsSync(join(worktree, "confirmed.txt"))).toBe(true);
     expect(existsSync(join(worktree, "inspected.txt"))).toBe(false);
   }, 20_000);
 
   it("refuses a command the project never declared", async () => {
     const running = runtime();
-    await expect(running.runSetup(context)).rejects.toThrow(/how to install itself/);
-    await expect(running.runCommand(context, null)).rejects.toThrow(/how to run itself/);
-    await expect(running.runVerification(context, null)).rejects.toThrow(/any checks/);
+    // Nothing declared means nothing published means nothing to pin, and the
+    // runner says so rather than resolving a name out of a file for itself.
+    await expect(running.runSetup(context, await pin(running, "setup"))).rejects.toThrow(
+      /has not read this project's configuration/
+    );
+    await expect(running.runCommand(context, await pin(running, "run"))).rejects.toThrow(
+      /has not read this project's configuration/
+    );
+    await expect(running.runVerification(context, await pin(running, "verification"))).rejects.toThrow(
+      /has not read this project's configuration/
+    );
 
     await commitSettings(`[[run]]\nname = "dev"\ncommand = "sleep 30"\n`);
-    await expect(running.runCommand(context, "not-a-command")).rejects.toThrow(/no run command named/);
+    await expect(
+      running.runCommand(context, await pin(running, "run", "not-a-command"))
+    ).rejects.toThrow(/has not read this project's configuration/);
   }, 20_000);
 });
 
@@ -224,14 +259,14 @@ describe("commands the project declared", () => {
     const worktree = worktreeFor(userData, MISSION_ID);
     const running = runtime();
 
-    await running.runSetup(context);
+    await running.runSetup(context, await pin(running, "setup"));
     expect(of("workspace.readiness").map((payload) => payload.readiness)).toEqual(["configuring", "ready"]);
     expect(of("workspace.readiness")[1]?.portRangeStart).toBeGreaterThan(3000);
 
-    await running.runCommand(context, null);
+    await running.runCommand(context, await pin(running, "run"));
     await waitFor("the run command to write", () => existsSync(join(worktree, "dev-ran.txt")));
 
-    await running.runVerification(context, null);
+    await running.runVerification(context, await pin(running, "verification"));
     const check = of("verification.completed")[0];
     expect(check?.name).toBe("test");
     expect(check?.outcome).toBe("passed");
@@ -255,7 +290,7 @@ describe("commands the project declared", () => {
       ].join("\n")
     );
     const running = runtime();
-    await running.runSetup(context);
+    await running.runSetup(context, await pin(running, "setup"));
     const seen = readFileSync(join(worktreeFor(userData, MISSION_ID), "novus-env.txt"), "utf8");
     expect(seen).toContain("NOVUS_WORKSPACE_ID=wsp_workspace");
     expect(seen).toContain(`NOVUS_MISSION_BRANCH=${MISSION_BRANCH}`);
@@ -278,7 +313,8 @@ describe("commands the project declared", () => {
       ].join("\n")
     );
 
-    await runtime().runVerification(context, "test");
+    const checking = runtime();
+    await checking.runVerification(context, await pin(checking, "verification", "test"));
     const check = of("verification.completed")[0];
     // The command really did receive the value...
     expect(check?.output).toContain("[redacted]");
@@ -312,7 +348,7 @@ describe("after a relaunch", () => {
   it("does not claim a run command is still running", async () => {
     await commitSettings(`[[run]]\nname = "dev"\ncommand = "sleep 40"\n`);
     const first = runtime();
-    await first.runCommand(context, null);
+    await first.runCommand(context, await pin(first, "run"));
     expect(of("process.started").length).toBe(1);
     const processId = of("process.started")[0]?.processId;
 

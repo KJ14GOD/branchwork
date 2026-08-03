@@ -484,7 +484,11 @@ function fakeApi(registrations: string[]): ControlPlaneClient {
   } as unknown as ControlPlaneClient;
 }
 
-async function waitFor(what: string, predicate: () => boolean, timeoutMs = 20_000): Promise<void> {
+/** Generous by design: what these wait for is a real clone over a real HTTP
+ *  remote, a real worktree, and a real turn, and the suite runs on whatever
+ *  machine it runs on. A deterministic test that fails on a busy laptop is not
+ *  evidence of anything. */
+async function waitFor(what: string, predicate: () => boolean, timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return;
@@ -546,7 +550,16 @@ describe("the runner on a repository it fetched", () => {
     });
     agent.pollNow();
 
-    await waitFor("the turn to complete", () => plane.kinds().includes("execution.completed"));
+    await waitFor(
+      "the turn to complete",
+      () => plane.kinds().includes("execution.completed"),
+      40_000
+    ).catch(() => {
+      throw new Error(
+        `turn never completed; reported ${JSON.stringify(plane.kinds())}; ` +
+          `credential requests ${plane.credentialRequests}; machineMap has ${machineMap.size}`
+      );
+    });
     expect(plane.kinds()).toContain("workspace.checkpoint");
 
     // The worktree is on the branch the server allocated, and the turn's

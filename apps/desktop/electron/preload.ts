@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { IpcAuthStatus, NovusBridge, TerminalChunk } from "@novus/contracts";
+import type { IpcAuthStatus, NovusBridge, ProcessLogChunk, TerminalChunk } from "@novus/contracts";
 
 /**
  * The complete renderer surface. No Node, no Electron internals, no session
@@ -27,7 +27,8 @@ const novus: NovusBridge = {
     base: (providerRepoId, ref) => ipcRenderer.invoke("novus:repos:base", { providerRepoId, ref }),
     addLocal: () => ipcRenderer.invoke("novus:repos:add-local"),
     localList: () => ipcRenderer.invoke("novus:repos:local-list"),
-    baseLocal: (localId) => ipcRenderer.invoke("novus:repos:base-local", localId)
+    baseLocal: (localId) => ipcRenderer.invoke("novus:repos:base-local", localId),
+    checkedOutHere: () => ipcRenderer.invoke("novus:repos:checked-out-here")
   },
   missions: {
     list: () => ipcRenderer.invoke("novus:missions:list"),
@@ -63,7 +64,17 @@ const novus: NovusBridge = {
     save: (input) => ipcRenderer.invoke("novus:workspace:save", input),
     prepareLocalFiles: (input) => ipcRenderer.invoke("novus:workspace:prepare-local-files", input),
     command: (input) => ipcRenderer.invoke("novus:workspace:command", input),
-    stop: (input) => ipcRenderer.invoke("novus:workspace:stop", input)
+    stop: (input) => ipcRenderer.invoke("novus:workspace:stop", input),
+    logs: (missionId) => ipcRenderer.invoke("novus:workspace:logs", missionId),
+    onLog: (listener: (chunk: ProcessLogChunk) => void) => {
+      const wrapped = (_event: unknown, chunk: ProcessLogChunk) => listener(chunk);
+      ipcRenderer.on("novus:process-log", wrapped);
+      return () => ipcRenderer.removeListener("novus:process-log", wrapped);
+    },
+    secrets: (missionId) => ipcRenderer.invoke("novus:workspace:secrets", missionId),
+    supplySecret: (input) => ipcRenderer.invoke("novus:workspace:supply-secret", input),
+    forgetSecret: (input) => ipcRenderer.invoke("novus:workspace:forget-secret", input),
+    openPreview: (input) => ipcRenderer.invoke("novus:workspace:open-preview", input)
   },
   // Local only, by construction: every verb here reaches this machine's own
   // main process and there is no shell verb in the runner protocol for any of
@@ -71,6 +82,7 @@ const novus: NovusBridge = {
   terminal: {
     list: (missionId) => ipcRenderer.invoke("novus:terminal:list", missionId),
     open: (input) => ipcRenderer.invoke("novus:terminal:open", input),
+    scrollback: (sessionId) => ipcRenderer.invoke("novus:terminal:scrollback", sessionId),
     write: (input) => ipcRenderer.invoke("novus:terminal:write", input),
     resize: (input) => ipcRenderer.invoke("novus:terminal:resize", input),
     rename: (input) => ipcRenderer.invoke("novus:terminal:rename", input),

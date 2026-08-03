@@ -182,7 +182,9 @@ describe("a session", () => {
     // reopening the drawer shows what already happened.
     const listed = sessions.list(WORKSTREAM_ID);
     expect(listed).toHaveLength(1);
-    expect(listed[0]?.scrollback).toContain("NOVUS_TERMINAL_MARKER");
+    // Fetched by its own verb rather than riding on every list: a pane asks
+    // once when it opens, and a rename does not ship 200KB back.
+    expect(sessions.scrollback(listed[0]?.sessionId ?? "")).toContain("NOVUS_TERMINAL_MARKER");
   }, 20_000);
 
   it("names itself after its kind when nobody named it, and can be renamed", () => {
@@ -245,11 +247,11 @@ describe("a session", () => {
     type(session.sessionId, 'echo FLOOD""_DONE');
     await waitFor(
       "the flood to finish",
-      () => (sessions.list(WORKSTREAM_ID)[0]?.scrollback ?? "").includes("FLOOD_DONE"),
+      () => sessions.scrollback(sessions.list(WORKSTREAM_ID)[0]?.sessionId ?? "").includes("FLOOD_DONE"),
       30_000
     );
 
-    const scrollback = sessions.list(WORKSTREAM_ID)[0]?.scrollback ?? "";
+    const scrollback = sessions.scrollback(sessions.list(WORKSTREAM_ID)[0]?.sessionId ?? "");
     expect(scrollback.length).toBeLessThanOrEqual(200 * 1024);
     // The oldest is what was dropped: the marker at the end survived, the
     // command that started it all did not.

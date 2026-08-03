@@ -4,7 +4,7 @@ import { novus } from "../bridge";
 import { AddProjectDialog, type PickedRepository } from "../components/add-project-dialog";
 import { HumanMark } from "../components/identity";
 import { RunControl } from "../components/run-control";
-import { TerminalToggle } from "../components/terminal-drawer";
+import { TerminalToggle } from "../components/runtime-dock";
 import { WorkspaceSetupDialog } from "../components/workspace-setup";
 import { truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
@@ -161,6 +161,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [missions, setMissions] = useState<Mission[] | null>(null);
   const [details, setDetails] = useState<Record<string, MissionDetailResponse>>({});
   const [localRepos, setLocalRepos] = useState<LocalRepo[]>([]);
+  /** Which repositories this machine actually holds a checkout for — a folder
+   *  somebody picked or one the runner fetched, which are the same thing once
+   *  it is here (D-025, D-032). */
+  const [checkedOutHere, setCheckedOutHere] = useState<Set<string>>(new Set());
   const [opened, setOpened] = useState<OpenedRepo[]>([]);
   const [offline, setOffline] = useState(false);
   const [selection, setSelection] = useState<{ projectKey: string; missionId: string | null } | null>(null);
@@ -184,9 +188,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const addTriggerRef = useRef<HTMLButtonElement>(null);
 
   const refresh = useCallback(async () => {
-    const [missionsResult, localResult] = await Promise.all([
+    const [missionsResult, localResult, checkoutResult] = await Promise.all([
       novus().missions.list(),
-      novus().repos.localList()
+      novus().repos.localList(),
+      novus().repos.checkedOutHere()
     ]);
     if (missionsResult.ok) {
       setOffline(false);
@@ -207,6 +212,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       setMissions((prev) => prev ?? []);
     }
     if (localResult.ok) setLocalRepos(localResult.value);
+    if (checkoutResult.ok) setCheckedOutHere(new Set(checkoutResult.value));
   }, []);
 
   useEffect(() => {
@@ -234,19 +240,22 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       map.set(key, project);
       return project;
     };
+    const here = (providerRepoId: string): boolean => checkedOutHere.has(providerRepoId);
     for (const repo of localRepos) ensure("local", repo.providerRepoId, repo.name, repo.onThisMachine);
     for (const mission of missions ?? []) {
       const repo = mission.repository;
       if (!repo) continue;
-      // A local repo not in localList (list unavailable) is honestly "not here".
-      ensure(repo.provider, repo.providerRepoId, repo.name, repo.provider === "github").missions.push(mission);
+      // Whether the work can happen *here* is one question with one answer:
+      // does this machine hold the checkout? A GitHub repository the runner has
+      // not fetched yet honestly does not, and says so.
+      ensure(repo.provider, repo.providerRepoId, repo.name, here(repo.providerRepoId)).missions.push(mission);
     }
-    for (const repo of opened) ensure(repo.provider, repo.providerRepoId, repo.name, repo.provider === "github");
+    for (const repo of opened) ensure(repo.provider, repo.providerRepoId, repo.name, here(repo.providerRepoId));
     for (const project of map.values()) {
       project.missions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     }
     return [...map.values()];
-  }, [missions, localRepos, opened]);
+  }, [missions, localRepos, opened, checkedOutHere]);
 
   // Needs attention: only states the server actually reports. A mission whose
   // branch failed, or one whose own state says it is waiting on a person.
@@ -405,7 +414,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         {/* The room's workspace controls: one Run control beside the evidence
             toggle, in the corner that belongs to the mission. Not a toolbar,
             and not a second navigation (DESIGN.md#component-behavior). */}
-        {openMission && openMission.mission.repository?.provider === "local" && (
+        {openMission && openMission.workstream && (
           <RunControl detail={openMission} onSetup={() => setSetupOpen(true)} />
         )}
         {/* Beside Run and the evidence toggle, never a second navigation. It
@@ -414,9 +423,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         <TerminalToggle
           open={terminalOpen}
           onToggle={() => setTerminalOpen((open) => !open)}
-          availableHere={
-            selectedProject?.provider === "local" && selectedProject.onThisMachine
-          }
+          availableHere={selectedProject?.onThisMachine === true}
           disabled={!selectedProject || selection?.missionId === null}
         />
         <button
@@ -621,7 +628,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           /* A workspace is prepared where the repository is. Anywhere else the
              dialog says so rather than offering a control that cannot work
              (D-042). */
-          preparableHere={selectedProject.provider === "local" && selectedProject.onThisMachine}
+          preparableHere={selectedProject.onThisMachine}
           onClose={() => setSetupOpen(false)}
         />
       )}

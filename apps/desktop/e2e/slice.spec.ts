@@ -280,17 +280,17 @@ describe("the Mission Room", () => {
     expect(baseText).toContain(DEMO_HEAD_SHA.slice(0, 8));
     expect(baseText).not.toContain(DEMO_HEAD_SHA); // abbreviated
 
-    // A GitHub project has no worktree on any machine, so direction here could
-    // only queue for a runner that cannot exist. The composer refuses up front
-    // and says what to do instead, rather than accepting words that go nowhere.
-    // A *local* repository on someone else's Mac stays directable — their
-    // runner picks it up — and that case is covered in the multiplayer suite.
+    // A GitHub project is directable. It has no worktree on this machine *yet*,
+    // and the room says exactly that rather than refusing: a runner fetches the
+    // repository into its own area and works it like any other checkout
+    // (D-025, D-032). The refusal this used to assert was the interface
+    // contradicting a runner that had been able to do this for a while.
     const draftInput = page.getByTestId("composer-input");
-    expect(await draftInput.isDisabled()).toBe(true);
-    expect(await draftInput.getAttribute("placeholder")).toContain("checked out on a Mac");
-    expect(
-      await page.getByTestId("composer-no-capability").getAttribute("title")
-    ).toContain("checked out on a Mac");
+    expect(await draftInput.isDisabled()).toBe(false);
+    expect(await page.getByTestId("composer-no-capability").count()).toBe(0);
+    expect(await page.getByTestId("state-line").textContent()).toContain(
+      "no machine has this repository checked out for Novus yet"
+    );
     await page.screenshot({ path: join(evidenceDir, "10-first-message.png") });
 
     await app.close();

@@ -1,3 +1,4 @@
+import { DeclaredCommandSchema } from "@novus/contracts";
 import type {
   Checkpoint,
   ControlSnapshot,
@@ -216,6 +217,7 @@ export async function listChecks(
       origin: row.origin as VerificationCheck["origin"],
       requestedByLogin: (row.requested_by_login as string | null) ?? null,
       command: row.command as string,
+      ending: (row.ending as VerificationCheck["ending"]) ?? null,
       exitCode: row.exit_code === null || row.exit_code === undefined ? null : Number(row.exit_code),
       output: (row.output as string | null) ?? null,
       truncated: Boolean(row.truncated),
@@ -247,7 +249,11 @@ export async function workspaceOf(db: Db, workstreamId: string | null): Promise<
     portRangeStart: row.port_range_start === null ? null : Number(row.port_range_start),
     portRangeEnd: row.port_range_end === null ? null : Number(row.port_range_end),
     setupError: (row.setup_error as string | null) ?? null,
-    configuredAt: row.configured_at ? (row.configured_at as Date).toISOString() : null
+    configuredAt: row.configured_at ? (row.configured_at as Date).toISOString() : null,
+    // Validated on the way out as well as on the way in: this list came from a
+    // runner, and a runner is semi-trusted by design.
+    declared: DeclaredCommandSchema.array().catch([]).parse(row.declared ?? []),
+    declaredAt: row.declared_at ? (row.declared_at as Date).toISOString() : null
   };
 }
 
@@ -265,6 +271,8 @@ export async function listProcesses(db: Db, missionId: string): Promise<Workspac
     name: row.name as string,
     command: row.command as string,
     state: row.state as WorkspaceProcess["state"],
+    readiness: (row.readiness as WorkspaceProcess["readiness"] | null) ?? "not_required",
+    ending: (row.ending as WorkspaceProcess["ending"]) ?? null,
     startedByLogin: (row.started_by_login as string | null) ?? null,
     previewUrl: (row.preview_url as string | null) ?? null,
     port: row.port === null || row.port === undefined ? null : Number(row.port),

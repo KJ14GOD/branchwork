@@ -35,6 +35,13 @@ export function pathForLocalRepo(localId: string): string | null {
   return loadMap()[localId] ?? null;
 }
 
+/** Every repository this machine holds a checkout for, whichever provider it
+ *  came from. A folder the user picked and a repository the runner fetched are
+ *  the same entry, which is the whole point (D-025, D-032). */
+export function repositoriesOnThisMachine(): string[] {
+  return Object.keys(loadMap());
+}
+
 /**
  * Records a checkout Novus made itself — a GitHub repository the runner
  * fetched (D-025, D-032) — in the same machine-local map a folder the user

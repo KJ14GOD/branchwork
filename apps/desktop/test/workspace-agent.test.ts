@@ -3,7 +3,12 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RunnerCommand, SequencedRunnerEvent } from "@novus/contracts";
+import type {
+  DeclaredCommand,
+  RunnerCommand,
+  RunnerEvent,
+  SequencedRunnerEvent
+} from "@novus/contracts";
 import type { ControlPlaneClient } from "../electron/api-client";
 import { startRunnerAgent, type RunnerAgent, type RunnerHost } from "../electron/runner-agent";
 
@@ -59,6 +64,14 @@ class FakeControlPlane {
 
   kinds(): string[] {
     return this.events().map((item) => item.event.kind);
+  }
+
+  /** Every command this runner has said the project declares. The real control
+   *  plane stores exactly this and hands one back with each authorization. */
+  declared(): DeclaredCommand[] {
+    return this.events()
+      .filter((item) => item.event.kind === "workspace.declared")
+      .flatMap((item) => (item.event as Extract<RunnerEvent, { kind: "workspace.declared" }>).payload.commands);
   }
 
   payloadsOf(kind: string): Record<string, unknown>[] {
@@ -185,6 +198,27 @@ const command = (kind: RunnerCommand["kind"], payload: Record<string, unknown> =
   };
 };
 
+/**
+ * Enqueues a command the way the real control plane does (D-043): resolved
+ * against what *this runner published*, and pinned to that exact snapshot.
+ *
+ * The waiting is the point rather than an inconvenience. A command can only be
+ * authorized once Novus has read the project, because until then there is
+ * nothing to authorize — which is the same order the product enforces.
+ */
+async function authorize(
+  kind: RunnerCommand["kind"],
+  declaredKind: DeclaredCommand["kind"],
+  name?: string
+): Promise<QueuedCommand> {
+  await waitFor("the runner to publish what this project declares", () => plane.declared().length > 0);
+  const ofKind = plane.declared().filter((entry) => entry.kind === declaredKind);
+  const snapshot = (name === undefined ? ofKind[0] : ofKind.find((entry) => entry.name === name)) ?? null;
+  const queued = command(kind, { name: name ?? snapshot?.name ?? null, command: snapshot });
+  plane.enqueue(queued);
+  return queued as QueuedCommand;
+}
+
 beforeEach(async () => {
   repo = mkdtempSync(join(tmpdir(), "novus-wsagent-repo-"));
   userData = mkdtempSync(join(tmpdir(), "novus-wsagent-userdata-"));
@@ -225,8 +259,8 @@ afterEach(async () => {
 
 describe("workspace commands through the agent", () => {
   it("runs setup and reports readiness with no execution", async () => {
-    plane.enqueue(command("run_setup"));
     start().discoverNow();
+    const setupCommand = await authorize("run_setup", "setup");
 
     await waitFor("readiness to be reported", () =>
       plane.payloadsOf("workspace.readiness").some((payload) => payload.readiness === "ready")
@@ -247,12 +281,12 @@ describe("workspace commands through the agent", () => {
     expect(sequences).toEqual([...sequences].sort((left, right) => left - right));
     expect(new Set(sequences).size).toBe(sequences.length);
 
-    await waitFor("the command to settle", () => plane.stateOf("cmd_ws0000000000000001") === "completed");
+    await waitFor("the command to settle", () => plane.stateOf(setupCommand.commandId) === "completed");
   }, 40_000);
 
   it("starts a run command, keeps it alive, and stops it on request", async () => {
-    plane.enqueue(command("run_command"));
     start().discoverNow();
+    const startCommand = await authorize("run_command", "run");
 
     await waitFor("the run command to start", () => plane.kinds().includes("process.started"));
     const started = plane.payloadsOf("process.started")[0];
@@ -264,9 +298,11 @@ describe("workspace commands through the agent", () => {
     );
     // The command is acknowledged while the process carries on: a run command
     // does not hold its acknowledgement for the life of the server.
-    await waitFor("the start to settle", () => plane.stateOf("cmd_ws0000000000000001") === "completed");
+    await waitFor("the start to settle", () => plane.stateOf(startCommand.commandId) === "completed");
     expect(plane.kinds()).not.toContain("process.exited");
 
+    // Stopping names a live process rather than a command line, so it carries
+    // no snapshot: what it can do is bounded by what is already running.
     plane.enqueue(command("stop_command", { name: "dev" }));
     await waitFor("the process to exit", () => plane.kinds().includes("process.exited"));
     expect(plane.payloadsOf("process.exited")[0]?.state).toBe("stopped");
@@ -274,8 +310,8 @@ describe("workspace commands through the agent", () => {
   }, 40_000);
 
   it("runs a declared check and reports the revision it proves", async () => {
-    plane.enqueue(command("run_verification", { name: "test" }));
     start().discoverNow();
+    await authorize("run_verification", "verification", "test");
 
     await waitFor("the check to complete", () => plane.kinds().includes("verification.completed"));
     const check = plane.payloadsOf("verification.completed")[0];
@@ -286,32 +322,38 @@ describe("workspace commands through the agent", () => {
     expect(check?.checkpointSha).toBe(head);
   }, 40_000);
 
-  it("fails the command by name when the project never declared it", async () => {
-    plane.enqueue(command("run_command", { name: "not-declared" }));
+  it("refuses a command that arrives with no snapshot to run", async () => {
+    // The real control plane refuses an undeclared name outright, so a command
+    // reaching the runner without a snapshot means something upstream is wrong.
+    // The runner does not fill the gap in by re-reading the file — that is the
+    // exact behaviour pinning exists to prevent (D-043).
     start().discoverNow();
+    await waitFor("the runner to publish", () => plane.declared().length > 0);
+    const orphan = command("run_command", { name: "not-declared", command: null });
+    plane.enqueue(orphan);
 
-    await waitFor("the command to fail", () => plane.stateOf("cmd_ws0000000000000001") === "failed");
-    expect(plane.failures.get("cmd_ws0000000000000001")).toContain("no run command named");
+    await waitFor("the command to fail", () => plane.stateOf(orphan.commandId) === "failed");
+    expect(plane.failures.get(orphan.commandId)).toContain("has not read this project's configuration");
     expect(plane.kinds()).not.toContain("process.started");
   }, 40_000);
 
   it("settles a command it already ran instead of running it twice", async () => {
-    plane.enqueue(command("run_setup"));
     start().discoverNow();
+    const setupCommand = await authorize("run_setup", "setup");
     await waitFor("setup to finish", () =>
       plane.payloadsOf("workspace.readiness").some((payload) => payload.readiness === "ready")
     );
-    await waitFor("the command to settle", () => plane.stateOf("cmd_ws0000000000000001") === "completed");
+    await waitFor("the command to settle", () => plane.stateOf(setupCommand.commandId) === "completed");
     await agent?.shutdown("relaunching");
     agent = null;
 
     // The control plane forgot the acknowledgement and offers it again.
-    const stale = plane.commands[0];
+    const stale = plane.commands.find((entry) => entry.commandId === setupCommand.commandId);
     if (stale) stale.state = "acknowledged";
     const before = plane.payloadsOf("workspace.readiness").length;
 
     start().discoverNow();
-    await waitFor("the replay to settle", () => plane.stateOf("cmd_ws0000000000000001") === "completed");
+    await waitFor("the replay to settle", () => plane.stateOf(setupCommand.commandId) === "completed");
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(plane.payloadsOf("workspace.readiness").length).toBe(before);
   }, 40_000);

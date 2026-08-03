@@ -22,7 +22,7 @@ import {
 import { GatedAction } from "../components/gated";
 import { Baton, HumanMark } from "../components/identity";
 import type { InspectorSection } from "../components/inspector";
-import { TerminalDrawer } from "../components/terminal-drawer";
+import { RuntimeDock } from "../components/runtime-dock";
 import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
 import type { Project } from "./project-shell";
 
@@ -88,8 +88,10 @@ export function ProjectRoom({
 
   const isDraft = selectedMissionId === null;
   const detail = selectedMissionId === null ? undefined : details[selectedMissionId];
-  // Agents run where the repository is: local, on this machine (D-032).
-  const executionAvailable = project.provider === "local" && project.onThisMachine;
+  // Agents run where the repository is. For a folder somebody added that means
+  // this machine; for a GitHub repository it means the machine whose runner
+  // fetched it — which is the same question and the same answer (D-025, D-032).
+  const executionAvailable = project.onThisMachine;
 
   const resolveBase = useCallback(async () => {
     setDraft((prev) =>
@@ -410,7 +412,8 @@ export function ProjectRoom({
               </span>
               {isDraft && !executionAvailable && (
                 <span className="state-detail">
-                  · no machine has this repository checked out for Novus yet
+                  · no machine has this repository checked out for Novus yet — the first direction asks one
+                  to fetch it
                 </span>
               )}
             </>
@@ -627,23 +630,11 @@ export function ProjectRoom({
         /* A draft has no mission yet, so no server capabilities exist to read:
            creating one is an org act (PRODUCT.md#roles-and-capabilities) and
            the creator becomes its Mission Admin. */
-        // A local repository that lives on someone else's Mac is fine to
-        // direct: their runner picks the work up, which is the whole point of
-        // the handoff. A GitHub project is not — no machine anywhere has a
-        // worktree for it, so a direction could only queue forever waiting for
-        // a runner that cannot exist (D-032: execution is local-first).
-        capabilities={
-          project.provider !== "local"
-            ? []
-            : isDraft
-              ? ["direction.submit"]
-              : (detail?.capabilities ?? null)
-        }
-        denialReason={
-          project.provider === "local"
-            ? undefined
-            : "Novus runs agents against a repository checked out on a Mac. Add this project from a local folder to direct it."
-        }
+        // A repository on someone else's Mac is fine to direct: their runner
+        // picks the work up, which is the whole point of the handoff. A GitHub
+        // repository is fine too — a runner fetches it into its own area and
+        // works it exactly like a folder somebody added (D-025, D-032).
+        capabilities={isDraft ? ["direction.submit"] : (detail?.capabilities ?? null)}
         isController={isController || isDraft}
         onSubmit={submit}
       />
@@ -652,7 +643,7 @@ export function ProjectRoom({
           rather than replacing it; below the single-column threshold it takes
           the room (DESIGN.md#component-behavior). */}
       {terminalOpen && executionAvailable && selectedMissionId !== null && (
-        <TerminalDrawer missionId={selectedMissionId} onHide={onHideTerminal} />
+        <RuntimeDock missionId={selectedMissionId} onHide={onHideTerminal} />
       )}
 
       </div>

@@ -1,4 +1,10 @@
-import type { WorkspaceProposal, WorkspaceSettings } from "@novus/contracts";
+import {
+  DEFAULT_SETUP_TIMEOUT_MINUTES,
+  DEFAULT_VERIFY_TIMEOUT_MINUTES,
+  type DeclaredCommand,
+  type WorkspaceProposal,
+  type WorkspaceSettings
+} from "@novus/contracts";
 
 /**
  * Pure reading of a `WorkspaceProposal` (D-040). Two questions get answered
@@ -21,6 +27,7 @@ export const EMPTY_SETTINGS: WorkspaceSettings = {
   run: [],
   concurrentRuns: false,
   verify: [],
+  timeouts: { setupMinutes: DEFAULT_SETUP_TIMEOUT_MINUTES, verifyMinutes: DEFAULT_VERIFY_TIMEOUT_MINUTES },
   env: {},
   secretNames: [],
   localFiles: []
@@ -48,6 +55,7 @@ export function declaredSettings(proposal: WorkspaceProposal): WorkspaceSettings
     defaultRun: local.defaultRun ?? shared.defaultRun,
     concurrentRuns: local.concurrentRuns,
     verify: mergeByName(shared.verify, local.verify),
+    timeouts: local.timeouts,
     env: { ...shared.env, ...local.env },
     secretNames: [...new Set([...shared.secretNames, ...local.secretNames])],
     localFiles: [...new Set([...shared.localFiles, ...local.localFiles])]
@@ -81,20 +89,41 @@ export interface CommandItem {
  * commands with the default first, then verification. Declared entries come
  * before suggestions of the same kind, and a suggestion whose name is already
  * declared disappears — the declaration is the truth.
+ *
+ * `published` is what the *runner* said this project declares (D-043), and it
+ * is what a participant who is not at the host machine reads: they have no
+ * worktree to inspect, so `proposal` is null for them and the list is the
+ * published one alone. Suggestions only ever come from a local inspection,
+ * because only the machine holding the repository can read one — and a
+ * suggestion never executes from this menu anyway.
  */
-export function commandItems(proposal: WorkspaceProposal): CommandItem[] {
-  const declared = declaredSettings(proposal);
+export function commandItems(
+  proposal: WorkspaceProposal | null,
+  published: readonly DeclaredCommand[] = []
+): CommandItem[] {
+  const inspected = proposal === null ? null : declaredSettings(proposal);
   const items: CommandItem[] = [];
+  const publishedOf = (kind: DeclaredCommand["kind"]) =>
+    published.filter((command) => command.kind === kind);
 
-  const declaredSetup = declared?.setup?.command ?? null;
+  const publishedSetup = publishedOf("setup")[0] ?? null;
+  const declaredSetup = publishedSetup?.command ?? inspected?.setup?.command ?? null;
   if (declaredSetup) {
     items.push({ kind: "setup", label: "Setup", command: declaredSetup, suggested: false, isDefault: false });
-  } else if (proposal.setup) {
+  } else if (proposal?.setup) {
     items.push({ kind: "setup", label: "Setup", command: proposal.setup, suggested: true, isDefault: false });
   }
 
-  const declaredRuns = declared ? runsInOrder(declared) : [];
-  const defaultRun = declared?.defaultRun ?? declaredRuns[0]?.name ?? null;
+  const publishedRuns = publishedOf("run");
+  const declaredRuns: { name: string; command: string }[] =
+    publishedRuns.length > 0
+      ? publishedRuns.map((entry) => ({ name: entry.name, command: entry.command }))
+      : inspected
+        ? runsInOrder(inspected)
+        : [];
+  // The runner publishes with the default first, so the head of that list is
+  // the default without the room having to re-derive it.
+  const defaultRun = inspected?.defaultRun ?? declaredRuns[0]?.name ?? null;
   for (const entry of declaredRuns) {
     items.push({
       kind: "run",
@@ -105,7 +134,7 @@ export function commandItems(proposal: WorkspaceProposal): CommandItem[] {
       isDefault: entry.name === defaultRun
     });
   }
-  for (const entry of proposal.run) {
+  for (const entry of proposal?.run ?? []) {
     if (declaredRuns.some((declaredRun) => declaredRun.name === entry.name)) continue;
     items.push({
       kind: "run",
@@ -117,7 +146,11 @@ export function commandItems(proposal: WorkspaceProposal): CommandItem[] {
     });
   }
 
-  const declaredVerify = declared?.verify ?? [];
+  const publishedVerify = publishedOf("verification");
+  const declaredVerify: { name: string; command: string }[] =
+    publishedVerify.length > 0
+      ? publishedVerify.map((entry) => ({ name: entry.name, command: entry.command }))
+      : (inspected?.verify ?? []);
   for (const entry of declaredVerify) {
     items.push({
       kind: "verification",
@@ -128,7 +161,7 @@ export function commandItems(proposal: WorkspaceProposal): CommandItem[] {
       isDefault: false
     });
   }
-  for (const entry of proposal.verify) {
+  for (const entry of proposal?.verify ?? []) {
     if (declaredVerify.some((declaredCheck) => declaredCheck.name === entry.name)) continue;
     items.push({
       kind: "verification",

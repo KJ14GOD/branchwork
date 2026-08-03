@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { MIN_SECRET_LENGTH } from "@novus/contracts";
+
+/** A refusal a person can act on, rather than a silent no-op. */
+export class SecretStoreError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SecretStoreError";
+  }
+}
 
 /**
  * Custody of the project's secret values (D-041).
@@ -55,6 +64,9 @@ export function osCrypto(): SecretCrypto {
 }
 
 export interface SecretStore {
+  /** Whether this machine can hold a secret at all. False means Novus holds
+   *  nothing, which the interface says out loud rather than implying. */
+  available(): boolean;
   /** The variable names this machine has supplied for a repository. */
   suppliedNames(repositoryKey: string): string[];
   /** Values for the named variables, and only those. */
@@ -95,13 +107,26 @@ export function fileSecretStore(directory: string, crypto: SecretCrypto = osCryp
     }
   };
 
+  /**
+   * Fails closed, and says so.
+   *
+   * A machine with no credential encryption gets a named refusal rather than a
+   * silent no-op: returning quietly would let the interface report a value as
+   * supplied when nothing was written, which is worse than an unprepared
+   * workspace — that is a state the product already knows how to say.
+   */
   const write = (repositoryKey: string, values: Record<string, string>): void => {
-    if (!crypto.available()) return; // never a plaintext fallback
+    if (!crypto.available()) {
+      throw new SecretStoreError(
+        "This operating system offers no credential storage, so Novus will not hold a secret value."
+      );
+    }
     mkdirSync(directory, { recursive: true });
     writeFileSync(fileFor(repositoryKey), crypto.encrypt(JSON.stringify(values)), { mode: 0o600 });
   };
 
   return {
+    available: () => crypto.available(),
     suppliedNames: (repositoryKey) => Object.keys(read(repositoryKey)).sort(),
     values: (repositoryKey, names) => {
       const held = read(repositoryKey);
@@ -114,9 +139,19 @@ export function fileSecretStore(directory: string, crypto: SecretCrypto = osCryp
     },
     allValues: (repositoryKey) => Object.values(read(repositoryKey)),
     put: (repositoryKey, name, value) => {
+      // Enforced here as well as at the bridge, because this is the only place
+      // a value can enter the store: a floor that lives only in a schema is a
+      // floor any other call site can walk around (D-044).
+      if (value.length < MIN_SECRET_LENGTH) {
+        throw new SecretStoreError(
+          `Novus only holds a value it can reliably remove from command output, which means at least ${MIN_SECRET_LENGTH} characters.`
+        );
+      }
       const held = read(repositoryKey);
       if (held[name] === undefined && Object.keys(held).length >= MAX_NAMES) {
-        throw new Error("This machine already holds as many values as Novus keeps for one repository.");
+        throw new SecretStoreError(
+          "This machine already holds as many values as Novus keeps for one repository."
+        );
       }
       held[name] = value.slice(0, MAX_VALUE_LENGTH);
       write(repositoryKey, held);
@@ -125,6 +160,12 @@ export function fileSecretStore(directory: string, crypto: SecretCrypto = osCryp
       const held = read(repositoryKey);
       if (held[name] === undefined) return;
       delete held[name];
+      if (Object.keys(held).length === 0) {
+        // Nothing held means no file: an empty encrypted blob is a thing to
+        // explain later, and there is nothing left in it to protect.
+        rmSync(fileFor(repositoryKey), { force: true });
+        return;
+      }
       write(repositoryKey, held);
     }
   };
@@ -135,11 +176,14 @@ export function fileSecretStore(directory: string, crypto: SecretCrypto = osCryp
  *  why a secret is missing. */
 export function emptySecretStore(): SecretStore {
   return {
+    available: () => false,
     suppliedNames: () => [],
     values: () => ({}),
     allValues: () => [],
     put: () => {
-      throw new Error("This operating system offers no credential storage, so Novus will not hold a secret.");
+      throw new SecretStoreError(
+        "This operating system offers no credential storage, so Novus will not hold a secret."
+      );
     },
     forget: () => undefined
   };

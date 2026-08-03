@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseToml, stringify as stringifyToml, TomlError } from "smol-toml";
-import { WorkspaceSettingsSchema, type SettingsScope, type WorkspaceSettings } from "@novus/contracts";
+import {
+  DEFAULT_SETUP_TIMEOUT_MINUTES,
+  DEFAULT_VERIFY_TIMEOUT_MINUTES,
+  WorkspaceSettingsSchema,
+  type SettingsScope,
+  type WorkspaceSettings
+} from "@novus/contracts";
 import { isIgnoredByGit, type GitExec } from "./workspace-git";
 
 /**
@@ -73,6 +79,7 @@ const SETTINGS_KEYS: SettingsKey[] = [
   "defaultRun",
   "concurrentRuns",
   "verify",
+  "timeouts",
   "env",
   "secretNames",
   "localFiles"
@@ -151,6 +158,10 @@ function layer(shared: ScopedSettings | null, local: ScopedSettings | null): Wor
     defaultRun: states("defaultRun") ? over.defaultRun : base.defaultRun,
     concurrentRuns: states("concurrentRuns") ? over.concurrentRuns : base.concurrentRuns,
     verify: mergeNamed(base.verify, states("verify") ? over.verify : []),
+    // Single values, replaced wholesale when the local file states them: a
+    // machine that overrides one deadline states both, which is one fewer way
+    // for a layered timeout to be a surprise.
+    timeouts: states("timeouts") ? over.timeouts : base.timeouts,
     env: { ...base.env, ...(states("env") ? over.env : {}) },
     secretNames: unique([...base.secretNames, ...(states("secretNames") ? over.secretNames : [])]),
     localFiles: unique([...base.localFiles, ...(states("localFiles") ? over.localFiles : [])])
@@ -205,6 +216,12 @@ function toDocument(settings: WorkspaceSettings): Record<string, unknown> {
   if (settings.concurrentRuns) document.concurrentRuns = true;
   if (settings.secretNames.length > 0) document.secretNames = settings.secretNames;
   if (settings.localFiles.length > 0) document.localFiles = settings.localFiles;
+  if (
+    settings.timeouts.setupMinutes !== DEFAULT_SETUP_TIMEOUT_MINUTES ||
+    settings.timeouts.verifyMinutes !== DEFAULT_VERIFY_TIMEOUT_MINUTES
+  ) {
+    document.timeouts = settings.timeouts;
+  }
   if (settings.setup !== undefined) document.setup = prune(settings.setup);
   if (settings.run.length > 0) document.run = settings.run.map(prune);
   if (settings.verify.length > 0) document.verify = settings.verify.map(prune);

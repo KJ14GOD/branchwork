@@ -163,6 +163,15 @@ function attribute(event: RunnerEvent, ctx: RunnerContext): { kind: "harness" | 
  * (ARCHITECTURE.md#event-model — transcripts are referenced, not inlined).
  */
 function eventPayload(event: RunnerEvent): Record<string, unknown> {
+  // The declared list lives on the workspace row, which is where the Run
+  // control reads it. The log keeps what it is *for* — that the configuration
+  // changed, and to what — rather than a second copy of every command line.
+  if (event.kind === "workspace.declared") {
+    return {
+      names: event.payload.commands.map((command) => `${command.kind}:${command.name}`),
+      digests: event.payload.commands.map((command) => command.digest)
+    };
+  }
   if (event.kind !== "workspace.checkpoint") return { ...event.payload };
   const files = event.payload.files;
   return {
@@ -367,6 +376,38 @@ async function applyWorkspaceSideEffects(
       );
       return true;
     }
+    case "workspace.declared": {
+      // Stored verbatim and never parsed for meaning: the control plane does
+      // not learn how to build anything (D-040). What it holds this list for is
+      // twofold — every participant's Run control offers the same commands, and
+      // an authorization can be pinned to the exact snapshot it authorized.
+      const workspaceId = await ensureWorkspace(client, {
+        orgId: ctx.orgId,
+        missionId: ctx.missionId,
+        workstreamId: ctx.workstreamId,
+        runnerId: ctx.runnerId
+      });
+      await client.query(
+        `update workspaces set declared = $2::jsonb, declared_at = now(), updated_at = now()
+          where wsp_id = $1`,
+        [workspaceId, JSON.stringify(event.payload.commands)]
+      );
+      return true;
+    }
+    case "process.readiness": {
+      const payload = event.payload;
+      // Monotonic in the same way an exit is: a process that already finished
+      // never becomes ready, and a late probe result cannot revive it.
+      await client.query(
+        `update workspace_processes
+            set readiness = $3,
+                state = case when $3 = 'ready' then 'running' else state end,
+                preview_url = coalesce($4, preview_url)
+          where prc_id = $1 and wst_id = $2 and state in ('starting', 'running')`,
+        [payload.processId, ctx.workstreamId, payload.readiness, payload.previewUrl]
+      );
+      return true;
+    }
     case "process.started": {
       const payload = event.payload;
       const workspaceId = await ensureWorkspace(client, {
@@ -395,8 +436,11 @@ async function applyWorkspaceSideEffects(
       try {
         await client.query(
           `insert into workspace_processes (prc_id, org_id, mission_id, wst_id, wsp_id, kind, name,
-                                            command, state, started_by, runner_id, preview_url, port)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, 'running', $9, $10, $11, $12)
+                                            command, state, readiness, started_by, runner_id,
+                                            preview_url, port)
+           values ($1, $2, $3, $4, $5, $6, $7, $8,
+                   case when $13 = 'pending' then 'starting' else 'running' end,
+                   $13, $9, $10, $11, $12)
            on conflict (prc_id) do update
              set preview_url = coalesce(excluded.preview_url, workspace_processes.preview_url),
                  port = coalesce(excluded.port, workspace_processes.port)
@@ -413,7 +457,8 @@ async function applyWorkspaceSideEffects(
             startedBy,
             ctx.runnerId,
             payload.previewUrl,
-            payload.port
+            payload.port,
+            payload.readiness
           ]
         );
         await client.query("release savepoint process_started");
@@ -430,7 +475,9 @@ async function applyWorkspaceSideEffects(
       // nothing. Scoped to this runner's workstream — a credential is one lane.
       await client.query(
         `update workspace_processes
-            set state = $3, exit_code = $4, failure_reason = $5, ended_at = now()
+            set state = $3, exit_code = $4, failure_reason = $5, ending = $6,
+                readiness = case when readiness = 'pending' then 'not_required' else readiness end,
+                ended_at = now()
           where prc_id = $1 and wst_id = $2
             and state in ('starting', 'running')`,
         [
@@ -438,7 +485,8 @@ async function applyWorkspaceSideEffects(
           ctx.workstreamId,
           payload.state,
           payload.exitCode,
-          payload.failureReason
+          payload.failureReason,
+          payload.ending
         ]
       );
       return true;
@@ -455,9 +503,9 @@ async function applyWorkspaceSideEffects(
         `insert into verification_checks (chk_id, org_id, mission_id, exe_id, name, category, outcome,
                                           origin, requested_by, command, exit_code, output, truncated,
                                           environment, runner_id, started_at, completed_at, duration_ms,
-                                          checkpoint_sha)
+                                          checkpoint_sha, ending)
          values ($1, $2, $3, null, $4, $5, $6, 'participant', $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                 $16, $17)`,
+                 $16, $17, $18)`,
         [
           newCheckId(),
           ctx.orgId,
@@ -479,7 +527,10 @@ async function applyWorkspaceSideEffects(
           payload.durationMs,
           // The revision this check proves. Staleness is derived against the
           // workstream's head at read time, never stored (D-037).
-          payload.checkpointSha
+          payload.checkpointSha,
+          // A check that ran out of time or was cancelled reached no verdict,
+          // and says which rather than reading as an ordinary failure.
+          payload.ending
         ]
       );
       return true;

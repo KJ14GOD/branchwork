@@ -60,22 +60,31 @@ export function RunControl({
   const [note, setNote] = useState<string | null>(null);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const missionId = detail.mission.missionId;
+  const declared = detail.workspace?.declared ?? [];
   const running = liveRunProcess(detail);
   const previewUrl = running?.previewUrl ?? null;
 
-  // A closed menu asks the machine nothing. Inspecting executes nothing by
-  // contract, but it still reads someone's disk, so it waits to be asked —
-  // and then it asks every time, because the configuration lives in the branch
-  // and a turn (or the setup dialog) may have just changed it. What was read
-  // before stays on screen while the new answer arrives, so the menu never
-  // blinks empty.
+  /**
+   * What the project declared, as the *runner* published it (D-043).
+   *
+   * Read from the mission rather than from this machine's disk, which is what
+   * makes the menu work for a participant who is not at the host machine: they
+   * have no worktree to inspect, and `workspace.command` is a capability they
+   * may genuinely hold. Suggestions still come from a local inspection, because
+   * a suggestion is a reading of a project and only the machine holding it can
+   * make one — and a suggestion never runs from here anyway.
+   */
   const read = useCallback(async () => {
     setProposal((previous) => (previous.kind === "read" ? previous : { kind: "reading" }));
     const result = await novus().workspace.inspect(missionId);
     setProposal(
-      result.ok ? { kind: "read", items: commandItems(result.value) } : { kind: "refused", message: result.message }
+      result.ok
+        ? { kind: "read", items: commandItems(result.value, declared) }
+        : declared.length > 0
+          ? { kind: "read", items: commandItems(null, declared) }
+          : { kind: "refused", message: result.message }
     );
-  }, [missionId]);
+  }, [missionId, declared]);
 
   useEffect(() => {
     setProposal({ kind: "unread" });
@@ -125,11 +134,16 @@ export function RunControl({
     setNote(result.ok ? null : result.message);
   };
 
-  const preview = (url: string) => {
-    // Electron only hands https: addresses to the browser, so a local preview
-    // has to be offered as an address rather than silently doing nothing.
-    const opened = window.open(url, "_blank", "noopener");
-    if (!opened) setNote(`Open ${url} in your browser — Novus can't open a local address for you.`);
+  /**
+   * Opens a local preview through the narrow bridge (D-045). The main process
+   * accepts a loopback `http`/`https` address that a process of this workstream
+   * actually reported, and hands it to the operating system's own browser — no
+   * shell command is involved, and there is no path here for an arbitrary
+   * address to reach one.
+   */
+  const preview = async (url: string) => {
+    const result = await novus().workspace.openPreview({ missionId, url });
+    setNote(result.ok ? null : result.message);
   };
 
   return (
@@ -144,7 +158,7 @@ export function RunControl({
           {/* Only when the process itself reported one: the room never invents
               an address for something that never said it had one. */}
           {previewUrl !== null && (
-            <button className="btn btn-text" onClick={() => preview(previewUrl)} data-testid="open-preview">
+            <button className="btn btn-text" onClick={() => void preview(previewUrl)} data-testid="open-preview">
               Open preview
             </button>
           )}
