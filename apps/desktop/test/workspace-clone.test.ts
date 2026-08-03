@@ -459,20 +459,36 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function fakeApi(registrations: string[]): ControlPlaneClient {
+/** Missions the fake control plane is currently serving, so a test can add a
+ *  second workstream on the same repository the way the server would. */
+interface FakeMission {
+  missionId: string;
+  workstreamId: string;
+  missionBranch: string;
+}
+
+function fakeApi(registrations: string[], missions?: FakeMission[]): ControlPlaneClient {
+  const served = missions ?? [
+    { missionId: MISSION_ID, workstreamId: WORKSTREAM_ID, missionBranch: OLD_BRANCH }
+  ];
   return {
-    listMissions: async () => [
-      { missionId: MISSION_ID, repository: { provider: "github", providerRepoId: "9001" } }
-    ],
-    getMission: async () => ({
-      workstream: {
-        workstreamId: WORKSTREAM_ID,
-        missionBranch: OLD_BRANCH,
-        // The server allocated the branch; that is what makes it fetchable.
-        branchStatus: "created"
-      },
-      runner: null
-    }),
+    listMissions: async () =>
+      served.map((mission) => ({
+        missionId: mission.missionId,
+        repository: { provider: "github", providerRepoId: "9001" }
+      })),
+    getMission: async (missionId: string) => {
+      const found = served.find((mission) => mission.missionId === missionId) ?? served[0];
+      return {
+        workstream: {
+          workstreamId: found?.workstreamId,
+          missionBranch: found?.missionBranch,
+          // The server allocated the branch; that is what makes it fetchable.
+          branchStatus: "created"
+        },
+        runner: null
+      };
+    },
     registerRunner: async (workstreamId: string) => {
       registrations.push(workstreamId);
       return {
@@ -573,4 +589,65 @@ describe("the runner on a repository it fetched", () => {
     expect(JSON.stringify(plane.reported)).not.toContain(TOKEN);
     expect(holdsToken(userData)).toEqual([]);
   }, 60_000);
+
+  it("fetches a second workstream's branch into a repository it already cloned", async () => {
+    // The bug this exists for: `needsCheckout` asked whether the *repository*
+    // was here, so the first mission cloned it and every mission after that was
+    // skipped — its branch never fetched, and `git worktree add` failing with
+    // `invalid reference: novus/m-…` the moment anything opened a terminal,
+    // read a file, or ran a command in it (D-051).
+    remote = await startRemote({ accept: true });
+    const plane = new FakeControlPlane(remote.url);
+    const machineMap = new Map<string, string>();
+    const host: RunnerHost = {
+      userDataPath: userData,
+      isPackaged: false,
+      label: "test-machine",
+      repositoryPath: (providerRepoId) => machineMap.get(providerRepoId) ?? null,
+      recordRepositoryPath: (providerRepoId, repoPath) => void machineMap.set(providerRepoId, repoPath)
+    };
+
+    // The server allocates a second workstream's branch on the remote.
+    git(origin, ["branch", LATER_BRANCH, NEW_BRANCH]);
+    git(origin, ["update-server-info"]);
+
+    const served: FakeMission[] = [
+      { missionId: MISSION_ID, workstreamId: WORKSTREAM_ID, missionBranch: OLD_BRANCH },
+      { missionId: "msn_second00000000000", workstreamId: "wst_second00000000000", missionBranch: LATER_BRANCH }
+    ];
+
+    agent = startRunnerAgent({
+      api: fakeApi([], served),
+      controlPlaneUrl: "http://control-plane.test",
+      getToken: () => "a-session",
+      host,
+      fetch: plane.fetch,
+      fakeHarness: true
+    });
+    agent.discoverNow();
+
+    await waitFor("the repository to be fetched", () => machineMap.has("9001"));
+    const checkout = machineMap.get("9001") as string;
+
+    // Both branches are here, not just the one that happened to be cloned
+    // first — so a worktree can be made for either workstream.
+    await waitFor("the second workstream's branch to arrive", () => {
+      try {
+        return git(checkout, ["rev-parse", "--verify", "--quiet", `refs/heads/${LATER_BRANCH}`]) !== "";
+      } catch {
+        return false;
+      }
+    });
+    expect(git(checkout, ["rev-parse", OLD_BRANCH])).toBe(originSha(OLD_BRANCH));
+    expect(git(checkout, ["rev-parse", LATER_BRANCH])).toBe(originSha(LATER_BRANCH));
+
+    const worktree = await ensureWorkspaceWorktree(
+      gitExec,
+      checkout,
+      userData,
+      "msn_second00000000000",
+      LATER_BRANCH
+    );
+    expect(git(worktree, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(LATER_BRANCH);
+  }, 90_000);
 });

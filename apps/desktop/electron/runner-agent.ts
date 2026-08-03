@@ -18,7 +18,7 @@ import { createWorkspaceRuntime, type PinnedCommand, type WorkspaceCommandContex
 import {
   clonedRepositoryRoot,
   ensureRepositoryClone,
-  isClonePresent,
+  hasMissionBranch,
   type CloneCredential
 } from "./workspace-clone";
 
@@ -198,6 +198,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   /** The last configuration problem said out loud per workstream, so a broken
    *  settings file is one warning rather than one every discovery pass. */
   const announcedProblem = new Map<string, string>();
+  /** Missions whose branch this machine has confirmed it holds, so the check
+   *  above costs one `rev-parse` per mission per run rather than one every
+   *  fifteen seconds forever. */
+  const fetched = new Set<string>();
 
   /**
    * The workspace runtime: setup, run, and verification commands, their
@@ -368,17 +372,26 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         const github = repository.provider === "github";
         if (!github && repository.provider !== "local") continue;
         if (!github && host.repositoryPath(repository.providerRepoId) === null) continue;
-        // Fetched once and reused: a second workstream on the same repository
-        // shares this checkout and takes its own worktree from it.
-        const needsCheckout = github && !isClonePresent(host.repositoryPath(repository.providerRepoId));
-
         const known = workstreamByMission.get(mission.missionId);
-        if (known !== undefined && enrolments.has(known) && !needsCheckout) continue;
+        const enrolled = known !== undefined && enrolments.has(known);
+        // A local repository is here or it is not. A GitHub one has a second
+        // question: this machine may hold the *repository* and not yet hold
+        // *this workstream's branch*, which is every mission after the first
+        // one on the same repository — and a worktree cannot be made from a ref
+        // that is not there.
+        if (enrolled && !github && fetched.has(mission.missionId)) continue;
 
         const detail = await deps.api.getMission(mission.missionId);
         if (!detail.workstream) continue;
         const workstreamId = detail.workstream.workstreamId;
+        const missionBranch = detail.workstream.missionBranch;
         workstreamByMission.set(mission.missionId, workstreamId);
+
+        const checkoutPath = host.repositoryPath(repository.providerRepoId);
+        const needsCheckout =
+          github && !(await hasMissionBranch(checkoutPath, missionBranch));
+        if (!needsCheckout) fetched.add(mission.missionId);
+        if (enrolled && !needsCheckout) continue;
 
         if (!enrolments.has(workstreamId)) {
           if (github && !shouldHostGithub(detail)) continue;
@@ -393,7 +406,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         // Before anything asks for a worktree, so the mission branch the server
         // allocated is here and the worktree starts from the right commit.
         if (needsCheckout) {
-          await ensureCheckout(workstreamId, repository.providerRepoId, detail.workstream.missionBranch);
+          await ensureCheckout(workstreamId, repository.providerRepoId, missionBranch);
+          if (await hasMissionBranch(host.repositoryPath(repository.providerRepoId), missionBranch)) {
+            fetched.add(mission.missionId);
+          }
         }
         // Queued on this workstream's own chain, and not awaited here.
         // Publishing reads the project and creates the worktree if it is not
@@ -401,7 +417,6 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         // its turn in the lane rather than running beside one. Not awaiting it
         // keeps discovery from delaying the first poll, which is how a command
         // that is already queued gets picked up.
-        const missionBranch = detail.workstream.missionBranch;
         const workspaceId = detail.workspace?.workspaceId ?? null;
         chain(workstreamId, () =>
           announceCommands({

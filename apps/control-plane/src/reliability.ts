@@ -161,7 +161,12 @@ export async function sweepLeases(db: Db, now = new Date()): Promise<number> {
  *  their authority, so a working controller never loses the baton. */
 export async function touchLease(db: Db, leaseId: string): Promise<void> {
   await db.query(
-    "update control_leases set last_heartbeat_at = now() where lease_id = $1 and state in ('held', 'releasing')",
+    `update control_leases set last_heartbeat_at = now()
+      where lease_id = $1 and state in ('held', 'releasing')
+        -- The room polls every two seconds; the TTL is half an hour. Writing on
+        -- every poll would be thirty times the writes for none of the accuracy,
+        -- so a heartbeat that is already fresh is left alone.
+        and (last_heartbeat_at is null or last_heartbeat_at < now() - interval '1 minute')`,
     [leaseId]
   );
 }

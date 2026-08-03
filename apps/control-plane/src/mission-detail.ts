@@ -16,6 +16,7 @@ import type {
 import type { Db } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
 import { listDirections } from "./directions.ts";
+import { touchLease } from "./reliability.ts";
 import type { MissionAccess } from "./authz.ts";
 
 /**
@@ -404,6 +405,20 @@ export async function missionDetail(
   viewerUserId: string,
   base: { mission: MissionDetailResponse["mission"]; workstream: MissionDetailResponse["workstream"] }
 ): Promise<MissionDetailResponse> {
+  // The lease's heartbeat is the holder's own client being alive, and this is
+  // where that is observed: the room polls this endpoint while it is open, so a
+  // controller who is sitting there watching keeps their lease, and one whose
+  // machine is closed stops keeping it (ARCHITECTURE.md — the TTL is the grace
+  // period after the last heartbeat).
+  //
+  // Without this the sweep expired every lease thirty minutes after it was
+  // created, whoever was watching, and every direction after that queued behind
+  // a controller who no longer existed. The verb was written when the sweep was
+  // and never called (D-051).
+  if (access.leaseId !== null && access.controllerUserId === viewerUserId) {
+    await touchLease(db, access.leaseId);
+  }
+
   const checkpointsForSha = await listCheckpoints(db, access.missionId);
   // The revision a check has to match to still count as current evidence.
   const currentCheckpointSha =

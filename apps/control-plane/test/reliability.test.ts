@@ -27,6 +27,24 @@ afterAll(async () => {
   await harness?.close();
 });
 
+/** A second participant, through the only path there is: an invitation. */
+async function joinAs(missionId: string, who: string): Promise<SignedIn> {
+  const joiner = await harness.signIn(who);
+  const created = await harness.app.inject({
+    method: "POST",
+    url: `/missions/${missionId}/invitations`,
+    headers: bearer(owner),
+    payload: { role: "contributor" }
+  });
+  await harness.app.inject({
+    method: "POST",
+    url: "/invitations/redeem",
+    headers: bearer(joiner),
+    payload: { token: created.json().token }
+  });
+  return joiner;
+}
+
 /** A local mission with this machine enrolled, and optionally a live turn. */
 async function lane(): Promise<{ missionId: string; workstreamId: string; runnerId: string }> {
   const localId = randomUUID();
@@ -284,5 +302,55 @@ describe("control lease expiry", () => {
       headers: bearer(owner)
     });
     expect(detail.json().control.holderLogin).toBe("kartik");
+  });
+});
+
+describe("a lease the holder is still watching", () => {
+  it("keeps it, because reading the room is the heartbeat", async () => {
+    const held = await lane();
+
+    // Backdate the heartbeat past the TTL, the way two hours at a desk would.
+    await harness.db.query(
+      "update control_leases set last_heartbeat_at = now() - interval '90 minutes' where wst_id = $1",
+      [held.workstreamId]
+    );
+
+    // The room polls this endpoint while it is open. That is the heartbeat —
+    // the verb existed from the day the sweep did and had no caller, so every
+    // lease expired thirty minutes after it was created however present its
+    // holder was, and every direction after that queued behind a controller who
+    // no longer existed (D-051).
+    const read = await harness.app.inject({
+      method: "GET",
+      url: `/missions/${held.missionId}`,
+      headers: bearer(owner)
+    });
+    expect(read.statusCode).toBe(200);
+
+    expect(await sweepLeases(harness.db)).toBe(0);
+    const after = await harness.db.query("select state from control_leases where wst_id = $1", [
+      held.workstreamId
+    ]);
+    expect(after.rows[0].state).toBe("held");
+  });
+
+  it("does not keep it for somebody who merely has the mission open", async () => {
+    const held = await lane();
+    const maya = await joinAs(held.missionId, "maya");
+    await harness.db.query(
+      "update control_leases set last_heartbeat_at = now() - interval '90 minutes' where wst_id = $1",
+      [held.workstreamId]
+    );
+
+    // Watching is not holding: a reader who is not the controller must not keep
+    // somebody else's lease alive, or the TTL would never expire in any room
+    // with two people in it.
+    const read = await harness.app.inject({
+      method: "GET",
+      url: `/missions/${held.missionId}`,
+      headers: bearer(maya)
+    });
+    expect(read.statusCode).toBe(200);
+    expect(await sweepLeases(harness.db)).toBe(1);
   });
 });

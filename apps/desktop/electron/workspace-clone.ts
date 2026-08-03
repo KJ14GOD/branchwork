@@ -172,6 +172,25 @@ export function isClonePresent(path: string | null): boolean {
   return path !== null && existsSync(join(path, ".git"));
 }
 
+/**
+ * True when this checkout already has the workstream's mission branch.
+ *
+ * Holding the repository is not the same as holding *this workstream's*
+ * branch. A second mission on a repository this machine already cloned needs
+ * its own branch fetched, and asking git is the only honest way to know: a ref
+ * may be loose or packed, so a file under `.git/refs` proves nothing either way.
+ */
+export async function hasMissionBranch(
+  path: string | null,
+  branch: string,
+  git: CloneGitExec = cloneGitExec
+): Promise<boolean> {
+  if (path === null || !isClonePresent(path)) return false;
+  if (!MISSION_BRANCH.test(branch)) return false;
+  const found = await git(path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], null);
+  return found.code === 0;
+}
+
 export interface EnsureCloneRequest {
   /** `clonedRepositoryRoot(userDataPath)`. */
   root: string;
