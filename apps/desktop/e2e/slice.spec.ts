@@ -280,14 +280,17 @@ describe("the Mission Room", () => {
     expect(baseText).toContain(DEMO_HEAD_SHA.slice(0, 8));
     expect(baseText).not.toContain(DEMO_HEAD_SHA); // abbreviated
 
-    // The composer is gated on the server's capability and nothing else;
-    // whether any machine can run the work is the state line's business.
+    // A GitHub project has no worktree on any machine, so direction here could
+    // only queue for a runner that cannot exist. The composer refuses up front
+    // and says what to do instead, rather than accepting words that go nowhere.
+    // A *local* repository on someone else's Mac stays directable — their
+    // runner picks it up — and that case is covered in the multiplayer suite.
     const draftInput = page.getByTestId("composer-input");
-    expect(await draftInput.isDisabled()).toBe(false);
-    expect(await draftInput.getAttribute("placeholder")).toBe("Direct Claude Code…");
-    expect(await page.getByTestId("state-line").textContent()).toContain(
-      "no machine has this repository checked out"
-    );
+    expect(await draftInput.isDisabled()).toBe(true);
+    expect(await draftInput.getAttribute("placeholder")).toContain("checked out on a Mac");
+    expect(
+      await page.getByTestId("composer-no-capability").getAttribute("title")
+    ).toContain("checked out on a Mac");
     await page.screenshot({ path: join(evidenceDir, "10-first-message.png") });
 
     await app.close();

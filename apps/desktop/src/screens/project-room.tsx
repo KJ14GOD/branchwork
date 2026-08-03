@@ -620,7 +620,23 @@ export function ProjectRoom({
         /* A draft has no mission yet, so no server capabilities exist to read:
            creating one is an org act (PRODUCT.md#roles-and-capabilities) and
            the creator becomes its Mission Admin. */
-        capabilities={isDraft ? ["direction.submit"] : (detail?.capabilities ?? null)}
+        // A local repository that lives on someone else's Mac is fine to
+        // direct: their runner picks the work up, which is the whole point of
+        // the handoff. A GitHub project is not — no machine anywhere has a
+        // worktree for it, so a direction could only queue forever waiting for
+        // a runner that cannot exist (D-032: execution is local-first).
+        capabilities={
+          project.provider !== "local"
+            ? []
+            : isDraft
+              ? ["direction.submit"]
+              : (detail?.capabilities ?? null)
+        }
+        denialReason={
+          project.provider === "local"
+            ? undefined
+            : "Novus runs agents against a repository checked out on a Mac. Add this project from a local folder to direct it."
+        }
         isController={isController || isDraft}
         onSubmit={submit}
       />

@@ -400,7 +400,10 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         push(block, {
           kind: "note",
           key: event.eventId,
-          text: `${event.actor.login ?? "The controller"} applied this direction`,
+          // Authorized, not applied. Applied is written only when the runner
+          // acknowledges it; saying "applied" here would claim the harness has
+          // work it may never have been given (PRODUCT.md#direction).
+          text: `${event.actor.login ?? "The controller"} approved this direction`,
           login: event.actor.login,
           tone: "neutral"
         });
