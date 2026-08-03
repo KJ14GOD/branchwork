@@ -132,9 +132,15 @@ alter table events add column if not exists cause_direction_id text;
 alter table events add column if not exists cause_lease_id text;
 alter table events add column if not exists origin_seq bigint;
 alter table events add column if not exists actor_login text;
--- A runner event replayed after a partition lands exactly once.
-create unique index if not exists events_execution_origin_seq
-  on events (execution_id, origin_seq) where origin_seq is not null;
+-- A runner event replayed after a partition lands exactly once. The key is the
+-- scope the report belongs to: an execution when there is one, the workstream
+-- when the report is about the workspace itself. Keying on execution_id alone
+-- would stop de-duplicating entirely for workspace reports, because Postgres
+-- treats NULL keys as distinct from one another.
+drop index if exists events_execution_origin_seq;
+create unique index if not exists events_origin_scope_seq
+  on events (coalesce(execution_id, workstream_id), origin_seq)
+  where origin_seq is not null;
 
 -- ---------------------------------------------------------------------------
 -- Invitations (PRODUCT.md#domain-model). Single-use, expiring, mission-scoped;
@@ -175,6 +181,9 @@ create table if not exists control_leases (
 -- Exactly one current holder per workstream.
 create unique index if not exists control_leases_one_current
   on control_leases (wst_id) where state in ('held', 'releasing');
+-- When the holder last exercised their authority. A lease is a grant, not a
+-- connection: it survives disconnection and lapses only on genuine absence.
+alter table control_leases add column if not exists last_heartbeat_at timestamptz;
 
 create table if not exists control_requests (
   req_id       text primary key,
@@ -379,3 +388,115 @@ create table if not exists verification_checks (
   observed_at  timestamptz not null default now()
 );
 create index if not exists verification_checks_by_execution on verification_checks (exe_id, observed_at);
+
+-- ---------------------------------------------------------------------------
+-- Workspace runtime (D-040 … D-042). The control plane records what a
+-- workspace *is* and what is running in it; it never learns how to build
+-- anything — the commands live in the repository — and it never holds a
+-- secret value.
+-- ---------------------------------------------------------------------------
+
+create table if not exists workspaces (
+  wsp_id       text primary key,
+  org_id       text not null references organizations(org_id),
+  mission_id   text not null references missions(mission_id),
+  wst_id       text not null references workstreams(wst_id),
+  runner_id    text references runners(runner_id),
+  location     text not null default 'local' check (location in ('local')),
+  -- Readiness is the answer to "can this workspace run anything yet?".
+  readiness    text not null check (readiness in ('unconfigured', 'configuring', 'ready', 'failed')),
+  -- Reported by the runner so the room can name a port without knowing a path.
+  port_range_start int,
+  port_range_end   int,
+  setup_error  text,
+  configured_at timestamptz,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+create unique index if not exists workspaces_one_per_workstream on workspaces (wst_id);
+
+-- A command the project declared, alive or finished, in a workspace. Long-lived
+-- run commands are the reason both clients can see "App running" at all.
+create table if not exists workspace_processes (
+  prc_id       text primary key,
+  org_id       text not null references organizations(org_id),
+  mission_id   text not null references missions(mission_id),
+  wst_id       text not null references workstreams(wst_id),
+  wsp_id       text not null references workspaces(wsp_id),
+  kind         text not null check (kind in ('setup', 'run', 'verification')),
+  name         text not null,
+  command      text not null,
+  state        text not null check (state in ('starting', 'running', 'exited', 'failed', 'stopped')),
+  started_by   text references users(user_id),
+  runner_id    text references runners(runner_id),
+  preview_url  text,
+  port         int,
+  exit_code    int,
+  failure_reason text,
+  started_at   timestamptz not null default now(),
+  ended_at     timestamptz
+);
+create index if not exists workspace_processes_live on workspace_processes (wst_id, started_at desc);
+-- One live process per named run command per workstream, unless the project
+-- said its run commands may overlap; the runner enforces the project's answer
+-- and this index enforces the default.
+create unique index if not exists workspace_processes_one_live_per_name
+  on workspace_processes (wst_id, name) where state in ('starting', 'running');
+
+-- Verification gains what makes a check evidence rather than a green word:
+-- who caused it, when, how long, what it exited with, and which revision it
+-- actually proves (D-037, extended).
+alter table verification_checks add column if not exists origin text not null default 'harness';
+alter table verification_checks drop constraint if exists verification_checks_origin_check;
+alter table verification_checks add constraint verification_checks_origin_check
+  check (origin in ('harness', 'participant', 'external'));
+alter table verification_checks add column if not exists requested_by text references users(user_id);
+alter table verification_checks add column if not exists exit_code int;
+alter table verification_checks add column if not exists started_at timestamptz;
+alter table verification_checks add column if not exists completed_at timestamptz;
+alter table verification_checks add column if not exists duration_ms int;
+-- The revision this check proves. Null only for harness-observed checks from
+-- before the workspace runtime existed.
+alter table verification_checks add column if not exists checkpoint_sha text;
+-- exe_id is nullable now: a participant can verify without an execution.
+alter table verification_checks alter column exe_id drop not null;
+
+-- The runner's command vocabulary grows with the workspace runtime. There is
+-- deliberately no shell command: remote interactive access to somebody's
+-- laptop is structurally absent, not merely unauthorized (D-042).
+alter table runner_commands drop constraint if exists runner_commands_kind_check;
+alter table runner_commands add constraint runner_commands_kind_check
+  check (kind in ('start_execution', 'apply_direction', 'stop_execution', 'boundary_request',
+                  'run_setup', 'run_command', 'stop_command', 'run_verification'));
+
+-- ---------------------------------------------------------------------------
+-- Declared commands, readiness, and how a command ended (D-043, D-045).
+-- ---------------------------------------------------------------------------
+
+-- What the project declared, exactly as the runner read it. The control plane
+-- never parses `.novus/settings.toml` and does not start now: this is an opaque
+-- list it was handed, stored so every participant's Run control offers the same
+-- commands and so an authorization can be pinned to the snapshot it authorized.
+alter table workspaces add column if not exists declared jsonb not null default '[]'::jsonb;
+alter table workspaces add column if not exists declared_at timestamptz;
+
+-- A process existing is not a claim that an application is serving. `pending`
+-- is a run command whose declared readiness signal has not answered yet, which
+-- the room shows as Starting rather than Running.
+alter table workspace_processes add column if not exists readiness text not null default 'not_required';
+alter table workspace_processes drop constraint if exists workspace_processes_readiness_check;
+alter table workspace_processes add constraint workspace_processes_readiness_check
+  check (readiness in ('not_required', 'pending', 'ready', 'unreachable'));
+
+-- Why it stopped. A deadline, a cancellation, and a non-zero exit are three
+-- different endings, and a room that cannot tell them apart cannot say what
+-- happened.
+alter table workspace_processes add column if not exists ending text;
+alter table workspace_processes drop constraint if exists workspace_processes_ending_check;
+alter table workspace_processes add constraint workspace_processes_ending_check
+  check (ending is null or ending in ('exit', 'signal', 'timeout', 'cancelled', 'spawn_failed'));
+
+alter table verification_checks add column if not exists ending text;
+alter table verification_checks drop constraint if exists verification_checks_ending_check;
+alter table verification_checks add constraint verification_checks_ending_check
+  check (ending is null or ending in ('exit', 'signal', 'timeout', 'cancelled', 'spawn_failed'));

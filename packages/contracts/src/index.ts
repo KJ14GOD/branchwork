@@ -21,6 +21,9 @@ export type Organization = z.infer<typeof OrganizationSchema>;
  *  reach. The schema widens as states become real; it never invents one. */
 export const MissionStateSchema = z.enum([
   "new_mission",
+  "workspace_needs_setup",
+  "provisioning_workspace",
+  "workspace_failed",
   "ready_for_instruction",
   "agent_starting",
   "agent_running",
@@ -36,6 +39,8 @@ export type MissionState = z.infer<typeof MissionStateSchema>;
 
 /** Conditions that coexist with a primary state (PRODUCT.md overlays). */
 export const MissionOverlaySchema = z.enum([
+  "app_running",
+  "verification_stale",
   "direction_queued",
   "control_requested",
   "handoff_offered",
@@ -200,6 +205,7 @@ export const CapabilitySchema = z.enum([
   "direction.apply",
   "execution.start",
   "execution.stop",
+  "workspace.command",
   "control.request",
   "control.offer",
   "control.accept",
@@ -346,16 +352,43 @@ export type Checkpoint = z.infer<typeof CheckpointSchema>;
 export const CheckCategorySchema = z.enum(["test", "typecheck", "build", "lint", "diagnostic"]);
 export const CheckOutcomeSchema = z.enum(["passed", "failed", "skipped", "errored"]);
 
+/** Where a check came from. Collapsing these into one green row is the
+ *  fabrication the ledger exists to prevent (D-037). */
+export const CheckOriginSchema = z.enum(["harness", "participant", "external"]);
+export type CheckOrigin = z.infer<typeof CheckOriginSchema>;
+
+/**
+ * Why a command stopped running. A process that ran out of time is not merely
+ * a process that failed, and one a person cancelled is neither: collapsing the
+ * three into "failed" is how a room ends up unable to say what happened.
+ */
+export const CommandEndingSchema = z.enum(["exit", "signal", "timeout", "cancelled", "spawn_failed"]);
+export type CommandEnding = z.infer<typeof CommandEndingSchema>;
+
 export const VerificationCheckSchema = z.object({
   checkId: z.string().startsWith("chk_"),
-  executionId: z.string().min(1),
+  executionId: z.string().nullable(),
   name: z.string().min(1),
   category: CheckCategorySchema,
   outcome: CheckOutcomeSchema,
+  origin: CheckOriginSchema,
+  requestedByLogin: z.string().nullable(),
   command: z.string().min(1),
+  /** How it ended. A check with no verdict says which — timed out, cancelled,
+   *  or never started — rather than reading as an ordinary failure. */
+  ending: CommandEndingSchema.nullable(),
+  exitCode: z.number().int().nullable(),
   output: z.string().nullable(),
   truncated: z.boolean(),
   environment: z.string().min(1),
+  startedAt: z.string().datetime().nullable(),
+  completedAt: z.string().datetime().nullable(),
+  durationMs: z.number().int().nonnegative().nullable(),
+  /** The revision this check proves. */
+  checkpointSha: z.string().nullable(),
+  /** True once the workstream moved past `checkpointSha`: still history, no
+   *  longer evidence for what is there now. Derived server-side, never stored. */
+  stale: z.boolean(),
   observedAt: z.string().datetime()
 });
 export type VerificationCheck = z.infer<typeof VerificationCheckSchema>;
@@ -368,6 +401,489 @@ export const FileDiffResponseSchema = z.object({
   truncated: z.boolean()
 });
 export type FileDiffResponse = z.infer<typeof FileDiffResponseSchema>;
+
+// --- Workspace runtime (D-040 … D-042) --------------------------------------
+
+export const WorkspaceReadinessSchema = z.enum(["unconfigured", "configuring", "ready", "failed"]);
+export type WorkspaceReadiness = z.infer<typeof WorkspaceReadinessSchema>;
+
+export const ProcessKindSchema = z.enum(["setup", "run", "verification"]);
+export const ProcessStateSchema = z.enum(["starting", "running", "exited", "failed", "stopped"]);
+
+/**
+ * Whether the *application* a run command started is actually up.
+ *
+ * A process existing does not prove it. `not_required` is a command that never
+ * claimed to serve anything; `pending` is one whose declared readiness signal
+ * has not answered yet, which the room says as *Starting*; `unreachable` is one
+ * that stayed silent past its own deadline — still running, honestly not ready.
+ */
+export const ProcessReadinessSchema = z.enum(["not_required", "pending", "ready", "unreachable"]);
+export type ProcessReadiness = z.infer<typeof ProcessReadinessSchema>;
+
+export const WorkspaceProcessSchema = z.object({
+  processId: z.string().startsWith("prc_"),
+  kind: ProcessKindSchema,
+  name: z.string().min(1),
+  /** Sanitized: the command as declared, never an expanded secret. */
+  command: z.string().min(1),
+  state: ProcessStateSchema,
+  readiness: ProcessReadinessSchema,
+  ending: CommandEndingSchema.nullable(),
+  startedByLogin: z.string().nullable(),
+  previewUrl: z.string().nullable(),
+  port: z.number().int().nullable(),
+  exitCode: z.number().int().nullable(),
+  failureReason: z.string().nullable(),
+  startedAt: z.string().datetime(),
+  endedAt: z.string().datetime().nullable()
+});
+export type WorkspaceProcess = z.infer<typeof WorkspaceProcessSchema>;
+
+// --- Project secret values (D-041, D-044) ------------------------------------
+// A secret's *name* is project configuration and travels with the branch. Its
+// value belongs to the machine that supplied it: it is held in operating-system
+// storage there, injected only into the project commands the configuration
+// selected it for, and never returned across this bridge, never sent to the
+// control plane, and never written into an event, a diff, a log, or a snapshot.
+
+export const SecretNameSchema = z
+  .string()
+  .min(1)
+  .max(120)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an environment variable name");
+
+/**
+ * The shortest value Novus will hold (D-044).
+ *
+ * Redaction works by removing a held value from anything a command printed
+ * before it can be reported. Below this length a "secret" is a common word, and
+ * removing every occurrence would shred ordinary output while protecting
+ * nothing — so instead of leaking it quietly, Novus refuses to store it and
+ * says why. Real credentials clear this floor by an order of magnitude.
+ */
+export const MIN_SECRET_LENGTH = 8;
+
+// The shape of `.novus/settings.toml`. Committed, shared, and non-secret; the
+// machine-local override has the identical shape and layers over it key by key.
+
+const CommandName = z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/, "lowercase, hyphenated, 40 characters or fewer");
+const CommandLine = z.string().min(1).max(400);
+/** A path inside the workspace. Never absolute, never escaping upward. */
+const RelativeDir = z
+  .string()
+  .max(200)
+  .refine((value) => !value.startsWith("/") && !value.split("/").includes(".."), {
+    message: "must be a relative path inside the workspace"
+  });
+
+/**
+ * A preview URL, validated rather than pattern-matched (D-045).
+ *
+ * This is repository-controlled data that ends up behind an "Open preview"
+ * button in *every* participant's Novus, including a reviewer who has never
+ * seen this machine. A committed `previewUrl = "https://looks-like-your-sso/"`
+ * would otherwise be a one-click phishing surface with no code execution
+ * needed. So: loopback only, http or https only, no credentials in the
+ * authority — `http://localhost@elsewhere.example` has the host
+ * `elsewhere.example`, which is exactly what a `startsWith` check waves through.
+ *
+ * The hostname allowlist is on the literal string, before any resolution. A
+ * name that merely *resolves* to loopback (`localtest.me`, `*.nip.io`, an
+ * attacker's own A record) is somebody else's host with a friendly spelling.
+ */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+export function isLoopbackPreviewUrl(candidate: string): boolean {
+  // Whitespace and control characters never belong in a URL; they are how a
+  // newline gets smuggled into whatever consumes one downstream.
+  if (/[\s\u0000-\u001f\u007f]/.test(candidate)) return false;
+  let url: URL;
+  try {
+    // `{port}` is filled in at run time; a stand-in keeps this parseable now.
+    url = new URL(candidate.split("{port}").join("1"));
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  if (url.username !== "" || url.password !== "") return false;
+  return LOOPBACK_HOSTNAMES.has(url.hostname.toLowerCase());
+}
+
+const LoopbackUrl = z
+  .string()
+  .max(300)
+  .refine(isLoopbackPreviewUrl, {
+    message: "must be a loopback http or https address, with no credentials in it"
+  });
+
+// --- Timeout policy (D-043) --------------------------------------------------
+// Every finite command has a deadline the project states, or one it inherits
+// from a stated default. There is no universal hidden constant: a policy nobody
+// can see is a policy nobody can argue with when it cuts a real build in half.
+
+/** The ceiling on any finite command, stated once and enforced by validation.
+ *  A project that genuinely needs longer than this needs a run command, which
+ *  has no ceiling at all, rather than a setup command that never ends. */
+export const MAX_COMMAND_TIMEOUT_MINUTES = 240;
+export const DEFAULT_SETUP_TIMEOUT_MINUTES = 30;
+export const DEFAULT_VERIFY_TIMEOUT_MINUTES = 15;
+
+const TimeoutMinutes = z
+  .number()
+  .int()
+  .min(1, "must be at least one minute")
+  .max(MAX_COMMAND_TIMEOUT_MINUTES, `must be ${MAX_COMMAND_TIMEOUT_MINUTES} minutes or fewer`);
+
+/** The project's defaults for the two finite kinds. A single command may state
+ *  its own; a run command may not, because it is not finite. */
+export const CommandTimeoutsSchema = z.object({
+  setupMinutes: TimeoutMinutes.default(DEFAULT_SETUP_TIMEOUT_MINUTES),
+  verifyMinutes: TimeoutMinutes.default(DEFAULT_VERIFY_TIMEOUT_MINUTES)
+});
+export type CommandTimeouts = z.infer<typeof CommandTimeoutsSchema>;
+
+/**
+ * How the project says its application is actually up (D-043). A process
+ * existing proves a process exists; it does not prove anything is serving.
+ * `process` is the honest default for a command that never claimed to.
+ */
+export const ReadinessKindSchema = z.enum(["process", "http", "port"]);
+export const ReadinessSchema = z.object({
+  kind: ReadinessKindSchema.default("process"),
+  /** For `http`: `{port}` is substituted. Loopback only — this probe runs on
+   *  the host machine and is not a general-purpose fetcher. */
+  url: LoopbackUrl.optional(),
+  /** For `port`: defaults to the port this command was given. */
+  port: z.number().int().min(1).max(65_535).optional(),
+  /** How long the declared signal has to answer before Novus says plainly that
+   *  it has not. The process keeps running either way. */
+  timeoutSeconds: z.number().int().min(1).max(900).default(120),
+  /** Whether a readiness failure stops the process. Off unless the project says
+   *  so out loud: killing somebody's server because a health URL was wrong is
+   *  not a decision Novus makes for them. */
+  stopOnFailure: z.boolean().default(false)
+});
+export type Readiness = z.infer<typeof ReadinessSchema>;
+
+/**
+ * The same signal with every field stated.
+ *
+ * `ReadinessSchema` fills defaults in, which is right for a file a person
+ * writes and wrong for a snapshot two parties must agree on: a shape whose
+ * fields may be absent is a shape whose digest depends on who parsed it. The
+ * runner resolves one into the other once, and this is what travels.
+ */
+export const ResolvedReadinessSchema = z.object({
+  kind: ReadinessKindSchema,
+  url: z.string().max(300).nullable(),
+  port: z.number().int().min(1).max(65_535).nullable(),
+  timeoutSeconds: z.number().int().min(1).max(900),
+  stopOnFailure: z.boolean()
+});
+export type ResolvedReadiness = z.infer<typeof ResolvedReadinessSchema>;
+
+export const RunCommandSchema = z.object({
+  name: CommandName,
+  command: CommandLine,
+  cwd: RelativeDir.optional(),
+  /** Where the project says its preview appears; `{port}` is substituted. */
+  previewUrl: LoopbackUrl.optional(),
+  port: z.number().int().min(1).max(65_535).optional(),
+  /** How this command says it is ready. Absent means the process starting is
+   *  all Novus knows, and all it will claim. */
+  readiness: ReadinessSchema.optional()
+});
+
+export const VerificationCommandSchema = z.object({
+  name: CommandName,
+  command: CommandLine,
+  cwd: RelativeDir.optional(),
+  category: CheckCategorySchema.default("test"),
+  /** Overrides `timeouts.verifyMinutes` for this check alone. */
+  timeoutMinutes: TimeoutMinutes.optional()
+});
+
+export const SetupCommandSchema = z.object({
+  command: CommandLine,
+  cwd: RelativeDir.optional(),
+  /** Overrides `timeouts.setupMinutes`. */
+  timeoutMinutes: TimeoutMinutes.optional()
+});
+
+export const WorkspaceSettingsSchema = z.object({
+  setup: SetupCommandSchema.optional(),
+  run: z.array(RunCommandSchema).max(20).default([]),
+  /** Which run command the Run control offers first. */
+  defaultRun: CommandName.optional(),
+  /** Whether two run commands may be alive at once. Default: no. */
+  concurrentRuns: z.boolean().default(false),
+  verify: z.array(VerificationCommandSchema).max(20).default([]),
+  /** The project's finite-command deadlines. Bounded by validation, visible in
+   *  the file a team reviews, never a constant hidden in Novus. */
+  timeouts: CommandTimeoutsSchema.default({}),
+  /** Shared, non-secret. A value here is committed; the gate says so. */
+  env: z.record(z.string().max(2_000)).default({}),
+  /** Names only. Values live in operating-system storage on the machine that
+   *  supplied them and never reach the control plane or the renderer (D-041). */
+  secretNames: z.array(SecretNameSchema).max(50).default([]),
+  /** Gitignored paths this workspace needs, from settings or .worktreeinclude. */
+  localFiles: z.array(z.string().max(300)).max(100).default([])
+});
+export type WorkspaceSettings = z.infer<typeof WorkspaceSettingsSchema>;
+
+/**
+ * One command exactly as it stood when a participant authorized it (D-043).
+ *
+ * The runner reads `.novus/settings.toml` and publishes what it found; the
+ * control plane hands that snapshot back with the command it enqueues; the
+ * runner executes the snapshot rather than reading the file again. A turn that
+ * edits the configuration between the click and the run therefore changes what
+ * the *next* command will be, never what this one already is.
+ */
+export const DeclaredCommandSchema = z.object({
+  kind: ProcessKindSchema,
+  name: CommandName,
+  /** As the project declared it; never an expanded secret. */
+  command: CommandLine,
+  cwd: RelativeDir.nullable(),
+  /** The deadline this command runs under. Null for a run command, which has
+   *  none by design (PRODUCT.md: an authorized execution has no Novus ceiling). */
+  timeoutMs: z.number().int().positive().nullable(),
+  category: CheckCategorySchema.nullable(),
+  port: z.number().int().min(1).max(65_535).nullable(),
+  previewUrl: LoopbackUrl.nullable(),
+  readiness: ResolvedReadinessSchema.nullable(),
+  /** Of every field above. Same configuration, same digest, on any machine. */
+  digest: z.string().regex(/^[0-9a-f]{16}$/)
+});
+export type DeclaredCommand = z.infer<typeof DeclaredCommandSchema>;
+
+export const WorkspaceSchema = z.object({
+  workspaceId: z.string().startsWith("wsp_"),
+  workstreamId: z.string().startsWith("wst_"),
+  location: z.literal("local"),
+  readiness: WorkspaceReadinessSchema,
+  /** Allocated per workstream so two on one host never collide. */
+  portRangeStart: z.number().int().nullable(),
+  portRangeEnd: z.number().int().nullable(),
+  setupError: z.string().nullable(),
+  configuredAt: z.string().datetime().nullable(),
+  /** What the project declared, as the runner last read it (D-043). This is
+   *  what the Run control offers — to every participant, not only the one at
+   *  the host machine — and what an authorized command is pinned to. */
+  declared: z.array(DeclaredCommandSchema).max(60),
+  declaredAt: z.string().datetime().nullable()
+});
+export type Workspace = z.infer<typeof WorkspaceSchema>;
+
+export const SettingsScopeSchema = z.enum(["shared", "local"]);
+
+/** What Novus noticed about a project, and what it would therefore propose.
+ *  A proposal is never executed without an explicit confirmation. */
+export const WorkspaceProposalSchema = z.object({
+  projectType: z.string().min(1),
+  signals: z.array(z.string().max(120)),
+  setup: CommandLine.nullable(),
+  run: z.array(RunCommandSchema),
+  verify: z.array(VerificationCommandSchema),
+  /** Filenames only — never contents (D-041). */
+  localFiles: z.array(
+    z.object({
+      path: z.string().min(1),
+      /** Whether the source repository actually has it right now. */
+      availableInSource: z.boolean(),
+      /** Whether the worktree already has a copy. */
+      presentInWorkspace: z.boolean(),
+      /** Only a Git-ignored file may ever be copied. */
+      gitIgnored: z.boolean()
+    })
+  ),
+  /** Non-null when the project already carries committed configuration. */
+  shared: WorkspaceSettingsSchema.nullable(),
+  local: WorkspaceSettingsSchema.nullable(),
+  /** Why the workspace is not runnable yet, in the product's words. */
+  blockers: z.array(z.string().max(200))
+});
+export type WorkspaceProposal = z.infer<typeof WorkspaceProposalSchema>;
+export type SettingsScope = z.infer<typeof SettingsScopeSchema>;
+export type ProcessKind = z.infer<typeof ProcessKindSchema>;
+export type PreparedFile = z.infer<typeof PreparedFileSchema>;
+
+export const SaveWorkspaceSettingsInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  scope: SettingsScopeSchema,
+  settings: WorkspaceSettingsSchema
+});
+
+export const PrepareLocalFilesInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  /** Explicitly confirmed by the person at the machine, one by one. */
+  paths: z.array(z.string().min(1).max(300)).min(1).max(50)
+});
+
+export const PreparedFileSchema = z.object({
+  path: z.string().min(1),
+  copied: z.boolean(),
+  /** Named refusal — path escape, symlink, not ignored, a directory. */
+  refusedBecause: z.string().nullable()
+});
+
+export const WorkspaceCommandInputSchema = z.object({
+  kind: ProcessKindSchema,
+  /** Omitted for setup, and for "run every configured check". */
+  name: CommandName.optional()
+});
+
+// --- Supplying a secret value (D-044) ----------------------------------------
+// The one direction a value travels: from the person sitting at the machine
+// that has it, into that machine's operating-system credential store. Nothing
+// reads one back out across this bridge, ever.
+
+export const SupplySecretInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  name: SecretNameSchema,
+  value: z.string().min(MIN_SECRET_LENGTH).max(8_000)
+});
+
+export const ForgetSecretInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  name: SecretNameSchema
+});
+
+/** What the interface may know: which names the project declared, which of them
+ *  this machine has supplied, and whether it can hold one at all. Never a
+ *  value, and never a length or a prefix of one. */
+export const SecretStateSchema = z.object({
+  /** False when the operating system offers no credential encryption. Novus
+   *  then holds nothing rather than writing a plaintext secret to disk, and the
+   *  workspace is honestly unprepared. */
+  encryptionAvailable: z.boolean(),
+  names: z.array(z.object({ name: SecretNameSchema, supplied: z.boolean() })).max(50),
+  /** Values this machine still holds for names the project no longer declares,
+   *  so they can be forgotten rather than lingering unnoticed. */
+  orphaned: z.array(z.string().max(120)).max(50)
+});
+export type SecretState = z.infer<typeof SecretStateSchema>;
+
+// --- Opening a local preview (D-045) -----------------------------------------
+// A narrow bridge, not a browser: loopback `http`/`https` only, handed to the
+// operating system's own external-browser API. No shell command is involved.
+
+export const OpenPreviewInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  url: z.string().min(1).max(2_000)
+});
+
+// --- The runtime dock (D-045) ------------------------------------------------
+// Setup, run, and verification output, bounded and redacted, for the machine
+// that ran it. It crosses the local IPC bridge and stops there — exactly like
+// the terminal. What a remote participant sees is the bounded result attached
+// to the evidence a check produced, never an unrestricted stream.
+
+export const ProcessLogSchema = z.object({
+  processId: z.string().startsWith("prc_"),
+  workstreamId: z.string().startsWith("wst_"),
+  kind: ProcessKindSchema,
+  name: z.string().min(1),
+  /** As declared, sanitized; never an expanded secret. */
+  command: z.string().min(1),
+  state: ProcessStateSchema,
+  readiness: ProcessReadinessSchema,
+  exitCode: z.number().int().nullable(),
+  ending: CommandEndingSchema.nullable(),
+  failureReason: z.string().nullable(),
+  /** Where this run command can be opened, once something reported one. */
+  previewUrl: LoopbackUrl.nullable(),
+  startedAt: z.string().datetime(),
+  endedAt: z.string().datetime().nullable(),
+  /** Bounded local output; oldest dropped, because the end is what says how a
+   *  command finished. */
+  output: z.string(),
+  truncated: z.boolean()
+});
+export type ProcessLog = z.infer<typeof ProcessLogSchema>;
+
+/** One streamed piece of a process's output; the state rides along so the last
+ *  chunk is also the news that it ended. */
+export const ProcessLogChunkSchema = z.object({
+  processId: z.string().startsWith("prc_"),
+  workstreamId: z.string().startsWith("wst_"),
+  data: z.string(),
+  state: ProcessStateSchema,
+  readiness: ProcessReadinessSchema,
+  exitCode: z.number().int().nullable(),
+  ending: CommandEndingSchema.nullable()
+});
+export type ProcessLogChunk = z.infer<typeof ProcessLogChunkSchema>;
+
+// --- The interactive terminal (D-042) ---------------------------------------
+// An interactive shell on a local workspace belongs to the person whose machine
+// hosts it, and to nobody else. It is not lease-granted and not role-granted:
+// there is no shell kind in `RunnerCommandKindSchema` and none is added, so the
+// restriction is structural rather than presentational and a crafted request
+// has nothing to reach. These shapes cross the local IPC bridge only.
+
+/** What a session is for. Distinguished so a tab says what it is, never so a
+ *  kind grants anything: every kind is the same shell with the same authority. */
+export const TerminalKindSchema = z.enum(["shell", "run", "test", "log"]);
+export type TerminalKind = z.infer<typeof TerminalKindSchema>;
+
+/** A PTY does not survive the process that owned it, so there is no third
+ *  state: after a relaunch a session is simply gone, never a dead tab shown
+ *  as live. */
+export const TerminalSessionStateSchema = z.enum(["running", "exited"]);
+export type TerminalSessionState = z.infer<typeof TerminalSessionStateSchema>;
+
+export const TerminalSessionSchema = z.object({
+  sessionId: z.string().startsWith("trm_"),
+  /** Sessions belong to a workstream, like every other workspace process. */
+  workstreamId: z.string().startsWith("wst_"),
+  name: z.string().min(1).max(60),
+  kind: TerminalKindSchema,
+  state: TerminalSessionStateSchema,
+  exitCode: z.number().int().nullable(),
+  startedAt: z.string().datetime(),
+  endedAt: z.string().datetime().nullable()
+});
+export type TerminalSession = z.infer<typeof TerminalSessionSchema>;
+
+/** One streamed piece of a session's output. `state` rides along so the last
+ *  chunk of a session is also the news that it ended. */
+export const TerminalChunkSchema = z.object({
+  sessionId: z.string().startsWith("trm_"),
+  data: z.string(),
+  state: TerminalSessionStateSchema,
+  exitCode: z.number().int().nullable()
+});
+export type TerminalChunk = z.infer<typeof TerminalChunkSchema>;
+
+export const OpenTerminalInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  name: z.string().trim().min(1).max(60).optional(),
+  kind: TerminalKindSchema.default("shell"),
+  cols: z.number().int().min(2).max(1000).optional(),
+  rows: z.number().int().min(1).max(500).optional()
+});
+
+const TerminalSessionId = z.string().startsWith("trm_");
+
+export const TerminalWriteInputSchema = z.object({
+  sessionId: TerminalSessionId,
+  /** Keystrokes, bounded: an input channel is not a file-transfer channel. */
+  data: z.string().max(8_192)
+});
+
+export const TerminalResizeInputSchema = z.object({
+  sessionId: TerminalSessionId,
+  cols: z.number().int().min(2).max(1000),
+  rows: z.number().int().min(1).max(500)
+});
+
+export const TerminalRenameInputSchema = z.object({
+  sessionId: TerminalSessionId,
+  name: z.string().trim().min(1).max(60)
+});
 
 // --- Control (PRODUCT.md#control) -------------------------------------------
 
@@ -467,7 +983,11 @@ export const RunnerCommandKindSchema = z.enum([
   "start_execution",
   "apply_direction",
   "stop_execution",
-  "boundary_request"
+  "boundary_request",
+  "run_setup",
+  "run_command",
+  "stop_command",
+  "run_verification"
 ]);
 
 export const RunnerCommandSchema = z.object({
@@ -555,6 +1075,29 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
       .strict()
   }),
   z.object({
+    kind: z.literal("verification.completed"),
+    payload: z
+      .object({
+        name: BOUNDED_LINE,
+        category: CheckCategorySchema,
+        outcome: CheckOutcomeSchema,
+        command: BOUNDED_LINE,
+        exitCode: z.number().int().nullable().default(null),
+        output: z.string().max(4_000).nullable().default(null),
+        truncated: z.boolean().default(false),
+        startedAt: z.string().max(40),
+        completedAt: z.string().max(40),
+        durationMs: z.number().int().nonnegative(),
+        /** The revision the check actually ran against. */
+        checkpointSha: z.string().max(64).nullable().default(null),
+        /** How it ended. A check that ran out of time or was cancelled is never
+         *  a pass and never a plain failure — it is evidence that no verdict was
+         *  reached, and it says which. */
+        ending: CommandEndingSchema.default("exit")
+      })
+      .strict()
+  }),
+  z.object({
     kind: z.literal("verification.observed"),
     payload: z
       .object({
@@ -564,6 +1107,63 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         command: BOUNDED_LINE,
         output: z.string().max(4_000).nullable().default(null),
         truncated: z.boolean().default(false)
+      })
+      .strict()
+  }),
+  z.object({
+    kind: z.literal("workspace.readiness"),
+    payload: z
+      .object({
+        readiness: WorkspaceReadinessSchema,
+        portRangeStart: z.number().int().nullable().default(null),
+        portRangeEnd: z.number().int().nullable().default(null),
+        setupError: BOUNDED_LINE.nullable().default(null)
+      })
+      .strict()
+  }),
+  z.object({
+    kind: z.literal("workspace.declared"),
+    payload: z.object({ commands: z.array(DeclaredCommandSchema).max(60) }).strict()
+  }),
+  z.object({
+    kind: z.literal("process.started"),
+    payload: z
+      .object({
+        processId: z.string().startsWith("prc_"),
+        kind: ProcessKindSchema,
+        name: BOUNDED_LINE,
+        command: BOUNDED_LINE,
+        port: z.number().int().nullable().default(null),
+        previewUrl: LoopbackUrl.nullable().default(null),
+        /** `pending` when the command declared a readiness signal: the process
+         *  is up, the application is not yet claimed to be. */
+        readiness: z.enum(["not_required", "pending"]).default("not_required")
+      })
+      .strict()
+  }),
+  z.object({
+    kind: z.literal("process.readiness"),
+    payload: z
+      .object({
+        processId: z.string().startsWith("prc_"),
+        readiness: z.enum(["ready", "unreachable"]),
+        /** A URL the readiness probe confirmed, when it confirmed one. */
+        previewUrl: LoopbackUrl.nullable().default(null),
+        detail: BOUNDED_LINE.nullable().default(null)
+      })
+      .strict()
+  }),
+  z.object({
+    kind: z.literal("process.exited"),
+    payload: z
+      .object({
+        processId: z.string().startsWith("prc_"),
+        state: z.enum(["exited", "failed", "stopped"]),
+        /** Why it stopped: a deadline, a cancellation, and a non-zero exit are
+         *  three different things and the room says which. */
+        ending: CommandEndingSchema.default("exit"),
+        exitCode: z.number().int().nullable().default(null),
+        failureReason: BOUNDED_LINE.nullable().default(null)
       })
       .strict()
   }),
@@ -606,7 +1206,11 @@ export const SequencedRunnerEventSchema = z.object({
 export type SequencedRunnerEvent = z.infer<typeof SequencedRunnerEventSchema>;
 
 export const ReportRunnerEventsInputSchema = z.object({
-  executionId: z.string().startsWith("exe_"),
+  /** Null for a workspace-scoped report: a setup or run command is not part of
+   *  any turn and can happen before a turn has ever existed. The runner's
+   *  sequence is then per workstream rather than per execution, and the server
+   *  de-duplicates on whichever of the two the report belongs to. */
+  executionId: z.string().startsWith("exe_").nullable(),
   events: z.array(SequencedRunnerEventSchema).min(1).max(50)
 });
 export type ReportRunnerEventsInput = z.infer<typeof ReportRunnerEventsInputSchema>;
@@ -657,6 +1261,8 @@ export const MissionDetailResponseSchema = z.object({
   checkpoints: z.array(CheckpointSchema),
   checks: z.array(VerificationCheckSchema),
   runner: RunnerStatusSchema.nullable(),
+  workspace: WorkspaceSchema.nullable(),
+  processes: z.array(WorkspaceProcessSchema),
   /** The viewer's server-computed effective capabilities (role ∪ lease). */
   capabilities: z.array(CapabilitySchema),
   viewerUserId: z.string().startsWith("usr_"),
@@ -773,6 +1379,15 @@ export interface NovusBridge {
       IpcResult<{ providerRepoId: string; name: string; defaultBranch: string; onThisMachine: boolean }[]>
     >;
     baseLocal(localId: string): Promise<IpcResult<BaseRevision>>;
+    /**
+     * The provider repository ids this machine actually holds a checkout for.
+     *
+     * The question a room needs answered is *where the checkout is*, never
+     * which provider it came from: a GitHub repository the runner fetched lands
+     * in the same machine-local map as a folder somebody picked (D-025, D-032),
+     * and after that nothing downstream can tell them apart.
+     */
+    checkedOutHere(): Promise<IpcResult<string[]>>;
   };
   missions: {
     list(): Promise<IpcResult<Mission[]>>;
@@ -815,5 +1430,84 @@ export interface NovusBridge {
   };
   evidence: {
     fileDiff(changeId: string): Promise<IpcResult<FileDiffResponse>>;
+  };
+  /**
+   * The workspace runtime. Inspecting a project, writing its configuration,
+   * and supplying local files are acts by the person at the machine, so they
+   * are local calls. Running a command is remotely invokable, so it goes
+   * through the control plane and is authorized there (D-042).
+   */
+  workspace: {
+    /** What Novus noticed and would therefore propose. Executes nothing. */
+    inspect(missionId: string): Promise<IpcResult<WorkspaceProposal>>;
+    save(input: {
+      missionId: string;
+      scope: SettingsScope;
+      settings: WorkspaceSettings;
+    }): Promise<IpcResult<null>>;
+    /** Copies confirmed Git-ignored files into the worktree. Names in, names
+     *  out — a content never crosses this bridge. */
+    prepareLocalFiles(input: {
+      missionId: string;
+      paths: string[];
+    }): Promise<IpcResult<PreparedFile[]>>;
+    /** Asks the control plane to authorize and enqueue a declared command. */
+    command(input: {
+      missionId: string;
+      kind: ProcessKind;
+      name?: string;
+    }): Promise<IpcResult<null>>;
+    stop(input: { missionId: string; name: string }): Promise<IpcResult<null>>;
+    /**
+     * This workstream's local process output. Local only, exactly like the
+     * terminal: it never travels to the control plane, and what a remote
+     * participant sees is the bounded result attached to a check's evidence.
+     */
+    logs(missionId: string): Promise<IpcResult<ProcessLog[]>>;
+    onLog(listener: (chunk: ProcessLogChunk) => void): () => void;
+    /** The declared secret names and whether this machine supplied each. Never
+     *  a value: nothing reads one back out of the store. */
+    secrets(missionId: string): Promise<IpcResult<SecretState>>;
+    supplySecret(input: { missionId: string; name: string; value: string }): Promise<
+      IpcResult<SecretState>
+    >;
+    forgetSecret(input: { missionId: string; name: string }): Promise<IpcResult<SecretState>>;
+    /** Opens a loopback preview in the operating system's browser. No shell
+     *  command is involved and nothing but loopback http/https is accepted. */
+    openPreview(input: { missionId: string; url: string }): Promise<IpcResult<null>>;
+  };
+  /**
+   * The interactive terminal (D-042). Every verb here is local: a session is
+   * created by the machine that holds the repository, exactly like
+   * `workspace.inspect` and `workspace.prepareLocalFiles`. Nothing in this
+   * block has a control-plane route or a runner command behind it, and none is
+   * added — controlling a mission is not unrestricted access to the host
+   * machine, and the restriction is structural so there is nothing to
+   * authorize incorrectly.
+   */
+  terminal: {
+    /** This workstream's sessions on this machine. Empty after a relaunch,
+     *  because a PTY does not outlive the process that owned it. */
+    list(missionId: string): Promise<IpcResult<TerminalSession[]>>;
+    open(input: {
+      missionId: string;
+      name?: string;
+      kind: TerminalKind;
+      cols?: number;
+      rows?: number;
+    }): Promise<IpcResult<TerminalSession>>;
+    /**
+     * What a session has printed so far, so reopening the drawer shows what
+     * already happened. Fetched once per pane rather than riding on every
+     * list. It crosses the local IPC bridge and stops there: raw terminal
+     * output is never written into an event, never reported to the control
+     * plane, and never becomes evidence (D-041, D-042).
+     */
+    scrollback(sessionId: string): Promise<IpcResult<string>>;
+    write(input: { sessionId: string; data: string }): Promise<IpcResult<null>>;
+    resize(input: { sessionId: string; cols: number; rows: number }): Promise<IpcResult<null>>;
+    rename(input: { sessionId: string; name: string }): Promise<IpcResult<TerminalSession>>;
+    close(sessionId: string): Promise<IpcResult<null>>;
+    onOutput(listener: (chunk: TerminalChunk) => void): () => void;
   };
 }

@@ -39,6 +39,21 @@ const ABSORBED_KINDS = new Set([
   "execution.starting"
 ]);
 
+/**
+ * The workspace runtime's own events. A run command is not an execution and no
+ * direction caused it, so nothing here hangs off a direction thread — and a
+ * thread with no author, no words, and one disclosure is exactly the lone
+ * fragment signature element 2 exists to prevent. The room reports these live
+ * in the state line and on the Run control; the record keeps them in history.
+ */
+const WORKSPACE_RUNTIME_KINDS = new Set([
+  "workspace.command_requested",
+  "workspace.stop_requested",
+  "workspace.readiness",
+  "process.started",
+  "process.exited"
+]);
+
 type Tone = "neutral" | "warn" | "danger" | "ok";
 
 type Segment =
@@ -213,8 +228,11 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
     queue.push(checkpoint);
     checkpointQueue.set(checkpoint.executionId, queue);
   }
+  // A participant-run check has no execution: it belongs to the ledger, not to
+  // any one direction's trace. Only harness-observed checks hang off a turn.
   const checkQueue = new Map<string, VerificationCheck[]>();
   for (const check of [...detail.checks].sort((a, b) => a.observedAt.localeCompare(b.observedAt))) {
+    if (check.executionId === null) continue;
     const queue = checkQueue.get(check.executionId) ?? [];
     queue.push(check);
     checkQueue.set(check.executionId, queue);
@@ -264,6 +282,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       setupAt = setupAt ?? event.occurredAt;
       continue;
     }
+    if (WORKSPACE_RUNTIME_KINDS.has(event.kind)) continue;
     if (event.kind.startsWith("control.") || event.kind.startsWith("handoff.")) {
       const line = controlLine(event);
       if (line) {
@@ -381,7 +400,10 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         push(block, {
           kind: "note",
           key: event.eventId,
-          text: `${event.actor.login ?? "The controller"} applied this direction`,
+          // Authorized, not applied. Applied is written only when the runner
+          // acknowledges it; saying "applied" here would claim the harness has
+          // work it may never have been given (PRODUCT.md#direction).
+          text: `${event.actor.login ?? "The controller"} approved this direction`,
           login: event.actor.login,
           tone: "neutral"
         });

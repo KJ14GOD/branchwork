@@ -22,6 +22,7 @@ import {
 import { GatedAction } from "../components/gated";
 import { Baton, HumanMark } from "../components/identity";
 import type { InspectorSection } from "../components/inspector";
+import { RuntimeDock } from "../components/runtime-dock";
 import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
 import type { Project } from "./project-shell";
 
@@ -57,9 +58,12 @@ export function ProjectRoom({
   details,
   selectedMissionId,
   onInspector,
+  onSetup,
   onSelectTab,
   onDetail,
-  onCreated
+  onCreated,
+  terminalOpen,
+  onHideTerminal
 }: {
   project: Project;
   details: Record<string, MissionDetailResponse>;
@@ -67,9 +71,15 @@ export function ProjectRoom({
   /** Opening the evidence panel is the shell's job — it owns the panel and the
    *  control that shows it. The room only ever asks for a section. */
   onInspector: (section: InspectorSection | null) => void;
+  /** The setup dialog is the shell's too: the Run control opens the same one. */
+  onSetup: () => void;
   onSelectTab: (missionId: string | null) => void;
   onDetail: (detail: MissionDetailResponse) => void;
   onCreated: (mission: Mission) => void;
+  /** The bottom terminal dock. Its toggle sits with the other workspace
+   *  controls, so the shell owns the state and the room only renders it. */
+  terminalOpen: boolean;
+  onHideTerminal: () => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -78,8 +88,10 @@ export function ProjectRoom({
 
   const isDraft = selectedMissionId === null;
   const detail = selectedMissionId === null ? undefined : details[selectedMissionId];
-  // Agents run where the repository is: local, on this machine (D-032).
-  const executionAvailable = project.provider === "local" && project.onThisMachine;
+  // Agents run where the repository is. For a folder somebody added that means
+  // this machine; for a GitHub repository it means the machine whose runner
+  // fetched it — which is the same question and the same answer (D-025, D-032).
+  const executionAvailable = project.onThisMachine;
 
   const resolveBase = useCallback(async () => {
     setDraft((prev) =>
@@ -380,6 +392,16 @@ export function ProjectRoom({
                   {stateLine.action.label}
                 </button>
               )}
+              {stateLine.action?.kind === "setup" && (
+                <button className="btn btn-secondary" onClick={onSetup} data-testid="state-setup">
+                  {stateLine.action.label}
+                </button>
+              )}
+              {/* Stop and Open preview are deliberately absent here: while a
+                  run command is alive they live on the Run control, which is
+                  where every run verb lives (DESIGN.md#component-behavior).
+                  Rendering them twice in one viewport would be two competing
+                  copies of one action, not one next step. */}
             </>
           ) : (
             <>
@@ -390,7 +412,8 @@ export function ProjectRoom({
               </span>
               {isDraft && !executionAvailable && (
                 <span className="state-detail">
-                  · no machine has this repository checked out for Novus yet
+                  · no machine has this repository checked out for Novus yet — the first direction asks one
+                  to fetch it
                 </span>
               )}
             </>
@@ -583,7 +606,10 @@ export function ProjectRoom({
                 </div>
               )}
 
-              {feed.blocks.length === 0 && !feed.setup && (
+              {/* A workstream that exists but has produced nothing says so.
+                  The technical setup row is not activity, so it does not
+                  suppress the sentence (DESIGN.md#transient-states). */}
+              {feed.blocks.length === 0 && (
                 <p className="quiet" data-testid="feed-empty">
                   Nothing has happened here yet.
                 </p>
@@ -604,10 +630,21 @@ export function ProjectRoom({
         /* A draft has no mission yet, so no server capabilities exist to read:
            creating one is an org act (PRODUCT.md#roles-and-capabilities) and
            the creator becomes its Mission Admin. */
+        // A repository on someone else's Mac is fine to direct: their runner
+        // picks the work up, which is the whole point of the handoff. A GitHub
+        // repository is fine too — a runner fetches it into its own area and
+        // works it exactly like a folder somebody added (D-025, D-032).
         capabilities={isDraft ? ["direction.submit"] : (detail?.capabilities ?? null)}
         isController={isController || isDraft}
         onSubmit={submit}
       />
+
+      {/* The bottom dock. It shares the room's width and shortens the trace
+          rather than replacing it; below the single-column threshold it takes
+          the room (DESIGN.md#component-behavior). */}
+      {terminalOpen && executionAvailable && selectedMissionId !== null && (
+        <RuntimeDock missionId={selectedMissionId} onHide={onHideTerminal} />
+      )}
 
       </div>
 

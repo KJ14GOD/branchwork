@@ -1,14 +1,23 @@
 import { defineConfig } from "vitest/config";
 
-// Deterministic unit tests for the desktop main process's pure logic: the
-// harness stream parser, the event outbox, git evidence extraction, and
-// verification observation. Modules under test must not import `electron` at
-// module scope — anything that needs the app object takes it as an argument —
-// so this suite runs in plain Node. The Electron end-to-end suite lives in
-// e2e/ and runs separately (`pnpm run e2e`).
+// Deterministic tests for the desktop main process. Most of it is pure logic —
+// the harness stream parser, the event outbox, git evidence extraction — but a
+// good part of it is deliberately not: real PTYs, real process groups, real git
+// remotes, and real child processes, because a mocked one of any of those would
+// happily pretend not to have the fault being tested for. Modules under test
+// must not import `electron` at module scope — anything that needs the app
+// object takes it as an argument — so this suite runs in plain Node. The
+// Electron end-to-end suite lives in e2e/ and runs separately (`pnpm run e2e`).
 export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
-    environment: "node"
+    environment: "node",
+    // One file at a time. Several of these suites spawn real shells, real
+    // servers, and real worktrees; run in parallel they contend for CPU and for
+    // temporary directories, and a suite that fails on a busy machine and
+    // passes on an idle one is not evidence of anything.
+    fileParallelism: false,
+    testTimeout: 30_000,
+    hookTimeout: 30_000
   }
 });

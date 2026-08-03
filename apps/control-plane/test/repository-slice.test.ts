@@ -12,7 +12,7 @@ import {
 } from "../src/repo-provider.ts";
 
 // Deterministic tests for the repository/workstream slice against a real
-// PostgreSQL (novus_test). One FakeRepositoryProvider instance is held across
+// PostgreSQL (novus_test_repository). One FakeRepositoryProvider instance is held across
 // the whole suite so provider-side state (branches, transient failures) can be
 // asserted directly. slice.test.ts owns auth and the base mission lifecycle;
 // this file owns repositories, base pinning, idempotency, branch outcomes.
@@ -25,10 +25,10 @@ let auth: { token: string; orgId: string; userId: string };
 
 async function ensureTestDatabase(): Promise<string> {
   const admin = createPool("postgres://novus:novus@127.0.0.1:5433/novus");
-  const exists = await admin.query("select 1 from pg_database where datname = 'novus_test'");
-  if (exists.rowCount === 0) await admin.query("create database novus_test");
+  const exists = await admin.query("select 1 from pg_database where datname = 'novus_test_repository'");
+  if (exists.rowCount === 0) await admin.query("create database novus_test_repository");
   await admin.end();
-  return "postgres://novus:novus@127.0.0.1:5433/novus_test";
+  return "postgres://novus:novus@127.0.0.1:5433/novus_test_repository";
 }
 
 async function signIn(server: FastifyInstance): Promise<{ token: string; orgId: string; userId: string }> {

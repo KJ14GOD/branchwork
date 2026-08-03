@@ -8,18 +8,33 @@ import type { RunnerEvent, SequencedRunnerEvent } from "@novus/contracts";
  * overflow emits a **gap marker** naming the range it dropped, so the receipt
  * states the gap instead of quietly missing it.
  *
- * The server already de-duplicates on (execution, origin sequence); what this
- * module owns is ordering, retry, the bound, and the honesty of the gap. Pure
- * Node — no Electron — so the failure paths are testable without an app.
+ * The server de-duplicates on (whatever the report belongs to, origin
+ * sequence); what this module owns is ordering, retry, the bound, and the
+ * honesty of the gap. Pure Node — no Electron — so the failure paths are
+ * testable without an app.
+ *
+ * Two sequence namespaces, because there are two things a report can belong to.
+ * A turn's events belong to their execution and are numbered per execution. A
+ * workspace's events — setup, a run command, a check somebody asked for —
+ * belong to no turn at all and can happen before a turn has ever existed, so
+ * they are numbered per workstream and reported with a null execution. Sharing
+ * one counter would either collide with an unrelated report or fail to
+ * de-duplicate a replay, which is the whole reason the server indexes them
+ * apart.
  */
 
 /** The control plane accepts at most this many events per report. */
 const MAX_BATCH = 50;
 
+/** The sequence namespace for events that belong to the workstream rather than
+ *  to any execution. Every execution id begins with `exe_`, so this can never
+ *  collide with one. */
+const WORKSTREAM_SEQUENCE = "workstream";
+
 export interface OutboxOptions {
   /** Where the buffer survives a relaunch. */
   filePath: string;
-  deliver: (executionId: string, batch: SequencedRunnerEvent[]) => Promise<void>;
+  deliver: (executionId: string | null, batch: SequencedRunnerEvent[]) => Promise<void>;
   /** Bound on buffered events before the oldest are dropped with a marker. */
   maxEvents?: number;
   /** Retries per batch before the outbox parks rather than spinning forever. */
@@ -33,7 +48,9 @@ export interface OutboxOptions {
 }
 
 interface QueuedEvent {
-  executionId: string;
+  /** Null for a workspace-scoped report (D-041's setup, run, and check
+   *  commands are not part of any turn). */
+  executionId: string | null;
   originSeq: number;
   event: RunnerEvent;
 }
@@ -52,7 +69,7 @@ export class EventOutbox {
   private parked = false;
 
   private readonly filePath: string;
-  private readonly deliver: (executionId: string, batch: SequencedRunnerEvent[]) => Promise<void>;
+  private readonly deliver: (executionId: string | null, batch: SequencedRunnerEvent[]) => Promise<void>;
   private readonly maxEvents: number;
   private readonly maxAttempts: number;
   private readonly baseDelayMs: number;
@@ -79,16 +96,18 @@ export class EventOutbox {
     return this.queue.length;
   }
 
-  /** The next sequence this execution will be given; 1 for a fresh one. */
-  nextSequence(executionId: string): number {
-    return (this.sequences.get(executionId) ?? 0) + 1;
+  /** The next sequence this stream will be given; 1 for a fresh one. Null asks
+   *  for the workstream's own stream rather than an execution's. */
+  nextSequence(executionId: string | null): number {
+    return (this.sequences.get(executionId ?? WORKSTREAM_SEQUENCE) ?? 0) + 1;
   }
 
-  /** Records one observation. The sequence is per execution and monotonic, so
-   *  a replayed delivery lands exactly once on the server. */
-  append(executionId: string, event: RunnerEvent): SequencedRunnerEvent {
+  /** Records one observation. The sequence is monotonic within its own stream —
+   *  per execution for a turn, per workstream for the workspace — so a replayed
+   *  delivery lands exactly once on the server. */
+  append(executionId: string | null, event: RunnerEvent): SequencedRunnerEvent {
     const originSeq = this.nextSequence(executionId);
-    this.sequences.set(executionId, originSeq);
+    this.sequences.set(executionId ?? WORKSTREAM_SEQUENCE, originSeq);
     this.queue.push({ executionId, originSeq, event });
     this.trim();
     this.persist();
@@ -119,7 +138,7 @@ export class EventOutbox {
     const count = Math.min(this.queue.length - 1, overflow + Math.ceil(this.maxEvents / 10));
     const dropped = this.queue.splice(0, count);
 
-    const ranges = new Map<string, { from: number; to: number }>();
+    const ranges = new Map<string | null, { from: number; to: number }>();
     for (const item of dropped) {
       const payload = item.event.kind === "runner.gap" ? item.event.payload : null;
       const from = payload ? Math.min(payload.droppedFrom, item.originSeq) : item.originSeq;
@@ -182,8 +201,8 @@ export class EventOutbox {
     }
   }
 
-  /** One execution's next run of events, bounded by the report ceiling. */
-  private takeBatch(): { executionId: string; items: QueuedEvent[] } | null {
+  /** One stream's next run of events, bounded by the report ceiling. */
+  private takeBatch(): { executionId: string | null; items: QueuedEvent[] } | null {
     const first = this.queue[0];
     if (!first) return null;
     let count = 0;

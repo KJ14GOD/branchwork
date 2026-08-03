@@ -24,6 +24,33 @@
   --selected: rgba(255, 255, 255, 0.06);
   --pressed: rgba(255, 255, 255, 0.06);
 
+  /* Terminal palette (D-046) — the one place hues appear outside their
+     semantic tokens, because these are a *foreign program's* colours, not
+     Novus saying anything. Muted and warm so a build log reads as part of the
+     product rather than a neon window cut into it. Canonical in
+     DESIGN.md#tokens. */
+  --term-bg: #17181b;
+  --term-fg: #eceae6;
+  --term-cursor: #e5e2dc;
+  --term-cursor-text: #17181b;
+  --term-selection: rgba(255, 255, 255, 0.16);
+  --term-black: #3a3b40;
+  --term-red: #c97b6f;
+  --term-green: #8fae8b;
+  --term-yellow: #d9a47e;
+  --term-blue: #7f9cc0;
+  --term-magenta: #9c8db8;
+  --term-cyan: #7fada8;
+  --term-white: #cdc9c2;
+  --term-bright-black: #5c5d63;
+  --term-bright-red: #dc9488;
+  --term-bright-green: #a8c6a4;
+  --term-bright-yellow: #efbe98;
+  --term-bright-blue: #9bb6d8;
+  --term-bright-magenta: #b6a7d1;
+  --term-bright-cyan: #99c6c1;
+  --term-bright-white: #f2f0ec;
+
   /* Type scale (size/line-height, weight) — no other sizes exist */
   --font-ui: "Inter", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
@@ -84,4 +111,28 @@
   --hover: rgba(0, 0, 0, 0.04);
   --selected: rgba(0, 0, 0, 0.06);
   --pressed: rgba(0, 0, 0, 0.06);
+
+  /* Terminal palette, inverted for light. Same hues, darkened so each keeps
+     its contrast against a light background (D-046). */
+  --term-bg: #faf9f6;
+  --term-fg: #26241f;
+  --term-cursor: #26241f;
+  --term-cursor-text: #faf9f6;
+  --term-selection: rgba(0, 0, 0, 0.14);
+  --term-black: #3a3833;
+  --term-red: #a8443a;
+  --term-green: #4f7a4a;
+  --term-yellow: #8a5320;
+  --term-blue: #3f5f85;
+  --term-magenta: #63527e;
+  --term-cyan: #3e6b66;
+  --term-white: #6d6961;
+  --term-bright-black: #55524b;
+  --term-bright-red: #8e3229;
+  --term-bright-green: #3d6339;
+  --term-bright-yellow: #6f4114;
+  --term-bright-blue: #2f4a6b;
+  --term-bright-magenta: #4e4065;
+  --term-bright-cyan: #2e544f;
+  --term-bright-white: #26241f;
 }

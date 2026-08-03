@@ -42,6 +42,7 @@ function isEffort(value: string | null): value is Effort {
  */
 export function Composer({
   capabilities,
+  denialReason,
   isController,
   contextNote,
   onSubmit
@@ -49,6 +50,10 @@ export function Composer({
   /** Null until the server has said what this viewer may do. The composer
    *  never guesses a capability it has not been told about. */
   capabilities: Capability[] | null;
+  /** Why direction is refused, when the reason is not a missing role — a
+   *  repository nothing can run needs its own sentence, not a lecture about
+   *  capabilities the person may well hold. */
+  denialReason?: string;
   isController: boolean;
   contextNote?: string | null;
   onSubmit: (input: { body: string; model: ModelId; effort: Effort }) => Promise<SubmitOutcome>;
@@ -121,7 +126,9 @@ export function Composer({
   const placeholder = !known
     ? "Loading this workstream…"
     : !mayDirect
-      ? "You can follow this mission — sending direction needs Contributor access"
+      // A refusal the person can act on belongs where they are looking, not
+      // only in a tooltip they may never hover.
+      ? denialReason ?? "You can follow this mission — sending direction needs Contributor access"
       : isController
         ? "Direct Claude Code…"
         : "Add direction to the queue…";
@@ -137,7 +144,8 @@ export function Composer({
         className="composer-box"
         title={
           known && !mayDirect
-            ? "Only participants with direction.submit can send direction. Ask a Mission Admin for Contributor access."
+            ? denialReason ??
+              "Only participants with direction.submit can send direction. Ask a Mission Admin for Contributor access."
             : undefined
         }
         data-testid={known && !mayDirect ? "composer-no-capability" : undefined}

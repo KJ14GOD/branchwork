@@ -4,11 +4,12 @@ import type {
   FileDiffResponse,
   Invitation,
   MissionDetailResponse,
-  MissionRole
+  MissionRole,
+  VerificationCheck
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { clockTime, plural, shortSha } from "../format";
-import { changedFiles } from "./derive";
+import { changedFiles, checkTallies } from "./derive";
 import { GatedAction } from "./gated";
 import { Baton, HumanMark, ParticipantStack, roleLabel } from "./identity";
 
@@ -107,6 +108,85 @@ function ChangeRow({
             </>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Where a check came from, in words (PRODUCT.md VerificationCheck, D-037).
+ * Collapsing "the agent said it ran" and "a person ran it" into one green row
+ * is the fabrication the ledger exists to prevent, so the origin is never
+ * abbreviated to a colour or a glyph.
+ */
+function originLine(check: VerificationCheck): string {
+  const where = `reported by ${check.environment}`;
+  switch (check.origin) {
+    case "harness":
+      return `Observed from Claude Code · ${where}`;
+    case "participant":
+      return `Run by ${check.requestedByLogin ?? "a participant"} · ${where}`;
+    case "external":
+      return `Reported by CI · ${where}`;
+  }
+}
+
+/** A duration the runner measured, as a compact elapsed time. */
+function elapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/** The revision a check proves, its exit code, and how long it took. A stale
+ *  row says outright that what it proved is no longer what is there. */
+function provenanceLine(check: VerificationCheck): string {
+  const parts: string[] = [];
+  if (check.checkpointSha === null) {
+    parts.push("no revision recorded");
+  } else {
+    parts.push(
+      check.stale
+        ? `proved ${shortSha(check.checkpointSha)}, since changed`
+        : `proved ${shortSha(check.checkpointSha)}`
+    );
+  }
+  if (check.exitCode !== null) parts.push(`exit ${check.exitCode}`);
+  if (check.durationMs !== null) parts.push(elapsed(check.durationMs));
+  return parts.join(" · ");
+}
+
+/**
+ * The evidence ledger (DESIGN.md signature element 3). Two columns in mono,
+ * `--ok` only on a check that passed *and* still proves the current revision;
+ * a stale row dims to `--text-3` and says what it proved, because a result
+ * that has been overtaken is history, not proof.
+ */
+function LedgerEntry({ check }: { check: VerificationCheck }) {
+  return (
+    <div
+      className={check.stale ? "ledger-entry stale" : "ledger-entry"}
+      data-testid="ledger-entry"
+      data-stale={check.stale ? "true" : "false"}
+    >
+      <div className="ledger-row">
+        <span className="mono ledger-name" title={check.command}>
+          {check.name}
+        </span>
+        <span className={`mono ledger-outcome outcome-${check.outcome}`}>{check.outcome}</span>
+      </div>
+      <div className="ledger-origin" data-testid="ledger-origin">
+        {originLine(check)}
+      </div>
+      <div className="mono ledger-facts" data-testid="ledger-facts">
+        {provenanceLine(check)}
+      </div>
+      {check.output && (check.outcome === "failed" || check.outcome === "errored") && (
+        <details className="disclosure">
+          <summary>Output</summary>
+          <pre className="mono check-output">{check.output}</pre>
+        </details>
       )}
     </div>
   );
@@ -278,8 +358,11 @@ export function Inspector({
   const [diffs, setDiffs] = useState<Record<string, DiffLoad>>({});
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
 
   const files = changedFiles(detail);
+  const tallies = checkTallies(detail);
   const { mission, workstream } = detail;
 
   // Escape closes the panel. Focus is deliberately not trapped and not stolen:
@@ -314,6 +397,19 @@ export function Inspector({
     },
     [diffs, expanded]
   );
+
+  /** Every check the project declared, in one request: the runner decides what
+   *  that means, because the commands live in the repository, not here. */
+  const runVerification = async () => {
+    setVerifying(true);
+    setVerifyError(null);
+    const result = await novus().workspace.command({
+      missionId: detail.mission.missionId,
+      kind: "verification"
+    });
+    setVerifying(false);
+    if (!result.ok) setVerifyError(result.message);
+  };
 
   const retryBranch = async () => {
     if (!workstream) return;
@@ -501,6 +597,40 @@ export function Inspector({
 
           {section === "verification" && (
             <div data-testid="inspector-verification">
+              <div className="ledger-head">
+                {/* Silent when there is nothing to tally: the empty state below
+                    says it once, and saying it twice is not more honest. */}
+                <span className="inspector-summary" data-testid="checks-summary">
+                  {tallies.total === 0
+                    ? ""
+                    : [
+                        `${plural(tallies.passed, "check")} passed`,
+                        tallies.failed > 0 ? `${tallies.failed} failed` : null,
+                        tallies.stale > 0 ? `${tallies.stale} proved an earlier revision` : null
+                      ]
+                        .filter((part) => part !== null)
+                        .join(" · ")}
+                </span>
+                {/* Running a check is a declared command like any other, so the
+                    server authorizes it the same way (D-042). */}
+                <GatedAction
+                  capability="workspace.command"
+                  capabilities={detail.capabilities}
+                  denialReason="Invoking a command this project declared needs the workspace.command capability."
+                  holderLogin={detail.control.holderLogin}
+                  onClick={() => void runVerification()}
+                  variant="secondary"
+                  busy={verifying}
+                  testid="run-verification"
+                >
+                  Run verification
+                </GatedAction>
+              </div>
+              {verifyError && (
+                <p className="inline-error" role="alert" data-testid="verify-error">
+                  {verifyError}
+                </p>
+              )}
               {detail.checks.length === 0 ? (
                 <p className="quiet" data-testid="checks-empty">
                   No checks observed.
@@ -508,21 +638,7 @@ export function Inspector({
               ) : (
                 <div className="ledger" data-testid="ledger">
                   {detail.checks.map((check) => (
-                    <div key={check.checkId} className="ledger-entry">
-                      <div className="ledger-row">
-                        <span className="mono ledger-name" title={check.command}>
-                          {check.name}
-                        </span>
-                        <span className={`mono ledger-outcome outcome-${check.outcome}`}>{check.outcome}</span>
-                      </div>
-                      <div className="ledger-origin">Reported by {check.environment}</div>
-                      {check.output && (check.outcome === "failed" || check.outcome === "errored") && (
-                        <details className="disclosure">
-                          <summary>Output</summary>
-                          <pre className="mono check-output">{check.output}</pre>
-                        </details>
-                      )}
-                    </div>
+                    <LedgerEntry key={check.checkId} check={check} />
                   ))}
                 </div>
               )}

@@ -1609,10 +1609,41 @@ body {
   color: var(--text-3);
 }
 
+.ledger-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 32px;
+  margin-bottom: var(--s-2);
+}
+
+.ledger-head .inspector-summary {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
 .ledger-origin {
   font: var(--type-meta);
   color: var(--text-2);
   margin-top: var(--s-1);
+}
+
+/* The revision a check proves, its exit code, and how long it took. */
+.ledger-facts {
+  font: 400 12px/18px var(--font-mono);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  margin-top: var(--s-1);
+}
+
+/* A check that proved an earlier revision is history: it dims to --text-3 and
+   never keeps the --ok of a pass it can no longer vouch for. */
+.ledger-entry.stale .ledger-name,
+.ledger-entry.stale .ledger-outcome,
+.ledger-entry.stale .ledger-origin,
+.ledger-entry.stale .ledger-facts {
+  color: var(--text-3);
 }
 
 .check-output {
@@ -1621,6 +1652,301 @@ body {
   white-space: pre-wrap;
   user-select: text;
   padding-top: var(--s-1);
+}
+
+/* ---------- The Run control (DESIGN.md#component-behavior) ---------- */
+
+/* One control in the corner that belongs to the mission, beside the evidence
+   toggle. Its menu hangs from it; nothing here is a toolbar. */
+.run-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.run-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.run-trigger.active {
+  background: var(--selected);
+}
+
+/* While a run command is alive the control says which one, and offers Stop. */
+.run-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.run-live-name {
+  font: var(--type-meta);
+  color: var(--text-1);
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-menu {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  min-width: 320px;
+  max-width: 420px;
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  box-shadow: var(--elev-1);
+  padding: var(--s-1);
+  z-index: 30;
+}
+
+.run-menu-item {
+  display: block;
+}
+
+/* Menu rows are the shared Button primitive, laid out as full-width rows —
+   no second button shape exists in the product. */
+.run-menu .btn {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  width: 100%;
+  min-height: 28px;
+  text-align: left;
+  color: var(--text-1);
+}
+
+.run-menu .btn:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.run-item-label {
+  flex: none;
+  font: var(--type-row);
+  color: inherit;
+}
+
+.run-item-command {
+  flex: 1;
+  min-width: 0;
+  font: var(--type-meta);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-item-note {
+  flex: none;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.run-menu-note {
+  font: var(--type-meta);
+  color: var(--text-2);
+  padding: var(--s-2);
+}
+
+.run-menu-foot {
+  border-top: 1px solid var(--edge);
+  margin-top: var(--s-1);
+  padding-top: var(--s-1);
+}
+
+/* A refusal belongs at the control that was refused, not in a toast. */
+.run-note {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 320px;
+  max-width: 420px;
+  padding: var(--s-2) var(--s-3);
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  box-shadow: var(--elev-1);
+  font: var(--type-meta);
+  user-select: text;
+}
+
+/* ---------- Set up workspace ---------- */
+
+/* Written against .dialog so the shared dialog rules below cannot win on
+   source order; this dialog is wider and sized to its content. */
+.dialog.setup-dialog {
+  width: 640px;
+}
+
+.setup-dialog .setup-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: var(--s-4);
+  /* A bounded dialog, not a hollow one: it is as tall as what it has to say. */
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.setup-add {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+
+.setup-add .input {
+  max-width: 160px;
+}
+
+.setup-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.setup-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.setup-lead {
+  font: var(--type-body);
+  color: var(--text-1);
+  max-width: 720px;
+}
+
+.setup-note {
+  font: var(--type-meta);
+  color: var(--text-2);
+  max-width: 720px;
+}
+
+.setup-signals {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.setup-blockers {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.setup-blockers li {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 24px;
+  font: var(--type-row);
+  color: var(--text-1);
+}
+
+.setup-command {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 32px;
+}
+
+.setup-command-name {
+  flex: none;
+  min-width: 96px;
+  font: var(--type-row);
+  color: var(--text-1);
+}
+
+.setup-command .input {
+  flex: 1;
+  min-width: 0;
+  font: 400 13px/20px var(--font-mono);
+}
+
+/* One column for the row's flags, so every command field ends on the same
+   vertical line however many notes a row carries. */
+.setup-flags {
+  flex: none;
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  min-width: 128px;
+}
+
+.setup-suggested {
+  flex: none;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+/* Filenames only. What is in them never crosses the bridge (D-041). */
+.file-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  min-height: 32px;
+  padding: var(--s-1) 0;
+  font: var(--type-row);
+}
+
+.file-path {
+  flex: none;
+  color: var(--text-1);
+  user-select: text;
+}
+
+.file-facts {
+  flex: 1;
+  min-width: 0;
+  font: var(--type-meta);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-action,
+.file-outcome {
+  flex: none;
+  margin-left: auto;
+}
+
+.file-outcome {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+/* The consent step: the consequence in one sentence, then the two answers. */
+.file-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: 1 0 100%;
+  min-height: 32px;
+}
+
+.file-question {
+  flex: 1;
+  min-width: 0;
+  font: var(--type-meta);
+  color: var(--text-1);
 }
 
 /* ---------- Add project dialog ---------- */
@@ -1926,4 +2252,299 @@ body {
   justify-content: flex-end;
   padding: 0;
   border-top: none;
+}
+
+/* ---------- The terminal (DESIGN.md#component-behavior, D-042) ---------- */
+
+/* A bottom dock in the room: it shares the room's width, shortens the trace
+   rather than replacing it, and is closed by default. Its height is a
+   proportion of the viewport — the same measure the composer's own ceiling
+   uses — so resizing mints no new value. */
+.terminal-dock {
+  flex: none;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 20vh;
+  max-height: 60vh;
+  background: var(--surface-1);
+  border-top: 1px solid var(--edge);
+}
+
+/* The drag edge. Two pointer-target rows tall, and invisible until reached. */
+.terminal-grip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--s-2);
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.terminal-grip:hover {
+  background: var(--hover);
+}
+
+.terminal-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 32px;
+  padding: var(--s-2) var(--s-6) 0;
+}
+
+.terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.terminal-head-spacer {
+  flex: 1;
+}
+
+/* A tab says what it is and what it is doing: kind in words, state as a dot
+   plus text, never colour alone (DESIGN.md#status-semantics). */
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 28px;
+  padding: 0 var(--s-2);
+  font: var(--type-row);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-control);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.terminal-tab:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.terminal-tab.active {
+  background: var(--selected);
+  color: var(--text-1);
+}
+
+.terminal-tab-name {
+  max-width: 20ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* shell / run / test / log, told apart in words at the micro step rather than
+   by a badge shape. */
+.terminal-tab-kind {
+  font: var(--type-micro);
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.terminal-tab-state {
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.terminal-new {
+  white-space: nowrap;
+}
+
+.terminal-rename {
+  width: 20ch;
+  min-height: 28px;
+}
+
+.terminal-error {
+  flex: none;
+  padding: 0 var(--s-6);
+}
+
+.terminal-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-6) var(--s-5);
+  font: var(--type-body);
+  color: var(--text-1);
+}
+
+/* The emulator's own element fills this region; xterm owns the scrolling
+   inside it, which is why nothing here sets overflow (D-046). */
+.terminal-screen {
+  flex: 1;
+  min-height: 0;
+  padding: var(--s-2) var(--s-6) var(--s-4);
+  overflow: hidden;
+}
+
+/* xterm ships a stylesheet with its own background. Overridden here so the
+   pane sits on the product's surface rather than a black rectangle cut into
+   the dock; every value is a token. */
+.terminal-screen .xterm,
+.terminal-screen .xterm-viewport,
+.terminal-screen .xterm-screen {
+  background-color: var(--term-bg);
+}
+
+.terminal-screen .xterm {
+  height: 100%;
+}
+
+.terminal-screen .xterm-viewport {
+  overflow-y: auto;
+}
+
+.terminal-ended {
+  margin-top: var(--s-3);
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+@media (max-width: 900px) {
+  /* Below the single-column threshold the dock becomes a dedicated full-room
+     view, the way Changes and Verification do. */
+  .terminal-dock {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    max-height: none;
+    height: auto !important;
+    border-top: none;
+    background: var(--surface-2);
+  }
+
+  .terminal-grip {
+    display: none;
+  }
+
+  .terminal-head,
+  .terminal-error,
+  .terminal-empty,
+  .terminal-screen {
+    padding-left: var(--s-5);
+    padding-right: var(--s-5);
+  }
+}
+
+/* The runtime dock's view switch and its process-output views (D-045). One
+   dock, four views: terminal sessions, and the three kinds of project process.
+   Detailed local output lives here; the trace shows the milestone and the
+   evidence panel shows the bounded result that supports a claim. */
+.dock-views {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+}
+
+.dock-view {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: var(--type-meta);
+  padding: var(--s-1) var(--s-2);
+  border-radius: var(--r-control);
+  cursor: pointer;
+}
+
+.dock-view:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.dock-view.active {
+  background: var(--selected);
+  color: var(--text-1);
+}
+
+.dock-runs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+  padding: 0 var(--s-6);
+  overflow-x: auto;
+}
+
+.dock-run {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  border: none;
+  background: transparent;
+  border-radius: var(--r-control);
+  padding: var(--s-1) var(--s-2);
+  font: var(--type-meta);
+  color: var(--text-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.dock-run.active {
+  background: var(--selected);
+  color: var(--text-1);
+}
+
+.dock-run-state {
+  color: var(--text-3);
+}
+
+.dock-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: none;
+  padding: var(--s-2) var(--s-6) 0;
+  font: var(--type-meta);
+  color: var(--text-2);
+  min-width: 0;
+}
+
+.dock-command {
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-state,
+.dock-reason {
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.dock-output {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: var(--s-2) var(--s-6) var(--s-4);
+  font: var(--type-row);
+  font-family: var(--font-mono);
+  color: var(--text-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.dock-empty {
+  flex: 1;
+  padding: var(--s-4) var(--s-6);
+  font: var(--type-body);
+  color: var(--text-2);
+}
+
+.dock-error {
+  flex: none;
+  padding: 0 var(--s-6);
 }

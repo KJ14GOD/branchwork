@@ -85,14 +85,14 @@ Conceptual definitions. Each term has exactly one meaning, defined here; data re
 - **Run / turn** — a lower-level unit inside an execution (a harness turn or tool run), surfaced in the activity feed for legibility. Not addressable by users in V0.
 - **Harness** (V0) — a supported coding agent product (Claude Code, Codex in V0) operated through the adapter contract in [ARCHITECTURE.md](ARCHITECTURE.md#harness-protocol).
 - **Runner** (V0) — the machine-side program that supervises executions and speaks the runner protocol. The first shipped runner is the host desktop itself, registered per workstream and authenticated with its own scoped credential (D-035); the Novus-managed cloud runner and enterprise and third-party runners speak the same protocol ([ARCHITECTURE.md](ARCHITECTURE.md#runner-plane)).
-- **Workspace** (V0) — a provisioned working environment (the workstream branch's working tree, dependencies, scoped credentials) on a runner. One active workspace per workstream, reused across that workstream's executions so its changes accumulate in one place. Its location may be cloud, local, or customer-managed; the first shipped workspace is a dedicated git worktree on the host machine (D-032), and the user's own checkout is never touched. The workspace is resumable execution state, not the permanent system of record.
+- **Workspace** (V0) — a provisioned working environment (the workstream branch's working tree, dependencies, scoped credentials) on a runner. A workspace is **runnable** only once its project has said how: a setup command, named run commands, and named verification commands, declared in the repository and layered with machine-local values (D-040). Until then it is honestly *not ready*, because a fresh worktree holds tracked files and nothing else. The runner publishes what the project declares so every participant sees the same commands, and a command a participant authorizes is pinned to the version they authorized rather than to whatever the file says when it runs (D-043). A run command that declared how it becomes ready is *starting* until that signal answers — a process existing is not a claim that an application is serving (D-045). One active workspace per workstream, reused across that workstream's executions so its changes accumulate in one place. Its location may be cloud, local, or customer-managed; the first shipped workspace is a dedicated git worktree on the host machine (D-032), and the user's own checkout is never touched. The workspace is resumable execution state, not the permanent system of record.
 - **Direction** (V0) — an attributed instruction submitted to a workstream and consumed by an execution, with the lifecycle in [Direction](#direction).
 - **ControlLease** (V0) — the server-issued grant that makes exactly one participant the controller of a workstream (see [Control](#control)).
 - **ControlRequest** (V0) — a participant's standing, visible request to become controller.
 - **HandoffOffer** (V0) — the controller's explicit offer of control to a named participant, requiring acceptance.
 - **Event** (V0) — one attributed, durable entry in the mission's append-only history. Every state change in this document is an event. Representation in [ARCHITECTURE.md](ARCHITECTURE.md#event-model).
 - **FileChange** (V0) — repository diff content produced by an execution, presented per file.
-- **VerificationCheck** (V0) — one named check (test run, typecheck, build, lint, manual confirmation) with an outcome, attributed to the environment that ran it.
+- **VerificationCheck** (V0) — one named check (test run, typecheck, build, lint, manual confirmation) with an outcome, attributed to the environment that ran it, to **who caused it**, and to the **exact revision it proves**. Its origin is one of: *harness-observed* (Novus watched the agent run it), *participant-run* (a named person invoked a saved check), or *external* (CI). A check proves the checkpoint it ran against and nothing later: once the workspace moves past that revision the result becomes **stale** — still true history, no longer current evidence.
 - **Artifact** (V0) — a non-repository output attached to the mission: logs, screenshots, preview URLs, exported reports.
 - **Evidence** (V0) — the collective term for a mission's FileChanges, VerificationChecks, and Artifacts: attributed records of what happened and where, never bare assertions.
 - **Review** (V0) — a participant's recorded judgment on the current result: comments, concerns, a revision request, or acceptance.
@@ -125,6 +125,7 @@ Capabilities are the enforcement unit, and they live in two scopes that never mi
 | `execution.pause`, `execution.resume` | — | — | — | — | ✓ |
 | `workspace.sync` (apply a visible remote update at a safe boundary) | — | — | — | — | ✓ |
 | `execution.stop` | ✓ | ✓ | ✓ | — | ✓ |
+| `workspace.command` (invoke a command the project declared: setup, run, verification) | ✓ | ✓ | — | — | ✓ |
 | `approval.respond` (approve or deny a harness approval request) | — | — | — | — | ✓ |
 | `control.request` | ✓ | ✓ | ✓ | — | — |
 | `control.offer` (and withdraw) | — | — | — | — | ✓ |
@@ -137,6 +138,7 @@ Capabilities are the enforcement unit, and they live in two scopes that never mi
 Deliberate choices:
 - **Stopping is broad, operating is narrow.** Any non-viewer participant may stop a running execution (`execution.stop`); a wrong or dangerous direction must not be able to run until a handoff completes. Only the lease holder steers, pauses, resumes, and answers approvals.
 - **The lease starts the work it authorizes.** An applied direction with no active execution has to be able to run, so the lease grants `execution.start` for its workstream whatever the holder's role (D-034). Starting an execution as a role capability remains an Operator-and-above act for anyone who is not the controller.
+- **Controlling a mission is not owning the host machine** (D-042). `workspace.command` invokes commands *the project itself declared* and nothing else, pinned to the version the participant authorized (D-043). An interactive shell on a workspace that lives on someone's laptop is never granted by the lease, by a role, or by anything the interface can offer; it belongs to the person whose machine it is. So does supplying a secret value: it is an act at the machine that has the value, with no route through the control plane (D-044).
 - **Non-controllers are not spectators.** Contributor verbs — submit direction to the queue, request control, comment on evidence, stop the work — are real, server-enforced operations, not chat.
 - Direction submitted by a non-controller queues automatically; only the controller applies, supersedes, or rejects it. Submission is never silently dropped.
 
@@ -209,7 +211,8 @@ The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-prese
 | State | Meaning — entered when / leaves when |
 | --- | --- |
 | New mission | Created; no workspace yet. Leaves on provisioning start. |
-| Provisioning workspace | Execution provider is preparing the workspace. Leaves on ready or failure. |
+| Workspace needs setup | The worktree exists but the project has not said how to install or run it, or a required machine-local file is missing. Leaves when the workspace is configured and prepared. |
+| Provisioning workspace | The workspace is being prepared: dependencies installing, the project's setup command running. Leaves on ready or failure. |
 | Workspace failed | Provisioning or the workspace itself failed; provider error attached. Retry provisions a new workspace — never silent reuse. |
 | Ready for instruction | Workspace ready, no active execution. Leaves when an execution starts. |
 | Agent starting | Execution accepted, harness booting. |
@@ -234,6 +237,8 @@ The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-prese
 | Repository sync error *(overlay)* | The workspace cannot sync with GitHub — token expiry or revocation, force-push, or branch conflict with base. Human-visible remediation; never silent retries. |
 | Reconnecting *(overlay)* | This client lost its connection; room is stale until restored. |
 | Runner offline *(overlay)* | The runner's connection dropped; execution state is last-known; events will backfill on reconnect. |
+| App running *(overlay)* | A run command the project declared is alive in the workspace, and — where the project declared a readiness signal — that signal has answered. Until it does the overlay says *starting*, and if its deadline passes it says the application is not answering rather than claiming it is up (D-045). Independent of any harness turn: an agent finishing does not stop the app, and the app running does not block direction. |
+| Verification stale *(overlay)* | The workspace moved past the revision the current checks proved. The results remain as history; they are no longer evidence for what is there now. |
 | Repository update available *(overlay)* | The remote mission branch or base moved beyond the workspace's recorded revision. No files move automatically; the controller may inspect and sync at a safe boundary. |
 
 A harness that fails to start is not a separate state: it surfaces inside *Agent starting* as that state's error recovery.

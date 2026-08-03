@@ -49,8 +49,9 @@ export async function recordEvent(client: pg.PoolClient, args: RecordEventArgs):
  * Records an event at an explicit sequence — used by mission creation, which
  * writes seq 1 and 2 inside the creating transaction.
  *
- * Runner-origin events carry `originSeq`; a replay of the same (execution,
- * originSeq) is ignored, so a retried delivery after a partition lands once
+ * Runner-origin events carry `originSeq`; a replay is ignored on the scope the
+ * report belongs to — the execution when there is one, the workstream when the
+ * report is about the workspace itself — so a retried delivery lands once
  * (ARCHITECTURE.md#event-model). Returns the empty string when the write was
  * a de-duplicated replay.
  */
@@ -66,7 +67,8 @@ export async function recordEventAtSeq(
        actor_kind, actor_id, actor_login, cause_direction_id, cause_lease_id,
        origin_seq, payload)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-     on conflict (execution_id, origin_seq) where origin_seq is not null do nothing
+     on conflict (coalesce(execution_id, workstream_id), origin_seq)
+       where origin_seq is not null do nothing
      returning event_id`,
     [
       eventId,

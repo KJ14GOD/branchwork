@@ -287,6 +287,31 @@ export class ControlPlaneClient {
     return this.controlPost(`/missions/${encodeURIComponent(missionId)}/control/revoke`);
   }
 
+  // --- Workspace commands ---------------------------------------------------
+  // Remotely invokable, so the server authorizes them (D-042). The desktop
+  // only asks; it never decides.
+
+  async workspaceCommand(
+    missionId: string,
+    input: { kind: "setup" | "run" | "verification"; name?: string }
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/workspace/command`,
+      OkResponseSchema,
+      input
+    );
+  }
+
+  async workspaceStop(missionId: string, name: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/workspace/stop`,
+      OkResponseSchema,
+      { name }
+    );
+  }
+
   // --- Runner registration --------------------------------------------------
 
   /** Issues this machine's runner credential. Called from the main process

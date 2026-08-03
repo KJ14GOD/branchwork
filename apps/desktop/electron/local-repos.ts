@@ -35,6 +35,27 @@ export function pathForLocalRepo(localId: string): string | null {
   return loadMap()[localId] ?? null;
 }
 
+/** Every repository this machine holds a checkout for, whichever provider it
+ *  came from. A folder the user picked and a repository the runner fetched are
+ *  the same entry, which is the whole point (D-025, D-032). */
+export function repositoriesOnThisMachine(): string[] {
+  return Object.keys(loadMap());
+}
+
+/**
+ * Records a checkout Novus made itself — a GitHub repository the runner
+ * fetched (D-025, D-032) — in the same machine-local map a folder the user
+ * picked lives in, keyed by the provider's repository id. From here on nothing
+ * downstream can tell the two apart: same lookup, same worktrees, same runtime.
+ * The path still never leaves this machine.
+ */
+export function recordRepositoryPath(providerRepoId: string, repoPath: string): void {
+  const map = loadMap();
+  if (map[providerRepoId] === repoPath) return;
+  map[providerRepoId] = repoPath;
+  saveMap(map);
+}
+
 function git(repoPath: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile("git", ["-C", repoPath, ...args], { timeout: 15_000 }, (error, stdout, stderr) => {

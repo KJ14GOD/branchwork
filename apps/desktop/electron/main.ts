@@ -3,8 +3,18 @@ import { join } from "node:path";
 import {
   CreateMissionInputSchema,
   DirectionResolutionSchema,
+  ForgetSecretInputSchema,
   IpcDirectInputSchema,
   MissionRoleSchema,
+  OpenPreviewInputSchema,
+  OpenTerminalInputSchema,
+  PrepareLocalFilesInputSchema,
+  SaveWorkspaceSettingsInputSchema,
+  SupplySecretInputSchema,
+  TerminalRenameInputSchema,
+  TerminalResizeInputSchema,
+  TerminalWriteInputSchema,
+  WorkspaceCommandInputSchema,
   type IpcAuthStatus,
   type IpcResult
 } from "@novus/contracts";
@@ -12,8 +22,35 @@ import { z } from "zod";
 import { ApiError, ControlPlaneClient } from "./api-client";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
-import { ensureLocalBranch, pathForLocalRepo, pickLocalRepository, resolveLocalBase } from "./local-repos";
+import {
+  ensureLocalBranch,
+  pathForLocalRepo,
+  pickLocalRepository,
+  repositoriesOnThisMachine,
+  resolveLocalBase
+} from "./local-repos";
 import { startRunnerAgent, type RunnerAgent } from "./runner-agent";
+import {
+  closeTerminal,
+  forgetSecret,
+  inspectWorkspace,
+  listTerminals,
+  onProcessLog,
+  onTerminalOutput,
+  openPreview,
+  openTerminal,
+  prepareLocalFiles,
+  processLogsFor,
+  renameTerminal,
+  resizeTerminal,
+  saveWorkspaceSettings,
+  secretsFor,
+  shutdownTerminals,
+  supplySecret,
+  terminalScrollback,
+  writeTerminal,
+  type WorkspaceTarget
+} from "./workspace";
 import { SessionStore } from "./session-store";
 
 // Test hooks (see DECISIONS.md D-027): both refuse to exist in packaged builds.
@@ -211,6 +248,8 @@ function registerIpc(): void {
     }
   });
 
+  ipcMain.handle("novus:repos:checked-out-here", () => ok(repositoriesOnThisMachine()));
+
   ipcMain.handle("novus:repos:base-local", async (_event, raw: unknown) => {
     const parsed = z.string().uuid().safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed repository id." };
@@ -389,6 +428,234 @@ function registerIpc(): void {
     return result;
   });
 
+  // --- Workspace runtime ----------------------------------------------------
+  // Inspecting a project, writing its configuration, and supplying its local
+  // files are acts by the person sitting at this machine, so they are local.
+  // Running a declared command is remotely invokable, so it goes through the
+  // control plane and is authorized there (D-042).
+
+  /**
+   * Resolves which workstream a request means, and refuses when this machine is
+   * not the one holding that repository.
+   *
+   * The question is *where the checkout is*, not which provider it came from. A
+   * GitHub repository the runner fetched is recorded in the same machine-local
+   * map a folder the user picked lives in (D-025, D-032), so from here on the
+   * two are the same thing and asking about the provider would refuse a
+   * workspace that plainly exists.
+   */
+  const targetFor = async (missionId: string): Promise<WorkspaceTarget> => {
+    const detail = await api.getMission(missionId);
+    const repository = detail.mission.repository;
+    const workstream = detail.workstream;
+    if (!repository || !workstream) {
+      throw new ApiError("no_workspace", "This mission has no workstream yet.", 409);
+    }
+    if (pathForLocalRepo(repository.providerRepoId) === null) {
+      throw new ApiError(
+        "not_this_machine",
+        repository.provider === "github"
+          ? "Novus has not fetched this repository onto this machine yet."
+          : "This repository lives on another machine, so its workspace can only be prepared there.",
+        409
+      );
+    }
+    return {
+      missionId,
+      workstreamId: workstream.workstreamId,
+      localId: repository.providerRepoId,
+      missionBranch: workstream.missionBranch
+    };
+  };
+
+  ipcMain.handle("novus:workspace:inspect", async (_event, raw: unknown) => {
+    const parsed = MissionIdSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(async () => inspectWorkspace(await targetFor(parsed.data)));
+  });
+
+  ipcMain.handle("novus:workspace:save", async (_event, raw: unknown) => {
+    const parsed = SaveWorkspaceSettingsInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed settings." };
+    const result = await call(async () => {
+      await saveWorkspaceSettings(
+        await targetFor(parsed.data.missionId),
+        parsed.data.scope,
+        parsed.data.settings
+      );
+      return null;
+    });
+    // Confirmed configuration is published immediately rather than at the next
+    // discovery tick, so the Run control offers what was just saved — to every
+    // participant, not only the person who saved it (D-043).
+    if (result.ok) runner?.republish(parsed.data.missionId);
+    return result;
+  });
+
+  ipcMain.handle("novus:workspace:prepare-local-files", async (_event, raw: unknown) => {
+    const parsed = PrepareLocalFilesInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed file list." };
+    return call(async () =>
+      prepareLocalFiles(await targetFor(parsed.data.missionId), parsed.data.paths)
+    );
+  });
+
+  ipcMain.handle("novus:workspace:command", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ missionId: MissionIdSchema })
+      .and(WorkspaceCommandInputSchema)
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed command." };
+    const result = await call(async () => {
+      await api.workspaceCommand(parsed.data.missionId, {
+        kind: parsed.data.kind,
+        name: parsed.data.name
+      });
+      return null;
+    });
+    runner?.pollNow();
+    return result;
+  });
+
+  // --- Secret values, the runtime dock, and local previews ------------------
+  // All local, exactly like inspect and prepare-local-files: a value is
+  // supplied by the person sitting at the machine that has it, a process's
+  // output belongs to the machine that produced it, and a preview is opened by
+  // the operating system that is running the server (D-044, D-045).
+
+  ipcMain.handle("novus:workspace:secrets", async (_event, raw: unknown) => {
+    const parsed = MissionIdSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(async () => secretsFor(await targetFor(parsed.data)));
+  });
+
+  ipcMain.handle("novus:workspace:supply-secret", async (_event, raw: unknown) => {
+    const parsed = SupplySecretInputSchema.safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "invalid_input",
+        message: parsed.error.issues[0]?.message ?? "That value cannot be stored."
+      };
+    }
+    return call(async () =>
+      supplySecret(await targetFor(parsed.data.missionId), parsed.data.name, parsed.data.value)
+    );
+  });
+
+  ipcMain.handle("novus:workspace:forget-secret", async (_event, raw: unknown) => {
+    const parsed = ForgetSecretInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed variable name." };
+    return call(async () => forgetSecret(await targetFor(parsed.data.missionId), parsed.data.name));
+  });
+
+  ipcMain.handle("novus:workspace:logs", async (_event, raw: unknown) => {
+    const parsed = MissionIdSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(async () => processLogsFor((await targetFor(parsed.data)).workstreamId));
+  });
+
+  ipcMain.handle("novus:workspace:open-preview", async (_event, raw: unknown) => {
+    const parsed = OpenPreviewInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed preview address." };
+    return call(async () => {
+      const target = await targetFor(parsed.data.missionId);
+      // `shell.openExternal` and nothing else: no shell command is involved in
+      // opening a preview, here or anywhere.
+      await openPreview(target.workstreamId, parsed.data.url, async (url) => {
+        await shell.openExternal(url);
+      });
+      return null;
+    });
+  });
+
+  // Process output goes to this window and stops there, exactly like terminal
+  // output: it is never an event, never reported, and never evidence.
+  onProcessLog((chunk) => window?.webContents.send("novus:process-log", chunk));
+
+  ipcMain.handle("novus:workspace:stop", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ missionId: MissionIdSchema, name: z.string().min(1).max(80) })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    const result = await call(async () => {
+      await api.workspaceStop(parsed.data.missionId, parsed.data.name);
+      return null;
+    });
+    runner?.pollNow();
+    return result;
+  });
+
+  // --- The interactive terminal (D-042) -------------------------------------
+  // Local only. These channels reach `workspace.ts` directly and never the
+  // control plane: there is no shell verb in the runner protocol, so an
+  // interactive shell on this machine is unreachable from anywhere else by
+  // construction. `targetFor` above already refuses a workstream whose
+  // repository is not on this machine, which is the same refusal the room
+  // states in words rather than hiding the control.
+
+  ipcMain.handle("novus:terminal:list", async (_event, raw: unknown) => {
+    const parsed = MissionIdSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(async () => listTerminals((await targetFor(parsed.data)).workstreamId));
+  });
+
+  ipcMain.handle("novus:terminal:open", async (_event, raw: unknown) => {
+    const parsed = OpenTerminalInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal request." };
+    return call(async () =>
+      openTerminal(await targetFor(parsed.data.missionId), {
+        name: parsed.data.name,
+        kind: parsed.data.kind,
+        cols: parsed.data.cols,
+        rows: parsed.data.rows
+      })
+    );
+  });
+
+  ipcMain.handle("novus:terminal:scrollback", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("trm_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal id." };
+    return call(async () => terminalScrollback(parsed.data));
+  });
+
+  ipcMain.handle("novus:terminal:write", async (_event, raw: unknown) => {
+    const parsed = TerminalWriteInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal input." };
+    return call(async () => {
+      writeTerminal(parsed.data.sessionId, parsed.data.data);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:terminal:resize", async (_event, raw: unknown) => {
+    const parsed = TerminalResizeInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal size." };
+    return call(async () => {
+      resizeTerminal(parsed.data.sessionId, parsed.data.cols, parsed.data.rows);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:terminal:rename", async (_event, raw: unknown) => {
+    const parsed = TerminalRenameInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal name." };
+    return call(async () => renameTerminal(parsed.data.sessionId, parsed.data.name));
+  });
+
+  ipcMain.handle("novus:terminal:close", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("trm_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal id." };
+    return call(async () => {
+      await closeTerminal(parsed.data);
+      return null;
+    });
+  });
+
+  // Raw output goes to this window and stops there: it is never an event, never
+  // reported to the control plane, and never evidence (D-041).
+  onTerminalOutput((chunk) => window?.webContents.send("novus:terminal-output", chunk));
+
   // --- Evidence -------------------------------------------------------------
 
   ipcMain.handle("novus:evidence:file-diff", async (_event, raw: unknown) => {
@@ -440,15 +707,19 @@ app.whenReady().then(async () => {
 // in-flight turn, records the interruption as an explicit outcome, and flushes
 // the outbox — a room never hangs on "running" forever, and no orphan process
 // is left behind (D-034).
+// An interactive terminal is held to the same rule for the same reason: a PTY
+// this process opened must not survive it, so quitting kills every session and
+// its whole process tree before the app exits.
 let quitting = false;
 app.on("before-quit", (event) => {
-  if (quitting || !runner) return;
+  if (quitting) return;
   quitting = true;
   event.preventDefault();
-  runner
-    .shutdown("The host desktop closed while the agent was working.")
-    .catch(() => undefined)
-    .finally(() => app.exit(0));
+  const exit = () => app.exit(0);
+  Promise.allSettled([
+    shutdownTerminals(),
+    runner?.shutdown("The host desktop closed while the agent was working.") ?? Promise.resolve()
+  ]).then(exit, exit);
 });
 
 app.on("window-all-closed", () => {

@@ -204,7 +204,10 @@ export async function createMission(
   return {
     mission: {
       ...base.mission,
-      primaryState: base.workstream.branchStatus === "created" ? "ready_for_instruction" : "new_mission"
+      // A brand-new workstream has a branch and nothing else: no worktree, no
+      // configuration, nothing it could run. Direction still works; running
+      // the project does not, and the room says so.
+      primaryState: base.workstream.branchStatus === "created" ? "workspace_needs_setup" : "new_mission"
     },
     workstream: base.workstream
   };
@@ -422,6 +425,9 @@ export async function listMissions(db: Db, ctx: AuthedContext): Promise<Mission[
               where e.mission_id = m.mission_id order by e.created_at desc limit 1) as latest_state,
             exists (select 1 from workstreams w
                      where w.mission_id = m.mission_id and w.branch_status = 'created') as branch_ready,
+            (select ws.readiness from workspaces ws
+               join workstreams w2 on w2.wst_id = ws.wst_id
+              where w2.mission_id = m.mission_id limit 1) as readiness,
             exists (select 1 from checkpoints c where c.mission_id = m.mission_id and c.files_changed > 0) as changed,
             exists (select 1 from verification_checks v where v.mission_id = m.mission_id and v.outcome = 'passed') as passed,
             exists (select 1 from verification_checks v where v.mission_id = m.mission_id and v.outcome in ('failed', 'errored')) as broken
@@ -440,14 +446,21 @@ export async function listMissions(db: Db, ctx: AuthedContext): Promise<Mission[
 function projectListState(row: {
   latest_state: string | null;
   branch_ready: boolean;
+  readiness: string | null;
   changed: boolean;
   passed: boolean;
   broken: boolean;
 }): Mission["primaryState"] {
   if (!row.branch_ready) return "new_mission";
+  if (row.readiness === "configuring") return "provisioning_workspace";
+  if (row.readiness === "failed") return "workspace_failed";
+  const idle: Mission["primaryState"] =
+    row.readiness === null || row.readiness === "unconfigured"
+      ? "workspace_needs_setup"
+      : "ready_for_instruction";
   switch (row.latest_state) {
     case null:
-      return "ready_for_instruction";
+      return idle;
     case "requested":
     case "starting":
       return "agent_starting";
@@ -465,7 +478,7 @@ function projectListState(row: {
       break;
   }
   if (row.broken) return "verification_failed";
-  if (!row.changed) return "ready_for_instruction";
+  if (!row.changed) return idle;
   return row.passed ? "ready_for_review" : "work_completed_unverified";
 }
 
