@@ -401,7 +401,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         {/* The room's workspace controls: one Run control beside the evidence
             toggle, in the corner that belongs to the mission. Not a toolbar,
             and not a second navigation (DESIGN.md#component-behavior). */}
-        {openMission && (
+        {openMission && openMission.mission.repository?.provider === "local" && (
           <RunControl detail={openMission} onSetup={() => setSetupOpen(true)} />
         )}
         <button

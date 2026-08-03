@@ -1796,6 +1796,17 @@ body {
   min-height: 0;
 }
 
+.setup-add {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+
+.setup-add .input {
+  max-width: 160px;
+}
+
 .setup-section {
   display: flex;
   flex-direction: column;

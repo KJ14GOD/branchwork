@@ -266,6 +266,7 @@ export function WorkspaceSetupDialog({
               <CommandSection
                 title="Run commands"
                 testid="setup-run"
+                namePlaceholder="dev"
                 empty="This project has no run command yet."
                 entries={draft.run}
                 defaultName={draft.defaultRun}
@@ -281,11 +282,38 @@ export function WorkspaceSetupDialog({
                       : prev
                   )
                 }
+                onAdd={(name) =>
+                  setDraft((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          run: [...prev.run, { name, command: "", suggested: false }],
+                          // The first run command a project declares is the one
+                          // the Run control should offer first.
+                          defaultRun: prev.defaultRun ?? name
+                        }
+                      : prev
+                  )
+                }
+                onRemove={(index) =>
+                  setDraft((prev) => {
+                    if (!prev) return prev;
+                    const removed = prev.run[index]?.name;
+                    const run = prev.run.filter((_, position) => position !== index);
+                    return {
+                      ...prev,
+                      run,
+                      defaultRun:
+                        prev.defaultRun === removed ? run[0]?.name ?? null : prev.defaultRun
+                    };
+                  })
+                }
               />
 
               <CommandSection
                 title="Verification commands"
                 testid="setup-verify"
+                namePlaceholder="test"
                 empty="This project has no verification command yet."
                 entries={draft.verify}
                 defaultName={null}
@@ -298,6 +326,20 @@ export function WorkspaceSetupDialog({
                             position === index ? { ...entry, command: value } : entry
                           )
                         }
+                      : prev
+                  )
+                }
+                onAdd={(name) =>
+                  setDraft((prev) =>
+                    prev
+                      ? { ...prev, verify: [...prev.verify, { name, command: "", suggested: false }] }
+                      : prev
+                  )
+                }
+                onRemove={(index) =>
+                  setDraft((prev) =>
+                    prev
+                      ? { ...prev, verify: prev.verify.filter((_, position) => position !== index) }
                       : prev
                   )
                 }
@@ -392,7 +434,10 @@ function CommandSection({
   empty,
   entries,
   defaultName,
-  onChange
+  onChange,
+  onAdd,
+  onRemove,
+  namePlaceholder
 }: {
   title: string;
   testid: string;
@@ -401,7 +446,16 @@ function CommandSection({
   /** The run command the Run control offers first, when there is one. */
   defaultName: string | null;
   onChange: (index: number, value: string) => void;
+  onAdd: (name: string) => void;
+  onRemove: (index: number) => void;
+  /** What a first command of this kind is usually called. */
+  namePlaceholder: string;
 }) {
+  const [adding, setAdding] = useState("");
+  const taken = new Set(entries.map((entry) => entry.name));
+  const proposed = adding.trim().toLowerCase();
+  const nameOk = /^[a-z0-9][a-z0-9-]{0,39}$/.test(proposed) && !taken.has(proposed);
+
   return (
     <section className="setup-section" data-testid={testid}>
       <h3 className="setup-label">{title}</h3>
@@ -421,10 +475,48 @@ function CommandSection({
             <span className="setup-flags">
               {entry.name === defaultName && <span className="setup-suggested">default</span>}
               {entry.suggested && <span className="setup-suggested">suggested</span>}
+              <button
+                className="btn btn-text"
+                onClick={() => onRemove(index)}
+                aria-label={`Remove ${entry.name}`}
+                data-testid={`${testid}-remove`}
+              >
+                Remove
+              </button>
             </span>
           </div>
         ))
       )}
+      {/* A project Novus cannot guess for — a Python service, a Makefile-only
+          repository — must still be configurable here. Without this the dialog
+          is useless for exactly the projects that need it most. */}
+      <div className="setup-add">
+        <input
+          className="input"
+          value={adding}
+          placeholder={namePlaceholder}
+          onChange={(event) => setAdding(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && nameOk) {
+              onAdd(proposed);
+              setAdding("");
+            }
+          }}
+          aria-label={`Name a new ${title.toLowerCase().replace(/s$/, "")}`}
+          data-testid={`${testid}-new-name`}
+        />
+        <button
+          className="btn btn-secondary"
+          disabled={!nameOk}
+          onClick={() => {
+            onAdd(proposed);
+            setAdding("");
+          }}
+          data-testid={`${testid}-add`}
+        >
+          Add
+        </button>
+      </div>
     </section>
   );
 }

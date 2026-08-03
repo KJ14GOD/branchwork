@@ -222,6 +222,17 @@ function primaryStateLine(
     case "new_mission":
       return { ...quiet, tone: "neutral", name: "New mission", detail: "set up the workspace to begin" };
     case "workspace_needs_setup":
+      // A GitHub project has no worktree on this machine, so there is nothing
+      // to set up and no command that could run. Saying "configure it" would
+      // point at a dialog that can only refuse.
+      if (detail.mission.repository?.provider !== "local") {
+        return {
+          ...quiet,
+          tone: "neutral",
+          name: "Ready",
+          detail: `tell ${HARNESS_NAME} what to change`
+        };
+      }
       return {
         tone: "warn",
         name: "Workspace needs setup",
