@@ -162,6 +162,24 @@ function secretStoreFor(host: WorkspaceHost): SecretStore {
 }
 
 /**
+ * One preparation per worktree at a time, in this process (D-058).
+ *
+ * Two callers ask for the same worktree routinely and by design: the runner's
+ * turn path, and whatever the person at the machine just did — open a terminal,
+ * list files, run setup, each of which resolves a worktree first. Unserialised
+ * they interleave destructively, because preparation reads "is it already
+ * there" and then *deletes* what it found. The loser removes the directory the
+ * winner has just created and returned, and the winner's next git command
+ * fails with `No such file or directory`.
+ *
+ * That is not theoretical: it is the intermittent `workspace-clone` failure
+ * that survived two sessions undiagnosed, and its user-visible form is the
+ * error string below — "This workspace could not be created" — which is what a
+ * person sees when they direct a mission and open its terminal a moment later.
+ */
+const worktreePreparations = new Map<string, Promise<string>>();
+
+/**
  * The worktree a workstream works in, created from the mission branch if it is
  * not there yet. The user's own checkout is never touched. Idempotent, and
  * identical to the guarantee the turn path makes: either may create it first,
@@ -177,11 +195,39 @@ export async function ensureWorkspaceWorktree(
   if (!MISSION_BRANCH.test(missionBranch)) {
     throw new WorkspaceCommandError("Refusing to prepare a workspace on an unrecognized branch name.");
   }
+  // Keyed by where the worktree would live, which is what two callers actually
+  // contend over — the same mission under a different user-data directory is a
+  // different worktree and must not queue behind this one.
+  const key = worktreeFor(userDataPath, missionId);
+  const previous = worktreePreparations.get(key);
+  const next = (previous ?? Promise.resolve("")).catch(() => "").then(() =>
+    prepareWorktree(git, repositoryPath, userDataPath, missionId, missionBranch)
+  );
+  worktreePreparations.set(key, next);
+  try {
+    return await next;
+  } finally {
+    // Only when nothing else has queued behind it; otherwise the chain stands.
+    if (worktreePreparations.get(key) === next) worktreePreparations.delete(key);
+  }
+}
+
+async function prepareWorktree(
+  git: GitExec,
+  repositoryPath: string,
+  userDataPath: string,
+  missionId: string,
+  missionBranch: string
+): Promise<string> {
   const root = worktreeRootFor(userDataPath);
   const worktree = worktreeFor(userDataPath, missionId);
   await git(repositoryPath, ["worktree", "prune"]);
   if (existsSync(join(worktree, ".git"))) return worktree;
   mkdirSync(root, { recursive: true });
+  // Whatever is here is not a worktree — it has no `.git` — so it is debris
+  // from a preparation that did not finish, and `git worktree add` refuses a
+  // path that exists. Removing it is safe *because* of the serialization
+  // above: without that, this line is what deletes another caller's worktree.
   if (existsSync(worktree)) rmSync(worktree, { recursive: true, force: true });
   const added = await git(repositoryPath, ["worktree", "add", "--", worktree, missionBranch]);
   if (added.code !== 0) {

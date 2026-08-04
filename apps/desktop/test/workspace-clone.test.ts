@@ -281,6 +281,34 @@ describe("a second workstream on the same repository", () => {
     expect(git(worktree, ["rev-parse", "HEAD"])).toBe(originSha(LATER_BRANCH));
   });
 
+  it("prepares one worktree when two callers ask for it at the same moment", async () => {
+    // The runner's turn path and whatever the person just did — open a
+    // terminal, list files — ask for the same worktree routinely. Unserialised
+    // they interleave destructively: preparation reads "is it already there"
+    // and then deletes what it found, so the loser removes the directory the
+    // winner has just created and returned (D-058).
+    remote = await startRemote({ accept: true });
+    const request = {
+      root: clonedRepositoryRoot(userData),
+      providerRepoId: "9001",
+      credential: credentialFor(remote.url)
+    };
+    const checkout = await ensureRepositoryClone({ ...request, missionBranch: OLD_BRANCH });
+    const asked = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        ensureWorkspaceWorktree(gitExec, checkout.path, userData, "msn_contended0000000", OLD_BRANCH)
+      )
+    );
+
+    // Every caller gets the same path, and that path is a real worktree on the
+    // right branch *after all of them have returned* — which is the assertion
+    // that fails when one caller has deleted another's.
+    expect(new Set(asked).size).toBe(1);
+    const worktree = asked[0] as string;
+    expect(existsSync(join(worktree, ".git"))).toBe(true);
+    expect(git(worktree, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(OLD_BRANCH);
+  }, 90_000);
+
   it("never moves a mission branch that already has work on it", async () => {
     remote = await startRemote({ accept: true });
     const request = {

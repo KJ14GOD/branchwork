@@ -586,6 +586,35 @@ Every run produces a **new record**. The failure that prompted it stays in the l
 
 **Revisit when.** CI results are ingested as a second attributed source, at which point a row may have an origin that Novus cannot re-run, and the control has to say so rather than be absent.
 
+## D-058 — One worktree preparation per mission at a time
+
+**Context.** `workspace-clone.test.ts` had failed intermittently for two sessions and survived both because nothing ever captured its output: the repository gate ran every step into `/dev/null`, so a failure named the command and nothing else, and the only way to see more was to run the suite outside the gate — unloaded, after nothing else — which is exactly the condition it does not fail under. That gate defect was fixed first; this is what the output then said.
+
+Reproduced one run in three with three other agents loading the machine:
+
+```
+fatal: cannot change to '.../worktrees/msn_second00000000000': No such file or directory
+```
+
+Not `invalid reference`, so not D-051 returning. The directory had been created and then removed while its creator was still using it.
+
+`ensureWorkspaceWorktree` read "is it already there", and if not, **deleted whatever was there** and ran `git worktree add`. Two callers ask for the same worktree routinely and by design — the runner's turn path, and whatever the person at the machine just did: open a terminal, list files, run setup, all of which resolve a worktree first. Unserialised they interleave destructively:
+
+1. Caller 1 runs `git worktree add`; it succeeds; it returns the path.
+2. Caller 2, which read `.git` before that add was visible, sees no worktree.
+3. Caller 2 deletes the directory caller 1 has just created and returned.
+4. Caller 1's next git command fails, or caller 2's own `worktree add` fails on a path git still believes is registered.
+
+The user-visible form of step 4 is the error string this codebase already had: **"This workspace could not be created"**, which is what a person sees when they direct a mission and open its terminal a moment later. It was reported from a real session and read as a GitHub problem, because the mission that showed it happened to be a GitHub one.
+
+**Decision.** Preparation is serialised per worktree path, in this process, with the promise-chain pattern the runner agent already uses for per-workstream commands. Keyed by the path rather than the mission id, because the same mission under a different user-data directory is a different worktree and must not queue behind this one. The destructive `rmSync` stays — a directory with no `.git` is debris from a preparation that did not finish, and `git worktree add` refuses a path that exists — but it is now only reachable while holding the lane, which is what makes it safe.
+
+**Alternatives.** A lock file on disk (rejected: it must survive a crash, so it needs an expiry, and an expiry is a second race; the contention is between callers in one process); making the second caller wait for the first by polling for `.git` (rejected: a preparation that legitimately fails would make every other caller wait out a timeout); dropping the `rmSync` and letting `git worktree add` fail on debris (rejected: it converts a recoverable state into a permanently broken workspace).
+
+**Consequences.** The intermittent failure is a bug that was always in the product and only ever showed up in a test that happened to run two callers at once. The test that now covers it asks six callers for one worktree simultaneously and requires that they all get the same real worktree on the right branch. Proven by seeding the failure: with serialisation bypassed the test fails with "This workspace could not be created"; with it restored the file passed four consecutive runs, having failed one in three before.
+
+**Revisit when.** More than one Novus process can share a user-data directory, at which point in-process serialisation is no longer sufficient and the lock has to become one the operating system arbitrates.
+
 ## D-059 — A cited decision must exist
 
 **Context.** D-053 was cited by six files — two canonical documents, three source files and a test — for an entire session before anyone noticed it had never been written. The slice it named shipped; the entry did not. `runner.ts` cited D-038, which has never existed either. Nothing caught either one, because nothing looked: the repository gate checks frontmatter, links, anchors, banned language, gradients, raw colours and untracked files, and had no opinion about whether a decision reference resolves to anything.
