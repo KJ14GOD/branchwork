@@ -387,10 +387,16 @@ export function startTurn(request: TurnRequest): RunningTurn {
           message: { content: [{ type: "text", text: "Done. The change is in the worktree." }] }
         })
       ];
+      // The double runs as fast as it can by default. An end-to-end test that
+      // needs to *catch* a turn — press Stop while it is working — cannot do
+      // that against a turn that is over in a tenth of a second, so its pace is
+      // adjustable. Only ever consulted on this branch, which the caller gates.
+      const pace = Number.parseInt(process.env.NOVUS_FAKE_HARNESS_PACE_MS ?? "", 10);
+      const perLine = Number.isFinite(pace) && pace > 0 ? Math.min(pace, 10_000) : 20;
       for (const line of lines) {
         if (stopReason !== null) return { code: null, signal: "SIGTERM", stderr: "", spawnError: null };
         for (const event of stream.push(`${line}\n`)) emit(event);
-        await delay(20);
+        await delay(perLine);
       }
       writeFileSync(join(worktreePath, "NOVUS_FAKE_TURN.md"), `# Fake turn\n\n${request.direction}\n`);
       // No trailing newline: the flush path is part of what is being exercised.

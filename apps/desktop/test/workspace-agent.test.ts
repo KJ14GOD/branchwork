@@ -358,3 +358,107 @@ describe("workspace commands through the agent", () => {
     expect(plane.payloadsOf("workspace.readiness").length).toBe(before);
   }, 40_000);
 });
+
+/**
+ * Stop, driven through the agent rather than through the turn (D-053).
+ *
+ * `execution.test.ts` already proves that a turn told to stop kills its process
+ * group and reports `execution.stopped`. That was never the broken half. The
+ * broken half was between the command arriving and that call being made: a
+ * `stop_execution` queued behind the turn it was meant to interrupt, and the
+ * chain it queued on only resolved *after* the turn had been removed from the
+ * active set — so the stop found nothing to stop and returned successfully. Not
+ * a late interrupt; a guaranteed no-op, which is why nothing failed loudly.
+ *
+ * These tests enter where the bug was, which is the only place they could have
+ * caught it.
+ */
+describe("stopping a coding-agent execution", () => {
+  const EXECUTION_ID = "exe_stoptest0000001";
+
+  function startExecution(executionId = EXECUTION_ID): RunnerCommand {
+    return {
+      ...command("start_execution", { body: "add a fake turn file", model: "", effort: "" }),
+      executionId
+    };
+  }
+
+  function stopExecution(executionId = EXECUTION_ID): RunnerCommand {
+    return { ...command("stop_execution"), executionId };
+  }
+
+  /** Every terminal event this execution reported, in order. */
+  const terminals = (): string[] =>
+    plane
+      .kinds()
+      .filter((kind) =>
+        ["execution.completed", "execution.stopped", "execution.failed", "execution.interrupted"].includes(kind)
+      );
+
+  it("reaches the execution in the same batch that started it, and no harness runs", async () => {
+    start().discoverNow();
+    // Both in one poll, which is the case a person actually produces: direct,
+    // then think better of it. The start holds the workstream's lane; before
+    // the fix the stop waited for that lane and arrived after everything.
+    plane.enqueue(startExecution());
+    plane.enqueue(stopExecution());
+
+    await waitFor("the execution to end", () => terminals().length > 0);
+    expect(terminals()).toEqual(["execution.stopped"]);
+    expect(plane.payloadsOf("execution.stopped")[0]?.reason).toBe("Stopped by a participant.");
+
+    // The strongest assertion here: the turn never ran at all. A stop that
+    // merely killed the process afterwards would still have left this file.
+    expect(existsSync(join(userData, "worktrees", MISSION_ID, "NOVUS_FAKE_TURN.md"))).toBe(false);
+    expect(plane.kinds()).not.toContain("harness.session");
+  }, 40_000);
+
+  it("is idempotent: two stops for one execution end it once", async () => {
+    start().discoverNow();
+    plane.enqueue(startExecution());
+    plane.enqueue(stopExecution());
+    plane.enqueue(stopExecution());
+
+    await waitFor("the execution to end", () => terminals().length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(terminals()).toEqual(["execution.stopped"]);
+  }, 40_000);
+
+  it("stops the execution it names and not whichever one is running", async () => {
+    start().discoverNow();
+    plane.enqueue(startExecution());
+    // A stale stop for an execution that is not this one — re-offered after a
+    // relaunch, say. Before the execution id was compared it would have killed
+    // whatever turn happened to be in the active slot.
+    plane.enqueue(stopExecution("exe_someothererun01"));
+
+    await waitFor("the execution to end", () => terminals().length > 0);
+    expect(terminals()).toEqual(["execution.completed"]);
+    expect(existsSync(join(userData, "worktrees", MISSION_ID, "NOVUS_FAKE_TURN.md"))).toBe(true);
+  }, 40_000);
+
+  it("stops the harness and leaves the project's own processes alone", async () => {
+    start().discoverNow();
+    const runCommand = await authorize("run_command", "run");
+    await waitFor("the run command to start", () => plane.kinds().includes("process.started"));
+    await waitFor("the run command to settle", () => plane.stateOf(runCommand.commandId) === "completed");
+
+    plane.enqueue(startExecution());
+    plane.enqueue(stopExecution());
+    await waitFor("the execution to end", () => terminals().length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // Stop is about the harness. A dev server a participant started is not part
+    // of the turn and does not end with it (D-045).
+    expect(plane.kinds()).not.toContain("process.exited");
+  }, 40_000);
+
+  it("settles the stop command itself, so it is not re-offered forever", async () => {
+    start().discoverNow();
+    plane.enqueue(startExecution());
+    const stop = stopExecution();
+    plane.enqueue(stop);
+
+    await waitFor("the stop to settle", () => plane.stateOf(stop.commandId) === "completed");
+  }, 40_000);
+});

@@ -271,6 +271,16 @@ function primaryStateLine(
         action: { label: "Stop", kind: "stop" },
         working: true
       };
+    case "agent_stopping":
+      return {
+        tone: "active",
+        name: "Stopping",
+        detail: `${HARNESS_NAME} was asked to stop`,
+        suffix: null,
+        // No action: the one that belongs here has been taken.
+        action: null,
+        working: true
+      };
     case "needs_direction":
       return {
         ...quiet,

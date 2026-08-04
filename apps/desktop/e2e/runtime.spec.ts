@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { NovusBridge } from "@novus/contracts";
@@ -92,7 +92,14 @@ async function mintToken(as?: string): Promise<string> {
   return token;
 }
 
-async function launch(dataDir: string, identity?: string): Promise<{ app: ElectronApplication; page: Page }> {
+async function launch(
+  dataDir: string,
+  identity?: string,
+  /** Milliseconds between the fake harness's lines. A turn that is over in a
+   *  tenth of a second cannot be caught by a person pressing Stop, and Stop is
+   *  precisely what one test here has to press *while the harness is working*. */
+  paceMs?: number
+): Promise<{ app: ElectronApplication; page: Page }> {
   const launched = await electron.launch({
     args: [desktopRoot],
     env: {
@@ -101,6 +108,7 @@ async function launch(dataDir: string, identity?: string): Promise<{ app: Electr
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
       NOVUS_USER_DATA_DIR: dataDir,
+      ...(paceMs ? { NOVUS_FAKE_HARNESS_PACE_MS: String(paceMs) } : {}),
       ...(identity ? { NOVUS_FAKE_IDENTITY: identity } : {})
     }
   });
@@ -846,5 +854,68 @@ describe("setup and verification, through the interface", () => {
     }, missionId);
     expect(checks.some((entry) => entry.name === "unit" && entry.outcome === "passed")).toBe(true);
     await shot(page, "55-relaunch-no-stale-terminal.png");
+  }, 240_000);
+});
+
+describe("stopping a running harness, through the interface", () => {
+  /**
+   * The one thing the deterministic suites cannot prove: that the Stop a person
+   * can actually see reaches the harness (D-053).
+   *
+   * It ran its own app with its own data directory and its own slow harness,
+   * because catching a turn mid-flight means the turn has to still be running
+   * when the click lands — and every other test here wants the opposite.
+   */
+  it("interrupts the turn on a click, and the room says stopped rather than completed", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "novus-stop-"));
+    writeFileSync(join(dataDir, "local-repos.json"), JSON.stringify({ [localId]: localRepoDir }));
+    // ~3s a line, four lines: long enough to see, short enough that the test
+    // is not waiting on a person's reflexes.
+    const stopApp = await launch(dataDir, undefined, 3_000);
+    try {
+      await signIn(stopApp.page);
+      const projectRow = stopApp.page.getByTestId("project-row").filter({ hasText: repoName });
+      await projectRow.waitFor({ timeout: 30_000 });
+      await projectRow.click();
+      // The project already has a mission on this control plane, so the room
+      // opens into it; a fresh mission is what this test wants.
+      await stopApp.page.getByTestId("new-tab").click();
+      await stopApp.page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
+      await stopApp.page.getByTestId("composer-input").fill("a turn that will be interrupted");
+      await stopApp.page.keyboard.press("Enter");
+
+      // The harness is genuinely working: it has already said something, and
+      // the room is offering the control that stops it.
+      await stopApp.page
+        .getByTestId("msg-agent")
+        .filter({ hasText: "Working on: a turn that will be interrupted" })
+        .waitFor({ timeout: 90_000 });
+      const stop = stopApp.page.getByTestId("stop");
+      await stop.waitFor({ timeout: 30_000 });
+      expect((await stopApp.page.getByTestId("state-line").textContent()) ?? "").toContain("Running");
+      await stopApp.page.screenshot({ path: join(evidenceDir, "59-running-with-stop.png") });
+
+      await stop.click();
+
+      // The outcome is the assertion. "Turn completed" here would mean the stop
+      // was accepted, recorded, and ignored — which is exactly what happened
+      // before: the command queued behind the turn it was meant to interrupt
+      // and found nothing left to stop by the time it ran.
+      const outcome = stopApp.page.getByTestId("trace-outcome");
+      await expect
+        .poll(async () => (await outcome.textContent().catch(() => "")) ?? "", { timeout: 60_000 })
+        .toMatch(/Stopped|stopped/);
+      expect((await outcome.textContent()) ?? "").not.toContain("Turn completed");
+      await stopApp.page.screenshot({ path: join(evidenceDir, "60-stopped.png") });
+
+      // And it is over: the room stops offering Stop for an execution that has
+      // already ended, rather than leaving a live control on a dead turn.
+      await expect
+        .poll(async () => stopApp.page.getByTestId("stop").count(), { timeout: 30_000 })
+        .toBe(0);
+    } finally {
+      await stopApp.app.close().catch(() => undefined);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   }, 240_000);
 });

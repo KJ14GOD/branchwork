@@ -345,8 +345,13 @@ export function projectMissionState(args: {
     case "starting":
       return "agent_starting";
     case "running":
-    case "stopping":
       return "agent_running";
+    case "stopping":
+      // Distinct from running, and briefly: a stop is dispatched out of band
+      // and reaches the harness within a poll, but a room that says Running
+      // with a live Stop while one is already in flight invites a second press
+      // and gives no sign the first was heard (D-053).
+      return "agent_stopping";
     case "needs_direction":
       return "needs_direction";
     case "needs_approval":

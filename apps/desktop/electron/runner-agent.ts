@@ -176,6 +176,10 @@ const StartPayloadSchema = z.object({
   resumeSessionId: z.string().nullable().default(null)
 });
 
+/** What a stopped execution says it was stopped by. One string, because the
+ *  turn path and the never-started path must give the same account. */
+const STOPPED_BY_PARTICIPANT = "Stopped by a participant.";
+
 export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   const host = deps.host ?? electronHost();
   const httpFetch = deps.fetch ?? fetch;
@@ -197,6 +201,9 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   const settled = new Set<string>(loadCommandMemory());
   const inFlight = new Set<string>();
   const chains = new Map<string, Promise<void>>();
+  /** Executions a participant has stopped. Consulted by every turn before it
+   *  spawns, so a stop that arrives early is honoured rather than swallowed. */
+  const stopRequested = new Set<string>();
   /** Repositories this machine could not fetch: when to try again, and what was
    *  last said about why, so one unreachable repository is one event. */
   const checkoutRetry = new Map<string, { after: number; attempts: number; reason: string }>();
@@ -617,7 +624,12 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     // or a live dev server holds the lane for as long as it lasts, so a stop
     // that waited its turn would never arrive — and it must not take the lane
     // over either, or whatever was already queued would lose its place.
-    const interrupt = command.kind === "stop_command";
+    //
+    // `stop_execution` belongs here for a sharper reason than lateness: the
+    // chain only resolves after the turn has been removed from `active`, so a
+    // queued stop found nothing to stop and returned successfully. It was not
+    // a delayed interrupt, it was a guaranteed no-op.
+    const interrupt = command.kind === "stop_command" || command.kind === "stop_execution";
     const previous = interrupt ? Promise.resolve() : (chains.get(workstream.workstreamId) ?? Promise.resolve());
     const next = previous
       .then(() => handle(command, workstream, enrolment))
@@ -681,8 +693,20 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   ): Promise<void> {
     const workstreamId = workstream.workstreamId;
     if (command.kind === "stop_execution") {
+      if (!command.executionId) return;
+      // Remembered, not just delivered. A stop can arrive before its turn has
+      // spawned, between two turns of a multi-turn execution, or while the
+      // start command is still queued behind something else — in every one of
+      // those the harness is not running *yet*, and a stop that only looked at
+      // what was running would be silently swallowed while the turn it was
+      // meant to prevent went ahead.
+      stopRequested.add(command.executionId);
       const running = active.get(workstreamId);
-      if (running) running.turn.stop("Stopped by a participant.");
+      // Matched on the execution, because a stale stop re-offered after its own
+      // execution ended would otherwise kill whichever turn is running now.
+      if (running && running.executionId === command.executionId) {
+        running.turn.stop(STOPPED_BY_PARTICIPANT);
+      }
       return;
     }
     if (command.kind === "boundary_request") {
@@ -782,6 +806,19 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       }
     };
 
+    // The stop may already have arrived — for this execution, before this turn
+    // existed. Reported as the terminal outcome rather than started and then
+    // killed, so a participant who stopped an execution never sees a harness
+    // process run afterwards and never gets a checkpoint from one.
+    if (stopRequested.has(args.executionId)) {
+      openExecutions.delete(args.executionId);
+      report(args.workstreamId, args.executionId, {
+        kind: "execution.stopped",
+        payload: { reason: STOPPED_BY_PARTICIPANT }
+      });
+      return;
+    }
+
     const turn = startTurn({
       executionId: args.executionId,
       missionId: args.missionId,
@@ -812,8 +849,16 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     if (stopped) return; // shutdown owns the terminal event
 
     // A completed turn only ends the execution when nothing else is queued for
-    // it; otherwise the next direction continues the same run.
-    if (result.terminal.kind === "execution.completed" && (await args.pendingApplies())) return;
+    // it; otherwise the next direction continues the same run. A *stopped* one
+    // never continues: queued direction for a stopped execution is discarded
+    // with it, which is what the participant asked for.
+    if (
+      result.terminal.kind === "execution.completed" &&
+      !stopRequested.has(args.executionId) &&
+      (await args.pendingApplies())
+    ) {
+      return;
+    }
     openExecutions.delete(args.executionId);
     report(args.workstreamId, args.executionId, result.terminal);
   }

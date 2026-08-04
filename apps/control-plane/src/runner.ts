@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
+  TERMINAL_EXECUTION_STATES,
   AckCommandInputSchema,
   RegisterRunnerInputSchema,
   ReportRunnerEventsInputSchema,
@@ -553,6 +554,15 @@ async function applySideEffects(
   // Everything below is a claim about a turn. Without one there is nothing to
   // move; the event stays in the log and no projected state changes.
   if (!execution) return;
+  // A turn that has already ended does not get to keep changing anything.
+  // `setExecutionState` has always refused to move a terminal execution, so a
+  // late report could not resurrect one — but the transcript, the session
+  // pointer, and checkpoints did not go through it, so a stopped execution
+  // went on talking, could overwrite the workstream's resume point with the
+  // session it was killed in, and could commit a checkpoint after the
+  // participant had stopped it. The event is still recorded; what it is no
+  // longer allowed to do is change what the room shows (D-053).
+  if (TERMINAL_EXECUTION_STATES.includes(execution.state as never)) return;
   switch (event.kind) {
     case "execution.starting":
       await setExecutionState(client, execution.exe_id, "starting");

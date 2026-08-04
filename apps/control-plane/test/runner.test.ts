@@ -823,6 +823,70 @@ describe("event ingestion", () => {
     expect(executions.rowCount).toBe(2);
   });
 
+  it("refuses a stop from someone whose role does not carry it, on the server", async () => {
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+    const viewer = await addParticipant(lane.missionId, "stop-viewer", "viewer");
+    const before = await harness.db.query("select state from executions where exe_id = $1", [executionId]);
+
+    const refused = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/stop`,
+      headers: bearer(viewer),
+      payload: {}
+    });
+    expect(refused.statusCode).toBe(403);
+
+    // Refused *and* inert: no state change, and no command a runner could act
+    // on. A capability the renderer merely hides is not a capability.
+    const state = await harness.db.query("select state from executions where exe_id = $1", [executionId]);
+    expect(state.rows[0].state).toBe(before.rows[0].state);
+    const { commands } = await commandsFor(lane.credential);
+    expect(commands.some((command: { kind: string }) => command.kind === "stop_execution")).toBe(false);
+  });
+
+  it("lets a stopped execution report nothing further into the room", async () => {
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+    await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/stop`,
+      headers: bearer(owner),
+      payload: {}
+    });
+    await report(lane.credential, executionId, [
+      { originSeq: 1, event: { kind: "execution.stopped", payload: { reason: "Stopped by a participant." } } }
+    ]);
+
+    const before = await harness.db.query(
+      "select harness_session_id from workstreams where wst_id = $1",
+      [lane.workstreamId]
+    );
+
+    // The harness process is killed, not asked politely, so whatever it had
+    // already written can still arrive. Recorded in the log — that is honest —
+    // but it no longer moves anything the room reads.
+    const late = await report(lane.credential, executionId, [
+      { originSeq: 2, event: { kind: "harness.session", payload: { sessionId: randomUUID(), resumed: false } } },
+      { originSeq: 3, event: { kind: "execution.completed", payload: {} } }
+    ]);
+    expect(late.statusCode).toBe(200);
+
+    const after = await harness.db.query(
+      "select state, exit_outcome, harness_session_id from executions where exe_id = $1",
+      [executionId]
+    );
+    expect(after.rows[0].state).toBe("stopped");
+    expect(after.rows[0].exit_outcome).toBe("stopped");
+    // The workstream's resume point is not overwritten by the session the turn
+    // was killed in, which is what the *next* execution would have continued.
+    const workstream = await harness.db.query(
+      "select harness_session_id from workstreams where wst_id = $1",
+      [lane.workstreamId]
+    );
+    expect(workstream.rows[0].harness_session_id).toBe(before.rows[0].harness_session_id);
+  });
+
   it("interrupts rather than stalls when the runner was revoked outright", async () => {
     const lane = await createLane();
     const executionId = await startExecution(lane);

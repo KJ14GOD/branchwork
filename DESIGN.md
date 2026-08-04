@@ -252,6 +252,8 @@ Keyed verbatim to [PRODUCT.md](PRODUCT.md#the-mission-state-model). Fields per s
 
 **Agent running** — "Running — {current activity summary}." · Primary: Pause · Secondary: Stop · Canvas: activity feed streaming; direction thread visible · Sidebar: workstreams, files touched count · Composer: controller "Steer {harness}…" / others "Add direction to the queue…" · Evidence: checks appear as they run · Participants: working indicator on the execution row · Color: `--accent` · Recovery: disconnects → Runner offline overlay.
 
+**Agent stopping** — "Stopping — {harness} was asked to stop." · Primary: none · Secondary: **none** — the action that belongs here has been taken, and a Stop still on screen after a Stop invites a second press and says nothing about the first · Canvas: activity feed as it was, no longer growing · Composer: enabled (queues) · Evidence: current · Color: `--accent` · Recovery: none needed — the state always resolves to a terminal outcome, and a runner that dies while stopping is ended by the sweep as *interrupted*.
+
 **Needs direction** — "{Harness} is waiting for direction." · Primary: composer submit · Secondary: Stop · Canvas: feed + the harness's question highlighted at bottom · Composer: focused · Evidence: current · Color: `--warn` dot · Recovery: n/a. Missions surface: Needs you.
 
 **Needs approval** — "{Harness} asks to {action}." · Primary: Approve (controller) · Secondary: Deny · Canvas: approval request payload rendered plainly · Composer: enabled · Evidence: current · Participants: non-controllers see who can approve · Color: `--warn` · Recovery: deny returns to running with denial as context. Needs you (controller).

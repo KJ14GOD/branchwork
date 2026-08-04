@@ -27,6 +27,7 @@ export const MissionStateSchema = z.enum([
   "ready_for_instruction",
   "agent_starting",
   "agent_running",
+  "agent_stopping",
   "needs_direction",
   "needs_approval",
   "paused",
