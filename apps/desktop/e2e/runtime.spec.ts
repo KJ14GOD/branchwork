@@ -730,6 +730,73 @@ describe("setup and verification, through the interface", () => {
     await shot(page, "54-verification-failed.png");
   }, 180_000);
 
+  it("runs a failed check again from its own row, and keeps the failure in the ledger", async () => {
+    // Depends on the failing check having run, which the test above does.
+    await openPanel(page);
+    await page.getByTestId("inspector-tab-verification").click();
+    const before = await page.evaluate(async (mission) => {
+      const result = await window.novus.missions.get(mission);
+      if (!result.ok) throw new Error(result.message);
+      return result.value.checks.filter((entry) => entry.name === "failing").length;
+    }, missionId);
+    expect(before).toBeGreaterThan(0);
+
+    // The row that failed offers the action; a row that passed and still
+    // proves the current revision has no question left to re-answer.
+    const rerun = page
+      .getByTestId("ledger-entry")
+      .filter({ hasText: "failing" })
+      .last()
+      .getByTestId("rerun-check");
+    await rerun.waitFor({ timeout: 20_000 });
+    await rerun.click();
+
+    // A *new* record, not an edit of the old one — the ledger is the history.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(async (mission) => {
+            const result = await window.novus.missions.get(mission);
+            if (!result.ok) return 0;
+            return result.value.checks.filter((entry) => entry.name === "failing").length;
+          }, missionId),
+        { timeout: 90_000 }
+      )
+      .toBe(before + 1);
+
+    const runs = await page.evaluate(async (mission) => {
+      const result = await window.novus.missions.get(mission);
+      if (!result.ok) throw new Error(result.message);
+      return result.value.checks
+        .filter((entry) => entry.name === "failing")
+        .map((entry) => ({
+          outcome: entry.outcome,
+          exitCode: entry.exitCode,
+          checkId: entry.checkId,
+          sha: entry.checkpointSha,
+          by: entry.requestedByLogin
+        }));
+    }, missionId);
+    // Every run is its own attributed record, bound to the revision it proved.
+    expect(new Set(runs.map((run) => run.checkId)).size).toBe(runs.length);
+    expect(runs.at(-1)?.outcome).toBe("failed");
+    expect(runs.at(-1)?.exitCode).toBe(1);
+    expect(runs.at(-1)?.by).not.toBeNull();
+    expect(runs.at(-1)?.sha).not.toBeNull();
+    // The earlier failure is still there. A ledger that overwrote it could not
+    // answer "did this ever fail" — and it is still there *on screen*, which is
+    // the claim that matters; the row count is asserted against the rendered
+    // ledger rather than against the response behind it.
+    expect(runs.length).toBeGreaterThanOrEqual(2);
+    await expect
+      .poll(
+        async () => page.getByTestId("ledger-entry").filter({ hasText: "failing" }).count(),
+        { timeout: 30_000 }
+      )
+      .toBeGreaterThanOrEqual(2);
+    await shot(page, "62-check-run-again.png");
+  }, 180_000);
+
   it("keeps setup, the app, and checks reachable from their own surfaces", async () => {
     // Removing the dock's switch removed a navigation, not three capabilities
     // (D-049). Each is invoked where it belongs: setup and the project's own

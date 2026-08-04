@@ -543,3 +543,21 @@ The file was created, `permission_denials` was empty, the run ended `result/succ
 **Alternatives.** An MCP permission-prompt tool (proven, kept as the fallback if driving stdin conflicts with something; costs a second process and gains no interrupt); polling `permission_denials` after the fact (rejected: the work has already been refused by then, so it is a report and not an approval); asking the model to request permission in prose (rejected: unenforceable, and an approval the harness can route around is not an approval).
 
 **Revisit when.** The slice is built — at which point this entry becomes the record of why stdio, and the interrupt finding should be reconsidered against D-053's process-group kill.
+
+## D-057 — A check is run again from the row that failed
+
+**Context.** A failed check was a dead end. The ledger recorded that `failing` exited 1 against a particular revision and offered nothing to do about it: the only way to run a check again was `Run ▾`, which is a menu of what the *project* declared rather than of what has already been tried, and *Run verification*, which runs every check and buries the one being asked about. A person who has just fixed the thing a check caught had no way to ask that check.
+
+Stale results have the same shape and are more common. A check that passed against an earlier revision dims and says what it proved (D-045), which is honest and also terminal: the row states that the answer is out of date and provides no way to get a current one.
+
+**Decision.** The ledger row carries **Run again**, and only where there is a question left to re-answer — a check that failed, errored, or proved a revision the worktree has moved past. A row that passed and still proves the current revision offers nothing, because nothing is being asked.
+
+It is the same declared command it was the first time, invoked by name through the same route, authorized by the server against `workspace.command`, and run against the snapshot the control plane pinned when it authorized it (D-043). Nothing about re-running is a second mechanism: the only new thing is the affordance.
+
+Every run produces a **new record**. The failure that prompted it stays in the ledger with its own attribution, its own revision, its own exit code, and its own output — a ledger that overwrote a failure with a later pass could not answer "did this ever fail", which is the question a verification record exists to answer. One run at a time per check, so a second click while one is in flight does nothing rather than queueing a duplicate.
+
+**Alternatives.** Re-running every check from the row (rejected: the reader asked about one, and the tally already offers *Run verification* for all of them); replacing the failed row with its newer result (rejected outright, for the reason above); a *Retry* on the mission state line (rejected: the state line names the mission's next step, and one check among several is not it); offering Run again on every row including passing ones (rejected: an action that is always available stops meaning anything, and re-running a green current check answers a question nobody asked).
+
+**Consequences.** Remote participants get the same control, subject to the same server-side capability, and read the same bounded evidence; the full local output stays on the machine that produced it, under Evidence → Output (D-050). Proven in the app: a failed check is run again from its own row, a second record appears with its own attribution and revision, and both remain on screen.
+
+**Revisit when.** CI results are ingested as a second attributed source, at which point a row may have an origin that Novus cannot re-run, and the control has to say so rather than be absent.

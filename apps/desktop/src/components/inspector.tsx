@@ -180,7 +180,25 @@ function provenanceLine(check: VerificationCheck): string {
  * a stale row dims to `--text-3` and says what it proved, because a result
  * that has been overtaken is history, not proof.
  */
-function LedgerEntry({ check }: { check: VerificationCheck }) {
+function LedgerEntry({
+  check,
+  capabilities,
+  holderLogin,
+  busy,
+  onRerun
+}: {
+  check: VerificationCheck;
+  capabilities: MissionDetailResponse["capabilities"];
+  holderLogin: string | null;
+  busy: boolean;
+  onRerun: (name: string) => void;
+}) {
+  /* A result that failed, or that proved a revision the worktree has moved
+     past, is the one a reader wants to try again — and trying again is the
+     same declared command it was the first time, authorized the same way
+     (D-057). A row that passed and still proves the current revision offers
+     nothing: there is no question to re-answer. */
+  const worthRunningAgain = check.stale || check.outcome === "failed" || check.outcome === "errored";
   return (
     <div
       className={check.stale ? "ledger-entry stale" : "ledger-entry"}
@@ -192,6 +210,20 @@ function LedgerEntry({ check }: { check: VerificationCheck }) {
           {check.name}
         </span>
         <span className={`mono ledger-outcome outcome-${check.outcome}`}>{check.outcome}</span>
+        {worthRunningAgain && (
+          <GatedAction
+            capability="workspace.command"
+            capabilities={capabilities}
+            denialReason="Invoking a command this project declared needs the workspace.command capability."
+            holderLogin={holderLogin}
+            onClick={() => onRerun(check.name)}
+            variant="text"
+            busy={busy}
+            testid="rerun-check"
+          >
+            Run again
+          </GatedAction>
+        )}
       </div>
       <div className="ledger-origin" data-testid="ledger-origin">
         {originLine(check)}
@@ -386,6 +418,8 @@ export function Inspector({
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  /** The check being run again, so its own row says so and no second run starts. */
+  const [rerunning, setRerunning] = useState<string | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
 
   const files = changedFiles(detail);
@@ -435,6 +469,28 @@ export function Inspector({
       kind: "verification"
     });
     setVerifying(false);
+    if (!result.ok) setVerifyError(result.message);
+  };
+
+  /**
+   * One named check again, by the name the ledger row carries.
+   *
+   * Not an edit of the row it came from: the run produces a *new* record, with
+   * its own attribution, its own revision, and its own outcome, and the one
+   * that failed stays in the ledger. A check's history is the evidence — a
+   * ledger that overwrote a failure with a later pass would be a ledger that
+   * cannot be used to answer "did this ever fail" (D-057).
+   */
+  const rerunCheck = async (name: string) => {
+    if (rerunning !== null) return; // one at a time; the row says which
+    setRerunning(name);
+    setVerifyError(null);
+    const result = await novus().workspace.command({
+      missionId: detail.mission.missionId,
+      kind: "verification",
+      name
+    });
+    setRerunning(null);
     if (!result.ok) setVerifyError(result.message);
   };
 
@@ -688,7 +744,14 @@ export function Inspector({
               ) : (
                 <div className="ledger" data-testid="ledger">
                   {detail.checks.map((check) => (
-                    <LedgerEntry key={check.checkId} check={check} />
+                    <LedgerEntry
+                      key={check.checkId}
+                      check={check}
+                      capabilities={detail.capabilities}
+                      holderLogin={detail.control.holderLogin}
+                      busy={rerunning === check.name}
+                      onRerun={(name) => void rerunCheck(name)}
+                    />
                   ))}
                 </div>
               )}
