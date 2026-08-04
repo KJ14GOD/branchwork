@@ -661,6 +661,17 @@ body {
   font: var(--type-meta);
 }
 
+/* Creating a mission is a row in the list it joins, not a floating control:
+   the rail already reads as "this project, and its missions", and the way to
+   add one belongs at the end of that sentence (D-055). */
+.side-new {
+  color: var(--text-3);
+}
+
+.side-new:hover {
+  color: var(--text-2);
+}
+
 .side-row.selected {
   background: var(--selected);
   color: var(--text-1);
@@ -2607,7 +2618,7 @@ body {
 .family-config { color: var(--term-green); background: color-mix(in srgb, var(--term-green) 14%, transparent); }
 .family-asset { color: var(--term-bright-magenta); background: color-mix(in srgb, var(--term-bright-magenta) 12%, transparent); }
 
-/* A file is its own tab beside the workstream's, marked as a file. */
+/* A file is its own tab beside the room's, marked as a file. */
 .file-tab {
   display: inline-flex;
   align-items: center;
@@ -2660,7 +2671,7 @@ body {
 }
 
 /* A file takes the room: read at full measure or not at all, and with none of
-   the workstream's own header above it. */
+   the mission's own header above it. */
 .file-view {
   flex: 1;
   min-height: 0;

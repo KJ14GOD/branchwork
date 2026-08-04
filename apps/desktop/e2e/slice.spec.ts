@@ -36,6 +36,22 @@ const DEMO_HEAD_SHA = createHash("sha1").update("demo-app@main").digest("hex");
 let controlPlane: ChildProcess;
 let userDataDir: string;
 
+/**
+ * Opens a project in the rail so its missions are disclosed.
+ *
+ * The row *toggles*, and the shell selects a project on mount, so a plain
+ * click is as likely to close it as to open it. Since D-055 the rail is the
+ * only place missions are listed, so every test that names one goes through
+ * here rather than assuming a click means open.
+ */
+async function openProject(target: Page, name: string): Promise<void> {
+  const row = target.getByTestId("project-row").filter({ hasText: name });
+  await row.waitFor({ timeout: 30_000 });
+  const rows = target.getByTestId("mission-row");
+  if ((await rows.count()) === 0) await row.click();
+  await rows.first().waitFor({ timeout: 30_000 });
+}
+
 async function waitForHealth(): Promise<void> {
   for (let i = 0; i < 60; i += 1) {
     try {
@@ -470,28 +486,26 @@ describe("the Mission Room", () => {
     await first.page.getByTestId("sign-out").waitFor();
 
     // Disclosure is the whole project row, not only the arrow beside it.
-    const workstreams = first.page.getByTestId("workstream-row");
-    expect(await workstreams.count()).toBeGreaterThan(0);
+    const missionRows = first.page.getByTestId("mission-row");
+    expect(await missionRows.count()).toBeGreaterThan(0);
     await first.page.getByTestId("project-row").filter({ hasText: repoName }).click();
-    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBe(0);
+    await expect.poll(async () => missionRows.count(), { timeout: 10_000 }).toBe(0);
     await first.page.getByTestId("project-row").filter({ hasText: repoName }).click();
-    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => missionRows.count(), { timeout: 10_000 }).toBeGreaterThan(0);
     // And the arrow alone still works, independently of selection.
     await first.page.getByTestId("project-twisty").first().click();
-    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBe(0);
+    await expect.poll(async () => missionRows.count(), { timeout: 10_000 }).toBe(0);
     await first.page.getByTestId("project-twisty").first().click();
-    await expect.poll(async () => workstreams.count(), { timeout: 10_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => missionRows.count(), { timeout: 10_000 }).toBeGreaterThan(0);
 
     await first.app.close();
 
     // Relaunch: the entire conversation reconstructs from the server.
     const second = await launchApp();
     await second.page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
-    const row = second.page.getByTestId("project-row").filter({ hasText: repoName });
-    await row.waitFor();
-    await row.click();
+    await openProject(second.page, repoName);
 
-    const tab = second.page.getByTestId("ws-tab").filter({ hasText: "add a fake turn file" });
+    const tab = second.page.getByTestId("mission-row").filter({ hasText: "add a fake turn file" });
     await tab.waitFor({ timeout: 20_000 });
     await second.page
       .getByTestId("msg-user")
@@ -614,8 +628,8 @@ describe("the workspace runtime", () => {
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
     await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
-    await page.getByTestId("project-row").filter({ hasText: runtimeRepoName }).click();
-    await page.getByTestId("ws-tab").filter({ hasText: freshGoal }).click();
+    await openProject(page, runtimeRepoName);
+    await page.getByTestId("mission-row").filter({ hasText: freshGoal }).click();
 
     // --- The state names what is missing, and offers one action -------------
     const stateLine = page.getByTestId("state-line");

@@ -92,6 +92,22 @@ async function mintToken(as?: string): Promise<string> {
   return token;
 }
 
+/**
+ * Opens a project in the rail so its missions are disclosed.
+ *
+ * The row *toggles*, and the shell selects a project on mount, so a plain
+ * click is as likely to close it as to open it. Since D-055 the rail is the
+ * only place missions are listed, so every test that names one goes through
+ * here rather than assuming a click means open.
+ */
+async function openProject(target: Page, name: string): Promise<void> {
+  const row = target.getByTestId("project-row").filter({ hasText: name });
+  await row.waitFor({ timeout: 30_000 });
+  const rows = target.getByTestId("mission-row");
+  if ((await rows.count()) === 0) await row.click();
+  await rows.first().waitFor({ timeout: 30_000 });
+}
+
 async function launch(
   dataDir: string,
   identity?: string,
@@ -522,10 +538,7 @@ describe("the terminal, through the interface", () => {
       await maya.page.getByTestId("join-submit").click();
       await maya.page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
 
-      const projectRow = maya.page.getByTestId("project-row").filter({ hasText: repoName });
-      await projectRow.waitFor({ timeout: 30_000 });
-      await projectRow.click();
-      await maya.page.getByTestId("ws-tab").first().waitFor({ timeout: 30_000 });
+      await openProject(maya.page, repoName);
 
       const toggle = maya.page.getByTestId("terminal-toggle");
       await expect.poll(() => toggle.getAttribute("data-available"), { timeout: 20_000 }).toBe("false");
@@ -825,10 +838,7 @@ describe("setup and verification, through the interface", () => {
     page = relaunched.page;
 
     await page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
-    const projectRow = page.getByTestId("project-row").filter({ hasText: repoName });
-    await projectRow.waitFor({ timeout: 30_000 });
-    await projectRow.click();
-    await page.getByTestId("ws-tab").first().waitFor({ timeout: 30_000 });
+    await openProject(page, repoName);
 
     // A PTY cannot outlive the process that owned it. Before the dock is
     // opened there are no sessions at all — no dead tab is presented as live —
@@ -874,12 +884,10 @@ describe("stopping a running harness, through the interface", () => {
     const stopApp = await launch(dataDir, undefined, 3_000);
     try {
       await signIn(stopApp.page);
-      const projectRow = stopApp.page.getByTestId("project-row").filter({ hasText: repoName });
-      await projectRow.waitFor({ timeout: 30_000 });
-      await projectRow.click();
+      await openProject(stopApp.page, repoName);
       // The project already has a mission on this control plane, so the room
       // opens into it; a fresh mission is what this test wants.
-      await stopApp.page.getByTestId("new-tab").click();
+      await stopApp.page.getByTestId("new-mission").click();
       await stopApp.page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
       await stopApp.page.getByTestId("composer-input").fill("a turn that will be interrupted");
       await stopApp.page.keyboard.press("Enter");
@@ -918,4 +926,83 @@ describe("stopping a running harness, through the interface", () => {
       rmSync(dataDir, { recursive: true, force: true });
     }
   }, 240_000);
+});
+
+describe("missions and workstreams, told apart", () => {
+  /**
+   * The rail owns missions; the centre is the room (D-055).
+   *
+   * Before this, both surfaces rendered `project.missions` — the rail as a
+   * list, the centre as a tab row — so every mission was on screen twice, in
+   * the same order, with near-identical labels, and both wrote the same
+   * selection. Every control in the centre also called a mission a workstream,
+   * which is a different thing that a mission contains exactly one of.
+   */
+  it("lists missions once, in the rail, and creates one from there", async () => {
+    const secondGoal = "Second mission here";
+    await page.evaluate(
+      async (args) => {
+        const base = await window.novus.repos.baseLocal(args.localId);
+        if (!base.ok) throw new Error(`${base.code}: ${base.message}`);
+        const created = await window.novus.missions.create({
+          goal: args.goal,
+          successCriteria: "Two missions coexist under one project",
+          provider: "local",
+          providerRepoId: args.localId,
+          baseRef: base.value.ref,
+          baseSha: base.value.sha,
+          creationKey: args.creationKey
+        });
+        if (!created.ok) throw new Error(`${created.code}: ${created.message}`);
+      },
+      { localId, goal: secondGoal, creationKey: randomUUID() }
+    );
+
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
+    await openProject(page, repoName);
+    const rows = page.getByTestId("mission-row");
+
+    // One list, and it is the rail's.
+    await expect.poll(async () => rows.count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
+
+    // Nothing in the centre repeats it. With no file open there is no strip at
+    // all: one workstream means no workstream chrome (DESIGN.md#component-behavior).
+    expect(await page.getByTestId("room-tab").count()).toBe(0);
+    expect(await page.locator(".tabbar").count()).toBe(0);
+
+    // Each mission is independently selectable, and the room follows.
+    const goal = page.getByTestId("room-goal");
+    await rows.filter({ hasText: secondGoal }).click();
+    await expect.poll(async () => (await goal.textContent()) ?? "", { timeout: 20_000 }).toContain(secondGoal);
+    await rows.filter({ hasText: "prepare this workspace" }).click();
+    await expect
+      .poll(async () => (await goal.textContent()) ?? "", { timeout: 20_000 })
+      .toContain("prepare this workspace");
+
+    // Creating one is a row in the list it joins, and it says Mission.
+    const create = page.getByTestId("new-mission");
+    await create.waitFor();
+    expect(await create.textContent()).toContain("New mission");
+    expect(await create.getAttribute("title")).toContain("New mission");
+    await create.click();
+    await page.getByTestId("draft-base").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("room-goal").textContent()).toContain("New mission");
+    const lead = await page.locator(".draft-lead").textContent();
+    expect(lead).toContain("creates this mission");
+    expect(lead).not.toContain("workstream");
+    await page.screenshot({ path: join(evidenceDir, "61-missions-in-the-rail.png") });
+
+    // The keyboard does the same thing the row does.
+    await page.getByTestId("mission-row").first().click();
+    await page.getByTestId("room-goal").waitFor();
+    await page.keyboard.press("Meta+t");
+    await page.getByTestId("draft-base").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("room-goal").textContent()).toContain("New mission");
+
+    // And nothing anywhere in the room calls a mission a workstream.
+    const roomText = (await page.getByTestId("project-room").textContent()) ?? "";
+    expect(roomText.toLowerCase()).not.toContain("workstream");
+  }, 180_000);
 });

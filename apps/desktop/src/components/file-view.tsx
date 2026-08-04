@@ -7,13 +7,13 @@ import { Markdown } from "./markdown";
 /**
  * One file, as its own tab in the room (D-048).
  *
- * It is a sibling of the workstream tabs rather than something layered inside
+ * It is a sibling of the room's own tab rather than something layered inside
  * one, because that is what it is: another thing you are looking at, at the
  * same level, switched between the same way. While a file tab is selected the
  * mission's own header is not shown at all — the title, the state line, and the
- * authority row are answers about the workstream, and repeating them above a
+ * authority row are answers about the mission, and repeating them above a
  * source file is chrome the reader did not ask for and cannot act on. Switching
- * back to the workstream tab brings all of it back untouched.
+ * back to the room's tab brings all of it back untouched.
  *
  * The composer stays. Reading a file is not a reason to stop being able to
  * direct, and it is very often the reason to start.

@@ -124,7 +124,7 @@ export function Composer({
   };
 
   const placeholder = !known
-    ? "Loading this workstream…"
+    ? "Loading this mission…"
     : !mayDirect
       // A refusal the person can act on belongs where they are looking, not
       // only in a tooltip they may never hover.

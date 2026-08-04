@@ -487,3 +487,23 @@ The detector is kept in the scratchpad as a diagnostic to run deliberately, not 
 **Consequences.** PROGRESS.md carries a critical-verb table naming, for each verb, the test that enters through production. A verb added to that list without such a test is a review failure, enforced by reading rather than by a script — stated plainly, because a rule a human enforces should not be dressed up as one a machine does.
 
 **Revisit when.** A fourth fault of this shape lands and the broad variant would have caught it, making the ratio two of four rather than one of three; or the codebase grows a dependency-injection seam that makes "is this wired" a type error instead of a runtime absence.
+
+## D-055 — Missions belong to the rail; the room is one mission
+
+**Context.** Two surfaces rendered the same list. The projects rail disclosed a project's missions as rows; the room drew a tab row across the top from the same array. Same order, same truncated labels, both writing the same selection — so every mission was on screen twice, and the tab row carried none of what made the rail useful (the count, the attention lens, reach across projects). Selecting a project always discloses it, so both were always visible together.
+
+Worse than the duplication was the naming. Every one of those tabs was a **Mission** and every control around them said *workstream*: the row's label, its `aria-label`, the `+` button's tooltip, the draft tab, the empty states, the sentence under a new room. A workstream is a different thing — a mission contains exactly one in V0, and nothing in the interface can create a second — so the word that named the room's most prominent control named nothing the reader could act on. DESIGN.md#component-behavior had said since the beginning that one workstream means no workstream chrome at all; the code drew that chrome in exactly the case the document forbade it.
+
+**Decision.** Missions are the rail's, and only the rail's. A project row discloses its missions and ends with **New mission**, which is where creating one belongs: a row in the list it joins, in the place that already reads *this project, and its missions*. `⌘T` is the same act and is now written down.
+
+The strip across the top of the room is for **files** (D-048). With none open there is no strip, so a single mission has no chrome above it. Open one and the room takes the first tab — the way back to itself, which is what the mission tabs had been doing incidentally and what nothing else did.
+
+Everything that named a mission a workstream now names it a mission, in labels, tooltips, empty states, test ids, and comments. `Workstream` continues to mean the workstream: every value of that type was always correctly named, and the fault was one-directional — labels applied to mission variables.
+
+**Alternatives.** Keeping a one-tab row for the single-mission case (rejected: DESIGN.md#component-behavior forbids it in as many words, and a tab row with one tab is a control that cannot be used for anything); moving mission creation to a floating `+` in the rail header (rejected: it would create into whichever project happened to be selected, which is a guess the row does not have to make); leaving the tabs and removing the rail's list (rejected: the rail carries the count, the attention lens, and every other project, and the room by construction cannot); renaming the tabs to *Mission* and keeping both (rejected: it fixes the word and leaves the duplication, and the duplication is the part that costs a reader something).
+
+**Consequences.** `ws-tab` becomes `mission-row`, `new-tab` becomes `new-mission`; `draft-tab` had no test and no purpose once the strip is file-only, and is gone. Five end-to-end assertions move from the tab row to the rail, which is where they should have been — the relaunch-reconstruction test in particular was proving that a *tab* came back when what it cared about was the mission. A new test covers two missions in one project: listed once, independently selectable, no strip in the centre, and no occurrence of the word *workstream* anywhere in the room.
+
+Not built, and deliberately: multiple workstreams inside a mission, the lane headers DESIGN.md specifies for that case, the Decision Room, and approach comparison. This slice makes one mission read correctly; it does not add a second workstream.
+
+**Revisit when.** A mission can actually hold more than one workstream, at which point the lane headers in DESIGN.md#component-behavior become real and this decision is what says they are lanes *within* the room rather than tabs above it.

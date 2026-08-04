@@ -79,7 +79,7 @@ export function TerminalToggle({
   onToggle: () => void;
   /** False when this workstream's repository is not checked out here. */
   availableHere: boolean;
-  /** True before a workstream exists at all — a draft tab has no workspace. */
+  /** True before a mission exists at all — a draft has no workspace. */
   disabled?: boolean;
 }) {
   const reason = availableHere ? undefined : TERMINAL_ELSEWHERE;

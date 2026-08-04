@@ -16,7 +16,7 @@ export function deriveGoal(message: string): string {
   return (space > 0 ? cut.slice(0, space) : cut).trim();
 }
 
-/** Workstream tab labels truncate; the room header always carries the whole
+/** Rail and tab labels truncate; the room header always carries the whole
  *  title, so the tab is free to be short (DESIGN.md#layout). */
 export function truncateLabel(text: string, max = 28): string {
   return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;

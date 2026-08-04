@@ -85,12 +85,31 @@ untracked=$(git status --porcelain 2>/dev/null | grep '^??' | awk '{print $2}' |
 [ -z "$untracked" ] || { echo "$untracked" | sed 's/^/GATE FAIL: untracked file (track it or ignore it deliberately): /'; FAIL=1; }
 
 # 13. Application build, typecheck, lint, and deterministic tests.
+#
+# Output is kept rather than discarded. It used to go to /dev/null, which made
+# an intermittent failure here undiagnosable by construction: the only way to
+# see what broke was to run the command outside the gate, and outside the gate
+# — unloaded, after nothing else — is exactly the condition it does not break
+# under. A gate that says a step failed and not why is one bit of information.
+GATE_LOGS="${TMPDIR:-/tmp}/novus-gate-$$"
+mkdir -p "$GATE_LOGS"
+
+step() {
+  local name="$1" script="$2" log="$GATE_LOGS/$2.log"
+  if ! pnpm run "$script" >"$log" 2>&1; then
+    echo "--- last 40 lines of $log ---" >&2
+    tail -40 "$log" >&2
+    echo "--- full output: $log ---" >&2
+    fail "$name failed (pnpm run $script)"
+  fi
+}
+
 if [ -f package.json ]; then
   pnpm run db:up >/dev/null 2>&1 || true
-  pnpm run build      >/dev/null 2>&1 || fail "application build failed (pnpm run build)"
-  pnpm run typecheck  >/dev/null 2>&1 || fail "typecheck failed (pnpm run typecheck)"
-  pnpm run lint       >/dev/null 2>&1 || fail "lint failed (pnpm run lint)"
-  pnpm run test       >/dev/null 2>&1 || fail "deterministic tests failed (pnpm run test)"
+  step "application build" build
+  step "typecheck" typecheck
+  step "lint" lint
+  step "deterministic tests" test
 fi
 
 if [ "$FAIL" -eq 0 ]; then

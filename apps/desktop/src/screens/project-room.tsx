@@ -24,7 +24,7 @@ import { HumanMark } from "../components/identity";
 import type { InspectorSection } from "../components/inspector";
 import { FileView } from "../components/file-view";
 
-/** The mark that says a tab is a file rather than a workstream. */
+/** The mark that says a tab is a file rather than the room itself. */
 function FileGlyph() {
   return (
     <svg
@@ -79,7 +79,6 @@ export function ProjectRoom({
   selectedMissionId,
   onInspector,
   onSetup,
-  onSelectTab,
   onDetail,
   onCreated,
   terminalOpen,
@@ -96,7 +95,6 @@ export function ProjectRoom({
   onInspector: (section: InspectorSection | null) => void;
   /** The setup dialog is the shell's too: the Run control opens the same one. */
   onSetup: () => void;
-  onSelectTab: (missionId: string | null) => void;
   onDetail: (detail: MissionDetailResponse) => void;
   onCreated: (mission: Mission) => void;
   /** The bottom terminal dock. Its toggle sits with the other workspace
@@ -104,8 +102,8 @@ export function ProjectRoom({
    *  same toggle closes it, which is why the dock carries no Hide of its own. */
   terminalOpen: boolean;
   /** Files the reader opened from the panel. Each is a tab beside the
-   *  workstream's own, and while one is selected the room shows that file and
-   *  nothing about the workstream above it (D-048). */
+   *  room's own, and while one is selected the room shows that file and
+   *  nothing about the mission above it (D-048). */
   openFiles: string[];
   activeFile: string | null;
   onSelectFile: (path: string | null) => void;
@@ -272,7 +270,7 @@ export function ProjectRoom({
       };
     }
 
-    if (!detail) return { ok: false, message: "This workstream is still loading." };
+    if (!detail) return { ok: false, message: "This mission is still loading." };
     const result = await novus().missions.direct({
       missionId: detail.mission.missionId,
       body,
@@ -349,71 +347,59 @@ export function ProjectRoom({
     );
   };
 
-  const title = isDraft ? "New workstream" : (detail?.mission.goal ?? "Loading workstream");
+  const title = isDraft ? "New mission" : (detail?.mission.goal ?? "Loading mission");
 
   return (
     <div className="room" data-testid="project-room">
       <div className="room-main">
-      <div className="tabbar" role="tablist" aria-label={`Workstreams in ${project.name}`}>
-        {project.missions.map((mission) => (
+      {/* The strip exists for *files*, not for missions (D-055). Missions are
+          the rail's: one list, in one place, next to the project that owns
+          them — DESIGN.md has always said that one workstream means no
+          workstream chrome, and a centre row that repeated the rail was that
+          chrome. With nothing open there is no strip at all; open a file and
+          the room takes a tab of its own, which is the way back to it. */}
+      {openFiles.length > 0 && (
+        <div className="tabbar" role="tablist" aria-label={`Open files in ${title}`}>
           <button
-            key={mission.missionId}
             role="tab"
-            aria-selected={mission.missionId === selectedMissionId}
-            className={mission.missionId === selectedMissionId ? "tab active" : "tab"}
-            onClick={() => {
-              onSelectFile(null);
-              onSelectTab(mission.missionId);
-            }}
-            title={mission.goal}
-            data-testid="ws-tab"
+            aria-selected={activeFile === null}
+            className={activeFile === null ? "tab active" : "tab"}
+            onClick={() => onSelectFile(null)}
+            title={title}
+            data-testid="room-tab"
           >
-            {truncateLabel(mission.goal)}
+            {truncateLabel(title)}
           </button>
-        ))}
-        {isDraft && (
-          <button role="tab" aria-selected className="tab active" data-testid="draft-tab">
-            New
-          </button>
-        )}
-        {openFiles.map((file) => (
-          <span
-            key={file}
-            className={file === activeFile ? "tab file-tab active" : "tab file-tab"}
-            data-testid="file-tab"
-            data-path={file}
-          >
-            <button
-              role="tab"
-              aria-selected={file === activeFile}
-              className="file-tab-open"
-              onClick={() => onSelectFile(file)}
-              title={file}
+          {openFiles.map((file) => (
+            <span
+              key={file}
+              className={file === activeFile ? "tab file-tab active" : "tab file-tab"}
+              data-testid="file-tab"
+              data-path={file}
             >
-              <FileGlyph />
-              <span className="file-tab-name">{file.split("/").pop() ?? file}</span>
-            </button>
-            <button
-              className="file-tab-close"
-              onClick={() => onCloseFile(file)}
-              aria-label={`Close ${file}`}
-              title={`Close ${file}`}
-              data-testid="file-tab-close"
-            >
-              ×
-            </button>
-          </span>
-        ))}
-        <button
-          className="tab tab-new"
-          onClick={() => onSelectTab(null)}
-          title="New workstream (⌘T)"
-          aria-label="New workstream"
-          data-testid="new-tab"
-        >
-          +
-        </button>
-      </div>
+              <button
+                role="tab"
+                aria-selected={file === activeFile}
+                className="file-tab-open"
+                onClick={() => onSelectFile(file)}
+                title={file}
+              >
+                <FileGlyph />
+                <span className="file-tab-name">{file.split("/").pop() ?? file}</span>
+              </button>
+              <button
+                className="file-tab-close"
+                onClick={() => onCloseFile(file)}
+                aria-label={`Close ${file}`}
+                title={`Close ${file}`}
+                data-testid="file-tab-close"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
       {activeFile === null && (
       <header className="room-header">
@@ -465,7 +451,7 @@ export function ProjectRoom({
             <>
               <span className="state-name">Ready</span>
               <span className="state-detail">
-                {isDraft ? "— the first direction creates this workstream" : "— loading this workstream"}
+                {isDraft ? "— the first direction creates this mission" : "— loading this mission"}
               </span>
               {isDraft && !executionAvailable && (
                 <span className="state-detail">
@@ -511,7 +497,7 @@ export function ProjectRoom({
             </>
           ) : (
             <span className="controller-name quiet">
-              {isDraft ? "Nobody has joined this workstream yet" : "Loading participants…"}
+              {isDraft ? "Nobody has joined this mission yet" : "Loading participants…"}
             </span>
           )}
         </div>
@@ -662,7 +648,7 @@ export function ProjectRoom({
                 </div>
               )}
 
-              {/* A workstream that exists but has produced nothing says so.
+              {/* A mission that exists but has produced nothing says so.
                   The technical setup row is not activity, so it does not
                   suppress the sentence (DESIGN.md#transient-states). */}
               {feed.blocks.length === 0 && (
@@ -737,7 +723,7 @@ function DraftCanvas({
   }
   return (
     <div className="draft-canvas">
-      <p className="draft-lead">The first direction creates this workstream and starts Claude Code.</p>
+      <p className="draft-lead">The first direction creates this mission and starts Claude Code.</p>
       <p className="quiet" data-testid="draft-base">
         Pinned to {project.name} · <span className="mono">{draft.base.base.ref}</span> ·{" "}
         <span className="mono">{shortSha(draft.base.base.sha)}</span>

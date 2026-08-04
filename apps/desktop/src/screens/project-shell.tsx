@@ -175,7 +175,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
    *  state line's action inside the room, and the Run control beside it. */
   const [setupOpen, setSetupOpen] = useState(false);
   /** The docked evidence panel. Held here because its toggle lives in the top
-   *  bar and because the panel outlives the workstream tab beneath it. */
+   *  bar and because the panel outlives the mission selected beside it. */
   const [inspector, setInspector] = useState<InspectorSection | null>(null);
   /** The bottom terminal dock, closed by default. Held here for the same
    *  reason: its toggle sits with the other workspace controls. */
@@ -187,7 +187,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
    *  the other. */
   const [openFiles, setOpenFiles] = useState<string[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
-  /** Which projects are showing their workstreams. Disclosure is the reader's
+  /** Which projects are showing their missions. Disclosure is the reader's
    *  choice and survives selection moving elsewhere. */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const addTriggerRef = useRef<HTMLButtonElement>(null);
@@ -297,7 +297,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     ? (projects.find((project) => project.key === selection.projectKey) ?? null)
     : null;
 
-  // Keyboard: ⌘T new tab in the project, ⌘1–9 switch workstream tabs.
+  // Keyboard: ⌘T a new mission in the selected project, ⌘1–9 its missions.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || !selectedProject) return;
@@ -316,8 +316,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedProject]);
 
-  // A dialog about one workstream's workspace must not survive a move to
-  // another workstream.
+  // A dialog about one mission's workspace must not survive a move to
+  // another mission.
   useEffect(() => {
     setSetupOpen(false);
     setOpenFiles([]);
@@ -380,9 +380,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     setRailOpen(false);
   };
 
-  const handleSelectTab = useCallback((missionId: string | null) => {
-    setSelection((prev) => (prev ? { projectKey: prev.projectKey, missionId } : prev));
-  }, []);
 
   const handleDetail = useCallback((detail: MissionDetailResponse) => {
     setDetails((prev) => ({ ...prev, [detail.mission.missionId]: detail }));
@@ -396,7 +393,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     if (repo) {
       const key = keyOf(repo.provider, repo.providerRepoId);
       setSelection({ projectKey: key, missionId: mission.missionId });
-      // A workstream you just created should be visible in the rail, not
+      // A mission you just created should be visible in the rail, not
       // hidden behind a project that never opened.
       setExpanded((prev) => new Set(prev).add(key));
     }
@@ -522,8 +519,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                       )}
                     </button>
                   </div>
-                  {/* An open project shows its workstreams inline: the tabs and
-                      the rail name the same things (D-032). */}
+                  {/* An open project discloses its missions inline, and this is
+                      the only place they are listed (D-055). */}
                   {open &&
                     project.missions.map((mission) => (
                       <button
@@ -535,11 +532,23 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                           setSelection({ projectKey: project.key, missionId: mission.missionId })
                         }
                         title={mission.goal}
-                        data-testid="workstream-row"
+                        data-testid="mission-row"
                       >
                         <span className="side-name">{truncateLabel(mission.goal, 26)}</span>
                       </button>
                     ))}
+                  {open && (
+                    <button
+                      className={`side-row side-child side-new${
+                        selected && selection?.missionId === null ? " selected" : ""
+                      }`}
+                      onClick={() => setSelection({ projectKey: project.key, missionId: null })}
+                      title="New mission (⌘T)"
+                      data-testid="new-mission"
+                    >
+                      <span className="side-name">New mission</span>
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -599,7 +608,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               selectedMissionId={selection.missionId}
               onInspector={setInspector}
               onSetup={() => setSetupOpen(true)}
-              onSelectTab={handleSelectTab}
               onDetail={handleDetail}
               onCreated={handleCreated}
               terminalOpen={terminalOpen}
