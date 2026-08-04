@@ -53,11 +53,11 @@ banned=$(grep -rniE 'seamless|single pane of glass|ai-powered|supercharge your' 
 
 # 7. Canonical terms defined only in PRODUCT.md (definition = bolded domain-model bullet).
 term_dups=$(grep -rlE '^- \*\*(Mission|Workstream|Execution|Direction|ControlLease|ControlRequest|HandoffOffer|Receipt|Participant|Capability|Harness|Runner|Workspace|Evidence|Artifact|Event)\*\*' \
-  $CANON .claude/ skills/ 2>/dev/null | grep -v '^PRODUCT.md$' || true)
+  $CANON .claude/ skills/ 2>/dev/null | grep -v '^PRODUCT.md$' | grep -v '^.claude/worktrees/' || true)
 [ -z "$term_dups" ] || { echo "$term_dups" | sed 's/^/GATE FAIL: domain term defined outside PRODUCT.md: /'; FAIL=1; }
 
 # 8. No product truth in skills/agent config.
-truth_leak=$(grep -rlE '^(Mission|Workstream|Execution|Direction|ControlLease|Receipt):' .claude/ skills/ 2>/dev/null || true)
+truth_leak=$(grep -rlE '^(Mission|Workstream|Execution|Direction|ControlLease|Receipt):' .claude/ skills/ 2>/dev/null | grep -v '^.claude/worktrees/' || true)
 [ -z "$truth_leak" ] || { echo "$truth_leak" | sed 's/^/GATE FAIL: product definitions outside canonical docs: /'; FAIL=1; }
 
 # 9. No gradients in source code (once it exists).
@@ -83,6 +83,26 @@ fi
 # 12. Untracked files: nothing sits in the repo undecided.
 untracked=$(git status --porcelain 2>/dev/null | grep '^??' | awk '{print $2}' || true)
 [ -z "$untracked" ] || { echo "$untracked" | sed 's/^/GATE FAIL: untracked file (track it or ignore it deliberately): /'; FAIL=1; }
+
+# 12b. Every decision cited anywhere must actually exist (D-059).
+#
+# D-053 was cited by six files — two canonical documents, three source files and
+# a test — for a full session before anyone noticed it had never been written.
+# Nothing caught it because nothing looked. This is deliberately the narrowest
+# possible check: it does not police numbering, gaps, or ordering, only that a
+# reference resolves to a heading. A gap in the sequence is fine: one number in
+# the thirties has never existed, and PROGRESS.md says so.
+# Build output is not a citation — it is a copy of one, and it lags.
+# A line that says a number does *not* exist is prose about the gap, not a
+# reference to follow, so it opts out by saying so in those words.
+cited=$(grep -rhE 'D-[0-9]{3}' $CANON apps/ packages/ scripts/ 2>/dev/null \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=dist-electron \
+  --exclude-dir=worktrees \
+  | grep -viE 'never existed|never been written|never happened|no such decision' \
+  | grep -oE 'D-[0-9]{3}' | sort -u || true)
+for d in $cited; do
+  grep -qE "^## $d " DECISIONS.md || fail "decision cited but never written: $d"
+done
 
 # 13. Application build, typecheck, lint, and deterministic tests.
 #

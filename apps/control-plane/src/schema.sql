@@ -99,7 +99,8 @@ create unique index if not exists workstreams_one_per_mission on workstreams (mi
 drop index if exists workstreams_branch_unique;
 -- One branch name per repository — the invariant the audit demanded be real.
 create unique index if not exists workstreams_repo_branch_unique on workstreams (repo_id, mission_branch);
--- The harness session this workstream continues across executions (D-038).
+-- The harness session this workstream continues across executions. (Cited a
+-- decision number that has never existed; the reason stands on its own.)
 alter table workstreams add column if not exists harness_session_id text;
 
 create table if not exists participants (

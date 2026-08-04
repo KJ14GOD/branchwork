@@ -576,7 +576,8 @@ async function applySideEffects(
         [execution.exe_id, event.payload.sessionId, event.payload.resumed]
       );
       // The workstream remembers the session so the next execution can continue
-      // the same conversation rather than starting cold (D-038).
+      // the same conversation rather than starting cold. (This cited a decision
+      // number that has never existed; the reason is stated instead.)
       await client.query("update workstreams set harness_session_id = $2 where wst_id = $1", [
         ctx.workstreamId,
         event.payload.sessionId

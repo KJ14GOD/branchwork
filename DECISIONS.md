@@ -464,6 +464,30 @@ The path policy recognises conventional *names*. A credential in `notes.txt` is 
 
 **Revisit when.** A secret is supplied as a file rather than a value often enough that its *contents* should seed the redactor at preparation time; or the harness gains a way to declare what it is about to print, making redaction a boundary rather than a filter.
 
+## D-053 — Stop reaches the harness, and a terminal execution stops changing
+
+*Written 2026-08-04, after the change it describes shipped. The slice was committed citing this number and the entry itself was never appended; six files referenced a decision nobody could read. Reconstructed from that commit and its tests rather than re-litigated.*
+
+**Context.** `stop_execution` never interrupted anything. The runner agent chains commands per workstream so one turn runs at a time, and only `stop_command` bypassed that chain — so a stop queued behind the very turn it was meant to interrupt. Worse than late: the chain resolves only *after* the turn has been removed from the active set, so when the stop finally ran there was nothing left to stop. It acknowledged successfully, and the room went on saying *Running* with a live Stop button until the turn finished on its own and reported *Completed*. Nothing failed loudly because, as far as every component could tell, nothing had failed.
+
+Separately, execution *state* was already monotonic — `setExecutionState` refuses to move a terminal execution — but the transcript, the harness session pointer, and checkpoints did not go through it. A stopped execution could go on talking, could overwrite the workstream's resume point with the session it had just been killed in, and could commit a checkpoint after the participant had stopped it.
+
+**Decision.** `stop_execution` bypasses the per-workstream chain exactly as `stop_command` always has. Three things become necessary only once the stop can actually arrive:
+
+- It is **matched to the execution it names**, so a stale stop re-offered after a relaunch cannot kill whichever turn is running now.
+- It is **remembered** in a per-execution set consulted before a turn spawns, so a stop that lands before its turn exists prevents the turn instead of being swallowed while the harness runs anyway.
+- A stopped execution's **queued direction is discarded with it**, rather than starting a second harness process in the same worktree after the participant asked for it to end.
+
+A terminal execution accepts no further projection at all: the event is still recorded, because the log is the honest record, but it no longer changes anything the room reads.
+
+The room gains `agent_stopping`, a transient state like `agent_starting`, so it does not go on saying *Running* — and offering a Stop that has already been pressed — while the interrupt is in flight.
+
+**Alternatives.** A universal turn deadline (rejected outright: D-034 says execution lifetime is not Novus's to cap); making the stop take over the chain rather than bypass it (rejected: whatever was already queued would lose its place); polling for a stop flag inside the turn loop (rejected: it only helps between lines, and a turn blocked in a tool call is exactly the case that matters).
+
+**Consequences.** Graceful-then-forced termination of the harness process *group*, so the agent's own child tools die with it; terminals and project processes are untouched, because a dev server a participant started is not part of the turn. Stop is refused server-side for a role without `execution.stop`, with no state change and no command enqueued. Two of the five tests added for this fail against the previous code — verified by restoring the bug and watching them go red.
+
+**Revisit when.** The harness offers an in-band interrupt. D-056 has since found that it does: Claude Code's control protocol carries `{"subtype":"interrupt","cancel_queued":true}`, which would stop a turn without destroying the resumable session. The process-group kill should become the fallback rather than the mechanism.
+
 ## D-054 — No unused-export gate; production-path tests instead
 
 **Context.** Three faults reached real sessions and all three were the same shape: a verb that existed, was correct, was tested, and was never called. `SecretStore.put` — a workspace permanently reporting itself blocked. `touchLease` — every lease expiring thirty minutes after it was created, so every direction after that queued behind a controller who no longer existed. The mission-branch fetch — every mission after the first failing to open a terminal or read a file. D-051 recorded the lesson and left the question of a gate open. This answers it.
@@ -561,3 +585,21 @@ Every run produces a **new record**. The failure that prompted it stays in the l
 **Consequences.** Remote participants get the same control, subject to the same server-side capability, and read the same bounded evidence; the full local output stays on the machine that produced it, under Evidence → Output (D-050). Proven in the app: a failed check is run again from its own row, a second record appears with its own attribution and revision, and both remain on screen.
 
 **Revisit when.** CI results are ingested as a second attributed source, at which point a row may have an origin that Novus cannot re-run, and the control has to say so rather than be absent.
+
+## D-059 — A cited decision must exist
+
+**Context.** D-053 was cited by six files — two canonical documents, three source files and a test — for an entire session before anyone noticed it had never been written. The slice it named shipped; the entry did not. `runner.ts` cited D-038, which has never existed either. Nothing caught either one, because nothing looked: the repository gate checks frontmatter, links, anchors, banned language, gradients, raw colours and untracked files, and had no opinion about whether a decision reference resolves to anything.
+
+This matters more here than it would elsewhere. The whole working contract in AGENTS.md rests on decisions being the place a reader goes to find out why something is the way it is, and a dangling `(D-0NN)` in a comment is worse than no comment — it tells a reader that the reasoning exists and has been recorded, and sends them to look for it.
+
+**Decision.** The gate fails when any `D-NNN` appearing in the canonical documents, `apps/`, `packages/` or `scripts/` has no `## D-NNN ` heading in DECISIONS.md.
+
+Deliberately the narrowest check that catches the failure. It does **not** police numbering, ordering, or gaps: D-038 has never existed and never will, and a sequence with a hole in it is not a defect. It asks one question — does this reference resolve — which is the same question the existing link and anchor checks ask about Markdown.
+
+D-054 rejected a broad unused-export gate because it caught one of three historical failures and produced nine false positives. This one is the opposite shape and is worth having for exactly that reason: it caught two real dangling references the moment it was written, has no false positives by construction, and its scope is one line of grep.
+
+**Alternatives.** A lint rule over comments only (rejected: PROGRESS.md and DESIGN.md cite decisions too, and those citations are the ones a reader is most likely to follow); requiring the sequence to be contiguous (rejected: it would demand inventing a D-038 that never happened, which is the failure this exists to prevent, in a more expensive form); doing nothing and relying on review (rejected: review is what missed it, six times, in six files).
+
+**Consequences.** Two dangling references are repaired in the same change: D-053 is written from the commit and tests that shipped it, and `runner.ts`'s citation of a decision that never existed is removed, because none covers what it claimed — the sentence states its own reason instead. PROGRESS.md's decision-record row stops naming a range that was already stale.
+
+**Revisit when.** Decisions are ever split across more than one file, at which case the check needs to look in all of them.
