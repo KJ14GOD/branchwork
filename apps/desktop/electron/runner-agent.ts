@@ -82,6 +82,9 @@ export interface RunnerAgentDeps {
   fetch?: typeof fetch;
   /** The scripted harness, normally read from the environment. */
   fakeHarness?: boolean;
+  /** Makes the scripted harness ask for permission before it writes, so the
+   *  approval round trip is driven through this agent rather than mocked. */
+  fakeApproval?: boolean;
 }
 
 interface ElectronAppShape {
@@ -176,6 +179,21 @@ const StartPayloadSchema = z.object({
   resumeSessionId: z.string().nullable().default(null)
 });
 
+/**
+ * One participant's answer to one harness permission question (D-056).
+ *
+ * The control plane has already settled the durable request by the time this
+ * arrives — this command exists only to carry the decision to the process that
+ * is blocked on it. `harnessRequestId` is the harness's own correlation id;
+ * nothing else can identify what is waiting.
+ */
+const ApprovalPayloadSchema = z.object({
+  approvalId: z.string().min(1).max(120),
+  harnessRequestId: z.string().min(1).max(400),
+  decision: z.enum(["approve", "deny"]),
+  reason: z.string().max(500).nullable().optional()
+});
+
 /** What a stopped execution says it was stopped by. One string, because the
  *  turn path and the never-started path must give the same account. */
 const STOPPED_BY_PARTICIPANT = "Stopped by a participant.";
@@ -189,6 +207,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   const worktreeRoot = join(userData, "worktrees");
   const fakeHarness =
     deps.fakeHarness ?? (process.env.NOVUS_FAKE_HARNESS === "1" && !host.isPackaged);
+  const fakeApproval =
+    deps.fakeApproval ?? (process.env.NOVUS_FAKE_HARNESS_APPROVAL === "1" && fakeHarness);
   const label = host.label;
 
   const enrolments = new Map<string, Enrolment>(Object.entries(loadEnrolments()));
@@ -639,7 +659,21 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     // chain only resolves after the turn has been removed from `active`, so a
     // queued stop found nothing to stop and returned successfully. It was not
     // a delayed interrupt, it was a guaranteed no-op.
-    const interrupt = command.kind === "stop_command" || command.kind === "stop_execution";
+    //
+    // `respond_approval` is the sharpest case of all: the turn it answers is
+    // *blocked on that answer*, so a decision that waited its turn in the lane
+    // would wait for the thing it exists to release. That is a deadlock, not a
+    // delay, and it is the same shape of fault D-053 found in stop.
+    //
+    // `boundary_request` joins them for the same reason: the boundary it asks
+    // about may be a turn blocked on an approval, and a question asked from
+    // behind that turn could never be answered while the turn is the thing
+    // holding the lane.
+    const interrupt =
+      command.kind === "stop_command" ||
+      command.kind === "stop_execution" ||
+      command.kind === "respond_approval" ||
+      command.kind === "boundary_request";
     const previous = interrupt ? Promise.resolve() : (chains.get(workstream.workstreamId) ?? Promise.resolve());
     const next = previous
       .then(() => handle(command, workstream, enrolment))
@@ -719,9 +753,28 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       }
       return;
     }
+    if (command.kind === "respond_approval") {
+      respondToApproval(command, workstreamId);
+      return;
+    }
     if (command.kind === "boundary_request") {
       // A turn always reports its own boundary when it ends; an idle
       // workstream is already at one, so there is nothing to interrupt.
+      //
+      // Except one case, which PRODUCT.md names outright: a harness waiting on
+      // a permission prompt **is** at a safe boundary. A transfer accepted
+      // while a turn is blocked on an approval would otherwise wait for the
+      // turn to end, and the turn is waiting for an answer the recipient is the
+      // only person allowed to give — so it would wait for ever. The boundary
+      // is declared here rather than assumed by the control plane, because only
+      // this machine knows the harness is blocked.
+      const blocked = active.get(workstreamId);
+      if (blocked && blocked.turn.pendingApprovals().length > 0) {
+        report(workstreamId, blocked.executionId, {
+          kind: "boundary.reached",
+          payload: { reason: "permission prompt pending" }
+        });
+      }
       return;
     }
     if (
@@ -756,6 +809,31 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });
+  }
+
+  /**
+   * Carries one settled decision to the harness process that is waiting on it.
+   *
+   * Late is the ordinary case and not an error: the turn may have ended, been
+   * stopped, or had the question cancelled with it, and the control plane has
+   * already recorded whatever actually happened. So an answer with nothing left
+   * to answer completes quietly rather than failing the command and having it
+   * re-offered for ever.
+   *
+   * Matched on the execution as well as the request id, for the same reason
+   * `stop_execution` is: a decision re-offered after a relaunch must not be
+   * written into whatever turn happens to be running now.
+   */
+  function respondToApproval(command: RunnerCommand, workstreamId: string): void {
+    const payload = ApprovalPayloadSchema.safeParse(command.payload);
+    if (!payload.success) throw new Error("the approval decision was malformed");
+    const running = active.get(workstreamId);
+    if (!running || running.executionId !== command.executionId) return;
+    running.turn.respondApproval(
+      payload.data.harnessRequestId,
+      payload.data.decision,
+      payload.data.reason ?? null
+    );
   }
 
   /**
@@ -824,7 +902,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       openExecutions.delete(args.executionId);
       report(args.workstreamId, args.executionId, {
         kind: "execution.stopped",
-        payload: { reason: STOPPED_BY_PARTICIPANT }
+        // Nothing was interrupted and nothing was killed: the stop arrived
+        // before any harness process existed, so the turn was prevented. The
+        // record says which of the three actually happened.
+        payload: { reason: STOPPED_BY_PARTICIPANT, via: "never_started" }
       });
       return;
     }
@@ -841,6 +922,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       resumeSessionId: args.resumeSessionId,
       announceStart: args.announceStart,
       fakeHarness,
+      fakeApproval,
       // Read per emit rather than captured once, and never handed to the
       // renderer or the control plane — the redactor is the only thing in the
       // reporting path that ever sees a value (D-041, D-052).

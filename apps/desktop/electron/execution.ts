@@ -7,10 +7,11 @@ import {
   DEFAULT_MODEL,
   EffortSchema,
   ModelIdSchema,
+  type ApprovalDecision,
   type RunnerEvent
 } from "@novus/contracts";
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
-import { HarnessStream } from "./harness-stream";
+import { HarnessStream, type HarnessApprovalRequest, type HarnessControlMessage } from "./harness-stream";
 import { harnessEnv } from "./workspace-env";
 import { redact } from "./secret-policy";
 
@@ -28,6 +29,8 @@ import { redact } from "./secret-policy";
  *    that throws, a stop that the process ignores — each has a named outcome.
  *  - A failed checkpoint is never reported as a completed execution.
  *  - A fresh harness session is never presented as a continuous one.
+ *  - The harness asks before it acts, and it asks *Novus* — never the settings
+ *    file of whoever's laptop this happens to be (D-056, and below).
  *
  * No Electron import: the app supplies the worktree root, the repository path,
  * and whether it is packaged, which keeps the whole turn testable.
@@ -39,8 +42,64 @@ const MISSION_BRANCH = /^novus\/m-[0-9a-z]+$/;
 /** How long a stopped harness gets to exit on its own before it is killed. */
 const SIGKILL_AFTER_MS = 5_000;
 
+/**
+ * How long the harness's own protocol interrupt gets to end the turn before
+ * Novus stops asking and signals the process group instead.
+ *
+ * Deliberately short. Against `claude 2.1.221` the interrupt is answered and
+ * the turn ends inside the same tenth of a second, so this is a ceiling on a
+ * harness that has stopped listening rather than a wait anybody experiences —
+ * a Stop must not become slower because it became gentler (D-053).
+ */
+const INTERRUPT_GRACE_MS = 2_000;
+
 const MAX_STDERR = 4_000;
 const MAX_REASON = 400;
+
+/**
+ * The permission policy, **pinned rather than inherited**.
+ *
+ * D-056 probed the installed CLI and found the thing that would otherwise make
+ * every approval guarantee a lie: `harnessEnv` forwards `HOME` and every
+ * `CLAUDE_*` variable so the user's own local login keeps working (D-041), and
+ * that same forwarding hands Claude Code the operator's `~/.claude/settings.json`
+ * — and the repository's committed `.claude/settings.json` — to take its
+ * permission rules from. Whether a tool call ever reaches a human therefore
+ * depended on whose machine the runner was, and on what the branch happened to
+ * commit.
+ *
+ * Both flags below were verified against `claude 2.1.221` on 2026-08-04:
+ *
+ *  - `--setting-sources ""` loads none of the three sources (user, project,
+ *    local). With a `.claude/settings.json` in the worktree saying
+ *    `{"permissions":{"allow":["Write"],"defaultMode":"acceptEdits"}}`, the same
+ *    Write was routed to Novus with this flag and silently performed without
+ *    it, where the session reported `permissionMode: acceptEdits` and asked
+ *    nobody. It also stops the operator's settings hooks from running: the
+ *    `hook_started` / `hook_response` messages present in an unpinned run are
+ *    absent here.
+ *  - `--permission-mode manual` states the asking mode outright, so nothing
+ *    inherited can choose a different one. It overrides a settings file that
+ *    says `acceptEdits`, which was checked on its own.
+ *
+ * What is deliberately *not* passed: `acceptEdits` (which is what made this a
+ * gap), `bypassPermissions`, `--dangerously-skip-permissions`, and
+ * `--allowedTools` — an allowlist is a standing grant, and this build issues
+ * one approval for one act. The CLI's own read-only classification still
+ * applies underneath: `Bash: ls` never reaches the router and a Bash command
+ * that writes a file always does. Novus neither widens nor narrows that; it
+ * makes it the *only* thing deciding.
+ *
+ * Authentication is unaffected — it does not come from settings — and every
+ * probe above ran under the machine's existing Claude Code login.
+ */
+const PINNED_PERMISSION_ARGS = ["--setting-sources", "", "--permission-mode", "manual"] as const;
+
+/** A CLI that does not know these flags says so before it does anything. */
+const UNSUPPORTED_FLAG = /(unknown option|argument missing|unknown command)/i;
+
+/** What a denial says to the harness when the responder gave no words. */
+const DENIED = "A participant denied this in Novus.";
 
 export type TerminalEvent = Extract<
   RunnerEvent,
@@ -71,6 +130,9 @@ export interface TurnRequest {
   announceStart: boolean;
   /** Deterministic scripted harness for tests; the caller gates it. */
   fakeHarness: boolean;
+  /** Makes the scripted harness ask before it writes, so the approval path can
+   *  be driven end to end without a model call. Ignored unless `fakeHarness`. */
+  fakeApproval?: boolean;
   /** The values this machine holds for the project, read at emit time so a
    *  secret supplied mid-turn protects the rest of that turn. */
   secretValues: () => readonly string[];
@@ -87,6 +149,17 @@ export interface TurnResult {
 
 export interface RunningTurn {
   stop(reason: string): void;
+  /**
+   * Answers one harness permission question.
+   *
+   * Returns false when nothing is waiting under that id — a duplicate answer, a
+   * late one, or one for a turn that has already ended. The caller settles the
+   * command either way: a decision that arrives too late is a no-op, never a
+   * second write to a process that has moved on.
+   */
+  respondApproval(requestId: string, decision: ApprovalDecision, reason: string | null): boolean;
+  /** The harness request ids this turn is still blocked on. */
+  pendingApprovals(): string[];
   readonly finished: Promise<TurnResult>;
 }
 
@@ -167,17 +240,136 @@ export function startTurn(request: TurnRequest): RunningTurn {
   let stopReason: string | null = null;
   let child: ChildProcess | null = null;
   let escalation: NodeJS.Timeout | null = null;
+  let interruptAsked = false;
+  /** Which path actually ended the turn, for the terminal event to name. */
+  let stoppedVia: "protocol_interrupt" | "process_signal" = "process_signal";
+  /**
+   * The questions this turn is blocked on, by the harness's own request id.
+   *
+   * Process-local and nothing more: the raw tool input is never in here,
+   * because a `{"behavior":"allow"}` with no `updatedInput` is accepted (probed
+   * against 2.1.221), so a `Write`'s whole file body never has to be held
+   * anywhere in order to say yes to it.
+   */
+  const pending = new Map<string, HarnessApprovalRequest>();
+  /** The scripted harness's stand-in for stdin, set while one is running. */
+  let fakeControl: ((message: unknown) => void) | null = null;
+
+  /** Writes one line into the harness's stdin, or reports that it could not. */
+  const writeControl = (message: unknown): boolean => {
+    if (fakeControl !== null) {
+      fakeControl(message);
+      return true;
+    }
+    const stdin = child?.stdin;
+    if (!stdin || stdin.destroyed || stdin.writableEnded) return false;
+    try {
+      stdin.write(`${JSON.stringify(message)}\n`);
+      return true;
+    } catch {
+      // The process died between the check and the write; the turn's own
+      // termination path already owns what happens next.
+      return false;
+    }
+  };
+
+  /** Every leftover question, settled, so nothing is left pending for ever. */
+  const cancelPending = (reason: string): void => {
+    if (pending.size === 0) return;
+    const outstanding = [...pending.keys()];
+    pending.clear();
+    for (const requestId of outstanding) {
+      emit({ kind: "approval.cancelled", payload: { requestId, reason: bounded(reason, MAX_REASON) } });
+    }
+  };
+
+  /**
+   * Control traffic, which never reaches the transcript. An approval is
+   * remembered so it can be answered; anything Novus cannot answer is answered
+   * with an error, because the CLI blocks on what it sends and silence would
+   * wedge the turn rather than ignore a message.
+   */
+  const handleControl = (message: HarnessControlMessage): void => {
+    if (message.kind === "approval") {
+      pending.set(message.requestId, message);
+      return;
+    }
+    if (message.kind === "unsupported") {
+      writeControl({
+        type: "control_response",
+        response: {
+          subtype: "error",
+          request_id: message.requestId,
+          error: `Novus does not implement the ${message.subtype} control request.`
+        }
+      });
+    }
+    // An acknowledgement is the CLI answering our interrupt. Nothing to do:
+    // the turn ends because the harness ends it, and the escalation timer is
+    // what covers the case where it does not.
+  };
+
+  const respondApproval = (
+    requestId: string,
+    decision: ApprovalDecision,
+    reason: string | null
+  ): boolean => {
+    if (!pending.has(requestId)) return false;
+    pending.delete(requestId);
+    // Approve once, or deny. There is no third answer and nothing is
+    // remembered: `permission_suggestions` — the CLI's offer to write an allow
+    // rule into local settings, or to switch the session to acceptEdits — is
+    // read by the parser and discarded, because taking it would turn one
+    // person's single approval into a standing grant nobody gave (D-056).
+    const response =
+      decision === "approve"
+        ? { behavior: "allow" }
+        : { behavior: "deny", message: bounded(sanitize(reason?.trim() || DENIED), MAX_REASON) };
+    return writeControl({
+      type: "control_response",
+      response: { subtype: "success", request_id: requestId, response }
+    });
+  };
+
+  /** The bounded fallback: signal the process group, then insist. */
+  const forceStop = (running: ChildProcess): void => {
+    stoppedVia = "process_signal";
+    if (escalation) clearTimeout(escalation);
+    // The harness spawns its own children; signalling the group is the only
+    // way an interrupted turn does not leave orphans behind.
+    killTree(running, "SIGTERM");
+    escalation = setTimeout(() => killTree(running, "SIGKILL"), SIGKILL_AFTER_MS);
+    escalation.unref?.();
+  };
 
   const stop = (reason: string): void => {
     stopReason = reason;
     const running = child;
-    if (!running?.pid) return;
-    // The harness spawns its own children; signalling the group is the only
-    // way an interrupted turn does not leave orphans behind.
-    killTree(running, "SIGTERM");
+    // Nothing to interrupt: a turn stopped before it spawned is prevented
+    // rather than interrupted, which the caller already reports as stopped.
+    if (!running?.pid && fakeControl === null) return;
+    if (interruptAsked) return; // asked once; the escalation timer owns the rest
+    interruptAsked = true;
+    // Ask first. The harness's own interrupt ends the turn without destroying
+    // the process or the session, so a stopped mission is still resumable —
+    // which the process-group kill this replaces could never be (D-053, D-056).
+    const asked = writeControl({
+      type: "control_request",
+      request_id: randomUUID(),
+      request: { subtype: "interrupt", cancel_queued: true }
+    });
+    if (!asked) {
+      if (running) forceStop(running);
+      return;
+    }
+    stoppedVia = "protocol_interrupt";
     if (escalation) clearTimeout(escalation);
-    escalation = setTimeout(() => killTree(running, "SIGKILL"), SIGKILL_AFTER_MS);
-    escalation.unref?.();
+    // The harness gets a bounded moment to end its own turn. If it does not,
+    // the process group is signalled anyway: a Stop is not a request.
+    if (running) {
+      escalation = setTimeout(() => forceStop(running), INTERRUPT_GRACE_MS);
+      escalation.unref?.();
+    }
   };
 
   const finished = (async (): Promise<TurnResult> => {
@@ -185,10 +377,13 @@ export function startTurn(request: TurnRequest): RunningTurn {
       return await run();
     } finally {
       if (escalation) clearTimeout(escalation);
+      // Whatever ended the turn, nothing is left waiting on an answer that can
+      // no longer be delivered.
+      cancelPending("The turn ended before this was answered.");
     }
   })();
 
-  return { stop, finished };
+  return { stop, respondApproval, pendingApprovals: () => [...pending.keys()], finished };
 
   async function run(): Promise<TurnResult> {
     if (request.announceStart) emit({ kind: "execution.starting", payload: {} });
@@ -225,20 +420,25 @@ export function startTurn(request: TurnRequest): RunningTurn {
     emit({ kind: "execution.running", payload: { harness: "claude-code", model, effort } });
 
     let resumeSessionId = request.resumeSessionId;
-    let stream = new HarnessStream({ resumeSessionId, sanitize });
+    let stream = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl });
     let outcome = await attempt(worktreePath, model, effort, stream, resumeSessionId);
+    cancelPending("The harness process ended before this was answered.");
 
     // A session the CLI no longer holds must not silently become a fresh
-    // conversation presented as continuous: retry once, openly fresh.
+    // conversation presented as continuous: retry once, openly fresh. A CLI
+    // that refused a flag is excluded — the second spawn would refuse the same
+    // flag, and the reason is not the session.
     if (
       resumeSessionId !== null &&
       stopReason === null &&
       stream.sessionId === null &&
+      !UNSUPPORTED_FLAG.test(outcome.stderr) &&
       (outcome.spawnError !== null || outcome.code !== 0)
     ) {
       resumeSessionId = null;
-      stream = new HarnessStream({ resumeSessionId: null, sanitize });
+      stream = new HarnessStream({ resumeSessionId: null, sanitize, onControl: handleControl });
       outcome = await attempt(worktreePath, model, effort, stream, null);
+      cancelPending("The harness process ended before this was answered.");
     }
 
     for (const event of stream.end()) emit(event);
@@ -294,12 +494,18 @@ export function startTurn(request: TurnRequest): RunningTurn {
     return new Promise<ProcessOutcome>((resolve) => {
       const args = [
         "-p",
-        request.direction,
+        // The direction travels on stdin as a stream-json message rather than
+        // as an argument, because stdin has to stay open for the control
+        // channel: that is the same pipe the harness's permission questions are
+        // answered on and the interrupt is sent on (D-056).
+        "--input-format",
+        "stream-json",
         "--output-format",
         "stream-json",
         "--verbose",
-        "--permission-mode",
-        "acceptEdits",
+        "--permission-prompt-tool",
+        "stdio",
+        ...PINNED_PERMISSION_ARGS,
         "--model",
         model,
         "--effort",
@@ -322,7 +528,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
           // local Claude Code login still works, and nothing a project declared
           // as a secret is in it.
           env: harnessEnv(),
-          stdio: ["ignore", "pipe", "pipe"],
+          // stdin is a pipe now, and stays open for as long as the turn does:
+          // it carries the direction in, then every control response and the
+          // interrupt. Closing it early would end the turn's only way to answer.
+          stdio: ["pipe", "pipe", "pipe"],
           // Its own process group, so a stop reaches the tools it started.
           detached: true
         });
@@ -331,6 +540,15 @@ export function startTurn(request: TurnRequest): RunningTurn {
         return;
       }
       child = spawned;
+      // A write that races the process's death must not take the app with it.
+      spawned.stdin?.on("error", () => undefined);
+      // The direction, as the first stream-json message. Written before any
+      // stop is honoured so the two orderings converge on the same place: an
+      // interrupt for a turn that has not started still ends it.
+      writeControl({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: request.direction }] }
+      });
       if (stopReason !== null) stop(stopReason); // stopped between the decision and the spawn
 
       // Without this listener a missing binary is an unhandled error event and
@@ -343,6 +561,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
         // Defensive by construction: the parser drops anything it cannot read
         // rather than throwing into the data handler.
         for (const event of stream.push(chunk.toString())) emit(event);
+        // The CLI does not exit while stdin is open — it is waiting for another
+        // turn. Its own final verdict is the signal that there is nothing left
+        // to say, so that is where the pipe closes and the process ends.
+        if (stream.result !== null) spawned.stdin?.end();
       });
 
       // stderr is Novus/system diagnostics. It is never the harness speaking,
@@ -360,8 +582,28 @@ export function startTurn(request: TurnRequest): RunningTurn {
 
   /** The scripted harness: the identical pipeline, real git, no model call. */
   async function fakeAttempt(worktreePath: string, stream: HarnessStream): Promise<ProcessOutcome> {
+    const approvalId = `fake-approval-${randomUUID()}`;
+    /** The answer this scripted turn is waiting for, once one arrives. */
+    let decided: { behavior?: string; message?: string } | null = null;
+    let wake: (() => void) | null = null;
+    // No process, so no stdin — but the same `writeControl` call, the same
+    // response shape, and the same interrupt. Routing the double through this
+    // seam is what makes the approval and interrupt paths testable at all
+    // without spending a model call on every assertion.
+    fakeControl = (message) => {
+      const line = message as {
+        type?: string;
+        response?: { request_id?: string; response?: { behavior?: string; message?: string } };
+        request?: { subtype?: string };
+      };
+      if (line.type === "control_response" && line.response?.request_id === approvalId) {
+        decided = line.response.response ?? { behavior: "allow" };
+      }
+      wake?.();
+    };
     try {
       const sessionId = request.resumeSessionId ?? randomUUID();
+      const filePath = join(worktreePath, "NOVUS_FAKE_TURN.md");
       const lines = [
         JSON.stringify({ type: "system", subtype: "init", session_id: sessionId, model: "fake-harness" }),
         JSON.stringify({
@@ -377,14 +619,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
                 id: "toolu_fake_write",
                 name: "Write",
                 // Deliberately absolute: the sanitizing gate has to earn its keep.
-                input: { file_path: join(worktreePath, "NOVUS_FAKE_TURN.md") }
+                input: { file_path: filePath }
               }
             ]
           }
-        }),
-        JSON.stringify({
-          type: "assistant",
-          message: { content: [{ type: "text", text: "Done. The change is in the worktree." }] }
         })
       ];
       // The double runs as fast as it can by default. An end-to-end test that
@@ -398,7 +636,68 @@ export function startTurn(request: TurnRequest): RunningTurn {
         for (const event of stream.push(`${line}\n`)) emit(event);
         await delay(perLine);
       }
-      writeFileSync(join(worktreePath, "NOVUS_FAKE_TURN.md"), `# Fake turn\n\n${request.direction}\n`);
+
+      // The permission question, in the shape the real CLI sends and through
+      // the same parser, so what a test drives is the production path.
+      let allowed = true;
+      if (request.fakeApproval) {
+        for (const event of stream.push(
+          `${JSON.stringify({
+            type: "control_request",
+            request_id: approvalId,
+            request: {
+              subtype: "can_use_tool",
+              tool_name: "Write",
+              display_name: "Write",
+              input: { file_path: filePath, content: "# Fake turn\n" },
+              description: "NOVUS_FAKE_TURN.md",
+              permission_suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }],
+              tool_use_id: "toolu_fake_write"
+            }
+          })}\n`
+        )) {
+          emit(event);
+        }
+        // Blocked, exactly as the CLI is: nothing else happens until someone
+        // answers or the turn is stopped.
+        while (decided === null && stopReason === null) {
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+            setTimeout(resolve, 25).unref?.();
+          });
+        }
+        wake = null;
+        if (stopReason !== null) return { code: null, signal: "SIGTERM", stderr: "", spawnError: null };
+        const answer = decided as { behavior?: string; message?: string } | null;
+        allowed = answer?.behavior !== "deny";
+        for (const event of stream.push(
+          `${JSON.stringify({
+            type: "assistant",
+            message: {
+              content: [
+                {
+                  type: "text",
+                  text: allowed ? "Approved. Writing the file." : `Denied: ${answer?.message ?? "no reason given"}`
+                }
+              ]
+            }
+          })}\n`
+        )) {
+          emit(event);
+        }
+      }
+
+      if (stopReason !== null) return { code: null, signal: "SIGTERM", stderr: "", spawnError: null };
+      for (const event of stream.push(
+        `${JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "Done. The change is in the worktree." }] }
+        })}\n`
+      )) {
+        emit(event);
+      }
+      // A denial is the whole point: the file is not written.
+      if (allowed) writeFileSync(filePath, `# Fake turn\n\n${request.direction}\n`);
       // No trailing newline: the flush path is part of what is being exercised.
       stream.push(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Done." }));
       return { code: 0, signal: null, stderr: "", spawnError: null };
@@ -406,6 +705,8 @@ export function startTurn(request: TurnRequest): RunningTurn {
       // An exception in the double must still end the turn, or a test run
       // hangs on an execution that never terminates.
       return { code: null, signal: null, stderr: "", spawnError: messageOf(error) };
+    } finally {
+      fakeControl = null;
     }
   }
 
@@ -415,7 +716,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
     checkpointFailed: string | null
   ): TerminalEvent {
     if (stopReason !== null) {
-      return { kind: "execution.stopped", payload: { reason: bounded(sanitize(stopReason), MAX_REASON) } };
+      return {
+        kind: "execution.stopped",
+        payload: { reason: bounded(sanitize(stopReason), MAX_REASON), via: stoppedVia }
+      };
     }
     if (outcome.spawnError !== null) {
       return {
@@ -423,6 +727,25 @@ export function startTurn(request: TurnRequest): RunningTurn {
         payload: {
           classification: "spawn_failed",
           reason: bounded(sanitize(`Claude Code could not start: ${outcome.spawnError}`), MAX_REASON)
+        }
+      };
+    }
+    // A CLI that does not know these flags refuses before it does anything, and
+    // Novus refuses with it. There is no fallback here on purpose: every way of
+    // running without the control channel is a way of running unsupervised, and
+    // the whole point of this path is that nothing changes a repository without
+    // a person saying so (D-056).
+    if (outcome.code !== 0 && UNSUPPORTED_FLAG.test(outcome.stderr)) {
+      return {
+        kind: "execution.failed",
+        payload: {
+          classification: "unsupported_harness",
+          reason: bounded(
+            sanitize(
+              `This machine's Claude Code can't route approvals to Novus (${outcome.stderr.trim().split("\n")[0] ?? "unknown option"}). Update the CLI and direct again.`
+            ),
+            MAX_REASON
+          )
         }
       };
     }

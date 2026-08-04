@@ -11,6 +11,7 @@ import {
   OpenTerminalInputSchema,
   PrepareLocalFilesInputSchema,
   ReadWorkspaceFileInputSchema,
+  RespondApprovalInputSchema,
   SaveWorkspaceSettingsInputSchema,
   SupplySecretInputSchema,
   TerminalRenameInputSchema,
@@ -348,6 +349,29 @@ function registerIpc(): void {
       await api.stopExecution(parsed.data);
       return null;
     });
+    runner?.pollNow();
+    return result;
+  });
+
+  // The controller's answer to a harness permission question (D-056). Asking is
+  // all this does: the server checks `approval.respond` against the current
+  // lease, so a participant who is no longer the controller — including one who
+  // was when the question appeared — is refused there rather than here.
+  ipcMain.handle("novus:missions:respond-approval", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ approvalId: z.string().startsWith("apr_") })
+      .and(RespondApprovalInputSchema)
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed answer." };
+    const result = await call(async () => {
+      await api.respondApproval(parsed.data.approvalId, {
+        decision: parsed.data.decision,
+        reason: parsed.data.reason
+      });
+      return null;
+    });
+    // The turn is blocked on this, so the runner asks for its commands now
+    // rather than at the next tick.
     runner?.pollNow();
     return result;
   });

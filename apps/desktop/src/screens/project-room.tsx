@@ -15,6 +15,7 @@ import {
   viewerIsController
 } from "../components/derive";
 import {
+  ApprovalRow,
   ControlEventRow,
   TraceView,
   buildFeed
@@ -111,6 +112,10 @@ export function ProjectRoom({
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  /** Which approval is being answered, so its own card says so and a second
+   *  click cannot send a second answer for it. */
+  const [answering, setAnswering] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
 
@@ -285,9 +290,31 @@ export function ProjectRoom({
   const stateLine = detail ? deriveStateLine(detail) : null;
   const controller = detail ? controllerOf(detail) : null;
   const isController = detail ? viewerIsController(detail) : false;
+  /**
+   * The permission questions this mission is blocked on.
+   *
+   * Rendered from the server's own projection, and answered through a route
+   * that checks `approval.respond` against the current lease — so a card on
+   * screen is never the thing deciding who may answer (D-062).
+   */
+  const pendingApprovals = (detail?.approvals ?? []).filter(
+    (approval) => approval.state === "pending"
+  );
+  const lastTraceKey =
+    [...(feed?.blocks ?? [])].reverse().find((block) => block.kind !== "control")?.key ?? null;
   const liveOffer = detail?.control.liveOffer ?? null;
   const offerIsLive =
     liveOffer !== null && ["open", "accepted", "waiting_for_boundary"].includes(liveOffer.state);
+
+  const respondToApproval = async (approvalId: string, decision: "approve" | "deny") => {
+    setAnswering(approvalId);
+    setApprovalError(null);
+    const result = await novus().missions.respondApproval({ approvalId, decision });
+    setAnswering(null);
+    // A request answered by whoever holds the baton now — including someone
+    // else, a moment ago — comes back refused, and the reason is the server's.
+    if (!result.ok) setApprovalError(result.message);
+  };
 
   const runAction = async (call: Promise<{ ok: boolean; message?: string }>) => {
     const result = await call;
@@ -553,6 +580,28 @@ export function ProjectRoom({
                     onOpenChanges={() => onInspector("changes")}
                     onOpenVerification={() => onInspector("verification")}
                     actions={block.direction ? directionActions(block.direction) : null}
+                    // The question goes in the thread that raised it, so it is
+                    // attached to the last block rather than floated anywhere.
+                    approvals={
+                      block.key === lastTraceKey
+                        ? pendingApprovals.map((approval) => (
+                            <ApprovalRow
+                              key={approval.approvalId}
+                              approval={approval}
+                              capabilities={detail.capabilities}
+                              controllerLogin={detail.control.holderLogin}
+                              busy={answering === approval.approvalId}
+                              error={answering === null ? approvalError : null}
+                              onRespond={(decision) => void respondToApproval(approval.approvalId, decision)}
+                              onRequestControl={
+                                detail.capabilities.includes("control.request")
+                                  ? () => void runAction(novus().control.request(detail.mission.missionId))
+                                  : null
+                              }
+                            />
+                          ))
+                        : null
+                    }
                   />
                 )
               )}

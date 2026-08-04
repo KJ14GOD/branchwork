@@ -160,14 +160,15 @@ function host(): RunnerHost {
   };
 }
 
-function start(): RunnerAgent {
+function start(options: { fakeApproval?: boolean } = {}): RunnerAgent {
   agent = startRunnerAgent({
     api: fakeApi(),
     controlPlaneUrl: "http://control-plane.test",
     getToken: () => "a-session",
     host: host(),
     fetch: plane.fetch,
-    fakeHarness: true
+    fakeHarness: true,
+    fakeApproval: options.fakeApproval ?? false
   });
   return agent;
 }
@@ -460,5 +461,188 @@ describe("stopping a coding-agent execution", () => {
     plane.enqueue(stop);
 
     await waitFor("the stop to settle", () => plane.stateOf(stop.commandId) === "completed");
+  }, 40_000);
+});
+
+/**
+ * Harness approvals, driven through the agent (D-056).
+ *
+ * The scripted harness asks before it writes, over the same parser and the same
+ * control channel the real CLI uses, so what these tests exercise is the
+ * production path from `respond_approval` arriving to the blocked turn being
+ * released. The bug this shape of test exists for is the one D-053 found in
+ * stop, and which is strictly worse here: a decision that queues behind the
+ * turn it is meant to unblock does not arrive late, it never arrives at all.
+ */
+describe("approving what the harness asks to do", () => {
+  const EXECUTION_ID = "exe_approvaltest0001";
+
+  /** The harness's own id for the question, read from what it actually asked. */
+  const requestedId = (): string =>
+    String(plane.payloadsOf("approval.requested")[0]?.requestId ?? "missing");
+
+  const startExecution = (executionId = EXECUTION_ID): RunnerCommand => ({
+    ...command("start_execution", { body: "write the fake turn file", model: "", effort: "" }),
+    executionId
+  });
+
+  const decide = (
+    decision: "approve" | "deny",
+    executionId = EXECUTION_ID,
+    reason: string | null = null
+  ): RunnerCommand => ({
+    ...command("respond_approval", {
+      approvalId: "apr_testapproval00001",
+      harnessRequestId: requestedId(),
+      decision,
+      reason
+    }),
+    executionId
+  });
+
+  const stopExecution = (executionId = EXECUTION_ID): RunnerCommand => ({
+    ...command("stop_execution"),
+    executionId
+  });
+
+  const terminals = (): string[] =>
+    plane
+      .kinds()
+      .filter((kind) =>
+        ["execution.completed", "execution.stopped", "execution.failed", "execution.interrupted"].includes(kind)
+      );
+
+  const writtenFile = (): string => join(userData, "worktrees", MISSION_ID, "NOVUS_FAKE_TURN.md");
+
+  it("reports the question and does nothing further until somebody answers", async () => {
+    start({ fakeApproval: true }).discoverNow();
+    plane.enqueue(startExecution());
+
+    await waitFor("the approval to be reported", () => plane.kinds().includes("approval.requested"));
+    const asked = plane.payloadsOf("approval.requested")[0];
+    expect(asked?.toolName).toBe("Write");
+    expect(String(asked?.summary)).toContain("NOVUS_FAKE_TURN.md");
+    // The whole point: it is *blocked*. Nothing has been written and the turn
+    // has not ended, and it stays that way for as long as nobody answers.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(terminals()).toEqual([]);
+    expect(existsSync(writtenFile())).toBe(false);
+    // And nothing auto-approved it on the way past.
+    expect(plane.kinds()).not.toContain("approval.cancelled");
+  }, 40_000);
+
+  it("carries an approval to the blocked turn, which then does the work", async () => {
+    start({ fakeApproval: true }).discoverNow();
+    plane.enqueue(startExecution());
+    await waitFor("the approval to be reported", () => plane.kinds().includes("approval.requested"));
+
+    const decision = decide("approve");
+    plane.enqueue(decision);
+
+    await waitFor("the execution to end", () => terminals().length > 0);
+    expect(terminals()).toEqual(["execution.completed"]);
+    expect(existsSync(writtenFile())).toBe(true);
+    await waitFor("the decision to settle", () => plane.stateOf(decision.commandId) === "completed");
+  }, 40_000);
+
+  it("carries a denial, and the work does not happen", async () => {
+    start({ fakeApproval: true }).discoverNow();
+    plane.enqueue(startExecution());
+    await waitFor("the approval to be reported", () => plane.kinds().includes("approval.requested"));
+
+    plane.enqueue(decide("deny", EXECUTION_ID, "Not that file."));
+
+    await waitFor("the execution to end", () => terminals().length > 0);
+    // A denial is not a failure: the turn ran, was refused, and finished.
+    expect(terminals()).toEqual(["execution.completed"]);
+    expect(existsSync(writtenFile())).toBe(false);
+    // The harness was told why, and said so in its own words.
+    expect(JSON.stringify(plane.payloadsOf("harness.text"))).toContain("Not that file.");
+    // The session is intact, so the next direction continues the conversation.
+    expect(plane.kinds()).toContain("harness.session");
+  }, 40_000);
+
+  it("ignores a decision that names a different execution", async () => {
+    start({ fakeApproval: true }).discoverNow();
+    plane.enqueue(startExecution());
+    await waitFor("the approval to be reported", () => plane.kinds().includes("approval.requested"));
+
+    // A stale decision re-offered after a relaunch must not be written into
+    // whichever turn happens to be running now.
+    const stale = decide("approve", "exe_someothererun01");
+    plane.enqueue(stale);
+    await waitFor("the stale decision to settle", () => plane.stateOf(stale.commandId) === "completed");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(terminals()).toEqual([]);
+    expect(existsSync(writtenFile())).toBe(false);
+  }, 40_000);
+
+  it("settles a decision that arrives after the turn is over, without reviving it", async () => {
+    start({ fakeApproval: true }).discoverNow();
+    plane.enqueue(startExecution());
+    await waitFor("the approval to be reported", () => plane.kinds().includes("approval.requested"));
+    const requestId = requestedId();
+    plane.enqueue(stopExecution());
+    await waitFor("the execution to end", () => terminals().length > 0);
+
+    const late = {
+      ...command("respond_approval", {
+        approvalId: "apr_testapproval00002",
+        harnessRequestId: requestId,
+        decision: "approve",
+        reason: null
+      }),
+      executionId: EXECUTION_ID
+    };
+    plane.enqueue(late);
+    await waitFor("the late decision to settle", () => plane.stateOf(late.commandId) === "completed");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // A late approval does not resume a stopped execution, and does not do the
+    // work the participant refused to let happen.
+    expect(terminals()).toEqual(["execution.stopped"]);
+    expect(existsSync(writtenFile())).toBe(false);
+  }, 40_000);
+
+  it("declares a boundary while it is blocked, so a handoff can complete", async () => {
+    start({ fakeApproval: true }).discoverNow();
+    plane.enqueue(startExecution());
+    await waitFor("the approval to be reported", () => plane.kinds().includes("approval.requested"));
+    const boundariesBefore = plane.payloadsOf("boundary.reached").length;
+
+    // The control plane asks for a boundary because a transfer was accepted.
+    // A turn blocked on a permission prompt is at one — PRODUCT.md says so —
+    // and only this machine knows that, so only this machine can declare it.
+    plane.enqueue(command("boundary_request", { offerId: "hof_test" }));
+
+    await waitFor(
+      "the boundary to be declared",
+      () => plane.payloadsOf("boundary.reached").length > boundariesBefore
+    );
+    expect(plane.payloadsOf("boundary.reached").at(-1)?.reason).toBe("permission prompt pending");
+    // Declaring a boundary is not answering the question: it is still open.
+    expect(terminals()).toEqual([]);
+    expect(existsSync(writtenFile())).toBe(false);
+
+    plane.enqueue(decide("approve"));
+    await waitFor("the execution to end", () => terminals().length > 0);
+    expect(terminals()).toEqual(["execution.completed"]);
+  }, 40_000);
+
+  it("cancels the open question when the execution is stopped", async () => {
+    start({ fakeApproval: true }).discoverNow();
+    plane.enqueue(startExecution());
+    await waitFor("the approval to be reported", () => plane.kinds().includes("approval.requested"));
+
+    plane.enqueue(stopExecution());
+    await waitFor("the execution to end", () => terminals().length > 0);
+
+    expect(terminals()).toEqual(["execution.stopped"]);
+    // The question is settled by the machine that asked it, so nothing is left
+    // pending on a turn that no longer exists.
+    await waitFor("the question to be cancelled", () => plane.kinds().includes("approval.cancelled"));
+    expect(plane.payloadsOf("approval.cancelled")[0]?.requestId).toBe(requestedId());
+    // The scripted harness has no process, so the interrupt is the whole story.
+    expect(plane.payloadsOf("execution.stopped")[0]?.via).toBe("protocol_interrupt");
   }, 40_000);
 });

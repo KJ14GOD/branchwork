@@ -10,6 +10,7 @@ import {
 } from "@novus/contracts";
 import { z } from "zod";
 import type pg from "pg";
+import { settlePendingApprovals } from "./approvals.ts";
 import { missionAccess, require as requireCapability } from "./authz.ts";
 import type { MissionAccess } from "./authz.ts";
 import type { Db } from "./db.ts";
@@ -62,13 +63,18 @@ export interface DispatchResult {
   deferred: string | null;
 }
 
-interface EnqueueArgs {
+export interface EnqueueArgs {
   orgId: string;
   missionId: string;
   workstreamId: string;
   executionId: string | null;
   runnerId: string;
-  kind: "start_execution" | "apply_direction" | "stop_execution" | "boundary_request";
+  kind:
+    | "start_execution"
+    | "apply_direction"
+    | "stop_execution"
+    | "boundary_request"
+    | "respond_approval";
   payload: Record<string, unknown>;
   idempotencyKey: string;
 }
@@ -78,7 +84,7 @@ interface EnqueueArgs {
  * a retried dispatch after a partition apply once: the second insert loses to
  * the unique index and the caller gets the command that already exists.
  */
-async function enqueueCommand(client: pg.PoolClient, args: EnqueueArgs): Promise<string> {
+export async function enqueueCommand(client: pg.PoolClient, args: EnqueueArgs): Promise<string> {
   const commandId = newCommandId();
   const inserted = await client.query(
     `insert into runner_commands (cmd_id, org_id, mission_id, wst_id, exe_id, runner_id, kind,
@@ -443,6 +449,20 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
         actorLogin: ctx.login,
         causeLeaseId: access.leaseId,
         payload: { runnerOnline: online }
+      });
+
+      // A Stop settles the questions the turn was blocked on, in the same
+      // transaction that decides it. Waiting for the runner's terminal report
+      // would leave the room saying *Needs approval* about a turn a participant
+      // has already ended, and would let a decision made in that window be
+      // enqueued toward a harness that is being interrupted (D-056).
+      await settlePendingApprovals(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId,
+        executionId,
+        outcome: "cancelled",
+        reason: "A participant stopped the execution before this was answered."
       });
 
       if (!online) {

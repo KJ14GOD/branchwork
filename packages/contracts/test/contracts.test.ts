@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   CLAUDE_MODELS,
+  CapabilitySchema,
   CreateMissionInputSchema,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
   EventSchema,
   IpcAuthStatusSchema,
   IpcDirectInputSchema,
+  MAX_APPROVAL_SUMMARY,
   MissionSchema,
   ModelIdSchema,
   ReportRunnerEventsInputSchema,
+  RespondApprovalInputSchema,
   RunnerEventSchema
 } from "../src/index.js";
 
@@ -150,6 +153,67 @@ describe("the runner event union", () => {
         payload: { classification: "nonzero_exit", reason: "exit 1" }
       }).success
     ).toBe(true);
+  });
+
+  it("bounds a harness approval's summary, and keeps its raw input out of the shape", () => {
+    const payload = {
+      requestId: "21740bb3-0000-0000-0000-000000000000",
+      toolUseId: "toolu_01",
+      toolName: "Write",
+      displayName: "Write",
+      summary: "the mission worktree/PROBE.md"
+    };
+    expect(RunnerEventSchema.safeParse({ kind: "approval.requested", payload }).success).toBe(true);
+    // A file's contents can be megabytes. What travels is a summary.
+    expect(
+      RunnerEventSchema.safeParse({
+        kind: "approval.requested",
+        payload: { ...payload, summary: "x".repeat(MAX_APPROVAL_SUMMARY + 1) }
+      }).success
+    ).toBe(false);
+    // `.strict()`: a runner cannot smuggle the tool input alongside it.
+    expect(
+      RunnerEventSchema.safeParse({
+        kind: "approval.requested",
+        payload: { ...payload, input: { file_path: "/Users/someone/.ssh/id_rsa", content: "-----BEGIN" } }
+      }).success
+    ).toBe(false);
+  });
+
+  it("names which path ended a stopped turn, and defaults to the forced one", () => {
+    const graceful = RunnerEventSchema.safeParse({
+      kind: "execution.stopped",
+      payload: { reason: "Stopped by a participant.", via: "protocol_interrupt" }
+    });
+    expect(graceful.success && graceful.data.payload).toEqual({
+      reason: "Stopped by a participant.",
+      via: "protocol_interrupt"
+    });
+    // An older runner that says nothing is read as the kill it was doing.
+    const legacy = RunnerEventSchema.safeParse({
+      kind: "execution.stopped",
+      payload: { reason: "Stopped by a participant." }
+    });
+    expect(legacy.success && legacy.data.payload.via).toBe("process_signal");
+    expect(
+      RunnerEventSchema.safeParse({
+        kind: "execution.stopped",
+        payload: { reason: "x", via: "vibes" }
+      }).success
+    ).toBe(false);
+  });
+
+  it("gives approval.respond to the lease and to no role", () => {
+    // The capability exists as an enforceable verb, and PRODUCT.md's table puts
+    // it in the lease column alone. The server-side half of that is asserted in
+    // the control-plane suite; this only pins the vocabulary.
+    expect(CapabilitySchema.safeParse("approval.respond").success).toBe(true);
+    expect(RespondApprovalInputSchema.safeParse({ decision: "approve" }).success).toBe(true);
+    expect(RespondApprovalInputSchema.safeParse({ decision: "deny", reason: "not that file" }).success).toBe(
+      true
+    );
+    // There is no third answer: no "always allow", and nothing remembered.
+    expect(RespondApprovalInputSchema.safeParse({ decision: "always_allow" }).success).toBe(false);
   });
 
   it("requires a positive origin sequence on every reported event", () => {

@@ -21,6 +21,7 @@ import {
   require as requireCapability,
   type MissionAccess
 } from "./authz.ts";
+import { enqueueCommand } from "./executions.ts";
 import {
   newControlRequestId,
   newHandoffOfferId,
@@ -173,6 +174,49 @@ async function hasActiveExecution(client: pg.PoolClient, workstreamId: string): 
     [workstreamId, ACTIVE_EXECUTION_STATES]
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Asks the runner to acknowledge at its next safe boundary
+ * (ARCHITECTURE.md#control-transfer-mechanics: the control plane marks the
+ * lease `releasing` and sends `report_boundary_request`).
+ *
+ * This half was protocol surface with no sender until approvals arrived, and
+ * approvals are what make it load-bearing: a harness blocked on a permission
+ * prompt is at a safe boundary and can stay there indefinitely, because the
+ * only person allowed to answer is the one waiting for the transfer. Without
+ * the ask, that transfer waits for a turn that is waiting for the transfer.
+ *
+ * The runner answers only when it is genuinely at a boundary; a turn that is
+ * merely working still reports its own boundary when it ends, exactly as
+ * before. Nothing here forces or interrupts anything.
+ */
+async function requestBoundary(
+  client: pg.PoolClient,
+  args: { orgId: string; missionId: string; workstreamId: string; offerId: string }
+): Promise<void> {
+  const runner = await client.query(
+    `select runner_id from runners
+      where wst_id = $1 and revoked_at is null and expires_at > now()
+      order by created_at desc limit 1`,
+    [args.workstreamId]
+  );
+  const runnerId = runner.rows[0]?.runner_id as string | undefined;
+  if (!runnerId) return;
+  const running = await client.query(
+    "select exe_id from executions where wst_id = $1 and state = any($2::text[]) limit 1",
+    [args.workstreamId, ACTIVE_EXECUTION_STATES]
+  );
+  await enqueueCommand(client, {
+    orgId: args.orgId,
+    missionId: args.missionId,
+    workstreamId: args.workstreamId,
+    executionId: (running.rows[0]?.exe_id as string | undefined) ?? null,
+    runnerId,
+    kind: "boundary_request",
+    payload: { offerId: args.offerId },
+    idempotencyKey: `boundary:${args.offerId}`
+  });
 }
 
 /**
@@ -911,6 +955,12 @@ export function registerAuthorityRoutes(app: FastifyInstance, deps: RouteDeps): 
         actorId: "control-plane",
         causeLeaseId: offer.lease_id,
         payload: { offerId: offer.offer_id, toLogin: ctx.login }
+      });
+      await requestBoundary(client, {
+        orgId: standing.orgId,
+        missionId: standing.missionId,
+        workstreamId: offer.wst_id,
+        offerId: offer.offer_id as string
       });
     });
     return { ok: true };

@@ -1,4 +1,5 @@
 import type {
+  ApprovalRequest,
   Checkpoint,
   Direction,
   MissionDetailResponse,
@@ -601,7 +602,8 @@ export function TraceView({
   viewerIsController,
   onOpenChanges,
   onOpenVerification,
-  actions
+  actions,
+  approvals
 }: {
   block: TraceBlock;
   controllerUserId: string | null;
@@ -611,6 +613,8 @@ export function TraceView({
   onOpenVerification: () => void;
   /** Apply / Reject / Cancel for a direction still awaiting judgment. */
   actions?: React.ReactNode;
+  /** Permission questions this execution is blocked on, if any. */
+  approvals?: React.ReactNode;
 }) {
   const direction = block.direction;
   const waiting = direction?.state === "submitted" || direction?.state === "queued";
@@ -713,7 +717,95 @@ export function TraceView({
           onOpenVerification={onOpenVerification}
         />
       ))}
+
+      {/* Last, because it is where the harness stopped: everything above is
+          what it did, and this is what it is waiting on (D-062). */}
+      {approvals}
     </article>
+  );
+}
+
+/**
+ * A permission the harness is asking for, in the thread where it asked.
+ *
+ * Not a dialog and not a notification centre: the question belongs beside the
+ * work that raised it, because "may I run this" is only answerable by someone
+ * reading what came before it (DESIGN.md#state-presentation).
+ *
+ * Only the lease holder may answer, and that is the server's decision — this
+ * renders what the server said about the viewer's capabilities and nothing it
+ * inferred locally. Everyone else is told who can, which is the honest answer
+ * to "why is this waiting" and the thing a room full of people needs to know.
+ */
+export function ApprovalRow({
+  approval,
+  capabilities,
+  controllerLogin,
+  busy,
+  error,
+  onRespond,
+  onRequestControl
+}: {
+  approval: ApprovalRequest;
+  capabilities: MissionDetailResponse["capabilities"];
+  controllerLogin: string | null;
+  busy: boolean;
+  error: string | null;
+  onRespond: (decision: "approve" | "deny") => void;
+  onRequestControl: (() => void) | null;
+}) {
+  const mayAnswer = capabilities.includes("approval.respond");
+  return (
+    <div className="approval" data-testid="approval" data-approval-id={approval.approvalId}>
+      <div className="approval-ask">
+        <span className="approval-tool mono" data-testid="approval-tool">
+          {approval.displayName}
+        </span>
+        <span className="approval-summary" data-testid="approval-summary">
+          {approval.summary}
+        </span>
+      </div>
+      {mayAnswer ? (
+        <div className="approval-actions">
+          <button
+            className="btn btn-primary"
+            onClick={() => onRespond("approve")}
+            disabled={busy}
+            data-testid="approval-approve"
+          >
+            Approve once
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => onRespond("deny")}
+            disabled={busy}
+            data-testid="approval-deny"
+          >
+            Deny
+          </button>
+          {/* Said plainly, because "Approve" on its own reads like a policy. */}
+          <span className="approval-note">This one act only — nothing is remembered.</span>
+        </div>
+      ) : (
+        <div className="approval-actions" data-testid="approval-denied-to-viewer">
+          <span className="approval-note">
+            {controllerLogin
+              ? `${controllerLogin} holds the baton and can answer this.`
+              : "Nobody holds the baton, so nobody can answer this yet."}
+          </span>
+          {onRequestControl && (
+            <button className="btn btn-text" onClick={onRequestControl} data-testid="approval-request-control">
+              Request control
+            </button>
+          )}
+        </div>
+      )}
+      {error && (
+        <p className="inline-error" role="alert" data-testid="approval-error">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

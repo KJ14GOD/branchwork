@@ -501,3 +501,49 @@ alter table verification_checks add column if not exists ending text;
 alter table verification_checks drop constraint if exists verification_checks_ending_check;
 alter table verification_checks add constraint verification_checks_ending_check
   check (ending is null or ending in ('exit', 'signal', 'timeout', 'cancelled', 'spawn_failed'));
+
+-- ---------------------------------------------------------------------------
+-- Harness approvals (D-056). The harness asks before it acts; the question is
+-- durable, the answer is attributed, and both outlive the turn.
+--
+-- What is deliberately absent is the tool's raw input. A `Write` carries an
+-- entire file in it and a `Bash` carries a command line that may hold a token;
+-- a row distributed to every participant and projected into a receipt is the
+-- last place either belongs. What is stored is a bounded summary the runner
+-- built from named fields and passed through the same redaction every other
+-- reported string goes through (D-052).
+-- ---------------------------------------------------------------------------
+
+create table if not exists approval_requests (
+  apr_id       text primary key,
+  org_id       text not null references organizations(org_id),
+  mission_id   text not null references missions(mission_id),
+  wst_id       text not null references workstreams(wst_id),
+  exe_id       text not null references executions(exe_id),
+  runner_id    text references runners(runner_id),
+  -- The harness's own correlation id. Unique per execution: a replayed report
+  -- of the same question is the same row, never a second one.
+  harness_request_id text not null,
+  tool_use_id  text,
+  tool_name    text not null,
+  display_name text not null,
+  summary      text not null,
+  state        text not null check (state in ('pending', 'approved', 'denied', 'cancelled', 'expired')),
+  requested_at timestamptz not null default now(),
+  responded_by text references users(user_id),
+  responded_at timestamptz,
+  resolution   text
+);
+create unique index if not exists approval_requests_one_per_harness_request
+  on approval_requests (exe_id, harness_request_id);
+create index if not exists approval_requests_by_mission on approval_requests (mission_id, requested_at);
+-- The open question, which is what *Needs approval* is about.
+create index if not exists approval_requests_pending on approval_requests (exe_id)
+  where state = 'pending';
+
+-- The controller's typed answer is a runner command like any other.
+alter table runner_commands drop constraint if exists runner_commands_kind_check;
+alter table runner_commands add constraint runner_commands_kind_check
+  check (kind in ('start_execution', 'apply_direction', 'stop_execution', 'boundary_request',
+                  'respond_approval',
+                  'run_setup', 'run_command', 'stop_command', 'run_verification'));

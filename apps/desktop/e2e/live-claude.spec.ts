@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -238,6 +238,48 @@ describe.skipIf(!LIVE)("a real Claude Code turn, end to end", () => {
       });
       if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
     }, missionId);
+
+    // --- The real permission question, answered in the real window ----------
+    // Claude Code is running under `--permission-prompt-tool stdio` with its
+    // setting sources pinned, so writing a file is not something it may simply
+    // do. It stops and asks, and this is the whole claim of D-062: the question
+    // reaches a person, the person answers it *in the product*, and the harness
+    // is unblocked by that answer and by nothing else.
+    await until(
+      missionId,
+      (value) => value.approvals.some((approval) => approval.state === "pending"),
+      "the real Claude to ask permission",
+      300_000
+    );
+
+    // Open the room, exactly as a person would find it.
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
+    if ((await page.getByTestId("mission-row").count()) === 0) {
+      await page.getByTestId("project-row").first().click();
+    }
+    await page.getByTestId("mission-row").first().click();
+
+    const card = page.getByTestId("approval");
+    await card.waitFor({ timeout: 60_000 });
+    const asked = (await page.getByTestId("approval-summary").textContent()) ?? "";
+    // A real request about the real file, and no file body in the durable text.
+    expect(asked.toUpperCase()).toContain("HELLO.MD");
+    await page.screenshot({ path: join(evidenceDir, "78-live-claude-asks.png") });
+
+    // Nothing has been written yet: the harness is genuinely waiting.
+    expect(existsSync(join(repoDir, "HELLO.md"))).toBe(false);
+
+    await page.getByTestId("approval-approve").click();
+
+    const answered = await until(
+      missionId,
+      (value) => value.approvals.some((approval) => approval.state === "approved"),
+      "the approval to settle",
+      120_000
+    );
+    expect(answered.approvals.at(-1)?.respondedByLogin).toBe("kartik");
 
     const afterFirst = await until(
       missionId,

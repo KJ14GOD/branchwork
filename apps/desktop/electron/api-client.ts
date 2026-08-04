@@ -16,6 +16,7 @@ import {
   RegisterRunnerResponseSchema,
   RetryBranchResponseSchema,
   SubmitDirectionResponseSchema,
+  type ApprovalDecision,
   type AuthClaimResponse,
   type AuthStartResponse,
   type AvailableRepository,
@@ -211,6 +212,22 @@ export class ControlPlaneClient {
       `/missions/${encodeURIComponent(missionId)}/execution/stop`,
       OkResponseSchema,
       {}
+    );
+  }
+
+  // --- Harness approvals (D-056) --------------------------------------------
+  // Asking, never deciding: the server checks `approval.respond` against the
+  // current lease and refuses a request that is already settled.
+
+  async respondApproval(
+    approvalId: string,
+    input: { decision: ApprovalDecision; reason?: string }
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/approvals/${encodeURIComponent(approvalId)}/respond`,
+      OkResponseSchema,
+      input
     );
   }
 

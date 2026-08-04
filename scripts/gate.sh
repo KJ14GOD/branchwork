@@ -97,7 +97,7 @@ untracked=$(git status --porcelain 2>/dev/null | grep '^??' | awk '{print $2}' |
 # reference to follow, so it opts out by saying so in those words.
 cited=$(grep -rhE 'D-[0-9]{3}' $CANON apps/ packages/ scripts/ 2>/dev/null \
   --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=dist-electron \
-  --exclude-dir=worktrees \
+  --exclude-dir=dist-renderer --exclude-dir=worktrees \
   | grep -viE 'never existed|never been written|never happened|no such decision' \
   | grep -oE 'D-[0-9]{3}' | sort -u || true)
 for d in $cited; do

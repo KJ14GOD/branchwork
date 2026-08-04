@@ -285,13 +285,23 @@ function primaryStateLine(
         name: "Needs direction",
         detail: `${HARNESS_NAME} is waiting at a safe boundary`
       };
-    case "needs_approval":
+    case "needs_approval": {
+      // DESIGN.md#state-presentation asks for "{Harness} asks to {action}", so
+      // the state line names the act rather than the category — a person
+      // deciding needs to know what is being asked, not that something is.
+      const asking = detail.approvals.find((approval) => approval.state === "pending");
       return {
         ...quiet,
         tone: "warn",
         name: "Needs approval",
-        detail: `${HARNESS_NAME} is waiting for a decision it cannot make itself`
+        // Names the act and stops. What is being asked for is on the card, in
+        // the thread, next to the work that raised it — saying it twice makes
+        // the line long and the card redundant.
+        detail: asking
+          ? `${HARNESS_NAME} asks to ${asking.displayName.toLowerCase()}`
+          : `${HARNESS_NAME} is waiting for a decision it cannot make itself`
       };
+    }
     case "paused":
       return { ...quiet, tone: "warn", name: "Paused", detail: "the execution is held at a safe boundary" };
     case "work_completed_unverified":

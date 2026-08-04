@@ -3034,3 +3034,47 @@ body {
   flex: none;
   padding: 0 0 var(--s-2);
 }
+
+/* --- A permission the harness is waiting on (D-062) -------------------------
+   In the thread, on the thread's own plane. Not a dialog, not a banner, and
+   not red: nothing has gone wrong — something is being asked. `--warn` is the
+   attention colour and the state is written in words beside it, because a
+   colour is not a sentence (DESIGN.md#status-semantics). */
+.approval {
+  margin-top: var(--s-3);
+  padding: var(--s-3) 0 0;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.approval-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.approval-tool {
+  color: var(--warn);
+  font: var(--type-mono-sm);
+}
+
+.approval-summary {
+  color: var(--text-1);
+  font: var(--type-body);
+  overflow-wrap: anywhere;
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.approval-note {
+  color: var(--text-3);
+  font: var(--type-meta);
+}

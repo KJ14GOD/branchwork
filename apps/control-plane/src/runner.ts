@@ -11,6 +11,11 @@ import {
 } from "@novus/contracts";
 import { z } from "zod";
 import type pg from "pg";
+import {
+  cancelApprovalByHarnessRequest,
+  recordApprovalRequest,
+  settlePendingApprovals
+} from "./approvals.ts";
 import { completeTransferAtBoundary } from "./authority.ts";
 import { workstreamAccess } from "./authz.ts";
 import type { Db } from "./db.ts";
@@ -541,6 +546,27 @@ async function applyWorkspaceSideEffects(
   }
 }
 
+/**
+ * A turn that has ended takes its open questions with it. Every terminal report
+ * calls this, so a request can never outlive the execution it belongs to and
+ * sit *pending* in a room where nobody can answer it any more.
+ */
+async function endOpenApprovals(
+  client: pg.PoolClient,
+  ctx: RunnerContext,
+  executionId: string,
+  reason: string
+): Promise<void> {
+  await settlePendingApprovals(client, {
+    orgId: ctx.orgId,
+    missionId: ctx.missionId,
+    workstreamId: ctx.workstreamId,
+    executionId,
+    outcome: "cancelled",
+    reason: `Nobody answered before ${reason}.`
+  });
+}
+
 /** The durable consequence of one reported event, applied after it was
  *  recorded and only when it was not a de-duplicated replay. */
 async function applySideEffects(
@@ -631,11 +657,36 @@ async function applySideEffects(
         ]
       );
       return;
+    case "approval.requested":
+      // The harness is blocked on a person. The execution enters *Needs
+      // approval*, which is the state PRODUCT.md has always defined and which
+      // nothing has ever entered until now (D-056).
+      await recordApprovalRequest(
+        client,
+        {
+          orgId: ctx.orgId,
+          missionId: ctx.missionId,
+          workstreamId: ctx.workstreamId,
+          runnerId: ctx.runnerId
+        },
+        execution.exe_id,
+        event.payload
+      );
+      return;
+    case "approval.cancelled":
+      await cancelApprovalByHarnessRequest(
+        client,
+        { orgId: ctx.orgId, missionId: ctx.missionId, workstreamId: ctx.workstreamId },
+        execution.exe_id,
+        event.payload
+      );
+      return;
     case "execution.completed":
       await setExecutionState(client, execution.exe_id, "completed", {
         ended: true,
         exitOutcome: "completed"
       });
+      await endOpenApprovals(client, ctx, execution.exe_id, "the turn completed");
       return;
     case "execution.stopped":
       await setExecutionState(client, execution.exe_id, "stopped", {
@@ -643,6 +694,7 @@ async function applySideEffects(
         exitOutcome: "stopped",
         failureReason: event.payload.reason
       });
+      await endOpenApprovals(client, ctx, execution.exe_id, "the execution was stopped");
       return;
     case "execution.failed":
       await setExecutionState(client, execution.exe_id, "failed", {
@@ -650,6 +702,7 @@ async function applySideEffects(
         exitOutcome: event.payload.classification,
         failureReason: event.payload.reason
       });
+      await endOpenApprovals(client, ctx, execution.exe_id, "the execution failed");
       return;
     case "execution.interrupted":
       await setExecutionState(client, execution.exe_id, "interrupted", {
@@ -657,6 +710,7 @@ async function applySideEffects(
         exitOutcome: "interrupted",
         failureReason: event.payload.reason
       });
+      await endOpenApprovals(client, ctx, execution.exe_id, "the execution was interrupted");
       return;
     case "harness.text":
     case "harness.tool":

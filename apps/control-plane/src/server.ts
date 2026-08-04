@@ -28,6 +28,7 @@ import {
   reportBranchOutcome
 } from "./missions.ts";
 import { AuthorizationError } from "./authz.ts";
+import { registerApprovalRoutes } from "./approvals.ts";
 import { registerAuthorityRoutes } from "./authority.ts";
 import { registerExecutionRoutes } from "./executions.ts";
 import { registerRunnerRoutes } from "./runner.ts";
@@ -278,6 +279,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
 
   // Slice modules own disjoint path sets; see each module's header.
   const deps: RouteDeps = { db, config, provider, requireAuth, sendError };
+  registerApprovalRoutes(app, deps);
   registerAuthorityRoutes(app, deps);
   registerExecutionRoutes(app, deps);
   registerRunnerRoutes(app, deps);

@@ -1,3 +1,4 @@
+import { settlePendingApprovals } from "./approvals.ts";
 import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
@@ -92,6 +93,19 @@ export async function sweepRunners(db: Db, now = new Date()): Promise<number> {
         actorKind: "system",
         actorId: "control-plane",
         payload: { reason: RUNNER_GONE, detectedBy: "runner heartbeat watchdog" }
+      });
+      // This is the one path that **expires** a question rather than cancelling
+      // it, and the distinction is the whole reason `expired` exists: the
+      // machine that asked is gone, so an answer could never have been
+      // delivered — nobody declined to answer, and the record should not read
+      // as though somebody did (D-056).
+      await settlePendingApprovals(client, {
+        orgId: row.org_id,
+        missionId: row.mission_id,
+        workstreamId: row.wst_id,
+        executionId: row.exe_id,
+        outcome: "expired",
+        reason: "The machine that asked stopped responding, so no answer could reach it."
       });
       return true;
     });

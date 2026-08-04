@@ -56,6 +56,12 @@ const LEASE_CAPABILITIES: Capability[] = [
   // The controller runs the commands the project declared — and only those.
   // An interactive shell is not here, and is not anywhere (D-042).
   "workspace.command",
+  // Answering the harness is the controller's, and **only** the controller's.
+  // PRODUCT.md#roles-and-capabilities gives `approval.respond` to the lease
+  // column alone: a Mission Admin who is not holding the baton may revoke it
+  // and then answer, which is visible and logged, but may not reach around it.
+  // That is why this appears here and in no role list.
+  "approval.respond",
   "control.offer"
 ];
 
@@ -143,7 +149,9 @@ export function require(access: MissionAccess, capability: Capability): void {
   if (!access.capabilities.includes(capability)) {
     throw new AuthorizationError(
       "forbidden",
-      capability === "direction.apply" || capability === "control.offer"
+      capability === "direction.apply" ||
+        capability === "control.offer" ||
+        capability === "approval.respond"
         ? "Only the controller can do that."
         : "Your role in this mission doesn't allow that."
     );

@@ -774,7 +774,7 @@ describe("event ingestion", () => {
     expect(commands.some((command: { kind: string }) => command.kind === "stop_execution")).toBe(true);
 
     await report(lane.credential, executionId, [
-      { originSeq: 1, event: { kind: "execution.stopped", payload: { reason: "stopped by the controller" } } }
+      { originSeq: 1, event: { kind: "execution.stopped", payload: { reason: "stopped by the controller", via: "protocol_interrupt" } } }
     ]);
     const ended = await harness.db.query(
       "select state, ended_at, exit_outcome, failure_reason from executions where exe_id = $1",
@@ -855,7 +855,7 @@ describe("event ingestion", () => {
       payload: {}
     });
     await report(lane.credential, executionId, [
-      { originSeq: 1, event: { kind: "execution.stopped", payload: { reason: "Stopped by a participant." } } }
+      { originSeq: 1, event: { kind: "execution.stopped", payload: { reason: "Stopped by a participant.", via: "protocol_interrupt" } } }
     ]);
 
     const before = await harness.db.query(

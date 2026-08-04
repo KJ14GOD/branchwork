@@ -13,6 +13,7 @@ import type {
   Workspace,
   WorkspaceProcess
 } from "@novus/contracts";
+import { listApprovals } from "./approvals.ts";
 import type { Db } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
 import { listDirections } from "./directions.ts";
@@ -429,22 +430,34 @@ export async function missionDetail(
   const currentCheckpointSha =
     [...checkpointsForSha].reverse().find((checkpoint) => checkpoint.sha !== null)?.sha ?? null;
 
-  const [participants, control, directions, executions, checkpoints, checks, runner, workspace, processes, eventRows] =
-    await Promise.all([
-      listParticipants(db, access.missionId, access.controllerUserId),
-      controlSnapshot(db, access.workstreamId),
-      listDirections(db, access.missionId),
-      listExecutions(db, access.missionId),
-      Promise.resolve(checkpointsForSha),
-      listChecks(db, access.missionId, currentCheckpointSha),
-      runnerStatus(db, access.workstreamId),
-      workspaceOf(db, access.workstreamId),
-      listProcesses(db, access.missionId),
-      db.query(`${EVENT_SELECT} where org_id = $1 and mission_id = $2 order by seq`, [
-        access.orgId,
-        access.missionId
-      ])
-    ]);
+  const [
+    participants,
+    control,
+    directions,
+    executions,
+    checkpoints,
+    checks,
+    approvals,
+    runner,
+    workspace,
+    processes,
+    eventRows
+  ] = await Promise.all([
+    listParticipants(db, access.missionId, access.controllerUserId),
+    controlSnapshot(db, access.workstreamId),
+    listDirections(db, access.missionId),
+    listExecutions(db, access.missionId),
+    Promise.resolve(checkpointsForSha),
+    listChecks(db, access.missionId, currentCheckpointSha),
+    listApprovals(db, access.missionId),
+    runnerStatus(db, access.workstreamId),
+    workspaceOf(db, access.workstreamId),
+    listProcesses(db, access.missionId),
+    db.query(`${EVENT_SELECT} where org_id = $1 and mission_id = $2 order by seq`, [
+      access.orgId,
+      access.missionId
+    ])
+  ]);
 
   const state = projectMissionState({
     hasWorkstream: base.workstream !== null,
@@ -472,6 +485,7 @@ export async function missionDetail(
     control,
     checkpoints,
     checks,
+    approvals,
     runner,
     workspace,
     processes,

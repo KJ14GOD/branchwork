@@ -219,7 +219,7 @@ The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-prese
 | Agent running | Harness actively working; activity streaming. |
 | Agent stopping | A participant asked the harness to stop and it has not finished stopping. Transient, like *Agent starting*: it exists so the room does not go on saying *Running* — and offering a Stop that has already been pressed — while the interrupt is in flight. It always resolves to a terminal outcome. |
 | Needs direction | Harness is waiting for input at a boundary and the queue is empty. |
-| Needs approval | Harness surfaced a permission/approval request that mission policy routes to the controller. |
+| Needs approval | Harness surfaced a permission request and is blocked on the answer. Routed to the lease holder, who answers it once, for that act — Novus issues no standing grants and remembers no decision (D-062). Everyone else sees the question and who can answer it. A pending request is a *safe execution boundary*, so control may transfer while the harness waits, and the new holder answers. |
 | Direction queued *(overlay)* | Direction is waiting to be applied at the next receptive point. |
 | Control requested *(overlay)* | An open ControlRequest exists. |
 | Handoff offered *(overlay)* | An open HandoffOffer awaits the recipient. |

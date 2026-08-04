@@ -207,6 +207,9 @@ export const CapabilitySchema = z.enum([
   "execution.start",
   "execution.stop",
   "workspace.command",
+  /** Answering a harness approval. Lease-held only — a Mission Admin who is not
+   *  the controller cannot answer for them (PRODUCT.md#roles-and-capabilities). */
+  "approval.respond",
   "control.request",
   "control.offer",
   "control.accept",
@@ -311,6 +314,67 @@ export const ExecutionSchema = z.object({
   latestCheckpointSha: z.string().nullable()
 });
 export type Execution = z.infer<typeof ExecutionSchema>;
+
+// --- Harness approvals (D-056) ----------------------------------------------
+// The harness asks before it acts; Novus routes the question to the controller
+// and carries the typed answer back. ARCHITECTURE.md#harness-protocol calls this
+// out as *not normalizable*: the payload is harness-specific and passes through
+// with attribution rather than being flattened.
+//
+// What travels is deliberately narrow. A tool's raw input can hold a whole file,
+// a command line with a token in it, or a repository's contents; none of that
+// belongs in a durable row distributed to every participant. So a request
+// carries the tool's name and a **bounded, redacted summary** built from named
+// fields, and nothing else.
+
+export const ApprovalStateSchema = z.enum([
+  "pending",
+  "approved",
+  "denied",
+  /** The execution ended before anyone answered — a Stop, a completion, a
+   *  failure, or the host quitting. The question is moot, not unanswered. */
+  "cancelled",
+  /** The machine that asked was declared gone, so no answer can ever reach it. */
+  "expired"
+]);
+export type ApprovalState = z.infer<typeof ApprovalStateSchema>;
+
+/** The first implementation answers once, for this request, and remembers
+ *  nothing: there is deliberately no "always allow" (D-056). */
+export const ApprovalDecisionSchema = z.enum(["approve", "deny"]);
+export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
+
+/** How much of a request's summary is durable. Long enough to say what is being
+ *  asked, short enough that a file's contents can never be it. */
+export const MAX_APPROVAL_SUMMARY = 400;
+
+export const ApprovalRequestSchema = z.object({
+  approvalId: z.string().startsWith("apr_"),
+  executionId: z.string().startsWith("exe_"),
+  workstreamId: z.string().startsWith("wst_"),
+  /** The harness's own correlation id. Novus answers by naming it back. */
+  harnessRequestId: z.string().min(1),
+  /** The tool call this permission is for, when the harness named one. */
+  toolUseId: z.string().nullable(),
+  toolName: z.string().min(1),
+  displayName: z.string().min(1),
+  /** Bounded and redacted before it left the machine that read it. */
+  summary: z.string().max(MAX_APPROVAL_SUMMARY),
+  state: ApprovalStateSchema,
+  requestedAt: z.string().datetime(),
+  respondedByLogin: z.string().nullable(),
+  respondedAt: z.string().datetime().nullable(),
+  /** Why it ended the way it did, in words. */
+  resolution: z.string().nullable()
+});
+export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
+
+export const RespondApprovalInputSchema = z.object({
+  decision: ApprovalDecisionSchema,
+  /** Carried to the harness verbatim on a denial, so the agent is told why. */
+  reason: z.string().trim().max(500).optional()
+});
+export type RespondApprovalInput = z.infer<typeof RespondApprovalInputSchema>;
 
 // --- Evidence: changes and verification (D-037) -----------------------------
 
@@ -1040,6 +1104,8 @@ export const RunnerCommandKindSchema = z.enum([
   "apply_direction",
   "stop_execution",
   "boundary_request",
+  /** The controller's typed answer to an `approval.requested` event (D-056). */
+  "respond_approval",
   "run_setup",
   "run_command",
   "stop_command",
@@ -1223,10 +1289,47 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
       })
       .strict()
   }),
+  z.object({
+    kind: z.literal("approval.requested"),
+    payload: z
+      .object({
+        /** The harness's own id for this question. The answer names it back. */
+        requestId: BOUNDED_LINE,
+        toolUseId: BOUNDED_LINE.nullable().default(null),
+        toolName: BOUNDED_LINE,
+        displayName: BOUNDED_LINE,
+        /** Built from named fields, bounded, and redacted — never the raw
+         *  tool input, which can be a whole file (D-052). */
+        summary: z.string().max(MAX_APPROVAL_SUMMARY)
+      })
+      .strict()
+  }),
+  z.object({
+    /** The harness stopped waiting without an answer: the turn ended, or the
+     *  protocol interrupt cancelled the question. The control plane's own
+     *  settlement paths never travel this way. */
+    kind: z.literal("approval.cancelled"),
+    payload: z.object({ requestId: BOUNDED_LINE, reason: BOUNDED_LINE }).strict()
+  }),
   z.object({ kind: z.literal("execution.completed"), payload: z.object({}).strict() }),
   z.object({
     kind: z.literal("execution.stopped"),
-    payload: z.object({ reason: BOUNDED_LINE }).strict()
+    payload: z
+      .object({
+        reason: BOUNDED_LINE,
+        /**
+         * Which path actually ended the turn (D-053, upgraded by D-056):
+         * `protocol_interrupt` is the harness's own interrupt, which ends the
+         * turn and leaves the session resumable; `process_signal` is the
+         * bounded process-tree kill that follows when the harness does not
+         * answer; `never_started` is a stop that reached its execution before
+         * any harness process existed, which is prevention rather than
+         * interruption and should not read as either kill. Defaulted so an
+         * older runner's report still validates.
+         */
+        via: z.enum(["protocol_interrupt", "process_signal", "never_started"]).default("process_signal")
+      })
+      .strict()
   }),
   z.object({
     kind: z.literal("execution.failed"),
@@ -1238,6 +1341,9 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
           "nonzero_exit",
           "checkpoint_failed",
           "harness_error",
+          /** The installed harness does not speak the approval protocol, so
+           *  Novus refuses to run it rather than running it unsupervised. */
+          "unsupported_harness",
           "internal"
         ]),
         reason: BOUNDED_LINE
@@ -1316,6 +1422,10 @@ export const MissionDetailResponseSchema = z.object({
   control: ControlSnapshotSchema,
   checkpoints: z.array(CheckpointSchema),
   checks: z.array(VerificationCheckSchema),
+  /** Harness permission questions, newest last. Pending ones are what the
+   *  *Needs approval* state is about; settled ones stay so the record can
+   *  answer who allowed what. */
+  approvals: z.array(ApprovalRequestSchema),
   runner: RunnerStatusSchema.nullable(),
   workspace: WorkspaceSchema.nullable(),
   processes: z.array(WorkspaceProcessSchema),
@@ -1465,6 +1575,16 @@ export interface NovusBridge {
     }): Promise<IpcResult<null>>;
     cancelDirection(directionId: string): Promise<IpcResult<null>>;
     stop(missionId: string): Promise<IpcResult<null>>;
+    /**
+     * Answers one harness approval (D-056). Asking is all this is: the server
+     * checks `approval.respond` against the current lease, and a request that
+     * has already been settled is refused rather than answered twice.
+     */
+    respondApproval(input: {
+      approvalId: string;
+      decision: ApprovalDecision;
+      reason?: string;
+    }): Promise<IpcResult<null>>;
   };
   control: {
     request(missionId: string): Promise<IpcResult<null>>;
