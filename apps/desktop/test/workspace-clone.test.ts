@@ -150,7 +150,12 @@ beforeEach(() => {
   execFileSync("git", ["clone", "-q", "--bare", source, origin]);
 });
 
+/** Restores anything a test replaced globally (console, for one). */
+let onCleanup: (() => void) | null = null;
+
 afterEach(async () => {
+  onCleanup?.();
+  onCleanup = null;
   await agent?.shutdown("test over");
   agent = null;
   await remote?.close();
@@ -616,6 +621,75 @@ describe("the runner on a repository it fetched", () => {
     // Nothing that was reported, and nothing left on disk, carries the token.
     expect(JSON.stringify(plane.reported)).not.toContain(TOKEN);
     expect(holdsToken(userData)).toEqual([]);
+  }, 60_000);
+
+  it("announces nothing for a mission whose branch this machine could not fetch", async () => {
+    // The case that actually produces `fatal: invalid reference`: the
+    // repository IS here — a first mission cloned it — and a later mission's
+    // branch is not, because its fetch failed. A refusing remote is the
+    // ordinary transient cause: an expired installation token, a rate limit, a
+    // branch the provider has not propagated yet. `ensureCheckout` then backs
+    // off and returns silently, and discovery used to fall through to
+    // announcing anyway — and publishing builds the worktree, so `git worktree
+    // add` ran against a ref this machine does not have, on every fifteen
+    // second pass of the backoff window (D-060).
+    remote = await startRemote({ accept: true });
+    const plane = new FakeControlPlane(remote.url);
+    const machineMap = new Map<string, string>();
+    const served: FakeMission[] = [
+      { missionId: MISSION_ID, workstreamId: WORKSTREAM_ID, missionBranch: OLD_BRANCH }
+    ];
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...parts: unknown[]) => void warnings.push(parts.map(String).join(" "));
+    onCleanup = () => {
+      console.warn = realWarn;
+    };
+
+    agent = startRunnerAgent({
+      api: fakeApi([], served),
+      controlPlaneUrl: "http://control-plane.test",
+      getToken: () => "a-session",
+      host: {
+        userDataPath: userData,
+        isPackaged: false,
+        label: "test-machine",
+        repositoryPath: (providerRepoId) => machineMap.get(providerRepoId) ?? null,
+        recordRepositoryPath: (providerRepoId, repoPath) => void machineMap.set(providerRepoId, repoPath)
+      },
+      fetch: plane.fetch,
+      fakeHarness: true
+    });
+    agent.discoverNow();
+    await waitFor("the repository to be fetched", () => machineMap.has("9001"));
+
+    // Now the remote goes away and a second mission appears. Its branch was
+    // never fetched, and cannot be.
+    await remote.close();
+    remote = null;
+    served.push({
+      missionId: "msn_unfetchable00000",
+      workstreamId: "wst_unfetchable00000",
+      missionBranch: LATER_BRANCH
+    });
+    // The first pass *throws* out of the fetch and never reaches the announce.
+    // The failure this guards is on every pass after it: `ensureCheckout`
+    // records a retry time and then returns silently while it backs off, so
+    // discovery falls straight through with no branch on the machine.
+    agent.discoverNow();
+    await new Promise((settle) => setTimeout(settle, 1_500));
+    warnings.length = 0;
+    agent.discoverNow();
+    await new Promise((settle) => setTimeout(settle, 2_000));
+
+    // `announceCommands` swallows what publishing throws and warns once, so the
+    // console is where this is visible — the same place it was visible in
+    // production, looking like a mission that can never have a workspace.
+    const complaints = warnings.join("\n");
+    expect(complaints).not.toContain("invalid reference");
+    expect(complaints).not.toContain("could not be created");
+    // And nothing built a worktree for it from a ref that is not here.
+    expect(existsSync(join(userData, "worktrees", "msn_unfetchable00000"))).toBe(false);
   }, 60_000);
 
   it("fetches a second workstream's branch into a repository it already cloned", async () => {

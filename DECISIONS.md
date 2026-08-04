@@ -632,3 +632,21 @@ D-054 rejected a broad unused-export gate because it caught one of three histori
 **Consequences.** Two dangling references are repaired in the same change: D-053 is written from the commit and tests that shipped it, and `runner.ts`'s citation of a decision that never existed is removed, because none covers what it claimed — the sentence states its own reason instead. PROGRESS.md's decision-record row stops naming a range that was already stale.
 
 **Revisit when.** Decisions are ever split across more than one file, at which case the check needs to look in all of them.
+
+## D-060 — A mission whose branch is not on this machine is not announced
+
+**Context.** `fatal: invalid reference: novus/m-…` was reported from a real session and attributed to D-051, which had fixed a different cause of the same message: the runner decided whether to fetch by asking whether this machine held the *repository*, when the question a worktree asks is whether it holds *this workstream's branch*. That fix was correct and this is not a regression of it. There is a second path to the same message, still live, and it is the one a fresh mission can still take.
+
+The runner's discovery pass fetches what it needs and then announces what the project declares. Announcing is not a read — publishing creates the worktree, because it must read the project's files to know what it declares. So `git worktree add -- <worktree> <branch>` runs against a repository that may not have the branch.
+
+`ensureCheckout` fails loudly the first time: it throws, and the pass ends before announcing. Then it records a retry time and, on **every** subsequent pass inside that backoff window, **returns silently**. Discovery fell straight through to the announce with no branch on the machine. The backoff runs 15 s → 30 s → 60 s, capped at five minutes, while discovery runs every fifteen seconds — so one transient fetch failure produced a stream of `invalid reference` for minutes. Any ordinary cause will do: an expired installation token, a rate limit, a branch the provider has not propagated yet, a laptop that slept.
+
+`announceCommands` swallows what publishing throws and warns once per distinct reason, so this never became an event, never reached the room, and never failed a test. What a person saw was a mission that would not build a workspace, with the same words D-051 had already been blamed for.
+
+**Decision.** Discovery announces nothing for a mission whose branch this machine does not have. The runner already tracks exactly that — it re-checks after fetching and records the mission as fetched only if the branch actually arrived — so the guard is that record, consulted one line before the announce.
+
+**Alternatives.** Making `ensureCheckout` throw during backoff instead of returning (rejected: the backoff exists so a failing fetch does not abort discovery for every *other* mission on the machine, and throwing restores that); announcing anyway and swallowing the error more quietly (rejected: it is the same silence that hid this, and the worktree attempt is real work against a real repository); retrying the fetch immediately rather than backing off (rejected: a rate limit is precisely the case where that is wrong).
+
+**Consequences.** A mission whose branch cannot be fetched now waits, silently and correctly, until it can be — which is what the backoff was always for. Proven by seeding the failure: with the guard bypassed the test observes `could not read this project's configuration: This workspace could not be created: fatal: invalid reference: novus/m-later003` on the second discovery pass, and with it restored there is nothing. The test needed two passes to reproduce, because the first one throws and never reaches the announce — which is why a single-pass test, and a session of manual checking, both missed it.
+
+**Revisit when.** Discovery gains per-mission error state the room can see, at which point "this machine cannot fetch your branch" should be a state a participant reads rather than a silence.

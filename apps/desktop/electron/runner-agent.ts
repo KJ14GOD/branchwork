@@ -423,6 +423,16 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
             fetched.add(mission.missionId);
           }
         }
+        // A mission whose branch is not on this machine is not announced at
+        // all (D-060). Publishing creates the worktree, and `git worktree add`
+        // on a repository that has no such ref fails with `fatal: invalid
+        // reference: novus/m-…` — which is the message this product has
+        // already been blamed for once. `ensureCheckout` returns silently
+        // while it is backing off from a failed fetch, so without this the
+        // announce fires on every fifteen-second pass of that window and the
+        // failure looks like a mission that can never have a workspace.
+        if (!fetched.has(mission.missionId)) continue;
+
         // Queued on this workstream's own chain, and not awaited here.
         // Publishing reads the project and creates the worktree if it is not
         // there, which is real work on the same files a turn uses — so it takes
