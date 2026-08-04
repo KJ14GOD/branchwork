@@ -1,0 +1,787 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
+import type { NovusBridge } from "@novus/contracts";
+
+declare global {
+  interface Window {
+    novus: NovusBridge;
+  }
+}
+
+/**
+ * The working set, through the interface.
+ *
+ * The projects rail lists every mission of every project, once (D-055). This
+ * suite is about the other list — the missions somebody currently has *open* —
+ * and about the ways a mission gets started. The faults it exists to catch are
+ * the ones only a real window shows: a second tab for a mission that is already
+ * open, a close that quietly stops a harness, a relaunch that will not start
+ * because one restored mission has since been deleted, a `+` that collapses the
+ * row it sits on, and a strip that pushes the shell sideways when the window
+ * gets narrow.
+ */
+
+const desktopRoot = resolve(__dirname, "..");
+const repoRoot = resolve(desktopRoot, "..", "..");
+const evidenceDir = join(desktopRoot, "e2e", "evidence");
+const CP_PORT = 4496;
+const CP_URL = `http://127.0.0.1:${CP_PORT}`;
+const DB_NAME = "novus_e2e_navigation";
+const DB_URL = `postgres://novus:novus@127.0.0.1:5433/${DB_NAME}`;
+
+let controlPlane: ChildProcess;
+let userDataDir: string;
+let app: ElectronApplication;
+let page: Page;
+let alphaName = "";
+let betaName = "";
+let alphaId = "";
+let betaId = "";
+/** The mission a real harness turn runs in, created through the composer. */
+let runningMissionId = "";
+const RUNNING_GOAL = "a turn that keeps running";
+
+const git = (cwd: string, args: string[]): string =>
+  execFileSync("git", args, { cwd }).toString().trim();
+
+const shot = (target: Page, name: string) =>
+  target.screenshot({ path: join(evidenceDir, name) }).catch(() => undefined);
+
+async function waitForHealth(): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    try {
+      if ((await fetch(`${CP_URL}/health`)).ok) return;
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((settle) => setTimeout(settle, 500));
+  }
+  throw new Error("control plane never became healthy");
+}
+
+async function mintToken(as?: string): Promise<string> {
+  const started = await fetch(`${CP_URL}/auth/github/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(as ? { as } : {})
+  });
+  const { state, authorizeUrl } = (await started.json()) as { state: string; authorizeUrl: string };
+  await fetch(authorizeUrl, { redirect: "follow" });
+  const claimed = await fetch(`${CP_URL}/auth/github/claim`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ state })
+  });
+  const { token } = (await claimed.json()) as { token?: string };
+  if (!token) throw new Error("auth claim did not return a token");
+  return token;
+}
+
+/** Direct SQL, for the one fact this suite cannot manufacture by running
+ *  anything: a check that failed against the revision the worktree is on, which
+ *  is what puts a mission into the rail's attention lens. It is written the way
+ *  a runner writes one and read back through the server's own projection. */
+async function sql(text: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
+  const pg = await import("pg");
+  const pool = new pg.default.Pool({ connectionString: DB_URL });
+  try {
+    return (await pool.query(text, params)).rows as Record<string, unknown>[];
+  } finally {
+    await pool.end();
+  }
+}
+
+async function launch(dataDir: string, paceMs?: number): Promise<{ app: ElectronApplication; page: Page }> {
+  const launched = await electron.launch({
+    args: [desktopRoot],
+    env: {
+      ...process.env,
+      NOVUS_CP_URL: CP_URL,
+      NOVUS_AUTH_AUTOVISIT: "1",
+      NOVUS_FAKE_HARNESS: "1",
+      NOVUS_USER_DATA_DIR: dataDir,
+      ...(paceMs ? { NOVUS_FAKE_HARNESS_PACE_MS: String(paceMs) } : {})
+    }
+  });
+  const window = await launched.firstWindow();
+  await window.waitForLoadState("domcontentloaded");
+  await resizeWindow(launched, 1440, 900);
+  return { app: launched, page: window };
+}
+
+/** The room is a resizable window, so the responsive rules are proved by
+ *  resizing the real window rather than a browser viewport. */
+async function resizeWindow(target: ElectronApplication, width: number, height: number): Promise<void> {
+  await target.evaluate(async ({ BrowserWindow }, size) => {
+    BrowserWindow.getAllWindows()[0]?.setContentSize(size.width, size.height);
+  }, { width, height });
+  await new Promise((settle) => setTimeout(settle, 300));
+}
+
+async function signIn(target: Page): Promise<void> {
+  await target.getByTestId("setup").waitFor({ timeout: 30_000 });
+  await target.getByTestId("sign-in-button").click();
+  await target.getByTestId("github-connected").waitFor({ timeout: 30_000 });
+  await target.getByTestId("finish-setup").click();
+  await target.getByTestId("project-shell").waitFor({ timeout: 30_000 });
+}
+
+/** One project's own block in the rail: its row, its missions, and its New
+ *  mission. Scoped, because more than one project can be open at once and an
+ *  unscoped `mission-row` then means "somebody's mission". */
+const projectGroup = (target: Page, name: string) =>
+  target.locator(".side-group", {
+    has: target.getByTestId("project-row").filter({ hasText: name })
+  });
+
+/**
+ * Opens a project in the rail so its missions are disclosed.
+ *
+ * The row *toggles*, and the shell selects a project on mount, so a plain click
+ * is as likely to close it as to open it.
+ */
+async function openProject(target: Page, name: string): Promise<void> {
+  const group = projectGroup(target, name);
+  await group.waitFor({ timeout: 30_000 });
+  if ((await group.getByTestId("mission-row").count()) === 0) {
+    await group.getByTestId("project-row").click();
+  }
+  await group.getByTestId("mission-row").first().waitFor({ timeout: 30_000 });
+}
+
+/** A repository on this machine, registered with the control plane and mapped
+ *  into the app's own machine-local store. */
+async function makeRepo(token: string, mapping: Record<string, string>): Promise<{
+  name: string;
+  localId: string;
+  dir: string;
+}> {
+  const dir = mkdtempSync(join(tmpdir(), "novus-nav-repo-"));
+  const name = basename(dir);
+  git(dir, ["init", "-b", "main"]);
+  writeFileSync(join(dir, "README.md"), `# ${name}\n`);
+  git(dir, ["add", "-A"]);
+  git(dir, ["-c", "user.name=T", "-c", "user.email=t@l", "commit", "-m", "fixture"]);
+  const headSha = git(dir, ["rev-parse", "HEAD"]);
+  const localId = randomUUID();
+  const registered = await fetch(`${CP_URL}/repositories/local`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ localId, name, defaultBranch: "main", headSha })
+  });
+  expect(registered.ok).toBe(true);
+  mapping[localId] = dir;
+  return { name, localId, dir };
+}
+
+/** Creates a mission without going through the room, so a test about tabs is
+ *  not also a test about harnesses. */
+async function seedMission(target: Page, localId: string, goal: string): Promise<string> {
+  return target.evaluate(
+    async (args) => {
+      const base = await window.novus.repos.baseLocal(args.localId);
+      if (!base.ok) throw new Error(`${base.code}: ${base.message}`);
+      const created = await window.novus.missions.create({
+        goal: args.goal,
+        successCriteria: `${args.goal} — seeded by the working-set suite`,
+        provider: "local",
+        providerRepoId: args.localId,
+        baseRef: base.value.ref,
+        baseSha: base.value.sha,
+        creationKey: args.creationKey
+      });
+      if (!created.ok) throw new Error(`${created.code}: ${created.message}`);
+      return created.value.mission.missionId;
+    },
+    { localId, goal, creationKey: randomUUID() }
+  );
+}
+
+const storageKey = (target: Page) =>
+  target.evaluate(async () => {
+    const status = await window.novus.auth.status();
+    if (status.state !== "signed_in") throw new Error("not signed in");
+    return `novus-open-missions:${status.user.userId}`;
+  });
+
+/** Closes every open mission, so a test starts from a working set it chose. */
+async function closeEveryTab(target: Page): Promise<void> {
+  for (let guard = 0; guard < 30; guard += 1) {
+    const closes = target.getByTestId("mission-tab-close");
+    if ((await closes.count()) === 0) return;
+    await closes.first().click();
+  }
+  throw new Error("the working set would not empty");
+}
+
+const tabLabels = (target: Page): Promise<string[]> =>
+  target.getByTestId("mission-tab-open").allInnerTexts();
+
+async function missionIdByGoal(target: Page, goal: string): Promise<string> {
+  return target.evaluate(async (wanted) => {
+    const result = await window.novus.missions.list();
+    if (!result.ok) throw new Error(result.message);
+    return result.value.find((mission) => mission.goal === wanted)?.missionId ?? "";
+  }, goal);
+}
+
+beforeAll(async () => {
+  mkdirSync(evidenceDir, { recursive: true });
+  userDataDir = mkdtempSync(join(tmpdir(), "novus-nav-"));
+
+  const pg = await import("pg");
+  const admin = new pg.default.Pool({ connectionString: "postgres://novus:novus@127.0.0.1:5433/novus" });
+  if ((await admin.query(`select 1 from pg_database where datname='${DB_NAME}'`)).rowCount === 0) {
+    await admin.query(`create database ${DB_NAME}`);
+  }
+  await admin.end();
+  const scrub = new pg.default.Pool({ connectionString: DB_URL });
+  await scrub.query("drop schema public cascade; create schema public;");
+  await scrub.end();
+
+  controlPlane = spawn(
+    process.execPath,
+    ["--experimental-strip-types", join(repoRoot, "apps", "control-plane", "src", "main.ts")],
+    {
+      env: {
+        ...process.env,
+        NOVUS_FAKE_GITHUB: "1",
+        NOVUS_CP_PORT: String(CP_PORT),
+        NOVUS_DATABASE_URL: DB_URL
+      },
+      stdio: "inherit"
+    }
+  );
+  await waitForHealth();
+
+  // Two real repositories on this machine, so "missions from two projects at
+  // once" is two projects and not a fixture pretending to be.
+  const token = await mintToken();
+  const mapping: Record<string, string> = {};
+  const alpha = await makeRepo(token, mapping);
+  const beta = await makeRepo(token, mapping);
+  alphaName = alpha.name;
+  betaName = beta.name;
+  alphaId = alpha.localId;
+  betaId = beta.localId;
+  writeFileSync(join(userDataDir, "local-repos.json"), JSON.stringify(mapping));
+
+  // ~2s a line: long enough that a turn is still running when a tab is closed.
+  const launched = await launch(userDataDir, 2_000);
+  app = launched.app;
+  page = launched.page;
+  await signIn(page);
+
+  await seedMission(page, alphaId, "Alpha one");
+  await seedMission(page, alphaId, "Alpha two");
+  await seedMission(page, betaId, "Beta one");
+  await page.reload();
+  await page.waitForLoadState("domcontentloaded");
+  await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
+}, 240_000);
+
+afterAll(async () => {
+  await app?.close().catch(() => undefined);
+  controlPlane?.kill("SIGTERM");
+});
+
+describe("the missions a person has open", () => {
+  it("opens two from one project and one from another, reuses a tab, and never mirrors the rail", async () => {
+    await closeEveryTab(page);
+    await page.getByTestId("no-mission-open").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("mission-strip").count()).toBe(0);
+
+    // Two missions of one project, open at the same time.
+    await openProject(page, alphaName);
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha one" }).click();
+    await page.getByTestId("mission-strip").waitFor({ timeout: 20_000 });
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha two" }).click();
+    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 20_000 }).toBe(2);
+    expect((await tabLabels(page)).join("|")).toContain("Alpha one");
+    expect((await tabLabels(page)).join("|")).toContain("Alpha two");
+
+    // One project, so no tab repeats the project's name.
+    expect(await page.locator(".mission-tab-project").count()).toBe(0);
+
+    // Selecting a mission that is already open moves to its tab rather than
+    // making a second one.
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha one" }).click();
+    await expect
+      .poll(async () => page.locator('[data-testid="mission-tab"][data-active="true"]').innerText(), {
+        timeout: 20_000
+      })
+      .toContain("Alpha one");
+    expect((await tabLabels(page)).length).toBe(2);
+    expect((await page.getByTestId("room-goal").innerText())).toContain("Alpha one");
+
+    // The rail is not this list and this list is not the rail: every mission is
+    // in the rail exactly once, open or not.
+    expect(
+      await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha one" }).count()
+    ).toBe(1);
+    expect(await projectGroup(page, alphaName).getByTestId("mission-row").count()).toBe(2);
+
+    // A mission from a different project, open beside them. Now a tab says
+    // which project it is in, because that has become a live question.
+    await openProject(page, betaName);
+    await projectGroup(page, betaName).getByTestId("mission-row").filter({ hasText: "Beta one" }).click();
+    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 20_000 }).toBe(3);
+    await expect
+      .poll(async () => page.locator(".mission-tab-project").count(), { timeout: 20_000 })
+      .toBe(3);
+    const projectsNamed = await page.locator(".mission-tab-project").allInnerTexts();
+    expect(projectsNamed.join("|")).toContain(betaName.slice(0, 12));
+
+    // Mission tabs are not file tabs: nothing has opened a file, so the room
+    // carries no strip of its own (D-048, D-055).
+    expect(await page.locator(".tabbar").count()).toBe(0);
+    expect(await page.getByTestId("room-tab").count()).toBe(0);
+
+    await shot(page, "63-working-set-two-projects.png");
+  }, 180_000);
+
+  it("closes a tab without stopping the mission, which keeps running and keeps its state in the rail", async () => {
+    await closeEveryTab(page);
+    await openProject(page, alphaName);
+    await projectGroup(page, alphaName).getByTestId("new-mission").click();
+    await page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
+    await page.getByTestId("composer-input").fill(RUNNING_GOAL);
+    await page.keyboard.press("Enter");
+
+    // The harness is genuinely working before anything is closed.
+    await page
+      .getByTestId("msg-agent")
+      .filter({ hasText: `Working on: ${RUNNING_GOAL}` })
+      .waitFor({ timeout: 90_000 });
+    runningMissionId = await missionIdByGoal(page, RUNNING_GOAL);
+    expect(runningMissionId).toMatch(/^msn_/);
+
+    const readMission = (id: string) =>
+      page.evaluate(async (mission) => {
+        const result = await window.novus.missions.get(mission);
+        if (!result.ok) return null;
+        return {
+          state: result.value.state,
+          events: result.value.events.length,
+          executions: result.value.executions.map((execution) => execution.state)
+        };
+      }, id);
+
+    const beforeClose = await readMission(runningMissionId);
+    expect(beforeClose?.executions.at(-1)).toMatch(/requested|starting|running/);
+
+    // Close the room. This is the whole act being tested.
+    await page
+      .getByTestId("mission-tab")
+      .filter({ hasText: RUNNING_GOAL.slice(0, 20) })
+      .getByTestId("mission-tab-close")
+      .click();
+    await expect
+      .poll(async () => (await tabLabels(page)).join("|"), { timeout: 20_000 })
+      .not.toContain(RUNNING_GOAL.slice(0, 20));
+
+    // Nothing was stopped: the execution is still alive and still producing
+    // events with no room open on it anywhere.
+    const duringClose = await readMission(runningMissionId);
+    expect(duringClose?.executions.at(-1)).toMatch(/requested|starting|running/);
+    await expect
+      .poll(async () => (await readMission(runningMissionId))?.events ?? 0, { timeout: 60_000 })
+      .toBeGreaterThan(beforeClose?.events ?? 0);
+
+    // And the rail never stopped listing it.
+    expect(
+      await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 20) }).count()
+    ).toBe(1);
+
+    // It runs to completion while closed, and reopening finds the finished turn
+    // rather than a room that was frozen when its tab went away.
+    await expect
+      .poll(async () => (await readMission(runningMissionId))?.executions.at(-1) ?? "", {
+        timeout: 120_000
+      })
+      .toBe("completed");
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 20) }).click();
+    await page
+      .getByTestId("trace-outcome")
+      .filter({ hasText: "Turn completed" })
+      .waitFor({ timeout: 30_000 });
+
+    // The rail also keeps *reporting* a mission whose tab is closed. A failed
+    // check against the revision the worktree is on is what a mission needing
+    // somebody looks like, and the attention lens is where the rail says so.
+    const checkpoints = await sql(
+      `select sha from checkpoints where mission_id = $1 and sha is not null
+        order by created_at desc limit 1`,
+      [runningMissionId]
+    );
+    const currentSha = checkpoints[0]?.sha as string | undefined;
+    expect(currentSha).toBeTruthy();
+    const mission = (
+      await sql("select org_id from missions where mission_id = $1", [runningMissionId])
+    )[0];
+    await sql(
+      `insert into verification_checks
+         (chk_id, org_id, mission_id, exe_id, name, category, outcome, origin, requested_by, command,
+          exit_code, output, truncated, environment, started_at, completed_at, duration_ms,
+          checkpoint_sha, observed_at)
+       values ($1, $2, $3, null, 'unit', 'test', 'failed', 'participant', null, 'pnpm test',
+               1, null, false, 'local worktree', now() - interval '1 minute', now(), 900, $4, now())`,
+      [`chk_${randomUUID().replace(/-/g, "")}`, mission?.org_id, runningMissionId, currentSha]
+    );
+
+    await closeEveryTab(page);
+    await expect
+      .poll(async () => page.getByTestId("attention-row").allInnerTexts(), { timeout: 60_000 })
+      .toContainEqual(expect.stringContaining(RUNNING_GOAL.slice(0, 20)));
+    await shot(page, "64-attention-with-no-tab-open.png");
+  }, 300_000);
+
+  it("restores the open missions across a relaunch, and drops the ones the server refuses", async () => {
+    await closeEveryTab(page);
+    await openProject(page, alphaName);
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha one" }).click();
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha two" }).click();
+    await openProject(page, betaName);
+    await projectGroup(page, betaName).getByTestId("mission-row").filter({ hasText: "Beta one" }).click();
+    // Come back to the middle one, so the *selection* has something to restore.
+    await page.getByTestId("mission-tab-open").filter({ hasText: "Alpha two" }).click();
+    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 20_000 }).toBe(3);
+
+    await app.close();
+    const relaunched = await launch(userDataDir, 2_000);
+    app = relaunched.app;
+    page = relaunched.page;
+    await page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
+
+    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 30_000 }).toBe(3);
+    expect((await tabLabels(page)).join("|")).toContain("Beta one");
+    await expect
+      .poll(async () => page.locator('[data-testid="mission-tab"][data-active="true"]').innerText(), {
+        timeout: 20_000
+      })
+      .toContain("Alpha two");
+    expect(await page.getByTestId("room-goal").innerText()).toContain("Alpha two");
+    await shot(page, "65-restored-working-set.png");
+
+    // Now the two ways a restored mission can be unopenable. One never existed;
+    // the other exists and belongs to somebody else's organization, which this
+    // server answers for identically and deliberately — a mission you cannot
+    // see does not exist for you.
+    const otherToken = await mintToken("maya");
+    const available = (await (
+      await fetch(`${CP_URL}/repositories/available`, {
+        headers: { authorization: `Bearer ${otherToken}` }
+      })
+    ).json()) as { repositories: { providerRepoId: string }[] };
+    const otherRepo = available.repositories[0]?.providerRepoId;
+    expect(otherRepo).toBeTruthy();
+    const otherBase = (await (
+      await fetch(`${CP_URL}/repositories/available/${encodeURIComponent(otherRepo!)}/base`, {
+        headers: { authorization: `Bearer ${otherToken}` }
+      })
+    ).json()) as { ref: string; sha: string };
+    const otherMission = (await (
+      await fetch(`${CP_URL}/missions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${otherToken}` },
+        body: JSON.stringify({
+          goal: "Somebody else's mission",
+          successCriteria: "It is not visible from this account",
+          provider: "github",
+          providerRepoId: otherRepo,
+          baseRef: otherBase.ref,
+          baseSha: otherBase.sha,
+          creationKey: randomUUID()
+        })
+      })
+    ).json()) as { mission?: { missionId: string } };
+    expect(otherMission.mission?.missionId).toMatch(/^msn_/);
+
+    const key = await storageKey(page);
+    const alphaOneId = await missionIdByGoal(page, "Alpha one");
+    const missing = `msn_${randomUUID().replace(/-/g, "")}`;
+    await page.evaluate(
+      (args) => {
+        localStorage.setItem(
+          args.key,
+          JSON.stringify({
+            missions: [
+              { missionId: args.missing, projectKey: args.projectKey },
+              { missionId: args.alphaOneId, projectKey: args.projectKey },
+              { missionId: args.otherId, projectKey: args.projectKey }
+            ],
+            activeMissionId: args.missing
+          })
+        );
+      },
+      {
+        key,
+        missing,
+        alphaOneId,
+        otherId: otherMission.mission?.missionId ?? "",
+        projectKey: `local:${alphaId}`
+      }
+    );
+
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    // The shell renders. That is half the assertion: a restored mission the
+    // server refuses must not be able to take the window down with it.
+    await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
+    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 30_000 }).toBe(1);
+    expect((await tabLabels(page))[0]).toContain("Alpha one");
+    expect(await page.getByTestId("room-goal").innerText()).toContain("Alpha one");
+    await shot(page, "66-restored-minus-the-refused.png");
+  }, 300_000);
+});
+
+describe("starting a mission", () => {
+  it("reveals a + on a repository row on hover and on keyboard focus, and never collapses the row", async () => {
+    await closeEveryTab(page);
+    await openProject(page, alphaName);
+
+    const row = page.getByTestId("project-row").filter({ hasText: alphaName });
+    const plus = page
+      .locator(".side-parent", { has: page.getByTestId("project-row").filter({ hasText: alphaName }) })
+      .getByTestId("repo-new-mission");
+    await plus.waitFor({ timeout: 20_000 });
+
+    // Named for what it does, in the repository it does it in.
+    expect(await plus.getAttribute("aria-label")).toBe(`New mission in ${alphaName}`);
+    expect(await plus.getAttribute("title")).toBe(`New mission in ${alphaName}`);
+
+    const opacity = () => plus.evaluate((element) => getComputedStyle(element).opacity);
+    /** Away from the rail entirely, so "not hovered" means it. */
+    const lookAway = () => page.mouse.move(1_200, 820);
+
+    // Quiet until asked for.
+    await lookAway();
+    await expect.poll(opacity, { timeout: 10_000 }).toBe("0");
+
+    // On hover.
+    await row.hover();
+    await expect.poll(opacity, { timeout: 10_000 }).toBe("1");
+
+    // And on the keyboard, which is the half a hover-only control never has:
+    // it is the next stop after the row itself, and it stays visible while it
+    // holds focus rather than disappearing under the pointer that left.
+    await row.focus();
+    await page.keyboard.press("Tab");
+    expect(await page.evaluate(() => document.activeElement?.getAttribute("data-testid"))).toBe(
+      "repo-new-mission"
+    );
+    await lookAway();
+    await expect.poll(opacity, { timeout: 10_000 }).toBe("1");
+    await shot(page, "67-repository-row-new-mission.png");
+
+    // Pressing it starts a mission and does nothing else: the row it sits on is
+    // still open, and the missions it was showing are still showing.
+    const missionsBefore = await projectGroup(page, alphaName).getByTestId("mission-row").count();
+    expect(missionsBefore).toBeGreaterThan(0);
+    await plus.click();
+    await page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
+    expect(await projectGroup(page, alphaName).getByTestId("mission-row").count()).toBe(missionsBefore);
+    expect(await page.getByTestId("room-goal").innerText()).toContain("New mission");
+
+    // Twice is the same draft, not two rooms nobody can tell apart.
+    const afterFirst = (await tabLabels(page)).length;
+    await plus.click();
+    await new Promise((settle) => setTimeout(settle, 500));
+    expect((await tabLabels(page)).length).toBe(afterFirst);
+  }, 180_000);
+
+  it("starts one from the strip and from ⌘T, and turns the draft into the mission in place", async () => {
+    await closeEveryTab(page);
+    await openProject(page, alphaName);
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha one" }).click();
+    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 20_000 }).toBe(1);
+
+    // The strip's own +, in the repository the person is in.
+    await page.getByTestId("strip-new-mission").click();
+    await page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
+    expect((await page.getByTestId("draft-base").innerText())).toContain(alphaName);
+    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 20_000 }).toBe(2);
+
+    // ⌘T is the same act, so it lands on the draft that is already there.
+    await page.keyboard.press("Meta+t");
+    await new Promise((settle) => setTimeout(settle, 500));
+    expect((await tabLabels(page)).length).toBe(2);
+    expect(await page.getByTestId("room-goal").innerText()).toContain("New mission");
+
+    // Nothing durable was created by opening a draft.
+    const before = await page.evaluate(async () => {
+      const result = await window.novus.missions.list();
+      return result.ok ? result.value.length : -1;
+    });
+
+    // The first direction creates it, in the tab that is already open.
+    await page.getByTestId("composer-input").fill("a mission started from the strip");
+    await page.keyboard.press("Enter");
+    // The tab is the draft's own, renamed by the goal the first direction
+    // derived — and a tab label is short, so this is the label it can carry.
+    await expect
+      .poll(async () => (await tabLabels(page)).join("|"), { timeout: 60_000 })
+      .toContain("a mission started from");
+    expect((await tabLabels(page)).length).toBe(2);
+    const after = await page.evaluate(async () => {
+      const result = await window.novus.missions.list();
+      return result.ok ? result.value.length : -1;
+    });
+    expect(after).toBe(before + 1);
+    await shot(page, "68-draft-became-a-mission.png");
+  }, 240_000);
+
+  it("discards an unsent draft, and offers an obvious way to start one where there is nothing open", async () => {
+    await closeEveryTab(page);
+    await openProject(page, betaName);
+
+    const before = await page.evaluate(async () => {
+      const result = await window.novus.missions.list();
+      return result.ok ? result.value.length : -1;
+    });
+
+    // The empty state asks for nothing to be hovered.
+    await closeEveryTab(page);
+    const empty = page.getByTestId("no-mission-open");
+    await empty.waitFor({ timeout: 20_000 });
+    expect(await empty.innerText()).toContain("New mission");
+    await shot(page, "69-nothing-open.png");
+    await page.getByTestId("empty-new-mission").click();
+    await page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
+
+    // Closing it discards that draft and only that draft.
+    await page.getByTestId("mission-tab-close").first().click();
+    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 20_000 }).toBe(0);
+    const after = await page.evaluate(async () => {
+      const result = await window.novus.missions.list();
+      return result.ok ? result.value.length : -1;
+    });
+    expect(after).toBe(before);
+  }, 180_000);
+});
+
+describe("mission tabs and file tabs, told apart", () => {
+  it("keeps each mission's open files to itself, and forgets them when its tab closes", async () => {
+    expect(runningMissionId).toMatch(/^msn_/);
+    await closeEveryTab(page);
+    await openProject(page, alphaName);
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 20) }).click();
+    await page.getByTestId("room-goal").waitFor({ timeout: 20_000 });
+
+    // A file opens over this mission's canvas, and adds no mission tab: opening
+    // a file is not opening a room.
+    const missionTabsBefore = (await tabLabels(page)).length;
+    if ((await page.getByTestId("inspector").count()) === 0) {
+      await page.getByTestId("panel-toggle").click();
+    }
+    await page.getByTestId("inspector").waitFor({ timeout: 20_000 });
+    await page.getByTestId("inspector-tab-files").click();
+    await page.getByTestId("file-tree").waitFor({ timeout: 30_000 });
+    await page.getByTestId("tree-row").filter({ hasText: "README.md" }).first().click();
+    await page.getByTestId("file-view").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("file-tab").count()).toBe(1);
+    expect((await tabLabels(page)).length).toBe(missionTabsBefore);
+    await page.getByTestId("inspector-close").click();
+    await shot(page, "70-file-tabs-inside-a-mission-tab.png");
+
+    // Another mission is another room, and it has no files open.
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha one" }).click();
+    await page.getByTestId("room-goal").waitFor({ timeout: 20_000 });
+    await expect.poll(async () => page.getByTestId("file-tab").count(), { timeout: 20_000 }).toBe(0);
+    expect(await page.locator(".tabbar").count()).toBe(0);
+
+    // Going back restores exactly what that mission had open, including which
+    // canvas was showing.
+    await page.getByTestId("mission-tab-open").filter({ hasText: RUNNING_GOAL.slice(0, 20) }).click();
+    await expect.poll(async () => page.getByTestId("file-tab").count(), { timeout: 20_000 }).toBe(1);
+    await page.getByTestId("file-view").waitFor({ timeout: 20_000 });
+
+    // The rule for closing (see project-shell.tsx): a mission tab's file view is
+    // local view state, so closing the tab discards it. Reopening the mission
+    // opens its trace, which is what the room is for.
+    await page
+      .getByTestId("mission-tab")
+      .filter({ hasText: RUNNING_GOAL.slice(0, 20) })
+      .getByTestId("mission-tab-close")
+      .click();
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 20) }).click();
+    await page.getByTestId("room-goal").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("file-tab").count()).toBe(0);
+    expect(await page.locator(".tabbar").count()).toBe(0);
+    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
+  }, 240_000);
+});
+
+describe("the strip at three window widths", () => {
+  it("scrolls sideways rather than breaking the shell", async () => {
+    await closeEveryTab(page);
+    // Every mission of both projects, open at once: the widest working set this
+    // suite can build, which is the case the narrow window has to survive.
+    for (const name of [alphaName, betaName]) {
+      await openProject(page, name);
+      const rows = projectGroup(page, name).getByTestId("mission-row");
+      const count = await rows.count();
+      for (let index = 0; index < count; index += 1) await rows.nth(index).click();
+    }
+    const openCount = (await tabLabels(page)).length;
+    expect(openCount).toBeGreaterThanOrEqual(4);
+
+    const shellOverflow = () =>
+      page.evaluate(() => {
+        const root = document.documentElement;
+        return root.scrollWidth - root.clientWidth;
+      });
+    const stripScrolls = () =>
+      page.evaluate(() => {
+        const strip = document.querySelector(".mission-strip-scroll");
+        if (!strip) return null;
+        return { scrollWidth: strip.scrollWidth, clientWidth: strip.clientWidth };
+      });
+
+    for (const [width, height, name] of [
+      [1440, 900, "71-strip-wide.png"],
+      [1000, 700, "72-strip-medium.png"],
+      [760, 600, "73-strip-narrow.png"]
+    ] as [number, number, string][]) {
+      await resizeWindow(app, width, height);
+      await page.getByTestId("mission-strip").waitFor({ timeout: 20_000 });
+      // The shell never gains a horizontal scrollbar of its own.
+      expect(await shellOverflow()).toBeLessThanOrEqual(0);
+      // The way to start one is still reachable at every width, because it sits
+      // outside the part that scrolls.
+      expect(await page.getByTestId("strip-new-mission").isVisible()).toBe(true);
+      await shot(page, name);
+    }
+
+    // At the narrow width the tabs genuinely overflow, and the strip — not the
+    // window — is what scrolls.
+    const narrow = await stripScrolls();
+    expect(narrow).not.toBeNull();
+    expect(narrow!.scrollWidth).toBeGreaterThan(narrow!.clientWidth);
+
+    // And the room being read is visible in the strip that says which room is
+    // being read, even when more tabs are open than fit.
+    const selected = page.locator('[data-testid="mission-tab"][data-active="true"]');
+    const seen = await page.evaluate(() => {
+      const strip = document.querySelector(".mission-strip-scroll");
+      const tab = document.querySelector('[data-testid="mission-tab"][data-active="true"]');
+      if (!strip || !tab) return null;
+      const outer = strip.getBoundingClientRect();
+      const inner = tab.getBoundingClientRect();
+      return { fitsLeft: inner.left >= outer.left - 1, fitsRight: inner.right <= outer.right + 1 };
+    });
+    expect(await selected.isVisible()).toBe(true);
+    expect(seen).toEqual({ fitsLeft: true, fitsRight: true });
+    await page.evaluate(() => {
+      document.querySelector(".mission-strip-scroll")?.scrollBy({ left: 400 });
+    });
+    expect(await shellOverflow()).toBeLessThanOrEqual(0);
+
+    await resizeWindow(app, 1440, 900);
+  }, 180_000);
+});

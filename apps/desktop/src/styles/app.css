@@ -527,6 +527,132 @@ body {
   position: relative;
 }
 
+/* ---------- The open missions (the working set) ----------
+   A window-level strip above both the rail and the room, because what is open
+   belongs to the window rather than to either of them. One surface, one edge
+   beneath it, and no border on the tabs themselves: a bordered tab inside a
+   bordered strip is the card-in-a-card this product does not draw. It scrolls
+   sideways rather than wrapping or squeezing the shell. */
+.mission-strip {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: var(--s-1);
+  min-height: 36px;
+  padding: 0 var(--s-3) 0 var(--s-2);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--edge);
+}
+
+.mission-strip-scroll {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: var(--s-1);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* The strip is one row tall, so the product's standard 10px thumb would be a
+   third of it. The affordance stays; it stops competing with the tabs. */
+.mission-strip-scroll::-webkit-scrollbar {
+  height: var(--s-1);
+}
+
+.mission-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  max-width: 30ch;
+  margin: var(--s-1) 0;
+  border-radius: var(--r-control);
+  color: var(--text-2);
+}
+
+.mission-tab:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+/* Selected is a quiet lift of the same plane, not a second colour. */
+.mission-tab.active {
+  background: var(--selected);
+  color: var(--text-1);
+}
+
+.mission-tab-open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: var(--type-row);
+  padding: var(--s-1) var(--s-1) var(--s-1) var(--s-3);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* The mission is the subject of the tab, so it keeps the room: everything else
+   in the tab gives way to it before it gives way to anything. */
+.mission-tab-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Which project this room is in — shown only when more than one is open, so a
+   working set inside one project never says its name on every tab, and capped
+   so context can never crowd out the thing it is context for. */
+.mission-tab-project {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 11ch;
+  font: var(--type-meta);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mission-tab-close {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font: var(--type-row);
+  line-height: 1;
+  padding: 2px var(--s-1);
+  margin-right: var(--s-1);
+  border-radius: var(--r-control);
+  cursor: pointer;
+}
+
+.mission-tab-close:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.mission-tab-new {
+  flex: none;
+  align-self: center;
+  width: 28px;
+  height: 24px;
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-3);
+  font: var(--type-row);
+  cursor: pointer;
+}
+
+.mission-tab-new:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
 .sidebar {
   width: 240px;
   flex: none;
@@ -670,6 +796,37 @@ body {
 
 .side-new:hover {
   color: var(--text-2);
+}
+
+/* And starting one in a repository you can see but are not in: quiet until the
+   pointer or the keyboard is on the row, because a rail carries nouns and
+   counts. It is transparent rather than absent, so it keeps its place in the
+   tab order and can be reached without a mouse. */
+.side-new-mission {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  min-height: 32px;
+  flex: none;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font: var(--type-row);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--m-press) var(--ease);
+}
+
+.side-parent:hover .side-new-mission,
+.side-new-mission:focus,
+.side-new-mission:focus-visible {
+  opacity: 1;
+}
+
+.side-new-mission:hover {
+  color: var(--text-1);
 }
 
 .side-row.selected {
@@ -2139,6 +2296,17 @@ body {
 
   .tabbar {
     padding: 0 var(--s-5);
+  }
+
+  /* The open missions keep their whole strip and scroll sideways inside it —
+     a narrow window loses width, not the way back to what it has open. */
+  .mission-strip {
+    padding-left: var(--s-1);
+    padding-right: var(--s-2);
+  }
+
+  .mission-tab {
+    max-width: 22ch;
   }
 
   /* Changes and Verification become full-screen views. */

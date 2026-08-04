@@ -906,6 +906,19 @@ describe("setup and verification, through the interface", () => {
     // Two files open at once, each its own tab, switched between like any other.
     expect(await page.getByTestId("file-tab").count()).toBe(2);
 
+    // The way back is a way back, not the goal a fourth time: the window's
+    // strip names this mission, the room's title names it, the rail names it
+    // (D-061).
+    // (The room's own header is hidden while a file covers the canvas, which is
+    // D-048's whole point, so the goal is read from the strip that is still on
+    // screen rather than from the header that is not.)
+    const back = page.getByTestId("room-tab");
+    await back.waitFor({ timeout: 20_000 });
+    expect((await back.textContent())?.trim()).toBe("Mission");
+    const named = (await page.getByTestId("mission-tab").first().textContent()) ?? "";
+    expect(named).toContain("prepare this workspace");
+    expect(await back.textContent()).not.toContain("prepare this workspace");
+
     // Closing a file tab returns to the workstream, exactly as it was.
     await page.getByTestId("file-tab").last().getByTestId("file-tab-close").click();
     await page.getByTestId("file-tab").first().getByTestId("file-tab-close").click();
@@ -1035,6 +1048,10 @@ describe("missions and workstreams, told apart", () => {
    * the same order, with near-identical labels, and both wrote the same
    * selection. Every control in the centre also called a mission a workstream,
    * which is a different thing that a mission contains exactly one of.
+   *
+   * The window-level strip of *open* missions is a different list and stays
+   * one: this asserts the centre still repeats nothing, and the working set's
+   * own suite (navigation.spec.ts) asserts the distinction from the other side.
    */
   it("lists missions once, in the rail, and creates one from there", async () => {
     const secondGoal = "Second mission here";
@@ -1069,6 +1086,12 @@ describe("missions and workstreams, told apart", () => {
     // all: one workstream means no workstream chrome (DESIGN.md#component-behavior).
     expect(await page.getByTestId("room-tab").count()).toBe(0);
     expect(await page.locator(".tabbar").count()).toBe(0);
+
+    // The window's strip carries only what is *open*, so it is shorter than the
+    // rail rather than a copy of it.
+    const railed = await rows.count();
+    const opened = await page.getByTestId("mission-tab").count();
+    expect(opened).toBeLessThan(railed);
 
     // Each mission is independently selectable, and the room follows.
     const goal = page.getByTestId("room-goal");

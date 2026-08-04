@@ -798,7 +798,18 @@ describe("the workspace runtime", () => {
 
     const { app, page } = await launchApp();
     await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
-    await page.getByTestId("project-row").filter({ hasText: runtimeRepoName }).click();
+    // A relaunch reopens the missions this machine left open, so the room is
+    // whichever one was last being read. The mission this test is about is
+    // named rather than assumed — and named inside its own project, because
+    // two repositories here were given the same first direction.
+    await openProject(page, runtimeRepoName);
+    await page
+      .locator(".side-group", {
+        has: page.getByTestId("project-row").filter({ hasText: runtimeRepoName })
+      })
+      .getByTestId("mission-row")
+      .filter({ hasText: "add a fake turn file" })
+      .click();
     const stateLine = page.getByTestId("state-line");
     // Everything that was proved is history, and the room says exactly that.
     await expect

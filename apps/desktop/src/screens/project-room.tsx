@@ -43,7 +43,7 @@ function FileGlyph() {
   );
 }
 import { RuntimeDock } from "../components/runtime-dock";
-import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
+import { clockTime, deriveGoal, shortSha } from "../format";
 import type { Project } from "./project-shell";
 
 type BaseLoad =
@@ -352,12 +352,13 @@ export function ProjectRoom({
   return (
     <div className="room" data-testid="project-room">
       <div className="room-main">
-      {/* The strip exists for *files*, not for missions (D-055). Missions are
-          the rail's: one list, in one place, next to the project that owns
-          them — DESIGN.md has always said that one workstream means no
-          workstream chrome, and a centre row that repeated the rail was that
-          chrome. With nothing open there is no strip at all; open a file and
-          the room takes a tab of its own, which is the way back to it. */}
+      {/* This strip exists for *files*, and only for files (D-048, D-055).
+          Every mission of every project is the rail's list; the missions that
+          are *open* are the window's own strip above the shell — neither of
+          them belongs in the room, because a centre row repeating either was
+          the workstream chrome DESIGN.md#component-behavior forbids. With no
+          file open there is no strip at all; open one and the room takes a tab
+          of its own, which is the way back to it. */}
       {openFiles.length > 0 && (
         <div className="tabbar" role="tablist" aria-label={`Open files in ${title}`}>
           <button
@@ -365,10 +366,15 @@ export function ProjectRoom({
             aria-selected={activeFile === null}
             className={activeFile === null ? "tab active" : "tab"}
             onClick={() => onSelectFile(null)}
-            title={title}
+            title={`Back to ${title}`}
             data-testid="room-tab"
           >
-            {truncateLabel(title)}
+            {/* Not the goal again. The window's strip above already names this
+                mission and the rail names it a third time; a fourth copy on the
+                way back from a file says nothing the reader cannot see, and the
+                only question this control answers is "what do I return to"
+                (D-061). */}
+            Mission
           </button>
           {openFiles.map((file) => (
             <span
