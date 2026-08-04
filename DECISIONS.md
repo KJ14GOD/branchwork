@@ -507,3 +507,39 @@ Everything that named a mission a workstream now names it a mission, in labels, 
 Not built, and deliberately: multiple workstreams inside a mission, the lane headers DESIGN.md specifies for that case, the Decision Room, and approach comparison. This slice makes one mission read correctly; it does not add a second workstream.
 
 **Revisit when.** A mission can actually hold more than one workstream, at which point the lane headers in DESIGN.md#component-behavior become real and this decision is what says they are lanes *within* the room rather than tabs above it.
+
+## D-056 — Approval routing is possible with the installed Claude Code, over stdio
+
+**Context.** `needs_approval` has existed in the execution and mission state models since the beginning, in PRODUCT.md, in DESIGN.md, and in the renderer's own state copy. Nothing has ever entered it. Novus runs Claude Code with `--permission-mode acceptEdits`, so the harness never asks — which makes every claim about supervised autonomy in this product currently false, and made it the largest honesty gap in the harness boundary.
+
+Whether it *could* ask was an open question, and one that documentation cannot settle. So it was probed against the installed binary — `claude 2.1.221`, `/Users/kj16/.local/bin/claude` — in a throwaway git repository, four short runs, with `--dangerously-skip-permissions` never used.
+
+**What was observed, verbatim.**
+
+*Today's flags ask nobody.* Under `acceptEdits` no permission is ever requested. Under the plain default mode the request is not surfaced either — it is **auto-denied**, and appears only after the fact: the tool result comes back `"Claude requested permissions to write to …, but you haven't granted it yet."` with `"non_execution_kind":"user-rejected"`, and the final `result` event carries `permission_denials: [{tool_name, tool_use_id, tool_input}]`. The file was not written and the session did not pause. There is no `permission_request` event kind in the stream.
+
+*`--permission-prompt-tool` exists but is undocumented.* It is absent from `--help`; invoking it bare returns `error: option '--permission-prompt-tool <tool>' argument missing`. Pointed at an MCP tool it works end to end: the server received `{"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Write","input":{…},"tool_use_id":"toolu_…"}}}`, replied `{"behavior":"allow","updatedInput":{…}}`, and **the file was created**, with `permission_denials: []`. The CLI blocks on that call — which is the pause Novus needs. One trap: a name that is not an MCP tool does **not** fail at startup; validation is lazy, so a misconfiguration surfaces mid-turn at the first permission request.
+
+*The stdio control protocol is better, and needs no MCP server.* With `--input-format stream-json --output-format stream-json --permission-prompt-tool stdio`, the CLI wrote to **stdout**:
+
+    {"type":"control_request","request_id":"21740bb3-…","request":{"subtype":"can_use_tool",
+     "tool_name":"Write","display_name":"Write","input":{…},"description":"PROBE.md",
+     "permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}],
+     "tool_use_id":"toolu_…"}}
+
+and blocked until this was written to **stdin**:
+
+    {"type":"control_response","response":{"subtype":"success","request_id":"21740bb3-…",
+     "response":{"behavior":"allow","updatedInput":{…}}}}
+
+The file was created, `permission_denials` was empty, the run ended `result/success`, and the transcript persisted at `~/.claude/projects/…/<session>.jsonl` — so `--resume` is unaffected and sessions stay resumable exactly as `execution.ts` already relies on. The request carries typed tool name and input, which is what an approval card needs to say what is being asked.
+
+**Decision.** Approval routing is **feasible and will be built on the stdio control protocol**, not on an MCP permission-prompt tool. Both are proven; stdio wins because it needs no second process, and because the same channel carries `{"subtype":"interrupt","cancel_queued":true}` — an interrupt that stops a turn without killing the process or losing the session, which is strictly better than the SIGTERM of the process group D-053 currently uses for Stop.
+
+**Not built.** Nothing of this is implemented. `needs_approval` is still never entered and the flags are unchanged. This entry records a probe, not a capability, and PROGRESS.md must keep saying so.
+
+**One thing that will bite, recorded now.** In the MCP probe the model also ran `Bash: ls` and it never reached the permission tool — the operator's own `~/.claude/settings.json` allowed it. `harnessEnv` forwards `HOME` and every `CLAUDE_*` variable so the person's local login works, which also means their settings govern Novus turns. **Which tool calls reach an approval router therefore depends on whose laptop it is.** If approval routing is to be a product guarantee rather than a default, the slice that builds it must pin the setting sources and the permission mode explicitly instead of inheriting them.
+
+**Alternatives.** An MCP permission-prompt tool (proven, kept as the fallback if driving stdin conflicts with something; costs a second process and gains no interrupt); polling `permission_denials` after the fact (rejected: the work has already been refused by then, so it is a report and not an approval); asking the model to request permission in prose (rejected: unenforceable, and an approval the harness can route around is not an approval).
+
+**Revisit when.** The slice is built — at which point this entry becomes the record of why stdio, and the interrupt finding should be reconsidered against D-053's process-group kill.
