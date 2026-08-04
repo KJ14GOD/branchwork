@@ -118,7 +118,9 @@ Capabilities are the enforcement unit, and they live in two scopes that never mi
 | Capability | Mission Admin | Operator | Contributor | Viewer | Lease holder |
 | --- | :-: | :-: | :-: | :-: | :-: |
 | `mission.view`, `receipt.view` | ✓ | ✓ | ✓ | ✓ | — |
-| `mission.invite`, `mission.close` | ✓ | — | — | — | — |
+| `mission.invite` | ✓ | — | — | — | — |
+| `mission.archive` (file a mission away, and restore it) | ✓ | — | — | — | — |
+| `mission.close` — *not implemented*; would end a mission's work, which archival does not | ✓ | — | — | — | — |
 | `direction.submit` | ✓ | ✓ | ✓ | — | — |
 | `direction.apply` (apply, supersede, or reject queued direction) | — | — | — | — | ✓ |
 | `execution.start` | ✓ | ✓ | — | — | ✓ |

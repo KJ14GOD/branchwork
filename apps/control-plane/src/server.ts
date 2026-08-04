@@ -29,6 +29,7 @@ import {
 } from "./missions.ts";
 import { AuthorizationError } from "./authz.ts";
 import { registerApprovalRoutes } from "./approvals.ts";
+import { registerArchiveRoutes } from "./archive.ts";
 import { registerAuthorityRoutes } from "./authority.ts";
 import { registerExecutionRoutes } from "./executions.ts";
 import { registerRunnerRoutes } from "./runner.ts";
@@ -229,7 +230,10 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
   app.get("/missions", async (request, reply) => {
     const ctx = await requireAuth(request, reply);
     if (!ctx) return;
-    return { missions: await listMissions(db, ctx) };
+    // Anything but `archived` is the ordinary list, including nothing at all:
+    // a caller that has not heard of archival gets what it always got.
+    const filter = (request.query as { filter?: string } | undefined)?.filter;
+    return { missions: await listMissions(db, ctx, filter === "archived" ? "archived" : "active") };
   });
 
   app.post("/missions", async (request, reply) => {
@@ -280,6 +284,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
   // Slice modules own disjoint path sets; see each module's header.
   const deps: RouteDeps = { db, config, provider, requireAuth, sendError };
   registerApprovalRoutes(app, deps);
+  registerArchiveRoutes(app, deps);
   registerAuthorityRoutes(app, deps);
   registerExecutionRoutes(app, deps);
   registerRunnerRoutes(app, deps);

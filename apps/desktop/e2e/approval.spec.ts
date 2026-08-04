@@ -470,3 +470,123 @@ describe("a permission the harness asks for", () => {
     await kartik.app.close();
   }, 300_000);
 });
+
+describe("filing a mission away", () => {
+  /**
+   * Archival, in the product (D-063).
+   *
+   * The claim is narrow and worth proving exactly: the mission leaves the rail
+   * and nothing else about it changes. Its tab closes because the rail no
+   * longer offers a way back to that room, not because closing a tab and
+   * archiving a mission are the same act — they are not, and the working set
+   * suite proves the other direction.
+   */
+  it("leaves the rail, keeps everything, comes back, and is refused while working", async () => {
+    const { kartik, maya, missionId } = await twoClientsOnOneMission("archive");
+    await openRoom(kartik, missionId);
+
+    // --- Refused while the harness is waiting --------------------------------
+    await kartik.page.evaluate(async (id) => {
+      const result = await window.novus.missions.direct({ missionId: id, body: "write the fake turn file" });
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+    }, missionId);
+    await until(
+      kartik,
+      missionId,
+      (value) => value.approvals.some((approval) => approval.state === "pending"),
+      "the harness to ask"
+    );
+
+    const whileWaiting = await kartik.page.evaluate(async (id) => {
+      const result = await window.novus.missions.archive(id);
+      return result.ok ? "archived" : result.message;
+    }, missionId);
+    expect(whileWaiting).toContain("Answer it");
+
+    // Answer it, let the turn finish, and it becomes archivable.
+    await kartik.page.getByTestId("approval-deny").click();
+    await until(
+      kartik,
+      missionId,
+      (value) => value.executions.every((execution) => ["completed", "failed", "stopped"].includes(execution.state)),
+      "the turn to end"
+    );
+
+    // --- Archived, through the rail's own control ---------------------------
+    const before = await detail(kartik, missionId);
+    expect(before.events.length).toBeGreaterThan(0);
+
+    const archiveControl = kartik.page.getByTestId("mission-archive").first();
+    await archiveControl.waitFor({ timeout: 30_000 });
+    await archiveControl.click();
+
+    // Gone from the rail, and its tab with it — but nowhere near deleted.
+    await expect
+      .poll(async () => kartik.page.getByTestId("mission-row").count(), { timeout: 30_000 })
+      .toBe(0);
+    await expect
+      .poll(async () => kartik.page.getByTestId("archived-row").count(), { timeout: 30_000 })
+      .toBe(1);
+    await expect
+      .poll(async () => kartik.page.getByTestId("mission-tab").count(), { timeout: 30_000 })
+      .toBe(0);
+    await snap(kartik, "79-mission-archived");
+
+    // Everything it was, still is.
+    const after = await detail(kartik, missionId);
+    expect(after.events.length).toBeGreaterThanOrEqual(before.events.length);
+    expect(after.directions.length).toBe(before.directions.length);
+    expect(after.approvals.length).toBe(before.approvals.length);
+    expect(after.approvals[0]?.state).toBe("denied");
+    expect(after.mission.archivedAt).not.toBeNull();
+
+    // The other client sees this one leave the list too. Asserted about this
+    // mission rather than about the length: these tests share a control plane,
+    // so Maya is a participant in the earlier ones as well.
+    await expect
+      .poll(
+        async () =>
+          maya.page.evaluate(async (id) => {
+            const result = await window.novus.missions.list();
+            return result.ok ? result.value.some((mission) => mission.missionId === id) : true;
+          }, missionId),
+        { timeout: 30_000 }
+      )
+      .toBe(false);
+    const filedForMaya = await maya.page.evaluate(async (id) => {
+      const result = await window.novus.missions.list("archived");
+      return result.ok ? result.value.some((mission) => mission.missionId === id) : false;
+    }, missionId);
+    expect(filedForMaya).toBe(true);
+
+    // --- And it comes back ---------------------------------------------------
+    await kartik.page.getByTestId("mission-restore").first().click();
+    await expect
+      .poll(async () => kartik.page.getByTestId("mission-row").count(), { timeout: 30_000 })
+      .toBe(1);
+    await expect
+      .poll(async () => kartik.page.getByTestId("archived-row").count(), { timeout: 30_000 })
+      .toBe(0);
+
+    // Survives a relaunch, because it is a fact about the mission and not a
+    // preference of this window.
+    await kartik.page.evaluate(async (id) => {
+      const result = await window.novus.missions.archive(id);
+      if (!result.ok) throw new Error(result.message);
+    }, missionId);
+    await kartik.app.close();
+    const again = await launch("kartik", kartik.userDataDir);
+    await signIn(again);
+    const listed = await again.page.evaluate(async (id) => {
+      const active = await window.novus.missions.list();
+      const filed = await window.novus.missions.list("archived");
+      return {
+        active: active.ok ? active.value.some((mission) => mission.missionId === id) : true,
+        filed: filed.ok ? filed.value.some((mission) => mission.missionId === id) : false
+      };
+    }, missionId);
+    expect(listed).toEqual({ active: false, filed: true });
+    await again.app.close();
+    await maya.app.close();
+  }, 300_000);
+});

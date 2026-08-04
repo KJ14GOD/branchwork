@@ -3078,3 +3078,31 @@ body {
   color: var(--text-3);
   font: var(--type-meta);
 }
+
+/* --- Filing a mission away (D-063) ------------------------------------------
+   The row keeps its shape; the control appears when the row is hovered or
+   anything inside it has focus. A permanent mark on every row would put a
+   destructive-looking affordance beside work nobody is filing away. */
+.side-open-mission {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.side-row-archive {
+  flex: none;
+  opacity: 0;
+  color: var(--text-3);
+  font: var(--type-meta);
+}
+
+.side-row:hover .side-row-archive,
+.side-row:focus-within .side-row-archive {
+  opacity: 1;
+}
+
+.side-row-archive:hover {
+  color: var(--text-1);
+}

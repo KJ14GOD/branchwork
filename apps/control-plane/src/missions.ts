@@ -30,6 +30,8 @@ interface MissionRow {
   created_by: string;
   created_by_login: string;
   created_at: Date;
+  archived_at: Date | null;
+  archived_by_login: string | null;
   repo_id: string | null;
   provider: string | null;
   provider_repo_id: string | null;
@@ -69,6 +71,8 @@ function toMission(row: MissionRow): Mission {
     createdBy: row.created_by,
     createdByLogin: row.created_by_login,
     createdAt: row.created_at.toISOString(),
+    archivedAt: row.archived_at ? row.archived_at.toISOString() : null,
+    archivedByLogin: row.archived_by_login ?? null,
     repository: toRepository(row)
   };
 }
@@ -391,9 +395,11 @@ export async function attemptBranchCreation(
 const MISSION_SELECT = `
   select m.mission_id, m.org_id, m.goal, m.success_criteria, m.primary_state,
          m.created_by, u.login as created_by_login, m.created_at,
+         m.archived_at, archiver.login as archived_by_login,
          m.repo_id, r.provider, r.provider_repo_id, r.name as repo_name, r.default_branch
     from missions m
     join users u on u.user_id = m.created_by
+    left join users archiver on archiver.user_id = m.archived_by
     left join repositories r on r.repo_id = m.repo_id`;
 
 /**
@@ -407,10 +413,23 @@ const VISIBLE_TO = `
    join participants p on p.mission_id = m.mission_id and p.user_id = $1
    join organization_members om on om.org_id = m.org_id and om.user_id = $1`;
 
-/** Missions the caller participates in, newest first. */
-export async function listMissions(db: Db, ctx: AuthedContext): Promise<Mission[]> {
+/**
+ * Missions the caller participates in, newest first.
+ *
+ * Archived ones are absent by default and are the whole content of the
+ * Archived view — one query, one filter, so the two lists can never disagree
+ * about which mission is where (D-063). Filed away is not hidden: reading a
+ * mission never consults this, so an archived mission opens exactly as it did.
+ */
+export async function listMissions(
+  db: Db,
+  ctx: AuthedContext,
+  filter: "active" | "archived" = "active"
+): Promise<Mission[]> {
   const result = await db.query(
-    `${MISSION_SELECT} ${VISIBLE_TO} order by m.created_at desc`,
+    `${MISSION_SELECT} ${VISIBLE_TO}
+      where m.archived_at is ${filter === "archived" ? "not null" : "null"}
+      order by m.created_at desc`,
     [ctx.userId]
   );
   const missions = (result.rows as MissionRow[]).map(toMission);

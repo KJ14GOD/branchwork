@@ -109,8 +109,12 @@ export class ControlPlaneClient {
     return this.request("POST", "/auth/signout", z.object({ ok: z.boolean() }));
   }
 
-  async listMissions(): Promise<Mission[]> {
-    const body = await this.request("GET", "/missions", MissionListResponseSchema);
+  async listMissions(filter?: "active" | "archived"): Promise<Mission[]> {
+    const body = await this.request(
+      "GET",
+      filter === "archived" ? "/missions?filter=archived" : "/missions",
+      MissionListResponseSchema
+    );
     return body.missions;
   }
 
@@ -218,6 +222,14 @@ export class ControlPlaneClient {
   // --- Harness approvals (D-056) --------------------------------------------
   // Asking, never deciding: the server checks `approval.respond` against the
   // current lease and refuses a request that is already settled.
+
+  async archiveMission(missionId: string): Promise<void> {
+    await this.request("POST", `/missions/${encodeURIComponent(missionId)}/archive`, OkResponseSchema, {});
+  }
+
+  async restoreMission(missionId: string): Promise<void> {
+    await this.request("POST", `/missions/${encodeURIComponent(missionId)}/restore`, OkResponseSchema, {});
+  }
 
   async respondApproval(
     approvalId: string,

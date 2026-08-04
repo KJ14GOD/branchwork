@@ -709,3 +709,27 @@ The decisive reason project settings cannot be an input: **the agent can write t
 **Consequences.** `needs_approval` is entered for the first time. Proven live against real `claude 2.1.221`: a real Write request reached the room, the card rendered it, **Approve once** was clicked in the window, the harness was unblocked, the file was written and committed, and the next turn resumed the same session. Proven deterministically in two clients: the non-controller sees the question, is told who can answer, and is refused by the server when their client asks anyway; control moves while the harness is blocked; the new holder answers; and a denial leaves the file uncreated and the execution completed rather than failed.
 
 **Revisit when.** `--append-system-prompt-file` carries the repository's instructions, closing the cost above; or a second harness needs routing, at which point the control channel becomes an adapter concern rather than Claude Code's.
+
+## D-063 — Missions are filed away, never deleted
+
+**Context.** Missions accumulated and nothing ever removed one. A project that had been worked on for a week showed every failed attempt beside the one that mattered, and the only way to make the rail readable was to stop using the project. PROGRESS.md has recorded "no terminal mission lifecycle" as a gap since the beginning.
+
+The obvious answer is a delete button, and it is the wrong one. A mission is the record of what an agent did to a repository under whose authority — directions, checkpoints, verification, and now who approved which act. That record is the product's reason to exist, and enterprise use means somebody will eventually need to answer "what happened here" about work everybody has forgotten. Deletion also cannot be undone by the person who most regrets it.
+
+**Decision.** Archival: one column, set and cleared. Everything the mission is stays exactly where it was, and the mission stays readable to anyone who could read it before. What changes is one thing — it leaves the ordinary list, and appears under **Archived**, from where it is restored by one control.
+
+There is no delete verb. Not hidden, not admin-only, not behind a flag: absent. A test asks for one and requires a 404, because "we chose not to expose it" and "it does not exist" are different guarantees and only the second one survives a future contributor.
+
+**What archival is refused for.** An archived mission must not be one that is still doing something, so it is refused while an execution is live or an approval is waiting. Two separate refusals, because they are two different things for a person to go and do — and the waiting question is checked **first**, even though such an execution is also "active", since *answer it* is the useful instruction and *stop the execution* is not.
+
+**What it deliberately does not touch.** No repository branch is deleted. No worktree is removed. The mission branch is the record of the work and lives in the user's own repository; a filing decision inside Novus does not reach into git. Worktree cleanup remains the separate, unbuilt concern PROGRESS already names.
+
+**Where it takes effect, which is one query.** The mission list filters on the column and the Archived view is the same query with the filter inverted, so the two lists cannot disagree about where a mission is. Reading a mission does **not** consult it — filed away is not hidden, and the room opens exactly as it did. One consequence worth stating because it is load-bearing and easy to miss: the runner discovers work through that same default list, so an archived mission stops being enrolled, cloned, fetched and worktree'd. That is only safe because archival is refused while an execution is live.
+
+**Capability.** A new `mission.archive`, held by Mission Admin and **not** lease-granted: filing a mission away is a decision about the mission's place in the product, not an operating verb on a running workstream, so holding the baton does not confer it. PRODUCT.md's `mission.close` is deliberately left alone and still unimplemented — closing a mission would *end its work*, which is a different act on a different lifecycle, and conflating the two to save a table row would have been improvising product truth.
+
+**Alternatives.** Reusing `mission.close` (rejected above); a soft-delete with a retention timer (rejected: a timer turns "filed away" into "deleted later", which is the thing this exists not to do, and nobody would find out until the record was gone); hiding archived missions from the room as well (rejected: then archival is deletion with extra steps, and a receipt over a mission nobody can open is not a receipt); per-project Archived sections (rejected for now: one list is simpler and the case that motivates this is a handful of old failures, not hundreds).
+
+**Consequences.** Closing a tab and archiving a mission are now visibly different acts and are proven to be: closing a tab leaves the mission running and in the rail (D-061), archiving takes it out of the rail and is refused if it is running. Archiving a mission whose tab is open closes that tab — a consequence of the rail no longer offering a way back, not a second meaning for the act.
+
+**Revisit when.** Archived missions are numerous enough that one flat list stops working, or a mission genuinely must be destroyed for a legal reason — at which point the thing to build is a documented, audited erasure of a *named* mission, not a delete button.

@@ -31,7 +31,7 @@ const novus: NovusBridge = {
     checkedOutHere: () => ipcRenderer.invoke("novus:repos:checked-out-here")
   },
   missions: {
-    list: () => ipcRenderer.invoke("novus:missions:list"),
+    list: (filter) => ipcRenderer.invoke("novus:missions:list", filter),
     create: (input) => ipcRenderer.invoke("novus:missions:create", input),
     get: (missionId) => ipcRenderer.invoke("novus:missions:get", missionId),
     retryBranch: (workstreamId) => ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
@@ -39,6 +39,8 @@ const novus: NovusBridge = {
     resolveDirection: (input) => ipcRenderer.invoke("novus:missions:resolve-direction", input),
     cancelDirection: (directionId) => ipcRenderer.invoke("novus:missions:cancel-direction", directionId),
     stop: (missionId) => ipcRenderer.invoke("novus:missions:stop", missionId),
+    archive: (missionId) => ipcRenderer.invoke("novus:missions:archive", missionId),
+    restore: (missionId) => ipcRenderer.invoke("novus:missions:restore", missionId),
     respondApproval: (input) => ipcRenderer.invoke("novus:missions:respond-approval", input)
   },
   control: {

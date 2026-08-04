@@ -118,7 +118,13 @@ export const MissionSchema = z.object({
   createdByLogin: z.string().min(1),
   createdAt: z.string().datetime(),
   /** Null only for missions created before repository connection existed. */
-  repository: RepositoryRefSchema.nullable()
+  repository: RepositoryRefSchema.nullable(),
+  /** When this mission was filed away, and by whom. Null while it is in the
+   *  ordinary list. Archival hides nothing and destroys nothing — every
+   *  direction, event, checkpoint, check and approval stays exactly where it
+   *  was, and the mission is still reachable and still restorable (D-063). */
+  archivedAt: z.string().datetime().nullable(),
+  archivedByLogin: z.string().nullable()
 });
 export type Mission = z.infer<typeof MissionSchema>;
 
@@ -202,6 +208,11 @@ export type MissionRole = z.infer<typeof MissionRoleSchema>;
 export const CapabilitySchema = z.enum([
   "mission.view",
   "mission.invite",
+  /** File a mission away, and take it back out. Not deletion: nothing is
+   *  destroyed, and there is no verb that destroys one (D-063). Distinct from
+   *  the unimplemented `mission.close`, which would *end* a mission's work —
+   *  a different act on a different lifecycle. */
+  "mission.archive",
   "direction.submit",
   "direction.apply",
   "execution.start",
@@ -368,6 +379,10 @@ export const ApprovalRequestSchema = z.object({
   resolution: z.string().nullable()
 });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
+
+/** What the rail asks for by default, and what the Archived view asks for. */
+export const MissionListFilterSchema = z.enum(["active", "archived"]);
+export type MissionListFilter = z.infer<typeof MissionListFilterSchema>;
 
 export const RespondApprovalInputSchema = z.object({
   decision: ApprovalDecisionSchema,
@@ -1556,7 +1571,9 @@ export interface NovusBridge {
     checkedOutHere(): Promise<IpcResult<string[]>>;
   };
   missions: {
-    list(): Promise<IpcResult<Mission[]>>;
+    /** The ordinary list by default; `"archived"` is the Archived view. One
+     *  verb and one filter, so the two lists cannot disagree (D-063). */
+    list(filter?: MissionListFilter): Promise<IpcResult<Mission[]>>;
     create(input: CreateMissionInput): Promise<IpcResult<{ mission: Mission; workstream: Workstream }>>;
     get(missionId: string): Promise<IpcResult<MissionDetailResponse>>;
     retryBranch(workstreamId: string): Promise<IpcResult<Workstream>>;
@@ -1580,6 +1597,12 @@ export interface NovusBridge {
      * checks `approval.respond` against the current lease, and a request that
      * has already been settled is refused rather than answered twice.
      */
+    /** Files a mission away. Refused while its execution is running or an
+     *  approval is waiting — an archived mission must not be one still doing
+     *  something. Never deletes: no branch, no worktree, no history (D-063). */
+    archive(missionId: string): Promise<IpcResult<null>>;
+    /** Takes it back out, into the ordinary list it left. */
+    restore(missionId: string): Promise<IpcResult<null>>;
     respondApproval(input: {
       approvalId: string;
       decision: ApprovalDecision;

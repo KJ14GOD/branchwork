@@ -16,6 +16,10 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
   mission_admin: [
     "mission.view",
     "mission.invite",
+    // Filing a mission away is the Mission Admin's, and is not lease-granted:
+    // it is a decision about the mission's place in the product, not an
+    // operating verb on a running workstream (PRODUCT.md#roles-and-capabilities).
+    "mission.archive",
     "direction.submit",
     "execution.start",
     "execution.stop",

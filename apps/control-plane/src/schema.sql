@@ -77,6 +77,15 @@ alter table missions add column if not exists repo_id text references repositori
 alter table missions add column if not exists creation_key text;
 create unique index if not exists missions_creation_key on missions (org_id, creation_key)
   where creation_key is not null;
+-- Archival (D-063): filed away, not deleted. There is deliberately no delete
+-- verb anywhere, so the only way a mission leaves the ordinary list is this
+-- column being set, and the only way it comes back is this column being
+-- cleared. Everything the mission is stays exactly where it was.
+alter table missions add column if not exists archived_at timestamptz;
+alter table missions add column if not exists archived_by text references users(user_id);
+create index if not exists missions_active_by_org on missions (org_id, created_at desc)
+  where archived_at is null;
+
 -- A mission's presented primary state is a projection over its workstream and
 -- execution state (PRODUCT.md#the-mission-state-model); the legacy column is
 -- retained for existing rows and is never read as truth.

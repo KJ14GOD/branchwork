@@ -37,6 +37,9 @@ describe("contracts", () => {
       createdBy: "usr_abc",
       createdByLogin: "kartik",
       createdAt: new Date().toISOString(),
+      // In the ordinary list: not filed away, by nobody (D-063).
+      archivedAt: null,
+      archivedByLogin: null,
       repository: {
         repoId: "rep_abc",
         provider: "github",

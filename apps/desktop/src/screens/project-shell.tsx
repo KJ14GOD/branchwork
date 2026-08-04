@@ -201,6 +201,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [railProject, setRailProject] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
+  /** Why filing one away was refused — most often because it is still working. */
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  /** The Archived view: read on demand, because it is not the rail's job. */
+  const [archived, setArchived] = useState<Mission[] | null>(null);
   const [joinOpen, setJoinOpen] = useState(false);
   /** The setup dialog is held here because two surfaces open the same one: the
    *  state line's action inside the room, and the Run control beside it. */
@@ -233,11 +237,13 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const addTriggerRef = useRef<HTMLButtonElement>(null);
 
   const refresh = useCallback(async () => {
-    const [missionsResult, localResult, checkoutResult] = await Promise.all([
+    const [missionsResult, archivedResult, localResult, checkoutResult] = await Promise.all([
       novus().missions.list(),
+      novus().missions.list("archived"),
       novus().repos.localList(),
       novus().repos.checkedOutHere()
     ]);
+    if (archivedResult.ok) setArchived(archivedResult.value);
     if (missionsResult.ok) {
       setOffline(false);
       setMissions(missionsResult.value);
@@ -572,6 +578,41 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   }, []);
 
   const openDetail = activeMissionId ? details[activeMissionId] : undefined;
+
+  /** What the server said this viewer may do in that mission. Absent until its
+   *  detail has been read, which is the honest answer to "may I" — so the
+   *  control is not offered rather than being offered and refused. */
+  const capabilitiesFor = (missionId: string): readonly string[] =>
+    details[missionId]?.capabilities ?? [];
+
+  /**
+   * Files a mission away (D-063). Not deletion, and not a tab close: the tab is
+   * closed too, because a room whose mission has left the list is a room the
+   * rail no longer offers a way back to — but that is a consequence, not the act.
+   */
+  const archiveMission = async (mission: Mission) => {
+    setArchiveError(null);
+    const result = await novus().missions.archive(mission.missionId);
+    if (!result.ok) {
+      setArchiveError(result.message);
+      return;
+    }
+    setWorkingSet((previous) => {
+      const tab = previous.tabs.find((entry) => entry.missionId === mission.missionId);
+      return tab ? closeTab(previous, tab.id) : previous;
+    });
+    await refresh();
+  };
+
+  const restoreMission = async (missionId: string) => {
+    setArchiveError(null);
+    const result = await novus().missions.restore(missionId);
+    if (!result.ok) {
+      setArchiveError(result.message);
+      return;
+    }
+    await refresh();
+  };
   const openFiles = active ? (filesByTab[active.id] ?? []) : [];
   const activeFile = active ? (activeFileByTab[active.id] ?? null) : null;
 
@@ -745,17 +786,36 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                       list and usually a much shorter one. */}
                   {open &&
                     project.missions.map((mission) => (
-                      <button
+                      <div
                         key={mission.missionId}
                         className={`side-row side-child${
                           activeMissionId === mission.missionId ? " selected" : ""
                         }`}
-                        onClick={() => openMissionTab(project.key, mission.missionId)}
-                        title={mission.goal}
                         data-testid="mission-row"
                       >
-                        <span className="side-name">{truncateLabel(mission.goal, 26)}</span>
-                      </button>
+                        <button
+                          className="side-open-mission"
+                          onClick={() => openMissionTab(project.key, mission.missionId)}
+                          title={mission.goal}
+                        >
+                          <span className="side-name">{truncateLabel(mission.goal, 26)}</span>
+                        </button>
+                        {/* One quiet control, revealed on hover or focus. A
+                            permanent icon on every row would put a destructive-
+                            looking mark beside work nobody is filing away, and
+                            most rows are never filed away (D-063). */}
+                        {capabilitiesFor(mission.missionId).includes("mission.archive") && (
+                          <button
+                            className="side-row-archive"
+                            onClick={() => void archiveMission(mission)}
+                            aria-label={`Archive ${mission.goal}`}
+                            title={`Archive ${mission.goal}`}
+                            data-testid="mission-archive"
+                          >
+                            Archive
+                          </button>
+                        )}
+                      </div>
                     ))}
                   {open && (
                     <button
@@ -772,6 +832,33 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                 </div>
               );
             })}
+            {/* Archived: not a place things go to be forgotten, so it says how
+                many there are and opens on asking. Everything in it is intact
+                and one control away from coming back (D-063). */}
+            {archived !== null && archived.length > 0 && (
+              <div className="side-group" data-testid="archived-group">
+                <div className="side-head">ARCHIVED</div>
+                {archived.map((mission) => (
+                  <div key={mission.missionId} className="side-row side-child" data-testid="archived-row">
+                    <span className="side-name">{truncateLabel(mission.goal, 26)}</span>
+                    <button
+                      className="side-row-archive"
+                      onClick={() => void restoreMission(mission.missionId)}
+                      aria-label={`Restore ${mission.goal}`}
+                      title={`Restore ${mission.goal}`}
+                      data-testid="mission-restore"
+                    >
+                      Restore
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {archiveError && (
+              <p className="inline-error" role="alert" data-testid="archive-error">
+                {archiveError}
+              </p>
+            )}
             {missions !== null && projects.length === 0 && (
               <p className="side-empty">No projects yet.</p>
             )}

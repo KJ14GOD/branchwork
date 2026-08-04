@@ -208,7 +208,9 @@ function registerIpc(): void {
     return ok(null);
   });
 
-  ipcMain.handle("novus:missions:list", () => call(() => api.listMissions()));
+  ipcMain.handle("novus:missions:list", (_event, raw: unknown) =>
+    call(() => api.listMissions(raw === "archived" ? "archived" : undefined))
+  );
   ipcMain.handle("novus:repos:available", () => call(() => api.availableRepositories()));
 
   ipcMain.handle("novus:repos:base", async (_event, raw: unknown) => {
@@ -357,6 +359,26 @@ function registerIpc(): void {
   // all this does: the server checks `approval.respond` against the current
   // lease, so a participant who is no longer the controller — including one who
   // was when the question appeared — is refused there rather than here.
+  // Filing a mission away is the server's decision — `mission.archive`, and
+  // refused outright while the mission is still working (D-063).
+  ipcMain.handle("novus:missions:archive", async (_event, raw: unknown) => {
+    const parsed = MissionIdSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(async () => {
+      await api.archiveMission(parsed.data);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:missions:restore", async (_event, raw: unknown) => {
+    const parsed = MissionIdSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(async () => {
+      await api.restoreMission(parsed.data);
+      return null;
+    });
+  });
+
   ipcMain.handle("novus:missions:respond-approval", async (_event, raw: unknown) => {
     const parsed = z
       .object({ approvalId: z.string().startsWith("apr_") })
