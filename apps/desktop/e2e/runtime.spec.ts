@@ -188,6 +188,42 @@ async function untilPane(target: Page, what: string, contains: string, timeoutMs
  * waits for the output to arrive and then go quiet, which is what "the prompt
  * is up" looks like from outside, rather than typing hopefully and retrying.
  */
+/**
+ * Types a command and keeps typing it until its output appears.
+ *
+ * `awaitPrompt` decides the shell is ready when its output has been quiet for
+ * ~600ms, and that is a guess rather than a signal. A cold login shell — this
+ * machine's loads conda, which is why the prompt reads `(base)` — emits its
+ * startup in bursts, and under load the gaps between those bursts exceed the
+ * quiet window. So the wait returns while the shell is still initialising, the
+ * keystrokes go into a shell that is not listening, and the marker never
+ * prints. Observed exactly once, in a full `pnpm run e2e` where every *later*
+ * terminal test in the same run passed in under five seconds.
+ *
+ * Retrying is the fix rather than a longer timeout, because the failure is
+ * swallowed input and not slowness: a shell that ate the first line takes the
+ * second one as soon as it reaches its prompt.
+ */
+async function runUntilPrinted(
+  target: Page,
+  mission: string,
+  command: string,
+  marker: string,
+  attempts = 4
+): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await awaitPrompt(target, mission);
+    await target.keyboard.type(command);
+    await target.keyboard.press("Enter");
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      if ((await sessionOutput(target, mission).catch(() => "")).includes(marker)) return;
+      await new Promise((settle) => setTimeout(settle, 200));
+    }
+  }
+  throw new Error(`\`${command}\` never printed ${marker} after ${attempts} attempts`);
+}
+
 async function awaitPrompt(target: Page, mission: string, timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let previous = "";
@@ -391,12 +427,7 @@ describe("the terminal, through the interface", () => {
 
     // The shell has the keyboard the moment it opens: typing works without
     // clicking into the pane first.
-    await awaitPrompt(page, missionId);
-    await page.keyboard.type(`echo ${typed("FOCUSED")}`);
-    await page.keyboard.press("Enter");
-    await expect
-      .poll(() => sessionOutput(page, missionId), { timeout: 30_000 })
-      .toContain(printed("FOCUSED"));
+    await runUntilPrinted(page, missionId, `echo ${typed("FOCUSED")}`, printed("FOCUSED"));
 
     // Typed at the keyboard, into the emulator, into the PTY.
     const shown = await runInPane(page, missionId, `pwd; echo ${typed("WHERE")}`, printed("WHERE"));
