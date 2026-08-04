@@ -293,11 +293,6 @@ export function terminalEnv(input: TerminalEnvInput): ProcessEnvironment {
   return env;
 }
 
-/** True when a variable name carries the harness's own credentials. Exported so
- *  the assertion "no project command ever sees this" is testable by name. */
-export function isHarnessCredentialName(name: string): boolean {
-  return isHarnessVariable(name);
-}
 
 /**
  * The passwords inside whatever proxy configuration this machine forwards.

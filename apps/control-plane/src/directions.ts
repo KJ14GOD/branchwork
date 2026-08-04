@@ -263,16 +263,3 @@ export async function markDirectionApplied(
   );
   return (updated.rowCount ?? 0) > 0;
 }
-
-/** The oldest queued direction for a workstream, if any. */
-export async function nextQueuedDirection(
-  client: pg.PoolClient,
-  workstreamId: string
-): Promise<{ dirId: string; body: string; authorUserId: string } | null> {
-  const result = await client.query(
-    "select dir_id, body, author_user_id from directions where wst_id = $1 and state = 'queued' order by ordinal limit 1",
-    [workstreamId]
-  );
-  const row = result.rows[0];
-  return row ? { dirId: row.dir_id, body: row.body, authorUserId: row.author_user_id } : null;
-}

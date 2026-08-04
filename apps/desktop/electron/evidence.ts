@@ -267,7 +267,12 @@ export async function captureCheckpoint(
       outcome: "failed",
       withheldSecrets: withheld.length,
       uncommitted: true,
-      error: sanitize(messageOf(error)).slice(0, 400)
+      error: sanitize(messageOf(error)).slice(0, 400),
+      // The commit failed; the work did not. Reporting an empty file list here
+      // told the room "nothing happened" about a turn that had changed things
+      // and could not save them, which is the one moment those files matter
+      // most (D-054).
+      files: await uncommittedChanges(git, cwd, sanitize, maxFiles).catch(() => [])
     };
   }
 
@@ -278,7 +283,8 @@ export async function captureCheckpoint(
       outcome: "failed",
       withheldSecrets: withheld.length,
       uncommitted: true,
-      error: "The checkpoint commit could not be read back."
+      error: "The checkpoint commit could not be read back.",
+      files: await uncommittedChanges(git, cwd, sanitize, maxFiles).catch(() => [])
     };
   }
 
@@ -307,8 +313,13 @@ export async function captureCheckpoint(
 }
 
 /**
- * The same per-file record for work that is still uncommitted — used when a
- * checkpoint could not commit but the room should still see what changed.
+ * The same per-file record for work that is still uncommitted — what the room
+ * sees when a checkpoint could not commit.
+ *
+ * Withholds exactly what a successful checkpoint withholds. A commit that fails
+ * is the case where an agent's `.env` is *most* likely to be sitting in the
+ * worktree, and a failure path that discloses what the success path protects is
+ * worse than no failure path at all (D-052).
  */
 export async function uncommittedChanges(
   git: GitRunner,
@@ -317,7 +328,7 @@ export async function uncommittedChanges(
   maxFiles = MAX_FILES
 ): Promise<RunnerFileChange[]> {
   const states = new Map((await dirtyEntries(git, cwd)).map((entry) => [entry.path, entry]));
-  const counted = await numstatForWorktree(git, cwd);
+  const counted = (await numstatForWorktree(git, cwd)).filter((entry) => !isSecretPath(entry.path));
   const files: RunnerFileChange[] = [];
   for (const entry of counted.slice(0, maxFiles)) {
     const diff = entry.binary ? null : await diffForWorktree(git, cwd, entry.path).catch(() => null);

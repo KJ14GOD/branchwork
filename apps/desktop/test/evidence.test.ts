@@ -32,6 +32,13 @@ async function commitAll(message: string): Promise<void> {
   await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", message]);
 }
 
+/** Makes every subsequent commit in the fixture fail, without touching the
+ *  index — so `git add` still works and the failure is the commit itself. */
+async function failCommits(): Promise<void> {
+  await git(repo, ["config", "commit.gpgsign", "true"]);
+  await git(repo, ["config", "user.signingkey", "0000000000000000"]);
+}
+
 const write = (relative: string, contents: string): void => {
   const path = join(repo, relative);
   mkdirSync(join(path, ".."), { recursive: true });
@@ -218,5 +225,48 @@ describe("path sanitization", () => {
     const sanitize = createSanitizer([]);
     expect(sanitize("ENOENT: /Users/kartik/Desktop/thing.txt")).toBe("ENOENT: ~/Desktop/thing.txt");
     expect(sanitize("ENOENT: /home/kartik/thing.txt")).toBe("ENOENT: ~/thing.txt");
+  });
+});
+
+describe("a checkpoint that could not commit", () => {
+  /**
+   * The failure path used to report an empty file list, which reads in the room
+   * as "the turn changed nothing" — about a turn that changed things and could
+   * not save them, which is the one moment those files matter most. The verb
+   * that produces the record existed and had tests; nothing called it (D-054).
+   *
+   * Entered through `captureCheckpoint`, the function the product actually
+   * calls, rather than through `uncommittedChanges` directly. A test that calls
+   * the orphan is what let the orphan stay an orphan.
+   */
+  it("says what changed instead of reporting nothing", async () => {
+    write("README.md", "# fixture\n\nchanged by the turn\n");
+    write("new-file.ts", "export const added = true;\n");
+    // A real commit failure, not a simulated one: signing is required and the
+    // key does not exist, so `git add` succeeds and `git commit` does not —
+    // which is the shape of every commit failure that matters (a hook, a full
+    // disk, an identity the machine cannot use).
+    await failCommits();
+
+    const checkpoint = await captureCheckpoint(git, repo, { branch: "novus/m-abc123", summary: "a turn" });
+    expect(checkpoint.outcome).toBe("failed");
+    expect(checkpoint.uncommitted).toBe(true);
+    expect(checkpoint.sha).toBeNull();
+    const paths = checkpoint.files.map((file) => file.path).sort();
+    expect(paths).toContain("README.md");
+    expect(paths).toContain("new-file.ts");
+  });
+
+  it("withholds a credential file from that record, exactly as a successful one does", async () => {
+    write("README.md", "# fixture\n\nchanged by the turn\n");
+    write(".env", "API_TOKEN=not-a-real-token-0000\n");
+    await failCommits();
+
+    const checkpoint = await captureCheckpoint(git, repo, { branch: "novus/m-abc123", summary: "a turn" });
+    expect(checkpoint.outcome).toBe("failed");
+    const paths = checkpoint.files.map((file) => file.path);
+    expect(paths).toContain("README.md");
+    expect(paths).not.toContain(".env");
+    expect(JSON.stringify(checkpoint)).not.toContain("not-a-real-token");
   });
 });

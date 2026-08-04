@@ -278,8 +278,3 @@ export function Composer({
     </div>
   );
 }
-
-/** Focus the composer's input from anywhere in the room. */
-export function focusComposer() {
-  document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')?.focus();
-}

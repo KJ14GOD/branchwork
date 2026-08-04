@@ -6,7 +6,7 @@ import {
   type Participant,
   type WorkspaceProcess
 } from "@novus/contracts";
-import { clockTime, plural, shortSha } from "../format";
+import { clockTime, plural } from "../format";
 
 /** Pure projections of one poll (`MissionDetailResponse`) into what the room
  *  shows. No fetching, no fabrication: everything here is derived from state
@@ -23,9 +23,6 @@ export function activeExecution(detail: MissionDetailResponse): Execution | null
   return live[live.length - 1] ?? null;
 }
 
-export function latestExecution(detail: MissionDetailResponse): Execution | null {
-  return detail.executions[detail.executions.length - 1] ?? null;
-}
 
 export function controller(detail: MissionDetailResponse): Participant | null {
   return detail.participants.find((participant) => participant.isController) ?? null;
@@ -349,22 +346,4 @@ function interruptionReason(detail: MissionDetailResponse): string {
     if (typeof reason === "string" && reason.length > 0) return reason;
   }
   return "the execution ended before it finished";
-}
-
-/** The workspace's one-line technical summary, folded out of the feed's
- *  setup noise: "Workspace ready · main @ f88c40df". */
-export function workspaceSummary(detail: MissionDetailResponse): {
-  label: string;
-  danger: boolean;
-} | null {
-  const workstream = detail.workstream;
-  if (!workstream) return null;
-  const anchor = `${workstream.baseRef} @ ${shortSha(workstream.baseSha)}`;
-  if (workstream.branchStatus === "failed") {
-    return { label: `Branch creation failed · ${anchor}`, danger: true };
-  }
-  if (workstream.branchStatus === "pending") {
-    return { label: `Preparing the mission branch · ${anchor}`, danger: false };
-  }
-  return { label: `Workspace ready · ${anchor}`, danger: false };
 }

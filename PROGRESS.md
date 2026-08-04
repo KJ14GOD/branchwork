@@ -85,6 +85,28 @@ Unless a line says otherwise, its evidence is the suite run of 2026-08-03 record
 | E2B provider spike — live run | Implemented | Run 2026-08-01, results in `spikes/e2b/spike-results.json` (D-024) |
 | Repository slice — desktop workflow (fake provider) | Implemented | Run 2026-08-01 on `slice/repository-missions`, still passing: repository selection, base pinning, branch allocation, relaunch reconstruction, and the failure/retry path through the real Electron app |
 
+## Critical verbs, and what proves each one is wired
+
+Three faults have reached real sessions because a verb was written, tested, and
+never called (D-051). The check that would have caught all three is a test that
+enters where the product enters, so every verb below names one. A unit test that
+imports the function and calls it is not in this column, on purpose — that is
+the kind of test all three faults already had (D-054).
+
+| Verb | Entered through | Evidence |
+| --- | --- | --- |
+| Secret storage | the bridge's `supplySecret` | `workspace-policy.test.ts` — supplied, listed by name with no value, refused below the length Novus can redact, refused where the OS offers no encryption |
+| Runner heartbeat | the runner's own poll | `runner.test.ts` — liveness is a side effect of polling; a runner silent past the threshold has its execution ended by the sweep |
+| Lease heartbeat | reading the mission | `reliability.test.ts` — a lease backdated past its TTL survives its holder's read and does not survive a bystander's (D-051) |
+| Repository clone and fetch | the runner agent's discovery pass | `workspace-clone.test.ts` — a second workstream's branch is fetched into a repository this machine had already cloned (D-051) |
+| Command dispatch | the runner agent against a stubbed control plane | `workspace-agent.test.ts` — setup, run, stop, and verification each produce their real effect |
+| Stop execution | a `stop_execution` command through the agent | `workspace-agent.test.ts` — two of its five tests fail against the pre-D-053 code |
+| Check execution | an authorized command through the agent | `workspace-agent.test.ts`, and `e2e/runtime.spec.ts` on a click |
+| Workspace setup | an authorized command through the agent | `workspace-agent.test.ts`, and `e2e/runtime.spec.ts` through the dialog |
+| Checkpoint creation | `captureCheckpoint`, which the turn calls | `evidence.test.ts` — including a commit that genuinely fails, where the room is told what changed rather than nothing (D-054) |
+| Event publication | the agent's outbox to a stubbed control plane | `workspace-agent.test.ts`, `outbox.test.ts` — ordering, de-duplication, backoff, gap marker |
+| Approval response | **nothing — not built** | see [Known gaps](#known-gaps) |
+
 ## Known gaps
 
 - **The live GitHub runtime proof is written but has not been run.** `apps/desktop/e2e/live-github.spec.ts` selects a real repository through the interface, creates a mission, waits for the runner to fetch it, checks the worktree is on the mission branch at the exact recorded base, runs a declared command and a check on it, then independently asserts that no installation token is in `.git/config`, anywhere under the machine's Novus state, in any event payload, or in any recorded check — and that a user session cannot ask for one. It is opt-in and cannot be otherwise: repository access comes from a GitHub App installation bound to a real organization, and that binding is created by a person signing in through their own browser, so the run borrows a profile that is already signed in. Until somebody runs it, "GitHub repositories run locally" stays Partial and the clone path is **Tested**, not proven live.

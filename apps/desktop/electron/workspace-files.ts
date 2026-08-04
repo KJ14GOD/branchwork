@@ -1,5 +1,5 @@
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 import type { PreparedFile } from "@novus/contracts";
 import { isSecretPath } from "./evidence";
 import { isIgnoredByGit, type GitExec } from "./workspace-git";
@@ -202,11 +202,6 @@ function applyMode(path: string, mode: number): boolean {
   }
 }
 
-/** Where a workspace copy of a given name would live. Exported so inspection
- *  and preparation agree on one answer. */
-export function workspaceCopyPath(worktree: string, path: string): string {
-  return join(worktree, path);
-}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : "unknown failure";
