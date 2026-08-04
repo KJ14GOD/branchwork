@@ -14,7 +14,12 @@ import { z } from "zod";
 import type { ControlPlaneClient } from "./api-client";
 import { startTurn, type RunningTurn, type TurnResult } from "./execution";
 import { EventOutbox } from "./outbox";
-import { createWorkspaceRuntime, type PinnedCommand, type WorkspaceCommandContext } from "./workspace";
+import {
+  createWorkspaceRuntime,
+  secretValuesFor,
+  type PinnedCommand,
+  type WorkspaceCommandContext
+} from "./workspace";
 import {
   clonedRepositoryRoot,
   ensureRepositoryClone,
@@ -706,6 +711,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       workstreamId,
       missionId: workstream.missionId,
       executionId,
+      providerRepoId: workstream.providerRepoId,
       repositoryPath,
       missionBranch: workstream.missionBranch,
       direction: payload.data.body,
@@ -748,6 +754,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     workstreamId: string;
     missionId: string;
     executionId: string;
+    /** Which project's supplied values the transcript must not repeat. */
+    providerRepoId: string;
     repositoryPath: string;
     missionBranch: string;
     direction: string;
@@ -786,6 +794,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       resumeSessionId: args.resumeSessionId,
       announceStart: args.announceStart,
       fakeHarness,
+      // Read per emit rather than captured once, and never handed to the
+      // renderer or the control plane — the redactor is the only thing in the
+      // reporting path that ever sees a value (D-041, D-052).
+      secretValues: () => secretValuesFor(host, args.providerRepoId),
       emit
     });
     active.set(args.workstreamId, { executionId: args.executionId, turn });

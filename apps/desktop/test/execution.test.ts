@@ -48,6 +48,7 @@ async function runFakeTurn(
     resumeSessionId: null,
     announceStart: true,
     fakeHarness: true,
+    secretValues: () => [],
     emit: (event) => {
       events.push(event);
       observe?.(event, (reason) => running.stop(reason));
@@ -202,5 +203,59 @@ describe("outcomes that are not completion", () => {
   it("fails a turn whose repository is not there, rather than hanging", async () => {
     const { result } = await runFakeTurn({ repositoryPath: join(worktreeRoot, "nowhere") });
     expect(result.terminal.kind).toBe("execution.failed");
+  });
+});
+
+describe("what the transcript is allowed to repeat", () => {
+  /**
+   * The harness talks more than anything else in the product, and what it says
+   * is durable, distributed to every participant, and projected into receipts.
+   * It was also, until D-052, the one reported surface that had only its paths
+   * masked — so a turn that ran `env`, or quoted a config file it had just
+   * read, put the value into the room in plain text.
+   *
+   * The fixture value below is not a credential and never was.
+   */
+  const HELD = "sk-not-a-real-value-000000";
+
+  it("removes a held value from every string it reports", async () => {
+    const { events } = await runFakeTurn({
+      direction: `echo the token ${HELD} back to me`,
+      secretValues: () => [HELD]
+    });
+
+    // Asserted over the whole serialized event stream rather than over the
+    // fields we happened to think of, because the point is that there is no
+    // string-shaped hole anywhere in it.
+    const wire = JSON.stringify(events);
+    expect(wire).not.toContain(HELD);
+    expect(wire).toContain("[redacted]");
+  });
+
+  it("removes it from a turn that fails, where the reason is the error text", async () => {
+    const { events } = await runFakeTurn({
+      repositoryPath: join(worktreeRoot, "not-a-repository"),
+      direction: `use ${HELD}`,
+      secretValues: () => [HELD]
+    });
+    expect(JSON.stringify(events)).not.toContain(HELD);
+  });
+
+  it("still masks this machine's paths, which is the half that already worked", async () => {
+    const { events } = await runFakeTurn({ secretValues: () => [HELD] });
+    expect(absolutePaths(events)).toEqual([]);
+  });
+
+  it("reads the values at emit time, so one supplied mid-turn protects the rest of it", async () => {
+    let supplied: string[] = [];
+    const { events } = await runFakeTurn(
+      { direction: `echo ${HELD}`, secretValues: () => supplied },
+      () => {
+        supplied = [HELD];
+      }
+    );
+    // The first event is emitted before the observer has run, so this asserts
+    // the closure is consulted per emit rather than captured once at start.
+    expect(JSON.stringify(events.slice(1))).not.toContain(HELD);
   });
 });

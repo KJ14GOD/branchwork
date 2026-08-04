@@ -26,7 +26,7 @@ import { gitExec, type GitExec } from "./workspace-git";
 import { inspectProject } from "./workspace-inspect";
 import { createPortAllocator, type PortAllocator, type PortRange } from "./workspace-ports";
 import { emptySecretStore, fileSecretStore, type SecretStore } from "./workspace-secrets";
-import { projectEnv, terminalEnv } from "./workspace-env";
+import { projectEnv, terminalEnv, proxyCredentials } from "./workspace-env";
 import {
   parseLoopbackHttpUrl,
   reconcileRecordedProcesses,
@@ -136,6 +136,25 @@ export function worktreeFor(userDataPath: string, missionId: string): string {
  * holds nothing and refuses by name, rather than one that quietly writes
  * nowhere (D-044).
  */
+/**
+ * Every value this machine holds for a project, for the redactor and for
+ * nothing else.
+ *
+ * Deliberately a function returning strings rather than the store: the turn
+ * path needs to *remove* these from text it is about to report, and giving it
+ * the store would give it a way to put one somewhere instead. Nothing that
+ * calls this may return its result across the bridge (D-041).
+ */
+export function secretValuesFor(host: WorkspaceHost, providerRepoId: string): readonly string[] {
+  try {
+    return [...secretStoreFor(host).allValues(providerRepoId), ...proxyCredentials()];
+  } catch {
+    // A store that cannot be read redacts nothing rather than failing the turn;
+    // the store itself fails closed on *writes*, which is where it matters.
+    return proxyCredentials();
+  }
+}
+
 function secretStoreFor(host: WorkspaceHost): SecretStore {
   if (host.secretStore) return host.secretStore;
   const store = fileSecretStore(join(host.userDataPath, "workspace-secrets"));
@@ -410,15 +429,37 @@ export function processLogsFor(workstreamId: string): ProcessLog[] {
 // Local, like the terminal: the worktree is on this machine, and browsing it is
 // an act by the person sitting at it (D-048).
 
+/**
+ * Runs a file verb and masks this machine's paths out of whatever it throws.
+ *
+ * These three were the only reported strings in the product that did not pass
+ * through the sanitizer: an `ENOTDIR` from the filesystem arrives carrying the
+ * absolute path it failed on, and that message is rendered in the pane. Errors
+ * are a reported string like any other.
+ */
+async function withMaskedPaths<T>(
+  target: WorkspaceTarget,
+  host: WorkspaceHost | undefined,
+  work: (resolved: Resolved) => T | Promise<T>
+): Promise<T> {
+  return named(async () => {
+    const resolved = await resolve(target, host);
+    const mask = sanitizerFor(resolved.worktree, resolved.repositoryPath, resolved.host.userDataPath);
+    try {
+      return await work(resolved);
+    } catch (error) {
+      if (error instanceof WorkspaceCommandError) throw new WorkspaceCommandError(mask(error.message));
+      throw error;
+    }
+  });
+}
+
 export async function listFiles(
   target: WorkspaceTarget,
   path: string | undefined,
   host?: WorkspaceHost
 ): Promise<WorkspaceEntry[]> {
-  return named(async () => {
-    const resolved = await resolve(target, host);
-    return listWorkspaceTree(resolved.worktree, path ?? "");
-  });
+  return withMaskedPaths(target, host, (resolved) => listWorkspaceTree(resolved.worktree, path ?? ""));
 }
 
 export async function readFile(
@@ -426,10 +467,7 @@ export async function readFile(
   path: string,
   host?: WorkspaceHost
 ): Promise<WorkspaceFile> {
-  return named(async () => {
-    const resolved = await resolve(target, host);
-    return readWorkspaceFile(resolved.worktree, path);
-  });
+  return withMaskedPaths(target, host, (resolved) => readWorkspaceFile(resolved.worktree, path));
 }
 
 export async function writeFile(
@@ -438,9 +476,9 @@ export async function writeFile(
   text: string,
   host?: WorkspaceHost
 ): Promise<void> {
-  await named(async () => {
-    const resolved = await resolve(target, host);
+  await withMaskedPaths(target, host, (resolved) => {
     writeWorkspaceFile(resolved.worktree, path, text);
+    return null;
   });
 }
 

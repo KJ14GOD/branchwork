@@ -1,4 +1,5 @@
 import type { FileChangeState, RunnerEvent, RunnerFileChange } from "@novus/contracts";
+import { isSecretPath } from "./secret-policy";
 
 /**
  * Evidence derived from git and nothing else (ARCHITECTURE.md#harness-protocol:
@@ -18,20 +19,11 @@ export type CheckpointPayload = Extract<RunnerEvent, { kind: "workspace.checkpoi
 const MAX_FILES = 150;
 const MAX_DIFF = 12_000;
 
-/** Files an agent may create that must never be swept into a checkpoint. */
-const SECRET_PATTERNS = [
-  /(^|\/)\.env(\.|$)/i,
-  /(^|\/)id_(rsa|ed25519|ecdsa|dsa)$/i,
-  /\.pem$/i,
-  /\.p12$/i,
-  /(^|\/)\.npmrc$/i,
-  /(^|\/)\.netrc$/i,
-  /credentials?\.json$/i
-];
-
-export function isSecretPath(path: string): boolean {
-  return SECRET_PATTERNS.some((pattern) => pattern.test(path));
-}
+// Which files an agent may create that must never be swept into a checkpoint is
+// the same question the file browser asks before listing, reading, or writing
+// one, so there is one answer and it lives in `secret-policy.ts` (D-052).
+// Re-exported here because this module was its original home.
+export { isSecretPath };
 
 // --- Path sanitization ------------------------------------------------------
 

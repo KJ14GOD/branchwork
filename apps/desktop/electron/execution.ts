@@ -12,6 +12,7 @@ import {
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
 import { HarnessStream } from "./harness-stream";
 import { harnessEnv } from "./workspace-env";
+import { redact } from "./secret-policy";
 
 /**
  * The Claude Code adapter (D-017, D-032): one direction becomes one supervised
@@ -70,6 +71,9 @@ export interface TurnRequest {
   announceStart: boolean;
   /** Deterministic scripted harness for tests; the caller gates it. */
   fakeHarness: boolean;
+  /** The values this machine holds for the project, read at emit time so a
+   *  secret supplied mid-turn protects the rest of that turn. */
+  secretValues: () => readonly string[];
   emit: (event: RunnerEvent) => void;
 }
 
@@ -146,11 +150,18 @@ export function startTurn(request: TurnRequest): RunningTurn {
   const worktree = join(request.worktreeRoot, request.missionId);
   // The mask list is built before anything can be emitted, so the very first
   // event is already free of machine-local paths.
-  const sanitize = createSanitizer([
+  const maskPaths = createSanitizer([
     { path: worktree, label: "the mission worktree" },
     { path: request.repositoryPath, label: "the repository" },
     { path: request.worktreeRoot, label: "the mission worktrees" }
   ]);
+  // Paths, then values. The transcript is the one reported surface that used to
+  // get only the first half: a harness that runs `env`, or prints a failing
+  // request, or quotes a config file it just read, put the value straight into
+  // the room — where it is durable, distributed to every participant, and
+  // projected into receipts. Process output has been redacted since D-044; this
+  // is the same protection reaching the path that talks the most (D-052).
+  const sanitize = (text: string): string => redact(maskPaths(text), request.secretValues());
   const emit = (event: RunnerEvent): void => request.emit(sanitizeEvent(event, sanitize));
 
   let stopReason: string | null = null;

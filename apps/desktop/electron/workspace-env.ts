@@ -72,9 +72,16 @@ const WINDOWS_BASE = [
 ] as const;
 
 /**
- * Proxy and certificate settings. None of them is a secret and every one of
- * them is load-bearing on a managed machine: without them neither the harness
- * nor a project's package manager can reach the network at all.
+ * Proxy and certificate settings. Every one of them is load-bearing on a
+ * managed machine: without them neither the harness nor a project's package
+ * manager can reach the network at all.
+ *
+ * The proxy variables are the exception to "none of this is a secret" —
+ * `https_proxy` is conventionally written `http://user:password@proxy:3128`,
+ * and a package manager that cannot reach it prints the whole URL in its error.
+ * Stripping the credential is not an option, because then the proxy refuses and
+ * nothing works; `proxyCredentials` below hands it to the redactor instead, so
+ * the value is forwarded and never reported (D-052).
  */
 const NETWORK_BASE = [
   "HTTP_PROXY",
@@ -290,4 +297,33 @@ export function terminalEnv(input: TerminalEnvInput): ProcessEnvironment {
  *  the assertion "no project command ever sees this" is testable by name. */
 export function isHarnessCredentialName(name: string): boolean {
   return isHarnessVariable(name);
+}
+
+/**
+ * The passwords inside whatever proxy configuration this machine forwards.
+ *
+ * Novus never asked for these and cannot be given them through Set up
+ * workspace — they arrive from the environment the app was launched in — so
+ * they are the one class of credential the redactor has to go and find rather
+ * than be handed. Only the password is returned: the host, port, and username
+ * are diagnostic, and an error that says which proxy refused is worth keeping.
+ */
+export function proxyCredentials(env: NodeJS.ProcessEnv = process.env): string[] {
+  const found = new Set<string>();
+  for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) {
+    const raw = env[name];
+    if (!raw) continue;
+    try {
+      const url = new URL(raw);
+      // Decoded, because that is the form a tool prints it back in; and raw,
+      // because some print it exactly as it was given.
+      if (url.password) {
+        found.add(url.password);
+        found.add(decodeURIComponent(url.password));
+      }
+    } catch {
+      // Not a URL. Nothing to take out of it, and nothing to report either.
+    }
+  }
+  return [...found];
 }

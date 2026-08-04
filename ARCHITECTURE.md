@@ -35,6 +35,10 @@ Harness account credentials on shared cloud workspaces are an explicit policy qu
 
 An accepted disclosure boundary, stated so it is never a surprise: per-project environment secrets are decrypted *into* the workspace, so anyone whose direction the harness follows can cause them to be read. That is inherent to giving the agent the environment it needs; the protections above are for secrets the agent does not need.
 
+Because those files really are in the worktree, every surface that can carry a file's name or contents out of it asks one policy before it does: checkpoint capture, evidence, and the file browser's list, read, and write. A path that looks like a credential — `.env` and its variants, registry and git credential stores, private keys, service-account files — is refused, with `.env.example` and its spellings exempt because a repository commits one to be read. The refusal is enforced in the Electron main process at the chokepoint all five routes already pass through, so a renderer asking for the path directly is refused rather than merely not offered it; there is no control-plane route and no runner command for reading a file, so a remote participant has no path to one at all. Reported text is masked for machine-local paths and then redacted of values this machine holds, including passwords harvested out of forwarded proxy configuration — the harness transcript included, which until D-052 had only the first half.
+
+Both halves are lists and neither is detection. Path patterns recognise conventional names, not a credential someone put in `notes.txt`; redaction removes literal occurrences of values Novus was explicitly given and cannot see one it was never handed, an encoded form of one it holds, or one split across two delivery chunks. **Novus does not detect arbitrary secrets.** The controls that carry the weight are the ones above, which keep credentials out of the reported path in the first place.
+
 ### What each plane may never do
 
 - Control plane: execute anything (above).

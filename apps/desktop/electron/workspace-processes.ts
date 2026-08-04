@@ -5,7 +5,6 @@ import { connect } from "node:net";
 import { uptime } from "node:os";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import {
-  MIN_SECRET_LENGTH,
   type CommandEnding,
   type DeclaredCommand,
   type ProcessKind,
@@ -16,6 +15,8 @@ import {
   type RunnerEvent
 } from "@novus/contracts";
 import { z } from "zod";
+import { redact } from "./secret-policy";
+export { redact };
 import { headSha, type GitExec } from "./workspace-git";
 
 /**
@@ -949,24 +950,6 @@ export function processIsAlive(pid: number): boolean {
 
 // --- Output handling ----------------------------------------------------------
 
-/**
- * Removes any secret value from text before it can be reported.
- *
- * Values shorter than `MIN_SECRET_LENGTH` are not stored at all — the entry
- * path refuses them by name (D-044) — so this floor is a second line rather
- * than a silent exception: if one ever reached the store from an older build,
- * redacting it would shred every line of output containing that common word
- * without protecting anything, and the honest answer is that Novus does not
- * accept a secret it cannot redact.
- */
-export function redact(text: string, secrets: readonly string[]): string {
-  let out = text;
-  for (const secret of secrets) {
-    if (secret.length < MIN_SECRET_LENGTH) continue;
-    out = out.split(secret).join("[redacted]");
-  }
-  return out;
-}
 
 /** Every string in a reported payload, cleaned in one place, so this is
  *  structural rather than something each call site has to remember. */

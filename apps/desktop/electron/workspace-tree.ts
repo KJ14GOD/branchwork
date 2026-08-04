@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 import type { WorkspaceEntry, WorkspaceFile } from "@novus/contracts";
+import { isSecretPath, SECRET_PATH_REFUSAL } from "./secret-policy";
 import { WorkspaceCommandError } from "./workspace-processes";
 
 /**
@@ -30,6 +31,28 @@ const SNIFF_BYTES = 8_000;
  *  a project is not looking for, and directories that would make listing a
  *  directory an expensive operation. */
 const SKIP = new Set([".git", "node_modules", ".DS_Store"]);
+
+/**
+ * A file that looks like it holds a credential is refused here, by the same
+ * policy checkpoints use (D-052).
+ *
+ * Enforced in this process rather than by not drawing a row: the renderer can
+ * ask for any path it likes, and a panel that merely declines to display one is
+ * a decision the caller can walk around. Listing, reading, and writing each ask
+ * separately, because each is a different way for the contents to leave.
+ */
+function refuseSecretPath(relativePath: string): void {
+  if (isSecretPath(relativePath)) {
+    throw new WorkspaceCommandError(SECRET_PATH_REFUSAL);
+  }
+  // `.git` is skipped when listing, which is not the same as being unreadable —
+  // and in a linked worktree it is a *file* whose one line is the absolute path
+  // of the repository it belongs to, which is the thing the path sanitizer
+  // exists to keep off the screen.
+  if (/(^|\/)\.git(\/|$)/.test(relativePath.replace(/\\/g, "/"))) {
+    throw new WorkspaceCommandError("That is git's own bookkeeping, not the project.");
+  }
+}
 
 /**
  * Where a path may point.
@@ -72,6 +95,7 @@ function entryFor(worktree: string, absolute: string, isDirectory: boolean): Wor
  * the order the filesystem happens to return.
  */
 export function listWorkspaceTree(worktree: string, relativePath = ""): WorkspaceEntry[] {
+  refuseSecretPath(relativePath);
   const directory = within(worktree, relativePath);
   let names: string[];
   try {
@@ -84,6 +108,10 @@ export function listWorkspaceTree(worktree: string, relativePath = ""): Workspac
   for (const name of names.slice(0, MAX_ENTRIES)) {
     if (SKIP.has(name)) continue;
     const absolute = join(directory, name);
+    // Judged on the path the reader would see, so a credential file is absent
+    // from the listing rather than present and refused on opening — a name in a
+    // tree is itself a disclosure about a project.
+    if (isSecretPath(relative(realOrSelf(worktree), absolute).split(sep).join("/"))) continue;
     let isDirectory: boolean;
     try {
       // `lstat` deliberately not used: a symlink is shown as what it points at,
@@ -111,6 +139,7 @@ function looksBinary(body: Buffer): boolean {
 /** One file, for showing. A directory, a file too large, and a file that is not
  *  text each come back saying so rather than as an error a pane has to guess at. */
 export function readWorkspaceFile(worktree: string, relativePath: string): WorkspaceFile {
+  refuseSecretPath(relativePath);
   const absolute = within(worktree, relativePath);
   let stats;
   try {
@@ -148,6 +177,7 @@ export function readWorkspaceFile(worktree: string, relativePath: string): Works
  * worktree like any other and is picked up by the next checkpoint (D-048).
  */
 export function writeWorkspaceFile(worktree: string, relativePath: string, text: string): void {
+  refuseSecretPath(relativePath);
   const absolute = within(worktree, relativePath);
   let stats;
   try {
@@ -156,7 +186,14 @@ export function writeWorkspaceFile(worktree: string, relativePath: string, text:
     throw new WorkspaceCommandError("Novus edits a file that is already there; it does not create one.");
   }
   if (stats.isDirectory()) throw new WorkspaceCommandError("That is a folder, not a file.");
-  if (stats.size <= MAX_FILE_BYTES && looksBinary(readFileSync(absolute))) {
+  // Size first, and as a refusal rather than as a reason to skip the sniff.
+  // Gated behind the size test, the "text only" rule inverted exactly where it
+  // mattered most: a file too large to *show* was still small enough to
+  // truncate, so a database this pane would not open it would happily destroy.
+  if (stats.size > MAX_FILE_BYTES) {
+    throw new WorkspaceCommandError("That file is too large to edit here.");
+  }
+  if (looksBinary(readFileSync(absolute))) {
     throw new WorkspaceCommandError("That file is not text, so there is nothing here that could edit it.");
   }
   try {

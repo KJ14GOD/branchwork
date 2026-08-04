@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { WorkspaceSettingsSchema } from "@novus/contracts";
-import { harnessEnv, novusPath, projectEnv, terminalEnv } from "../electron/workspace-env";
+import {
+  harnessEnv,
+  novusPath,
+  projectEnv,
+  proxyCredentials,
+  terminalEnv
+} from "../electron/workspace-env";
 
 /**
  * The disclosure boundary D-041 exists to draw, asserted from both sides: what
@@ -183,5 +189,44 @@ describe("the constructed PATH", () => {
   it("uses the platform's own separator", () => {
     const path = novusPath({ PATH: "C:\\Windows;C:\\Windows\\System32" }, "win32");
     expect(path).toBe("C:\\Windows;C:\\Windows\\System32");
+  });
+});
+
+describe("the credential inside a forwarded proxy", () => {
+  /**
+   * A proxy URL is forwarded whole and must be — stripped of its credential the
+   * proxy refuses and nothing on the machine can reach the network. So the
+   * value is kept and the *reporting* is what changes: it goes to the redactor
+   * like a supplied secret, even though nobody supplied it (D-052).
+   *
+   * The passwords below are fixtures.
+   */
+  it("finds the password and leaves the diagnostic parts alone", () => {
+    const found = proxyCredentials({
+      HTTPS_PROXY: "http://corp-user:fake-proxy-password@proxy.example.invalid:3128"
+    });
+    expect(found).toContain("fake-proxy-password");
+    expect(found).not.toContain("proxy.example.invalid");
+    expect(found).not.toContain("corp-user");
+  });
+
+  it("reads the lowercase spellings, which are the ones tools actually set", () => {
+    expect(proxyCredentials({ https_proxy: "http://u:lower-case-secret@p.invalid:8080" })).toContain(
+      "lower-case-secret"
+    );
+    expect(proxyCredentials({ all_proxy: "socks5://u:socks-secret@p.invalid:1080" })).toContain(
+      "socks-secret"
+    );
+  });
+
+  it("returns the percent-decoded form too, because that is how a tool prints it back", () => {
+    const found = proxyCredentials({ HTTP_PROXY: "http://u:a%40b%3Ac@p.invalid:3128" });
+    expect(found).toContain("a@b:c");
+  });
+
+  it("finds nothing in a proxy with no credential, and does not throw on nonsense", () => {
+    expect(proxyCredentials({ HTTPS_PROXY: "http://proxy.example.invalid:3128" })).toEqual([]);
+    expect(proxyCredentials({ HTTPS_PROXY: "not a url at all" })).toEqual([]);
+    expect(proxyCredentials({})).toEqual([]);
   });
 });
