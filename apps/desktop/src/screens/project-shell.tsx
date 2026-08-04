@@ -687,20 +687,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         </div>
       )}
 
-      {/* The working set, above the rail and the room because it belongs to the
-          window rather than to either of them. Absent while nothing is open. */}
-      {workingSet.tabs.length > 0 && (
-        <MissionTabs
-          tabs={workingSet.tabs}
-          activeId={workingSet.activeId}
-          labelOf={labelOf}
-          projectOf={projectNameOf}
-          onSelect={(tab) => setWorkingSet((previous) => selectTab(previous, tab.id))}
-          onClose={closeMissionTab}
-          onNew={newMissionHere}
-        />
-      )}
-
       <div className={railOpen ? "project-shell rail-open" : "project-shell"} data-testid="project-shell">
         <aside className="sidebar" data-testid="sidebar">
           <div className="sidebar-scroll">
@@ -907,6 +893,20 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         {railOpen && <div className="rail-scrim" onClick={() => setRailOpen(false)} />}
 
         <section className="room-area">
+          {/* The working set sits above the *room*, not above the window: the
+              rail is its own full-height column and nothing overlaps it. Absent
+              while nothing is open. */}
+          {workingSet.tabs.length > 0 && (
+            <MissionTabs
+              tabs={workingSet.tabs}
+              activeId={workingSet.activeId}
+              labelOf={labelOf}
+              projectOf={projectNameOf}
+              onSelect={(tab) => setWorkingSet((previous) => selectTab(previous, tab.id))}
+              onClose={closeMissionTab}
+              onNew={newMissionHere}
+            />
+          )}
           {active && currentProject ? (
             <ProjectRoom
               key={active.id}
