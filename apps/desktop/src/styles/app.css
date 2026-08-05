@@ -3119,3 +3119,30 @@ body {
 .side-row-archive:hover {
   color: var(--text-1);
 }
+
+/* The archived list, inside its dialog. Rows are names and one control: there
+   is nothing to decide here beyond whether to put something back. */
+.archived-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.archived-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 32px;
+  padding: 0 var(--s-1);
+}
+
+.archived-goal {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+  font: var(--type-row);
+}

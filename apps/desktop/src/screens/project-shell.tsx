@@ -32,6 +32,72 @@ import { Inspector, type InspectorSection } from "../components/inspector";
  * project, no mission, and nothing to click — so this lives beside Add project
  * in the rail, which is the only place a person with an empty Novus looks.
  */
+/**
+ * The missions that have been filed away.
+ *
+ * Behind a control rather than in the rail, because that is what filing
+ * something away means: it is out of the list, and taking it back out is a
+ * deliberate act you go and perform (D-063). A permanent Archived section with
+ * a Restore beside every row would make putting something away and getting it
+ * back equally easy, and then archival is just a second list.
+ */
+function ArchivedDialog({
+  missions,
+  error,
+  onRestore,
+  onClose
+}: {
+  missions: Mission[];
+  error: string | null;
+  onRestore: (missionId: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose} />
+      <div className="dialog" role="dialog" aria-label="Archived missions" data-testid="archived-dialog">
+        <h2 className="dialog-title">Archived</h2>
+        <p className="quiet">
+          Nothing here was deleted. Every direction, checkpoint and decision is intact, and restoring
+          one puts it back in its project exactly as it was.
+        </p>
+        <div className="archived-list">
+          {missions.map((mission) => (
+            <div key={mission.missionId} className="archived-entry" data-testid="archived-row">
+              <span className="archived-goal">{mission.goal}</span>
+              <button
+                className="btn btn-text"
+                onClick={() => void onRestore(mission.missionId)}
+                data-testid="mission-restore"
+              >
+                Restore
+              </button>
+            </div>
+          ))}
+        </div>
+        {error && (
+          <p className="inline-error" role="alert" data-testid="restore-error">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          <button className="btn btn-text" onClick={onClose} data-testid="archived-close">
+            Close
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function JoinDialog({ onJoined, onClose }: { onJoined: () => void; onClose: () => void }) {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -205,6 +271,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [archiveError, setArchiveError] = useState<string | null>(null);
   /** The Archived view: read on demand, because it is not the rail's job. */
   const [archived, setArchived] = useState<Mission[] | null>(null);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   /** The setup dialog is held here because two surfaces open the same one: the
    *  state line's action inside the room, and the Run control beside it. */
@@ -818,28 +885,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                 </div>
               );
             })}
-            {/* Archived: not a place things go to be forgotten, so it says how
-                many there are and opens on asking. Everything in it is intact
-                and one control away from coming back (D-063). */}
-            {archived !== null && archived.length > 0 && (
-              <div className="side-group" data-testid="archived-group">
-                <div className="side-head">ARCHIVED</div>
-                {archived.map((mission) => (
-                  <div key={mission.missionId} className="side-row side-child" data-testid="archived-row">
-                    <span className="side-name">{truncateLabel(mission.goal, 26)}</span>
-                    <button
-                      className="side-row-archive"
-                      onClick={() => void restoreMission(mission.missionId)}
-                      aria-label={`Restore ${mission.goal}`}
-                      title={`Restore ${mission.goal}`}
-                      data-testid="mission-restore"
-                    >
-                      Restore
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
             {archiveError && (
               <p className="inline-error" role="alert" data-testid="archive-error">
                 {archiveError}
@@ -866,6 +911,19 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             >
               Join with invitation
             </button>
+            {/* Archived missions are put away, not parked in the rail. A row
+                that listed them with Restore beside each one would make filing
+                something away and taking it back out equally easy, which is
+                not what filing away means — you go and look (D-063). */}
+            {archived !== null && archived.length > 0 && (
+              <button
+                className="btn btn-text add-project"
+                onClick={() => setArchivedOpen(true)}
+                data-testid="open-archived"
+              >
+                Archived <span className="side-count">{archived.length}</span>
+              </button>
+            )}
             <div className="sidebar-identity">
               <HumanMark login={user.login} name={user.name} />
               <span className="sidebar-login">{user.login}</span>
@@ -886,6 +944,18 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             onJoined={() => {
               setJoinOpen(false);
               void refresh();
+            }}
+          />
+        )}
+
+        {archivedOpen && (
+          <ArchivedDialog
+            missions={archived ?? []}
+            error={archiveError}
+            onRestore={restoreMission}
+            onClose={() => {
+              setArchivedOpen(false);
+              setArchiveError(null);
             }}
           />
         )}

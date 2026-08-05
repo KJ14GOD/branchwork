@@ -525,12 +525,21 @@ describe("filing a mission away", () => {
       .poll(async () => kartik.page.getByTestId("mission-row").count(), { timeout: 30_000 })
       .toBe(0);
     await expect
-      .poll(async () => kartik.page.getByTestId("archived-row").count(), { timeout: 30_000 })
-      .toBe(1);
-    await expect
       .poll(async () => kartik.page.getByTestId("mission-tab").count(), { timeout: 30_000 })
       .toBe(0);
+
+    // And it is *put away*, not parked in the rail: nothing lists it until you
+    // go and look, and taking it back out is a deliberate act.
+    expect(await kartik.page.getByTestId("archived-row").count()).toBe(0);
+    const openArchived = kartik.page.getByTestId("open-archived");
+    await openArchived.waitFor({ timeout: 30_000 });
     await snap(kartik, "79-mission-archived");
+    await openArchived.click();
+    await kartik.page.getByTestId("archived-dialog").waitFor({ timeout: 20_000 });
+    await expect
+      .poll(async () => kartik.page.getByTestId("archived-row").count(), { timeout: 20_000 })
+      .toBe(1);
+    await snap(kartik, "80-archived-dialog");
 
     // Everything it was, still is.
     const after = await detail(kartik, missionId);
@@ -562,10 +571,15 @@ describe("filing a mission away", () => {
     // --- And it comes back ---------------------------------------------------
     await kartik.page.getByTestId("mission-restore").first().click();
     await expect
+      .poll(async () => kartik.page.getByTestId("archived-row").count(), { timeout: 30_000 })
+      .toBe(0);
+    await kartik.page.getByTestId("archived-close").click();
+    await expect
       .poll(async () => kartik.page.getByTestId("mission-row").count(), { timeout: 30_000 })
       .toBe(1);
+    // Nothing is filed away any more, so the way to look is gone too.
     await expect
-      .poll(async () => kartik.page.getByTestId("archived-row").count(), { timeout: 30_000 })
+      .poll(async () => kartik.page.getByTestId("open-archived").count(), { timeout: 30_000 })
       .toBe(0);
 
     // Survives a relaunch, because it is a fact about the mission and not a
