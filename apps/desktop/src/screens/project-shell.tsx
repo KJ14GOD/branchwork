@@ -830,70 +830,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   return (
     <div className="shell-split">
       <div className="shell-column">
-      <header className="topbar">
-        {/* Furthest left, level with the window's own controls: the rail is a
-            thing you show and hide, and its switch belongs at the edge it
-            moves (D-066). */}
-        <button
-          className={railHidden ? "icon-button" : "icon-button active"}
-          onClick={() => setRailHidden((hidden) => !hidden)}
-          aria-pressed={!railHidden}
-          aria-label={railHidden ? "Show the projects rail" : "Hide the projects rail"}
-          title={railHidden ? "Show projects" : "Hide projects"}
-          data-testid="rail-toggle"
-        >
-          <SidebarGlyph />
-        </button>
-        {/* The open missions live in the window's own top row rather than in a
-            band beneath it. The row was mostly empty and the tabs sat under it,
-            so the window had two chrome edges where it needed one (D-066). */}
-        {workingSet.tabs.length > 0 && (
-          <MissionTabs
-            tabs={workingSet.tabs}
-            activeId={workingSet.activeId}
-            labelOf={labelOf}
-            projectOf={projectNameOf}
-            onSelect={(tab) => setWorkingSet((previous) => selectTab(previous, tab.id))}
-            onClose={closeMissionTab}
-            onNew={newMissionHere}
-          />
-        )}
-        <span className="spacer" />
-        {/* The room's workspace controls: one Run control beside the evidence
-            toggle, in the corner that belongs to the mission. Not a toolbar,
-            and not a second navigation (DESIGN.md#component-behavior). */}
-        {openDetail && openDetail.workstream && (
-          <RunControl detail={openDetail} onSetup={() => setSetupOpen(true)} />
-        )}
-        {/* Beside Run and the evidence toggle, never a second navigation. It
-            stays visible and disabled when the workspace is on someone else's
-            machine, saying why in words (D-042). */}
-        <TerminalToggle
-          open={terminalOpen}
-          onToggle={() => setTerminalOpen((open) => !open)}
-          availableHere={currentProject?.onThisMachine === true}
-          disabled={activeMissionId === null}
-        />
-        <button
-          className={inspector ? "icon-button active" : "icon-button"}
-          onClick={() =>
-            setInspector((current) => {
-              if (current) {
-                lastSection.current = current;
-                return null;
-              }
-              return lastSection.current;
-            })
-          }
-          aria-pressed={inspector !== null}
-          aria-label={inspector ? "Hide the evidence panel" : "Show the evidence panel"}
-          title={inspector ? "Hide details" : "Show details"}
-          disabled={activeMissionId === null}
-          data-testid="panel-toggle"
-        >
-          <PanelGlyph />
-        </button>
-      </header>
 
       {offline && (
         <div className="notice-bar" data-testid="offline" aria-live="polite">
@@ -904,6 +840,21 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       <div className={railOpen ? "project-shell rail-open" : "project-shell"} data-testid="project-shell">
         {!railHidden && (
         <aside className="sidebar" data-testid="sidebar" style={{ width: railWidth }}>
+          {/* At the rail's own right edge, clear of the window's buttons:
+              the switch belongs to the column it moves, and the column now
+              runs the full height of the window (D-068). */}
+          <div className="sidebar-top">
+            <button
+              className="icon-button active"
+              onClick={() => setRailHidden(true)}
+              aria-pressed
+              aria-label="Hide the projects rail"
+              title="Hide projects"
+              data-testid="rail-toggle"
+            >
+              <SidebarGlyph />
+            </button>
+          </div>
           {/* Fixed above the scroll, and only these two. Everything else in
               this column is a list; these are the two ways out of one (D-066). */}
           <div className="sidebar-fixed">
@@ -1158,6 +1109,71 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         {railOpen && <div className="rail-scrim" onClick={() => setRailOpen(false)} />}
 
         <section className="room-area">
+        <header className={railHidden ? "topbar topbar-alone" : "topbar"}>
+          {/* Only while the rail is away — its own copy lives at the rail's
+              right edge, and two switches for one thing is one too many. */}
+          {railHidden && (
+            <button
+              className="icon-button"
+              onClick={() => setRailHidden(false)}
+              aria-pressed={false}
+              aria-label="Show the projects rail"
+              title="Show projects"
+              data-testid="rail-toggle"
+            >
+              <SidebarGlyph />
+            </button>
+          )}
+          {/* The open missions live in the window's own top row rather than in a
+              band beneath it. The row was mostly empty and the tabs sat under it,
+              so the window had two chrome edges where it needed one (D-066). */}
+          {workingSet.tabs.length > 0 && (
+            <MissionTabs
+              tabs={workingSet.tabs}
+              activeId={workingSet.activeId}
+              labelOf={labelOf}
+              projectOf={projectNameOf}
+              onSelect={(tab) => setWorkingSet((previous) => selectTab(previous, tab.id))}
+              onClose={closeMissionTab}
+              onNew={newMissionHere}
+            />
+          )}
+          <span className="spacer" />
+          {/* The room's workspace controls: one Run control beside the evidence
+              toggle, in the corner that belongs to the mission. Not a toolbar,
+              and not a second navigation (DESIGN.md#component-behavior). */}
+          {openDetail && openDetail.workstream && (
+            <RunControl detail={openDetail} onSetup={() => setSetupOpen(true)} />
+          )}
+          {/* Beside Run and the evidence toggle, never a second navigation. It
+              stays visible and disabled when the workspace is on someone else's
+              machine, saying why in words (D-042). */}
+          <TerminalToggle
+            open={terminalOpen}
+            onToggle={() => setTerminalOpen((open) => !open)}
+            availableHere={currentProject?.onThisMachine === true}
+            disabled={activeMissionId === null}
+          />
+          <button
+            className={inspector ? "icon-button active" : "icon-button"}
+            onClick={() =>
+              setInspector((current) => {
+                if (current) {
+                  lastSection.current = current;
+                  return null;
+                }
+                return lastSection.current;
+              })
+            }
+            aria-pressed={inspector !== null}
+            aria-label={inspector ? "Hide the evidence panel" : "Show the evidence panel"}
+            title={inspector ? "Hide details" : "Show details"}
+            disabled={activeMissionId === null}
+            data-testid="panel-toggle"
+          >
+            <PanelGlyph />
+          </button>
+        </header>
           {active && currentProject ? (
             <ProjectRoom
               key={active.id}

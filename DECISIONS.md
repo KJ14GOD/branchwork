@@ -827,3 +827,17 @@ Four more things, all of them the same fault in different places: something pres
 **Consequences.** Four end-to-end assertions matched tab text at lengths the tighter labels no longer reach, and were shortened to the part that survives truncation. One hover assertion was made to re-place the pointer on each poll: the rail re-reads the mission list on a timer, and a row replaced under a stationary pointer does not always re-acquire `:hover` — which is a property of the test environment, not of the product, and had been failing intermittently before this change made it constant.
 
 **Revisit when.** Novus is packaged for a platform whose window controls are not at the top left, at which point the inset is a per-platform value rather than a constant.
+
+## D-068 — The rail is the whole left column
+
+**Context.** Run and looked at: the rail's right edge started below the top row while the evidence panel's ran the full height of the window, so the two columns disagreed about what they were. The rail's switch, moved to the far left of the top row, was still crowding the window's own buttons. And the tabs began at the window's left edge — inside the width the rail occupies — so opening one drew it over the column beside it.
+
+All three are the same mistake: treating the top row as a band across the window rather than as the room's own header.
+
+**Decision.** The rail is the full left column, top to bottom, and the top row belongs to the room. The rail carries its own strip at the top, inset past the window's buttons, with its switch at the rail's right edge — the switch belongs to the column it moves, at the edge that moves. The room's row starts where the room starts, so tabs begin after the rail rather than over it. When the rail is put away the switch reappears in the room's row, which then takes the inset itself: two switches for one thing is one too many, and a switch that hides with the thing it reveals cannot bring it back.
+
+**Alternatives.** Keeping the row full-width and giving the rail a top border to match the panel (rejected: it makes the columns agree by adding a line rather than by being right); putting the switch in the room's row permanently (rejected: it is the rail's control, and reaching across the room's header to move the rail reads as backwards).
+
+**Consequences.** `.project-shell` is now the whole window below nothing at all. The `--traffic-inset` introduced in D-067 moves from the top row to the rail's strip, and applies to the top row only in the case where the rail is not there to hold it.
+
+**Revisit when.** The room needs a header of its own *and* a tab row — at which point the tabs and the room's controls stop sharing a line.

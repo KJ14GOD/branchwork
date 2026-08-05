@@ -82,12 +82,18 @@ body {
   display: flex;
   align-items: center;
   gap: var(--s-3);
-  padding: 0 var(--s-4) 0 var(--traffic-inset);
+  /* Inside the room column now, so it starts where the room does. Only when
+     the rail is away does it have to clear the window's own buttons. */
+  padding: 0 var(--s-4) 0 var(--s-3);
   -webkit-app-region: drag;
 }
 
 .topbar > * {
   -webkit-app-region: no-drag;
+}
+
+.topbar-alone {
+  padding-left: var(--traffic-inset);
 }
 
 .topbar .brand {
@@ -520,6 +526,8 @@ body {
   flex-direction: column;
 }
 
+/* The shell is now the two columns and nothing above them: the rail runs the
+   full height and the room's own top row lives inside the room (D-068). */
 .project-shell {
   flex: 1;
   min-height: 0;
@@ -662,6 +670,8 @@ body {
   color: var(--text-1);
 }
 
+/* The full left column, top to bottom (D-068). The window's own buttons sit
+   over its top-left corner, which is why the strip below is inset past them. */
 .sidebar {
   width: 240px;
   flex: none;
@@ -671,8 +681,24 @@ body {
   padding: var(--s-2) var(--s-2) var(--s-3);
 }
 
-/* Home and Search, above the lists and never scrolling with them. Set in from
-   the window's top so the rail does not start hard against the chrome (D-066). */
+/* The rail's own top strip: the window's buttons on the left, the rail's
+   switch at its right edge, and the whole band draggable like the chrome it
+   shares a line with (D-068). */
+.sidebar-top {
+  flex: none;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 var(--s-2) 0 var(--traffic-inset);
+  -webkit-app-region: drag;
+}
+
+.sidebar-top > * {
+  -webkit-app-region: no-drag;
+}
+
+/* Home and Search, above the lists and never scrolling with them. */
 .sidebar-fixed {
   flex: none;
   display: flex;

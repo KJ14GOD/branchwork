@@ -209,7 +209,7 @@ async function runUntilPrinted(
   mission: string,
   command: string,
   marker: string,
-  attempts = 4
+  attempts = 8
 ): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     await awaitPrompt(target, mission);
