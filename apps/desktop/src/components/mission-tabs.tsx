@@ -79,11 +79,11 @@ export function MissionTabs({
                 title={`${label} — ${project}`}
                 data-testid="mission-tab-open"
               >
-                <span className="mission-tab-name">{truncateLabel(label, 24)}</span>
+                <span className="mission-tab-name">{truncateLabel(label, 18)}</span>
                 {/* Always, not only when two projects are open: a tab that
                     gains and loses its project label as siblings come and go is
                     a tab whose meaning changes without it changing (D-066). */}
-                <span className="mission-tab-project">{truncateLabel(project, 16)}</span>
+                <span className="mission-tab-project">{truncateLabel(project, 14)}</span>
               </button>
               <button
                 className="mission-tab-close"

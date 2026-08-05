@@ -803,3 +803,27 @@ Four more things, all of them the same fault in different places: something pres
 **Consequences.** Three end-to-end assertions changed because they pinned the old behaviour: the project label being absent with one project, the strip overflowing at a width it no longer overflows at now that it has the window's full width, and the panel carrying a controller line and participant stack in a header that no longer exists. Each was rewritten to assert the new truth rather than deleted — the participant assertion in particular moved to Overview, where the list actually is.
 
 **Revisit when.** A fourth thing genuinely belongs beside All files / Changes / Checks, at which point the split needs rethinking rather than a fourth tab; or the rail's search needs to find something other than a mission.
+
+## D-067 — Verification follows the size of the change
+
+**Context.** The repository gate runs the build, type checking, linting, and every deterministic test. Requiring that full run after every small visual adjustment made UI iteration take many minutes, encouraged test edits made only to satisfy an intermediate layout, and pulled attention away from inspecting the actual screen.
+
+**Decision.** Verification is proportional during development. Visual-only work is inspected in the app and does not require a full test run. A focused behavior change runs its focused test. Contract, runner, persistence, security, or cross-package work runs the affected package tests. The full gate remains required before merging a coherent slice, pushing a shared branch, or preparing a release or demo build. End-to-end tests are required when the user-facing workflow changes or at release checkpoints. No test may be weakened merely to make a visual iteration pass.
+
+**Alternatives.** Run the full gate after every task (rejected: too slow for iteration); skip verification entirely (rejected: it hides regressions); make the gate incremental (deferred: useful later, but does not solve the immediate workflow problem).
+
+**Consequences.** Claude can move quickly through small UI refinements while still producing strong evidence at slice and release boundaries. Intermediate work may be explicitly marked as not fully verified, and a final gate remains a hard requirement for shared or release-ready code.
+
+**Revisit when.** The gate becomes incremental and fast enough that the full run no longer interrupts normal iteration, or CI can provide reliable slice-level verification automatically.
+
+## D-067 — The top row starts after the window's own buttons, and a tab is a word
+
+**Context.** Two things visible the moment the previous change was run rather than reasoned about. The rail's switch had been put at the far left of the top row, which on macOS is where the window's own close, minimise and zoom buttons are — so it sat on top of them. And the tab strip, moved into that row, had kept the surface and bottom border it needed when it was a band of its own: a filled plane a few pixels under the window's own edge, with every tab a filled shape inside it. A panel in a panel, and eight shapes asking for attention when only one had anything to say.
+
+**Decision.** A `--traffic-inset` token, and everything Novus puts in the top row starts after it. The strip loses its background and its border: it is in the window's row, so the window is its surface. Tabs lose theirs too — a tab is a word, at `--text-3`, brightening on hover — and only the one being read takes a plane. Labels tighten so more of them fit before the row has to scroll, and the horizontal scrollbar goes: the strip is one row tall, so any thumb is a third of its height and sits under the tabs looking like debris, while the selected tab is scrolled into view for you and a trackpad scrolls the rest.
+
+**Alternatives.** Keeping a lighter surface on the strip (rejected: the reason it had one was to separate it from the room, and in the window's own row there is nothing to separate it from); an underline on the active tab instead of a plane (rejected: it reads as a second border a few pixels below the window's, which is the thing being removed).
+
+**Consequences.** Four end-to-end assertions matched tab text at lengths the tighter labels no longer reach, and were shortened to the part that survives truncation. One hover assertion was made to re-place the pointer on each poll: the rail re-reads the mission list on a timer, and a row replaced under a stationary pointer does not always re-acquire `:hover` — which is a property of the test environment, not of the product, and had been failing intermittently before this change made it constant.
+
+**Revisit when.** Novus is packaged for a platform whose window controls are not at the top left, at which point the inset is a per-platform value rather than a constant.

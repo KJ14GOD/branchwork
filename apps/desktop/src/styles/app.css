@@ -82,7 +82,7 @@ body {
   display: flex;
   align-items: center;
   gap: var(--s-3);
-  padding: 0 var(--s-4) 0 var(--s-5);
+  padding: 0 var(--s-4) 0 var(--traffic-inset);
   -webkit-app-region: drag;
 }
 
@@ -535,15 +535,15 @@ body {
    the tabs themselves: a bordered tab inside a
    bordered strip is the card-in-a-card this product does not draw. It scrolls
    sideways rather than wrapping or squeezing the shell. */
+/* No plane of its own and no edge. The strip is in the window's top row now, so
+   giving it a surface put a panel inside a panel and drew a second border a few
+   pixels under the window's own (D-067). */
 .mission-strip {
-  flex: none;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: stretch;
   gap: var(--s-1);
-  min-height: 36px;
-  padding: 0 var(--s-3) 0 var(--s-2);
-  background: var(--surface-1);
-  border-bottom: 1px solid var(--edge);
 }
 
 .mission-strip-scroll {
@@ -556,28 +556,35 @@ body {
   overflow-y: hidden;
 }
 
-/* The strip is one row tall, so the product's standard 10px thumb would be a
-   third of it. The affordance stays; it stops competing with the tabs. */
+/* No visible bar. The strip is one row tall, so any thumb is a third of it and
+   sits under the tabs looking like debris; it scrolls with a trackpad and the
+   selected tab is scrolled into view for you, so the bar was drawing attention
+   to a mechanism nobody has to operate (D-067). */
+.mission-strip-scroll {
+  scrollbar-width: none;
+}
+
 .mission-strip-scroll::-webkit-scrollbar {
-  height: var(--s-1);
+  display: none;
 }
 
 .mission-tab {
   display: inline-flex;
   align-items: center;
   flex: none;
-  max-width: 30ch;
-  margin: var(--s-1) 0;
+  max-width: 22ch;
+  margin: var(--s-2) 0;
   border-radius: var(--r-control);
-  color: var(--text-2);
+  color: var(--text-3);
 }
 
 .mission-tab:hover {
-  background: var(--hover);
-  color: var(--text-1);
+  color: var(--text-2);
 }
 
-/* Selected is a quiet lift of the same plane, not a second colour. */
+/* The only tab that gets a plane is the one you are reading. The rest are
+   words on the window — a row of eight filled shapes is a row of eight things
+   asking for attention, and seven of them have nothing to say. */
 .mission-tab.active {
   background: var(--selected);
   color: var(--text-1);

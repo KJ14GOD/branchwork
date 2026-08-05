@@ -915,9 +915,10 @@ describe("setup and verification, through the interface", () => {
     const back = page.getByTestId("room-tab");
     await back.waitFor({ timeout: 20_000 });
     expect((await back.textContent())?.trim()).toBe("Mission");
+    // Truncated in the strip, so matched on the part that survives it.
     const named = (await page.getByTestId("mission-tab").first().textContent()) ?? "";
-    expect(named).toContain("prepare this workspace");
-    expect(await back.textContent()).not.toContain("prepare this workspace");
+    expect(named).toContain("prepare this work");
+    expect(await back.textContent()).not.toContain("prepare this work");
 
     // Closing a file tab returns to the workstream, exactly as it was.
     await page.getByTestId("file-tab").last().getByTestId("file-tab-close").click();

@@ -382,12 +382,12 @@ describe("the missions a person has open", () => {
     // Close the room. This is the whole act being tested.
     await page
       .getByTestId("mission-tab")
-      .filter({ hasText: RUNNING_GOAL.slice(0, 20) })
+      .filter({ hasText: RUNNING_GOAL.slice(0, 14) })
       .getByTestId("mission-tab-close")
       .click();
     await expect
       .poll(async () => (await tabLabels(page)).join("|"), { timeout: 20_000 })
-      .not.toContain(RUNNING_GOAL.slice(0, 20));
+      .not.toContain(RUNNING_GOAL.slice(0, 14));
 
     // Nothing was stopped: the execution is still alive and still producing
     // events with no room open on it anywhere.
@@ -399,7 +399,7 @@ describe("the missions a person has open", () => {
 
     // And the rail never stopped listing it.
     expect(
-      await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 20) }).count()
+      await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 14) }).count()
     ).toBe(1);
 
     // It runs to completion while closed, and reopening finds the finished turn
@@ -409,7 +409,7 @@ describe("the missions a person has open", () => {
         timeout: 120_000
       })
       .toBe("completed");
-    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 20) }).click();
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 14) }).click();
     await page
       .getByTestId("trace-outcome")
       .filter({ hasText: "Turn completed" })
@@ -441,7 +441,7 @@ describe("the missions a person has open", () => {
     await closeEveryTab(page);
     await expect
       .poll(async () => page.getByTestId("attention-row").allInnerTexts(), { timeout: 60_000 })
-      .toContainEqual(expect.stringContaining(RUNNING_GOAL.slice(0, 20)));
+      .toContainEqual(expect.stringContaining(RUNNING_GOAL.slice(0, 14)));
     await shot(page, "64-attention-with-no-tab-open.png");
   }, 300_000);
 
@@ -567,9 +567,18 @@ describe("starting a mission", () => {
     await lookAway();
     await expect.poll(opacity, { timeout: 10_000 }).toBe("0");
 
-    // On hover.
-    await row.hover();
-    await expect.poll(opacity, { timeout: 10_000 }).toBe("1");
+    // On hover. The pointer is re-placed on each poll: the rail re-reads the
+    // mission list on a timer, and a row replaced under a stationary pointer
+    // does not always re-acquire :hover.
+    await expect
+      .poll(
+        async () => {
+          await row.hover();
+          return opacity();
+        },
+        { timeout: 15_000 }
+      )
+      .toBe("1");
 
     // And on the keyboard, which is the half a hover-only control never has:
     // it is the next stop after the row itself, and it stays visible while it
@@ -630,7 +639,7 @@ describe("starting a mission", () => {
     // derived — and a tab label is short, so this is the label it can carry.
     await expect
       .poll(async () => (await tabLabels(page)).join("|"), { timeout: 60_000 })
-      .toContain("a mission started from");
+      .toContain("a mission s");
     expect((await tabLabels(page)).length).toBe(2);
     const after = await page.evaluate(async () => {
       const result = await window.novus.missions.list();
@@ -674,7 +683,7 @@ describe("mission tabs and file tabs, told apart", () => {
     expect(runningMissionId).toMatch(/^msn_/);
     await closeEveryTab(page);
     await openProject(page, alphaName);
-    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 20) }).click();
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 14) }).click();
     await page.getByTestId("room-goal").waitFor({ timeout: 20_000 });
 
     // A file opens over this mission's canvas, and adds no mission tab: opening
@@ -701,7 +710,7 @@ describe("mission tabs and file tabs, told apart", () => {
 
     // Going back restores exactly what that mission had open, including which
     // canvas was showing.
-    await page.getByTestId("mission-tab-open").filter({ hasText: RUNNING_GOAL.slice(0, 20) }).click();
+    await page.getByTestId("mission-tab-open").filter({ hasText: RUNNING_GOAL.slice(0, 14) }).click();
     await expect.poll(async () => page.getByTestId("file-tab").count(), { timeout: 20_000 }).toBe(1);
     await page.getByTestId("file-view").waitFor({ timeout: 20_000 });
 
@@ -710,10 +719,10 @@ describe("mission tabs and file tabs, told apart", () => {
     // opens its trace, which is what the room is for.
     await page
       .getByTestId("mission-tab")
-      .filter({ hasText: RUNNING_GOAL.slice(0, 20) })
+      .filter({ hasText: RUNNING_GOAL.slice(0, 14) })
       .getByTestId("mission-tab-close")
       .click();
-    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 20) }).click();
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 14) }).click();
     await page.getByTestId("room-goal").waitFor({ timeout: 20_000 });
     expect(await page.getByTestId("file-tab").count()).toBe(0);
     expect(await page.locator(".tabbar").count()).toBe(0);

@@ -96,6 +96,9 @@
 
   /* Shell */
   --topbar-h: 48px;
+  /* The window's own buttons live here. Anything Novus puts in the top row
+     starts after them, or it sits on top of them (D-067). */
+  --traffic-inset: 78px;
 }
 
 /* Light theme: token-for-token override, provisional until screen-proven
