@@ -305,8 +305,12 @@ describe("the missions a person has open", () => {
     expect((await tabLabels(page)).join("|")).toContain("Alpha one");
     expect((await tabLabels(page)).join("|")).toContain("Alpha two");
 
-    // One project, so no tab repeats the project's name.
-    expect(await page.locator(".mission-tab-project").count()).toBe(0);
+    // Every tab names its project, whether or not a second project is open
+    // (D-066): a label that appears and disappears as siblings come and go
+    // makes a tab's meaning depend on its neighbours.
+    expect(await page.locator(".mission-tab-project").count()).toBe(
+      await page.getByTestId("mission-tab").count()
+    );
 
     // Selecting a mission that is already open moves to its tab rather than
     // making a second one.
@@ -740,7 +744,11 @@ describe("the strip at three window widths", () => {
       page.evaluate(() => {
         const strip = document.querySelector(".mission-strip-scroll");
         if (!strip) return null;
-        return { scrollWidth: strip.scrollWidth, clientWidth: strip.clientWidth };
+        return {
+          scrollWidth: strip.scrollWidth,
+          clientWidth: strip.clientWidth,
+          overflowX: getComputedStyle(strip).overflowX
+        };
       });
 
     for (const [width, height, name] of [
@@ -758,11 +766,16 @@ describe("the strip at three window widths", () => {
       await shot(page, name);
     }
 
-    // At the narrow width the tabs genuinely overflow, and the strip — not the
-    // window — is what scrolls.
+    // The strip is the thing that scrolls, and the shell is not. Asserted as a
+    // property of the strip rather than by hoping this fixture overflows at
+    // this width: since the strip moved into the window's own top row (D-066)
+    // it has the whole width, so how many tabs it takes to overflow is a fact
+    // about the fixture and not about the layout.
     const narrow = await stripScrolls();
     expect(narrow).not.toBeNull();
-    expect(narrow!.scrollWidth).toBeGreaterThan(narrow!.clientWidth);
+    expect(narrow!.overflowX).toBe("auto");
+    expect(narrow!.scrollWidth).toBeGreaterThanOrEqual(narrow!.clientWidth);
+    expect(await shellOverflow()).toBeLessThanOrEqual(0);
 
     // And the room being read is visible in the strip that says which room is
     // being read, even when more tabs are open than fit.

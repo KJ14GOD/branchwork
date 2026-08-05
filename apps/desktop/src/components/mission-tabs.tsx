@@ -33,10 +33,6 @@ export function MissionTabs({
   onClose: (tab: OpenTab) => void;
   onNew: () => void;
 }) {
-  // A tab says which project it belongs to only when that is a live question.
-  // With everything open from one project the answer is already on screen in
-  // the rail, and repeating it on every tab would be the same label twice.
-  const spansProjects = new Set(tabs.map((tab) => tab.projectKey)).size > 1;
 
   // The room you are reading has to be visible in the strip that says which
   // room you are reading. In a narrow window, or after a relaunch restored more
@@ -84,9 +80,10 @@ export function MissionTabs({
                 data-testid="mission-tab-open"
               >
                 <span className="mission-tab-name">{truncateLabel(label, 24)}</span>
-                {spansProjects && (
-                  <span className="mission-tab-project">{truncateLabel(project, 16)}</span>
-                )}
+                {/* Always, not only when two projects are open: a tab that
+                    gains and loses its project label as siblings come and go is
+                    a tab whose meaning changes without it changing (D-066). */}
+                <span className="mission-tab-project">{truncateLabel(project, 16)}</span>
               </button>
               <button
                 className="mission-tab-close"
@@ -100,18 +97,18 @@ export function MissionTabs({
             </span>
           );
         })}
+        {/* Directly after the last tab, inside the scroller: it makes the next
+            one, so it belongs where the next one will be (D-066). */}
+        <button
+          className="mission-tab-new"
+          onClick={onNew}
+          aria-label="New mission"
+          title="New mission (⌘T)"
+          data-testid="strip-new-mission"
+        >
+          +
+        </button>
       </div>
-      {/* Outside the scroller, so it is still there when the open missions
-          overflow the window rather than scrolling off the end of them. */}
-      <button
-        className="mission-tab-new"
-        onClick={onNew}
-        aria-label="New mission"
-        title="New mission (⌘T)"
-        data-testid="strip-new-mission"
-      >
-        +
-      </button>
     </div>
   );
 }

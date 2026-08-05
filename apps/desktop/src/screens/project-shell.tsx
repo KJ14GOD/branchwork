@@ -177,6 +177,121 @@ function JoinDialog({ onJoined, onClose }: { onJoined: () => void; onClose: () =
   );
 }
 
+/** The rail's own switch: a pane with its left column marked. */
+/**
+ * Finding a mission by name, across every project (D-066).
+ *
+ * Deliberately missions and not code: the rail's job is getting to a room, and
+ * a box there that searched file contents would be a different feature wearing
+ * the same control. Files are filtered where the files are.
+ */
+function SearchDialog({
+  missions,
+  onOpen,
+  onClose
+}: {
+  missions: { missionId: string; goal: string; project: string }[];
+  onOpen: (missionId: string) => void;
+  onClose: () => void;
+}) {
+  const [term, setTerm] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const needle = term.trim().toLowerCase();
+  const found = needle === ""
+    ? missions
+    : missions.filter(
+        (mission) =>
+          mission.goal.toLowerCase().includes(needle) || mission.project.toLowerCase().includes(needle)
+      );
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose} />
+      <div className="dialog" role="dialog" aria-label="Find a mission" data-testid="search-dialog">
+        <div className="dialog-head">
+          <input
+            ref={inputRef}
+            className="input"
+            value={term}
+            placeholder="Find a mission"
+            onChange={(event) => setTerm(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && found[0]) onOpen(found[0].missionId);
+            }}
+            aria-label="Find a mission"
+            data-testid="search-input"
+          />
+        </div>
+        <div className="archived-list">
+          {found.map((mission) => (
+            <button
+              key={mission.missionId}
+              className="archived-entry search-hit"
+              onClick={() => onOpen(mission.missionId)}
+              data-testid="search-hit"
+            >
+              <span className="archived-goal">{mission.goal}</span>
+              <span className="archived-meta">{mission.project}</span>
+            </button>
+          ))}
+          {found.length === 0 && (
+            <p className="quiet archived-error" data-testid="search-empty">
+              No mission here is called that.
+            </p>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function HomeGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+      strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.5 6.75 8 2.5l5.5 4.25v6a.75.75 0 0 1-.75.75h-9a.75.75 0 0 1-.75-.75z" />
+    </svg>
+  );
+}
+
+function SearchGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+      strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <circle cx="7.25" cy="7.25" r="4.25" />
+      <path d="m10.5 10.5 2.75 2.75" />
+    </svg>
+  );
+}
+
+function SidebarGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+      <path d="M6.25 2.75v10.5" />
+    </svg>
+  );
+}
+
 function PanelGlyph() {
   return (
     <svg
@@ -274,6 +389,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [railProject, setRailProject] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
+  /** Hidden by choice, at any width — distinct from `railOpen`, which is the
+   *  narrow-window overlay. */
+  const [railHidden, setRailHidden] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   // Both side columns are draggable and remember where they were put (D-065).
   const [railWidth, setRailWidth] = useColumnWidth("novus-rail-width", 240, 180, 420);
   const [panelWidth, setPanelWidth] = useColumnWidth("novus-panel-width", 420, 320, 760);
@@ -712,15 +831,33 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     <div className="shell-split">
       <div className="shell-column">
       <header className="topbar">
+        {/* Furthest left, level with the window's own controls: the rail is a
+            thing you show and hide, and its switch belongs at the edge it
+            moves (D-066). */}
         <button
-          className="btn btn-text rail-toggle"
-          onClick={() => setRailOpen((open) => !open)}
-          aria-expanded={railOpen}
+          className={railHidden ? "icon-button" : "icon-button active"}
+          onClick={() => setRailHidden((hidden) => !hidden)}
+          aria-pressed={!railHidden}
+          aria-label={railHidden ? "Show the projects rail" : "Hide the projects rail"}
+          title={railHidden ? "Show projects" : "Hide projects"}
           data-testid="rail-toggle"
         >
-          Projects
+          <SidebarGlyph />
         </button>
-        <span className="brand">Novus</span>
+        {/* The open missions live in the window's own top row rather than in a
+            band beneath it. The row was mostly empty and the tabs sat under it,
+            so the window had two chrome edges where it needed one (D-066). */}
+        {workingSet.tabs.length > 0 && (
+          <MissionTabs
+            tabs={workingSet.tabs}
+            activeId={workingSet.activeId}
+            labelOf={labelOf}
+            projectOf={projectNameOf}
+            onSelect={(tab) => setWorkingSet((previous) => selectTab(previous, tab.id))}
+            onClose={closeMissionTab}
+            onNew={newMissionHere}
+          />
+        )}
         <span className="spacer" />
         {/* The room's workspace controls: one Run control beside the evidence
             toggle, in the corner that belongs to the mission. Not a toolbar,
@@ -765,7 +902,24 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       )}
 
       <div className={railOpen ? "project-shell rail-open" : "project-shell"} data-testid="project-shell">
+        {!railHidden && (
         <aside className="sidebar" data-testid="sidebar" style={{ width: railWidth }}>
+          {/* Fixed above the scroll, and only these two. Everything else in
+              this column is a list; these are the two ways out of one (D-066). */}
+          <div className="sidebar-fixed">
+            <button
+              className={activeMissionId === null && active === null ? "side-row selected" : "side-row"}
+              onClick={() => setWorkingSet(emptyWorkingSet)}
+              data-testid="rail-home"
+            >
+              <HomeGlyph />
+              <span className="side-name">Home</span>
+            </button>
+            <button className="side-row" onClick={() => setSearchOpen(true)} data-testid="rail-search">
+              <SearchGlyph />
+              <span className="side-name">Search</span>
+            </button>
+          </div>
           <div className="sidebar-scroll">
             {attention.length > 0 && (
               <>
@@ -947,7 +1101,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             </div>
           </div>
         </aside>
+        )}
 
+        {!railHidden && (
         <ColumnHandle
           edge="right"
           width={railWidth}
@@ -955,6 +1111,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           reset={240}
           label="Resize the projects rail"
         />
+        )}
 
         {joinOpen && (
           <JoinDialog
@@ -963,6 +1120,26 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               setJoinOpen(false);
               void refresh();
             }}
+          />
+        )}
+
+        {searchOpen && (
+          <SearchDialog
+            missions={projects.flatMap((project) =>
+              project.missions.map((mission) => ({
+                missionId: mission.missionId,
+                goal: mission.goal,
+                project: project.name
+              }))
+            )}
+            onOpen={(missionId) => {
+              const owner = projects.find((project) =>
+                project.missions.some((mission) => mission.missionId === missionId)
+              );
+              if (owner) openMissionTab(owner.key, missionId);
+              setSearchOpen(false);
+            }}
+            onClose={() => setSearchOpen(false)}
           />
         )}
 
@@ -981,20 +1158,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         {railOpen && <div className="rail-scrim" onClick={() => setRailOpen(false)} />}
 
         <section className="room-area">
-          {/* The working set sits above the *room*, not above the window: the
-              rail is its own full-height column and nothing overlaps it. Absent
-              while nothing is open. */}
-          {workingSet.tabs.length > 0 && (
-            <MissionTabs
-              tabs={workingSet.tabs}
-              activeId={workingSet.activeId}
-              labelOf={labelOf}
-              projectOf={projectNameOf}
-              onSelect={(tab) => setWorkingSet((previous) => selectTab(previous, tab.id))}
-              onClose={closeMissionTab}
-              onNew={newMissionHere}
-            />
-          )}
           {active && currentProject ? (
             <ProjectRoom
               key={active.id}

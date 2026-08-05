@@ -779,3 +779,27 @@ The room's whole purpose is one question — *what did the agent say back* — a
 **Consequences.** Every screenshot in `e2e/evidence` is regenerated. The type scale gains its first new step since the beginning, which is why this is a decision and not a stylesheet edit.
 
 **Revisit when.** A turn can contain more than one speaker — a second harness, or a participant interjecting mid-turn — at which point attaching speech by indent alone may stop being enough.
+
+## D-066 — One top row, a rail with two fixed ways out, and a panel that is not a menu
+
+**Context.** Looked at side by side with a tool that does this well. The window had two chrome edges where it needed one: a top row holding Run and two toggles with most of its width empty, and a band of mission tabs underneath it. The top of the window — the part a person's eye reaches first — was doing almost nothing, and the tabs sat below it as if they were content.
+
+Four more things, all of them the same fault in different places: something present that says nothing.
+
+**Decision.**
+
+**One top row.** The mission tabs move into the window's own row, level with its controls: rail toggle at the far left where the rail is, tabs immediately after it, the room's controls at the right. The wordmark is gone — the window is the product, and a label saying so is a label. `+` sits directly after the last tab, inside the scroller, because it makes the next one and belongs where the next one will be.
+
+**Every tab names its project, always.** It used to appear only when two projects were open. A label that arrives and leaves as siblings come and go makes a tab's meaning depend on its neighbours; closing an unrelated tab should not change what the remaining ones say.
+
+**The rail is a thing you can put away**, at any width, from a switch at the edge it moves — separate from the narrow-window overlay, which is the window's decision rather than the person's. Above its lists, fixed and not scrolling with them, are the only two things that are not a list: **Home** and **Search**. Search finds a mission by name across every project, deliberately not code — the rail's job is getting to a room, and a box there that searched file contents would be a different feature wearing the same control. Files are filtered where the files are, which is now a box above the tree.
+
+**The panel is three sections, not five.** Five equally-weighted tabs made it a menu: nothing in the row said which you were likely to want. The split is what the *work* is — All files, Changes, Checks — against what the *workspace* is: Overview and Output, in their own region at the foot, under their own edge. The first three are read while working; the last two are consulted.
+
+**And the panel loses its identity header.** Who holds the baton is the room's sentence, said once beneath the mission title. A second copy at the top of the panel competed with the panel's own subject, and the participant marks beside it duplicated the list in Overview.
+
+**Alternatives.** Keeping the tab band and shrinking the top row (rejected: two edges is the problem, not the height of either); a project label only on hover (rejected: a tab has to be readable without being pointed at); folding Overview into the room header (rejected outright — DESIGN.md forbids machinery in the mission header, which is why Overview exists); a real code search in the rail (rejected for now: it needs the worktree indexed, which is a feature and not a box).
+
+**Consequences.** Three end-to-end assertions changed because they pinned the old behaviour: the project label being absent with one project, the strip overflowing at a width it no longer overflows at now that it has the window's full width, and the panel carrying a controller line and participant stack in a header that no longer exists. Each was rewritten to assert the new truth rather than deleted — the participant assertion in particular moved to Overview, where the list actually is.
+
+**Revisit when.** A fourth thing genuinely belongs beside All files / Changes / Checks, at which point the split needs rethinking rather than a fourth tab; or the rail's search needs to find something other than a mission.

@@ -471,12 +471,16 @@ describe("the Mission Room", () => {
     await panelToggle.click();
     await panel.waitFor({ state: "detached", timeout: 10_000 });
 
-    // The panel carries who is here and who holds the baton in its own header,
-    // and its close control hides it again.
+    // The panel has no identity header of its own (D-066): who holds the baton
+    // is the room's sentence, said once beneath the mission title, and who is
+    // here is read in Overview. A second copy at the top of the panel competed
+    // with the panel's own subject.
     await panelToggle.click();
     await panel.waitFor({ timeout: 10_000 });
-    await first.page.getByTestId("panel-controller").waitFor();
-    await first.page.getByTestId("participant-stack").waitFor();
+    expect(await first.page.getByTestId("panel-controller").count()).toBe(0);
+    await first.page.getByTestId("controller").waitFor();
+    await first.page.getByTestId("inspector-tab-overview").click();
+    await first.page.getByTestId("participant-list").waitFor();
     await first.page.getByTestId("inspector-tab-changes").click();
     await first.page.getByTestId("inspector-changes").waitFor();
     await first.page.getByTestId("inspector-close").click();

@@ -14,7 +14,7 @@ import { changedFiles, checkTallies } from "./derive";
 import { GatedAction } from "./gated";
 import { FileTree } from "./file-tree";
 import { ProcessLogView } from "./process-log";
-import { HumanMark, ParticipantStack, roleLabel } from "./identity";
+import { HumanMark, roleLabel } from "./identity";
 
 function CloseGlyph() {
   return (
@@ -26,11 +26,23 @@ function CloseGlyph() {
 
 export type InspectorSection = "files" | "overview" | "changes" | "verification" | "output";
 
+/**
+ * Three above, two below (D-066).
+ *
+ * Five equally-weighted tabs made the panel a menu: nothing about the row said
+ * which of them you were likely to want. The split is what the *work* is —
+ * the files, what changed in them, whether it passed — against what the
+ * *workspace* is: where it came from and what its processes printed. The first
+ * three are read while working; the last two are consulted.
+ */
 const SECTIONS: { id: InspectorSection; label: string }[] = [
   { id: "files", label: "All files" },
-  { id: "overview", label: "Overview" },
   { id: "changes", label: "Changes" },
-  { id: "verification", label: "Verification" },
+  { id: "verification", label: "Checks" }
+];
+
+const WORKSPACE_SECTIONS: { id: InspectorSection; label: string }[] = [
+  { id: "overview", label: "Overview" },
   { id: "output", label: "Output" }
 ];
 
@@ -518,33 +530,13 @@ export function Inspector({
         ref={panelRef}
         data-testid="inspector"
       >
-        <div className="inspector-identity">
-          <ParticipantStack
-            participants={detail.participants}
-          />
-          <span className="inspector-controller" data-testid="panel-controller">
-            {/* The baton lives on the controller's mark in the stack beside this
-                line. One mark, one meaning — it is not repeated here. */}
-            {detail.control.holderLogin ? (
-              detail.control.holderUserId === detail.viewerUserId
-                ? "You have control"
-                : `${detail.control.holderLogin} has control`
-            ) : (
-              <>
-                No controller
-              </>
-            )}
-          </span>
-          <button className="icon-button" onClick={onClose} aria-label="Hide the evidence panel" data-testid="inspector-close">
-            <CloseGlyph />
-          </button>
-        </div>
-
+        {/* No identity row. Who holds the baton is the room's sentence, said
+            once beneath the mission title; a second copy at the top of the
+            panel competed with the panel's own subject (D-066). The close
+            control keeps its corner. */}
         <div className="inspector-head">
           <div className="inspector-tabs" role="tablist" aria-label="Inspector sections">
-            {SECTIONS.filter(
-              (option) => hostedHere || (option.id !== "output" && option.id !== "files")
-            ).map((option) => (
+            {SECTIONS.filter((option) => hostedHere || option.id !== "files").map((option) => (
               <button
                 key={option.id}
                 role="tab"
@@ -557,6 +549,14 @@ export function Inspector({
               </button>
             ))}
           </div>
+          <button
+            className="icon-button"
+            onClick={onClose}
+            aria-label="Hide the evidence panel"
+            data-testid="inspector-close"
+          >
+            <CloseGlyph />
+          </button>
         </div>
 
         <div className="inspector-scroll">
@@ -761,6 +761,26 @@ export function Inspector({
               )}
             </div>
           )}
+        </div>
+
+        {/* The workspace itself, under its own edge: where this came from and
+            what its processes printed. Consulted rather than read, so it sits
+            below the work instead of competing with it in one row (D-066). */}
+        <div className="inspector-foot">
+          <div className="inspector-tabs" role="tablist" aria-label="Workspace sections">
+            {WORKSPACE_SECTIONS.filter((option) => hostedHere || option.id !== "output").map((option) => (
+              <button
+                key={option.id}
+                role="tab"
+                aria-selected={section === option.id}
+                className={section === option.id ? "inspector-tab active" : "inspector-tab"}
+                onClick={() => onSection(option.id)}
+                data-testid={`inspector-tab-${option.id}`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
       </aside>
     </>

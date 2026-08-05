@@ -664,6 +664,24 @@ body {
   padding: var(--s-2) var(--s-2) var(--s-3);
 }
 
+/* Home and Search, above the lists and never scrolling with them. Set in from
+   the window's top so the rail does not start hard against the chrome (D-066). */
+.sidebar-fixed {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-3) 0 var(--s-4);
+}
+
+.sidebar-fixed .side-row {
+  gap: var(--s-3);
+  color: var(--text-2);
+}
+
+.sidebar-fixed .side-row:hover {
+  color: var(--text-1);
+}
+
 .sidebar-scroll {
   flex: 1;
   min-height: 0;
@@ -3222,4 +3240,49 @@ body.resizing {
 /* The panel keeps its own left edge only when nothing is beside it to draw one. */
 .inspector {
   border-left: none;
+}
+
+/* --- The panel's two regions, and the tabs above them (D-066) ---------------- */
+.inspector-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--edge);
+}
+
+.inspector-head .inspector-tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The workspace region: its own edge, at the foot, under the work. */
+.inspector-foot {
+  flex: none;
+  padding: var(--s-2) var(--s-3);
+  border-top: 1px solid var(--edge);
+}
+
+/* One filter above the tree, on the tree's own plane. */
+.tree-filter {
+  padding: var(--s-2) var(--s-3) var(--s-3);
+}
+
+.input-inline {
+  width: 100%;
+  height: 28px;
+  font: var(--type-row);
+}
+
+/* A search hit is a row, not a card: the same shape the archived list uses, so
+   the two dialogs read as one product rather than two. */
+.search-hit {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-hit:hover {
+  background: var(--surface-1);
 }

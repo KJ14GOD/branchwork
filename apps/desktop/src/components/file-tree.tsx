@@ -125,6 +125,7 @@ export function FileTree({
   const [levels, setLevels] = useState<Record<string, WorkspaceEntry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
 
   const load = useCallback(
     async (path: string) => {
@@ -188,9 +189,32 @@ export function FileTree({
     );
   }
 
+  /* Filtering, not searching a repository: it narrows what is already open, so
+     a folder whose name matches keeps its children and a file matches on its
+     path. Anything deeper needs the worktree indexed, which is a bigger thing
+     than a box above a list (D-066). */
+  const needle = filter.trim().toLowerCase();
+  const shown = needle === "" ? rows : rows.filter((row) => row.entry.path.toLowerCase().includes(needle));
+
   return (
+    <>
+      <div className="tree-filter">
+        <input
+          className="input input-inline"
+          value={filter}
+          placeholder="Filter files"
+          onChange={(event) => setFilter(event.target.value)}
+          aria-label="Filter workspace files"
+          data-testid="tree-filter"
+        />
+      </div>
+      {needle !== "" && shown.length === 0 && (
+        <p className="quiet" data-testid="tree-no-match">
+          Nothing here matches “{filter.trim()}”.
+        </p>
+      )}
     <div className="tree" role="tree" aria-label="Workspace files" data-testid="file-tree">
-      {rows.map(({ entry, depth }) => (
+      {shown.map(({ entry, depth }) => (
         <Row
           key={entry.path}
           entry={entry}
@@ -201,5 +225,6 @@ export function FileTree({
         />
       ))}
     </div>
+    </>
   );
 }
