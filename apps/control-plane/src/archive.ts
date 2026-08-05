@@ -56,6 +56,40 @@ export function registerArchiveRoutes(app: FastifyInstance, deps: RouteDeps): vo
       );
       if ((waiting.rowCount ?? 0) > 0) return "waiting" as const;
 
+      // An execution that no runner was ever told to start is not work. It
+      // cannot begin and cannot end, and refusing to file the mission away
+      // because of one means a mission can be wedged out of the product by a
+      // row nobody can act on. Novus creates the execution and its command in
+      // one transaction, so a live `requested` execution always has one — an
+      // execution without a command is a dead attempt, and it is ended here
+      // rather than left saying Starting for ever.
+      const stillborn = await client.query(
+        `select e.exe_id from executions e
+           join workstreams w on w.wst_id = e.wst_id
+          where w.mission_id = $1 and e.state = 'requested'
+            and not exists (select 1 from runner_commands c where c.exe_id = e.exe_id)`,
+        [missionId]
+      );
+      for (const row of stillborn.rows) {
+        await client.query(
+          `update executions
+              set state = 'interrupted', ended_at = now(), exit_outcome = 'interrupted',
+                  failure_reason = 'Never started: no command was ever issued for this attempt.'
+            where exe_id = $1 and state = 'requested'`,
+          [row.exe_id]
+        );
+        await recordEvent(client, {
+          orgId: access.orgId,
+          missionId,
+          workstreamId: null,
+          executionId: row.exe_id as string,
+          actorKind: "user",
+          actorId: ctx.userId,
+          kind: "execution.interrupted",
+          payload: { reason: "Never started: no command was ever issued for this attempt." }
+        });
+      }
+
       const running = await client.query(
         `select 1 from executions e join workstreams w on w.wst_id = e.wst_id
           where w.mission_id = $1 and e.state = any($2::text[]) limit 1`,

@@ -758,6 +758,59 @@ describe("event ingestion", () => {
     expect(gap?.actor_kind).toBe("runner");
   });
 
+  it("gives a direction directed again after a failure a command of its own", async () => {
+    // A direction that failed and is directed again is a *new attempt*. Keyed
+    // on the direction, its start command collided with the first attempt's
+    // idempotency key, `on conflict do nothing` swallowed it, and the new
+    // execution sat in `requested` with nothing to run it — for ever, while the
+    // room said Starting and archival refused because it looked like work.
+    const lane = await createLane();
+    const first = await startExecution(lane);
+    await report(lane.credential, first, [
+      {
+        originSeq: 1,
+        event: {
+          kind: "execution.failed",
+          payload: { classification: "internal", reason: "fatal: invalid reference: novus/m-whatever" }
+        }
+      }
+    ]);
+    const failed = await harness.db.query("select state from executions where exe_id = $1", [first]);
+    expect(failed.rows[0].state).toBe("failed");
+
+    // The *same* direction, applied again — which is what a person does when a
+    // turn failed and they want it retried. It stays queued after a failure, so
+    // there is a direction sitting there to apply.
+    const direction = await harness.db.query(
+      "select dir_id from directions where wst_id = $1 order by ordinal desc limit 1",
+      [lane.workstreamId]
+    );
+    const again = await harness.app.inject({
+      method: "POST",
+      url: `/directions/${direction.rows[0].dir_id}/resolve`,
+      headers: bearer(owner),
+      payload: { action: "apply" }
+    });
+    expect(again.statusCode).toBe(200);
+
+    const executions = await harness.db.query(
+      "select exe_id, state from executions where wst_id = $1 order by created_at",
+      [lane.workstreamId]
+    );
+    expect(executions.rowCount).toBe(2);
+    const retry = executions.rows[1].exe_id as string;
+    expect(retry).not.toBe(first);
+
+    // The assertion that fails against the old key: the second attempt has a
+    // command, so a runner can actually pick it up.
+    const commands = await harness.db.query(
+      "select kind, state from runner_commands where exe_id = $1",
+      [retry]
+    );
+    expect(commands.rowCount).toBe(1);
+    expect(commands.rows[0].kind).toBe("start_execution");
+  });
+
   it("stops an execution through a durable command", async () => {
     const lane = await createLane();
     const executionId = await startExecution(lane);

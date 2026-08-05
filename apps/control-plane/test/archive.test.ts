@@ -283,6 +283,43 @@ describe("filing a mission away", () => {
     expect(refused.json().error.message).toContain("Answer it");
   });
 
+  it("files away a mission wedged by an attempt that was never given a command", async () => {
+    // The shape a real session produced: a direction applied twice, where the
+    // second attempt's start command collided with the first's idempotency key
+    // and was swallowed. The execution sat in `requested` with nothing to run
+    // it, the room said Starting for ever, and archival refused because it
+    // looked like work. The key is fixed; this is about the rows it left.
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+    await report(lane.credential, executionId, [
+      {
+        originSeq: 700,
+        event: { kind: "execution.failed", payload: { classification: "internal", reason: "no branch" } }
+      }
+    ]);
+    // An attempt with no command of its own, exactly as that collision left it.
+    const stranded = `exe_${"stranded".padEnd(20, "0")}`;
+    await harness.db.query(
+      `insert into executions (exe_id, org_id, mission_id, wst_id, harness, model, effort,
+                               runner_id, state, started_by)
+       select $1, org_id, mission_id, wst_id, harness, model, effort, runner_id, 'requested', started_by
+         from executions where exe_id = $2`,
+      [stranded, executionId]
+    );
+
+    const archived = await archive(lane.missionId, owner);
+    expect(archived.statusCode).toBe(200);
+
+    // Filed away, and the dead attempt is ended honestly rather than left
+    // sitting in `requested` where the room would go on saying Starting.
+    const rows = await harness.db.query(
+      "select state, failure_reason from executions where exe_id = $1",
+      [stranded]
+    );
+    expect(rows.rows[0].state).toBe("interrupted");
+    expect(rows.rows[0].failure_reason).toContain("Never started");
+  });
+
   it("refuses a participant whose role does not carry it, on the server", async () => {
     const lane = await createLane();
     const contributor = await addParticipant(lane.missionId, "archive-contributor", "contributor");

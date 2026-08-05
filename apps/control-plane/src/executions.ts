@@ -279,7 +279,15 @@ export async function dispatchDirection(
         effort: args.effort,
         resumeSessionId
       },
-      idempotencyKey: `start:${args.directionId}`
+      // Keyed on the *execution*, not the direction. A direction that failed
+      // and is directed again is a new attempt and needs a new command; keyed
+      // on the direction, the second attempt collided with the first command's
+      // idempotency key, `on conflict do nothing` swallowed it, and the new
+      // execution sat in `requested` with nothing to run it — for ever, while
+      // the room said Starting. Two concurrent dispatches of one direction are
+      // already prevented by the partial unique index above, which is the
+      // concurrency guard; this key only has to be unique per attempt.
+      idempotencyKey: `start:${executionId}`
     });
     await recordEvent(client, {
       orgId: access.orgId,
