@@ -1009,6 +1009,17 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     active.clear();
     openExecutions.clear();
 
+    // Whatever is still queued on a workstream's lane is still touching that
+    // workstream's files — publishing what a project declares reads the
+    // repository and can create a worktree. Shutdown that returns while one is
+    // mid-`git` is claiming to be finished when it is not, and the caller then
+    // does the thing callers do after shutdown: remove the directory.
+    await Promise.race([
+      Promise.allSettled([...chains.values()]),
+      new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS))
+    ]);
+    chains.clear();
+
     // No run command outlives the app that started it, and each one reports
     // its own exit on the way out (D-034).
     await workspace.shutdown(reason);
