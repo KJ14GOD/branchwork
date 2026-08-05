@@ -4,6 +4,7 @@ import { novus } from "../bridge";
 import { AddProjectDialog, type PickedRepository } from "../components/add-project-dialog";
 import { HumanMark } from "../components/identity";
 import { MissionTabs } from "../components/mission-tabs";
+import { ColumnHandle, useColumnWidth } from "../components/resizable";
 import { RunControl } from "../components/run-control";
 import { TerminalToggle } from "../components/runtime-dock";
 import { WorkspaceSetupDialog } from "../components/workspace-setup";
@@ -22,7 +23,7 @@ import {
   type OpenTab,
   type WorkingSet
 } from "../components/working-set";
-import { truncateLabel } from "../format";
+import { plural, truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
 import { Inspector, type InspectorSection } from "../components/inspector";
 
@@ -64,17 +65,23 @@ function ArchivedDialog({
     <>
       <div className="scrim" onClick={onClose} />
       <div className="dialog" role="dialog" aria-label="Archived missions" data-testid="archived-dialog">
-        <h2 className="dialog-title">Archived</h2>
-        <p className="quiet">
-          Nothing here was deleted. Every direction, checkpoint and decision is intact, and restoring
-          one puts it back in its project exactly as it was.
-        </p>
+        <div className="dialog-head">
+          <h2 className="dialog-title">Archived</h2>
+          <p className="quiet">
+            {plural(missions.length, "mission")}, kept whole. Restoring one puts it back in its project
+            with every direction, checkpoint and decision exactly where it was.
+          </p>
+        </div>
         <div className="archived-list">
           {missions.map((mission) => (
             <div key={mission.missionId} className="archived-entry" data-testid="archived-row">
               <span className="archived-goal">{mission.goal}</span>
+              <span className="archived-meta">
+                {mission.repository?.name ?? "local"}
+                {mission.archivedByLogin ? ` · filed by ${mission.archivedByLogin}` : ""}
+              </span>
               <button
-                className="btn btn-text"
+                className="btn btn-text archived-restore"
                 onClick={() => void onRestore(mission.missionId)}
                 data-testid="mission-restore"
               >
@@ -84,7 +91,7 @@ function ArchivedDialog({
           ))}
         </div>
         {error && (
-          <p className="inline-error" role="alert" data-testid="restore-error">
+          <p className="inline-error archived-error" role="alert" data-testid="restore-error">
             {error}
           </p>
         )}
@@ -267,6 +274,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [railProject, setRailProject] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
+  // Both side columns are draggable and remember where they were put (D-065).
+  const [railWidth, setRailWidth] = useColumnWidth("novus-rail-width", 240, 180, 420);
+  const [panelWidth, setPanelWidth] = useColumnWidth("novus-panel-width", 420, 320, 760);
   /** Why filing one away was refused — most often because it is still working. */
   const [archiveError, setArchiveError] = useState<string | null>(null);
   /** The Archived view: read on demand, because it is not the rail's job. */
@@ -755,7 +765,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       )}
 
       <div className={railOpen ? "project-shell rail-open" : "project-shell"} data-testid="project-shell">
-        <aside className="sidebar" data-testid="sidebar">
+        <aside className="sidebar" data-testid="sidebar" style={{ width: railWidth }}>
           <div className="sidebar-scroll">
             {attention.length > 0 && (
               <>
@@ -938,6 +948,14 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           </div>
         </aside>
 
+        <ColumnHandle
+          edge="right"
+          width={railWidth}
+          onWidth={setRailWidth}
+          reset={240}
+          label="Resize the projects rail"
+        />
+
         {joinOpen && (
           <JoinDialog
             onClose={() => setJoinOpen(false)}
@@ -1058,7 +1076,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       {/* Full height, hard against the right edge: the panel owns that corner
           of the window, including the identity and control it reports on. */}
       {inspector && openDetail && active && (
+        <ColumnHandle
+          edge="left"
+          width={panelWidth}
+          onWidth={setPanelWidth}
+          reset={420}
+          label="Resize the evidence panel"
+        />
+      )}
+      {inspector && openDetail && active && (
         <Inspector
+          width={panelWidth}
           detail={openDetail}
           section={inspector}
           onSection={setInspector}

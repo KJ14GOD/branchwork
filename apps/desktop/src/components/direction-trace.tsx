@@ -487,14 +487,24 @@ function Chevron() {
 
 function CheckpointRow({ segment, onOpenChanges }: { segment: Segment & { kind: "checkpoint" }; onOpenChanges: () => void }) {
   const checkpoint = segment.checkpoint;
-  const counts = checkpoint
-    ? `${plural(checkpoint.filesChanged, "file")} changed · +${checkpoint.additions} −${checkpoint.deletions}`
-    : "checkpoint recorded";
   return (
     <div className="milestone" data-testid="checkpoint-line">
       <span className="milestone-label">Checkpoint</span>
       <span className="milestone-body">
-        {counts}
+        {checkpoint ? (
+          <>
+            {plural(checkpoint.filesChanged, "file")} changed{" "}
+            {/* The sign says which way; the colour agrees with it. Same two
+                tokens the diff itself uses, so one change reads the same in
+                the trace and in the panel (D-065). */}
+            <span className="change-counts mono">
+              <span className="count-add">+{checkpoint.additions}</span>
+              <span className="count-del">−{checkpoint.deletions}</span>
+            </span>
+          </>
+        ) : (
+          "checkpoint recorded"
+        )}
         {segment.sha && <span className="mono milestone-sha"> {shortSha(segment.sha)}</span>}
         {checkpoint?.withheldSecrets ? ` · ${plural(checkpoint.withheldSecrets, "secret")} withheld` : ""}
         {checkpoint?.uncommitted ? " · uncommitted" : ""}

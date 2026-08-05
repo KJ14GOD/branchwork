@@ -1089,18 +1089,18 @@ body {
   margin-left: var(--s-2);
 }
 
+/* No rule down the side. A line drawn beside every turn says "these things are
+   together", which the spacing already says, and it competed with the only mark
+   on the surface that means anything — the speaker's (D-065). */
 .trace {
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
-  border-left: 1px solid var(--edge-hover);
-  padding-left: var(--s-4);
 }
 
-/* Lifecycle is line treatment and position, never a badge. */
-.trace-waiting,
-.trace-settled {
-  border-left-color: var(--edge);
+/* Lifecycle is weight and wording, never a badge and no longer a line. */
+.trace-settled .trace-body {
+  color: var(--text-3);
 }
 
 .trace-settled .trace-body {
@@ -1115,9 +1115,9 @@ body {
 }
 
 .trace-author {
-  font: var(--type-row);
+  font: var(--type-meta);
   font-weight: 500;
-  color: var(--text-1);
+  color: var(--text-2);
 }
 
 .trace-time {
@@ -1127,9 +1127,12 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* What was asked. Present and readable, and deliberately not the loudest thing
+   in the block: you wrote it, you know what it says — the answer is what you
+   came back for. */
 .trace-body {
   font: var(--type-body);
-  color: var(--text-1);
+  color: var(--text-2);
 }
 
 .trace-machinery {
@@ -1159,16 +1162,18 @@ body {
 }
 
 .harness-name {
-  font: var(--type-row);
+  font: var(--type-meta);
   font-weight: 500;
-  color: var(--text-1);
+  color: var(--text-3);
 }
 
+/* The reply. The largest type on the surface and the only thing at --text-1,
+   because it is the answer to the question the room exists to ask. */
 .harness-body {
   display: flex;
   flex-direction: column;
   gap: var(--s-2);
-  font: var(--type-body);
+  font: var(--type-speech);
   color: var(--text-1);
   padding-left: calc(20px + var(--s-2));
 }
@@ -1665,12 +1670,15 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* The sign is the signal and the colour agrees with it, which is why this is
+   not colour-alone (DESIGN.md#status-semantics). Same two tokens the diff
+   itself uses, so one change reads the same everywhere it appears. */
 .count-add {
-  color: var(--text-2);
+  color: var(--ok);
 }
 
 .count-del {
-  color: var(--text-2);
+  color: var(--danger);
 }
 
 .change-diff {
@@ -3122,27 +3130,96 @@ body {
 
 /* The archived list, inside its dialog. Rows are names and one control: there
    is nothing to decide here beyond whether to put something back. */
+/* The archived list. Two columns on one baseline — what it was, and where it
+   came from — with the one thing you can do about it at the end of the row and
+   no weight of its own. Rows share the dialog's inset, so the head, the list
+   and the actions sit on one axis instead of three (D-065). */
 .archived-list {
-  display: flex;
-  flex-direction: column;
-  max-height: 320px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  padding: var(--s-2) 0;
 }
 
 .archived-entry {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  min-height: 32px;
-  padding: 0 var(--s-1);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+}
+
+.archived-entry:hover {
+  background: var(--surface-1);
 }
 
 .archived-goal {
-  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-1);
-  font: var(--type-row);
+  font: var(--type-body);
+}
+
+/* Under the name, not beside it: where it came from is context for the name,
+   and a second column of it would read as a competing value. */
+.archived-meta {
+  grid-column: 1;
+  font: var(--type-meta);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Visible, unlike the rail's Archive control. Hiding an action behind hover is
+   right where it sits beside work nobody is filing away; it is wrong here,
+   because restoring is the only reason anyone opened this. */
+.archived-restore {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+.archived-error {
+  padding: 0 var(--s-4) var(--s-2);
+}
+
+/* --- Columns a person can drag (D-065) ---------------------------------------
+   A hairline that takes no layout width and widens to a real target under the
+   pointer. The seam stays a seam: nothing appears on hover except the edge
+   itself getting slightly more present, because a handle that announces itself
+   on every pass across the window is chrome that never stops moving. */
+.column-handle {
+  flex: none;
+  position: relative;
+  width: 1px;
+  background: var(--edge);
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.column-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0 -3px;
+}
+
+.column-handle:hover,
+.column-handle:focus-visible {
+  background: var(--edge-hover);
+  outline: none;
+}
+
+/* While a column is being dragged the pointer owns the window: without this,
+   crossing the trace selects its text and the drag reads as a text selection. */
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* The panel keeps its own left edge only when nothing is beside it to draw one. */
+.inspector {
+  border-left: none;
 }

@@ -396,7 +396,8 @@ export function Inspector({
   hostedHere,
   onClose,
   onDetail,
-  onRevoke
+  onRevoke,
+  width
 }: {
   detail: MissionDetailResponse;
   section: InspectorSection;
@@ -410,6 +411,8 @@ export function Inspector({
   onClose: () => void;
   onDetail: (detail: MissionDetailResponse) => void;
   onRevoke: () => void;
+  /** Set by the drag handle beside it; remembered per machine (D-065). */
+  width: number;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [outputKind, setOutputKind] = useState<ProcessKind>("setup");
@@ -508,6 +511,7 @@ export function Inspector({
     <>
       <aside
         className="inspector"
+        style={{ width }}
         role="complementary"
         aria-modal="true"
         aria-label="Mission inspector"

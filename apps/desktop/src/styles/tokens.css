@@ -61,6 +61,9 @@
   --type-meta: 400 12px/18px var(--font-ui);
   --type-row: 400 13px/20px var(--font-ui);
   --type-body: 400 14px/22px var(--font-ui);
+  /* What the agent said. The one thing a person opened the room to read, so it
+     gets a step of its own and everything about the turn sits below it. */
+  --type-speech: 400 15px/25px var(--font-ui);
   --type-section: 600 16px/24px var(--font-ui);
   --type-title: 600 20px/28px var(--font-ui);
   --type-mission: 650 28px/34px var(--font-ui);

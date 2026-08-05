@@ -755,3 +755,27 @@ A settings file grants **authority**: allow-rules, and hooks that run *before* t
 **Consequences.** The one thing D-062 made worse is undone. PROGRESS's gap on it closes, with the measurement stated rather than the claim.
 
 **Revisit when.** Projects nest instructions per directory often enough that the root file is not enough, or a harness other than Claude Code needs the same treatment through a different flag.
+
+## D-065 — The reply leads; the apparatus recedes; the columns move
+
+**Context.** Looked at rather than reasoned about: a room where somebody had typed *hi* and Claude had answered was hard to read, and the reason was that nothing in it led. The direction, the reply, the speaker's name and "Technical activity 2 steps" were all 13–14px, and the direction and the reply were both `--text-1`. A vertical rule ran down the left of every turn. The eye landed on the rule, then on whatever was longest.
+
+The room's whole purpose is one question — *what did the agent say back* — and the surface gave that answer no more weight than the machinery around it.
+
+**Decision.** Three things, all subtractive except one.
+
+**A step for speech.** `--type-speech` (15/25) is added to the scale for what the agent said, and it is the only text at `--text-1` inside a turn. The direction someone wrote drops to `--text-2`: you wrote it, you know what it says, and the answer is what you came back for. Everything *about* the turn — the speaker's name, model and effort, technical activity, the checkpoint line — goes to `--type-meta` at `--text-3`. Speech is content; the rest is apparatus. This is a scale addition, so it lands in DESIGN.md#typography in the same change.
+
+**The rule goes.** Grouping is the indent of speech under its speaker and the space between blocks. A line beside every turn repeats what the spacing already says, and it competed with the only mark on the surface that carries meaning — the speaker's.
+
+**Diff arithmetic is coloured.** `+3` and `−0` take `--ok` and `--danger` as text, the same pair the diff body already uses as backgrounds, so one change reads identically in the trace and in the panel. This is not colour-alone: the sign says which way it goes and the colour agrees with it.
+
+**And the columns move.** The rail and the evidence panel were both fixed — 240px and 420px — which made a developer's working width somebody else's decision. Project names run past 240px routinely, and a diff's readable width is a property of the code being read. Each column now has a hairline handle that takes no layout width, widens to a real target under the pointer, is keyboard-operable (arrows step, Home resets), double-clicks back to its default, and remembers its width. Bounded at both ends so neither can be dragged to nothing or made to swallow the room. Remembered locally, because how wide a person keeps their panel is a fact about them and not about the mission — the same reason the working set is local (D-061).
+
+**The archived dialog is composed rather than assembled.** It had a title, a paragraph, rows and a footer as four unrelated blocks with no shared inset; it read as a list dropped into a box. It now uses the dialog's own head/body/actions composition, and each row has one primary value (the mission), its context beneath it (project, who filed it), and the one action at the end. Restore is *not* hidden behind hover there, unlike Archive in the rail: hiding an action is right where it sits beside work nobody is filing away, and wrong where restoring is the only reason anyone opened the surface.
+
+**Alternatives.** Making the direction quieter by indenting it instead of recolouring it (rejected: indentation is how speech is attached to its speaker, and using it for emphasis too would make both meanings mushy); keeping the rule and lightening it (rejected: a line that has to be nearly invisible to be tolerable is a line that is not doing anything); a splitter with a visible grab affordance (rejected: chrome that announces itself on every pass across the window).
+
+**Consequences.** Every screenshot in `e2e/evidence` is regenerated. The type scale gains its first new step since the beginning, which is why this is a decision and not a stylesheet edit.
+
+**Revisit when.** A turn can contain more than one speaker — a second harness, or a participant interjecting mid-turn — at which point attaching speech by indent alone may stop being enough.
