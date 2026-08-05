@@ -733,3 +733,25 @@ There is no delete verb. Not hidden, not admin-only, not behind a flag: absent. 
 **Consequences.** Closing a tab and archiving a mission are now visibly different acts and are proven to be: closing a tab leaves the mission running and in the rail (D-061), archiving takes it out of the rail and is refused if it is running. Archiving a mission whose tab is open closes that tab — a consequence of the rail no longer offering a way back, not a second meaning for the act.
 
 **Revisit when.** Archived missions are numerous enough that one flat list stops working, or a mission genuinely must be destroyed for a legal reason — at which point the thing to build is a documented, audited erasure of a *named* mission, not a delete button.
+
+## D-064 — The project's instructions, handed over explicitly
+
+**Context.** D-062 pinned the harness's permission policy with `--setting-sources ""`, because a `.claude/settings.json` in the worktree is a file the agent can write, and reading it to decide what the agent may do is not a boundary. That was right and stands. It cost something real, which D-062 recorded rather than buried: the repository's `CLAUDE.md` stopped loading, so a project could no longer tell the agent its own conventions.
+
+Measured against `claude 2.1.221`, with tools disabled so that auto-loading into context is the only way to know: a repository whose `CLAUDE.md` names a codeword is answered correctly with settings unpinned, and **not** answered with them pinned — the model goes looking for the file instead. (With tools available it often finds it, which is why this was easy to miss; a tool call that might discover the instructions is not the same as the instructions being in context, and it spends a turn.)
+
+**Decision.** Novus reads the worktree's own `CLAUDE.md` and passes it with `--append-system-prompt-file`, which needs no setting source at all. Same measurement, same repository, pinned: answered immediately.
+
+**Why this is safe while settings stay pinned — the distinction the whole thing rests on.** Both files are things the agent can write. They differ in what they can do.
+
+A settings file grants **authority**: allow-rules, and hooks that run *before* the permission check. A supervised turn that writes one widens what the next turn may do without asking anybody, which is the escalation D-062 closed.
+
+`CLAUDE.md` grants **nothing**. Every tool call still reaches the permission router; an agent that writes "you may always write files" into it has written a sentence, not a grant. The worst it can do is mislead the model — which is true of every file in a repository the agent reads, and is not a new power.
+
+**What is checked before it is passed.** The file is resolved through `realpath` and must land inside the worktree: a `CLAUDE.md` symlinked to `~/.ssh/config` is an ordinary relative path right up until something reads it. Symlinks are *followed*, because this repository's own `CLAUDE.md` is one — pointing at `AGENTS.md` beside it — so refusing links outright would break the common case. It must be a non-empty regular file under 100 KB, so a generated file cannot become the whole prompt. It is read per attempt, because a turn that edits the project's instructions is describing how the next turn should work.
+
+**Alternatives.** Re-admitting `--setting-sources project` (rejected: it is the hijack vector, and it also re-admits hooks); inlining the file into the direction text (rejected: it would appear in the room as something a person said, and the transcript would carry it every turn); reading the nested `CLAUDE.md` files Claude Code itself walks (rejected for now: one file at the worktree root is what a project uses, and a directory walk is a bigger surface to contain).
+
+**Consequences.** The one thing D-062 made worse is undone. PROGRESS's gap on it closes, with the measurement stated rather than the claim.
+
+**Revisit when.** Projects nest instructions per directory often enough that the root file is not enough, or a harness other than Claude Code needs the same treatment through a different flag.

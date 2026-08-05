@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join, sep } from "node:path";
 import {
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
@@ -94,6 +94,58 @@ const MAX_REASON = 400;
  * probe above ran under the machine's existing Claude Code login.
  */
 const PINNED_PERMISSION_ARGS = ["--setting-sources", "", "--permission-mode", "manual"] as const;
+
+/** Larger than any instruction file a person wrote, small enough that a
+ *  generated one cannot become the whole prompt. */
+const MAX_INSTRUCTIONS_BYTES = 100_000;
+
+/**
+ * The project's own instructions, handed to the harness explicitly (D-064).
+ *
+ * Pinning the setting sources is what stops a `.claude/settings.json` in the
+ * worktree deciding what gets asked (D-062), and it cost this: `CLAUDE.md` no
+ * longer loaded, so a project could not tell the agent its own conventions.
+ * The file is read here and passed with `--append-system-prompt-file`, which
+ * needs no settings source at all.
+ *
+ * **Instructions are not authority, and that is the whole reason this is safe
+ * to restore while settings stay pinned.** Both files are things the agent can
+ * write. A settings file can grant *permission* — allow-rules, and hooks that
+ * run before the permission check — so reading one lets a supervised turn widen
+ * what the next turn may do without asking. `CLAUDE.md` cannot: every tool call
+ * still reaches the permission router, so an agent that writes "you may always
+ * write files" into it has written a sentence, not a grant. The worst it can do
+ * is mislead the model, which is what any file in the repository can do.
+ *
+ * Resolved through `realpath` and required to stay inside the worktree, because
+ * a symlinked `CLAUDE.md` pointing at `~/.ssh/config` is an ordinary relative
+ * path right up until something reads it. (This repository's own `CLAUDE.md` is
+ * a symlink — to `AGENTS.md`, beside it — so following them is required, and
+ * following them *out* is not.)
+ */
+export function projectInstructionsFile(worktreePath: string): string | null {
+  let root: string;
+  try {
+    root = realpathSync(worktreePath);
+  } catch {
+    return null;
+  }
+  const candidate = join(root, "CLAUDE.md");
+  let real: string;
+  try {
+    real = realpathSync(candidate);
+  } catch {
+    return null; // absent, which is the ordinary case
+  }
+  if (real !== root && !real.startsWith(`${root}${sep}`)) return null;
+  try {
+    const stats = statSync(real);
+    if (!stats.isFile() || stats.size === 0 || stats.size > MAX_INSTRUCTIONS_BYTES) return null;
+  } catch {
+    return null;
+  }
+  return real;
+}
 
 /** A CLI that does not know these flags says so before it does anything. */
 const UNSUPPORTED_FLAG = /(unknown option|argument missing|unknown command)/i;
@@ -491,6 +543,11 @@ export function startTurn(request: TurnRequest): RunningTurn {
   ): Promise<ProcessOutcome> {
     if (request.fakeHarness) return fakeAttempt(worktreePath, stream);
 
+    // Read per attempt rather than once: a turn that edits the project's
+    // instructions is describing how the *next* turn should work.
+    const instructionsFile = projectInstructionsFile(worktreePath);
+    const instructions = instructionsFile ? ["--append-system-prompt-file", instructionsFile] : [];
+
     return new Promise<ProcessOutcome>((resolve) => {
       const args = [
         "-p",
@@ -506,6 +563,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         "--permission-prompt-tool",
         "stdio",
         ...PINNED_PERMISSION_ARGS,
+        ...instructions,
         "--model",
         model,
         "--effort",

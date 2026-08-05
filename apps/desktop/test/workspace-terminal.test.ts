@@ -55,6 +55,33 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return outcome.stdout.trim();
 }
 
+/**
+ * Writes a line into a session and keeps writing it until its output appears.
+ *
+ * A cold login shell — this machine's loads conda — emits its startup in bursts,
+ * and a line written before it reaches a prompt is simply eaten. Under load
+ * that window is wide enough to lose the whole test, which is what it did on a
+ * gate run. Retrying is the fix rather than a longer timeout, because the shell
+ * was never slow to answer; it was not listening yet (D-058's sibling, and the
+ * same remedy `e2e/runtime.spec.ts` uses).
+ */
+async function writeUntil(
+  sessionId: string,
+  line: string,
+  appears: () => boolean,
+  attempts = 5
+): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    writeTerminal(sessionId, line);
+    const deadline = Date.now() + 4_000;
+    while (Date.now() < deadline) {
+      if (appears()) return;
+      await new Promise((settle) => setTimeout(settle, 20));
+    }
+  }
+  throw new Error(`the shell never answered \`${line.trim()}\` after ${attempts} attempts`);
+}
+
 async function waitFor(what: string, predicate: () => boolean, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -398,9 +425,12 @@ describe("the entry points the bridge calls", () => {
     expect(session.workstreamId).toBe(WORKSTREAM_ID);
     expect(listTerminals(WORKSTREAM_ID).map((entry) => entry.sessionId)).toEqual([session.sessionId]);
 
-    writeTerminal(session.sessionId, "pwd\r");
-    writeTerminal(session.sessionId, 'printf "NOVUS%s=%s\\n" DIR "$NOVUS_WORKSPACE_DIR"\r');
-    await waitFor("the shell to answer", () => /NOVUSDIR=\//.test(seen.join("")));
+    await writeUntil(session.sessionId, "pwd\r", () => seen.join("").includes(realpathSync(worktree)));
+    await writeUntil(
+      session.sessionId,
+      'printf "NOVUS%s=%s\\n" DIR "$NOVUS_WORKSPACE_DIR"\r',
+      () => /NOVUSDIR=\//.test(seen.join(""))
+    );
     stop();
 
     const said = seen.join("");

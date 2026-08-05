@@ -1,10 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { RunnerEvent } from "@novus/contracts";
-import { startTurn, type RunningTurn, type TurnResult } from "../electron/execution";
+import {
+  projectInstructionsFile,
+  startTurn,
+  type RunningTurn,
+  type TurnResult
+} from "../electron/execution";
 
 /**
  * The approval protocol through the **real spawn path** (D-056).
@@ -245,6 +260,62 @@ describe("the permission policy Novus pins", () => {
       message: { role: "user", content: [{ type: "text", text: "Write APPROVED.md" }] }
     });
   }, 40_000);
+
+  it("hands the project its own instructions back, which pinning the settings had cost", async () => {
+    // `--setting-sources ""` is what stops a committed settings file deciding
+    // who gets asked, and it also stopped `CLAUDE.md` loading — so a project
+    // could no longer tell the agent its own conventions. This is that,
+    // restored without re-admitting settings (D-064).
+    // Committed to the mission branch, because that is what a project's
+    // instructions are: repository content, checked out with the worktree.
+    writeFileSync(join(repo, "CLAUDE.md"), "# House rules\n\nAlways use tabs.\n");
+    await git(repo, ["add", "-A"]);
+    await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "rules"]);
+    await git(repo, ["branch", "-f", MISSION_BRANCH, "HEAD"]);
+
+    installStub("approval");
+    const running = begin();
+    await waitFor("the approval to arrive", () => running.turn.pendingApprovals().length > 0);
+    running.turn.respondApproval("stub-request-1", "approve", null);
+    await running.finished;
+
+    const args = argv();
+    const worktree = join(worktreeRoot, MISSION_ID);
+    expect(args[args.indexOf("--append-system-prompt-file") + 1]).toBe(
+      realpathSync(join(worktree, "CLAUDE.md"))
+    );
+    // And it did not buy that back by loosening the thing that cost it.
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
+    expect(args[args.indexOf("--permission-mode") + 1]).toBe("manual");
+  }, 40_000);
+
+  it("passes nothing when the project has no instructions, or they leave the worktree", async () => {
+    const worktree = join(worktreeRoot, MISSION_ID);
+    mkdirSync(worktree, { recursive: true });
+
+    // Absent: the ordinary case, and the flag is simply not there.
+    expect(projectInstructionsFile(worktree)).toBeNull();
+
+    // A symlink out is an ordinary-looking relative path right up until
+    // something reads it, which is why the check follows links and then asks
+    // where it landed.
+    const outside = mkdtempSync(join(tmpdir(), "novus-outside-"));
+    writeFileSync(join(outside, "secrets.md"), "not the project's instructions\n");
+    symlinkSync(join(outside, "secrets.md"), join(worktree, "CLAUDE.md"));
+    expect(projectInstructionsFile(worktree)).toBeNull();
+    rmSync(join(worktree, "CLAUDE.md"));
+
+    // A symlink that stays inside is followed: this repository's own CLAUDE.md
+    // is one, pointing at AGENTS.md beside it.
+    writeFileSync(join(worktree, "AGENTS.md"), "# House rules\n");
+    symlinkSync(join(worktree, "AGENTS.md"), join(worktree, "CLAUDE.md"));
+    expect(projectInstructionsFile(worktree)).toBe(realpathSync(join(worktree, "AGENTS.md")));
+    rmSync(join(worktree, "CLAUDE.md"));
+
+    // And a generated one does not become the whole prompt.
+    writeFileSync(join(worktree, "CLAUDE.md"), "x".repeat(200_000));
+    expect(projectInstructionsFile(worktree)).toBeNull();
+  });
 
   it("still passes --resume, so approval routing did not cost session continuity", async () => {
     installStub("approval");
