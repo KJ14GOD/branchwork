@@ -120,6 +120,10 @@ alter table workstreams add constraint workstreams_approach_needs_intent
 drop index if exists workstreams_branch_unique;
 -- One branch name per repository — the invariant the audit demanded be real.
 create unique index if not exists workstreams_repo_branch_unique on workstreams (repo_id, mission_branch);
+-- The lane a mission starts with reads as the current work, and its name says
+-- so (D-079). 'main' was a git word wearing a lane's name; idempotent because
+-- nothing writes 'main' as a lane name any more.
+update workstreams set name = 'Current work' where name = 'main' and approach_flag = false;
 -- The harness session this workstream continues across executions. (Cited a
 -- decision number that has never existed; the reason stands on its own.)
 alter table workstreams add column if not exists harness_session_id text;

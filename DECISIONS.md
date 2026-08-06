@@ -1011,3 +1011,21 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** DESIGN.md's radii rule and the D-077 creation paragraph are amended in the same change. Model/effort selection now genuinely works at creation time, which the hardcoded-default version of D-077 quietly did not offer.
 
 **Revisit when.** The dialog needs Conductor's remaining furniture — create-from-branch, create-more — at which point the foot grows controls rather than the header growing menus.
+
+## D-079 — An approach forks from the shared checkpoint, shown before it is used
+
+**Context.** D-074 recorded that an approach forks "from a recorded checkpoint of the workstream it is created beside", and the implementation read that as *the latest checkpoint of the source lane*. For the mission's first lane those are the same thing. For a lane that is itself an approach they are not: forking beside an Alternative that had checkpointed its own work would seed the new lane with commits that exist only in the Alternative — a continuation wearing a sibling's name, and a comparison between two lanes that did not start from the same place. Separately, the creation dialog showed a checkpoint the route did not enforce, so the revision a person read and the revision they got could drift apart between the look and the click.
+
+**Decision.** Three rules, one of them computed in exactly one place.
+
+**The fork point is the shared checkpoint.** A new approach created beside lane X starts from the last checkpoint X *shares* with its own origin lineage: X's recorded origin where X is an approach, X's latest checkpoint where X is the lane the mission started with. Work that exists only in X stays in X. `sharedForkPoint` computes this once; the creation route enforces it and `ApproachSummary.forkPointSha` reports it, so the dialog and the route cannot disagree.
+
+**The revision shown is the revision used, or nothing.** The creation input carries `expectedOriginSha` — the checkpoint the dialog displayed. When the computed fork point differs (the lane checkpointed again between the look and the click), creation is refused with `origin_moved`, naming where it moved, and nothing is created. When no shared checkpoint exists, creation is refused with `nothing_to_fork` and the dialog says so with a disabled action rather than guessing.
+
+**Lanes are named for what they are.** The lane a mission starts with is **Current work** (it was `main`, a git word wearing a lane's name, migrated idempotently); a fork defaults to **Alternative**, then **Alternative 2**. Names identify, never rank.
+
+**Alternatives.** Forking an approach from its own head (rejected: it inherits work unique to the lane being read, which is the exact leak this entry closes); letting every approach fork only from the mission's very first origin (rejected: it would freeze all comparison at the first fork and forbid forking from the baseline's later progress); resolving an origin race by silently re-forking from the newer checkpoint (rejected: "never guess or silently fork from an unrelated later revision" is the rule — the person re-reads and re-decides).
+
+**Consequences.** `CreateApproachInput` gains `expectedOriginSha`; `ApproachSummary` gains `forkPointSha`; the dialog states the mission goal, the exact shared checkpoint, and that changes made only in the current lane stay there. PRODUCT.md's origin-revision sentence is restated in these terms.
+
+**Revisit when.** Approaches need to fork from a *chosen* historical checkpoint rather than the shared one, at which point the dialog grows a revision picker and the pinning input already exists to carry it.

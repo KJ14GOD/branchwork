@@ -253,7 +253,7 @@ export class ControlPlaneClient {
 
   async createApproach(
     missionId: string,
-    input: { fromWorkstreamId: string; intent: string; name?: string }
+    input: { fromWorkstreamId: string; intent: string; name?: string; expectedOriginSha?: string }
   ): Promise<Workstream> {
     const body = await this.request(
       "POST",

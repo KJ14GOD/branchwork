@@ -255,7 +255,7 @@ async function createMissionTx(
     const missionBranch = `novus/m-${missionId.slice(4, 12)}`;
     await client.query(
       `insert into workstreams (wst_id, mission_id, repo_id, name, base_ref, base_sha, mission_branch, branch_status)
-         values ($1, $2, $3, 'main', $4, $5, $6, 'pending')`,
+         values ($1, $2, $3, 'Current work', $4, $5, $6, 'pending')`,
       [workstreamId, missionId, repoId, input.baseRef, input.baseSha, missionBranch]
     );
     // The creator holds the first lease: a workstream is never born without a

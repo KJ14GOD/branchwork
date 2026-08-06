@@ -300,9 +300,10 @@ export function ProjectRoom({
   const approaches = detail?.approaches ?? [];
   const currentDecision = (detail?.decisions ?? []).find((entry) => entry.supersededAt === null) ?? null;
   /** Something to fork from: an approach only means anything beside a result
-   *  that already exists, so the control is absent until there is one. */
+   *  that already exists, so the control is absent until the lane being read
+   *  has a shared checkpoint a sibling could start at (D-079). */
   const forkable = approaches.find(
-    (approach) => approach.workstreamId === detail?.workstream?.workstreamId && approach.checkpointSha !== null
+    (approach) => approach.workstreamId === detail?.workstream?.workstreamId && approach.forkPointSha !== null
   );
 
   const feed = useMemo(() => (detail ? buildFeed(detail) : null), [detail]);
@@ -342,7 +343,11 @@ export function ProjectRoom({
     const result = await novus().approaches.create({
       missionId: detail.mission.missionId,
       fromWorkstreamId: detail.workstream.workstreamId,
-      intent
+      intent,
+      // The checkpoint the dialog showed is the checkpoint the fork gets, or
+      // the server refuses and says where it moved — never a silent later
+      // revision (D-079).
+      ...(forkable?.forkPointSha ? { expectedOriginSha: forkable.forkPointSha } : {})
     });
     setDecisionBusy(false);
     setForking(false);
@@ -577,13 +582,25 @@ export function ProjectRoom({
                   produced something to fork from, and absent for anyone whose
                   role does not carry it (D-074). */}
               {forkable && detail.capabilities.includes("approach.create") && (
-                <button
-                  className="btn btn-text"
-                  onClick={() => setForking(true)}
-                  data-testid="try-another-approach"
-                >
-                  Try another approach
-                </button>
+                <>
+                  <button
+                    className="btn btn-text"
+                    onClick={() => setForking(true)}
+                    data-testid="try-another-approach"
+                  >
+                    Try another approach
+                  </button>
+                  {/* One quiet sentence, only while the mission has a single
+                      lane and a reviewable result — the moment the control is
+                      for. Once approaches exist the switcher says the rest. */}
+                  {approaches.length === 1 &&
+                    (detail.state === "work_completed_unverified" ||
+                      detail.state === "ready_for_review") && (
+                      <span className="quiet approach-helper" data-testid="approach-helper">
+                        Start from this shared checkpoint and compare another solution.
+                      </span>
+                    )}
+                </>
               )}
               {(approaches.length > 1 || currentDecision) && (
                 <button
@@ -640,8 +657,9 @@ export function ProjectRoom({
 
       {forking && detail?.workstream && (
         <TryAnotherApproach
+          goal={detail.mission.goal}
           fromName={detail.workstream.name}
-          originSha={forkable?.checkpointSha ?? null}
+          originSha={forkable?.forkPointSha ?? null}
           busy={decisionBusy}
           onCancel={() => setForking(false)}
           onCreate={(intent) => void createApproach(intent)}
@@ -905,20 +923,24 @@ function DraftCanvas({
 }
 
 /**
- * Starting a competing approach (D-074).
+ * Starting a competing approach (D-074, D-079).
  *
  * One required field, because an approach nobody can tell apart from its
  * sibling is a retry — and PRODUCT.md has always said a retry is a
- * continuation. The dialog states what is being forked and from which
- * revision, so nobody starts one thinking it begins from now.
+ * continuation. The dialog names the mission's goal and the exact shared
+ * checkpoint the fork starts from, so nobody starts one thinking it begins
+ * from now — and if no shared checkpoint exists, it blocks with the reason
+ * rather than guessing a revision.
  */
 function TryAnotherApproach({
+  goal,
   fromName,
   originSha,
   busy,
   onCancel,
   onCreate
 }: {
+  goal: string;
   fromName: string;
   originSha: string | null;
   busy: boolean;
@@ -930,25 +952,37 @@ function TryAnotherApproach({
     <Dialog label="Try another approach" onClose={onCancel} testId="try-approach-dialog">
         <header className="dialog-head">
           <h2>Try another approach</h2>
-          <p className="dialog-sub">
-            Forked from {fromName}
-            {originSha ? ` at ${shortSha(originSha)}` : ""} — its own branch, its own workspace, its own
-            baton. Nothing about {fromName} changes.
-          </p>
+          <p className="dialog-sub" data-testid="approach-goal">{goal}</p>
+          {originSha ? (
+            <p className="dialog-sub" data-testid="approach-origin">
+              Starts from shared checkpoint <span className="mono">{shortSha(originSha)}</span>. Changes
+              made only in {fromName} stay there.
+            </p>
+          ) : (
+            <p className="dialog-sub" data-testid="approach-origin-missing">
+              No shared checkpoint exists yet — {fromName} has to checkpoint a first result before an
+              approach can start beside it.
+            </p>
+          )}
         </header>
         <div className="dialog-body">
           <label className="field">
-            <span className="field-label">How should this one differ?</span>
+            <span className="field-label">What should this approach try differently?</span>
             <textarea
               className="input"
               rows={3}
               value={intent}
               onChange={(event) => setIntent(event.target.value)}
-              placeholder="One sentence. This is how the comparison tells them apart."
+              placeholder="Describe the solution you want to compare."
               data-testid="approach-intent-input"
               autoFocus
             />
           </label>
+          <p className="quiet">This starts an isolated workspace. {fromName} stays unchanged.</p>
+          <p className="quiet">
+            Approaches should solve the same mission in meaningfully different ways. For unrelated
+            work, create a new mission.
+          </p>
         </div>
         <footer className="dialog-actions">
           <button className="btn btn-secondary" onClick={onCancel} disabled={busy}>
@@ -956,11 +990,11 @@ function TryAnotherApproach({
           </button>
           <button
             className="btn btn-primary"
-            disabled={intent.trim().length === 0 || busy}
+            disabled={intent.trim().length === 0 || busy || originSha === null}
             onClick={() => onCreate(intent.trim())}
             data-testid="create-approach"
           >
-            Start it
+            Start approach
           </button>
         </footer>
     </Dialog>

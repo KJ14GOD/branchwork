@@ -132,11 +132,19 @@ export const WorkstreamSchema = z.object({
 export type Workstream = z.infer<typeof WorkstreamSchema>;
 
 export const CreateApproachInputSchema = z.object({
-  /** The lane to fork. Its latest checkpoint becomes the new lane's origin. */
+  /** The lane to fork beside. The new lane starts from the last checkpoint
+   *  this lane *shares* with the lane it was itself forked from — for the
+   *  mission's first lane that is its latest checkpoint, and for an approach
+   *  it is the approach's own recorded origin, so a sibling never inherits
+   *  work that exists only in the lane being read (D-079). */
   fromWorkstreamId: z.string().startsWith("wst_"),
   intent: z.string().trim().min(1, "Say how this approach should differ.").max(APPROACH_INTENT_MAX),
   /** Optional human label; the server names it when this is absent. */
-  name: z.string().trim().min(1).max(80).optional()
+  name: z.string().trim().min(1).max(80).optional(),
+  /** The shared checkpoint the caller was shown. When present, the server
+   *  refuses creation rather than forking from any other revision — an
+   *  approach must never start from a commit nobody looked at (D-079). */
+  expectedOriginSha: z.string().min(7).max(64).optional()
 });
 export type CreateApproachInput = z.infer<typeof CreateApproachInputSchema>;
 
@@ -433,6 +441,11 @@ export const ApproachSummarySchema = z.object({
   approach: z.boolean(),
   missionBranch: z.string().min(1),
   originSha: z.string().nullable(),
+  /** The shared checkpoint a new approach created beside this lane would start
+   *  from: the lane's own origin where it has one, its latest checkpoint
+   *  otherwise, null when there is nothing to fork. Computed by the server so
+   *  the creation dialog and the creation route can never disagree (D-079). */
+  forkPointSha: z.string().nullable(),
   /** The lane's own primary state, projected exactly as a mission's is. */
   state: MissionStateSchema,
   controllerLogin: z.string().nullable(),
@@ -1862,13 +1875,16 @@ export interface NovusBridge {
    * and nothing the renderer does decides who may fork or who may choose.
    */
   approaches: {
-    /** Forks a sibling lane from the named workstream's latest checkpoint. The
-     *  intent is required and refused empty by the server as well as here. */
+    /** Forks a sibling lane from the named workstream's shared checkpoint —
+     *  its own origin where it has one, its latest checkpoint otherwise
+     *  (D-079). The intent is required and refused empty by the server as well
+     *  as here; `expectedOriginSha` pins the revision the person was shown. */
     create(input: {
       missionId: string;
       fromWorkstreamId: string;
       intent: string;
       name?: string;
+      expectedOriginSha?: string;
     }): Promise<IpcResult<{ workstream: Workstream }>>;
     /** Records a decision. Writes a record; publishes nothing. */
     decide(input: {

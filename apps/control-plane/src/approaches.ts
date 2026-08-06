@@ -156,6 +156,13 @@ export function summarizeApproaches(input: ApproachInputs): ApproachSummary[] {
       approach: workstream.approach,
       missionBranch: workstream.missionBranch,
       originSha: workstream.originSha,
+      // One rule, computed here and enforced by the creation route: a fork
+      // beside this lane starts from what this lane *shares* — its own origin
+      // where it has one, its latest checkpoint otherwise (D-079).
+      forkPointSha: sharedForkPoint(
+        { approach: workstream.approach, originSha: workstream.originSha },
+        latest?.sha ?? null
+      ),
       state: input.stateOf(lane),
       controllerLogin: input.controllers.get(lane) ?? null,
       checkpointSha: latest?.sha ?? null,
@@ -180,6 +187,24 @@ export function summarizeApproaches(input: ApproachInputs): ApproachSummary[] {
 function add(current: number | null, value: number | null): number | null {
   if (value === null) return current;
   return (current ?? 0) + value;
+}
+
+/**
+ * The checkpoint a new approach created beside this lane starts from (D-079).
+ *
+ * An approach forks from the last checkpoint the read lane *shares* with the
+ * lane it was itself created beside — which for an approach is its recorded
+ * origin, and for the lane the mission started with is simply its latest
+ * checkpoint. Work that exists only in the lane being read stays there: a
+ * sibling that inherited it would not be a competing approach to the same
+ * problem, it would be a continuation wearing the name.
+ */
+export function sharedForkPoint(
+  lane: { approach: boolean; originSha: string | null },
+  latestCheckpointSha: string | null
+): string | null {
+  if (lane.approach && lane.originSha !== null) return lane.originSha;
+  return latestCheckpointSha;
 }
 
 /** Files more than one lane changed. Novus points at them and merges nothing. */
@@ -302,16 +327,19 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
     const outcome = await withTransaction(deps.db, async (client) => {
       await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
       const lanes = await client.query(
-        "select wst_id, repo_id, base_ref, base_sha, branch_status from workstreams where mission_id = $1 order by created_at",
+        `select wst_id, repo_id, base_ref, base_sha, branch_status, approach_flag, origin_sha
+           from workstreams where mission_id = $1 order by created_at`,
         [access.missionId]
       );
       if ((lanes.rowCount ?? 0) >= MAX_LANES) return { error: "too_many_lanes" as const };
       const source = lanes.rows.find((row) => row.wst_id === body.data.fromWorkstreamId);
       if (!source) return { error: "no_source" as const };
 
-      // The origin: the exact revision this approach starts from. Without one
-      // there is nothing to have started *beside*, and a comparison would be
-      // between two different problems (D-074).
+      // The origin: the exact revision this approach starts from — the last
+      // checkpoint the source lane shares with the lane *it* forked beside,
+      // never the source's own later work (D-079). Without one there is
+      // nothing to have started beside, and a comparison would be between two
+      // different problems (D-074).
       const checkpoint = await client.query(
         `select c.sha from checkpoints c
            join executions e on e.exe_id = c.exe_id
@@ -319,8 +347,20 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
           order by c.created_at desc limit 1`,
         [body.data.fromWorkstreamId]
       );
-      const originSha = (checkpoint.rows[0]?.sha as string | undefined) ?? null;
+      const originSha = sharedForkPoint(
+        {
+          approach: Boolean(source.approach_flag),
+          originSha: (source.origin_sha as string | null) ?? null
+        },
+        (checkpoint.rows[0]?.sha as string | undefined) ?? null
+      );
       if (originSha === null) return { error: "nothing_to_fork" as const };
+      // The revision the person was shown is the revision they get, or nothing:
+      // silently forking from a checkpoint nobody looked at is how "changes
+      // made only in the current lane stay there" stops being true (D-079).
+      if (body.data.expectedOriginSha && body.data.expectedOriginSha !== originSha) {
+        return { error: "origin_moved" as const, originSha };
+      }
 
       const workstreamId = newWorkstreamId();
       const ordinal = (lanes.rowCount ?? 0) + 1;
@@ -336,7 +376,9 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
           workstreamId,
           access.missionId,
           source.repo_id,
-          body.data.name ?? `Approach ${ordinal}`,
+          // "Alternative", then "Alternative 2": the first lane already reads
+          // as the current work, and a fork is an alternative to it (D-079).
+          body.data.name ?? (ordinal === 2 ? "Alternative" : `Alternative ${ordinal - 1}`),
           body.data.intent,
           body.data.fromWorkstreamId,
           originSha,
@@ -391,11 +433,19 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
       if (outcome.error === "no_source") {
         return deps.sendError(reply, 404, "not_found", "No such workstream in this mission.");
       }
+      if (outcome.error === "origin_moved") {
+        return deps.sendError(
+          reply,
+          409,
+          "origin_moved",
+          `The shared checkpoint moved to ${outcome.originSha.slice(0, 8)} since you looked. Nothing was created — review the new checkpoint and start the approach again.`
+        );
+      }
       return deps.sendError(
         reply,
         409,
         "nothing_to_fork",
-        "There is nothing to fork yet — this workstream has not checkpointed any work."
+        "There is no shared checkpoint to start from yet — this lane has not checkpointed any work."
       );
     }
 

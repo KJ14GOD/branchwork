@@ -311,7 +311,8 @@ function registerIpc(): void {
         missionId: MissionIdSchema,
         fromWorkstreamId: z.string().startsWith("wst_"),
         intent: z.string().trim().min(1).max(APPROACH_INTENT_MAX),
-        name: z.string().trim().min(1).max(80).optional()
+        name: z.string().trim().min(1).max(80).optional(),
+        expectedOriginSha: z.string().min(7).max(64).optional()
       })
       .safeParse(raw);
     if (!parsed.success) {
@@ -321,7 +322,10 @@ function registerIpc(): void {
       let workstream = await api.createApproach(parsed.data.missionId, {
         fromWorkstreamId: parsed.data.fromWorkstreamId,
         intent: parsed.data.intent,
-        ...(parsed.data.name ? { name: parsed.data.name } : {})
+        ...(parsed.data.name ? { name: parsed.data.name } : {}),
+        ...(parsed.data.expectedOriginSha
+          ? { expectedOriginSha: parsed.data.expectedOriginSha }
+          : {})
       });
       // A local branch is this machine's job, exactly as it is when a mission
       // is created: cut the ref at the revision the approach forked from, and

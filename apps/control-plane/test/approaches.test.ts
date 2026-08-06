@@ -188,6 +188,24 @@ async function fork(lane: Lane, intent: string, as: SignedIn = kartik) {
   });
 }
 
+/** Enrols a freshly forked lane so it can be directed and can report. */
+async function enrol(missionId: string, workstreamId: string): Promise<Lane> {
+  await harness.app.inject({
+    method: "POST",
+    url: `/workstreams/${workstreamId}/branch/report`,
+    headers: bearer(kartik),
+    payload: { status: "created" }
+  });
+  const enrolled = await harness.app.inject({
+    method: "POST",
+    url: `/workstreams/${workstreamId}/runner`,
+    headers: bearer(kartik),
+    payload: { workstreamId, label: "kartik-macbook" }
+  });
+  expect(enrolled.statusCode).toBe(200);
+  return { missionId, workstreamId, credential: enrolled.json().credential as string };
+}
+
 const detailOf = async (lane: Lane, as: SignedIn = kartik) => {
   const response = await harness.app.inject({
     method: "GET",
@@ -264,6 +282,82 @@ describe("starting a competing approach", () => {
     const refused = await fork(lane, "Try the other library");
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error.code).toBe("nothing_to_fork");
+  });
+
+  it("forks beside an approach from the shared checkpoint, never the approach's own later work", async () => {
+    const { lane, sha: shared } = await laneWithWork();
+    const first = await fork(lane, "Try it in the middleware");
+    expect(first.statusCode).toBe(201);
+    const approach = await enrol(lane.missionId, first.json().workstream.workstreamId as string);
+
+    // The approach does its own work past the fork point.
+    const executionId = await direct(approach, "Go the middleware way");
+    const later = sha(`${approach.workstreamId}-later`);
+    await report(approach.credential, executionId, [checkpoint(1, later, "src/middleware.ts")]);
+
+    // Forking *beside the approach* starts from the checkpoint it shares with
+    // the lane it forked beside — not from `later`, which exists only in it.
+    const second = await fork(
+      { ...lane, workstreamId: approach.workstreamId },
+      "Try it as a background job"
+    );
+    expect(second.statusCode).toBe(201);
+    expect(second.json().workstream.originSha).toBe(shared);
+    expect(second.json().workstream.originSha).not.toBe(later);
+    expect(second.json().workstream.baseSha).toBe(shared);
+    // Named as the next alternative, not a copy of the first.
+    expect(second.json().workstream.name).toBe("Alternative 2");
+
+    // And the summary states the same fork point the route used: the
+    // approach's own head moved, its fork point did not.
+    const detail = await detailOf(lane);
+    const summarized = detail.approaches.find(
+      (entry: { workstreamId: string }) => entry.workstreamId === approach.workstreamId
+    );
+    expect(summarized.checkpointSha).toBe(later);
+    expect(summarized.forkPointSha).toBe(shared);
+    const baseline = detail.approaches.find(
+      (entry: { workstreamId: string }) => entry.workstreamId === lane.workstreamId
+    );
+    expect(baseline.forkPointSha).toBe(shared);
+    expect(baseline.name).toBe("Current work");
+    expect(summarized.name).toBe("Alternative");
+  });
+
+  it("refuses to fork from a revision the person was not shown", async () => {
+    const { lane, sha: shared } = await laneWithWork();
+    const stale = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/approaches`,
+      headers: bearer(kartik),
+      payload: {
+        fromWorkstreamId: lane.workstreamId,
+        intent: "Try it with a cache",
+        expectedOriginSha: sha("some-other-revision")
+      }
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().error.code).toBe("origin_moved");
+    expect(stale.json().error.message).toMatch(/Nothing was created/);
+    const lanes = await harness.db.query(
+      "select count(*)::int as n from workstreams where mission_id = $1",
+      [lane.missionId]
+    );
+    expect(lanes.rows[0].n).toBe(1);
+
+    // The pinned revision that matches is accepted.
+    const pinned = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/approaches`,
+      headers: bearer(kartik),
+      payload: {
+        fromWorkstreamId: lane.workstreamId,
+        intent: "Try it with a cache",
+        expectedOriginSha: shared
+      }
+    });
+    expect(pinned.statusCode).toBe(201);
+    expect(pinned.json().workstream.originSha).toBe(shared);
   });
 
   it("is a role's act, not the baton's: a contributor is refused", async () => {
