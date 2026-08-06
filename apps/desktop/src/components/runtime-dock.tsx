@@ -183,7 +183,7 @@ interface Pane {
  * Panes are created once per session and disposed when that session is closed
  * or the drawer unmounts.
  */
-function usePanes(missionId: string) {
+function usePanes(missionId: string, workstreamId?: string) {
   const panes = useRef(new Map<string, Pane>());
 
   useEffect(() => {
@@ -195,7 +195,7 @@ function usePanes(missionId: string) {
       }
       held.clear();
     };
-  }, [missionId]);
+  }, [missionId, workstreamId]);
 
   return panes;
 }
@@ -213,7 +213,16 @@ function usePanes(missionId: string) {
  * evidence panel's ledger. A switch in front of a shell is a navigation nobody
  * asked for on the one surface where the request is unambiguous.
  */
-export function RuntimeDock({ missionId }: { missionId: string }) {
+export function RuntimeDock({
+  missionId,
+  workstreamId
+}: {
+  missionId: string;
+  /** The lane whose worktree the shell opens in — the room's active approach.
+   *  Switching lanes remounts the dock, so a session in one worktree is never
+   *  presented as the other's (D-080). */
+  workstreamId?: string;
+}) {
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -221,7 +230,7 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
   const [heightVh, setHeightVh] = useState(DEFAULT_HEIGHT_VH);
 
   const screenRef = useRef<HTMLDivElement>(null);
-  const panes = usePanes(missionId);
+  const panes = usePanes(missionId, workstreamId);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
 
@@ -267,7 +276,7 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
   useEffect(() => {
     let live = true;
     void (async () => {
-      const result = await novus().terminal.list(missionId);
+      const result = await novus().terminal.list(missionId, workstreamId);
       if (!live) return;
       if (!result.ok) {
         setError(result.message);
@@ -275,7 +284,11 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
       }
       setSessions(result.value);
       if (result.value.length === 0) {
-        const opened = await novus().terminal.open({ missionId, kind: "shell" });
+        const opened = await novus().terminal.open({
+          missionId,
+          ...(workstreamId ? { workstreamId } : {}),
+          kind: "shell"
+        });
         if (!live) return;
         if (!opened.ok) {
           setError(opened.message);
@@ -290,7 +303,7 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
     return () => {
       live = false;
     };
-  }, [missionId]);
+  }, [missionId, workstreamId]);
 
   // Output is streamed from this machine's own main process and written into
   // the pane. It goes nowhere else (D-041).
@@ -365,6 +378,7 @@ export function RuntimeDock({ missionId }: { missionId: string }) {
     const current = activeId === null ? null : panes.current.get(activeId);
     const result = await novus().terminal.open({
       missionId,
+      ...(workstreamId ? { workstreamId } : {}),
       kind,
       ...(current ? { cols: current.terminal.cols, rows: current.terminal.rows } : {})
     });

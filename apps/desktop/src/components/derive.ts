@@ -14,6 +14,50 @@ import { clockTime, plural } from "../format";
 
 const HARNESS_NAME = "Claude Code";
 
+/**
+ * One lane's view of the mission (D-080).
+ *
+ * The server already computes the lane-scoped facts — control, capabilities,
+ * runner, workspace, state — for the lane the room asked for; what remains
+ * mission-wide in the payload are the ledgers (directions, executions,
+ * checkpoints, checks, approvals, events), because the Decision Room reads
+ * them across lanes. This filters those ledgers down to the response's own
+ * lane, so the trace, the state line's arithmetic, and the approval cards all
+ * describe one lane and never a sibling's work. A mission with one lane passes
+ * through untouched.
+ */
+export function laneView(detail: MissionDetailResponse): MissionDetailResponse {
+  const lane = detail.workstream?.workstreamId ?? null;
+  if (lane === null || detail.workstreams.length <= 1) return detail;
+  const laneOf = new Map(
+    detail.executions.map((execution) => [execution.executionId, execution.workstreamId])
+  );
+  return {
+    ...detail,
+    directions: detail.directions.filter((direction) => direction.workstreamId === lane),
+    executions: detail.executions.filter((execution) => execution.workstreamId === lane),
+    checkpoints: detail.checkpoints.filter(
+      (checkpoint) => laneOf.get(checkpoint.executionId) === lane
+    ),
+    checks: detail.checks.filter(
+      (check) =>
+        (check.workstreamId ??
+          (check.executionId === null ? null : laneOf.get(check.executionId) ?? null)) === lane
+    ),
+    approvals: detail.approvals.filter((approval) => approval.workstreamId === lane),
+    // A process without a lane predates lane-scoping; it belongs to the
+    // default lane rather than to every lane at once.
+    processes: detail.processes.filter(
+      (process) => (process.workstreamId ?? detail.workstreams[0]?.workstreamId) === lane
+    ),
+    // Mission-level events (null lane) stay: a participant joining belongs to
+    // every lane's story. Another lane's events do not.
+    events: detail.events.filter(
+      (event) => event.workstreamId === null || event.workstreamId === lane
+    )
+  };
+}
+
 /** The one execution that is still live, if any. At most one per workstream
  *  (PRODUCT.md#domain-model). */
 export function activeExecution(detail: MissionDetailResponse): Execution | null {

@@ -9,6 +9,7 @@ import {
   openDraft,
   openMission,
   promoteDraft,
+  selectLane,
   selectTab,
   tabIsGone,
   type WorkingSet
@@ -176,6 +177,38 @@ describe("what a relaunch restores", () => {
     expect(decodeWorkingSet("{not json", minter())).toEqual(emptyWorkingSet);
     expect(decodeWorkingSet("[]", minter())).toEqual(emptyWorkingSet);
     expect(decodeWorkingSet('{"missions":"nope"}', minter())).toEqual(emptyWorkingSet);
+  });
+
+  it("restores the approach lane a tab was reading, so the composer's target survives a relaunch", () => {
+    const mint = minter();
+    let set = openMission(emptyWorkingSet, "msn_a", "local:one", mint);
+    set = openMission(set, "msn_b", "local:one", mint);
+    // Reading msn_a's Alternative; msn_b stays on its default lane.
+    set = selectLane(set, set.tabs[0]!.id, "wst_alternative");
+    const restored = decodeWorkingSet(encodeWorkingSet(set), minter());
+    expect(restored.tabs[0]!.workstreamId).toBe("wst_alternative");
+    expect(restored.tabs[1]!.workstreamId).toBeNull();
+  });
+
+  it("selecting a lane changes that tab alone, and null returns to the default lane", () => {
+    const mint = minter();
+    let set = openMission(emptyWorkingSet, "msn_a", "local:one", mint);
+    set = openMission(set, "msn_b", "local:one", mint);
+    set = selectLane(set, set.tabs[0]!.id, "wst_alternative");
+    expect(set.tabs[0]!.workstreamId).toBe("wst_alternative");
+    expect(set.tabs[1]!.workstreamId).toBeNull();
+    set = selectLane(set, set.tabs[0]!.id, null);
+    expect(set.tabs[0]!.workstreamId).toBeNull();
+  });
+
+  it("drops a malformed stored lane rather than a whole tab", () => {
+    const raw = JSON.stringify({
+      missions: [{ missionId: "msn_a", projectKey: "local:one", workstreamId: "not-a-lane" }],
+      activeMissionId: "msn_a"
+    });
+    const restored = decodeWorkingSet(raw, minter());
+    expect(restored.tabs.map((tab) => tab.missionId)).toEqual(["msn_a"]);
+    expect(restored.tabs[0]!.workstreamId).toBeNull();
   });
 
   it("skips entries it cannot use and never restores one mission twice", () => {

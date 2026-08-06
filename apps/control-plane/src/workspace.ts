@@ -67,7 +67,10 @@ const MissionParamsSchema = z.object({ missionId: z.string().startsWith("msn_") 
 /** The same name rule the declared command carries — taken from the contract
  *  rather than restated, so the two can never drift. */
 const CommandNameSchema = WorkspaceCommandInputSchema.shape.name.unwrap();
-const StopInputSchema = z.object({ name: CommandNameSchema });
+const StopInputSchema = z.object({
+  name: CommandNameSchema,
+  workstreamId: z.string().startsWith("wst_").optional()
+});
 
 /** What a request became. `already_queued` is a double-click, not an error. */
 type Enqueued = "enqueued" | "already_queued" | "no_runner" | "not_declared";
@@ -188,9 +191,13 @@ async function authorizeCommand(
   deps: RouteDeps,
   ctx: { userId: string },
   missionId: string,
-  reply: FastifyReply
+  reply: FastifyReply,
+  /** The lane the command is for. Resolved like every other lane-scoped verb:
+   *  a lane that is not this mission's is a 404, never the default lane's
+   *  authority under the wrong name (D-080). */
+  workstreamId?: string
 ): Promise<MissionAccess | null> {
-  const access = await missionAccess(deps.db, ctx, missionId);
+  const access = await missionAccess(deps.db, ctx, missionId, workstreamId ?? null);
   if (!access) {
     await deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
     return null;
@@ -217,7 +224,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: RouteDeps): 
         body.error.issues[0]?.message ?? "That isn't a command this project declared."
       );
     }
-    const access = await authorizeCommand(deps, ctx, params.data.missionId, reply);
+    const access = await authorizeCommand(deps, ctx, params.data.missionId, reply, body.data.workstreamId);
     if (!access) return;
     const workstreamId = access.workstreamId;
     if (!workstreamId) {
@@ -308,7 +315,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: RouteDeps): 
       return deps.sendError(reply, 422, "invalid_command", "Name the command to stop.");
     }
     // Stopping is the same authority as starting: it acts on the same machine.
-    const access = await authorizeCommand(deps, ctx, params.data.missionId, reply);
+    const access = await authorizeCommand(deps, ctx, params.data.missionId, reply, body.data.workstreamId);
     if (!access) return;
     const workstreamId = access.workstreamId;
     if (!workstreamId) {

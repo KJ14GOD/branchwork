@@ -114,10 +114,13 @@ function Row({
 
 export function FileTree({
   missionId,
+  workstreamId,
   openPath,
   onOpenFile
 }: {
   missionId: string;
+  /** The lane whose worktree is listed — the room's active approach (D-080). */
+  workstreamId?: string;
   /** The file currently taking the canvas, so the tree can mark it. */
   openPath: string | null;
   onOpenFile: (path: string) => void;
@@ -129,7 +132,11 @@ export function FileTree({
 
   const load = useCallback(
     async (path: string) => {
-      const result = await novus().workspace.listFiles({ missionId, path: path === "" ? undefined : path });
+      const result = await novus().workspace.listFiles({
+        missionId,
+        ...(workstreamId ? { workstreamId } : {}),
+        path: path === "" ? undefined : path
+      });
       if (!result.ok) {
         setError(result.message);
         return;
@@ -137,7 +144,7 @@ export function FileTree({
       setError(null);
       setLevels((previous) => ({ ...previous, [path]: result.value }));
     },
-    [missionId]
+    [missionId, workstreamId]
   );
 
   useEffect(() => {

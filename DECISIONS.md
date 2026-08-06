@@ -1029,3 +1029,23 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** `CreateApproachInput` gains `expectedOriginSha`; `ApproachSummary` gains `forkPointSha`; the dialog states the mission goal, the exact shared checkpoint, and that changes made only in the current lane stay there. PRODUCT.md's origin-revision sentence is restated in these terms.
 
 **Revisit when.** Approaches need to fork from a *chosen* historical checkpoint rather than the shared one, at which point the dialog grows a revision picker and the pinning input already exists to carry it.
+
+## D-080 — The active lane is the room's address, and everything follows it
+
+**Context.** D-074 made a second lane possible and nothing made it *operable*: `MissionDetailResponse` was always the first lane's — its control, its capabilities, its state — the room rendered the mission's pooled ledgers, every workspace verb resolved to the first lane's worktree, and a direction submitted with no lane named landed on lane one however hard a person was looking at the Alternative. The Decision Room could compare lanes nobody could actually work in. DESIGN.md's sketch for this moment ("a slim lane header per workstream") predates the working set and the room's own file strip, and a header is not a way to *be in* a lane.
+
+**Decision.** The lane a person is reading is an explicit address, carried end to end.
+
+**One lane per response.** `missions.get` takes the lane being read; `missionAccess` resolves it, so control, capabilities, runner, workspace, **state and overlays** come back computed for that lane — a fresh Alternative reads as its own empty room, never as its sibling's finished work. A lane that is not the mission's answers "no such mission", never the default lane's data under the wrong name. The renderer's `laneView` filters the mission-wide ledgers (directions, executions, checkpoints, checks, approvals, events, processes) to the same lane for the trace, while the Decision Room keeps reading them across lanes.
+
+**Lanes are the room's own tabs.** The room's strip — the one that already carries file tabs — grows one tab per lane (a 7px identity dot and the name), a Compare tab, and nothing anywhere else: no second mission row in the rail, no lane in the window's mission strip. The rail says "2 approaches" under the mission's single row, a count and nothing more. A compact switcher (*Approaches 2 ▾*) beside *Try another approach* states the shared checkpoint and each lane's own facts in creation order, with Open — the same no-ranking rule as the comparison.
+
+**The composer targets the lane on screen, always.** Every direction carries the active lane's id explicitly; the composer's foot says "Directing Alternative"; workspace verbs — files, terminal, setup, secrets, checks, run, preview, output — carry the lane and act in its worktree. The selected lane is part of the tab in the working set, so a relaunch restores the lane and the composer's target with it.
+
+**Identity is a token pair, not a violet edge.** `--alt` is replaced by `--lane-current` (muted slate blue) and `--lane-alt` (muted amber): identity dots on tabs and switcher rows, plus the approach column's 1px edge. Identification only — the tokens' meaning forbids reading either as quality.
+
+**Alternatives.** Lane headers stacked in one room (rejected: two live traces in one scroll is a merged transcript, and the composer would need a target picker anyway); approaches as tabs in the window's mission strip (rejected: they are not missions, and the rail/strip contract says missions only — D-061); a global "active approach" per mission shared by all participants (rejected outright: which lane *you* are reading is client state, like which file you have open); inferring the direction's lane server-side from "the most recently active" (rejected: that is the silent routing this entry exists to forbid).
+
+**Consequences.** `Mission` gains `workstreamCount`; `MissionEvent` and `WorkspaceProcess` gain their lane; workspace/terminal IPC and the workspace command route accept a lane and resolve authority against it (ARCHITECTURE.md#authorization). DESIGN.md's lane-header sketch is replaced by the tab model, and the token table swaps `--alt` for the lane pair. The needs-attention lens still reads the default lane's state for missions nobody has open; a background Alternative that needs approval is visible in the room but not yet in the lens, and PROGRESS.md carries that as a gap.
+
+**Revisit when.** More lanes than fit a tab row turn out to be real — the switcher already scales, the tabs would need to collapse; or two people need to *share* a lane focus, at which point presence, not navigation, is the tool.

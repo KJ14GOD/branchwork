@@ -277,7 +277,14 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     if (!ctx) return;
     const params = z.object({ missionId: z.string().startsWith("msn_") }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, "bad_id", "Malformed mission id.");
-    const found = await getMission(db, ctx, params.data.missionId);
+    // The lane the caller is reading (D-080): control, capabilities, runner,
+    // workspace and state come back computed for it. A lane that is not this
+    // mission's is a 404, never the default lane's data under the wrong name.
+    const query = z
+      .object({ workstream: z.string().startsWith("wst_").optional() })
+      .safeParse(request.query);
+    if (!query.success) return sendError(reply, 400, "bad_id", "Malformed workstream id.");
+    const found = await getMission(db, ctx, params.data.missionId, query.data.workstream);
     if (!found) return sendError(reply, 404, "not_found", "No such mission in your organization.");
     return found;
   });

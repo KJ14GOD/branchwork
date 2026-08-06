@@ -27,6 +27,11 @@ export interface OpenTab {
   projectKey: string;
   /** Null while this tab is an unsent local draft — no mission exists yet. */
   missionId: string | null;
+  /** The approach lane this room is reading, null for the lane the mission
+   *  started with. Part of the tab because it is part of "the room you left":
+   *  reopening a mission puts you back in the lane you were directing, with
+   *  the composer targeting it (D-080). */
+  workstreamId: string | null;
 }
 
 export interface WorkingSet {
@@ -60,7 +65,7 @@ export function openMission(
 ): WorkingSet {
   const existing = tabFor(set, missionId);
   if (existing) return set.activeId === existing.id ? set : { ...set, activeId: existing.id };
-  const tab: OpenTab = { id: mint(), projectKey, missionId };
+  const tab: OpenTab = { id: mint(), projectKey, missionId, workstreamId: null };
   return { tabs: [...set.tabs, tab].slice(-MAX_TABS), activeId: tab.id };
 }
 
@@ -72,13 +77,28 @@ export function openMission(
 export function openDraft(set: WorkingSet, projectKey: string, mint: () => string): WorkingSet {
   const existing = set.tabs.find((tab) => tab.missionId === null && tab.projectKey === projectKey);
   if (existing) return set.activeId === existing.id ? set : { ...set, activeId: existing.id };
-  const tab: OpenTab = { id: mint(), projectKey, missionId: null };
+  const tab: OpenTab = { id: mint(), projectKey, missionId: null, workstreamId: null };
   return { tabs: [...set.tabs, tab].slice(-MAX_TABS), activeId: tab.id };
 }
 
 export function selectTab(set: WorkingSet, id: string): WorkingSet {
   if (!set.tabs.some((tab) => tab.id === id)) return set;
   return set.activeId === id ? set : { ...set, activeId: id };
+}
+
+/**
+ * Selects which approach lane a tab is reading. Null returns to the lane the
+ * mission started with. The choice survives a relaunch exactly as the open
+ * tab does, because the composer's target must come back as it was left —
+ * never silently reset to the first lane (D-080).
+ */
+export function selectLane(set: WorkingSet, tabId: string, workstreamId: string | null): WorkingSet {
+  const tab = set.tabs.find((entry) => entry.id === tabId);
+  if (!tab || tab.workstreamId === workstreamId) return set;
+  return {
+    ...set,
+    tabs: set.tabs.map((entry) => (entry.id === tabId ? { ...entry, workstreamId } : entry))
+  };
 }
 
 /**
@@ -135,6 +155,7 @@ export function tabIsGone(code: string): boolean {
 interface StoredTab {
   missionId: string;
   projectKey: string;
+  workstreamId?: string | null;
 }
 
 interface StoredWorkingSet {
@@ -152,7 +173,11 @@ export function encodeWorkingSet(set: WorkingSet): string {
   const stored: StoredWorkingSet = {
     missions: set.tabs
       .filter((tab): tab is OpenTab & { missionId: string } => tab.missionId !== null)
-      .map((tab) => ({ missionId: tab.missionId, projectKey: tab.projectKey })),
+      .map((tab) => ({
+        missionId: tab.missionId,
+        projectKey: tab.projectKey,
+        workstreamId: tab.workstreamId
+      })),
     activeMissionId: active?.missionId ?? null
   };
   return JSON.stringify(stored);
@@ -178,11 +203,21 @@ export function decodeWorkingSet(raw: string | null, mint: () => string): Workin
   const tabs: OpenTab[] = [];
   for (const entry of record.missions) {
     if (typeof entry !== "object" || entry === null) continue;
-    const candidate = entry as { missionId?: unknown; projectKey?: unknown };
+    const candidate = entry as { missionId?: unknown; projectKey?: unknown; workstreamId?: unknown };
     if (typeof candidate.missionId !== "string" || typeof candidate.projectKey !== "string") continue;
     if (candidate.missionId === "" || seen.has(candidate.missionId)) continue;
     seen.add(candidate.missionId);
-    tabs.push({ id: mint(), projectKey: candidate.projectKey, missionId: candidate.missionId });
+    tabs.push({
+      id: mint(),
+      projectKey: candidate.projectKey,
+      missionId: candidate.missionId,
+      // A stored lane comes back as it was left; anything malformed is the
+      // default lane rather than a broken tab.
+      workstreamId:
+        typeof candidate.workstreamId === "string" && candidate.workstreamId.startsWith("wst_")
+          ? candidate.workstreamId
+          : null
+    });
     if (tabs.length === MAX_TABS) break;
   }
   if (tabs.length === 0) return emptyWorkingSet;

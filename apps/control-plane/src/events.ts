@@ -101,6 +101,7 @@ export interface EventRow {
   cause_direction_id: string | null;
   cause_lease_id: string | null;
   execution_id: string | null;
+  workstream_id?: string | null;
   payload: Record<string, unknown>;
   schema_version: number;
   occurred_at: Date;
@@ -119,6 +120,7 @@ export function toMissionEvent(row: EventRow): MissionEvent {
     },
     cause: { directionId: row.cause_direction_id, leaseId: row.cause_lease_id },
     executionId: row.execution_id,
+    workstreamId: row.workstream_id ?? null,
     payload: row.payload,
     schemaVersion: row.schema_version,
     occurredAt: row.occurred_at.toISOString()
@@ -127,6 +129,6 @@ export function toMissionEvent(row: EventRow): MissionEvent {
 
 export const EVENT_SELECT = `
   select event_id, mission_id, seq, kind, actor_kind, actor_id, actor_login,
-         cause_direction_id, cause_lease_id, execution_id, payload,
+         cause_direction_id, cause_lease_id, execution_id, workstream_id, payload,
          schema_version, occurred_at
     from events`;

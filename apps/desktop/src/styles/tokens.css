@@ -20,7 +20,11 @@
   --ok: #8fae8b;
   --warn: #d9a47e;
   --danger: #c97b6f;
-  --alt: #9c8db8;
+  /* Lane identity (D-080): which approach something belongs to, never which
+     is better. Muted slate blue for the lane a mission starts with, muted
+     amber for a deliberately forked alternative. */
+  --lane-current: #7f9cc0;
+  --lane-alt: #cfa368;
 
   /* Interaction states */
   --hover: rgba(255, 255, 255, 0.06);
@@ -117,6 +121,8 @@
   --ok: #4f7a4a;
   --warn: #a15f28;
   --danger: #a8443a;
+  --lane-current: #3f5f85;
+  --lane-alt: #8a5f1e;
   --hover: rgba(0, 0, 0, 0.04);
   --selected: rgba(0, 0, 0, 0.06);
   --pressed: rgba(0, 0, 0, 0.06);

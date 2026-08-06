@@ -47,7 +47,16 @@ export function endingLabel(log: ProcessLog): string {
 }
 
 
-export function ProcessLogView({ missionId, kind }: { missionId: string; kind: ProcessKind }) {
+export function ProcessLogView({
+  missionId,
+  workstreamId,
+  kind
+}: {
+  missionId: string;
+  /** The lane whose processes are read — the room's active approach (D-080). */
+  workstreamId?: string;
+  kind: ProcessKind;
+}) {
   const [logs, setLogs] = useState<ProcessLog[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +66,7 @@ export function ProcessLogView({ missionId, kind }: { missionId: string; kind: P
   useEffect(() => {
     let live = true;
     void (async () => {
-      const result = await novus().workspace.logs(missionId);
+      const result = await novus().workspace.logs(missionId, workstreamId);
       if (!live) return;
       if (!result.ok) {
         setError(result.message);
@@ -68,7 +77,7 @@ export function ProcessLogView({ missionId, kind }: { missionId: string; kind: P
     return () => {
       live = false;
     };
-  }, [missionId]);
+  }, [missionId, workstreamId]);
 
   // Streamed from this machine's own main process, exactly like the terminal's.
   useEffect(() => {
@@ -79,7 +88,7 @@ export function ProcessLogView({ missionId, kind }: { missionId: string; kind: P
           // A process that started while this view was open: ask once for the
           // whole list rather than inventing a row from a chunk.
           void novus()
-            .workspace.logs(missionId)
+            .workspace.logs(missionId, workstreamId)
             .then((result) => {
               if (result.ok) setLogs(result.value);
             });
@@ -99,7 +108,7 @@ export function ProcessLogView({ missionId, kind }: { missionId: string; kind: P
         return next;
       });
     });
-  }, [missionId]);
+  }, [missionId, workstreamId]);
 
   const ofKind = useMemo(
     () =>

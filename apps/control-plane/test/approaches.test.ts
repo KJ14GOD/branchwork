@@ -457,6 +457,144 @@ describe("comparing them", () => {
   });
 });
 
+describe("routing direction to a lane", () => {
+  /** A mission with two lanes, both enrolled, ready to be directed. */
+  async function forkedMission() {
+    const { lane } = await laneWithWork();
+    const created = await fork(lane, "Do it in the middleware instead");
+    expect(created.statusCode).toBe(201);
+    const approach = await enrol(lane.missionId, created.json().workstream.workstreamId as string);
+    return { lane, approach };
+  }
+
+  it("a direction naming a lane lands in that lane — its row, its events, its execution, its checkpoint", async () => {
+    const { lane, approach } = await forkedMission();
+
+    // Into the lane the mission started with.
+    await direct(lane, "Keep going the guard way");
+    // Into the alternative.
+    const approachExecution = await direct(approach, "Go the middleware way");
+    const at = sha(`${approach.workstreamId}-turn`);
+    await report(approach.credential, approachExecution, [checkpoint(1, at, "src/middleware.ts")]);
+
+    const rows = await harness.db.query(
+      "select body, wst_id from directions where mission_id = $1 order by ordinal",
+      [lane.missionId]
+    );
+    const byBody = new Map(rows.rows.map((row) => [row.body as string, row.wst_id as string]));
+    expect(byBody.get("Keep going the guard way")).toBe(lane.workstreamId);
+    expect(byBody.get("Go the middleware way")).toBe(approach.workstreamId);
+
+    // The submitted events carry the lane the direction named.
+    const events = await harness.db.query(
+      "select workstream_id, payload from events where mission_id = $1 and kind = 'direction.submitted' order by seq",
+      [lane.missionId]
+    );
+    const eventLane = new Map(
+      events.rows.map((row) => [(row.payload as { body: string }).body, row.workstream_id as string])
+    );
+    expect(eventLane.get("Keep going the guard way")).toBe(lane.workstreamId);
+    expect(eventLane.get("Go the middleware way")).toBe(approach.workstreamId);
+
+    // Its execution and its checkpoint belong to the lane, not the mission's first.
+    const executions = await harness.db.query(
+      "select exe_id, wst_id from executions where mission_id = $1",
+      [lane.missionId]
+    );
+    const laneOf = new Map(executions.rows.map((row) => [row.exe_id as string, row.wst_id as string]));
+    expect(laneOf.get(approachExecution)).toBe(approach.workstreamId);
+    const checkpoints = await harness.db.query(
+      "select c.sha, e.wst_id from checkpoints c join executions e on e.exe_id = c.exe_id where c.mission_id = $1 and c.sha = $2",
+      [lane.missionId, at]
+    );
+    expect(checkpoints.rows[0]?.wst_id).toBe(approach.workstreamId);
+  });
+
+  it("reading the mission for a lane returns that lane's own control, state, and workstream", async () => {
+    const { lane, approach } = await forkedMission();
+    // The alternative's lease is held by its creator; direct it so its state
+    // diverges from the baseline's.
+    await direct(approach, "Go the middleware way");
+
+    const scoped = await harness.app.inject({
+      method: "GET",
+      url: `/missions/${lane.missionId}?workstream=${approach.workstreamId}`,
+      headers: bearer(kartik)
+    });
+    expect(scoped.statusCode).toBe(200);
+    expect(scoped.json().workstream.workstreamId).toBe(approach.workstreamId);
+    // The lane-scoped facts are the alternative's own.
+    expect(["agent_starting", "agent_running"]).toContain(scoped.json().state);
+    expect(scoped.json().control.holderLogin).toBe("kartik");
+
+    const defaulted = await harness.app.inject({
+      method: "GET",
+      url: `/missions/${lane.missionId}`,
+      headers: bearer(kartik)
+    });
+    expect(defaulted.json().workstream.workstreamId).toBe(lane.workstreamId);
+
+    // A lane that is not this mission's is no mission at all — never the
+    // default lane's data under the wrong name.
+    const other = await laneWithWork();
+    const crossed = await harness.app.inject({
+      method: "GET",
+      url: `/missions/${lane.missionId}?workstream=${other.lane.workstreamId}`,
+      headers: bearer(kartik)
+    });
+    expect(crossed.statusCode).toBe(404);
+  });
+
+  it("a role without direction.submit is refused on a named lane, and a foreign lane is 404", async () => {
+    const { lane, approach } = await forkedMission();
+    const viewer = await joinAs(lane.missionId, "maya-view-lane", "viewer");
+    const refused = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/direction`,
+      headers: bearer(viewer),
+      payload: {
+        body: "Try to steer the alternative",
+        model: "claude-fable-5",
+        effort: "high",
+        workstreamId: approach.workstreamId
+      }
+    });
+    expect(refused.statusCode).toBe(403);
+
+    const other = await laneWithWork();
+    const crossed = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/direction`,
+      headers: bearer(kartik),
+      payload: {
+        body: "Land in the wrong mission's lane",
+        model: "claude-fable-5",
+        effort: "high",
+        workstreamId: other.lane.workstreamId
+      }
+    });
+    expect(crossed.statusCode).toBe(404);
+    const rows = await harness.db.query(
+      "select count(*)::int as n from directions where mission_id = $1 and body like 'Land in%'",
+      [lane.missionId]
+    );
+    expect(rows.rows[0].n).toBe(0);
+  });
+
+  it("counts the mission's lanes for the rail", async () => {
+    const { lane } = await forkedMission();
+    const listed = await harness.app.inject({
+      method: "GET",
+      url: "/missions",
+      headers: bearer(kartik)
+    });
+    const mission = listed
+      .json()
+      .missions.find((entry: { missionId: string }) => entry.missionId === lane.missionId);
+    expect(mission.workstreamCount).toBe(2);
+  });
+});
+
 describe("the decision between them", () => {
   it("records the rationale, the revision, and what was unverified at that moment", async () => {
     const { lane, sha: at } = await laneWithWork();

@@ -1064,6 +1064,39 @@ body {
   text-align: center;
 }
 
+/* A lane tab is a room of its own inside the mission (D-080). The dot is the
+   lane's identity everywhere it appears — never a quality signal — and it
+   stays at full strength while the label dims, so an unselected lane is still
+   recognizably itself. */
+.lane-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.lane-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.lane-dot-current {
+  background: var(--lane-current);
+}
+
+.lane-dot-alt {
+  background: var(--lane-alt);
+}
+
+/* Which lane the room is, under the title: one quiet line, absent entirely
+   for a mission that never forked. */
+.lane-context {
+  font: var(--type-meta);
+  color: var(--text-3);
+  margin: 0;
+}
+
 /* The header answers, in order: what work, what is happening, who controls it. */
 .room-header {
   flex: none;
@@ -1561,6 +1594,59 @@ body {
   margin-left: auto;
   font: var(--type-meta);
   color: var(--text-3);
+}
+
+/* The lane switcher's popover (D-080): opens downward from the authority row,
+   one row per lane in creation order, each the same shape. No highlight on
+   the better one — there is no better one here. */
+.approaches-menu {
+  top: calc(100% + var(--s-1));
+  bottom: auto;
+  min-width: 340px;
+  padding: var(--s-2);
+}
+
+.approaches-shared {
+  font: var(--type-meta);
+  color: var(--text-3);
+  padding: var(--s-1) var(--s-2) var(--s-2);
+}
+
+.approaches-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 32px;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-control);
+}
+
+.approaches-name {
+  font: var(--type-row);
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.approaches-meta {
+  font: var(--type-meta);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.approaches-here {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.approaches-compare {
+  width: 100%;
+  justify-content: flex-start;
+  margin-top: var(--s-1);
 }
 
 /* The one sanctioned loop: the working indicator while an agent runs. */
@@ -3235,6 +3321,14 @@ body {
   cursor: pointer;
 }
 
+/* A mission with competing approaches says so in the rail with a count and
+   nothing else (D-080): the lanes are the room's, never rows in this list. */
+.side-approaches {
+  display: block;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
 .side-row-archive {
   flex: none;
   padding: 0 var(--s-2);
@@ -3620,10 +3714,11 @@ body.resizing {
   min-width: 0;
 }
 
-/* Identification only, never quality: `--alt` marks a lane as a deliberately
-   created approach and says nothing about whether it is the better one. */
+/* Identification only, never quality: `--lane-alt` marks a lane as a
+   deliberately created approach and says nothing about whether it is the
+   better one (D-080). */
 .approach-column.is-approach {
-  border-left: 1px solid var(--alt);
+  border-left: 1px solid var(--lane-alt);
 }
 
 .approach-name {

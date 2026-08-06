@@ -37,6 +37,7 @@ interface MissionRow {
   provider_repo_id: string | null;
   repo_name: string | null;
   default_branch: string | null;
+  workstream_count?: number;
 }
 
 interface WorkstreamRow {
@@ -77,7 +78,10 @@ function toMission(row: MissionRow): Mission {
     createdAt: row.created_at.toISOString(),
     archivedAt: row.archived_at ? row.archived_at.toISOString() : null,
     archivedByLogin: row.archived_by_login ?? null,
-    repository: toRepository(row)
+    repository: toRepository(row),
+    // How many lanes the mission holds, so the rail can say "2 approaches"
+    // without fetching every room (D-080). One for almost every mission.
+    workstreamCount: Number(row.workstream_count ?? 1)
   };
 }
 
@@ -411,7 +415,8 @@ const MISSION_SELECT = `
   select m.mission_id, m.org_id, m.goal, m.success_criteria, m.primary_state,
          m.created_by, u.login as created_by_login, m.created_at,
          m.archived_at, archiver.login as archived_by_login,
-         m.repo_id, r.provider, r.provider_repo_id, r.name as repo_name, r.default_branch
+         m.repo_id, r.provider, r.provider_repo_id, r.name as repo_name, r.default_branch,
+         (select count(*)::int from workstreams w where w.mission_id = m.mission_id) as workstream_count
     from missions m
     join users u on u.user_id = m.created_by
     left join users archiver on archiver.user_id = m.archived_by
@@ -520,7 +525,10 @@ function projectListState(row: {
 export async function getMissionBase(
   db: Db,
   ctx: AuthedContext,
-  missionId: string
+  missionId: string,
+  /** The lane the caller is reading. Absent means the one the mission started
+   *  with, so every mission that never forked is unchanged (D-074, D-080). */
+  workstreamId?: string
 ): Promise<{ mission: Mission; workstream: Workstream | null } | null> {
   const result = await db.query(
     `${MISSION_SELECT} ${VISIBLE_TO} where m.mission_id = $2`,
@@ -530,24 +538,31 @@ export async function getMissionBase(
   if (!row) return null;
   // The lane the room reads by default is the one the mission started with —
   // oldest first, so a mission that has since forked an approach still opens
-  // where it always did (D-074).
+  // where it always did (D-074). A named lane must belong to this mission, or
+  // the answer is "no such mission" rather than the default lane's data.
   const workstreamRows = await db.query(
     "select * from workstreams where mission_id = $1 order by created_at, wst_id",
     [missionId]
   );
-  const workstream = workstreamRows.rows[0] ? toWorkstream(workstreamRows.rows[0] as WorkstreamRow) : null;
+  const rows = workstreamRows.rows as WorkstreamRow[];
+  const selected = workstreamId ? rows.find((lane) => lane.wst_id === workstreamId) : rows[0];
+  if (workstreamId && !selected) return null;
+  const workstream = selected ? toWorkstream(selected) : null;
   return { mission: toMission(row), workstream };
 }
 
-/** The complete room payload for one authorized viewer. */
+/** The complete room payload for one authorized viewer, computed for the lane
+ *  they are reading: control, capabilities, runner, workspace and state are
+ *  that lane's own (D-080). */
 export async function getMission(
   db: Db,
   ctx: AuthedContext,
-  missionId: string
+  missionId: string,
+  workstreamId?: string
 ): Promise<MissionDetailResponse | null> {
-  const base = await getMissionBase(db, ctx, missionId);
+  const base = await getMissionBase(db, ctx, missionId, workstreamId);
   if (!base) return null;
-  const access = await missionAccess(db, ctx, missionId);
+  const access = await missionAccess(db, ctx, missionId, workstreamId ?? null);
   if (!access) return null;
   return missionDetail(db, access, ctx.userId, base);
 }

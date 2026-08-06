@@ -299,6 +299,7 @@ export async function listProcesses(db: Db, missionId: string): Promise<Workspac
   );
   return result.rows.map((row) => ({
     processId: row.prc_id as string,
+    workstreamId: row.wst_id as string,
     kind: row.kind as WorkspaceProcess["kind"],
     name: row.name as string,
     command: row.command as string,
@@ -621,6 +622,33 @@ export async function missionDetail(
   const decisions = await listDecisions(db, access.missionId);
   const current = decisions.find((decision) => decision.supersededAt === null) ?? null;
 
+  // The state and overlays are the *selected lane's* own (D-080): a mission
+  // with a fresh Alternative open must read as a lane with nothing in it, not
+  // as its sibling's finished work. With one lane these filters are identity.
+  const selectedLane = access.workstreamId;
+  const laneExecutions = selectedLane
+    ? executions.filter((execution) => execution.workstreamId === selectedLane)
+    : executions;
+  const laneCheckpoints = selectedLane
+    ? checkpoints.filter((checkpoint) => laneOf.get(checkpoint.executionId) === selectedLane)
+    : checkpoints;
+  const laneChecks = selectedLane
+    ? checks.filter(
+        (check) =>
+          (check.workstreamId ??
+            (check.executionId === null ? null : laneOf.get(check.executionId) ?? null)) ===
+          selectedLane
+      )
+    : checks;
+  const laneDirections = selectedLane
+    ? directions.filter((direction) => direction.workstreamId === selectedLane)
+    : directions;
+  const laneProcesses = selectedLane
+    ? processes.filter(
+        (process) => (process.workstreamId ?? workstreams[0]?.workstreamId) === selectedLane
+      )
+    : processes;
+
   const state = current
     ? // A recorded decision is what the mission is now about, and the state's
       // whole job is to say that nothing has been published (D-075).
@@ -629,17 +657,17 @@ export async function missionDetail(
         hasWorkstream: base.workstream !== null,
         branchReady: base.workstream?.branchStatus === "created",
         workspace,
-        executions,
-        checkpoints,
-        checks
+        executions: laneExecutions,
+        checkpoints: laneCheckpoints,
+        checks: laneChecks
       });
   const overlays = projectOverlays({
-    queuedDirections: directions.filter((direction) => direction.state === "queued").length,
+    queuedDirections: laneDirections.filter((direction) => direction.state === "queued").length,
     control,
     runner,
-    processes,
-    checks,
-    lastProgressAt: lastProgressOf(executions, eventRows.rows as EventRow[])
+    processes: laneProcesses,
+    checks: laneChecks,
+    lastProgressAt: lastProgressOf(laneExecutions, eventRows.rows as EventRow[])
   });
 
   return {

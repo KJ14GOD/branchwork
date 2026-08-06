@@ -182,8 +182,13 @@ export class ControlPlaneClient {
     return body.workstream;
   }
 
-  getMission(missionId: string): Promise<MissionDetailResponse> {
-    return this.request("GET", `/missions/${encodeURIComponent(missionId)}`, MissionDetailResponseSchema);
+  getMission(missionId: string, workstreamId?: string): Promise<MissionDetailResponse> {
+    const query = workstreamId ? `?workstream=${encodeURIComponent(workstreamId)}` : "";
+    return this.request(
+      "GET",
+      `/missions/${encodeURIComponent(missionId)}${query}`,
+      MissionDetailResponseSchema
+    );
   }
 
   // --- Direction ------------------------------------------------------------
@@ -368,7 +373,7 @@ export class ControlPlaneClient {
 
   async workspaceCommand(
     missionId: string,
-    input: { kind: "setup" | "run" | "verification"; name?: string }
+    input: { kind: "setup" | "run" | "verification"; name?: string; workstreamId?: string }
   ): Promise<void> {
     await this.request(
       "POST",
@@ -378,12 +383,12 @@ export class ControlPlaneClient {
     );
   }
 
-  async workspaceStop(missionId: string, name: string): Promise<void> {
+  async workspaceStop(missionId: string, name: string, workstreamId?: string): Promise<void> {
     await this.request(
       "POST",
       `/missions/${encodeURIComponent(missionId)}/workspace/stop`,
       OkResponseSchema,
-      { name }
+      workstreamId ? { name, workstreamId } : { name }
     );
   }
 

@@ -553,6 +553,7 @@ export function Inspector({
     setVerifyError(null);
     const result = await novus().workspace.command({
       missionId: detail.mission.missionId,
+      ...(detail.workstream ? { workstreamId: detail.workstream.workstreamId } : {}),
       kind: "verification"
     });
     setVerifying(false);
@@ -574,6 +575,7 @@ export function Inspector({
     setVerifyError(null);
     const result = await novus().workspace.command({
       missionId: detail.mission.missionId,
+      ...(detail.workstream ? { workstreamId: detail.workstream.workstreamId } : {}),
       kind: "verification",
       name
     });
@@ -633,7 +635,12 @@ export function Inspector({
 
         <div className="inspector-scroll">
           {topSection === "files" && (
-            <FileTree missionId={detail.mission.missionId} openPath={openPath} onOpenFile={onOpenFile} />
+            <FileTree
+              missionId={detail.mission.missionId}
+              workstreamId={detail.workstream?.workstreamId}
+              openPath={openPath}
+              onOpenFile={onOpenFile}
+            />
           )}
 
           {topSection === "changes" && (
@@ -794,7 +801,11 @@ export function Inspector({
                       </button>
                     ))}
                   </div>
-                  <ProcessLogView missionId={detail.mission.missionId} kind={outputKind} />
+                  <ProcessLogView
+                    missionId={detail.mission.missionId}
+                    workstreamId={detail.workstream?.workstreamId}
+                    kind={outputKind}
+                  />
                 </>
               )}
 

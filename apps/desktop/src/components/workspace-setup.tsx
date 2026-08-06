@@ -63,7 +63,7 @@ const SCOPES: { id: SettingsScope; label: string; note: string }[] = [
  * offered nothing: Novus does not write a plaintext secret to disk, and an
  * unprepared workspace is a state the product already knows how to say.
  */
-function SecretRows({ missionId }: { missionId: string }) {
+function SecretRows({ missionId, workstreamId }: { missionId: string; workstreamId?: string }) {
   const [state, setState] = useState<SecretState | null>(null);
   const [entering, setEntering] = useState<string | null>(null);
   const [value, setValue] = useState("");
@@ -71,10 +71,10 @@ function SecretRows({ missionId }: { missionId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const result = await novus().workspace.secrets(missionId);
+    const result = await novus().workspace.secrets(missionId, workstreamId);
     if (result.ok) setState(result.value);
     else setError(result.message);
-  }, [missionId]);
+  }, [missionId, workstreamId]);
 
   useEffect(() => {
     void load();
@@ -83,7 +83,12 @@ function SecretRows({ missionId }: { missionId: string }) {
   const supplyValue = async (name: string) => {
     setBusy(true);
     setError(null);
-    const result = await novus().workspace.supplySecret({ missionId, name, value });
+    const result = await novus().workspace.supplySecret({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      name,
+      value
+    });
     setBusy(false);
     // Cleared whatever happened: this component never holds a value longer
     // than the moment it takes to hand it to the main process.
@@ -98,7 +103,11 @@ function SecretRows({ missionId }: { missionId: string }) {
 
   const forget = async (name: string) => {
     setError(null);
-    const result = await novus().workspace.forgetSecret({ missionId, name });
+    const result = await novus().workspace.forgetSecret({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      name
+    });
     if (result.ok) setState(result.value);
     else setError(result.message);
   };
@@ -205,11 +214,15 @@ function SecretRows({ missionId }: { missionId: string }) {
 
 export function WorkspaceSetupDialog({
   missionId,
+  workstreamId,
   /** Whether this viewer is at the machine that holds the repository. */
   preparableHere,
   onClose
 }: {
   missionId: string;
+  /** The lane whose worktree is being prepared — the room's active approach
+   *  (D-080). */
+  workstreamId?: string;
   preparableHere: boolean;
   onClose: () => void;
 }) {
@@ -225,7 +238,7 @@ export function WorkspaceSetupDialog({
   const read = useCallback(async () => {
     if (!preparableHere) return;
     setLoad({ kind: "reading" });
-    const result = await novus().workspace.inspect(missionId);
+    const result = await novus().workspace.inspect(missionId, workstreamId);
     if (result.ok) {
       setLoad({ kind: "read", proposal: result.value });
       setDraft(draftFrom(result.value));
@@ -238,7 +251,7 @@ export function WorkspaceSetupDialog({
         ? { kind: "elsewhere" }
         : { kind: "refused", message: result.message }
     );
-  }, [missionId, preparableHere]);
+  }, [missionId, workstreamId, preparableHere]);
 
   useEffect(() => {
     void read();
@@ -284,6 +297,7 @@ export function WorkspaceSetupDialog({
     setSaveError(null);
     const result = await novus().workspace.save({
       missionId,
+      ...(workstreamId ? { workstreamId } : {}),
       scope,
       settings: settingsToSave(draft, load.proposal, scope)
     });
@@ -300,7 +314,11 @@ export function WorkspaceSetupDialog({
 
   const supply = async (path: string) => {
     setFiles((prev) => ({ ...prev, [path]: { kind: "copying" } }));
-    const result = await novus().workspace.prepareLocalFiles({ missionId, paths: [path] });
+    const result = await novus().workspace.prepareLocalFiles({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      paths: [path]
+    });
     if (!result.ok) {
       setFiles((prev) => ({ ...prev, [path]: { kind: "refused", because: result.message } }));
       return;
@@ -534,7 +552,7 @@ export function WorkspaceSetupDialog({
                   an event, or shown again — not even to you.
                 </p>
                 {preparableHere ? (
-                  <SecretRows missionId={missionId} />
+                  <SecretRows missionId={missionId} workstreamId={workstreamId} />
                 ) : (
                   <p className="quiet" data-testid="secrets-elsewhere">
                     A value is supplied on the machine hosting this workspace, and nowhere else.

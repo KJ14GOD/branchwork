@@ -164,7 +164,11 @@ export const MissionSchema = z.object({
    *  direction, event, checkpoint, check and approval stays exactly where it
    *  was, and the mission is still reachable and still restorable (D-063). */
   archivedAt: z.string().datetime().nullable(),
-  archivedByLogin: z.string().nullable()
+  archivedByLogin: z.string().nullable(),
+  /** How many lanes this mission holds — 1 for almost every mission, more only
+   *  where somebody deliberately forked an approach. The rail's "2 approaches"
+   *  line reads this rather than fetching every room (D-080). */
+  workstreamCount: z.number().int().positive().default(1)
 });
 export type Mission = z.infer<typeof MissionSchema>;
 
@@ -185,6 +189,10 @@ export const EventSchema = z.object({
     leaseId: z.string().nullable()
   }),
   executionId: z.string().nullable(),
+  /** The lane the event acted on; null for mission-level events. The room
+   *  filters its trace on this so one lane's activity never reads as
+   *  another's (D-080). */
+  workstreamId: z.string().nullable().default(null),
   payload: z.record(z.unknown()),
   schemaVersion: z.number().int().positive(),
   occurredAt: z.string().datetime()
@@ -705,6 +713,9 @@ export type ProcessReadiness = z.infer<typeof ProcessReadinessSchema>;
 
 export const WorkspaceProcessSchema = z.object({
   processId: z.string().startsWith("prc_"),
+  /** The lane whose worktree ran it (D-080). Optional so an older payload
+   *  still parses; the server always sends it. */
+  workstreamId: z.string().startsWith("wst_").optional(),
   kind: ProcessKindSchema,
   name: z.string().min(1),
   /** Sanitized: the command as declared, never an expanded secret. */
@@ -994,12 +1005,18 @@ export type PreparedFile = z.infer<typeof PreparedFileSchema>;
 
 export const SaveWorkspaceSettingsInputSchema = z.object({
   missionId: z.string().startsWith("msn_"),
+  /** The lane whose worktree this acts on. Absent means the one the
+   *  mission started with (D-080). */
+  workstreamId: z.string().startsWith("wst_").optional(),
   scope: SettingsScopeSchema,
   settings: WorkspaceSettingsSchema
 });
 
 export const PrepareLocalFilesInputSchema = z.object({
   missionId: z.string().startsWith("msn_"),
+  /** The lane whose worktree this acts on. Absent means the one the
+   *  mission started with (D-080). */
+  workstreamId: z.string().startsWith("wst_").optional(),
   /** Explicitly confirmed by the person at the machine, one by one. */
   paths: z.array(z.string().min(1).max(300)).min(1).max(50)
 });
@@ -1014,7 +1031,10 @@ export const PreparedFileSchema = z.object({
 export const WorkspaceCommandInputSchema = z.object({
   kind: ProcessKindSchema,
   /** Omitted for setup, and for "run every configured check". */
-  name: CommandName.optional()
+  name: CommandName.optional(),
+  /** The lane whose worktree runs it. Absent means the one the mission
+   *  started with, so nothing that never forked changes (D-080). */
+  workstreamId: z.string().startsWith("wst_").optional()
 });
 
 // --- Supplying a secret value (D-044) ----------------------------------------
@@ -1024,12 +1044,18 @@ export const WorkspaceCommandInputSchema = z.object({
 
 export const SupplySecretInputSchema = z.object({
   missionId: z.string().startsWith("msn_"),
+  /** The lane whose worktree this acts on. Absent means the one the
+   *  mission started with (D-080). */
+  workstreamId: z.string().startsWith("wst_").optional(),
   name: SecretNameSchema,
   value: z.string().min(MIN_SECRET_LENGTH).max(8_000)
 });
 
 export const ForgetSecretInputSchema = z.object({
   missionId: z.string().startsWith("msn_"),
+  /** The lane whose worktree this acts on. Absent means the one the
+   *  mission started with (D-080). */
+  workstreamId: z.string().startsWith("wst_").optional(),
   name: SecretNameSchema
 });
 
@@ -1054,6 +1080,9 @@ export type SecretState = z.infer<typeof SecretStateSchema>;
 
 export const OpenPreviewInputSchema = z.object({
   missionId: z.string().startsWith("msn_"),
+  /** The lane whose worktree this acts on. Absent means the one the
+   *  mission started with (D-080). */
+  workstreamId: z.string().startsWith("wst_").optional(),
   url: z.string().min(1).max(2_000)
 });
 
@@ -1126,6 +1155,9 @@ export type WorkspaceEntry = z.infer<typeof WorkspaceEntrySchema>;
 
 export const ListWorkspaceFilesInputSchema = z.object({
   missionId: z.string().startsWith("msn_"),
+  /** The lane whose worktree this acts on. Absent means the one the
+   *  mission started with (D-080). */
+  workstreamId: z.string().startsWith("wst_").optional(),
   /** The directory to list. Omitted for the worktree's own top level. */
   path: WorkspacePathSchema.optional()
 });
@@ -1143,11 +1175,17 @@ export type WorkspaceFile = z.infer<typeof WorkspaceFileSchema>;
 
 export const ReadWorkspaceFileInputSchema = z.object({
   missionId: z.string().startsWith("msn_"),
+  /** The lane whose worktree this acts on. Absent means the one the
+   *  mission started with (D-080). */
+  workstreamId: z.string().startsWith("wst_").optional(),
   path: WorkspacePathSchema
 });
 
 export const WriteWorkspaceFileInputSchema = z.object({
   missionId: z.string().startsWith("msn_"),
+  /** The lane whose worktree this acts on. Absent means the one the
+   *  mission started with (D-080). */
+  workstreamId: z.string().startsWith("wst_").optional(),
   path: WorkspacePathSchema,
   /** Bounded for the same reason reading is: this is an editor pane, not an
    *  upload channel. */
@@ -1197,6 +1235,9 @@ export type TerminalChunk = z.infer<typeof TerminalChunkSchema>;
 
 export const OpenTerminalInputSchema = z.object({
   missionId: z.string().startsWith("msn_"),
+  /** The lane whose worktree this acts on. Absent means the one the
+   *  mission started with (D-080). */
+  workstreamId: z.string().startsWith("wst_").optional(),
   name: z.string().trim().min(1).max(60).optional(),
   kind: TerminalKindSchema.default("shell"),
   cols: z.number().int().min(2).max(1000).optional(),
@@ -1664,8 +1705,10 @@ export const MissionListResponseSchema = z.object({
  *  demand so the poll stays small. */
 export const MissionDetailResponseSchema = z.object({
   mission: MissionSchema,
-  /** The lane the room reads by default: the mission's first workstream. Null
-   *  only for missions created before repository connection existed. */
+  /** The lane this response was computed for: the one the caller named, or
+   *  the mission's first workstream. Control, capabilities, runner, workspace
+   *  and state are this lane's own (D-080). Null only for missions created
+   *  before repository connection existed. */
   workstream: WorkstreamSchema.nullable(),
   /** Every lane this mission holds, in creation order — one for almost every
    *  mission, more only where somebody deliberately forked an approach
@@ -1831,7 +1874,10 @@ export interface NovusBridge {
      *  verb and one filter, so the two lists cannot disagree (D-063). */
     list(filter?: MissionListFilter): Promise<IpcResult<Mission[]>>;
     create(input: CreateMissionInput): Promise<IpcResult<{ mission: Mission; workstream: Workstream }>>;
-    get(missionId: string): Promise<IpcResult<MissionDetailResponse>>;
+    /** The room payload, computed for the named lane when one is given —
+     *  control, capabilities, runner, workspace and state are that lane's own
+     *  (D-080). Absent means the lane the mission started with. */
+    get(missionId: string, workstreamId?: string): Promise<IpcResult<MissionDetailResponse>>;
     retryBranch(workstreamId: string): Promise<IpcResult<Workstream>>;
     /** Submits attributed direction. Whether it runs now or queues for the
      *  controller is the server's decision, reflected in the returned state. */
@@ -1929,9 +1975,10 @@ export interface NovusBridge {
    */
   workspace: {
     /** What Novus noticed and would therefore propose. Executes nothing. */
-    inspect(missionId: string): Promise<IpcResult<WorkspaceProposal>>;
+    inspect(missionId: string, workstreamId?: string): Promise<IpcResult<WorkspaceProposal>>;
     save(input: {
       missionId: string;
+      workstreamId?: string;
       scope: SettingsScope;
       settings: WorkspaceSettings;
     }): Promise<IpcResult<null>>;
@@ -1939,40 +1986,42 @@ export interface NovusBridge {
      *  out — a content never crosses this bridge. */
     prepareLocalFiles(input: {
       missionId: string;
+      workstreamId?: string;
       paths: string[];
     }): Promise<IpcResult<PreparedFile[]>>;
     /** Asks the control plane to authorize and enqueue a declared command. */
     command(input: {
       missionId: string;
+      workstreamId?: string;
       kind: ProcessKind;
       name?: string;
     }): Promise<IpcResult<null>>;
-    stop(input: { missionId: string; name: string }): Promise<IpcResult<null>>;
+    stop(input: { missionId: string; workstreamId?: string; name: string }): Promise<IpcResult<null>>;
     /**
      * This workstream's local process output. Local only, exactly like the
      * terminal: it never travels to the control plane, and what a remote
      * participant sees is the bounded result attached to a check's evidence.
      */
-    logs(missionId: string): Promise<IpcResult<ProcessLog[]>>;
+    logs(missionId: string, workstreamId?: string): Promise<IpcResult<ProcessLog[]>>;
     onLog(listener: (chunk: ProcessLogChunk) => void): () => void;
     /** The declared secret names and whether this machine supplied each. Never
      *  a value: nothing reads one back out of the store. */
-    secrets(missionId: string): Promise<IpcResult<SecretState>>;
-    supplySecret(input: { missionId: string; name: string; value: string }): Promise<
+    secrets(missionId: string, workstreamId?: string): Promise<IpcResult<SecretState>>;
+    supplySecret(input: { missionId: string; workstreamId?: string; name: string; value: string }): Promise<
       IpcResult<SecretState>
     >;
-    forgetSecret(input: { missionId: string; name: string }): Promise<IpcResult<SecretState>>;
+    forgetSecret(input: { missionId: string; workstreamId?: string; name: string }): Promise<IpcResult<SecretState>>;
     /** Opens a loopback preview in the operating system's browser. No shell
      *  command is involved and nothing but loopback http/https is accepted. */
-    openPreview(input: { missionId: string; url: string }): Promise<IpcResult<null>>;
+    openPreview(input: { missionId: string; workstreamId?: string; url: string }): Promise<IpcResult<null>>;
     /**
      * The workspace's own files (D-048). Local, like the terminal: the worktree
      * is on this machine, every path is resolved against it and refused if it
      * leaves, and what comes back is shown rather than reported.
      */
-    listFiles(input: { missionId: string; path?: string }): Promise<IpcResult<WorkspaceEntry[]>>;
-    readFile(input: { missionId: string; path: string }): Promise<IpcResult<WorkspaceFile>>;
-    writeFile(input: { missionId: string; path: string; text: string }): Promise<IpcResult<null>>;
+    listFiles(input: { missionId: string; workstreamId?: string; path?: string }): Promise<IpcResult<WorkspaceEntry[]>>;
+    readFile(input: { missionId: string; workstreamId?: string; path: string }): Promise<IpcResult<WorkspaceFile>>;
+    writeFile(input: { missionId: string; workstreamId?: string; path: string; text: string }): Promise<IpcResult<null>>;
   };
   /**
    * The interactive terminal (D-042). Every verb here is local: a session is
@@ -1986,9 +2035,10 @@ export interface NovusBridge {
   terminal: {
     /** This workstream's sessions on this machine. Empty after a relaunch,
      *  because a PTY does not outlive the process that owned it. */
-    list(missionId: string): Promise<IpcResult<TerminalSession[]>>;
+    list(missionId: string, workstreamId?: string): Promise<IpcResult<TerminalSession[]>>;
     open(input: {
       missionId: string;
+      workstreamId?: string;
       name?: string;
       kind: TerminalKind;
       cols?: number;

@@ -33,7 +33,11 @@ const novus: NovusBridge = {
   missions: {
     list: (filter) => ipcRenderer.invoke("novus:missions:list", filter),
     create: (input) => ipcRenderer.invoke("novus:missions:create", input),
-    get: (missionId) => ipcRenderer.invoke("novus:missions:get", missionId),
+    get: (missionId, workstreamId) =>
+      ipcRenderer.invoke(
+        "novus:missions:get",
+        workstreamId ? { missionId, workstreamId } : missionId
+      ),
     retryBranch: (workstreamId) => ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
     direct: (input) => ipcRenderer.invoke("novus:missions:direct", input),
     resolveDirection: (input) => ipcRenderer.invoke("novus:missions:resolve-direction", input),
@@ -68,18 +72,21 @@ const novus: NovusBridge = {
     fileDiff: (changeId) => ipcRenderer.invoke("novus:evidence:file-diff", changeId)
   },
   workspace: {
-    inspect: (missionId) => ipcRenderer.invoke("novus:workspace:inspect", missionId),
+    inspect: (missionId, workstreamId) =>
+      ipcRenderer.invoke("novus:workspace:inspect", workstreamId ? { missionId, workstreamId } : missionId),
     save: (input) => ipcRenderer.invoke("novus:workspace:save", input),
     prepareLocalFiles: (input) => ipcRenderer.invoke("novus:workspace:prepare-local-files", input),
     command: (input) => ipcRenderer.invoke("novus:workspace:command", input),
     stop: (input) => ipcRenderer.invoke("novus:workspace:stop", input),
-    logs: (missionId) => ipcRenderer.invoke("novus:workspace:logs", missionId),
+    logs: (missionId, workstreamId) =>
+      ipcRenderer.invoke("novus:workspace:logs", workstreamId ? { missionId, workstreamId } : missionId),
     onLog: (listener: (chunk: ProcessLogChunk) => void) => {
       const wrapped = (_event: unknown, chunk: ProcessLogChunk) => listener(chunk);
       ipcRenderer.on("novus:process-log", wrapped);
       return () => ipcRenderer.removeListener("novus:process-log", wrapped);
     },
-    secrets: (missionId) => ipcRenderer.invoke("novus:workspace:secrets", missionId),
+    secrets: (missionId, workstreamId) =>
+      ipcRenderer.invoke("novus:workspace:secrets", workstreamId ? { missionId, workstreamId } : missionId),
     supplySecret: (input) => ipcRenderer.invoke("novus:workspace:supply-secret", input),
     forgetSecret: (input) => ipcRenderer.invoke("novus:workspace:forget-secret", input),
     openPreview: (input) => ipcRenderer.invoke("novus:workspace:open-preview", input),
@@ -91,7 +98,8 @@ const novus: NovusBridge = {
   // main process and there is no shell verb in the runner protocol for any of
   // it to travel through (D-042).
   terminal: {
-    list: (missionId) => ipcRenderer.invoke("novus:terminal:list", missionId),
+    list: (missionId, workstreamId) =>
+      ipcRenderer.invoke("novus:terminal:list", workstreamId ? { missionId, workstreamId } : missionId),
     open: (input) => ipcRenderer.invoke("novus:terminal:open", input),
     scrollback: (sessionId) => ipcRenderer.invoke("novus:terminal:scrollback", sessionId),
     write: (input) => ipcRenderer.invoke("novus:terminal:write", input),

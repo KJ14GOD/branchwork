@@ -60,6 +60,9 @@ export function RunControl({
   const [note, setNote] = useState<string | null>(null);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const missionId = detail.mission.missionId;
+  // The lane the detail was computed for — the room's active approach. Every
+  // verb here names it, so a command runs in the lane on screen (D-080).
+  const workstreamId = detail.workstream?.workstreamId;
   const declared = detail.workspace?.declared ?? [];
   const running = liveRunProcess(detail);
   const previewUrl = running?.previewUrl ?? null;
@@ -76,7 +79,7 @@ export function RunControl({
    */
   const read = useCallback(async () => {
     setProposal((previous) => (previous.kind === "read" ? previous : { kind: "reading" }));
-    const result = await novus().workspace.inspect(missionId);
+    const result = await novus().workspace.inspect(missionId, workstreamId);
     setProposal(
       result.ok
         ? { kind: "read", items: commandItems(result.value, declared) }
@@ -84,7 +87,7 @@ export function RunControl({
           ? { kind: "read", items: commandItems(null, declared) }
           : { kind: "refused", message: result.message }
     );
-  }, [missionId, declared]);
+  }, [missionId, workstreamId, declared]);
 
   useEffect(() => {
     setProposal({ kind: "unread" });
@@ -125,12 +128,21 @@ export function RunControl({
 
   const invoke = async (item: CommandItem) => {
     setOpen(false);
-    const result = await novus().workspace.command({ missionId, kind: item.kind, name: item.name });
+    const result = await novus().workspace.command({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      kind: item.kind,
+      name: item.name
+    });
     setNote(result.ok ? null : result.message);
   };
 
   const stop = async (name: string) => {
-    const result = await novus().workspace.stop({ missionId, name });
+    const result = await novus().workspace.stop({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      name
+    });
     setNote(result.ok ? null : result.message);
   };
 
@@ -142,7 +154,11 @@ export function RunControl({
    * address to reach one.
    */
   const preview = async (url: string) => {
-    const result = await novus().workspace.openPreview({ missionId, url });
+    const result = await novus().workspace.openPreview({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      url
+    });
     setNote(result.ok ? null : result.message);
   };
 

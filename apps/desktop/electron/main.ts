@@ -124,6 +124,19 @@ async function call<T>(fn: () => Promise<T>): Promise<IpcResult<T>> {
 }
 
 const MissionIdSchema = z.string().startsWith("msn_");
+/** A mission, or a mission with the lane being read (D-080): a bare id keeps
+ *  meaning the lane the mission started with, so nothing that never forked
+ *  changes shape. */
+const MissionTargetSchema = z.union([
+  z.string().startsWith("msn_").transform((missionId) => ({
+    missionId,
+    workstreamId: undefined as string | undefined
+  })),
+  z.object({
+    missionId: z.string().startsWith("msn_"),
+    workstreamId: z.string().startsWith("wst_").optional()
+  })
+]);
 
 async function restoreSession(): Promise<void> {
   if (!store.load()) return;
@@ -507,9 +520,19 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("novus:missions:get", async (_event, raw: unknown) => {
-    const parsed = MissionIdSchema.safeParse(raw);
+    // A bare id, or an id with the lane being read (D-080): the room asks for
+    // the lane it is showing, and everything lane-scoped comes back for it.
+    const parsed = z
+      .union([
+        MissionIdSchema.transform((missionId) => ({ missionId, workstreamId: undefined as string | undefined })),
+        z.object({
+          missionId: MissionIdSchema,
+          workstreamId: z.string().startsWith("wst_").optional()
+        })
+      ])
+      .safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
-    return call(() => api.getMission(parsed.data));
+    return call(() => api.getMission(parsed.data.missionId, parsed.data.workstreamId));
   });
 
   // --- Control --------------------------------------------------------------
@@ -605,8 +628,13 @@ function registerIpc(): void {
    * two are the same thing and asking about the provider would refuse a
    * workspace that plainly exists.
    */
-  const targetFor = async (missionId: string): Promise<WorkspaceTarget> => {
-    const detail = await api.getMission(missionId);
+  const targetFor = async (missionId: string, workstreamId?: string): Promise<WorkspaceTarget> => {
+    // Lane-scoped (D-080): the detail comes back computed for the named lane,
+    // so a terminal, file listing, or setup on the Alternative acts in the
+    // Alternative's worktree and nowhere else. The control plane refuses a
+    // lane that is not this mission's, so there is no way to borrow the
+    // default lane's workspace under another lane's name.
+    const detail = await api.getMission(missionId, workstreamId);
     const repository = detail.mission.repository;
     const workstream = detail.workstream;
     if (!repository || !workstream) {
@@ -633,9 +661,11 @@ function registerIpc(): void {
   };
 
   ipcMain.handle("novus:workspace:inspect", async (_event, raw: unknown) => {
-    const parsed = MissionIdSchema.safeParse(raw);
+    const parsed = MissionTargetSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
-    return call(async () => inspectWorkspace(await targetFor(parsed.data)));
+    return call(async () =>
+      inspectWorkspace(await targetFor(parsed.data.missionId, parsed.data.workstreamId))
+    );
   });
 
   ipcMain.handle("novus:workspace:save", async (_event, raw: unknown) => {
@@ -643,7 +673,7 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed settings." };
     const result = await call(async () => {
       await saveWorkspaceSettings(
-        await targetFor(parsed.data.missionId),
+        await targetFor(parsed.data.missionId, parsed.data.workstreamId),
         parsed.data.scope,
         parsed.data.settings
       );
@@ -660,7 +690,10 @@ function registerIpc(): void {
     const parsed = PrepareLocalFilesInputSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed file list." };
     return call(async () =>
-      prepareLocalFiles(await targetFor(parsed.data.missionId), parsed.data.paths)
+      prepareLocalFiles(
+        await targetFor(parsed.data.missionId, parsed.data.workstreamId),
+        parsed.data.paths
+      )
     );
   });
 
@@ -673,7 +706,8 @@ function registerIpc(): void {
     const result = await call(async () => {
       await api.workspaceCommand(parsed.data.missionId, {
         kind: parsed.data.kind,
-        name: parsed.data.name
+        name: parsed.data.name,
+        ...(parsed.data.workstreamId ? { workstreamId: parsed.data.workstreamId } : {})
       });
       return null;
     });
@@ -688,9 +722,11 @@ function registerIpc(): void {
   // the operating system that is running the server (D-044, D-045).
 
   ipcMain.handle("novus:workspace:secrets", async (_event, raw: unknown) => {
-    const parsed = MissionIdSchema.safeParse(raw);
+    const parsed = MissionTargetSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
-    return call(async () => secretsFor(await targetFor(parsed.data)));
+    return call(async () =>
+      secretsFor(await targetFor(parsed.data.missionId, parsed.data.workstreamId))
+    );
   });
 
   ipcMain.handle("novus:workspace:supply-secret", async (_event, raw: unknown) => {
@@ -703,39 +739,55 @@ function registerIpc(): void {
       };
     }
     return call(async () =>
-      supplySecret(await targetFor(parsed.data.missionId), parsed.data.name, parsed.data.value)
+      supplySecret(
+        await targetFor(parsed.data.missionId, parsed.data.workstreamId),
+        parsed.data.name,
+        parsed.data.value
+      )
     );
   });
 
   ipcMain.handle("novus:workspace:forget-secret", async (_event, raw: unknown) => {
     const parsed = ForgetSecretInputSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed variable name." };
-    return call(async () => forgetSecret(await targetFor(parsed.data.missionId), parsed.data.name));
+    return call(async () =>
+      forgetSecret(await targetFor(parsed.data.missionId, parsed.data.workstreamId), parsed.data.name)
+    );
   });
 
   ipcMain.handle("novus:workspace:logs", async (_event, raw: unknown) => {
-    const parsed = MissionIdSchema.safeParse(raw);
+    const parsed = MissionTargetSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
-    return call(async () => processLogsFor((await targetFor(parsed.data)).workstreamId));
+    return call(async () =>
+      processLogsFor((await targetFor(parsed.data.missionId, parsed.data.workstreamId)).workstreamId)
+    );
   });
 
   ipcMain.handle("novus:workspace:list-files", async (_event, raw: unknown) => {
     const parsed = ListWorkspaceFilesInputSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed folder." };
-    return call(async () => listFiles(await targetFor(parsed.data.missionId), parsed.data.path));
+    return call(async () =>
+      listFiles(await targetFor(parsed.data.missionId, parsed.data.workstreamId), parsed.data.path)
+    );
   });
 
   ipcMain.handle("novus:workspace:read-file", async (_event, raw: unknown) => {
     const parsed = ReadWorkspaceFileInputSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed path." };
-    return call(async () => readFile(await targetFor(parsed.data.missionId), parsed.data.path));
+    return call(async () =>
+      readFile(await targetFor(parsed.data.missionId, parsed.data.workstreamId), parsed.data.path)
+    );
   });
 
   ipcMain.handle("novus:workspace:write-file", async (_event, raw: unknown) => {
     const parsed = WriteWorkspaceFileInputSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed edit." };
     return call(async () => {
-      await writeFile(await targetFor(parsed.data.missionId), parsed.data.path, parsed.data.text);
+      await writeFile(
+        await targetFor(parsed.data.missionId, parsed.data.workstreamId),
+        parsed.data.path,
+        parsed.data.text
+      );
       return null;
     });
   });
@@ -744,7 +796,7 @@ function registerIpc(): void {
     const parsed = OpenPreviewInputSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed preview address." };
     return call(async () => {
-      const target = await targetFor(parsed.data.missionId);
+      const target = await targetFor(parsed.data.missionId, parsed.data.workstreamId);
       // `shell.openExternal` and nothing else: no shell command is involved in
       // opening a preview, here or anywhere.
       await openPreview(target.workstreamId, parsed.data.url, async (url) => {
@@ -760,11 +812,15 @@ function registerIpc(): void {
 
   ipcMain.handle("novus:workspace:stop", async (_event, raw: unknown) => {
     const parsed = z
-      .object({ missionId: MissionIdSchema, name: z.string().min(1).max(80) })
+      .object({
+        missionId: MissionIdSchema,
+        workstreamId: z.string().startsWith("wst_").optional(),
+        name: z.string().min(1).max(80)
+      })
       .safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
     const result = await call(async () => {
-      await api.workspaceStop(parsed.data.missionId, parsed.data.name);
+      await api.workspaceStop(parsed.data.missionId, parsed.data.name, parsed.data.workstreamId);
       return null;
     });
     runner?.pollNow();
@@ -780,16 +836,18 @@ function registerIpc(): void {
   // states in words rather than hiding the control.
 
   ipcMain.handle("novus:terminal:list", async (_event, raw: unknown) => {
-    const parsed = MissionIdSchema.safeParse(raw);
+    const parsed = MissionTargetSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
-    return call(async () => listTerminals((await targetFor(parsed.data)).workstreamId));
+    return call(async () =>
+      listTerminals((await targetFor(parsed.data.missionId, parsed.data.workstreamId)).workstreamId)
+    );
   });
 
   ipcMain.handle("novus:terminal:open", async (_event, raw: unknown) => {
     const parsed = OpenTerminalInputSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed terminal request." };
     return call(async () =>
-      openTerminal(await targetFor(parsed.data.missionId), {
+      openTerminal(await targetFor(parsed.data.missionId, parsed.data.workstreamId), {
         name: parsed.data.name,
         kind: parsed.data.kind,
         cols: parsed.data.cols,

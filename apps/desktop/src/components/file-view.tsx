@@ -92,7 +92,16 @@ function Source({ text, extension }: { text: string; extension: string }) {
   );
 }
 
-export function FileView({ missionId, path }: { missionId: string; path: string }) {
+export function FileView({
+  missionId,
+  workstreamId,
+  path
+}: {
+  missionId: string;
+  /** The lane whose worktree holds the file — the room's active approach (D-080). */
+  workstreamId?: string;
+  path: string;
+}) {
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [mode, setMode] = useState<Mode>("preview");
   const [draft, setDraft] = useState<string | null>(null);
@@ -102,11 +111,15 @@ export function FileView({ missionId, path }: { missionId: string; path: string 
 
   const read = useCallback(async () => {
     setLoad({ kind: "loading" });
-    const result = await novus().workspace.readFile({ missionId, path });
+    const result = await novus().workspace.readFile({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      path
+    });
     setLoad(result.ok ? { kind: "read", file: result.value } : { kind: "refused", message: result.message });
     setDraft(null);
     setSaveError(null);
-  }, [missionId, path]);
+  }, [missionId, workstreamId, path]);
 
   useEffect(() => {
     setMode(isMarkdown(path) ? "preview" : "edit");
@@ -122,7 +135,12 @@ export function FileView({ missionId, path }: { missionId: string; path: string 
     if (draft === null || saving) return;
     setSaving(true);
     setSaveError(null);
-    const result = await novus().workspace.writeFile({ missionId, path, text: draft });
+    const result = await novus().workspace.writeFile({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      path,
+      text: draft
+    });
     setSaving(false);
     if (!result.ok) {
       setSaveError(result.message);

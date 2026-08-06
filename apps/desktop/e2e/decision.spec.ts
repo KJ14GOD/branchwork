@@ -251,6 +251,10 @@ describe("competing approaches, compared and decided", () => {
     // --- Nothing to compare yet, so there is no comparison ------------------
     // Prohibited pattern 11: no decision or comparison UI over empty content.
     expect(await page.getByTestId("open-decision-room").count()).toBe(0);
+    // And no lane chrome at all: a one-approach mission stays simple (D-080).
+    expect(await page.getByTestId("lane-tab").count()).toBe(0);
+    expect(await page.getByTestId("approaches-switcher").count()).toBe(0);
+    expect(await page.getByTestId("mission-approaches-count").count()).toBe(0);
 
     // --- Try another approach, which requires saying how it differs ---------
     await page.getByTestId("try-another-approach").click();
@@ -258,6 +262,12 @@ describe("competing approaches, compared and decided", () => {
     await dialog.waitFor({ timeout: 30_000 });
     // The intent is required: the primary action is dead until there is one.
     expect(await page.getByTestId("create-approach").isDisabled()).toBe(true);
+    // The dialog names the goal and the exact shared checkpoint it forks at,
+    // and says the current lane's own changes stay where they are (D-079).
+    expect(await page.getByTestId("approach-goal").innerText()).toContain("session guard");
+    const originLine = await page.getByTestId("approach-origin").innerText();
+    expect(originLine).toMatch(/Starts from shared checkpoint/i);
+    expect(originLine).toMatch(/stay there/i);
     await page.getByTestId("approach-intent-input").fill("Do it in the middleware instead");
     await shot("83-try-another-approach.png");
     await page.getByTestId("create-approach").click();
@@ -273,13 +283,45 @@ describe("competing approaches, compared and decided", () => {
     expect(approach.originSha).toBeTruthy();
     // Its own branch, beside the baseline's rather than replacing it.
     expect(approach.missionBranch).not.toBe(baseline.missionBranch);
+    // Named for what they are (D-079).
+    expect(baseline.name).toBe("Current work");
+    expect(approach.name).toBe("Alternative");
+
+    // --- The room grows lane tabs, and the rail a count — nothing else -----
+    const laneTabs = page.getByTestId("lane-tab");
+    await expect.poll(() => laneTabs.count(), { timeout: 30_000 }).toBe(2);
+    expect(await laneTabs.nth(0).innerText()).toContain("Current work");
+    expect(await laneTabs.nth(1).innerText()).toContain("Alternative");
+    // One mission row in the rail, carrying a count only (D-080).
+    await expect
+      .poll(() => page.getByTestId("mission-approaches-count").count(), { timeout: 30_000 })
+      .toBe(1);
+    expect(await page.getByTestId("mission-approaches-count").innerText()).toContain("2 approaches");
+    expect(await page.getByTestId("mission-row").count()).toBe(1);
+
+    // --- Switching lanes is the tab, and everything follows it -------------
+    // The new lane opened automatically... it did not: opening is explicit
+    // here, which is one deliberate click on the tab that just appeared.
+    await laneTabs.nth(1).click();
+    // The room re-polls for the lane it now reads; the switch is complete when
+    // the header says so.
+    await expect
+      .poll(() => page.getByTestId("lane-context").innerText(), { timeout: 30_000 })
+      .toContain("Alternative");
+    expect(await page.getByTestId("lane-context").innerText()).toContain("isolated workspace");
+    // A fresh lane is its own empty room: it must never wear its sibling's
+    // finished state (D-080).
+    expect(await page.getByTestId("state-line").innerText()).not.toContain("Work finished");
+    await shot("88-the-alternative-lane-open.png");
 
     // --- The approach runs, in its own worktree -----------------------------
-    // A different direction, so the two lanes genuinely diverge: the scripted
-    // harness writes the direction into the file, and identical text would
-    // produce a clean checkpoint — which is the product being right about
-    // "nothing changed" rather than the approach failing.
-    await direct("write the fake turn file, the middleware way", approach.workstreamId);
+    // Directed through the real composer while the Alternative is the active
+    // lane: the composer names its target, and the direction lands in the
+    // lane on screen rather than the mission's first (D-080). A different
+    // direction body, so the two lanes genuinely diverge.
+    expect(await page.getByTestId("composer").innerText()).toContain("Directing Alternative");
+    await page.getByTestId("composer-input").fill("write the fake turn file, the middleware way");
+    await page.getByTestId("send").click();
     await until(
       "the approach to check point",
       (value) =>
@@ -290,6 +332,13 @@ describe("competing approaches, compared and decided", () => {
     expect(existsSync(join(worktreeRoot, baseline.workstreamId))).toBe(true);
     expect(existsSync(join(worktreeRoot, approach.workstreamId))).toBe(true);
     expect(existsSync(join(worktreeRoot, missionId))).toBe(false);
+
+    // --- The lane switcher: every lane's own facts, and the way across -----
+    await page.getByTestId("approaches-switcher").click();
+    await page.getByTestId("approaches-menu").waitFor({ timeout: 30_000 });
+    expect(await page.getByTestId("approaches-shared").innerText()).toMatch(/Shared checkpoint/i);
+    expect(await page.getByTestId("approaches-row").count()).toBe(2);
+    await shot("89-the-approaches-switcher.png");
 
     // --- The comparison ------------------------------------------------------
     await page.getByTestId("open-decision-room").click();
@@ -353,5 +402,23 @@ describe("competing approaches, compared and decided", () => {
     const line = await page.getByTestId("state-line").innerText();
     expect(line).toContain("Decision recorded");
     expect(line).toMatch(/not published yet/i);
+
+    // --- A reload keeps the lane, the composer's target, and the decision --
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
+    await expect
+      .poll(() => page.getByTestId("lane-context").innerText(), { timeout: 30_000 })
+      .toContain("Alternative");
+    expect(await page.getByTestId("composer").innerText()).toContain("Directing Alternative");
+    const lineAfter = await page.getByTestId("state-line").innerText();
+    expect(lineAfter).toContain("Decision recorded");
+
+    // Back on the first lane, one click away, with its own room intact.
+    await page.getByTestId("lane-tab").first().click();
+    await expect
+      .poll(async () => page.getByTestId("lane-context").innerText(), { timeout: 30_000 })
+      .toContain("Current work");
+    expect(await page.getByTestId("composer").innerText()).toContain("Directing Current work");
   }, 300_000);
 });

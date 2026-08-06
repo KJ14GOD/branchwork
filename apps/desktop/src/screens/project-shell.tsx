@@ -25,12 +25,14 @@ import {
   openMission,
   promoteDraft,
   readWorkingSet,
+  selectLane,
   selectTab,
   tabIsGone,
   writeWorkingSet,
   type OpenTab,
   type WorkingSet
 } from "../components/working-set";
+import { laneView } from "../components/derive";
 import { deriveGoal, plural, truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
 import { Inspector, type InspectorSection } from "../components/inspector";
@@ -421,6 +423,12 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [offline, setOffline] = useState(false);
   /** The missions this person has open, and which one they are reading. */
   const [workingSet, setWorkingSet] = useState<WorkingSet>(emptyWorkingSet);
+  /** The same set, readable from inside `refresh` without remaking it: the
+   *  rail's slow poll fetches each open mission for the lane its tab is
+   *  reading, so the room and the background refresh never disagree about
+   *  which lane a mission's cached detail describes (D-080). */
+  const workingSetRef = useRef(workingSet);
+  workingSetRef.current = workingSet;
   /** Restoration reads the store and asks the server about every mission in it
    *  before anything is allowed to open a room, or a relaunch would open a
    *  first mission over the ones the person actually left open. */
@@ -485,7 +493,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       setOffline(false);
       setMissions(missionsResult.value);
       const detailResults = await Promise.all(
-        missionsResult.value.map((mission) => novus().missions.get(mission.missionId))
+        missionsResult.value.map((mission) => {
+          const tab = workingSetRef.current.tabs.find((entry) => entry.missionId === mission.missionId);
+          return novus().missions.get(mission.missionId, tab?.workstreamId ?? undefined);
+        })
       );
       setDetails((prev) => {
         const next = { ...prev };
@@ -1016,6 +1027,14 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                           title={mission.goal}
                         >
                           <span className="side-name">{truncateLabel(mission.goal, 26)}</span>
+                          {/* A count and nothing else (D-080): the lanes
+                              themselves live inside the room, never as rows
+                              in this list. */}
+                          {mission.workstreamCount > 1 && (
+                            <span className="side-approaches" data-testid="mission-approaches-count">
+                              {mission.workstreamCount} approaches
+                            </span>
+                          )}
                         </button>
                         {/* One quiet control, revealed on hover or focus. A
                             permanent icon on every row would put a destructive-
@@ -1198,7 +1217,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               vanishes when you switch tabs reads as a layout bug, and the
               house rule is disabled-with-reason, never hidden (DESIGN.md). */}
           {openDetail && openDetail.workstream ? (
-            <RunControl detail={openDetail} onSetup={() => setSetupOpen(true)} />
+            <RunControl detail={laneView(openDetail)} onSetup={() => setSetupOpen(true)} />
           ) : (
             <button
               className="btn btn-secondary run-trigger"
@@ -1263,6 +1282,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                   previous[active.id] === path ? { ...previous, [active.id]: null } : previous
                 );
               }}
+              activeWorkstreamId={active.workstreamId}
+              onSelectLane={(workstreamId) =>
+                setWorkingSet((previous) => selectLane(previous, active.id, workstreamId))
+              }
             />
           ) : currentProject ? (
             // Nothing open in this project. The rail lists what there is; this
@@ -1305,8 +1328,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
 
       {setupOpen && openDetail && currentProject && (
         <WorkspaceSetupDialog
-          key={openDetail.mission.missionId}
+          key={`${openDetail.mission.missionId}:${openDetail.workstream?.workstreamId ?? "default"}`}
           missionId={openDetail.mission.missionId}
+          workstreamId={openDetail.workstream?.workstreamId}
           /* A workspace is prepared where the repository is. Anywhere else the
              dialog says so rather than offering a control that cannot work
              (D-042). */
@@ -1330,7 +1354,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       {inspector && openDetail && active && (
         <Inspector
           width={panelWidth}
-          detail={openDetail}
+          detail={laneView(openDetail)}
           section={inspector}
           onSection={setInspector}
           hostedHere={currentProject?.onThisMachine === true}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  ApproachSummary,
   BaseRevision,
   Direction,
   Effort,
@@ -12,6 +13,7 @@ import { Composer, type SubmitOutcome } from "../components/composer";
 import {
   controller as controllerOf,
   deriveStateLine,
+  laneView,
   viewerIsController
 } from "../components/derive";
 import {
@@ -46,7 +48,7 @@ function FileGlyph() {
   );
 }
 import { RuntimeDock } from "../components/runtime-dock";
-import { clockTime, deriveGoal, shortSha } from "../format";
+import { clockTime, deriveGoal, plural, shortSha } from "../format";
 import type { Project } from "./project-shell";
 
 type BaseLoad =
@@ -88,7 +90,9 @@ export function ProjectRoom({
   openFiles,
   activeFile,
   onSelectFile,
-  onCloseFile
+  onCloseFile,
+  activeWorkstreamId,
+  onSelectLane
 }: {
   project: Project;
   details: Record<string, MissionDetailResponse>;
@@ -111,6 +115,12 @@ export function ProjectRoom({
   activeFile: string | null;
   onSelectFile: (path: string | null) => void;
   onCloseFile: (path: string) => void;
+  /** The approach lane this room is reading — null for the lane the mission
+   *  started with. Everything lane-scoped follows it: the poll asks for it,
+   *  the composer targets it, files and the terminal act in its worktree
+   *  (D-080). */
+  activeWorkstreamId: string | null;
+  onSelectLane: (workstreamId: string | null) => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -122,7 +132,12 @@ export function ProjectRoom({
   const pinnedRef = useRef(true);
 
   const isDraft = selectedMissionId === null;
-  const detail = selectedMissionId === null ? undefined : details[selectedMissionId];
+  const raw = selectedMissionId === null ? undefined : details[selectedMissionId];
+  /** The lane's own view: the server computed the lane-scoped facts for the
+   *  lane the poll named, and this filters the mission-wide ledgers down to
+   *  the same lane (D-080). The Decision Room reads the unfiltered fields,
+   *  which laneView leaves untouched. */
+  const detail = raw ? laneView(raw) : undefined;
   // Agents run where the repository is. For a folder somebody added that means
   // this machine; for a GitHub repository it means the machine whose runner
   // fetched it — which is the same question and the same answer (D-025, D-032).
@@ -160,8 +175,15 @@ export function ProjectRoom({
     if (selectedMissionId === null) return;
     let live = true;
     const tick = async () => {
-      const result = await novus().missions.get(selectedMissionId);
-      if (live && result.ok) onDetail(result.value);
+      const result = await novus().missions.get(selectedMissionId, activeWorkstreamId ?? undefined);
+      if (!live) return;
+      if (result.ok) {
+        onDetail(result.value);
+        return;
+      }
+      // A remembered lane the mission no longer has: fall back to the lane the
+      // mission started with rather than polling a 404 forever.
+      if (activeWorkstreamId !== null && result.code === "not_found") onSelectLane(null);
     };
     void tick();
     const timer = setInterval(() => void tick(), 2000);
@@ -169,7 +191,7 @@ export function ProjectRoom({
       live = false;
       clearInterval(timer);
     };
-  }, [selectedMissionId, onDetail]);
+  }, [selectedMissionId, activeWorkstreamId, onDetail, onSelectLane]);
 
   // Auto-scroll on new activity unless the reader scrolled up.
   const eventCount = detail?.events.length ?? 0;
@@ -278,11 +300,18 @@ export function ProjectRoom({
     }
 
     if (!detail) return { ok: false, message: "This mission is still loading." };
+    if (detail.workstream === null) {
+      return { ok: false, message: "This mission has no workstream to direct yet." };
+    }
+    // Direction names the lane on screen, always (D-080): the server resolves
+    // the named lane's own lease and queue, so work can never silently land on
+    // the mission's first lane while an Alternative is being read.
     const result = await novus().missions.direct({
       missionId: detail.mission.missionId,
       body,
       model,
-      effort
+      effort,
+      workstreamId: detail.workstream.workstreamId
     });
     if (!result.ok) return { ok: false, message: offlineOr(result.code, result.message) };
     return { ok: true, queued: !result.value.dispatched, deferred: result.value.deferred };
@@ -305,6 +334,22 @@ export function ProjectRoom({
   const forkable = approaches.find(
     (approach) => approach.workstreamId === detail?.workstream?.workstreamId && approach.forkPointSha !== null
   );
+  /** Every lane, in creation order; more than one only where somebody forked
+   *  an approach (D-074). The first is the lane the mission started with. */
+  const lanes = detail?.workstreams ?? [];
+  const multiLane = lanes.length > 1;
+  /** The lane this response was actually computed for — used for everything
+   *  rendered, so the room is always internally consistent even in the poll
+   *  between switching lanes and the next response arriving. */
+  const activeLaneId = detail?.workstream?.workstreamId ?? null;
+  const activeLane = lanes.find((lane) => lane.workstreamId === activeLaneId) ?? null;
+  /** Selecting a lane: the first lane is the default and stored as null, so a
+   *  mission that never forked never carries a lane id around. */
+  const selectLane = (workstreamId: string) => {
+    onSelectLane(workstreamId === lanes[0]?.workstreamId ? null : workstreamId);
+    onSelectFile(null);
+    setDecisionOpen(false);
+  };
 
   const feed = useMemo(() => (detail ? buildFeed(detail) : null), [detail]);
   const stateLine = detail ? deriveStateLine(detail) : null;
@@ -456,8 +501,54 @@ export function ProjectRoom({
           the workstream chrome DESIGN.md#component-behavior forbids. With no
           file open there is no strip at all; open one and the room takes a tab
           of its own, which is the way back to it. */}
-      {openFiles.length > 0 && (
-        <div className="tabbar" role="tablist" aria-label={`Open files in ${title}`}>
+      {(openFiles.length > 0 || multiLane) && (
+        <div className="tabbar" role="tablist" aria-label={`Open in ${title}`}>
+          {multiLane ? (
+            <>
+              {/* One tab per lane, each a room of its own (D-080). The dot is
+                  identity, never quality: the first lane and its alternatives
+                  each keep one colour everywhere they appear. */}
+              {lanes.map((lane, index) => (
+                <button
+                  key={lane.workstreamId}
+                  role="tab"
+                  aria-selected={activeFile === null && !decisionOpen && lane.workstreamId === activeLaneId}
+                  className={
+                    activeFile === null && !decisionOpen && lane.workstreamId === activeLaneId
+                      ? "tab lane-tab active"
+                      : "tab lane-tab"
+                  }
+                  onClick={() => selectLane(lane.workstreamId)}
+                  title={
+                    lane.approach
+                      ? `${lane.name} — isolated workspace`
+                      : `${lane.name} — the lane this mission started with`
+                  }
+                  data-testid="lane-tab"
+                  data-workstream={lane.workstreamId}
+                >
+                  <span
+                    className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
+                    aria-hidden="true"
+                  />
+                  {lane.name}
+                </button>
+              ))}
+              <button
+                role="tab"
+                aria-selected={activeFile === null && decisionOpen}
+                className={activeFile === null && decisionOpen ? "tab active" : "tab"}
+                onClick={() => {
+                  setDecisionOpen(true);
+                  onSelectFile(null);
+                }}
+                title="Compare approaches"
+                data-testid="compare-tab"
+              >
+                Compare
+              </button>
+            </>
+          ) : (
           <button
             role="tab"
             aria-selected={activeFile === null}
@@ -473,6 +564,7 @@ export function ProjectRoom({
                 (D-061). */}
             Mission
           </button>
+          )}
           {openFiles.map((file) => (
             <span
               key={file}
@@ -509,6 +601,21 @@ export function ProjectRoom({
         <h1 className="mission-title" data-testid="room-goal" title={title}>
           {title}
         </h1>
+
+        {/* Which lane this room is, said once and quietly (D-080). Absent for
+            the mission that never forked, because there is nothing to tell
+            apart. */}
+        {multiLane && activeLane && (
+          <p className="lane-context" data-testid="lane-context">
+            {activeLane.name}
+            {activeLane.approach ? " · isolated workspace" : ""}
+            {activeLane.approach && activeLane.originSha ? (
+              <>
+                {" "}· forked at <span className="mono">{shortSha(activeLane.originSha)}</span>
+              </>
+            ) : null}
+          </p>
+        )}
 
         <div className="state-line" role="status" aria-live="polite" data-testid="state-line">
           {stateLine ? (
@@ -602,13 +709,24 @@ export function ProjectRoom({
                     )}
                 </>
               )}
-              {(approaches.length > 1 || currentDecision) && (
+              {multiLane && (
+                <ApproachesSwitcher
+                  approaches={approaches}
+                  activeLaneId={activeLaneId}
+                  onOpenLane={selectLane}
+                  onCompare={() => {
+                    setDecisionOpen(true);
+                    onSelectFile(null);
+                  }}
+                />
+              )}
+              {currentDecision && (
                 <button
                   className="btn btn-text"
                   onClick={() => setDecisionOpen(true)}
-                  data-testid="open-decision-room"
+                  data-testid="open-the-decision"
                 >
-                  {currentDecision ? "The decision" : `Compare ${approaches.length} approaches`}
+                  The decision
                 </button>
               )}
               <span className="controller-slot" data-testid="controller">
@@ -667,7 +785,11 @@ export function ProjectRoom({
       )}
 
       {activeFile !== null && selectedMissionId !== null ? (
-        <FileView missionId={selectedMissionId} path={activeFile} />
+        <FileView
+          missionId={selectedMissionId}
+          workstreamId={activeLaneId ?? undefined}
+          path={activeFile}
+        />
       ) : decisionOpen && detail ? (
         <div className="feed-scroll">
           <DecisionRoom
@@ -869,6 +991,7 @@ export function ProjectRoom({
         // works it exactly like a folder somebody added (D-025, D-032).
         capabilities={isDraft ? ["direction.submit"] : (detail?.capabilities ?? null)}
         isController={isController || isDraft}
+        contextNote={multiLane && activeLane ? `Directing ${activeLane.name}` : null}
         onSubmit={submit}
       />
 
@@ -876,7 +999,11 @@ export function ProjectRoom({
           rather than replacing it; below the single-column threshold it takes
           the room (DESIGN.md#component-behavior). */}
       {terminalOpen && executionAvailable && selectedMissionId !== null && (
-        <RuntimeDock missionId={selectedMissionId} />
+        <RuntimeDock
+          key={activeLaneId ?? "default"}
+          missionId={selectedMissionId}
+          workstreamId={activeLaneId ?? undefined}
+        />
       )}
 
       </div>
@@ -919,6 +1046,114 @@ function DraftCanvas({
         <span className="mono">{shortSha(draft.base.base.sha)}</span>
       </p>
     </div>
+  );
+}
+
+/**
+ * The compact lane switcher (D-080): "Approaches 2 ▾".
+ *
+ * A popover, not a page — it answers "what lanes are there and where am I",
+ * lets the reader open one, and offers the comparison. Each row is the lane's
+ * own facts in the same shape (state, changes, verification), in creation
+ * order, with no highlight on the better one — the ordering rule the Decision
+ * Room keeps applies here too (D-074).
+ */
+function ApproachesSwitcher({
+  approaches,
+  activeLaneId,
+  onOpenLane,
+  onCompare
+}: {
+  approaches: ApproachSummary[];
+  activeLaneId: string | null;
+  onOpenLane: (workstreamId: string) => void;
+  onCompare: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // One shared checkpoint to state, when every fork genuinely started from the
+  // same revision; with mixed origins each row's own facts carry it instead.
+  const origins = [...new Set(approaches.filter((entry) => entry.approach).map((entry) => entry.originSha))];
+  const sharedOrigin = origins.length === 1 && origins[0] !== null ? origins[0] : null;
+
+  return (
+    <span className="chip-wrap" ref={wrapRef}>
+      <button
+        className="btn btn-text"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        data-testid="approaches-switcher"
+      >
+        Approaches {approaches.length} <span aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <div className="chip-menu approaches-menu" role="menu" data-testid="approaches-menu">
+          {sharedOrigin && (
+            <div className="approaches-shared" data-testid="approaches-shared">
+              Shared checkpoint · <span className="mono">{shortSha(sharedOrigin)}</span>
+            </div>
+          )}
+          {approaches.map((entry, index) => (
+            <div className="approaches-row" key={entry.workstreamId} data-testid="approaches-row">
+              <span
+                className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
+                aria-hidden="true"
+              />
+              <span className="approaches-name">{entry.name}</span>
+              <span className="approaches-meta">
+                {entry.state.replace(/_/g, " ")} ·{" "}
+                {entry.filesChanged === 0 ? "no files changed" : `${plural(entry.filesChanged, "file")} changed`} ·{" "}
+                {entry.checksRun === 0
+                  ? "Not verified"
+                  : `${entry.checksPassed} of ${plural(entry.checksRun, "check")} passed`}
+              </span>
+              {entry.workstreamId === activeLaneId ? (
+                <span className="approaches-here">Open now</span>
+              ) : (
+                <button
+                  className="btn btn-text"
+                  onClick={() => {
+                    onOpenLane(entry.workstreamId);
+                    setOpen(false);
+                  }}
+                  data-testid="approaches-open"
+                >
+                  Open
+                </button>
+              )}
+            </div>
+          ))}
+          <button
+            className="btn btn-text approaches-compare"
+            onClick={() => {
+              onCompare();
+              setOpen(false);
+            }}
+            data-testid="open-decision-room"
+          >
+            Compare approaches
+          </button>
+        </div>
+      )}
+    </span>
   );
 }
 
