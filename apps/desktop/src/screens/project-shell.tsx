@@ -195,6 +195,9 @@ function SearchDialog({
   onClose: () => void;
 }) {
   const [term, setTerm] = useState("");
+  /** Which row Enter would open. Arrow keys move it; the pointer moves it too,
+   *  so the keyboard and the mouse never disagree about what is selected. */
+  const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -207,49 +210,74 @@ function SearchDialog({
   }, [onClose]);
 
   const needle = term.trim().toLowerCase();
-  const found = needle === ""
-    ? missions
-    : missions.filter(
-        (mission) =>
-          mission.goal.toLowerCase().includes(needle) || mission.project.toLowerCase().includes(needle)
-      );
+  const found =
+    needle === ""
+      ? missions
+      : missions.filter(
+          (mission) =>
+            mission.goal.toLowerCase().includes(needle) || mission.project.toLowerCase().includes(needle)
+        );
+  const cursor = Math.min(active, Math.max(0, found.length - 1));
 
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <div className="dialog" role="dialog" aria-label="Find a mission" data-testid="search-dialog">
-        <div className="dialog-head">
+      <div className="dialog palette" role="dialog" aria-label="Find a mission" data-testid="search-dialog">
+        {/* One line, no box. A field drawn as a box inside a dialog is a box
+            inside a box, and the glyph already says what the line is for. */}
+        <div className="palette-query">
+          <SearchGlyph />
           <input
             ref={inputRef}
-            className="input"
+            className="palette-input"
             value={term}
             placeholder="Find a mission"
-            onChange={(event) => setTerm(event.target.value)}
+            onChange={(event) => {
+              setTerm(event.target.value);
+              setActive(0);
+            }}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && found[0]) onOpen(found[0].missionId);
+              if (event.key === "ArrowDown") {
+                setActive((index) => Math.min(index + 1, found.length - 1));
+                event.preventDefault();
+              } else if (event.key === "ArrowUp") {
+                setActive((index) => Math.max(index - 1, 0));
+                event.preventDefault();
+              } else if (event.key === "Enter" && found[cursor]) {
+                onOpen(found[cursor].missionId);
+              }
             }}
             aria-label="Find a mission"
             data-testid="search-input"
           />
+          <kbd className="palette-hint">esc</kbd>
         </div>
-        <div className="archived-list">
-          {found.map((mission) => (
-            <button
-              key={mission.missionId}
-              className="archived-entry search-hit"
-              onClick={() => onOpen(mission.missionId)}
-              data-testid="search-hit"
-            >
-              <span className="archived-goal">{mission.goal}</span>
-              <span className="archived-meta">{mission.project}</span>
-            </button>
-          ))}
-          {found.length === 0 && (
-            <p className="quiet archived-error" data-testid="search-empty">
-              No mission here is called that.
-            </p>
-          )}
-        </div>
+
+        {found.length > 0 && (
+          <div className="palette-results" role="listbox" aria-label="Missions">
+            <div className="palette-group">Missions</div>
+            {found.map((mission, index) => (
+              <button
+                key={mission.missionId}
+                role="option"
+                aria-selected={index === cursor}
+                className={index === cursor ? "palette-hit active" : "palette-hit"}
+                onMouseEnter={() => setActive(index)}
+                onClick={() => onOpen(mission.missionId)}
+                data-testid="search-hit"
+              >
+                <span className="palette-name">{mission.goal}</span>
+                <span className="palette-where">{mission.project}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {found.length === 0 && (
+          <p className="palette-empty" data-testid="search-empty">
+            No mission here is called that.
+          </p>
+        )}
       </div>
     </>
   );

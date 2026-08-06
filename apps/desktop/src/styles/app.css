@@ -3314,14 +3314,120 @@ body.resizing {
   font: var(--type-row);
 }
 
-/* A search hit is a row, not a card: the same shape the archived list uses, so
-   the two dialogs read as one product rather than two. */
-.search-hit {
+/* --- Find a mission (D-069) ---------------------------------------------------
+   A palette, not a form. Every element here declares its own background and
+   border: the last version inherited the browser's control face on its rows and
+   its focus ring on the field, which is how a dialog ends up looking like a
+   1990s search box with grey slabs under it.
+
+   It sits high rather than centred, because you are reading the list and not
+   the box, and a box centred in the window puts the list under your eye line. */
+.palette {
+  top: 18%;
+  transform: translate(-50%, 0);
+  width: 560px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.palette-query {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-4);
+  height: 52px;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--edge);
+}
+
+/* No box. The glyph says what the line is for, and a field drawn as a box
+   inside a dialog is a box inside a box. */
+.palette-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font: var(--type-body);
+  padding: 0;
+}
+
+.palette-input:focus {
+  outline: none;
+}
+
+.palette-input::placeholder {
+  color: var(--text-3);
+}
+
+.palette-hint {
+  flex: none;
+  padding: 2px var(--s-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  color: var(--text-3);
+  font: var(--type-micro);
+  font-family: var(--font-mono);
+}
+
+.palette-results {
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: var(--s-2) var(--s-2) var(--s-3);
+}
+
+.palette-group {
+  padding: var(--s-2) var(--s-3) var(--s-1);
+  color: var(--text-3);
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* A row is a name and where it lives, on one line, on one baseline. The second
+   value is right-aligned so the eye reads a column of names and finds the
+   context only when it wants it. */
+.palette-hit {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
   width: 100%;
+  padding: var(--s-2) var(--s-3);
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
   text-align: left;
   cursor: pointer;
 }
 
-.search-hit:hover {
-  background: var(--surface-1);
+/* One row is selected at a time and it is the one Enter opens, so hover and the
+   keyboard write to the same state rather than drawing two highlights. */
+.palette-hit.active {
+  background: var(--selected);
+}
+
+.palette-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+  font: var(--type-body);
+}
+
+.palette-hit.active .palette-name {
+  color: var(--text-1);
+}
+
+.palette-where {
+  flex: none;
+  color: var(--text-3);
+  font: var(--type-meta);
+}
+
+.palette-empty {
+  padding: var(--s-4);
+  color: var(--text-3);
+  font: var(--type-body);
 }
