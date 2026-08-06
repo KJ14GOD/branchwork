@@ -343,6 +343,12 @@ describe("competing approaches, compared and decided", () => {
     // --- The comparison ------------------------------------------------------
     await page.getByTestId("open-decision-room").click();
     await page.getByTestId("decision-room").waitFor({ timeout: 30_000 });
+    // The header states what the comparison is about, and leaving is not
+    // deciding: the way out reads Keep exploring.
+    expect(await page.getByTestId("decision-shared").innerText()).toMatch(/Shared checkpoint/i);
+    expect(await page.getByTestId("decision-close").innerText()).toContain("Keep exploring");
+    // Two lanes need no pair selector, and get none.
+    expect(await page.getByTestId("decision-pair").count()).toBe(0);
     const columns = page.getByTestId("approach-column");
     await expect.poll(() => columns.count(), { timeout: 30_000 }).toBe(2);
     // Creation order, and each column carrying its own lane's evidence.
@@ -357,6 +363,44 @@ describe("competing approaches, compared and decided", () => {
     expect(contested).toContain("NOVUS_FAKE_TURN.md");
     expect(await page.getByTestId("decision-room").innerText()).not.toMatch(/recommend|winner|score/i);
     await shot("84-comparing-two-approaches.png");
+
+    // --- A third approach turns the columns into a chosen pair --------------
+    const third = await page.evaluate(
+      async (args) => {
+        const result = await window.novus.approaches.create({
+          missionId: args.missionId,
+          fromWorkstreamId: args.from,
+          intent: "Try it as a background job"
+        });
+        return result.ok ? result.value.workstream.workstreamId : `${result.code}: ${result.message}`;
+      },
+      { missionId, from: baseline.workstreamId }
+    );
+    expect(third.startsWith("wst_")).toBe(true);
+    await expect.poll(() => page.getByTestId("pair-chip").count(), { timeout: 30_000 }).toBe(3);
+    // Still two columns — the first two by default — and one click swaps one.
+    expect(await columns.count()).toBe(2);
+    await page.getByTestId("pair-chip").nth(2).click();
+    await expect
+      .poll(async () => {
+        const rendered = await columns.evaluateAll((nodes) =>
+          nodes.map((node) => node.getAttribute("data-workstream"))
+        );
+        return rendered.includes(third);
+      }, { timeout: 30_000 })
+      .toBe(true);
+    expect(await columns.count()).toBe(2);
+    await shot("90-three-approaches-pick-a-pair.png");
+    // Back to the original pair, so the choice below is between the two that
+    // actually did work.
+    await page.getByTestId("pair-chip").nth(0).click();
+    await page.getByTestId("pair-chip").nth(1).click();
+    await expect
+      .poll(async () =>
+        columns.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-workstream"))),
+        { timeout: 30_000 }
+      )
+      .toEqual([baseline.workstreamId, approach.workstreamId]);
 
     // --- Choosing asks for a reason, and will not proceed without one -------
     await columns.nth(1).getByTestId("choose-approach").click();

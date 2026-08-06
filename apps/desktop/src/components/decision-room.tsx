@@ -52,16 +52,80 @@ export function DecisionRoom({
   const [revising, setRevising] = useState<string | null>(null);
   const mayDecide = detail.capabilities.includes("review.approve");
 
+  // The one checkpoint every fork started from, when they genuinely share one;
+  // with mixed origins each column's own Revision row carries the truth and
+  // the header claims nothing (D-079).
+  const origins = [
+    ...new Set(detail.approaches.filter((entry) => entry.approach).map((entry) => entry.originSha))
+  ];
+  const sharedOrigin = origins.length === 1 && origins[0] !== null ? origins[0] : null;
+
+  /**
+   * Three or more lanes compare as a chosen pair, not a wall of columns: a
+   * selectable list decides which two render (DESIGN.md#component-behavior).
+   * Two lanes need no selection and get no selector.
+   */
+  const [pair, setPair] = useState<string[]>([]);
+  const all = detail.approaches;
+  const chosen = pair.filter((id) => all.some((entry) => entry.workstreamId === id));
+  const compared =
+    all.length <= 2
+      ? all
+      : all.filter((entry) =>
+          (chosen.length === 2 ? chosen : all.slice(0, 2).map((lane) => lane.workstreamId)).includes(
+            entry.workstreamId
+          )
+        );
+  const comparedIds = compared.map((entry) => entry.workstreamId);
+  const togglePair = (workstreamId: string) => {
+    if (comparedIds.includes(workstreamId)) return;
+    // The newest pick evicts the *least recently* picked — selection order,
+    // not column order — so one click swaps one column and any pair is
+    // reachable in at most two clicks.
+    const ordered = chosen.length === 2 ? chosen : comparedIds;
+    setPair([ordered[1] ?? ordered[0] ?? workstreamId, workstreamId].filter(Boolean) as string[]);
+  };
+
   return (
     <section className="decision-room" data-testid="decision-room">
       <header className="decision-head">
-        <h2 className="section-title">
-          {decision ? "The decision" : `Comparing ${plural(detail.approaches.length, "approach", "approaches")}`}
-        </h2>
+        <div className="decision-head-titles">
+          <h2 className="section-title">{decision ? "The decision" : "Compare approaches"}</h2>
+          {sharedOrigin && (
+            <p className="decision-shared" data-testid="decision-shared">
+              Shared checkpoint · <span className="mono">{shortSha(sharedOrigin)}</span>
+            </p>
+          )}
+        </div>
+        {/* Leaving is not deciding, and the label says so (DESIGN.md's four
+            actions for this surface). */}
         <button className="btn btn-text" onClick={onClose} data-testid="decision-close">
-          Back to the mission
+          Keep exploring
         </button>
       </header>
+
+      {all.length > 2 && (
+        <div className="decision-pair" role="group" aria-label="Approaches to compare" data-testid="decision-pair">
+          {all.map((entry, index) => (
+            <button
+              key={entry.workstreamId}
+              className={
+                comparedIds.includes(entry.workstreamId) ? "chip-button pair-chip active" : "chip-button pair-chip"
+              }
+              aria-pressed={comparedIds.includes(entry.workstreamId)}
+              onClick={() => togglePair(entry.workstreamId)}
+              data-testid="pair-chip"
+            >
+              <span
+                className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
+                aria-hidden="true"
+              />
+              {entry.name}
+            </button>
+          ))}
+          <span className="quiet">Comparing two at a time — pick which two.</span>
+        </div>
+      )}
 
       {decision ? (
         <DecisionReceipt
@@ -73,7 +137,7 @@ export function DecisionRoom({
       ) : null}
 
       <div className="approach-columns" data-testid="approach-columns">
-        {detail.approaches.map((approach) => (
+        {compared.map((approach) => (
           <ApproachColumn
             key={approach.workstreamId}
             approach={approach}

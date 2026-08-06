@@ -3694,6 +3694,40 @@ body.resizing {
   gap: var(--s-3);
 }
 
+.decision-head-titles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.decision-shared {
+  font: var(--type-meta);
+  color: var(--text-3);
+  margin: 0;
+}
+
+/* Three or more lanes compare as a chosen pair (DESIGN.md#component-behavior):
+   one chip per lane, the two being compared marked, everything else one click
+   away. Identity dots, never a quality mark. */
+.decision-pair {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.pair-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.pair-chip.active {
+  background: var(--selected);
+  color: var(--text-1);
+}
+
 .approach-columns {
   display: grid;
   grid-auto-columns: minmax(280px, 1fr);

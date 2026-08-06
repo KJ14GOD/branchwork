@@ -223,7 +223,11 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     if (!params.success || !body.success) return sendError(reply, 400, "bad_request", "Malformed report.");
     const missionId = await reportBranchOutcome(db, ctx, params.data.workstreamId, body.data);
     if (!missionId) return sendError(reply, 404, "not_found", "No such workstream in your organization.");
-    const detail = await getMission(db, ctx, missionId);
+    // The lane that was reported, not the mission's first: with competing
+    // approaches those are different lanes, and the caller is owed the one it
+    // named (D-080 — found when a created approach came back wearing the
+    // baseline's identity).
+    const detail = await getMission(db, ctx, missionId, params.data.workstreamId);
     if (!detail?.workstream) return sendError(reply, 500, "workstream_missing", "Workstream disappeared.");
     return { workstream: detail.workstream };
   });
@@ -266,8 +270,8 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     if (!params.success) return sendError(reply, 400, "bad_id", "Malformed workstream id.");
     const missionId = await getWorkstreamMission(db, ctx, params.data.workstreamId);
     if (!missionId) return sendError(reply, 404, "not_found", "No such workstream in your organization.");
-    await attemptBranchCreation(db, provider, ctx, missionId);
-    const detail = await getMission(db, ctx, missionId);
+    await attemptBranchCreation(db, provider, ctx, missionId, params.data.workstreamId);
+    const detail = await getMission(db, ctx, missionId, params.data.workstreamId);
     if (!detail?.workstream) return sendError(reply, 500, "workstream_missing", "Workstream disappeared.");
     return { workstream: detail.workstream };
   });
