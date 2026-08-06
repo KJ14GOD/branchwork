@@ -1536,7 +1536,7 @@ body {
    room keeps the majority of the width it is entitled to (DESIGN.md#layout). */
 .inspector {
   flex: none;
-  width: 420px;
+  width: 380px;
   max-width: 40%;
   min-height: 0;
   display: flex;
@@ -3102,6 +3102,28 @@ body {
   padding: 0 0 var(--s-2);
 }
 
+/* Which process, inside the Output region. Quieter than the tabs above it:
+   this is a filter within a section, not a section. */
+.output-kind {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: var(--type-meta);
+  padding: var(--s-1) var(--s-2);
+  border-radius: var(--r-control);
+  cursor: pointer;
+}
+
+.output-kind:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.output-kind.active {
+  background: var(--selected);
+  color: var(--text-1);
+}
+
 /* --- A permission the harness is waiting on (D-062) -------------------------
    In the thread, on the thread's own plane. Not a dialog, not a banner, and
    not red: nothing has gone wrong — something is being asked. `--warn` is the
@@ -3296,11 +3318,90 @@ body.resizing {
   min-width: 0;
 }
 
-/* The workspace region: its own edge, at the foot, under the work. */
-.inspector-foot {
+/* The workspace region: its own edge, at the foot, *under* the work rather
+   than instead of it. Folded, it is one row of tabs; open, it takes
+   the height it was dragged to and scrolls inside itself, so a diff above and
+   a build log below are readable in one glance. */
+.inspector-drawer {
   flex: none;
-  padding: var(--s-2) var(--s-3);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   border-top: 1px solid var(--edge);
+}
+
+.inspector-drawer.open {
+  min-height: 12vh;
+  max-height: 70vh;
+}
+
+/* The drag edge, invisible until reached — the terminal dock's own grip. */
+.inspector-drawer-grip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--s-2);
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.inspector-drawer-grip:hover {
+  background: var(--hover);
+}
+
+.inspector-drawer-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-2) var(--s-3) var(--s-2) var(--s-2);
+}
+
+.inspector-drawer-head .inspector-tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The fold sits at the row's left, where the eye starts, and is the only
+   control in it that is not a tab. Sized to the tabs beside it, not to the
+   32px icon buttons in the panel's own header — this row is chrome. */
+.inspector-drawer-fold {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--text-3);
+}
+
+.inspector-drawer-fold:hover {
+  color: var(--text-1);
+}
+
+.inspector-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s-1) var(--s-4) var(--s-4);
+}
+
+/* A log fills the region and scrolls inside itself; the region does not scroll
+   a log that is already a scroller. */
+.inspector-drawer-body.log {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0 0 var(--s-2);
+}
+
+.inspector-drawer-body.log .output-kinds,
+.inspector-drawer .dock-runs,
+.inspector-drawer .dock-summary,
+.inspector-drawer .dock-output,
+.inspector-drawer .dock-empty,
+.inspector-drawer .dock-error {
+  padding-left: var(--s-4);
+  padding-right: var(--s-4);
 }
 
 /* One filter above the tree, on the tree's own plane. */

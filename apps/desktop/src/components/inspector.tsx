@@ -41,10 +41,41 @@ const SECTIONS: { id: InspectorSection; label: string }[] = [
   { id: "verification", label: "Checks" }
 ];
 
-const WORKSPACE_SECTIONS: { id: InspectorSection; label: string }[] = [
+/** The two below the edge. They open a region of their own rather than taking
+ *  the one above, so this is a type the panel can hold on to. */
+export type WorkspaceSection = "overview" | "output";
+
+const WORKSPACE_SECTIONS: { id: WorkspaceSection; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "output", label: "Output" }
 ];
+
+/** How tall the workspace region opens, as a share of the window — the same
+ *  measure the terminal dock resizes by, so no new unit is minted. */
+const DRAWER_DEFAULT_VH = 46;
+const DRAWER_MIN_VH = 12;
+const DRAWER_MAX_VH = 70;
+
+/** The fold. Points down when the region is open, right when it is not — the
+ *  same twisty the trace and the file tree use. */
+function FoldGlyph({ open }: { open: boolean }) {
+  return (
+    <svg
+      className={open ? "twisty-glyph open" : "twisty-glyph"}
+      viewBox="0 0 16 16"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 4l4 4-4 4" />
+    </svg>
+  );
+}
 
 /**
  * Which kind of process output is showing (D-050). This switch lives here and
@@ -428,6 +459,17 @@ export function Inspector({
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [outputKind, setOutputKind] = useState<ProcessKind>("setup");
+  /**
+   * Which workspace section is open below the work, and how tall it is
+   *. `null` folds it back to its own row.
+   *
+   * The panel used to switch: choosing Output *replaced* the diff you were
+   * reading, so "what did the build print about this change" cost you the
+   * change. Two regions, one column — the work above, the workspace below —
+   * and neither takes the other's place.
+   */
+  const [drawer, setDrawer] = useState<WorkspaceSection | null>("overview");
+  const [drawerVh, setDrawerVh] = useState(DRAWER_DEFAULT_VH);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, DiffLoad>>({});
   const [retrying, setRetrying] = useState(false);
@@ -440,6 +482,36 @@ export function Inspector({
   const files = changedFiles(detail);
   const tallies = checkTallies(detail);
   const { mission, workstream } = detail;
+
+  /**
+   * The region above the edge always shows one of its own three. A request for
+   * a workspace section — the room's `Overview` action, or the section the
+   * shell remembered — opens the region below rather than blanking the work.
+   */
+  const topSection: InspectorSection =
+    section === "overview" || section === "output" ? "changes" : section;
+
+  useEffect(() => {
+    if (section === "overview" || section === "output") setDrawer(section);
+  }, [section]);
+
+  /** Dragging the workspace region's own top edge. */
+  const onDrawerGrab = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = drawerVh;
+    const viewport = window.innerHeight || 1;
+    const move = (moveEvent: PointerEvent) => {
+      const deltaVh = ((startY - moveEvent.clientY) / viewport) * 100;
+      setDrawerVh(Math.min(DRAWER_MAX_VH, Math.max(DRAWER_MIN_VH, startHeight + deltaVh)));
+    };
+    const release = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", release);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", release);
+  };
 
   // Escape closes the panel. Focus is deliberately not trapped and not stolen:
   // this is a docked region beside the room, not a modal over it, so tabbing
@@ -540,8 +612,8 @@ export function Inspector({
               <button
                 key={option.id}
                 role="tab"
-                aria-selected={section === option.id}
-                className={section === option.id ? "inspector-tab active" : "inspector-tab"}
+                aria-selected={topSection === option.id}
+                className={topSection === option.id ? "inspector-tab active" : "inspector-tab"}
                 onClick={() => onSection(option.id)}
                 data-testid={`inspector-tab-${option.id}`}
               >
@@ -560,126 +632,11 @@ export function Inspector({
         </div>
 
         <div className="inspector-scroll">
-          {section === "output" && (
-            <>
-              <div className="output-kinds" role="tablist" aria-label="Which output">
-                {OUTPUT_KINDS.map((entry) => (
-                  <button
-                    key={entry.kind}
-                    role="tab"
-                    aria-selected={outputKind === entry.kind}
-                    className={outputKind === entry.kind ? "dock-view active" : "dock-view"}
-                    onClick={() => setOutputKind(entry.kind)}
-                    data-testid="output-kind"
-                    data-kind={entry.kind}
-                  >
-                    {entry.label}
-                  </button>
-                ))}
-              </div>
-              <ProcessLogView missionId={detail.mission.missionId} kind={outputKind} />
-            </>
-          )}
-
-          {section === "files" && (
+          {topSection === "files" && (
             <FileTree missionId={detail.mission.missionId} openPath={openPath} onOpenFile={onOpenFile} />
           )}
 
-          {section === "overview" && (
-            <div data-testid="inspector-overview">
-              <div className="kv" data-testid="repo-block">
-                <span className="kv-label">Repository</span>
-                <span className="kv-value" data-testid="repo-name">
-                  {mission.repository?.name ?? "No repository recorded"}
-                </span>
-
-                {workstream && (
-                  <>
-                    <span className="kv-label">Mission branch</span>
-                    <span className="kv-value mono" data-testid="ws-branch">
-                      {workstream.missionBranch}
-                    </span>
-
-                    <span className="kv-label">Base</span>
-                    <span className="kv-value mono" data-testid="ws-base" title={workstream.baseSha}>
-                      {workstream.baseRef} · {shortSha(workstream.baseSha)}
-                    </span>
-
-                    <span className="kv-label">Branch</span>
-                    <span className="kv-value" data-testid="ws-branch-status">
-                      {workstream.branchStatus === "created" && "Created"}
-                      {workstream.branchStatus === "pending" && "Pending"}
-                      {workstream.branchStatus === "failed" && (
-                        <>
-                          <span className="inline-error" data-testid="branch-error">
-                            {workstream.branchError ?? "Branch creation failed."}
-                          </span>{" "}
-                          <button
-                            className="btn btn-text"
-                            onClick={() => void retryBranch()}
-                            disabled={retrying}
-                            data-testid="retry-branch"
-                          >
-                            Retry
-                          </button>
-                          {retryError && (
-                            <span className="inline-error" role="alert" data-testid="retry-error">
-                              {retryError}
-                            </span>
-                          )}
-                        </>
-                      )}
-                    </span>
-                  </>
-                )}
-
-                <span className="kv-label">Runner</span>
-                <span className="kv-value" data-testid="runner-status">
-                  {detail.runner ? (
-                    <>
-                      {detail.runner.label} · {detail.runner.online ? "online" : "offline"}
-                      {!detail.runner.online && detail.runner.lastSeenAt
-                        ? ` · last heard ${clockTime(detail.runner.lastSeenAt)}`
-                        : ""}
-                    </>
-                  ) : (
-                    "No runner has registered for this workstream."
-                  )}
-                </span>
-              </div>
-
-              <h3 className="inspector-heading">Participants</h3>
-              <ul className="participant-list" data-testid="participant-list">
-                {detail.participants.map((participant) => (
-                  <li key={participant.userId} className="participant-row">
-                    <HumanMark login={participant.login} name={participant.name} />
-                    <span className="participant-name">{participant.name ?? participant.login}</span>
-                    <span className="participant-role">{roleLabel(participant.role)}</span>
-                  </li>
-                ))}
-                {detail.participants.length === 0 && <li className="quiet">No participants recorded.</li>}
-              </ul>
-              <InviteSection detail={detail} />
-
-              {detail.control.holderLogin && (
-                <div className="inspector-actions">
-                  <GatedAction
-                    capability="control.revoke"
-                    capabilities={detail.capabilities}
-                    denialReason="Only a Mission Admin can revoke control."
-                    holderLogin={detail.control.holderLogin}
-                    onClick={onRevoke}
-                    variant="secondary"
-                    testid="revoke-control"
-                  >
-                    Revoke control
-                  </GatedAction>
-                </div>
-              )}
-            </div>
-          )}
-
-          {section === "changes" && (
+          {topSection === "changes" && (
             <div data-testid="inspector-changes">
               {files.length === 0 ? (
                 <p className="quiet" data-testid="changes-empty">
@@ -705,7 +662,7 @@ export function Inspector({
             </div>
           )}
 
-          {section === "verification" && (
+          {topSection === "verification" && (
             <div data-testid="inspector-verification">
               <div className="ledger-head">
                 {/* Silent when there is nothing to tally: the empty state below
@@ -763,24 +720,179 @@ export function Inspector({
           )}
         </div>
 
-        {/* The workspace itself, under its own edge: where this came from and
-            what its processes printed. Consulted rather than read, so it sits
-            below the work instead of competing with it in one row (D-066). */}
-        <div className="inspector-foot">
-          <div className="inspector-tabs" role="tablist" aria-label="Workspace sections">
-            {WORKSPACE_SECTIONS.filter((option) => hostedHere || option.id !== "output").map((option) => (
-              <button
-                key={option.id}
-                role="tab"
-                aria-selected={section === option.id}
-                className={section === option.id ? "inspector-tab active" : "inspector-tab"}
-                onClick={() => onSection(option.id)}
-                data-testid={`inspector-tab-${option.id}`}
-              >
-                {option.label}
-              </button>
-            ))}
+        {/* The workspace, under the work rather than instead of it. The
+            three tabs above answer what the work is; these two answer what the
+            workspace is and what it printed, and a person reading a diff should
+            not have to give it up to see either. Drag its edge; the chevron
+            folds it back to its own row. */}
+        <div
+          className={drawer === null ? "inspector-drawer" : "inspector-drawer open"}
+          style={drawer === null ? undefined : { height: `${drawerVh}vh` }}
+          data-testid="inspector-drawer"
+        >
+          {drawer !== null && (
+            <div
+              className="inspector-drawer-grip"
+              onPointerDown={onDrawerGrab}
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize the workspace section"
+              data-testid="inspector-drawer-grip"
+            />
+          )}
+
+          <div className="inspector-drawer-head">
+            <button
+              className="icon-button inspector-drawer-fold"
+              onClick={() => setDrawer((open) => (open === null ? "overview" : null))}
+              aria-expanded={drawer !== null}
+              aria-label={drawer === null ? "Show the workspace" : "Fold the workspace away"}
+              title={drawer === null ? "Show the workspace" : "Fold the workspace away"}
+              data-testid="inspector-drawer-fold"
+            >
+              <FoldGlyph open={drawer !== null} />
+            </button>
+            <div className="inspector-tabs" role="tablist" aria-label="Workspace sections">
+              {WORKSPACE_SECTIONS.filter((option) => hostedHere || option.id !== "output").map((option) => (
+                <button
+                  key={option.id}
+                  role="tab"
+                  aria-selected={drawer === option.id}
+                  className={drawer === option.id ? "inspector-tab active" : "inspector-tab"}
+                  onClick={() => setDrawer(option.id === drawer ? null : (option.id as WorkspaceSection))}
+                  data-testid={`inspector-tab-${option.id}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
+
+          {/* Output is a log that owns its own scrolling, so it fills the
+              region rather than sitting in a scrolling column of its own. */}
+          {drawer !== null && (
+            <div
+              className={
+                drawer === "output" ? "inspector-drawer-body log" : "inspector-drawer-body"
+              }
+              data-testid="inspector-drawer-body"
+            >
+              {drawer === "output" && (
+                <>
+                  <div className="output-kinds" role="tablist" aria-label="Which output">
+                    {OUTPUT_KINDS.map((entry) => (
+                      <button
+                        key={entry.kind}
+                        role="tab"
+                        aria-selected={outputKind === entry.kind}
+                        className={outputKind === entry.kind ? "output-kind active" : "output-kind"}
+                        onClick={() => setOutputKind(entry.kind)}
+                        data-testid="output-kind"
+                        data-kind={entry.kind}
+                      >
+                        {entry.label}
+                      </button>
+                    ))}
+                  </div>
+                  <ProcessLogView missionId={detail.mission.missionId} kind={outputKind} />
+                </>
+              )}
+
+              {drawer === "overview" && (
+                <div data-testid="inspector-overview">
+                  <div className="kv" data-testid="repo-block">
+                    <span className="kv-label">Repository</span>
+                    <span className="kv-value" data-testid="repo-name">
+                      {mission.repository?.name ?? "No repository recorded"}
+                    </span>
+
+                    {workstream && (
+                      <>
+                        <span className="kv-label">Mission branch</span>
+                        <span className="kv-value mono" data-testid="ws-branch">
+                          {workstream.missionBranch}
+                        </span>
+
+                        <span className="kv-label">Base</span>
+                        <span className="kv-value mono" data-testid="ws-base" title={workstream.baseSha}>
+                          {workstream.baseRef} · {shortSha(workstream.baseSha)}
+                        </span>
+
+                        <span className="kv-label">Branch</span>
+                        <span className="kv-value" data-testid="ws-branch-status">
+                          {workstream.branchStatus === "created" && "Created"}
+                          {workstream.branchStatus === "pending" && "Pending"}
+                          {workstream.branchStatus === "failed" && (
+                            <>
+                              <span className="inline-error" data-testid="branch-error">
+                                {workstream.branchError ?? "Branch creation failed."}
+                              </span>{" "}
+                              <button
+                                className="btn btn-text"
+                                onClick={() => void retryBranch()}
+                                disabled={retrying}
+                                data-testid="retry-branch"
+                              >
+                                Retry
+                              </button>
+                              {retryError && (
+                                <span className="inline-error" role="alert" data-testid="retry-error">
+                                  {retryError}
+                                </span>
+                              )}
+                            </>
+                          )}
+                        </span>
+                      </>
+                    )}
+
+                    <span className="kv-label">Runner</span>
+                    <span className="kv-value" data-testid="runner-status">
+                      {detail.runner ? (
+                        <>
+                          {detail.runner.label} · {detail.runner.online ? "online" : "offline"}
+                          {!detail.runner.online && detail.runner.lastSeenAt
+                            ? ` · last heard ${clockTime(detail.runner.lastSeenAt)}`
+                            : ""}
+                        </>
+                      ) : (
+                        "No runner has registered for this workstream."
+                      )}
+                    </span>
+                  </div>
+
+                  <h3 className="inspector-heading">Participants</h3>
+                  <ul className="participant-list" data-testid="participant-list">
+                    {detail.participants.map((participant) => (
+                      <li key={participant.userId} className="participant-row">
+                        <HumanMark login={participant.login} name={participant.name} />
+                        <span className="participant-name">{participant.name ?? participant.login}</span>
+                        <span className="participant-role">{roleLabel(participant.role)}</span>
+                      </li>
+                    ))}
+                    {detail.participants.length === 0 && <li className="quiet">No participants recorded.</li>}
+                  </ul>
+                  <InviteSection detail={detail} />
+
+                  {detail.control.holderLogin && (
+                    <div className="inspector-actions">
+                      <GatedAction
+                        capability="control.revoke"
+                        capabilities={detail.capabilities}
+                        denialReason="Only a Mission Admin can revoke control."
+                        holderLogin={detail.control.holderLogin}
+                        onClick={onRevoke}
+                        variant="secondary"
+                        testid="revoke-control"
+                      >
+                        Revoke control
+                      </GatedAction>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </aside>
     </>

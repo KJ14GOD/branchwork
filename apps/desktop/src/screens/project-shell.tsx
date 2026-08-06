@@ -423,7 +423,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [searchOpen, setSearchOpen] = useState(false);
   // Both side columns are draggable and remember where they were put (D-065).
   const [railWidth, setRailWidth] = useColumnWidth("novus-rail-width", 240, 180, 420);
-  const [panelWidth, setPanelWidth] = useColumnWidth("novus-panel-width", 420, 320, 760);
+  const [panelWidth, setPanelWidth] = useColumnWidth("novus-panel-width", 380, 320, 760);
   /** Why filing one away was refused — most often because it is still working. */
   const [archiveError, setArchiveError] = useState<string | null>(null);
   /** The Archived view: read on demand, because it is not the rail's job. */
