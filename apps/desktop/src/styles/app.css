@@ -678,7 +678,10 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: var(--s-2) var(--s-2) var(--s-3);
+  /* No padding at the top: the rail's own strip has to start at the window's
+     top edge, or its switch sits lower than the identical one in the room's
+     row and moves down as the rail opens. */
+  padding: 0 var(--s-2) var(--s-3);
 }
 
 /* The rail's own top strip: the window's buttons on the left, the rail's
