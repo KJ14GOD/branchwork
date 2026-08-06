@@ -56,6 +56,7 @@ let localRepoDir: string;
 let repoName: string;
 let localId: string;
 let missionId: string;
+let workstreamId: string;
 let app: ElectronApplication;
 let page: Page;
 
@@ -378,11 +379,18 @@ beforeAll(async () => {
   page = launched.page;
   await signIn(page);
 
+  // Starting a mission is a question, not a place (D-077): the ask-dialog
+  // replaces the draft flow this spec used to drive, and D-077's entry is the
+  // discussion this rewrite answers to.
   const projectRow = page.getByTestId("project-row").filter({ hasText: repoName });
   await projectRow.waitFor({ timeout: 30_000 });
-  await projectRow.click();
-  await page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
-  await page.getByTestId("composer-input").fill("prepare this workspace");
+  await projectRow.hover();
+  await page.getByTestId("repo-new-mission").click();
+  await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
+  await page
+    .getByTestId("new-mission-dialog")
+    .getByTestId("composer-input")
+    .fill("prepare this workspace");
   await page.keyboard.press("Enter");
   await page
     .getByTestId("trace-outcome")
@@ -395,6 +403,14 @@ beforeAll(async () => {
     return result.value.find((mission) => mission.repository?.providerRepoId === repositoryId)?.missionId ?? "";
   }, localId);
   expect(missionId).toMatch(/^msn_/);
+  // Worktrees are keyed by workstream, not mission (D-074): a mission may hold
+  // competing approaches, each in a worktree of its own.
+  workstreamId = await page.evaluate(async (mission) => {
+    const result = await window.novus.missions.get(mission);
+    if (!result.ok) throw new Error(result.message);
+    return result.value.workstream?.workstreamId ?? "";
+  }, missionId);
+  expect(workstreamId).toMatch(/^wst_/);
 }, 240_000);
 
 afterAll(async () => {
@@ -436,7 +452,7 @@ describe("the terminal, through the interface", () => {
     // the assertion that stands between an interactive shell and someone's
     // actual work (D-042).
     expect(shown).toContain(`worktrees`);
-    expect(shown).toContain(missionId);
+    expect(shown).toContain(workstreamId);
     expect(shown).not.toContain(localRepoDir);
     await shot(page, "45-terminal-in-the-worktree.png");
   }, 120_000);
@@ -601,7 +617,7 @@ describe("setup and verification, through the interface", () => {
 
     // Nothing has run yet: the dialog proposes, and the witness the setup
     // command writes is not on disk.
-    const worktree = join(userDataDir, "worktrees", missionId);
+    const worktree = join(userDataDir, "worktrees", workstreamId);
     expect(existsSync(join(worktree, "prepared.txt"))).toBe(false);
 
     await page.getByTestId("setup-save").click();
@@ -724,7 +740,7 @@ describe("setup and verification, through the interface", () => {
     expect(check?.ending).toBe("exit");
     expect(check?.origin).toBe("participant");
     // Bound to the revision it tested, not to "now".
-    const worktree = join(userDataDir, "worktrees", missionId);
+    const worktree = join(userDataDir, "worktrees", workstreamId);
     expect(check?.checkpointSha).toBe(git(worktree, ["rev-parse", "HEAD"]));
     expect(check?.stale).toBe(false);
 
@@ -892,7 +908,7 @@ describe("setup and verification, through the interface", () => {
       .poll(() => page.getByTestId("file-save").count(), { timeout: 20_000 })
       .toBe(0);
 
-    const worktree = join(userDataDir, "worktrees", missionId);
+    const worktree = join(userDataDir, "worktrees", workstreamId);
     expect(readFileSync(join(worktree, "README.md"), "utf8")).toContain("Edited from the file pane");
     await shot(page, "56-file-view-markdown.png");
 
@@ -999,9 +1015,15 @@ describe("stopping a running harness, through the interface", () => {
       await openProject(stopApp.page, repoName);
       // The project already has a mission on this control plane, so the room
       // opens into it; a fresh mission is what this test wants.
-      await stopApp.page.getByTestId("new-mission").click();
-      await stopApp.page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
-      await stopApp.page.getByTestId("composer-input").fill("a turn that will be interrupted");
+      // Starting a mission is a question, not a place (D-077): the ask-dialog
+      // replaces the rail row and draft this drove before.
+      await stopApp.page.getByTestId("project-row").first().hover();
+      await stopApp.page.getByTestId("repo-new-mission").click();
+      await stopApp.page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
+      await stopApp.page
+        .getByTestId("new-mission-dialog")
+        .getByTestId("composer-input")
+        .fill("a turn that will be interrupted");
       await stopApp.page.keyboard.press("Enter");
 
       // The harness is genuinely working: it has already said something, and
@@ -1103,25 +1125,22 @@ describe("missions and workstreams, told apart", () => {
       .poll(async () => (await goal.textContent()) ?? "", { timeout: 20_000 })
       .toContain("prepare this workspace");
 
-    // Creating one is a row in the list it joins, and it says Mission.
-    const create = page.getByTestId("new-mission");
-    await create.waitFor();
-    expect(await create.textContent()).toContain("New mission");
-    expect(await create.getAttribute("title")).toContain("New mission");
-    await create.click();
-    await page.getByTestId("draft-base").waitFor({ timeout: 20_000 });
-    expect(await page.getByTestId("room-goal").textContent()).toContain("New mission");
-    const lead = await page.locator(".draft-lead").textContent();
-    expect(lead).toContain("creates this mission");
-    expect(lead).not.toContain("workstream");
+    // Creating one is a question, not a place (D-077): the + on the project
+    // row opens the ask-dialog, and closing it leaves nothing behind — no
+    // draft, no tab, no row.
+    await page.getByTestId("project-row").first().hover();
+    await page.getByTestId("repo-new-mission").click();
+    await page.getByTestId("new-mission-dialog").waitFor({ timeout: 20_000 });
     await page.screenshot({ path: join(evidenceDir, "61-missions-in-the-rail.png") });
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.getByTestId("new-mission-dialog").count(), { timeout: 20_000 }).toBe(0);
 
-    // The keyboard does the same thing the row does.
+    // The keyboard asks the same question.
     await page.getByTestId("mission-row").first().click();
     await page.getByTestId("room-goal").waitFor();
     await page.keyboard.press("Meta+t");
-    await page.getByTestId("draft-base").waitFor({ timeout: 20_000 });
-    expect(await page.getByTestId("room-goal").textContent()).toContain("New mission");
+    await page.getByTestId("new-mission-dialog").waitFor({ timeout: 20_000 });
+    await page.keyboard.press("Escape");
 
     // And nothing anywhere in the room calls a mission a workstream.
     const roomText = (await page.getByTestId("project-room").textContent()) ?? "";

@@ -636,8 +636,10 @@ export async function missionDetail(
     ? checks.filter(
         (check) =>
           (check.workstreamId ??
-            (check.executionId === null ? null : laneOf.get(check.executionId) ?? null)) ===
-          selectedLane
+            (check.executionId === null ? null : laneOf.get(check.executionId) ?? null) ??
+            // A check that predates lane attribution belongs to the lane the
+            // mission started with rather than to no lane at all.
+            workstreams[0]?.workstreamId) === selectedLane
       )
     : checks;
   const laneDirections = selectedLane

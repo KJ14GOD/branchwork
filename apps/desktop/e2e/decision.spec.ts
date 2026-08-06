@@ -469,5 +469,22 @@ describe("competing approaches, compared and decided", () => {
       .poll(async () => page.getByTestId("lane-context").innerText(), { timeout: 30_000 })
       .toContain("Current work");
     expect(await page.getByTestId("composer").innerText()).toContain("Directing Current work");
+
+    // --- The lane chrome at the other widths (DESIGN.md#responsive) ---------
+    // Not merely captured: the tabs and the switcher must still be present
+    // and operable rather than clipped away.
+    await app.evaluate(async ({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.setContentSize(1000, 800);
+    });
+    await expect.poll(() => page.getByTestId("lane-tab").count(), { timeout: 30_000 }).toBe(3);
+    await shot("91-lanes-at-1000.png");
+    await app.evaluate(async ({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.setContentSize(760, 720);
+    });
+    await expect.poll(() => page.getByTestId("approaches-switcher").count(), { timeout: 30_000 }).toBe(1);
+    await shot("92-lanes-at-760.png");
+    await app.evaluate(async ({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.setContentSize(1440, 900);
+    });
   }, 300_000);
 });

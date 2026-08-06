@@ -42,7 +42,10 @@ export function laneView(detail: MissionDetailResponse): MissionDetailResponse {
     checks: detail.checks.filter(
       (check) =>
         (check.workstreamId ??
-          (check.executionId === null ? null : laneOf.get(check.executionId) ?? null)) === lane
+          (check.executionId === null ? null : laneOf.get(check.executionId) ?? null) ??
+          // Unattributed checks predate lane attribution and belong to the
+          // lane the mission started with.
+          detail.workstreams[0]?.workstreamId) === lane
     ),
     approvals: detail.approvals.filter((approval) => approval.workstreamId === lane),
     // A process without a lane predates lane-scoping; it belongs to the

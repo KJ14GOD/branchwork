@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { NovusBridge } from "@novus/contracts";
@@ -31,7 +31,6 @@ const CP_URL = `http://127.0.0.1:${CP_PORT}`;
 const DB_URL = "postgres://novus:novus@127.0.0.1:5433/novus_e2e";
 
 // The fake provider's head SHA is deterministic (repo-provider.ts).
-const DEMO_HEAD_SHA = createHash("sha1").update("demo-app@main").digest("hex");
 
 let controlPlane: ChildProcess;
 let userDataDir: string;
@@ -287,27 +286,24 @@ describe("the Mission Room", () => {
     await expect.poll(async () => page.getByTestId("repo-row").count(), { timeout: 5_000 }).toBe(1);
     await page.keyboard.press("Enter");
 
-    // The "+" tab: no form — a quiet pinned base line and the composer.
-    const baseLine = page.getByTestId("draft-base");
-    await baseLine.waitFor();
-    const baseText = (await baseLine.textContent()) ?? "";
-    expect(baseText).toContain("novus/demo-app");
-    expect(baseText).toContain("main");
-    expect(baseText).toContain(DEMO_HEAD_SHA.slice(0, 8));
-    expect(baseText).not.toContain(DEMO_HEAD_SHA); // abbreviated
+    // Picking a repository asks a question, not a place (D-077, D-078): one
+    // small dialog with the project's name and the real composer. No draft
+    // tab, no form, no base machinery on screen.
+    const askDialog = page.getByTestId("new-mission-dialog");
+    await askDialog.waitFor();
+    expect(await page.getByTestId("ask-project").textContent()).toContain("novus/demo-app");
 
-    // A GitHub project is directable. It has no worktree on this machine *yet*,
-    // and the room says exactly that rather than refusing: a runner fetches the
-    // repository into its own area and works it like any other checkout
-    // (D-025, D-032). The refusal this used to assert was the interface
-    // contradicting a runner that had been able to do this for a while.
-    const draftInput = page.getByTestId("composer-input");
-    expect(await draftInput.isDisabled()).toBe(false);
-    expect(await page.getByTestId("composer-no-capability").count()).toBe(0);
-    expect(await page.getByTestId("state-line").textContent()).toContain(
-      "no machine has this repository checked out for Novus yet"
-    );
+    // A GitHub project is directable from here: the composer inside the ask is
+    // live, because a runner fetches the repository into its own area and
+    // works it like any other checkout (D-025, D-032).
+    const askInput = askDialog.getByTestId("composer-input");
+    expect(await askInput.isDisabled()).toBe(false);
+    expect(await askDialog.getByTestId("composer-no-capability").count()).toBe(0);
     await page.screenshot({ path: join(evidenceDir, "10-first-message.png") });
+    // Enter with nothing, Esc, or a click outside closes it and nothing
+    // happens anywhere (D-077).
+    await page.keyboard.press("Escape");
+    await askDialog.waitFor({ state: "detached" });
 
     await app.close();
   });
@@ -340,24 +336,30 @@ describe("the Mission Room", () => {
     await first.page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
     const projectRow = first.page.getByTestId("project-row").filter({ hasText: repoName });
     await projectRow.waitFor();
-    await projectRow.click();
+    // Starting a mission is a question (D-077): the + on the project row opens
+    // the ask-dialog, which embeds the real composer (D-078).
+    await projectRow.hover();
+    await first.page.getByTestId("repo-new-mission").click();
+    await first.page.getByTestId("new-mission-dialog").waitFor();
 
-    const baseLine = first.page.getByTestId("draft-base");
-    await baseLine.waitFor();
-    const baseText = (await baseLine.textContent()) ?? "";
-    expect(baseText).toContain(repoName);
-    expect(baseText).toContain(headSha.slice(0, 8));
-
-    // The composer sits at one row before anything is typed, and returns to
-    // that height after it submits (DESIGN.md prohibited pattern 9).
-    const input = first.page.getByTestId("composer-input");
-    const idleHeight = (await input.boundingBox())?.height ?? 0;
-    expect(idleHeight).toBeGreaterThan(0);
-    await input.fill("add a fake turn file\nsecond line\nthird line\nfourth line");
-    const grownHeight = (await input.boundingBox())?.height ?? 0;
-    expect(grownHeight).toBeGreaterThan(idleHeight);
+    const input = first.page.getByTestId("new-mission-dialog").getByTestId("composer-input");
     await input.fill("add a fake turn file");
     await first.page.keyboard.press("Enter");
+    await first.page
+      .getByTestId("new-mission-dialog")
+      .waitFor({ state: "detached", timeout: 30_000 });
+
+    // The room's composer sits at one row before anything is typed and grows
+    // with content (DESIGN.md prohibited pattern 9) — checked here because the
+    // ask-dialog styles the same composer tall on purpose (D-078).
+    const roomInput = first.page.getByTestId("composer-input");
+    await roomInput.waitFor({ timeout: 30_000 });
+    const idleHeight = (await roomInput.boundingBox())?.height ?? 0;
+    expect(idleHeight).toBeGreaterThan(0);
+    await roomInput.fill("a draft\nsecond line\nthird line\nfourth line");
+    const grownHeight = (await roomInput.boundingBox())?.height ?? 0;
+    expect(grownHeight).toBeGreaterThan(idleHeight);
+    await roomInput.fill("");
 
     // The first message creates the mission and runs it. This machine enrols as
     // the workstream's runner moments after the mission exists, and the control
@@ -399,10 +401,10 @@ describe("the Mission Room", () => {
 
     await first.page.getByTestId("checkpoint-line").waitFor({ timeout: 20_000 });
 
-    // The composer is back to one row and empty.
+    // The room's composer is back to one row and empty.
     await first.page.getByTestId("working").waitFor({ state: "detached", timeout: 20_000 });
-    expect(await input.inputValue()).toBe("");
-    expect((await input.boundingBox())?.height ?? 0).toBe(idleHeight);
+    expect(await roomInput.inputValue()).toBe("");
+    expect((await roomInput.boundingBox())?.height ?? 0).toBe(idleHeight);
 
     // Authority is rendered from the server's own snapshot. The room header
     // keeps who holds the baton; who is here lives in the panel's own header.
@@ -440,8 +442,8 @@ describe("the Mission Room", () => {
     await first.page.getByTestId("diff").waitFor({ timeout: 10_000 });
     await first.page.screenshot({ path: join(evidenceDir, "15-changes-diff.png") });
 
-    // Overview holds the machinery the header must never carry.
-    await first.page.getByTestId("inspector-tab-overview").click();
+    // Overview holds the machinery the header must never carry. The workspace
+    // drawer opens on it already; clicking the tab again would fold it away.
     await first.page.getByTestId("ws-branch").waitFor();
     expect(await first.page.getByTestId("ws-base").textContent()).toContain(headSha.slice(0, 8));
     await first.page.screenshot({ path: join(evidenceDir, "17-inspector-overview.png") });
@@ -479,7 +481,6 @@ describe("the Mission Room", () => {
     await panel.waitFor({ timeout: 10_000 });
     expect(await first.page.getByTestId("panel-controller").count()).toBe(0);
     await first.page.getByTestId("controller").waitFor();
-    await first.page.getByTestId("inspector-tab-overview").click();
     await first.page.getByTestId("participant-list").waitFor();
     await first.page.getByTestId("inspector-tab-changes").click();
     await first.page.getByTestId("inspector-changes").waitFor();
@@ -588,14 +589,19 @@ describe("the workspace runtime", () => {
     await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
     const projectRow = page.getByTestId("project-row").filter({ hasText: runtimeRepoName });
     await projectRow.waitFor({ timeout: 20_000 });
-    await projectRow.click();
-
-    // One real turn, so the ledger has an actual revision to prove later. The
-    // base has to be resolved before the first message can create anything.
-    await page.getByTestId("draft-base").waitFor({ timeout: 20_000 });
-    await page.getByTestId("composer-input").fill("add a fake turn file");
+    // One real turn, so the ledger has an actual revision to prove later —
+    // asked through the ask-dialog (D-077).
+    const parentRow = page.locator(".side-parent", { has: projectRow });
+    await parentRow.hover();
+    await parentRow.getByTestId("repo-new-mission").click();
+    await page.getByTestId("new-mission-dialog").waitFor({ timeout: 20_000 });
+    await page
+      .getByTestId("new-mission-dialog")
+      .getByTestId("composer-input")
+      .fill("add a fake turn file");
     await page.keyboard.press("Enter");
     expect(await page.getByTestId("send-error").count()).toBe(0);
+    await page.getByTestId("new-mission-dialog").waitFor({ state: "detached", timeout: 30_000 });
     await page
       .getByTestId("trace-outcome")
       .filter({ hasText: "Turn completed" })
@@ -683,7 +689,14 @@ describe("the workspace runtime", () => {
 
     // Opening it ran nothing: no configuration written, no file copied, no
     // process, no execution.
-    const worktree = join(userDataDir, "worktrees", freshMissionId);
+    // Worktrees are keyed by workstream, not mission (D-074).
+    const freshWorkstreamId = await page.evaluate(async (mission) => {
+      const result = await window.novus.missions.get(mission);
+      if (!result.ok) throw new Error(result.message);
+      return result.value.workstream?.workstreamId ?? "";
+    }, freshMissionId);
+    expect(freshWorkstreamId).toMatch(/^wst_/);
+    const worktree = join(userDataDir, "worktrees", freshWorkstreamId);
     expect(existsSync(join(worktree, ".novus", "settings.toml"))).toBe(false);
     expect(existsSync(join(worktree, ".env"))).toBe(false);
     const afterOpen = await page.evaluate(async (id) => {

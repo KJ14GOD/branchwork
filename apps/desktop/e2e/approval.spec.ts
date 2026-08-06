@@ -205,7 +205,7 @@ async function twoClientsOnOneMission(label: string): Promise<{
   kartik: Client;
   maya: Client;
   missionId: string;
-  worktreeOf: (missionId: string) => string;
+  worktreeOf: () => string;
   kartikDir: string;
 }> {
   const repoDir = mkdtempSync(join(tmpdir(), `novus-${label}-repo-`));
@@ -257,6 +257,9 @@ async function twoClientsOnOneMission(label: string): Promise<{
     { localId, ref: base.ref, sha: base.sha, creationKey: randomUUID(), label }
   );
   const missionId = created.mission.missionId;
+  // Worktrees are keyed by workstream, not mission, since a mission may hold
+  // competing approaches (D-074).
+  const workstreamId = created.workstream.workstreamId;
 
   await until(kartik, missionId, (value) => value.runner !== null, "the runner to register");
 
@@ -276,7 +279,7 @@ async function twoClientsOnOneMission(label: string): Promise<{
     maya,
     missionId,
     kartikDir,
-    worktreeOf: (mission: string) => join(kartikDir, "worktrees", mission)
+    worktreeOf: () => join(kartikDir, "worktrees", workstreamId)
   };
 }
 
@@ -323,7 +326,7 @@ describe("a permission the harness asks for", () => {
     expect(JSON.stringify(asked.approvals)).not.toContain("# Fake turn");
 
     // The harness is genuinely blocked: the file it asked about is not there.
-    expect(existsSync(join(worktreeOf(missionId), "NOVUS_FAKE_TURN.md"))).toBe(false);
+    expect(existsSync(join(worktreeOf(), "NOVUS_FAKE_TURN.md"))).toBe(false);
 
     // --- Maya sees the question and is told she cannot answer it -------------
     await openRoom(maya, missionId);
@@ -393,7 +396,7 @@ describe("a permission the harness asks for", () => {
 
     // The harness is unblocked and does the thing it asked about.
     await expect
-      .poll(() => existsSync(join(worktreeOf(missionId), "NOVUS_FAKE_TURN.md")), { timeout: 60_000 })
+      .poll(() => existsSync(join(worktreeOf(), "NOVUS_FAKE_TURN.md")), { timeout: 60_000 })
       .toBe(true);
     const settled = await until(
       kartik,
@@ -454,7 +457,7 @@ describe("a permission the harness asks for", () => {
     expect(settled.approvals[0]?.respondedByLogin).toBe("kartik");
 
     // The act was refused, so it did not happen.
-    expect(existsSync(join(worktreeOf(missionId), "NOVUS_FAKE_TURN.md"))).toBe(false);
+    expect(existsSync(join(worktreeOf(), "NOVUS_FAKE_TURN.md"))).toBe(false);
 
     // A denial is not a failure: the turn ends normally with the refusal as
     // context, rather than the execution being reported as broken.

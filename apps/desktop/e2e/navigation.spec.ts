@@ -352,10 +352,17 @@ describe("the missions a person has open", () => {
   it("closes a tab without stopping the mission, which keeps running and keeps its state in the rail", async () => {
     await closeEveryTab(page);
     await openProject(page, alphaName);
-    await projectGroup(page, alphaName).getByTestId("new-mission").click();
-    await page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
-    await page.getByTestId("composer-input").fill(RUNNING_GOAL);
+    // Starting a mission is a question, not a place (D-077): the + on the
+    // repository row opens the ask-dialog, and the words create the mission.
+    const alphaParent = page.locator(".side-parent", {
+      has: page.getByTestId("project-row").filter({ hasText: alphaName })
+    });
+    await alphaParent.hover();
+    await alphaParent.getByTestId("repo-new-mission").click();
+    await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
+    await page.getByTestId("new-mission-dialog").getByTestId("composer-input").fill(RUNNING_GOAL);
     await page.keyboard.press("Enter");
+    await page.getByTestId("new-mission-dialog").waitFor({ state: "detached", timeout: 30_000 });
 
     // The harness is genuinely working before anything is closed.
     await page
@@ -592,51 +599,55 @@ describe("starting a mission", () => {
     await expect.poll(opacity, { timeout: 10_000 }).toBe("1");
     await shot(page, "67-repository-row-new-mission.png");
 
-    // Pressing it starts a mission and does nothing else: the row it sits on is
-    // still open, and the missions it was showing are still showing.
+    // Pressing it asks the question and does nothing else (D-077): the row it
+    // sits on is still open, and the missions it was showing are still showing.
     const missionsBefore = await projectGroup(page, alphaName).getByTestId("mission-row").count();
     expect(missionsBefore).toBeGreaterThan(0);
+    const tabsBefore = (await tabLabels(page)).length;
     await plus.click();
-    await page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
+    await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
     expect(await projectGroup(page, alphaName).getByTestId("mission-row").count()).toBe(missionsBefore);
-    expect(await page.getByTestId("room-goal").innerText()).toContain("New mission");
 
-    // Twice is the same draft, not two rooms nobody can tell apart.
-    const afterFirst = (await tabLabels(page)).length;
-    await plus.click();
-    await new Promise((settle) => setTimeout(settle, 500));
-    expect((await tabLabels(page)).length).toBe(afterFirst);
+    // Esc leaves nothing behind anywhere: no draft, no tab, no row.
+    await page.keyboard.press("Escape");
+    await expect
+      .poll(() => page.getByTestId("new-mission-dialog").count(), { timeout: 20_000 })
+      .toBe(0);
+    expect((await tabLabels(page)).length).toBe(tabsBefore);
   }, 180_000);
 
-  it("starts one from the strip and from ⌘T, and turns the draft into the mission in place", async () => {
+  it("starts one from the strip and from ⌘T, and the words create the mission (D-077)", async () => {
     await closeEveryTab(page);
     await openProject(page, alphaName);
     await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha one" }).click();
     await expect.poll(async () => (await tabLabels(page)).length, { timeout: 20_000 }).toBe(1);
 
-    // The strip's own +, in the repository the person is in.
+    // The strip's own + asks the question, in the repository the person is in.
     await page.getByTestId("strip-new-mission").click();
-    await page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
-    expect((await page.getByTestId("draft-base").innerText())).toContain(alphaName);
-    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 20_000 }).toBe(2);
+    await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
+    expect(await page.getByTestId("ask-project").innerText()).toContain(alphaName);
+    // Nothing durable was created by asking, and Esc leaves nothing behind.
+    await page.keyboard.press("Escape");
+    await expect
+      .poll(() => page.getByTestId("new-mission-dialog").count(), { timeout: 20_000 })
+      .toBe(0);
+    expect((await tabLabels(page)).length).toBe(1);
 
-    // ⌘T is the same act, so it lands on the draft that is already there.
-    await page.keyboard.press("Meta+t");
-    await new Promise((settle) => setTimeout(settle, 500));
-    expect((await tabLabels(page)).length).toBe(2);
-    expect(await page.getByTestId("room-goal").innerText()).toContain("New mission");
-
-    // Nothing durable was created by opening a draft.
+    // ⌘T is the same act.
     const before = await page.evaluate(async () => {
       const result = await window.novus.missions.list();
       return result.ok ? result.value.length : -1;
     });
+    await page.keyboard.press("Meta+t");
+    await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
 
-    // The first direction creates it, in the tab that is already open.
-    await page.getByTestId("composer-input").fill("a mission started from the strip");
+    // The words create the mission and open its room, in a tab named by the
+    // goal they derive — and a tab label is short, so this is what it carries.
+    await page
+      .getByTestId("new-mission-dialog")
+      .getByTestId("composer-input")
+      .fill("a mission started from the strip");
     await page.keyboard.press("Enter");
-    // The tab is the draft's own, renamed by the goal the first direction
-    // derived — and a tab label is short, so this is the label it can carry.
     await expect
       .poll(async () => (await tabLabels(page)).join("|"), { timeout: 60_000 })
       .toContain("a mission s");
@@ -649,7 +660,7 @@ describe("starting a mission", () => {
     await shot(page, "68-draft-became-a-mission.png");
   }, 240_000);
 
-  it("discards an unsent draft, and offers an obvious way to start one where there is nothing open", async () => {
+  it("dismissing the ask leaves nothing behind, and the empty state offers the way in", async () => {
     await closeEveryTab(page);
     await openProject(page, betaName);
 
@@ -665,11 +676,15 @@ describe("starting a mission", () => {
     expect(await empty.innerText()).toContain("New mission");
     await shot(page, "69-nothing-open.png");
     await page.getByTestId("empty-new-mission").click();
-    await page.getByTestId("draft-base").waitFor({ timeout: 30_000 });
+    await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
 
-    // Closing it discards that draft and only that draft.
-    await page.getByTestId("mission-tab-close").first().click();
-    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 20_000 }).toBe(0);
+    // Esc closes it and nothing happened anywhere: no draft, no tab, no row,
+    // no mission (D-077).
+    await page.keyboard.press("Escape");
+    await expect
+      .poll(() => page.getByTestId("new-mission-dialog").count(), { timeout: 20_000 })
+      .toBe(0);
+    expect((await tabLabels(page)).length).toBe(0);
     const after = await page.evaluate(async () => {
       const result = await window.novus.missions.list();
       return result.ok ? result.value.length : -1;

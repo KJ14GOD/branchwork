@@ -330,7 +330,9 @@ describe("two people, one mission", () => {
     // clicking is an invitation that does not exist for a user.
     await showRoom(kartik);
     await kartik.page.getByTestId("panel-toggle").click();
-    await kartik.page.getByTestId("inspector-tab-overview").click();
+    // The workspace drawer opens on Overview already; clicking the tab again
+    // would fold it away (the drawer rework after D-068).
+    await kartik.page.getByTestId("inspector-overview").waitFor({ timeout: 30_000 });
     await kartik.page.getByTestId("create-invitation").click();
     await kartik.page.getByTestId("invitation-token").waitFor({ timeout: 15_000 });
     const invitationToken = (
