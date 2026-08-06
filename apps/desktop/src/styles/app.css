@@ -689,7 +689,10 @@ body {
   height: var(--topbar-h);
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  /* Hard against the inset, which is exactly where the room's copy sits when
+     the rail is away. The switch must not move when it is used: a control that
+     relocates on its own click makes you find it again to undo it. */
+  justify-content: flex-start;
   padding: 0 var(--s-2) 0 var(--traffic-inset);
   -webkit-app-region: drag;
 }
