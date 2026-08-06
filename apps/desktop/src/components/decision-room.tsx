@@ -407,6 +407,26 @@ function RecordDecisionDialog({
               data-testid="decision-risks"
             />
           </label>
+          {/* What is being accepted, at the moment of accepting it: the lane's
+              own evidence and the exact revision the decision will pin. The
+              record captures the checkpoint; this puts it in front of the
+              person while they can still change their mind (D-075). */}
+          <section className="decision-evidence" data-testid="decision-evidence">
+            <h3 className="field-label">The evidence this decides on</h3>
+            <p className="quiet">
+              {approach
+                ? [
+                    approach.filesChanged === 0
+                      ? "nothing changed"
+                      : `${plural(approach.filesChanged, "file")} changed (+${approach.additions} −${approach.deletions})`,
+                    approach.checksRun === 0
+                      ? "no checks ran"
+                      : `${approach.checksPassed} of ${plural(approach.checksRun, "check")} passed`,
+                    approach.checkpointSha ? `revision ${shortSha(approach.checkpointSha)}` : "no checkpoint"
+                  ].join(" · ")
+                : "This approach is still loading."}
+            </p>
+          </section>
           <section className="decision-unresolved" data-testid="decision-unresolved">
             <h3 className="field-label">Recorded as unresolved</h3>
             <p className="quiet">

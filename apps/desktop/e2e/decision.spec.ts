@@ -409,6 +409,11 @@ describe("competing approaches, compared and decided", () => {
     // And it shows what it is about to record as unverified, while there is
     // still time to change your mind.
     expect(await page.getByTestId("decision-unresolved").innerText()).toMatch(/no verification has run/i);
+    // And the evidence being accepted, with the exact revision the decision
+    // will pin — in front of the person, not only in the record.
+    const evidence = await page.getByTestId("decision-evidence").innerText();
+    expect(evidence).toMatch(/1 file changed/);
+    expect(evidence).toMatch(/revision [0-9a-f]{8}/);
     await page.getByTestId("decision-rationale").fill("The middleware version keeps the guard in one place.");
     await page.getByTestId("decision-risks").fill("Nothing is verified yet; the suite has not run.");
     await shot("85-recording-a-decision.png");
