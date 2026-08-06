@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Mission, MissionDetailResponse, Organization, User } from "@novus/contracts";
+import {
+  type Effort,
+  type Mission,
+  type ModelId,
+  type MissionDetailResponse,
+  type Organization,
+  type User
+} from "@novus/contracts";
 import { novus } from "../bridge";
 import { AddProjectDialog, type PickedRepository } from "../components/add-project-dialog";
+import { Composer } from "../components/composer";
+import { Dialog } from "../components/dialog";
 import { HumanMark } from "../components/identity";
 import { MissionTabs } from "../components/mission-tabs";
 import { ColumnHandle, useColumnWidth } from "../components/resizable";
@@ -13,7 +22,6 @@ import {
   closeTab,
   closeTabs,
   emptyWorkingSet,
-  openDraft,
   openMission,
   promoteDraft,
   readWorkingSet,
@@ -23,7 +31,7 @@ import {
   type OpenTab,
   type WorkingSet
 } from "../components/working-set";
-import { plural, truncateLabel } from "../format";
+import { deriveGoal, plural, truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
 import { Inspector, type InspectorSection } from "../components/inspector";
 
@@ -45,11 +53,13 @@ import { Inspector, type InspectorSection } from "../components/inspector";
 function ArchivedDialog({
   missions,
   error,
+  restoringMissionId,
   onRestore,
   onClose
 }: {
   missions: Mission[];
   error: string | null;
+  restoringMissionId: string | null;
   onRestore: (missionId: string) => Promise<void>;
   onClose: () => void;
 }) {
@@ -83,9 +93,11 @@ function ArchivedDialog({
               <button
                 className="btn btn-text archived-restore"
                 onClick={() => void onRestore(mission.missionId)}
+                disabled={restoringMissionId !== null}
+                aria-busy={restoringMissionId === mission.missionId}
                 data-testid="mission-restore"
               >
-                Restore
+                {restoringMissionId === mission.missionId ? "Restoring…" : "Restore"}
               </button>
             </div>
           ))}
@@ -426,6 +438,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [panelWidth, setPanelWidth] = useColumnWidth("novus-panel-width", 380, 320, 760);
   /** Why filing one away was refused — most often because it is still working. */
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [restoringMissionId, setRestoringMissionId] = useState<string | null>(null);
   /** The Archived view: read on demand, because it is not the rail's job. */
   const [archived, setArchived] = useState<Mission[] | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -637,9 +650,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     setRailOpen(false);
   }, []);
 
-  const openDraftTab = useCallback((projectKey: string) => {
-    setWorkingSet((previous) => openDraft(previous, projectKey, mintTabId));
-    setRailProject(projectKey);
+  /**
+   * Starting a mission is a question, not a place (D-077): a small dialog asks
+   * what Claude should do, Enter with words creates and starts the mission, and
+   * Enter with nothing — or Esc, or a click outside — does nothing at all. The
+   * permanent "New mission" row this replaces sat in the rail dressed as a
+   * mission, and the draft tab it opened sat in the strip dressed as one too.
+   */
+  const [newMissionIn, setNewMissionIn] = useState<Project | null>(null);
+  const openNewMission = useCallback((project: Project) => {
+    setNewMissionIn(project);
+    setRailProject(project.key);
     setRailOpen(false);
   }, []);
 
@@ -658,13 +679,13 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** Whichever repository the person is in: the room they are reading, or the
    *  project the rail is showing when nothing is open. */
   const newMissionHere = useCallback(() => {
-    if (currentProjectKey) {
-      openDraftTab(currentProjectKey);
+    if (currentProject) {
+      openNewMission(currentProject);
       return;
     }
     // No repository to create in yet, so the honest next step is choosing one.
     setDialogOpen(true);
-  }, [currentProjectKey, openDraftTab]);
+  }, [currentProject, openNewMission]);
 
   // Keep somewhere to be whenever a project exists; never a dead canvas.
   useEffect(() => {
@@ -682,8 +703,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     if (!first) return;
     const firstMission = first.missions[0];
     if (firstMission) openMissionTab(first.key, firstMission.missionId);
-    else openDraftTab(first.key);
-  }, [restored, projects, railProject, workingSet.tabs.length, openMissionTab, openDraftTab]);
+    else setRailProject(first.key);
+  }, [restored, projects, railProject, workingSet.tabs.length, openMissionTab]);
 
   // Keyboard: ⌘T a new mission in the repository you are in, ⌘1–9 the rail's
   // missions for that project (DESIGN.md#keyboard).
@@ -727,8 +748,18 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         ? prev
         : [...prev, picked]
     );
-    openDraftTab(keyOf(picked.provider, picked.providerRepoId));
+    const key = keyOf(picked.provider, picked.providerRepoId);
+    setRailProject(key);
+    setExpanded((prev) => new Set(prev).add(key));
     closeDialog();
+    setNewMissionIn({
+      key,
+      name: picked.name,
+      provider: picked.provider,
+      providerRepoId: picked.providerRepoId,
+      missions: [],
+      onThisMachine: true
+    });
   };
 
   const toggleExpanded = useCallback((key: string) => {
@@ -740,34 +771,15 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     });
   }, []);
 
-  const selectProject = (project: Project) => {
-    setExpanded((prev) => new Set(prev).add(project.key));
-    setRailProject(project.key);
-    setRailOpen(false);
-    // Opening a project lands you in it: the room you last had open there, its
-    // first mission, or — for a project with none — a draft.
-    const alreadyOpen = workingSet.tabs.find((tab) => tab.projectKey === project.key);
-    if (alreadyOpen) {
-      setWorkingSet((previous) => selectTab(previous, alreadyOpen.id));
-      return;
-    }
-    const firstMission = project.missions[0];
-    if (firstMission) openMissionTab(project.key, firstMission.missionId);
-    else openDraftTab(project.key);
-  };
-
   /**
-   * Clicking anywhere on a project row opens it — the name is the control, not
-   * just the arrow beside it. Clicking the project you are already reading
-   * closes it again, so one target both reveals and hides.
+   * A project row is a disclosure and nothing more (D-077): click opens the
+   * list, click again closes it, and the room never moves. Landing somewhere
+   * is what clicking a *mission* does — a row that navigated on its first
+   * press and toggled on its second was two behaviours behind one target.
    */
   const openProject = (project: Project) => {
-    const showing = expanded.has(project.key) && currentProjectKey === project.key;
-    if (showing) {
-      toggleExpanded(project.key);
-      return;
-    }
-    selectProject(project);
+    setRailProject(project.key);
+    toggleExpanded(project.key);
   };
 
   const openAttention = (mission: Mission) => {
@@ -829,13 +841,19 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   };
 
   const restoreMission = async (missionId: string) => {
+    if (restoringMissionId !== null) return;
     setArchiveError(null);
-    const result = await novus().missions.restore(missionId);
-    if (!result.ok) {
-      setArchiveError(result.message);
-      return;
+    setRestoringMissionId(missionId);
+    try {
+      const result = await novus().missions.restore(missionId);
+      if (!result.ok) {
+        setArchiveError(result.message);
+        return;
+      }
+      await refresh();
+    } finally {
+      setRestoringMissionId(null);
     }
-    await refresh();
   };
   const openFiles = active ? (filesByTab[active.id] ?? []) : [];
   const activeFile = active ? (activeFileByTab[active.id] ?? null) : null;
@@ -933,7 +951,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               const open = expanded.has(project.key);
               return (
                 <div key={project.key} className="side-group">
-                  <div className={`side-row side-parent${selected ? " selected" : ""}${away ? " away" : ""}`}>
+                  {/* Never washed as selected: selection is the mission's, and
+                      greying the heading with it read as the whole project
+                      being pressed (D-077). */}
+                  <div className={`side-row side-parent${away ? " away" : ""}`}>
                     {/* Disclosure and selection are separate acts: you can look
                         inside a project without leaving the one you are in. */}
                     <button
@@ -967,7 +988,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                       className="side-new-mission"
                       onClick={(event) => {
                         event.stopPropagation();
-                        openDraftTab(project.key);
+                        openNewMission(project);
                       }}
                       aria-label={`New mission in ${project.name}`}
                       title={`New mission in ${project.name}`}
@@ -1013,18 +1034,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                         )}
                       </div>
                     ))}
-                  {open && (
-                    <button
-                      className={`side-row side-child side-new${
-                        selected && activeMissionId === null && active !== null ? " selected" : ""
-                      }`}
-                      onClick={() => openDraftTab(project.key)}
-                      title="New mission (⌘T)"
-                      data-testid="new-mission"
-                    >
-                      <span className="side-name">New mission</span>
-                    </button>
-                  )}
+
                 </div>
               );
             })}
@@ -1092,6 +1102,18 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         />
         )}
 
+        {newMissionIn && (
+          <NewMissionDialog
+            project={newMissionIn}
+            projects={projects}
+            onClose={() => setNewMissionIn(null)}
+            onCreated={(mission) => {
+              setNewMissionIn(null);
+              handleCreated(mission);
+            }}
+          />
+        )}
+
         {joinOpen && (
           <JoinDialog
             onClose={() => setJoinOpen(false)}
@@ -1126,6 +1148,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           <ArchivedDialog
             missions={archived ?? []}
             error={archiveError}
+            restoringMissionId={restoringMissionId}
             onRestore={restoreMission}
             onClose={() => {
               setArchivedOpen(false);
@@ -1170,8 +1193,21 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           {/* The room's workspace controls: one Run control beside the evidence
               toggle, in the corner that belongs to the mission. Not a toolbar,
               and not a second navigation (DESIGN.md#component-behavior). */}
-          {openDetail && openDetail.workstream && (
+          {/* Run never leaves the corner. A draft has nothing to run yet, so
+              the control disables rather than unmounting — a control that
+              vanishes when you switch tabs reads as a layout bug, and the
+              house rule is disabled-with-reason, never hidden (DESIGN.md). */}
+          {openDetail && openDetail.workstream ? (
             <RunControl detail={openDetail} onSetup={() => setSetupOpen(true)} />
+          ) : (
+            <button
+              className="btn btn-secondary run-trigger"
+              disabled
+              title="Available once this mission exists and has a workspace"
+              data-testid="run-control-disabled"
+            >
+              Run
+            </button>
           )}
           {/* Beside Run and the evidence toggle, never a second navigation. It
               stays visible and disabled when the workspace is on someone else's
@@ -1240,7 +1276,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               </p>
               <button
                 className="btn btn-primary"
-                onClick={() => openDraftTab(currentProject.key)}
+                onClick={() => openNewMission(currentProject)}
                 data-testid="empty-new-mission"
               >
                 New mission
@@ -1314,5 +1350,118 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Starting a mission, the way Conductor starts work (D-077): the project's
+ * name across the top, one large prompt area that *is* the body, and the real
+ * composer's own foot — model chip, effort chip, and the send control as the
+ * Create action. Enter with words creates the mission and your words become
+ * its first direction; Enter with nothing, Esc, or a click outside closes it
+ * and nothing happens anywhere.
+ */
+function NewMissionDialog({
+  project,
+  projects,
+  onClose,
+  onCreated
+}: {
+  project: Project;
+  /** Every project, so the ask is not stuck where it was opened: the header
+   *  is a picker, exactly as Conductor's is. */
+  projects: Project[];
+  onClose: () => void;
+  onCreated: (mission: Mission) => void;
+}) {
+  const [target, setTarget] = useState(project);
+  const [picking, setPicking] = useState(false);
+  const create = async ({
+    body,
+    model,
+    effort
+  }: {
+    body: string;
+    model: ModelId;
+    effort: Effort;
+  }): Promise<{ ok: boolean; message?: string }> => {
+    const base =
+      target.provider === "local"
+        ? await novus().repos.baseLocal(target.providerRepoId)
+        : await novus().repos.base(target.providerRepoId);
+    if (!base.ok) return { ok: false, message: base.message };
+    const created = await novus().missions.create({
+      goal: deriveGoal(body),
+      successCriteria: body,
+      provider: target.provider,
+      providerRepoId: target.providerRepoId,
+      baseRef: base.value.ref,
+      baseSha: base.value.sha,
+      creationKey: crypto.randomUUID()
+    });
+    if (!created.ok) return { ok: false, message: created.message };
+    // The words are the first direction; whether they run now or queue is the
+    // server's decision, reported in the room this opens into.
+    await novus().missions.direct({
+      missionId: created.value.mission.missionId,
+      body,
+      model,
+      effort
+    });
+    onCreated(created.value.mission);
+    return { ok: true };
+  };
+
+  return (
+    <Dialog label={`New mission in ${target.name}`} onClose={onClose} testId="new-mission-dialog">
+      <header className="dialog-head ask-head">
+        {/* The header is a picker, not a label: with five projects open, where
+            the mission lands is part of the ask (D-078). Reuses the composer's
+            own chip menu, so one menu style exists in the product. */}
+        <span className="chip-wrap">
+          <button
+            className="chip-button ask-project"
+            onClick={() => setPicking((open) => !open)}
+            aria-haspopup="menu"
+            aria-expanded={picking}
+            data-testid="ask-project"
+          >
+            {target.name}
+            <Chevron open={picking} />
+          </button>
+          {picking && (
+            <div className="chip-menu ask-project-menu" role="menu" data-testid="ask-project-menu">
+              {projects.map((candidate) => {
+                const away = candidate.provider === "local" && !candidate.onThisMachine;
+                return (
+                  <button
+                    key={candidate.key}
+                    className="chip-menu-row"
+                    role="menuitem"
+                    disabled={away}
+                    title={away ? "On another machine" : candidate.name}
+                    onClick={() => {
+                      setTarget(candidate);
+                      setPicking(false);
+                    }}
+                  >
+                    {candidate.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </span>
+      </header>
+      <div className="dialog-body ask-body">
+        <Composer
+          capabilities={["direction.submit"]}
+          isController
+          placeholderOverride="What should Claude Code work on?"
+          onEmptySubmit={onClose}
+          onSubmit={create}
+        />
+      </div>
+    </Dialog>
   );
 }

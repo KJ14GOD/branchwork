@@ -86,7 +86,13 @@ export function repositoryLabel(name: string): string {
 }
 
 /** Server-allocated branch names only; nothing else is ever checked out. */
-const MISSION_BRANCH = /^novus\/m-[0-9a-z]+$/;
+/**
+ * The shapes the **server** allocates, and nothing else: a mission's own lane,
+ * and a competing approach's sibling branch beside it (D-074). Still a closed
+ * pattern rather than a loosened one — a direction can no more name a branch
+ * now than it could before.
+ */
+const MISSION_BRANCH = /^novus\/m-[0-9a-z]+(-a[0-9]+)?$/;
 
 /** How long a quitting application waits for its commands to unwind before it
  *  stops waiting. Long enough for a SIGKILL escalation, short enough that a
@@ -125,9 +131,17 @@ export function worktreeRootFor(userDataPath: string): string {
   return join(userDataPath, "worktrees");
 }
 
-/** One worktree per mission, the same one the harness turn uses. */
-export function worktreeFor(userDataPath: string, missionId: string): string {
-  return join(worktreeRootFor(userDataPath), missionId);
+/**
+ * One worktree per **workstream**, the same one the harness turn uses.
+ *
+ * Keyed by the lane rather than the mission since D-074: a mission may hold a
+ * competing approach, and two approaches sharing a checkout would be two agents
+ * editing one set of files — which is the opposite of what "isolated" means.
+ * Existing worktrees under the old mission-keyed name are simply not found and
+ * are recreated from the branch, which is safe because the branch is the record.
+ */
+export function worktreeFor(userDataPath: string, workstreamId: string): string {
+  return join(worktreeRootFor(userDataPath), workstreamId);
 }
 
 /**
@@ -189,7 +203,7 @@ export async function ensureWorkspaceWorktree(
   git: GitExec,
   repositoryPath: string,
   userDataPath: string,
-  missionId: string,
+  workstreamId: string,
   missionBranch: string
 ): Promise<string> {
   if (!MISSION_BRANCH.test(missionBranch)) {
@@ -198,10 +212,10 @@ export async function ensureWorkspaceWorktree(
   // Keyed by where the worktree would live, which is what two callers actually
   // contend over — the same mission under a different user-data directory is a
   // different worktree and must not queue behind this one.
-  const key = worktreeFor(userDataPath, missionId);
+  const key = worktreeFor(userDataPath, workstreamId);
   const previous = worktreePreparations.get(key);
   const next = (previous ?? Promise.resolve("")).catch(() => "").then(() =>
-    prepareWorktree(git, repositoryPath, userDataPath, missionId, missionBranch)
+    prepareWorktree(git, repositoryPath, userDataPath, workstreamId, missionBranch)
   );
   worktreePreparations.set(key, next);
   try {
@@ -216,11 +230,11 @@ async function prepareWorktree(
   git: GitExec,
   repositoryPath: string,
   userDataPath: string,
-  missionId: string,
+  workstreamId: string,
   missionBranch: string
 ): Promise<string> {
   const root = worktreeRootFor(userDataPath);
-  const worktree = worktreeFor(userDataPath, missionId);
+  const worktree = worktreeFor(userDataPath, workstreamId);
   await git(repositoryPath, ["worktree", "prune"]);
   if (existsSync(join(worktree, ".git"))) return worktree;
   mkdirSync(root, { recursive: true });
@@ -269,7 +283,7 @@ async function resolve(target: WorkspaceTarget, host?: WorkspaceHost): Promise<R
     git,
     repositoryPath,
     resolvedHost.userDataPath,
-    target.missionId,
+    target.workstreamId,
     target.missionBranch
   );
   return { host: resolvedHost, git, repositoryPath, worktree, secrets: secretStoreFor(resolvedHost) };
@@ -753,7 +767,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
       git,
       repositoryPath,
       deps.host.userDataPath,
-      context.missionId,
+      context.workstreamId,
       context.missionBranch
     );
     // Configuration is read fresh every time: it lives in the branch, so a turn

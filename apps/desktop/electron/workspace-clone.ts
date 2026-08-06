@@ -161,7 +161,13 @@ export function clonedRepositoryRoot(userDataPath: string): string {
 
 /** Server-allocated branch names only; nothing else is ever fetched or made.
  *  The same shape `workspace.ts` refuses to prepare a worktree on. */
-const MISSION_BRANCH = /^novus\/m-[0-9a-z]+$/;
+/**
+ * The shapes the **server** allocates, and nothing else: a mission's own lane,
+ * and a competing approach's sibling branch beside it (D-074). Still a closed
+ * pattern rather than a loosened one — a direction can no more name a branch
+ * now than it could before.
+ */
+const MISSION_BRANCH = /^novus\/m-[0-9a-z]+(-a[0-9]+)?$/;
 /** A provider repository id is an opaque provider string, and it is about to
  *  become a directory name. Anything that could climb out of the root is not
  *  one. */

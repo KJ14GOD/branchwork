@@ -36,8 +36,13 @@ import { redact } from "./secret-policy";
  * and whether it is packaged, which keeps the whole turn testable.
  */
 
-/** Server-allocated branch names only; a direction never names a branch. */
-const MISSION_BRANCH = /^novus\/m-[0-9a-z]+$/;
+/**
+ * The shapes the **server** allocates, and nothing else: a mission's own lane,
+ * and a competing approach's sibling branch beside it (D-074). Still a closed
+ * pattern rather than a loosened one — a direction can no more name a branch
+ * now than it could before.
+ */
+const MISSION_BRANCH = /^novus\/m-[0-9a-z]+(-a[0-9]+)?$/;
 
 /** How long a stopped harness gets to exit on its own before it is killed. */
 const SIGKILL_AFTER_MS = 5_000;
@@ -94,6 +99,23 @@ const MAX_REASON = 400;
  * probe above ran under the machine's existing Claude Code login.
  */
 const PINNED_PERMISSION_ARGS = ["--setting-sources", "", "--permission-mode", "manual"] as const;
+
+/**
+ * Flags Novus asks for but can run without.
+ *
+ * `--forward-subagent-text` makes the CLI forward what its **own** subagents
+ * say, tagged with the tool call that spawned them (observed on 2.1.223).
+ * Without it a `Task` that runs for four minutes is one tool row and then
+ * silence, which reads as a wedged turn and is the opposite of what a room
+ * watching a long run needs.
+ *
+ * Separated from `PINNED_PERMISSION_ARGS` because the two must fail
+ * differently. A CLI that will not route permission to Novus is a CLI Novus
+ * refuses to run (D-062). A CLI that has never heard of subagent forwarding is
+ * simply older, and losing a nicety must not lose the turn — so an unknown
+ * option that names one of these is retried once without them.
+ */
+const OPTIONAL_ARGS = ["--forward-subagent-text"] as const;
 
 /** Larger than any instruction file a person wrote, small enough that a
  *  generated one cannot become the whole prompt. */
@@ -167,6 +189,9 @@ export type TerminalEvent = Extract<
 export interface TurnRequest {
   executionId: string;
   missionId: string;
+  /** The lane this turn belongs to. Worktrees are keyed by it, so a mission's
+   *  competing approaches never share a checkout (D-074). */
+  workstreamId: string;
   /** The user's repository, from which the mission worktree is created. */
   repositoryPath: string;
   /** The app-owned directory that holds one worktree per mission. */
@@ -248,10 +273,10 @@ async function ensureWorktree(
   git: GitRunner,
   repositoryPath: string,
   worktreeRoot: string,
-  missionId: string,
+  workstreamId: string,
   missionBranch: string
 ): Promise<string> {
-  const worktree = join(worktreeRoot, missionId);
+  const worktree = join(worktreeRoot, workstreamId);
   await git(repositoryPath, ["worktree", "prune"]).catch(() => undefined);
   if (existsSync(join(worktree, ".git"))) return worktree;
   mkdirSync(worktreeRoot, { recursive: true });
@@ -272,7 +297,7 @@ interface ProcessOutcome {
 }
 
 export function startTurn(request: TurnRequest): RunningTurn {
-  const worktree = join(request.worktreeRoot, request.missionId);
+  const worktree = join(request.worktreeRoot, request.workstreamId);
   // The mask list is built before anything can be emitted, so the very first
   // event is already free of machine-local paths.
   const maskPaths = createSanitizer([
@@ -453,7 +478,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         gitExec,
         request.repositoryPath,
         request.worktreeRoot,
-        request.missionId,
+        request.workstreamId,
         request.missionBranch
       );
     } catch (error) {
@@ -472,9 +497,21 @@ export function startTurn(request: TurnRequest): RunningTurn {
     emit({ kind: "execution.running", payload: { harness: "claude-code", model, effort } });
 
     let resumeSessionId = request.resumeSessionId;
+    let optional = true;
     let stream = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl });
-    let outcome = await attempt(worktreePath, model, effort, stream, resumeSessionId);
+    let outcome = await attempt(worktreePath, model, effort, stream, resumeSessionId, optional);
     cancelPending("The harness process ended before this was answered.");
+
+    // An older CLI that does not know an optional flag refused before it did
+    // anything, so there is nothing to undo: drop the niceties and run the turn
+    // it was actually asked for. The pinned permission flags are never in this
+    // set, so this can never quietly become an unsupervised run.
+    if (stopReason === null && refusedOptionalFlag(outcome)) {
+      optional = false;
+      stream = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl });
+      outcome = await attempt(worktreePath, model, effort, stream, resumeSessionId, optional);
+      cancelPending("The harness process ended before this was answered.");
+    }
 
     // A session the CLI no longer holds must not silently become a fresh
     // conversation presented as continuous: retry once, openly fresh. A CLI
@@ -489,7 +526,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
     ) {
       resumeSessionId = null;
       stream = new HarnessStream({ resumeSessionId: null, sanitize, onControl: handleControl });
-      outcome = await attempt(worktreePath, model, effort, stream, null);
+      outcome = await attempt(worktreePath, model, effort, stream, null, optional);
       cancelPending("The harness process ended before this was answered.");
     }
 
@@ -539,7 +576,8 @@ export function startTurn(request: TurnRequest): RunningTurn {
     model: string,
     effort: string,
     stream: HarnessStream,
-    resumeSessionId: string | null
+    resumeSessionId: string | null,
+    optional: boolean
   ): Promise<ProcessOutcome> {
     if (request.fakeHarness) return fakeAttempt(worktreePath, stream);
 
@@ -563,6 +601,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         "--permission-prompt-tool",
         "stdio",
         ...PINNED_PERMISSION_ARGS,
+        ...(optional ? OPTIONAL_ARGS : []),
         ...instructions,
         "--model",
         model,
@@ -857,6 +896,18 @@ export function startTurn(request: TurnRequest): RunningTurn {
     emit({ kind: "boundary.reached", payload: { reason: "turn ended before the harness started" } });
     return { terminal, sessionId: null };
   }
+}
+
+/**
+ * Did the CLI refuse one of the flags Novus can do without, by name?
+ *
+ * Both halves matter. Without the name, a CLI refusing `--permission-prompt-tool`
+ * would be retried as though it were an old version missing a nicety, and the
+ * turn that came back would be the unsupervised one D-062 exists to refuse.
+ */
+function refusedOptionalFlag(outcome: ProcessOutcome): boolean {
+  if (outcome.code === 0 || !UNSUPPORTED_FLAG.test(outcome.stderr)) return false;
+  return OPTIONAL_ARGS.some((flag) => outcome.stderr.includes(flag));
 }
 
 function killTree(child: ChildProcess, signal: NodeJS.Signals): void {

@@ -61,8 +61,8 @@ describe("stream parsing", () => {
       ])
     );
     expect(events.map((event) => event.kind)).toEqual(["harness.text", "harness.tool"]);
-    expect(payloadOf(events, "harness.text")).toEqual({ text: "Looking at the auth module." });
-    expect(payloadOf(events, "harness.tool")).toEqual({ tool: "Read", detail: "src/auth.ts" });
+    expect(payloadOf(events, "harness.text")).toEqual({ text: "Looking at the auth module.", parentToolUseId: null });
+    expect(payloadOf(events, "harness.tool")).toEqual({ tool: "Read", detail: "src/auth.ts", parentToolUseId: null });
   });
 
   it("ignores malformed lines instead of dying on them", () => {
@@ -87,7 +87,7 @@ describe("stream parsing", () => {
     const half = Math.floor(whole.length / 2);
     expect(stream.push(whole.slice(0, half))).toEqual([]);
     const events = stream.push(whole.slice(half));
-    expect(payloadOf(events, "harness.text")).toEqual({ text: "split across chunks" });
+    expect(payloadOf(events, "harness.text")).toEqual({ text: "split across chunks", parentToolUseId: null });
   });
 
   it("bounds text and tool detail to the contract's ceilings", () => {
@@ -346,5 +346,76 @@ describe("control traffic is not transcript", () => {
     expect(stream.push(line({ type: "control_request", request_id: 7, request: null }))).toEqual([]);
     expect(stream.push(line({ type: "control_response" }))).toEqual([]);
     expect(seen).toEqual([]);
+  });
+});
+
+/**
+ * The two things the CLI says about a turn that Novus used to drop on the
+ * floor. Both shapes are copied from a real `claude 2.1.223` transcript
+ * (`--output-format stream-json --verbose`), not invented here.
+ */
+describe("what the turn cost, and who was speaking", () => {
+  const result = (extra: Record<string, unknown>) =>
+    line({ type: "result", subtype: "success", is_error: false, result: "Done.", ...extra });
+
+  it("reads usage and cost off the CLI's own final line", () => {
+    const stream = new HarnessStream();
+    const events = stream.push(
+      result({
+        duration_ms: 2379,
+        duration_api_ms: 3340,
+        num_turns: 1,
+        total_cost_usd: 0.013929,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 81,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 6459
+        }
+      })
+    );
+    expect(payloadOf(events, "harness.usage")).toEqual({
+      inputTokens: 10,
+      outputTokens: 81,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 6459,
+      costUsd: 0.013929,
+      durationMs: 2379,
+      turns: 1
+    });
+    // The verdict itself is unchanged: usage is metadata beside it, never a
+    // replacement for it.
+    expect(stream.result?.isError).toBe(false);
+  });
+
+  it("says nothing rather than reporting a free turn when the harness reported no figures", () => {
+    const stream = new HarnessStream();
+    expect(stream.push(result({}))).toEqual([]);
+    // A harness that reports garbage is the same as one that reports nothing:
+    // a zero here would read as "this turn cost nothing", which is a claim.
+    expect(stream.push(result({ total_cost_usd: "free", usage: { input_tokens: -3 } }))).toEqual([]);
+  });
+
+  it("tags what one of the harness's own subagents said, and leaves its own speech untagged", () => {
+    const stream = new HarnessStream();
+    const own = stream.push(assistant([{ type: "text", text: "Delegating the search." }]));
+    expect(payloadOf(own, "harness.text")?.parentToolUseId).toBeNull();
+
+    const worker = stream.push(
+      line({
+        type: "assistant",
+        parent_tool_use_id: "toolu_task_1",
+        message: {
+          content: [
+            { type: "text", text: "Found three call sites." },
+            { type: "tool_use", id: "sub-1", name: "Grep", input: { pattern: "authorize(" } }
+          ]
+        }
+      })
+    );
+    // Grouped under the tool call that spawned it — never given an identity of
+    // its own. A subagent is the harness's business (PRODUCT.md#the-harness-boundary).
+    expect(payloadOf(worker, "harness.text")?.parentToolUseId).toBe("toolu_task_1");
+    expect(payloadOf(worker, "harness.tool")?.parentToolUseId).toBe("toolu_task_1");
   });
 });

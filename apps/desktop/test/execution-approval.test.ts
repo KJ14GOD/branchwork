@@ -39,11 +39,14 @@ import {
 
 const MISSION_BRANCH = "novus/m-ap12cd34";
 const MISSION_ID = "msn_approvaltest";
+/** Worktrees are keyed by the lane, not the mission (D-074). */
+const WORKSTREAM_ID = "wst_approval";
 
 let repo: string;
 let worktreeRoot: string;
 let stubDir: string;
 let argvPath: string;
+let argvLogPath: string;
 let stdinPath: string;
 let originalPath: string | undefined;
 
@@ -54,7 +57,7 @@ const git = (cwd: string, args: string[]): Promise<string> =>
     );
   });
 
-type StubMode = "approval" | "ignores-interrupt" | "unknown-option";
+type StubMode = "approval" | "ignores-interrupt" | "unknown-option" | "refuses-optional";
 
 /**
  * A `claude` that speaks the stdio control protocol.
@@ -70,11 +73,23 @@ const fs = require("node:fs");
 const ARGV = ${JSON.stringify(argvPath)};
 const STDIN_LOG = ${JSON.stringify(stdinPath)};
 const MODE = ${JSON.stringify(mode)};
-fs.writeFileSync(ARGV, JSON.stringify(process.argv.slice(2)));
+const ARGV_LOG = ${JSON.stringify(argvLogPath)};
+const args = process.argv.slice(2);
+fs.writeFileSync(ARGV, JSON.stringify(args));
+const attempts = fs.existsSync(ARGV_LOG) ? JSON.parse(fs.readFileSync(ARGV_LOG, "utf8")) : [];
+attempts.push(args);
+fs.writeFileSync(ARGV_LOG, JSON.stringify(attempts));
 fs.writeFileSync(STDIN_LOG, "");
 
 if (MODE === "unknown-option") {
   process.stderr.write("error: unknown option '--permission-prompt-tool'\\n");
+  process.exit(1);
+}
+
+// An older CLI: it knows how to route permission, and has never heard of
+// subagent forwarding. It refuses by name, which is what Novus reads.
+if (MODE === "refuses-optional" && args.includes("--forward-subagent-text")) {
+  process.stderr.write("error: unknown option '--forward-subagent-text'\\n");
   process.exit(1);
 }
 
@@ -155,6 +170,7 @@ function begin(overrides: Partial<Parameters<typeof startTurn>[0]> = {}): Runnin
   const turn = startTurn({
     executionId: "exe_approval",
     missionId: MISSION_ID,
+    workstreamId: WORKSTREAM_ID,
     repositoryPath: repo,
     worktreeRoot,
     missionBranch: MISSION_BRANCH,
@@ -182,6 +198,9 @@ async function waitFor(what: string, predicate: () => boolean, timeoutMs = 15_00
 
 const argv = (): string[] => JSON.parse(readFileSync(argvPath, "utf8")) as string[];
 
+/** Every spawn of the stub, in order — so a retry can be told from a first try. */
+const argvAttempts = (): string[][] => JSON.parse(readFileSync(argvLogPath, "utf8")) as string[][];
+
 function payloadOf<K extends RunnerEvent["kind"]>(
   events: RunnerEvent[],
   kind: K
@@ -196,6 +215,7 @@ beforeEach(async () => {
   stubDir = mkdtempSync(join(tmpdir(), "novus-approval-bin-"));
   mkdirSync(stubDir, { recursive: true });
   argvPath = join(stubDir, "argv.json");
+  argvLogPath = join(stubDir, "argv-log.json");
   stdinPath = join(stubDir, "stdin.log");
 
   await git(repo, ["init", "-b", "main"]);
@@ -261,6 +281,38 @@ describe("the permission policy Novus pins", () => {
     });
   }, 40_000);
 
+  it("asks for the harness's own subagents to be forwarded, and runs without them if it must", async () => {
+    // Asked for: a `Task` that runs for minutes is otherwise one tool row and
+    // then silence, which reads as a wedged turn.
+    installStub("approval");
+    const first = begin();
+    await waitFor("the approval to arrive", () => first.turn.pendingApprovals().length > 0);
+    first.turn.respondApproval("stub-request-1", "approve", null);
+    await first.finished;
+    expect(argv()).toContain("--forward-subagent-text");
+
+    // And done without, on a CLI that has never heard of it. The distinction
+    // that matters: an optional flag degrades, the permission flags never do.
+    rmSync(join(worktreeRoot, WORKSTREAM_ID), { recursive: true, force: true });
+    await git(repo, ["worktree", "prune"]);
+    rmSync(argvLogPath, { force: true });
+    installStub("refuses-optional");
+    const second = begin();
+    await waitFor("the retry's approval", () => second.turn.pendingApprovals().length > 0, 20_000);
+    second.turn.respondApproval("stub-request-1", "approve", null);
+    const result = await second.finished;
+
+    const attempts = argvAttempts();
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toContain("--forward-subagent-text");
+    expect(attempts[1]).not.toContain("--forward-subagent-text");
+    // The retry is the same supervised turn: nothing about the permission
+    // policy moved to buy the second attempt.
+    expect(attempts[1]).toContain("--permission-prompt-tool");
+    expect(attempts[1]?.[attempts[1].indexOf("--permission-mode") + 1]).toBe("manual");
+    expect(result.terminal.kind).toBe("execution.completed");
+  }, 60_000);
+
   it("hands the project its own instructions back, which pinning the settings had cost", async () => {
     // `--setting-sources ""` is what stops a committed settings file deciding
     // who gets asked, and it also stopped `CLAUDE.md` loading — so a project
@@ -280,7 +332,7 @@ describe("the permission policy Novus pins", () => {
     await running.finished;
 
     const args = argv();
-    const worktree = join(worktreeRoot, MISSION_ID);
+    const worktree = join(worktreeRoot, WORKSTREAM_ID);
     expect(args[args.indexOf("--append-system-prompt-file") + 1]).toBe(
       realpathSync(join(worktree, "CLAUDE.md"))
     );
@@ -290,7 +342,7 @@ describe("the permission policy Novus pins", () => {
   }, 40_000);
 
   it("passes nothing when the project has no instructions, or they leave the worktree", async () => {
-    const worktree = join(worktreeRoot, MISSION_ID);
+    const worktree = join(worktreeRoot, WORKSTREAM_ID);
     mkdirSync(worktree, { recursive: true });
 
     // Absent: the ordinary case, and the flag is simply not there.
@@ -346,7 +398,7 @@ describe("answering one question", () => {
     expect(running.turn.respondApproval("stub-request-1", "approve", null)).toBe(true);
     const result = await running.finished;
     expect(result.terminal.kind).toBe("execution.completed");
-    expect(existsSync(join(worktreeRoot, MISSION_ID, "APPROVED.md"))).toBe(true);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "APPROVED.md"))).toBe(true);
     // Nothing is left waiting, and no cancellation was manufactured.
     expect(running.turn.pendingApprovals()).toEqual([]);
     expect(running.events.some((event) => event.kind === "approval.cancelled")).toBe(false);
@@ -361,7 +413,7 @@ describe("answering one question", () => {
 
     // The harness was told why, in the responder's own words.
     expect(readFileSync(stdinPath, "utf8")).toContain("Not that file.");
-    expect(existsSync(join(worktreeRoot, MISSION_ID, "APPROVED.md"))).toBe(false);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "APPROVED.md"))).toBe(false);
     // A denial is not a failure, and it does not cost the conversation: the
     // session comes back so the next direction resumes it.
     expect(result.terminal.kind).toBe("execution.completed");
@@ -377,7 +429,7 @@ describe("answering one question", () => {
     expect(running.turn.respondApproval("stub-request-1", "deny", "changed my mind")).toBe(false);
     await running.finished;
     expect(readFileSync(stdinPath, "utf8")).not.toContain("changed my mind");
-    expect(existsSync(join(worktreeRoot, MISSION_ID, "APPROVED.md"))).toBe(true);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "APPROVED.md"))).toBe(true);
   }, 40_000);
 
   it("refuses a decision for a question it was never asked", async () => {
@@ -410,7 +462,7 @@ describe("stopping a turn that is asking", () => {
     const cancelled = payloadOf(running.events, "approval.cancelled");
     expect(cancelled?.requestId).toBe("stub-request-1");
     expect(running.turn.pendingApprovals()).toEqual([]);
-    expect(existsSync(join(worktreeRoot, MISSION_ID, "APPROVED.md"))).toBe(false);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "APPROVED.md"))).toBe(false);
   }, 40_000);
 
   it("kills a harness that ignores the interrupt, within a bounded wait", async () => {
@@ -430,7 +482,7 @@ describe("stopping a turn that is asking", () => {
     expect(stopped.payload.via).toBe("process_signal");
     // Bounded: the grace period plus the kill, not the stub's own 30s ceiling.
     expect(took).toBeLessThan(12_000);
-    expect(existsSync(join(worktreeRoot, MISSION_ID, "APPROVED.md"))).toBe(false);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "APPROVED.md"))).toBe(false);
   }, 40_000);
 });
 

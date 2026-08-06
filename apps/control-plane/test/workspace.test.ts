@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
-import type { DeclaredCommand, SequencedRunnerEvent } from "@novus/contracts";
+import type { DeclaredCommand, ReportableRunnerEvent, SequencedRunnerEvent } from "@novus/contracts";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
 
 /**
@@ -216,7 +216,7 @@ async function settle(credential: string, commandId: string, state: "completed" 
 async function report(
   credential: string,
   executionId: string | null,
-  events: SequencedRunnerEvent[]
+  events: ReportableRunnerEvent[]
 ) {
   const response = await harness.app.inject({
     method: "POST",

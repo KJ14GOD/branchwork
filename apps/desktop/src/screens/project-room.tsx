@@ -23,6 +23,8 @@ import {
 import { GatedAction } from "../components/gated";
 import { HumanMark } from "../components/identity";
 import type { InspectorSection } from "../components/inspector";
+import { DecisionRoom } from "../components/decision-room";
+import { Dialog } from "../components/dialog";
 import { FileView } from "../components/file-view";
 
 /** The mark that says a tab is a file rather than the room itself. */
@@ -286,6 +288,23 @@ export function ProjectRoom({
     return { ok: true, queued: !result.value.dispatched, deferred: result.value.deferred };
   };
 
+  /**
+   * The Decision Room takes the canvas, exactly as an opened file does: a
+   * comparison is read at full measure or not at all, and the composer stays
+   * because deciding is not a reason to stop being able to direct (D-074).
+   */
+  const [decisionOpen, setDecisionOpen] = useState(false);
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
+  const [forking, setForking] = useState(false);
+  const approaches = detail?.approaches ?? [];
+  const currentDecision = (detail?.decisions ?? []).find((entry) => entry.supersededAt === null) ?? null;
+  /** Something to fork from: an approach only means anything beside a result
+   *  that already exists, so the control is absent until there is one. */
+  const forkable = approaches.find(
+    (approach) => approach.workstreamId === detail?.workstream?.workstreamId && approach.checkpointSha !== null
+  );
+
   const feed = useMemo(() => (detail ? buildFeed(detail) : null), [detail]);
   const stateLine = detail ? deriveStateLine(detail) : null;
   const controller = detail ? controllerOf(detail) : null;
@@ -314,6 +333,52 @@ export function ProjectRoom({
     // A request answered by whoever holds the baton now — including someone
     // else, a moment ago — comes back refused, and the reason is the server's.
     if (!result.ok) setApprovalError(result.message);
+  };
+
+  const createApproach = async (intent: string) => {
+    if (!detail?.workstream) return;
+    setDecisionBusy(true);
+    setDecisionError(null);
+    const result = await novus().approaches.create({
+      missionId: detail.mission.missionId,
+      fromWorkstreamId: detail.workstream.workstreamId,
+      intent
+    });
+    setDecisionBusy(false);
+    setForking(false);
+    if (!result.ok) setDecisionError(result.message);
+    else setDecisionOpen(true);
+  };
+
+  const recordDecision = async (input: {
+    workstreamId: string;
+    rationale: string;
+    acceptedRisks: string;
+  }) => {
+    if (!detail) return;
+    setDecisionBusy(true);
+    setDecisionError(null);
+    const result = await novus().approaches.decide({
+      missionId: detail.mission.missionId,
+      workstreamId: input.workstreamId,
+      rationale: input.rationale,
+      ...(input.acceptedRisks ? { acceptedRisks: input.acceptedRisks } : {})
+    });
+    setDecisionBusy(false);
+    if (!result.ok) setDecisionError(result.message);
+  };
+
+  const requestRevision = async (input: { workstreamId: string; reason: string }) => {
+    if (!detail) return;
+    setDecisionBusy(true);
+    setDecisionError(null);
+    const result = await novus().approaches.requestRevision({
+      missionId: detail.mission.missionId,
+      workstreamId: input.workstreamId,
+      reason: input.reason
+    });
+    setDecisionBusy(false);
+    if (!result.ok) setDecisionError(result.message);
   };
 
   const runAction = async (call: Promise<{ ok: boolean; message?: string }>) => {
@@ -474,6 +539,15 @@ export function ProjectRoom({
                   {stateLine.action.label}
                 </button>
               )}
+              {stateLine.action?.kind === "decision" && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => setDecisionOpen(true)}
+                  data-testid="state-decision"
+                >
+                  {stateLine.action.label}
+                </button>
+              )}
               {/* Stop and Open preview are deliberately absent here: while a
                   run command is alive they live on the Run control, which is
                   where every run verb lives (DESIGN.md#component-behavior).
@@ -499,6 +573,27 @@ export function ProjectRoom({
         <div className="authority-row">
           {detail ? (
             <>
+              {/* Deliberately reached, never pushed: absent until this lane has
+                  produced something to fork from, and absent for anyone whose
+                  role does not carry it (D-074). */}
+              {forkable && detail.capabilities.includes("approach.create") && (
+                <button
+                  className="btn btn-text"
+                  onClick={() => setForking(true)}
+                  data-testid="try-another-approach"
+                >
+                  Try another approach
+                </button>
+              )}
+              {(approaches.length > 1 || currentDecision) && (
+                <button
+                  className="btn btn-text"
+                  onClick={() => setDecisionOpen(true)}
+                  data-testid="open-decision-room"
+                >
+                  {currentDecision ? "The decision" : `Compare ${approaches.length} approaches`}
+                </button>
+              )}
               <span className="controller-slot" data-testid="controller">
                 {controller ? (
                   <>
@@ -543,8 +638,30 @@ export function ProjectRoom({
         </p>
       )}
 
+      {forking && detail?.workstream && (
+        <TryAnotherApproach
+          fromName={detail.workstream.name}
+          originSha={forkable?.checkpointSha ?? null}
+          busy={decisionBusy}
+          onCancel={() => setForking(false)}
+          onCreate={(intent) => void createApproach(intent)}
+        />
+      )}
+
       {activeFile !== null && selectedMissionId !== null ? (
         <FileView missionId={selectedMissionId} path={activeFile} />
+      ) : decisionOpen && detail ? (
+        <div className="feed-scroll">
+          <DecisionRoom
+            detail={detail}
+            busy={decisionBusy}
+            error={decisionError}
+            onRecord={(input) => void recordDecision(input)}
+            onRequestRevision={(input) => void requestRevision(input)}
+            onInspectPath={() => onInspector("changes")}
+            onClose={() => setDecisionOpen(false)}
+          />
+        </div>
       ) : (
       <div className="feed-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="feed" data-testid="chat">
@@ -784,5 +901,68 @@ function DraftCanvas({
         <span className="mono">{shortSha(draft.base.base.sha)}</span>
       </p>
     </div>
+  );
+}
+
+/**
+ * Starting a competing approach (D-074).
+ *
+ * One required field, because an approach nobody can tell apart from its
+ * sibling is a retry — and PRODUCT.md has always said a retry is a
+ * continuation. The dialog states what is being forked and from which
+ * revision, so nobody starts one thinking it begins from now.
+ */
+function TryAnotherApproach({
+  fromName,
+  originSha,
+  busy,
+  onCancel,
+  onCreate
+}: {
+  fromName: string;
+  originSha: string | null;
+  busy: boolean;
+  onCancel: () => void;
+  onCreate: (intent: string) => void;
+}) {
+  const [intent, setIntent] = useState("");
+  return (
+    <Dialog label="Try another approach" onClose={onCancel} testId="try-approach-dialog">
+        <header className="dialog-head">
+          <h2>Try another approach</h2>
+          <p className="dialog-sub">
+            Forked from {fromName}
+            {originSha ? ` at ${shortSha(originSha)}` : ""} — its own branch, its own workspace, its own
+            baton. Nothing about {fromName} changes.
+          </p>
+        </header>
+        <div className="dialog-body">
+          <label className="field">
+            <span className="field-label">How should this one differ?</span>
+            <textarea
+              className="input"
+              rows={3}
+              value={intent}
+              onChange={(event) => setIntent(event.target.value)}
+              placeholder="One sentence. This is how the comparison tells them apart."
+              data-testid="approach-intent-input"
+              autoFocus
+            />
+          </label>
+        </div>
+        <footer className="dialog-actions">
+          <button className="btn btn-secondary" onClick={onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            disabled={intent.trim().length === 0 || busy}
+            onClick={() => onCreate(intent.trim())}
+            data-testid="create-approach"
+          >
+            Start it
+          </button>
+        </footer>
+    </Dialog>
   );
 }

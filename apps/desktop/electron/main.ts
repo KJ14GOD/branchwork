@@ -1,11 +1,14 @@
 import { BrowserWindow, app, ipcMain, shell } from "electron";
 import { join } from "node:path";
 import {
+  APPROACH_INTENT_MAX,
   CreateMissionInputSchema,
   DirectionResolutionSchema,
   ForgetSecretInputSchema,
   IpcDirectInputSchema,
   ListWorkspaceFilesInputSchema,
+  MAX_ACCEPTED_RISKS,
+  MAX_RATIONALE,
   MissionRoleSchema,
   OpenPreviewInputSchema,
   OpenTerminalInputSchema,
@@ -297,6 +300,100 @@ function registerIpc(): void {
     }
   });
 
+  // --- Approaches, and the decision between them (D-074, D-075) -------------
+  // The renderer asks; the control plane decides. `approach.create` and
+  // `review.approve` are role-held capabilities checked server-side, so nothing
+  // below is what stops somebody forking or choosing.
+
+  ipcMain.handle("novus:approaches:create", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: MissionIdSchema,
+        fromWorkstreamId: z.string().startsWith("wst_"),
+        intent: z.string().trim().min(1).max(APPROACH_INTENT_MAX),
+        name: z.string().trim().min(1).max(80).optional()
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, code: "invalid_input", message: "Say how this approach should differ." };
+    }
+    try {
+      let workstream = await api.createApproach(parsed.data.missionId, {
+        fromWorkstreamId: parsed.data.fromWorkstreamId,
+        intent: parsed.data.intent,
+        ...(parsed.data.name ? { name: parsed.data.name } : {})
+      });
+      // A local branch is this machine's job, exactly as it is when a mission
+      // is created: cut the ref at the revision the approach forked from, and
+      // report the outcome as a claim.
+      const detail = await api.getMission(parsed.data.missionId);
+      const provider = detail.mission.repository?.provider;
+      if (provider === "local" && workstream.originSha) {
+        const result = await ensureLocalBranch(
+          detail.mission.repository!.providerRepoId,
+          workstream.missionBranch,
+          workstream.originSha
+        );
+        workstream = await api.reportBranch(
+          workstream.workstreamId,
+          result.ok ? { status: "created" } : { status: "failed", error: result.error }
+        );
+      }
+      // So the new lane gets its own runner enrolment and its own worktree
+      // without waiting for the next discovery tick.
+      runner?.discoverNow();
+      return ok({ workstream });
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
+  ipcMain.handle("novus:approaches:decide", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: MissionIdSchema,
+        workstreamId: z.string().startsWith("wst_"),
+        rationale: z.string().trim().min(1).max(MAX_RATIONALE),
+        acceptedRisks: z.string().trim().max(MAX_ACCEPTED_RISKS).optional()
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, code: "invalid_input", message: "Say why you chose this." };
+    }
+    try {
+      const decisionId = await api.recordDecision(parsed.data.missionId, {
+        workstreamId: parsed.data.workstreamId,
+        rationale: parsed.data.rationale,
+        ...(parsed.data.acceptedRisks ? { acceptedRisks: parsed.data.acceptedRisks } : {})
+      });
+      return ok({ decisionId });
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
+  ipcMain.handle("novus:approaches:request-revision", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: MissionIdSchema,
+        workstreamId: z.string().startsWith("wst_"),
+        reason: z.string().trim().min(1).max(MAX_RATIONALE)
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, code: "invalid_input", message: "Say what needs to change." };
+    }
+    try {
+      await api.requestRevision(parsed.data.missionId, {
+        workstreamId: parsed.data.workstreamId,
+        reason: parsed.data.reason
+      });
+      return ok(null);
+    } catch (error) {
+      return fail(error);
+    }
+  });
+
   // --- Direction and execution ---------------------------------------------
   // The renderer asks; the control plane decides. It authorizes the direction,
   // records it, and — only when the author holds the lease — enqueues a
@@ -307,7 +404,14 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed direction." };
     const input = parsed.data;
     const result = await call(() =>
-      api.submitDirection(input.missionId, { body: input.body, model: input.model, effort: input.effort })
+      api.submitDirection(input.missionId, {
+        body: input.body,
+        model: input.model,
+        effort: input.effort,
+        // Carried through, so a competing approach can actually be worked
+        // rather than every direction landing on the mission's first lane.
+        ...(input.workstreamId ? { workstreamId: input.workstreamId } : {})
+      })
     );
     if (!result.ok) return result;
     runner?.pollNow();

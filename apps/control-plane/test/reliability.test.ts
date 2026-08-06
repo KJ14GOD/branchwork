@@ -46,7 +46,12 @@ async function joinAs(missionId: string, who: string): Promise<SignedIn> {
 }
 
 /** A local mission with this machine enrolled, and optionally a live turn. */
-async function lane(): Promise<{ missionId: string; workstreamId: string; runnerId: string }> {
+async function lane(): Promise<{
+  missionId: string;
+  workstreamId: string;
+  runnerId: string;
+  credential: string;
+}> {
   const localId = randomUUID();
   const headSha = sha(localId);
   await harness.app.inject({
@@ -82,7 +87,8 @@ async function lane(): Promise<{ missionId: string; workstreamId: string; runner
   return {
     missionId: body.mission.missionId as string,
     workstreamId,
-    runnerId: enrolled.json().runnerId as string
+    runnerId: enrolled.json().runnerId as string,
+    credential: enrolled.json().credential as string
   };
 }
 
@@ -352,5 +358,242 @@ describe("a lease the holder is still watching", () => {
     });
     expect(read.statusCode).toBe(200);
     expect(await sweepLeases(harness.db)).toBe(1);
+  });
+});
+
+/**
+ * The case D-062 left open and PROGRESS.md has carried as a known gap since:
+ * the harness is blocked on a person, and that person's authority lapses.
+ *
+ * Nothing here may kill the harness. Expiry removes authority, not work
+ * (D-034), so the question has to survive its asker's controller and be
+ * answerable by whoever picks the baton up.
+ */
+describe("a question outliving the person who could answer it", () => {
+  const ageLease = (workstreamId: string, ms: number) =>
+    harness.db.query(
+      "update control_leases set last_heartbeat_at = $2 where wst_id = $1 and state = 'held'",
+      [workstreamId, agesAgo(ms)]
+    );
+
+  /** Puts the harness in *Needs approval*, the way the runner does. */
+  async function askForPermission(credential: string, executionId: string): Promise<string> {
+    const reported = await harness.app.inject({
+      method: "POST",
+      url: "/runner/events",
+      headers: { authorization: `Runner ${credential}` },
+      payload: {
+        executionId,
+        events: [
+          {
+            originSeq: 1,
+            event: {
+              kind: "approval.requested",
+              payload: {
+                requestId: "harness-request-1",
+                toolUseId: "toolu_1",
+                toolName: "Write",
+                displayName: "Write",
+                summary: "AUTH.md"
+              }
+            }
+          }
+        ]
+      }
+    });
+    expect(reported.statusCode).toBe(200);
+    const row = await harness.db.query(
+      "select apr_id from approval_requests where exe_id = $1 and state = 'pending'",
+      [executionId]
+    );
+    expect(row.rowCount).toBe(1);
+    return row.rows[0].apr_id as string;
+  }
+
+  it("keeps the question, kills nothing, and says a question was waiting", async () => {
+    const { missionId, workstreamId, credential } = await lane();
+    const executionId = await startExecution(missionId);
+    const approvalId = await askForPermission(credential, executionId);
+
+    await ageLease(workstreamId, RELIABILITY_THRESHOLDS.LEASE_TTL_MS);
+    expect(await sweepLeases(harness.db)).toBeGreaterThanOrEqual(1);
+
+    // The three things that must not have happened.
+    const approval = await harness.db.query("select state from approval_requests where apr_id = $1", [
+      approvalId
+    ]);
+    expect(approval.rows[0].state).toBe("pending");
+    expect((await stateOf(executionId)).state).toBe("needs_approval");
+    const commands = await harness.db.query(
+      "select kind from runner_commands where wst_id = $1 and kind = 'stop_execution'",
+      [workstreamId]
+    );
+    expect(commands.rowCount).toBe(0);
+
+    // And the one that must: the record explains why the room now needs
+    // somebody, rather than leaving a bare "the lease expired".
+    const expired = await harness.db.query(
+      "select payload from events where mission_id = $1 and kind = 'control.expired'",
+      [missionId]
+    );
+    expect(expired.rows[0].payload.approvalWaiting).toBe(true);
+  });
+
+  it("lets whoever claims the baton answer it, once, with their name on it", async () => {
+    const { missionId, workstreamId, credential } = await lane();
+    const executionId = await startExecution(missionId);
+    const approvalId = await askForPermission(credential, executionId);
+    const maya = await joinAs(missionId, "maya-answers");
+
+    // Before the baton, the server refuses her — a question is not a capability.
+    const early = await harness.app.inject({
+      method: "POST",
+      url: `/approvals/${approvalId}/respond`,
+      headers: bearer(maya),
+      payload: { decision: "approve" }
+    });
+    expect(early.statusCode).toBe(403);
+
+    await ageLease(workstreamId, RELIABILITY_THRESHOLDS.LEASE_TTL_MS);
+    await sweepLeases(harness.db);
+
+    // A request against an unheld lease is a claim, and the server fulfils it.
+    const claimed = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${missionId}/control/request`,
+      headers: bearer(maya)
+    });
+    expect(claimed.statusCode).toBe(200);
+
+    const answered = await harness.app.inject({
+      method: "POST",
+      url: `/approvals/${approvalId}/respond`,
+      headers: bearer(maya),
+      payload: { decision: "approve" }
+    });
+    expect(answered.statusCode).toBe(200);
+
+    const settled = await harness.db.query(
+      `select a.state, u.login from approval_requests a
+         join users u on u.user_id = a.responded_by where a.apr_id = $1`,
+      [approvalId]
+    );
+    expect(settled.rows[0].state).toBe("approved");
+    expect(settled.rows[0].login).toBe("maya-answers");
+
+    // Answered once: the decision reached the machine as exactly one command.
+    const carried = await harness.db.query(
+      "select count(*)::int as n from runner_commands where wst_id = $1 and kind = 'respond_approval'",
+      [workstreamId]
+    );
+    expect(carried.rows[0].n).toBe(1);
+
+    // And the previous holder cannot answer it back: authority is read now.
+    const late = await harness.app.inject({
+      method: "POST",
+      url: `/approvals/${approvalId}/respond`,
+      headers: bearer(owner),
+      payload: { decision: "deny" }
+    });
+    expect(late.statusCode).toBe(403);
+  });
+});
+
+/**
+ * *Execution stalled* (PRODUCT.md): the overlay that exists so a wedged turn is
+ * a sentence rather than a mystery. It never stops anything — D-034 forbids a
+ * Novus-imposed ceiling — and it is deliberately not entered for a harness that
+ * is waiting on a person.
+ */
+describe("an execution that has gone quiet", () => {
+  const backdateEvents = (executionId: string, ms: number) =>
+    harness.db.query("update events set occurred_at = $2 where execution_id = $1", [
+      executionId,
+      agesAgo(ms)
+    ]);
+
+  const overlaysOf = async (missionId: string, who = owner): Promise<string[]> => {
+    const detail = await harness.app.inject({
+      method: "GET",
+      url: `/missions/${missionId}`,
+      headers: bearer(who)
+    });
+    expect(detail.statusCode).toBe(200);
+    return detail.json().overlays as string[];
+  };
+
+  async function running(credential: string, executionId: string): Promise<void> {
+    const reported = await harness.app.inject({
+      method: "POST",
+      url: "/runner/events",
+      headers: { authorization: `Runner ${credential}` },
+      payload: {
+        executionId,
+        events: [
+          {
+            originSeq: 1,
+            event: {
+              kind: "execution.running",
+              payload: { harness: "claude-code", model: "claude-fable-5", effort: "high" }
+            }
+          }
+        ]
+      }
+    });
+    expect(reported.statusCode).toBe(200);
+  }
+
+  it("says nothing while the turn is reporting", async () => {
+    const { missionId, credential } = await lane();
+    const executionId = await startExecution(missionId);
+    await running(credential, executionId);
+    expect(await overlaysOf(missionId)).not.toContain("execution_stalled");
+  });
+
+  it("says so once nothing has been reported for long enough", async () => {
+    const { missionId, credential } = await lane();
+    const executionId = await startExecution(missionId);
+    await running(credential, executionId);
+    await backdateEvents(executionId, 11 * 60_000);
+
+    expect(await overlaysOf(missionId)).toContain("execution_stalled");
+    // Visible, and nothing else: the turn is still running and still the
+    // workstream's active execution.
+    expect((await stateOf(executionId)).state).toBe("running");
+  });
+
+  it("never calls a harness waiting on a person stalled", async () => {
+    const { missionId, workstreamId, credential } = await lane();
+    const executionId = await startExecution(missionId);
+    await running(credential, executionId);
+    await harness.app.inject({
+      method: "POST",
+      url: "/runner/events",
+      headers: { authorization: `Runner ${credential}` },
+      payload: {
+        executionId,
+        events: [
+          {
+            originSeq: 2,
+            event: {
+              kind: "approval.requested",
+              payload: {
+                requestId: "harness-request-2",
+                toolUseId: null,
+                toolName: "Bash",
+                displayName: "Bash",
+                summary: "rm -rf build"
+              }
+            }
+          }
+        ]
+      }
+    });
+    await backdateEvents(executionId, 30 * 60_000);
+
+    // Waiting for a human is not a fault, however long it lasts. The room
+    // already says *Needs approval*, which is the true and useful sentence.
+    expect(await overlaysOf(missionId)).not.toContain("execution_stalled");
+    expect(workstreamId).toBeTruthy();
   });
 });

@@ -261,7 +261,7 @@ describe("the timeout a project states", () => {
     // And a check under the same configuration does have one, so the absence
     // above is a decision rather than an oversight. Written into the worktree,
     // which is where configuration is read from once one exists.
-    const worktree = worktreeFor(userData, MISSION_ID);
+    const worktree = worktreeFor(userData, WORKSTREAM_ID);
     writeFileSync(
       join(worktree, ".novus", "settings.toml"),
       [
@@ -640,7 +640,7 @@ describe("an authorized command is pinned to what it was", () => {
     expect(authorized.snapshot?.command).toContain("authorized");
 
     // A turn edits the project's configuration between the click and the run.
-    const worktree = worktreeFor(userData, MISSION_ID);
+    const worktree = worktreeFor(userData, WORKSTREAM_ID);
     mkdirSync(join(worktree, ".novus"), { recursive: true });
     writeFileSync(
       join(worktree, ".novus", "settings.toml"),

@@ -14,6 +14,13 @@ import type {
   WorkspaceProcess
 } from "@novus/contracts";
 import { listApprovals } from "./approvals.ts";
+import {
+  contestedPaths,
+  listDecisions,
+  listWorkstreams,
+  preparePullRequest,
+  summarizeApproaches
+} from "./approaches.ts";
 import type { Db } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
 import { listDirections } from "./directions.ts";
@@ -141,8 +148,25 @@ export async function listExecutions(db: Db, missionId: string): Promise<Executi
     resumedSession: Boolean(row.resumed_session),
     exitOutcome: (row.exit_outcome as string | null) ?? null,
     failureReason: (row.failure_reason as string | null) ?? null,
-    latestCheckpointSha: (row.latest_checkpoint_sha as string | null) ?? null
+    latestCheckpointSha: (row.latest_checkpoint_sha as string | null) ?? null,
+    usage: {
+      inputTokens: numberOrNull(row.input_tokens),
+      outputTokens: numberOrNull(row.output_tokens),
+      cacheReadTokens: numberOrNull(row.cache_read_tokens),
+      cacheCreationTokens: numberOrNull(row.cache_creation_tokens),
+      costUsd: numberOrNull(row.cost_usd),
+      durationMs: numberOrNull(row.harness_duration_ms),
+      turns: numberOrNull(row.harness_turns)
+    }
   }));
+}
+
+/** Postgres hands back `bigint` and `numeric` as strings, and null as null.
+ *  A figure the harness never reported stays null rather than becoming 0. */
+function numberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export async function listCheckpoints(db: Db, missionId: string): Promise<Checkpoint[]> {
@@ -199,7 +223,10 @@ export async function listCheckpoints(db: Db, missionId: string): Promise<Checkp
 export async function listChecks(
   db: Db,
   missionId: string,
-  currentCheckpointSha: string | null
+  /** The head of the lane a check belongs to. A mission with competing
+   *  approaches has one head per lane, and a check that proves its own lane's
+   *  current revision must not read as stale because a *sibling* moved on. */
+  currentCheckpointSha: (workstreamId: string | null) => string | null
 ): Promise<VerificationCheck[]> {
   const result = await db.query(
     `select v.*, u.login as requested_by_login
@@ -210,9 +237,12 @@ export async function listChecks(
   );
   return result.rows.map((row) => {
     const checkpointSha = (row.checkpoint_sha as string | null) ?? null;
+    const workstreamId = (row.wst_id as string | null) ?? null;
+    const laneHead = currentCheckpointSha(workstreamId);
     return {
       checkId: row.chk_id as string,
       executionId: (row.exe_id as string | null) ?? null,
+      workstreamId,
       name: row.name as string,
       category: row.category as VerificationCheck["category"],
       outcome: row.outcome as VerificationCheck["outcome"],
@@ -230,9 +260,9 @@ export async function listChecks(
       checkpointSha,
       // No recorded revision means it predates the workspace runtime: it can
       // never be claimed as proof of the current one.
-      stale: currentCheckpointSha === null || checkpointSha === null
+      stale: laneHead === null || checkpointSha === null
         ? checkpointSha !== null
-        : checkpointSha !== currentCheckpointSha,
+        : checkpointSha !== laneHead,
       observedAt: (row.observed_at as Date).toISOString()
     };
   });
@@ -283,6 +313,18 @@ export async function listProcesses(db: Db, missionId: string): Promise<Workspac
     startedAt: (row.started_at as Date).toISOString(),
     endedAt: row.ended_at ? (row.ended_at as Date).toISOString() : null
   }));
+}
+
+/** Who holds one lane's baton. Control is per lane (D-074), so a mission with
+ *  two approaches has two answers to "who is in control?" and the room says
+ *  both rather than picking one. */
+async function holderOf(db: Db, workstreamId: string): Promise<string | null> {
+  const result = await db.query(
+    `select u.login from control_leases l join users u on u.user_id = l.holder_user_id
+      where l.wst_id = $1 and l.state in ('held', 'releasing') limit 1`,
+    [workstreamId]
+  );
+  return (result.rows[0]?.login as string | undefined) ?? null;
 }
 
 export async function runnerStatus(db: Db, workstreamId: string | null): Promise<RunnerStatus | null> {
@@ -377,14 +419,33 @@ export function projectMissionState(args: {
   return "work_completed_unverified";
 }
 
+/**
+ * How long a running execution may report nothing before the room says so.
+ *
+ * Not a ceiling and not a stop (D-034): the turn keeps running, nothing is
+ * killed, and no authority changes. It is generous on purpose — a turn is
+ * legitimately silent while a long test suite runs inside one tool call — and
+ * the sentence it produces is true either way: nothing has been reported for
+ * this long.
+ */
+const NO_PROGRESS_AFTER_MS = 10 * 60_000;
+
 export function projectOverlays(args: {
   queuedDirections: number;
   control: ControlSnapshot;
   runner: RunnerStatus | null;
   processes: WorkspaceProcess[];
   checks: VerificationCheck[];
+  /** When the running execution last reported anything, and now. Absent when
+   *  nothing is running, which is not a stall — it is an idle workstream. */
+  lastProgressAt?: Date | null;
+  now?: Date;
 }): MissionOverlay[] {
   const overlays: MissionOverlay[] = [];
+  if (args.lastProgressAt) {
+    const since = (args.now ?? new Date()).getTime() - args.lastProgressAt.getTime();
+    if (since >= NO_PROGRESS_AFTER_MS) overlays.push("execution_stalled");
+  }
   if (args.processes.some((process) => process.kind === "run" && (process.state === "running" || process.state === "starting"))) {
     overlays.push("app_running");
   }
@@ -402,6 +463,28 @@ export function projectOverlays(args: {
   }
   if (args.runner && !args.runner.online) overlays.push("runner_offline");
   return overlays;
+}
+
+/**
+ * When the execution that is currently working last reported anything.
+ *
+ * `null` unless a turn is genuinely in flight: an idle workstream is not
+ * stalled, and a harness *waiting on an approval* is not stalled either — it is
+ * waiting for a person, which the room already says in words and which no
+ * amount of silence from the harness should be dressed up as a fault.
+ */
+function lastProgressOf(executions: Execution[], events: EventRow[]): Date | null {
+  const latest = executions[executions.length - 1];
+  if (!latest) return null;
+  if (latest.state !== "running" && latest.state !== "starting") return null;
+  let last: Date | null = null;
+  for (const row of events) {
+    if (row.execution_id !== latest.executionId) continue;
+    if (last === null || row.occurred_at > last) last = row.occurred_at;
+  }
+  // A turn that has produced no event at all is timed from when it was asked
+  // for, so a harness that never starts is visible rather than silent forever.
+  return last ?? new Date(latest.createdAt);
 }
 
 /** Assembles the whole room payload for one authorized viewer. */
@@ -426,9 +509,22 @@ export async function missionDetail(
   }
 
   const checkpointsForSha = await listCheckpoints(db, access.missionId);
-  // The revision a check has to match to still count as current evidence.
-  const currentCheckpointSha =
-    [...checkpointsForSha].reverse().find((checkpoint) => checkpoint.sha !== null)?.sha ?? null;
+  // The revision a check has to match to still count as current evidence —
+  // per lane, because a mission may hold competing approaches and each one's
+  // head moves on its own (D-074).
+  const executionsForLanes = await listExecutions(db, access.missionId);
+  const laneOfExecution = new Map(
+    executionsForLanes.map((execution) => [execution.executionId, execution.workstreamId])
+  );
+  const headOfLane = new Map<string, string>();
+  for (const checkpoint of checkpointsForSha) {
+    const lane = laneOfExecution.get(checkpoint.executionId);
+    if (lane && checkpoint.sha) headOfLane.set(lane, checkpoint.sha);
+  }
+  const currentCheckpointSha = (workstreamId: string | null): string | null =>
+    workstreamId === null
+      ? [...checkpointsForSha].reverse().find((checkpoint) => checkpoint.sha !== null)?.sha ?? null
+      : headOfLane.get(workstreamId) ?? null;
 
   const [
     participants,
@@ -446,7 +542,7 @@ export async function missionDetail(
     listParticipants(db, access.missionId, access.controllerUserId),
     controlSnapshot(db, access.workstreamId),
     listDirections(db, access.missionId),
-    listExecutions(db, access.missionId),
+    Promise.resolve(executionsForLanes),
     Promise.resolve(checkpointsForSha),
     listChecks(db, access.missionId, currentCheckpointSha),
     listApprovals(db, access.missionId),
@@ -459,25 +555,107 @@ export async function missionDetail(
     ])
   ]);
 
-  const state = projectMissionState({
-    hasWorkstream: base.workstream !== null,
-    branchReady: base.workstream?.branchStatus === "created",
-    workspace,
-    executions,
-    checkpoints,
-    checks
+  // Every lane, and the evidence each one produced on its own. A mission that
+  // never forked has exactly one of these and the room shows no lane chrome at
+  // all (DESIGN.md#component-behavior).
+  const workstreams = await listWorkstreams(db, access.missionId);
+  const laneOf = laneOfExecution;
+  const stateOfLane = (workstreamId: string): MissionState =>
+    projectMissionState({
+      hasWorkstream: true,
+      branchReady:
+        workstreams.find((lane) => lane.workstreamId === workstreamId)?.branchStatus === "created",
+      // Workspace and readiness are the default lane's for now: a second lane's
+      // own workspace row arrives with its own runner, and until it does this
+      // reports what the lane's executions and evidence say rather than
+      // inventing a readiness nobody reported.
+      workspace: workstreamId === access.workstreamId ? workspace : null,
+      executions: executions.filter((execution) => execution.workstreamId === workstreamId),
+      checkpoints: checkpoints.filter((checkpoint) => laneOf.get(checkpoint.executionId) === workstreamId),
+      checks: checks.filter(
+        (check) =>
+          (check.workstreamId ?? (check.executionId === null ? null : laneOf.get(check.executionId))) ===
+          workstreamId
+      )
+    });
+
+  const controllers = new Map<string, string | null>();
+  for (const lane of workstreams) {
+    controllers.set(
+      lane.workstreamId,
+      lane.workstreamId === access.workstreamId ? control.holderLogin : await holderOf(db, lane.workstreamId)
+    );
+  }
+
+  const approaches = summarizeApproaches({
+    workstreams,
+    executions: executions.map((execution) => ({
+      workstreamId: execution.workstreamId,
+      startedAt: execution.startedAt,
+      endedAt: execution.endedAt,
+      usage: execution.usage
+    })),
+    checkpoints: checkpoints.map((checkpoint) => ({
+      workstreamId: laneOf.get(checkpoint.executionId) ?? null,
+      sha: checkpoint.sha,
+      additions: checkpoint.additions,
+      deletions: checkpoint.deletions,
+      paths: checkpoint.files.map((file) => file.path)
+    })),
+    checks: checks.map((check) => ({
+      workstreamId: check.workstreamId ?? (check.executionId === null ? null : laneOf.get(check.executionId) ?? null),
+      outcome: check.outcome,
+      stale: check.stale
+    })),
+    directions: directions.map((direction) => ({ workstreamId: direction.workstreamId })),
+    approvalsAnswered: approvals
+      .filter((approval) => approval.state === "approved" || approval.state === "denied")
+      .map((approval) => ({ workstreamId: approval.workstreamId })),
+    stops: executions
+      .filter((execution) => execution.state === "stopped")
+      .map((execution) => ({ workstreamId: execution.workstreamId })),
+    controllers,
+    stateOf: stateOfLane
   });
+
+  const decisions = await listDecisions(db, access.missionId);
+  const current = decisions.find((decision) => decision.supersededAt === null) ?? null;
+
+  const state = current
+    ? // A recorded decision is what the mission is now about, and the state's
+      // whole job is to say that nothing has been published (D-075).
+      ("decision_recorded" as MissionState)
+    : projectMissionState({
+        hasWorkstream: base.workstream !== null,
+        branchReady: base.workstream?.branchStatus === "created",
+        workspace,
+        executions,
+        checkpoints,
+        checks
+      });
   const overlays = projectOverlays({
     queuedDirections: directions.filter((direction) => direction.state === "queued").length,
     control,
     runner,
     processes,
-    checks
+    checks,
+    lastProgressAt: lastProgressOf(executions, eventRows.rows as EventRow[])
   });
 
   return {
     mission: { ...base.mission, primaryState: state },
     workstream: base.workstream,
+    workstreams,
+    approaches,
+    contested: contestedPaths(approaches),
+    decisions,
+    preparedPullRequest: preparePullRequest(
+      base.mission.goal,
+      current,
+      approaches.find((approach) => approach.workstreamId === current?.workstreamId),
+      workstreams.find((lane) => lane.workstreamId === current?.workstreamId),
+      base.mission.repository?.provider ?? null
+    ),
     events: (eventRows.rows as EventRow[]).map(toMissionEvent),
     participants,
     directions,

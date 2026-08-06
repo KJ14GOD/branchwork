@@ -103,8 +103,20 @@ create table if not exists workstreams (
   branch_error   text,
   created_at     timestamptz not null default now()
 );
--- V0 constraint: exactly one workstream per mission (multi-workstream is a later, deliberate change).
-create unique index if not exists workstreams_one_per_mission on workstreams (mission_id);
+-- A mission may hold several lanes: one to begin with, and a sibling for every
+-- approach somebody deliberately forks (D-074). The index that made a second
+-- one impossible is dropped rather than left as a comment about the past.
+drop index if exists workstreams_one_per_mission;
+-- What makes a fork an approach rather than a retry: a stated intent, the lane
+-- it forked from, and the exact revision it forked at. Null on the lane a
+-- mission starts with, required on every approach — enforced by a check so the
+-- database cannot hold an approach nobody can tell apart from its sibling.
+alter table workstreams add column if not exists intent text;
+alter table workstreams add column if not exists forked_from_wst_id text references workstreams(wst_id);
+alter table workstreams add column if not exists origin_sha text;
+alter table workstreams drop constraint if exists workstreams_approach_needs_intent;
+alter table workstreams add constraint workstreams_approach_needs_intent
+  check (approach_flag = false or (intent is not null and length(btrim(intent)) > 0));
 drop index if exists workstreams_branch_unique;
 -- One branch name per repository — the invariant the audit demanded be real.
 create unique index if not exists workstreams_repo_branch_unique on workstreams (repo_id, mission_branch);
@@ -281,6 +293,18 @@ create table if not exists executions (
   last_origin_seq   bigint not null default 0,
   latest_checkpoint_sha text
 );
+-- What the harness said the work cost, summed over the execution's turns. An
+-- opaque claim: Novus bills nothing from it and stops nothing because of it
+-- (ARCHITECTURE.md#harness-protocol). Null means the harness reported nothing,
+-- which is a different fact from zero.
+alter table executions add column if not exists input_tokens bigint;
+alter table executions add column if not exists output_tokens bigint;
+alter table executions add column if not exists cache_read_tokens bigint;
+alter table executions add column if not exists cache_creation_tokens bigint;
+alter table executions add column if not exists cost_usd numeric(12, 6);
+alter table executions add column if not exists harness_duration_ms bigint;
+alter table executions add column if not exists harness_turns integer;
+
 create index if not exists executions_by_workstream on executions (wst_id, created_at desc);
 create unique index if not exists executions_one_active_per_workstream
   on executions (wst_id)
@@ -471,13 +495,17 @@ alter table verification_checks add column if not exists checkpoint_sha text;
 -- exe_id is nullable now: a participant can verify without an execution.
 alter table verification_checks alter column exe_id drop not null;
 
--- The runner's command vocabulary grows with the workspace runtime. There is
--- deliberately no shell command: remote interactive access to somebody's
--- laptop is structurally absent, not merely unauthorized (D-042).
-alter table runner_commands drop constraint if exists runner_commands_kind_check;
-alter table runner_commands add constraint runner_commands_kind_check
-  check (kind in ('start_execution', 'apply_direction', 'stop_execution', 'boundary_request',
-                  'run_setup', 'run_command', 'stop_command', 'run_verification'));
+-- The runner's command vocabulary grows with the workspace runtime, and it is
+-- widened in exactly **one** place — below, where the list is complete. It used
+-- to be widened here as well, with the list as it stood at the time, and that
+-- made this file non-rerunnable the moment a database held a command added
+-- later: re-migrating dropped the good constraint and re-added a narrower one,
+-- which Postgres then refused against the existing rows. A real deployment hit
+-- it the second time it started after somebody answered an approval.
+--
+-- There is deliberately no shell command in the vocabulary: remote interactive
+-- access to somebody's laptop is structurally absent, not merely unauthorized
+-- (D-042).
 
 -- ---------------------------------------------------------------------------
 -- Declared commands, readiness, and how a command ended (D-043, D-045).
@@ -556,3 +584,51 @@ alter table runner_commands add constraint runner_commands_kind_check
   check (kind in ('start_execution', 'apply_direction', 'stop_execution', 'boundary_request',
                   'respond_approval',
                   'run_setup', 'run_command', 'stop_command', 'run_verification'));
+
+-- A check proves one lane's revision (D-074). Harness-observed checks could
+-- always be traced through their execution; participant-run ones carry no
+-- execution at all, so with a second lane in the mission they belonged to
+-- nothing. The workstream is recorded directly, and backfilled for the rows
+-- written before it existed.
+alter table verification_checks add column if not exists wst_id text references workstreams(wst_id);
+update verification_checks v
+   set wst_id = e.wst_id
+  from executions e
+ where v.exe_id = e.exe_id and v.wst_id is null;
+update verification_checks v
+   set wst_id = w.wst_id
+  from workstreams w
+ where v.wst_id is null and w.mission_id = v.mission_id
+   and not exists (select 1 from workstreams w2 where w2.mission_id = v.mission_id and w2.wst_id <> w.wst_id);
+create index if not exists verification_checks_by_workstream on verification_checks (wst_id, observed_at);
+
+-- ---------------------------------------------------------------------------
+-- Decisions (PRODUCT.md#domain-model, D-075). A judgment, never a computation:
+-- nothing here is scored, ranked, or derived from which lane "won". Append
+-- only — a later decision supersedes an earlier one and neither is rewritten.
+-- ---------------------------------------------------------------------------
+
+create table if not exists decisions (
+  dec_id          text primary key,
+  org_id          text not null references organizations(org_id),
+  mission_id      text not null references missions(mission_id),
+  wst_id          text not null references workstreams(wst_id),
+  -- The exact revision chosen. Null only where a lane was chosen before it
+  -- ever produced a checkpoint, which the surface states rather than hides.
+  checkpoint_sha  text,
+  decided_by      text not null references users(user_id),
+  -- Required by the database as well as by the route: a rationale that can be
+  -- skipped is a rationale that is skipped.
+  rationale       text not null check (length(btrim(rationale)) > 0),
+  accepted_risks  text,
+  -- What was outstanding at the moment of deciding, captured then rather than
+  -- recomputed later, when the answer would have changed.
+  unresolved_check_ids jsonb not null default '[]'::jsonb,
+  unresolved_summary   jsonb not null default '[]'::jsonb,
+  decided_at      timestamptz not null default now(),
+  superseded_at   timestamptz
+);
+create index if not exists decisions_by_mission on decisions (mission_id, decided_at);
+-- One current decision per mission; the rest are history.
+create unique index if not exists decisions_one_current_per_mission
+  on decisions (mission_id) where superseded_at is null;

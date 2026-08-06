@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
-import type { SequencedRunnerEvent } from "@novus/contracts";
+import type { ReportableRunnerEvent, SequencedRunnerEvent } from "@novus/contracts";
 import { buildServer } from "../src/server.ts";
 import { sweepRunners, RELIABILITY_THRESHOLDS } from "../src/reliability.ts";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
@@ -112,7 +112,7 @@ async function commandsFor(credential: string) {
   return response.json().commands as { commandId: string; kind: string; payload: Record<string, unknown> }[];
 }
 
-async function report(credential: string, executionId: string, events: SequencedRunnerEvent[]) {
+async function report(credential: string, executionId: string, events: ReportableRunnerEvent[]) {
   return harness.app.inject({
     method: "POST",
     url: "/runner/events",

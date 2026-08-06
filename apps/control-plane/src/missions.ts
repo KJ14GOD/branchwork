@@ -48,6 +48,10 @@ interface WorkstreamRow {
   mission_branch: string;
   branch_status: string;
   branch_error: string | null;
+  approach_flag?: boolean;
+  intent?: string | null;
+  forked_from_wst_id?: string | null;
+  origin_sha?: string | null;
 }
 
 function toRepository(row: MissionRow): RepositoryRef | null {
@@ -86,7 +90,13 @@ function toWorkstream(row: WorkstreamRow): Workstream {
     baseSha: row.base_sha,
     missionBranch: row.mission_branch,
     branchStatus: row.branch_status as Workstream["branchStatus"],
-    branchError: row.branch_error
+    branchError: row.branch_error,
+    // What makes this lane an approach rather than the one the mission started
+    // with (D-074). Absent on every mission that never forked.
+    approach: Boolean(row.approach_flag),
+    intent: row.intent ?? null,
+    forkedFromWorkstreamId: row.forked_from_wst_id ?? null,
+    originSha: row.origin_sha ?? null
   };
 }
 
@@ -312,15 +322,20 @@ export async function attemptBranchCreation(
   db: Db,
   provider: RepositoryProvider,
   _ctx: AuthedContext,
-  missionId: string
+  missionId: string,
+  /** Which lane's branch to drive. A mission may hold several (D-074); absent
+   *  means the one it started with, which is every mission that never forked. */
+  workstreamId?: string
 ): Promise<void> {
   const rows = await db.query(
     `select w.wst_id, w.mission_branch, w.base_sha, w.branch_status, r.provider_repo_id, m.org_id
        from workstreams w
        join missions m on m.mission_id = w.mission_id
        join repositories r on r.repo_id = w.repo_id
-      where w.mission_id = $1 and r.provider = 'github'`,
-    [missionId]
+      where w.mission_id = $1 and r.provider = 'github'
+        and ($2::text is null or w.wst_id = $2)
+      order by w.created_at, w.wst_id`,
+    [missionId, workstreamId ?? null]
   );
   const row = rows.rows[0];
   if (!row || row.branch_status === "created") return;
@@ -513,7 +528,13 @@ export async function getMissionBase(
   );
   const row = (result.rows as MissionRow[])[0];
   if (!row) return null;
-  const workstreamRows = await db.query("select * from workstreams where mission_id = $1", [missionId]);
+  // The lane the room reads by default is the one the mission started with —
+  // oldest first, so a mission that has since forked an approach still opens
+  // where it always did (D-074).
+  const workstreamRows = await db.query(
+    "select * from workstreams where mission_id = $1 order by created_at, wst_id",
+    [missionId]
+  );
   const workstream = workstreamRows.rows[0] ? toWorkstream(workstreamRows.rows[0] as WorkstreamRow) : null;
   return { mission: toMission(row), workstream };
 }

@@ -23,6 +23,14 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     "direction.submit",
     "execution.start",
     "execution.stop",
+    // Forking a competing approach makes a *sibling* lane with its own branch,
+    // workspace and lease. It does not steer the lane it forks, so it is held
+    // by role and never by the baton (D-074) — the same reasoning as archival.
+    "approach.create",
+    // Resolving the work: recording a decision, or asking for a revision
+    // instead. Also role-held: choosing between approaches is not an operating
+    // verb on either of them (D-075).
+    "review.approve",
     "workspace.command",
     "control.request",
     "control.accept",
@@ -33,6 +41,8 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     "direction.submit",
     "execution.start",
     "execution.stop",
+    "approach.create",
+    "review.approve",
     "workspace.command",
     "control.request",
     "control.accept"
@@ -116,7 +126,19 @@ export async function missionAccess(
   /** Only the caller's identity is read; a full session is not required, so a
    *  server-side path can resolve someone else's standing deliberately. */
   ctx: Pick<AuthedContext, "userId">,
-  missionId: string
+  missionId: string,
+  /**
+   * Which lane the caller is acting on (D-074). A mission may hold several:
+   * the one it started with, and a sibling for every approach somebody forked.
+   * Control is **per lane**, so who the controller is — and therefore what the
+   * caller may do — depends on which one this names. Absent means the lane the
+   * mission started with, which is every mission that never forked.
+   *
+   * A lane id that belongs to another mission resolves to no access at all,
+   * rather than silently falling back to the default: naming someone else's
+   * workstream must never widen what you can do to your own.
+   */
+  workstreamId?: string | null
 ): Promise<MissionAccess | null> {
   const result = await db.query(
     `select m.mission_id, m.org_id, p.mission_role,
@@ -125,14 +147,26 @@ export async function missionAccess(
        from missions m
        join participants p on p.mission_id = m.mission_id and p.user_id = $2
        join organization_members om on om.org_id = m.org_id and om.user_id = $2
-       left join workstreams w on w.mission_id = m.mission_id
+       left join lateral (
+         select w2.wst_id
+           from workstreams w2
+          where w2.mission_id = m.mission_id
+            and ($3::text is null or w2.wst_id = $3)
+          -- Oldest first, so "the mission's lane" is stable rather than
+          -- whichever row the planner happened to return.
+          order by w2.created_at, w2.wst_id
+          limit 1
+       ) w on true
        left join control_leases l
               on l.wst_id = w.wst_id and l.state in ('held', 'releasing')
       where m.mission_id = $1`,
-    [missionId, ctx.userId]
+    [missionId, ctx.userId, workstreamId ?? null]
   );
   const row = result.rows[0];
   if (!row) return null;
+  // A named lane that does not belong to this mission: refused outright rather
+  // than served with the default lane's authority.
+  if (workstreamId && row.wst_id !== workstreamId) return null;
   const role = row.mission_role as MissionRole;
   const controllerUserId = (row.holder_user_id as string | null) ?? null;
   const isController = controllerUserId === ctx.userId;
@@ -174,7 +208,7 @@ export async function workstreamAccess(
   );
   const missionId = result.rows[0]?.mission_id as string | undefined;
   if (!missionId) return null;
-  const access = await missionAccess(db, ctx, missionId);
-  if (!access || access.workstreamId !== workstreamId) return null;
-  return access;
+  // Resolved *against this lane*, so an approach's own lease decides what its
+  // controller may do — rather than the mission's first lane deciding for it.
+  return missionAccess(db, ctx, missionId, workstreamId);
 }

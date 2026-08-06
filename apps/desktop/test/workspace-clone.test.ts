@@ -254,8 +254,8 @@ describe("a second workstream on the same repository", () => {
     expect(second.path).toBe(first.path);
 
     // The ordinary worktree path, unchanged, on a repository it did not fetch.
-    const older = await ensureWorkspaceWorktree(gitExec, first.path, userData, "msn_older", OLD_BRANCH);
-    const newer = await ensureWorkspaceWorktree(gitExec, second.path, userData, "msn_newer", NEW_BRANCH);
+    const older = await ensureWorkspaceWorktree(gitExec, first.path, userData, "wst_older", OLD_BRANCH);
+    const newer = await ensureWorkspaceWorktree(gitExec, second.path, userData, "wst_newer", NEW_BRANCH);
 
     expect(git(older, ["rev-parse", "HEAD"])).toBe(originSha(OLD_BRANCH));
     expect(git(newer, ["rev-parse", "HEAD"])).toBe(originSha(NEW_BRANCH));
@@ -280,7 +280,7 @@ describe("a second workstream on the same repository", () => {
     git(origin, ["update-server-info"]);
 
     const later = await ensureRepositoryClone({ ...request, missionBranch: LATER_BRANCH });
-    const worktree = await ensureWorkspaceWorktree(gitExec, later.path, userData, "msn_later", LATER_BRANCH);
+    const worktree = await ensureWorkspaceWorktree(gitExec, later.path, userData, "wst_later", LATER_BRANCH);
 
     expect(later.cloned).toBe(false);
     expect(git(worktree, ["rev-parse", "HEAD"])).toBe(originSha(LATER_BRANCH));
@@ -301,7 +301,7 @@ describe("a second workstream on the same repository", () => {
     const checkout = await ensureRepositoryClone({ ...request, missionBranch: OLD_BRANCH });
     const asked = await Promise.all(
       Array.from({ length: 6 }, () =>
-        ensureWorkspaceWorktree(gitExec, checkout.path, userData, "msn_contended0000000", OLD_BRANCH)
+        ensureWorkspaceWorktree(gitExec, checkout.path, userData, "wst_contended0000000", OLD_BRANCH)
       )
     );
 
@@ -324,7 +324,7 @@ describe("a second workstream on the same repository", () => {
     const checkout = await ensureRepositoryClone({ ...request, missionBranch: OLD_BRANCH });
 
     // A checkpoint commit that has not been published yet.
-    const worktree = await ensureWorkspaceWorktree(gitExec, checkout.path, userData, "msn_work", OLD_BRANCH);
+    const worktree = await ensureWorkspaceWorktree(gitExec, checkout.path, userData, "wst_work", OLD_BRANCH);
     writeFileSync(join(worktree, "WORK.md"), "# a turn happened\n");
     git(worktree, ["-c", "user.email=t@l", "-c", "user.name=T", "add", "-A"]);
     git(worktree, ["-c", "user.email=t@l", "-c", "user.name=T", "commit", "-qm", "checkpoint"]);
@@ -613,7 +613,7 @@ describe("the runner on a repository it fetched", () => {
 
     // The worktree is on the branch the server allocated, and the turn's
     // checkpoint sits directly on the commit that branch pointed at.
-    const worktree = join(userData, "worktrees", MISSION_ID);
+    const worktree = join(userData, "worktrees", WORKSTREAM_ID);
     expect(git(worktree, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(OLD_BRANCH);
     expect(existsSync(join(worktree, "NOVUS_FAKE_TURN.md"))).toBe(true);
     expect(git(worktree, ["rev-parse", "HEAD~1"])).toBe(originSha(OLD_BRANCH));
@@ -743,11 +743,14 @@ describe("the runner on a repository it fetched", () => {
     expect(git(checkout, ["rev-parse", OLD_BRANCH])).toBe(originSha(OLD_BRANCH));
     expect(git(checkout, ["rev-parse", LATER_BRANCH])).toBe(originSha(LATER_BRANCH));
 
+    // The lane's own key: the agent has already made this worktree while
+    // discovering the second workstream, and asking for the same lane finds it
+    // rather than trying to check the branch out twice (D-074).
     const worktree = await ensureWorkspaceWorktree(
       gitExec,
       checkout,
       userData,
-      "msn_second00000000000",
+      "wst_second00000000000",
       LATER_BRANCH
     );
     expect(git(worktree, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(LATER_BRANCH);

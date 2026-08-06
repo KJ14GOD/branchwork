@@ -64,8 +64,17 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 1px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* A text field already has an edge; focus brightens that edge instead of
+   drawing a ring around it. Still visible, still not colour alone — the
+   contrast step is large and the caret is in it. */
+.input:focus-visible,
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 /* ---------- Shell ---------- */
@@ -137,13 +146,21 @@ body {
 
 /* ---------- Primitives ---------- */
 
+/* One height, one padding, every variant. A row of buttons is a row of the
+   same object in different weights — a primary that is taller than the
+   secondary beside it reads as two unrelated controls. 32px is also the
+   pointer-target floor DESIGN.md#density has always asked for. */
 .btn {
   font: var(--type-row);
   font-weight: 500;
   border: 1px solid transparent;
   border-radius: var(--r-control);
-  padding: var(--s-1) var(--s-3);
-  min-height: 28px;
+  padding: var(--s-2) var(--s-3);
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-1);
   cursor: pointer;
   transition: background var(--m-press) var(--ease);
   color: var(--text-1);
@@ -159,8 +176,6 @@ body {
 .btn-primary {
   background: var(--accent);
   color: var(--bg);
-  padding: var(--s-2) var(--s-4);
-  min-height: 32px;
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -547,7 +562,10 @@ body {
    giving it a surface put a panel inside a panel and drew a second border a few
    pixels under the window's own (D-067). */
 .mission-strip {
-  flex: 1;
+  /* Sized by its tabs, shrinking only when they outgrow the row — the spacer
+     beside it is `flex: 1` and would otherwise take half the free width,
+     which made the strip scroll with the row half empty. */
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   align-items: stretch;
@@ -574,6 +592,18 @@ body {
 
 .mission-strip-scroll::-webkit-scrollbar {
   display: none;
+}
+
+/* A tab shows keyboard focus on its own shape — the surface it already takes
+   on hover — never as a boxed outline, which on this strip reads as a white
+   frame stuck to the tab you just clicked (D-076). */
+.mission-tab-open:focus-visible {
+  outline: none;
+}
+
+.mission-tab:has(.mission-tab-open:focus-visible) {
+  background: var(--hover);
+  color: var(--text-1);
 }
 
 .mission-tab {
@@ -755,10 +785,23 @@ body {
   color: var(--text-1);
 }
 
-/* A project row is two controls in one line: disclose, and open. */
+/* A project row is two controls in one line: disclose, and open. It is the
+   list's heading, and reads as one: the name carries weight and --text-1
+   while the missions under it sit quieter (D-077). It also never takes the
+   selected wash — selection belongs to the mission, and greying the heading
+   with it read as the whole project being pressed. */
 .side-parent {
   padding: 0;
   gap: 0;
+}
+
+.side-parent .side-name {
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.side-parent:hover {
+  background: transparent;
 }
 
 .side-twisty {
@@ -841,20 +884,14 @@ body {
 }
 
 .side-child {
-  padding-left: var(--s-5);
   color: var(--text-2);
-  font: var(--type-meta);
-}
-
-/* Creating a mission is a row in the list it joins, not a floating control:
-   the rail already reads as "this project, and its missions", and the way to
-   add one belongs at the end of that sentence (D-055). */
-.side-new {
-  color: var(--text-3);
-}
-
-.side-new:hover {
-  color: var(--text-2);
+  /* A touch smaller than the heading's row, and inset so the rounded
+     highlight reads as a chip inside the rail rather than a bar across it. */
+  min-height: 28px;
+  width: calc(100% - var(--s-4));
+  margin: 0 var(--s-2);
+  padding-left: var(--s-4);
+  border-radius: var(--r-control);
 }
 
 /* And starting one in a repository you can see but are not in: quiet until the
@@ -945,6 +982,10 @@ body {
 .add-project {
   width: 100%;
   text-align: left;
+  /* A rail row reads down a left edge with everything above it. The button
+     primitive centres its content, which is right for a control that hugs its
+     label and wrong for one that spans the column. */
+  justify-content: flex-start;
 }
 
 .room-area {
@@ -1247,6 +1288,13 @@ body {
   display: flex;
   gap: var(--s-2);
   font: var(--type-meta);
+}
+
+/* One of the harness's own workers. Indent is the grouping, as it is for
+   speech under its speaker: the step belongs to the turn above it and never
+   claims a lane, a branch, or a name of its own. */
+.tool-list li.tool-line-nested {
+  padding-left: var(--s-3);
 }
 
 .tool-name {
@@ -1869,6 +1917,7 @@ body {
   position: relative;
   display: inline-flex;
   align-items: center;
+  flex: none;
 }
 
 .run-trigger {
@@ -2179,9 +2228,8 @@ body {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: var(--s-2);
-  padding: var(--s-4);
-  border-bottom: 1px solid var(--edge);
+  gap: var(--s-1);
+  padding: var(--s-5) var(--s-5) 0;
 }
 
 .dialog-title {
@@ -2300,9 +2348,9 @@ body {
   flex: none;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--s-2);
-  padding: var(--s-3) var(--s-4);
-  border-top: 1px solid var(--edge);
+  padding: var(--s-2) var(--s-5) var(--s-5);
 }
 
 .dialog-spacer {
@@ -3530,5 +3578,260 @@ body.resizing {
 .palette-empty {
   padding: var(--s-4);
   color: var(--text-3);
+  font: var(--type-body);
+}
+
+/* ---------- The Decision Room (D-074, D-075) ---------- */
+/* Columns are identical by construction: one grid track per approach, the same
+   width, the same rows, in the order the server sent them. Nothing here can
+   emphasise one lane over another, because there is no rule that could. */
+
+.decision-room {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  padding: var(--s-5) var(--s-6) var(--s-8);
+}
+
+.decision-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.approach-columns {
+  display: grid;
+  grid-auto-columns: minmax(280px, 1fr);
+  grid-auto-flow: column;
+  gap: var(--s-4);
+  overflow-x: auto;
+  padding-bottom: var(--s-2);
+}
+
+.approach-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-4);
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-button);
+  min-width: 0;
+}
+
+/* Identification only, never quality: `--alt` marks a lane as a deliberately
+   created approach and says nothing about whether it is the better one. */
+.approach-column.is-approach {
+  border-left: 1px solid var(--alt);
+}
+
+.approach-name {
+  font: var(--type-section);
+  color: var(--text-1);
+}
+
+.approach-intent {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.approach-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.approach-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.approach-fact dt {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.approach-fact dd {
+  font: var(--type-row);
+  color: var(--text-1);
+}
+
+.approach-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: auto;
+  padding-top: var(--s-2);
+}
+
+.approach-chosen {
+  font: var(--type-row);
+  color: var(--text-2);
+}
+
+.contested-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.contested-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font: var(--type-meta);
+  color: var(--text-2);
+  min-height: 32px;
+}
+
+/* The receipt: the room, frozen, at prose measure. */
+.decision-receipt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-width: 720px;
+}
+
+.receipt-line {
+  font: var(--type-row);
+  color: var(--text-1);
+}
+
+.prepared-pr {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--edge);
+}
+
+.prepared-body {
+  font: var(--type-row);
+  font-family: var(--font-mono);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 320px;
+  overflow-y: auto;
+  width: 100%;
+}
+
+.decision-unresolved {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.field-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.dialog-head h2 {
+  font: var(--type-title);
+  color: var(--text-1);
+}
+
+.dialog-sub {
+  font: var(--type-meta);
+  color: var(--text-2);
+  max-width: 60ch;
+}
+
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: var(--s-5);
+  overflow-y: auto;
+}
+
+/* Inside a dialog a field sits *on* the surface rather than in a box of its
+   own: the dialog is the container, and a second border around the input is
+   the container drawn twice. */
+.dialog-body .input {
+  background: var(--surface-1);
+  border-color: transparent;
+  resize: none;
+}
+
+.dialog-body .input:hover:not(:focus) {
+  background: var(--hover);
+}
+
+.dialog-body .input:focus,
+.dialog-body .input:focus-visible {
+  border-color: var(--edge-hover);
+  background: var(--surface-1);
+}
+
+.section-title {
+  font: var(--type-section);
+  color: var(--text-1);
+}
+
+/* ---------- The ask-dialog (D-077), Conductor-shaped ---------- */
+/* The project across the top, one large prompt that is the body, and the
+   composer's own foot as the Create row. The composer's border comes off in
+   here: the dialog is the container, and its box would be the border twice. */
+
+/* A hairline under the header, which composition allows — separation by a
+   1px Separator — and Conductor's shape asks for. The prompt below stays
+   borderless, so the dialog is still one container with one line in it. */
+.ask-head {
+  flex-direction: row;
+  align-items: center;
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--edge);
+}
+
+.ask-project {
+  font: var(--type-row);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+/* The menu opens below the header's own line, not the composer's foot. */
+.ask-project-menu {
+  top: calc(100% + var(--s-1));
+  bottom: auto;
+  left: 0;
+}
+
+.ask-body {
+  padding-top: var(--s-3);
+}
+
+.ask-body .composer {
+  padding: 0;
+}
+
+.ask-body .composer-box {
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+}
+
+.ask-body .composer-box:focus-within {
+  border-color: transparent;
+}
+
+.ask-body .composer-input {
+  min-height: 120px;
   font: var(--type-body);
 }

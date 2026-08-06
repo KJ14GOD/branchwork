@@ -144,6 +144,20 @@ export async function sweepLeases(db: Db, now = new Date()): Promise<number> {
         [row.lease_id]
       );
       if (released.rowCount === 0) return false;
+      // Is the harness sitting on a question nobody can now answer? The
+      // approval is deliberately **not** settled — the request stays pending
+      // and the process stays alive, because expiry removes authority and does
+      // not end work (D-034). What it changes is that the room has to say so,
+      // and the record has to explain why a mission suddenly needs someone.
+      const waiting = await client.query(
+        `select 1 from approval_requests a
+           join executions e on e.exe_id = a.exe_id
+          where a.wst_id = $1 and a.state = 'pending'
+            and e.state not in ('completed', 'stopped', 'interrupted', 'failed')
+          limit 1`,
+        [row.wst_id]
+      );
+      const approvalWaiting = (waiting.rowCount ?? 0) > 0;
       // A handoff that was mid-flight cannot complete onto a lease that no
       // longer exists; it fails visibly rather than silently never landing.
       await client.query(
@@ -161,7 +175,11 @@ export async function sweepLeases(db: Db, now = new Date()): Promise<number> {
         causeLeaseId: row.lease_id,
         payload: {
           holderLogin: row.login,
-          reason: "the controller was silent past the lease's time to live"
+          reason: "the controller was silent past the lease's time to live",
+          // Read by the room and by anyone reconstructing the mission later:
+          // "the baton lapsed" and "the baton lapsed while the harness was
+          // waiting to be answered" are different events to walk into.
+          approvalWaiting
         }
       });
       return true;

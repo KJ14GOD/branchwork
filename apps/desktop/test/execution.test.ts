@@ -15,6 +15,8 @@ import { startTurn, type TurnResult } from "../electron/execution";
 
 const MISSION_BRANCH = "novus/m-ab12cd34";
 const MISSION_ID = "msn_testexecution";
+/** Worktrees are keyed by the lane, not the mission (D-074). */
+const WORKSTREAM_ID = "wst_execution";
 
 let repo: string;
 let worktreeRoot: string;
@@ -39,6 +41,7 @@ async function runFakeTurn(
   const running = startTurn({
     executionId: "exe_test",
     missionId: MISSION_ID,
+    workstreamId: WORKSTREAM_ID,
     repositoryPath: repo,
     worktreeRoot,
     missionBranch: MISSION_BRANCH,
@@ -151,7 +154,7 @@ describe("a complete turn", () => {
 
   it("reuses the worktree across turns and rebuilds one that vanished", async () => {
     await runFakeTurn();
-    const worktree = join(worktreeRoot, MISSION_ID);
+    const worktree = join(worktreeRoot, WORKSTREAM_ID);
     expect(existsSync(worktree)).toBe(true);
     rmSync(worktree, { recursive: true, force: true });
 
@@ -167,7 +170,7 @@ describe("outcomes that are not completion", () => {
       // The worktree disappears at the boundary, exactly when the checkpoint
       // is about to run: the harness succeeded, the evidence did not.
       if (event.kind === "boundary.reached") {
-        rmSync(join(worktreeRoot, MISSION_ID), { recursive: true, force: true });
+        rmSync(join(worktreeRoot, WORKSTREAM_ID), { recursive: true, force: true });
       }
     });
     const checkpoint = payloadOf(events, "workspace.checkpoint");

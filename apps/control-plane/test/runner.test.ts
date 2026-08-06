@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
-import type { SequencedRunnerEvent } from "@novus/contracts";
+import type { ReportableRunnerEvent, SequencedRunnerEvent } from "@novus/contracts";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
 
 /**
@@ -124,7 +124,7 @@ async function commandsFor(credential: string) {
   return response.json();
 }
 
-async function report(credential: string, executionId: string, events: SequencedRunnerEvent[]) {
+async function report(credential: string, executionId: string, events: ReportableRunnerEvent[]) {
   return harness.app.inject({
     method: "POST",
     url: "/runner/events",
@@ -578,6 +578,73 @@ describe("event ingestion", () => {
     ]);
     expect(execution.rows[0].state).toBe("running");
     expect(execution.rows[0].started_at).not.toBeNull();
+  });
+
+  it("adds up what the harness said each turn cost, and never invents a figure", async () => {
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+    const accepted = await report(lane.credential, executionId, [
+      {
+        originSeq: 1,
+        event: {
+          kind: "harness.usage",
+          payload: {
+            inputTokens: 10,
+            outputTokens: 81,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 6459,
+            costUsd: 0.013929,
+            durationMs: 2379,
+            turns: 1
+          }
+        }
+      },
+      // A second turn of the same execution: the execution has spent both.
+      {
+        originSeq: 2,
+        event: {
+          kind: "harness.usage",
+          payload: {
+            inputTokens: 4,
+            outputTokens: 19,
+            cacheReadTokens: 6459,
+            cacheCreationTokens: 0,
+            costUsd: 0.002,
+            durationMs: 1200,
+            turns: 1
+          }
+        }
+      }
+    ]);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toEqual({ ok: true, accepted: 2, duplicates: 0 });
+
+    const row = await harness.db.query(
+      `select input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+              cost_usd, harness_duration_ms, harness_turns
+         from executions where exe_id = $1`,
+      [executionId]
+    );
+    expect(Number(row.rows[0].input_tokens)).toBe(14);
+    expect(Number(row.rows[0].output_tokens)).toBe(100);
+    expect(Number(row.rows[0].cache_read_tokens)).toBe(6459);
+    expect(Number(row.rows[0].cache_creation_tokens)).toBe(6459);
+    expect(Number(row.rows[0].cost_usd)).toBeCloseTo(0.015929, 6);
+    expect(Number(row.rows[0].harness_duration_ms)).toBe(3579);
+    expect(Number(row.rows[0].harness_turns)).toBe(2);
+
+    // A harness that reports nothing leaves the execution with nothing, rather
+    // than a row of zeros that would read as a turn that cost nothing.
+    const quiet = await createLane();
+    const quietExecution = await startExecution(quiet);
+    await report(quiet.credential, quietExecution, [
+      { originSeq: 1, event: { kind: "harness.text", payload: { text: "no figures here" } } }
+    ]);
+    const untouched = await harness.db.query("select input_tokens, cost_usd from executions where exe_id = $1", [
+      quietExecution
+    ]);
+    expect(untouched.rows[0].input_tokens).toBeNull();
+    expect(untouched.rows[0].cost_usd).toBeNull();
   });
 
   it("de-duplicates a replayed batch and applies its side effects exactly once", async () => {

@@ -121,6 +121,33 @@ interface StreamLine {
   request_id?: string;
   request?: ControlRequestBody;
   response?: { subtype?: string; request_id?: string };
+  /**
+   * Set by the CLI on messages produced by one of its **own** subagents, naming
+   * the tool call that spawned it (`--forward-subagent-text`). Null or absent
+   * on everything the harness itself says.
+   */
+  parent_tool_use_id?: string | null;
+  /** Present on the final `result` line: what the turn cost. */
+  total_cost_usd?: unknown;
+  duration_ms?: unknown;
+  num_turns?: unknown;
+  usage?: {
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+    cache_read_input_tokens?: unknown;
+    cache_creation_input_tokens?: unknown;
+  };
+}
+
+/** A count the harness reported, or null. Never a zero standing in for a
+ *  figure that was not given: "not reported" and "none" are different. */
+function count(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+/** Same rule, for a figure that is not a whole number. */
+function amount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 /** The `can_use_tool` request the CLI blocks on, as observed against 2.1.221. */
@@ -271,7 +298,7 @@ export class HarnessStream {
           subtype: typeof parsed.subtype === "string" ? parsed.subtype : "unknown",
           message: typeof parsed.result === "string" ? this.sanitize(parsed.result) : null
         };
-        return [];
+        return this.consumeUsage(parsed);
       default:
         return [];
     }
@@ -358,6 +385,31 @@ export class HarnessStream {
     this.onControl({ kind: "acknowledgement", requestId, ok: response?.subtype === "success" });
   }
 
+  /**
+   * What the turn cost, off the CLI's own final line.
+   *
+   * Observed against `claude 2.1.223`: `total_cost_usd`, `duration_ms`,
+   * `num_turns`, and a `usage` object carrying input, output, and both cache
+   * counts. Reported as the harness's claim and nothing more — Novus bills
+   * nothing from it and stops nothing because of it (ARCHITECTURE.md#harness-protocol).
+   * A line carrying none of them produces no event, rather than a row of zeros
+   * that would read as a free turn.
+   */
+  private consumeUsage(parsed: StreamLine): RunnerEvent[] {
+    const usage = parsed.usage ?? {};
+    const payload = {
+      inputTokens: count(usage.input_tokens),
+      outputTokens: count(usage.output_tokens),
+      cacheReadTokens: count(usage.cache_read_input_tokens),
+      cacheCreationTokens: count(usage.cache_creation_input_tokens),
+      costUsd: amount(parsed.total_cost_usd),
+      durationMs: count(parsed.duration_ms),
+      turns: count(parsed.num_turns)
+    };
+    if (Object.values(payload).every((value) => value === null)) return [];
+    return [{ kind: "harness.usage", payload }];
+  }
+
   private consumeSystem(parsed: StreamLine): RunnerEvent[] {
     if (parsed.subtype !== "init" || typeof parsed.session_id !== "string") return [];
     const sessionId = parsed.session_id;
@@ -375,11 +427,18 @@ export class HarnessStream {
   private consumeAssistant(parsed: StreamLine): RunnerEvent[] {
     const content = parsed.message?.content;
     if (!Array.isArray(content)) return [];
+    // Whose words these are. The harness's own subagents speak on this same
+    // stream when forwarding is on, and their text is *activity*, not the
+    // answer the room is waiting for — so it is tagged rather than mixed in.
+    const parentToolUseId = this.parentOf(parsed);
     const events: RunnerEvent[] = [];
     for (const raw of content) {
       const block = raw as StreamBlock;
       if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
-        events.push({ kind: "harness.text", payload: { text: bound(this.sanitize(block.text), MAX_TEXT) } });
+        events.push({
+          kind: "harness.text",
+          payload: { text: bound(this.sanitize(block.text), MAX_TEXT), parentToolUseId }
+        });
         continue;
       }
       if (block.type !== "tool_use") continue;
@@ -395,11 +454,19 @@ export class HarnessStream {
         kind: "harness.tool",
         payload: {
           tool: bound(tool, MAX_LINE),
-          detail: detail === null ? null : bound(this.sanitize(detail), MAX_LINE)
+          detail: detail === null ? null : bound(this.sanitize(detail), MAX_LINE),
+          parentToolUseId
         }
       });
     }
     return events;
+  }
+
+  /** The tool call that spawned whoever produced this line, when the harness
+   *  says one did. Bounded like every other line the harness hands over. */
+  private parentOf(parsed: StreamLine): string | null {
+    const parent = parsed.parent_tool_use_id;
+    return typeof parent === "string" && parent.trim() ? bound(parent, MAX_LINE) : null;
   }
 
   private consumeUser(parsed: StreamLine): RunnerEvent[] {

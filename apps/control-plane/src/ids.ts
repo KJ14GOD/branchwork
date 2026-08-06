@@ -40,6 +40,9 @@ export const newWorkspaceId = () => `wsp_${opaque(20)}`;
 // Harness approvals (D-056).
 export const newApprovalId = () => `apr_${opaque(20)}`;
 
+// The decision between approaches (D-075).
+export const newDecisionId = () => `dec_${opaque(20)}`;
+
 /** Single-use secrets handed out exactly once: invitation tokens and runner
  *  credentials. Only their SHA-256 hash is ever stored. */
 export const newSecretToken = () => randomBytes(32).toString("base64url");

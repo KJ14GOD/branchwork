@@ -841,3 +841,173 @@ All three are the same mistake: treating the top row as a band across the window
 **Consequences.** `.project-shell` is now the whole window below nothing at all. The `--traffic-inset` introduced in D-067 moves from the top row to the rail's strip, and applies to the top row only in the case where the rail is not there to hold it.
 
 **Revisit when.** The room needs a header of its own *and* a tab row — at which point the tabs and the room's controls stop sharing a line.
+
+## D-069 — Search is a command surface for missions
+
+**Context.** Search was presented as another framed form, which made a global navigation action look like a settings dialog and gave every result the same visual weight.
+
+**Decision.** Search opens as a compact command surface from the rail. The input is the surface's title-level control, results are one selectable list with a clear active row, and each result names the mission first with its project as context. Empty and no-match states remain inside the same surface. Keyboard navigation and an explicit listbox relationship are required; search remains mission navigation, not file-content search.
+
+**Consequences.** The search surface shares the dialog and palette tokens, keeps one content axis, and remains usable without a pointer. The rail stays responsible for finding rooms; files continue to be filtered in the files panel.
+
+**Revisit when.** Search needs to query code, transcript content, or another indexed resource, at which point those scopes need an explicit product decision rather than being added to this command surface implicitly.
+
+## D-070 — A command this machine began is never begun twice
+
+**Context.** The runner remembers the commands it has settled, so a command re-offered after a relaunch is completed rather than repeated. It wrote that memory *after* the work returned, which left the case in between unhandled: a machine killed mid-turn — a crash, a force quit, a laptop closing — came back, polled, and was offered the same `start_execution` it had already been running. It ran the whole turn again, from the top, against a worktree the first attempt had already changed, with the first attempt's own record nowhere. PROGRESS.md has carried this as a known gap since D-053.
+
+**Decision.** The memory records a command as **started** before the work begins and **settled** when it ends, and both survive a relaunch. A command the file says this machine began and never settled is not run again: it is acknowledged as failed with that reason, and — when it named an execution — reported as `execution.interrupted`, which is the state whose action is Restart. The person decides whether to run it again, which is what D-034 already says about a lost host. At-most-once per machine is now the property the memory carries; the control plane's idempotency keys remain the property the *transport* carries, and neither substitutes for the other.
+
+**Alternatives.** Re-running the command and relying on the harness to notice (rejected: the harness has no idea a previous process existed, and the second turn's checkpoint would silently contain the first turn's work); marking the command settled *before* running it (rejected: a command that fails to start would then be reported as done); waiting for the runner-liveness sweep to end the execution (rejected: it is right and it is ninety seconds late, and it cannot stop the returning machine from picking the command back up in the meantime).
+
+**Consequences.** A crash mid-turn now ends that execution honestly and quickly rather than duplicating it. The memory file gains a version and two states; the old array of settled ids still reads, as settled. Everything that was already covered stays covered: a graceful quit still reports `execution.interrupted` on the way out, and a command that ran to completion is still a no-op on replay.
+
+**Revisit when.** Cloud runners exist, where "this machine" is not one laptop and a replacement runner may legitimately continue a turn another one began.
+
+## D-071 — What a turn cost, and the harness's own workers
+
+**Context.** Two things the CLI says on its own stream were being dropped. It reports what a turn spent — tokens, cache, dollars, wall clock — on its final `result` line, and Novus discarded it, so a person watching a long unattended run had no way to see what it was costing and a receipt could never say. And Claude Code can spawn its **own** subagents: by default nothing they say is forwarded, so a `Task` that runs for four minutes was one tool row followed by silence, which reads like a wedged turn. `--forward-subagent-text` forwards their text tagged with the tool call that spawned them (measured against `claude 2.1.223`).
+
+**Decision.** Both are carried, and both are carried as what they are.
+
+**Usage is an opaque claim.** `harness.usage` reports the harness's own figures per turn and they are summed onto the execution. Nothing is billed from them, nothing is stopped by them, and no ceiling is derived from them — ARCHITECTURE.md has said "opaque optional metadata" since before there was an implementation, and D-034 forbids a Novus-imposed limit. A figure the harness did not report stays **null**, never zero: "not reported" and "free" are different facts, and a zero would be Novus asserting one of them.
+
+**A subagent's activity is activity, not speech.** `--forward-subagent-text` is passed, and text carrying a `parent_tool_use_id` goes into the turn's technical disclosure, indented under it — not into the speech position. The reply that leads a turn stays the harness's own (D-065), and a worker is never given a branch, a checkpoint, a controller, or a workstream. Novus groups what the stream exposes and invents nothing: PRODUCT.md's harness boundary gives internal subagents to the harness, and a room that drew lanes for them would be claiming a structure the product does not have.
+
+**And an optional flag degrades where a pinned one fails.** `--forward-subagent-text` is a nicety; a CLI that has never heard of it refuses by name, and Novus retries once without it. The permission flags are deliberately not in that set: a CLI that will not route approvals still fails the execution outright (D-062), because every way of running without the control channel is a way of running unsupervised. The retry reads the refusal by flag name, so the two can never be confused.
+
+**Alternatives.** Deriving cost ourselves from token counts and a price table (rejected: prices are the vendor's and change without us; a number Novus computed would look like a bill); rendering subagent text as harness speech (rejected: it makes the room's central question — what did the agent say back — answered by whichever worker spoke last); probing `claude --help` for the flag before every turn (rejected: it spawns the binary an extra time for a nicety, and the refusal already names itself); not forwarding at all (rejected: the silence during a long `Task` is indistinguishable from a stall, which is the fault the next slice exists to make visible).
+
+**Consequences.** The execution row carries seven nullable figures and the trace's machinery line states them at the meta step — apparatus beside the model that ran it, never a tile or a chart (DESIGN.md prohibited pattern 16). `RunnerEvent` gains `harness.usage` and a `parentToolUseId` on harness text and tool events. Proven live against `claude 2.1.223`: real figures arrive through Novus's own turn path.
+
+**Revisit when.** A harness reports usage in a shape these fields cannot hold, or an organization budget becomes real — at which point cost stops being only a claim and needs a decision of its own about what it may stop.
+
+## D-072 — Project skills stay outside the pinned boundary, and this is why
+
+**Context.** Pinning `--setting-sources ""` (D-062) is what stops a `.claude/settings.json` in the worktree deciding what the agent may do. D-064 restored the repository's `CLAUDE.md` through `--append-system-prompt-file`, which needs no setting source. The open question was the next one: a project's `.claude/skills` — the folder a team uses to teach an agent its own procedures.
+
+**Measured, against `claude 2.1.223`, in a directory carrying `.claude/skills/zephyr-codes/SKILL.md`.** The session's own `system/init` line enumerates what it loaded. With settings pinned: 16 skills, 45 slash commands, no `zephyr-codes`, no MCP servers. With `--setting-sources project`: 17 skills, 46 slash commands, `zephyr-codes` present in both — **and three MCP servers appeared with it**. So project skills genuinely do not load under the pinned policy, and the flag that loads them loads more than them.
+
+**Decision.** Novus does not load a project's skills in this slice, and does not reach for the two channels that could.
+
+`--setting-sources project` is refused for the reason D-062 gave and the probe above confirms: it re-admits hooks, which run *before* the permission check, and MCP servers, which are tool surface nobody in the room authorized. A file the agent can write must not decide what the agent may do, and skills arrive through the same door as the things that would.
+
+`--plugin-dir` is refused *for now* for a subtler reason: it is explicit, bounded, and session-scoped, which is the right shape — but a Claude Code plugin is not only skills. It can carry hooks and MCP servers too, so pointing it at repository content re-opens the same door with better manners. The version of this that could work is Novus **composing** a directory containing only skill files it copied out of the worktree, under the same containment `CLAUDE.md` already has — resolved through `realpath`, inside the worktree, regular files, bounded — and that is a slice with its own path handling, not a flag.
+
+**What a project can do today** is state its conventions in `CLAUDE.md`, which is carried, and which grants nothing: every tool call still reaches the permission router (D-064).
+
+**Alternatives.** Inlining every skill body into the appended system prompt (rejected: skills exist to be loaded on demand, and pasting them all into every turn spends the context they were meant to save); inlining only their descriptions (rejected: it tells the model about procedures it has no way to invoke, which is worse than silence); shipping `--plugin-dir` now with a note that hooks are a risk (rejected outright — "we know it can escalate and we shipped it anyway" is not a boundary).
+
+**Consequences.** A team whose procedures live in skills gets none of them through Novus yet, and PROGRESS.md says so rather than leaving the impression that pinning the settings was free. The measurement above is the reference for whoever builds the composed-directory version.
+
+**Revisit when.** The CLI gains a way to load skills alone from a named directory, or the composed skills-only directory is built with its own containment and evidence.
+
+## D-073 — A quiet turn is a sentence, not a limit; and a waiting question outlives its answerer
+
+**Context.** Two failures in the same family: the room could not say that nothing had happened. A harness turn that wedges — a tool call that never returns, a process waiting on something that will not arrive — looked exactly like a turn that was working, for ever, because the only thing the room reported was `running`. And when a control lease expired while the harness was blocked on a permission question, the question stayed pending with nobody holding `approval.respond`; the state was recoverable, since any participant may claim an unheld lease, but nothing said so and nothing explained why the mission had gone quiet. PROGRESS.md has carried both as known gaps.
+
+**Decision — the stall is stated, never enforced.** PRODUCT.md's *Execution stalled* overlay is implemented as what it always said it was: an observation. A running execution that has reported nothing for **ten minutes** carries the overlay, and the state line appends *no progress reported since {time}*. Nothing is stopped, no authority moves, no execution is ended, and no ceiling is imposed — D-034 forbids one and this does not smuggle one in. The threshold is deliberately generous, because the most common quiet turn is a legitimate one: a twenty-minute test suite inside a single tool call reports nothing while it runs, and the sentence the overlay produces — nothing has been reported for this long — is true and useful in that case too.
+
+**A harness waiting on a person is never stalled.** It is waiting for a human, which the room already says in words, and however long that lasts it is not a fault. Silence from an execution that is `needs_approval` produces no overlay at all.
+
+**And the recovery action is the one that already exists.** A wedged turn is ended with **Stop**, which any non-viewer participant already holds, which already prefers the harness's own interrupt and escalates to the process group (D-053), and which is already recorded. `force_interrupt` stays unimplemented as a distinct verb: it would do what Stop does, and two verbs for one act is how a capability table starts lying.
+
+**Decision — the question survives.** A lease that expires while an approval is pending settles nothing and kills nothing: the request stays `pending`, the harness process stays alive, and the execution stays in *Needs approval*. What changes is that it is now **said**. The expiry event records that a question was waiting, so the history explains the moment; the state line adds *no one holds the baton — claim it to answer*; and the approval card already offers Request control to anyone whose role carries it. Claiming an unheld lease is fulfilled immediately, the claimant answers, and the previous holder is refused — because authority is read from current durable state at command time, not from who was asked.
+
+**Alternatives.** Killing a stalled turn automatically (rejected outright: it is a wall-clock ceiling wearing a watchdog's clothes, and the first thing it would kill is somebody's long test run); a short threshold with a gentler word (rejected: a sentence that appears every few minutes on healthy turns is one people learn to ignore); reassigning the lease to another participant when it expires (rejected: Novus does not choose who is responsible — a claim is an act, and an unheld lease is claimable by design); settling pending approvals when the lease expires (rejected: it answers a question nobody was asked, and denial-by-timeout is the silent auto-decision this whole slice exists to not make).
+
+**Consequences.** `MissionOverlay` gains `execution_stalled`. The room's suffix says what is true and offers nothing new to press. A person walking into a mission whose controller vanished mid-question now reads what is wrong and what to do about it in the state line.
+
+**Revisit when.** Runners can report liveness *within* a turn — a heartbeat while a tool call runs — at which point a stall can be told from a long tool call and the threshold can drop.
+
+## D-074 — An approach is a sibling workstream with an intent, and nothing ranks it
+
+**Context.** D-006 settled the shape years of prototype drift got wrong: an approach is a *flag on a deliberately created sibling workstream*, not a fifth object, and comparison chrome may not render over one lane. The flag has existed in the schema since the beginning with nothing able to set it, a `workstreams_one_per_mission` unique index underneath it making a second lane impossible, and a runner that assumed `detail.workstream` was singular. So "competing approaches" was a documented idea with a database column and no product.
+
+**Decision.** Creating an approach is one explicit act, `approach.create`, held by Mission Admin and Operator and **not** lease-granted — forking the work is a decision about the mission, not an operating verb on the lane being forked, and the baton over one workstream must not confer the power to spawn another.
+
+**Three things are required of every approach**, because without them a comparison is theatre:
+
+- **An intent.** One sentence saying how this attempt is meant to differ. Empty is refused by the server, not just by the form. An approach nobody can distinguish from its sibling is a retry, and PRODUCT.md has always said a retry is a continuation rather than an approach.
+- **An origin.** It forks from a recorded checkpoint of the workstream it is created beside, and that revision is stored. Two approaches are comparable *because* they started from the same commit; without a recorded origin, a comparison is between two different problems.
+- **Its own everything.** Its own branch allocated beside its sibling's, its own worktree, its own lease, its own direction queue, its own executions, its own runner enrolment and credential. Isolation is structural: there is no shared filesystem for two approaches to collide in, and no code path where one lane's turn can see the other's worktree.
+
+**Nothing ranks them.** No score, no total, no ordering by outcome, no recommended column, no synthesis of one approach into another. PRODUCT.md's non-goals have forbidden automatic ranking from the first draft and this is where that becomes load-bearing rather than theoretical: the surface presents each approach's own evidence in the same shape and stops. Where evidence is missing the row says so — *not verified* is a finding, and a blank would let a reader assume the opposite.
+
+**Alternatives.** Approach as its own object with its own lifecycle (rejected again, for D-006's reason: a fifth concept whose default presence invites the comparison-chrome-over-nothing failure); one worktree shared by both approaches with branch switching (rejected outright: two agents and one checkout is a corruption waiting to happen, and it makes "isolated" a promise the filesystem contradicts); scoring approaches on checks passed (rejected: it is the automatic ranking the product forbids, and a green tick count is not a judgment about which change is right); allowing an approach with no intent (rejected: it is how a comparison surface fills with lanes nobody can tell apart).
+
+**Consequences.** The one-workstream-per-mission index is dropped and a mission may hold several lanes. The runner enrols per workstream rather than per mission, and worktrees are keyed by workstream — an existing mission's worktree is recreated from its branch under the new key, which is safe because the branch is the record and a checkpoint commits at every turn boundary. `MissionDetailResponse` carries `workstreams` and per-lane state; the room shows lane chrome only when more than one exists (DESIGN.md#component-behavior). PROGRESS.md's "one workstream per mission" constraint closes.
+
+**Revisit when.** More than a handful of approaches per mission turns out to be real, at which point the comparison axis stops being columns; or two approaches need to be run on two different machines, which the per-workstream runner enrolment already permits and nothing yet exercises.
+
+## D-075 — A decision is a judgment with a rationale, and choosing is not applying
+
+**Context.** The product could produce competing results and had no way to record which one a team chose or why. PRODUCT.md's Review object covered comments and acceptance in the abstract; nothing carried the things that make a choice defensible six months later — what was accepted despite being unverified, and what risk somebody knowingly took.
+
+**Decision — the record.** A `Decision` names the chosen workstream, the exact checkpoint chosen, the person who chose, a **rationale that cannot be empty**, the risks they wrote down, and the ids of the checks that were unresolved at that moment, captured *at* that moment rather than recomputed later. It is recorded under `review.approve`, which PRODUCT.md's capability table has always defined as "accept result, request revision" — the verb existed and had no implementation; this is it. A later decision supersedes an earlier one and neither is erased: reversals are part of the record.
+
+**Rationale is required and is a person's own words.** Not a dropdown, not a template, not a generated summary. The one sentence a reviewer most needs in a postmortem is why a human chose this, and a field that can be skipped is a field that is skipped.
+
+**Decision — choosing is not applying.** Recording a decision moves the mission to *Decision recorded*, whose whole job is to say that nothing has been published. Novus then **prepares** a pull request — title, body assembled from the goal, the rationale, the accepted risks, the unresolved checks and the changed files, plus base and head branch — and shows it read-only with a copy action. Nothing contacts GitHub, nothing merges, and no state pretends otherwise. The prepared request is a **projection** over durable state rather than a stored draft, so it cannot go stale against the decision it describes; a tracked `PullRequest` row starts existing when one is actually opened, which is a later slice.
+
+**Unresolved checks are shown before the decision, not after.** The recording surface lists what was never verified while the person is deciding. A product whose principle is evidence over claims cannot let somebody accept a result without seeing what it does not have.
+
+**Alternatives.** Completing the mission on a decision (rejected: it is the exact conflation this entry exists to prevent — the work is not applied and the PR does not exist); a decision without a checkpoint (rejected: "we chose this approach" without a revision is a claim about a moving target); computing the unresolved checks when the receipt is read (rejected: it would rewrite history every time verification changed, and the honest question is what was outstanding *then*); storing the prepared pull-request body (rejected for now: a stored draft drifts from the decision it was made for, and nothing yet edits it).
+
+**Consequences.** PRODUCT.md gains the `Decision` object and the *Decision recorded* state; DESIGN.md gains the Decision Room, the recording surface, and the receipt with its prepared pull request. `review.approve` stops being an unimplemented row in the capability table. Live GitHub publication remains deliberately out of scope, and PROGRESS.md says so rather than letting "prepared" read as "opened".
+
+**Revisit when.** Pull requests are actually opened and tracked, at which point *Decision recorded* hands over to *Pull request open* and the prepared projection becomes a real row.
+
+## D-076 — Quiet chrome: one button size, a hairline focus, one plane per dialog
+
+**Context.** Looked at rather than reasoned about, on a real screen. The *Try another approach* dialog showed three faults at once, and all three are elsewhere in the product too. **Cancel** was 28px tall beside a 32px **Start it**, because `.btn` set one size and `.btn-primary` quietly overrode it — two buttons on one row rendering as two unrelated objects. The focused textarea wore a 2px near-white ring at 2px offset, which on a dark ground is a white slab stuck to whatever you touched, and which appears the instant the dialog opens because the field is autofocused. And the dialog was three stacked planes — a bordered box containing a hairline-separated head, a bordered input, and a hairline-separated foot — which is the cards-in-cards shape prohibited pattern 5 already forbids, arriving one hairline at a time.
+
+The user's words for the result were "cheap" and "not the design you'd expect from a coding agent", against a reference of tools that keep it simple and clean. That is a standing correction, not a one-off, so it is written into DESIGN.md's product feeling rather than only fixed here.
+
+**Decision.**
+
+**One button size.** `.btn` is 32px minimum height with one padding, and no variant overrides it. 32px is also the pointer-target floor DESIGN.md#density already asked for, which the 28px default had been quietly failing.
+
+**A hairline focus ring, and none at all on a text field.** `:focus-visible` becomes 1px at 2px offset. An input shows focus on **its own edge** — the border it already has, brightened — because a ring around a bordered box is that border drawn twice. Focus stays visible everywhere and is still never removed; what changes is that it stops shouting.
+
+**One plane per dialog.** The head and the actions lose their hairlines and separate by space; a field inside a dialog sits on `--surface-1` with no border of its own. One bordered container, nothing bordered inside it.
+
+**And every dialog closes the two ways people expect** — `Esc`, and a click outside — which DESIGN.md has specified from the first draft and which three dialogs shipped without because each was hand-written. That is what the `Dialog` primitive on DESIGN.md's list is for, and it now exists: scrim, escape, focus restored, in one place.
+
+**Alternatives.** Keeping the 2px ring for accessibility (rejected: the obligation is that focus is *visible*, not that it is loud, and a 1px ring plus a brightened field edge is visible at a glance); removing the focus ring on mouse interaction only (already true — the rule was `:focus-visible` before this change, and the ring was simply too heavy); leaving the hairlines and lightening them (rejected for D-065's reason: a line that has to be nearly invisible to be tolerable is not doing anything).
+
+**Consequences.** Every button in the product grows to one height, which is most visible in dense rows where a text button now has a real target. The Add project dialog, the setup dialog and the archived dialog inherit the quieter composition without being touched individually. DESIGN.md gains the standing correction in *Product feeling*, so the next agent reads it before drawing anything.
+
+**Revisit when.** A surface genuinely needs a larger primary — a first-run action, a destructive confirmation — at which point the size becomes a named variant rather than a per-component override.
+
+## D-077 — Starting a mission is a question; a project row is a disclosure; the heading reads as one
+
+**Context.** Three faults in one screenshot of the rail, all judged against how Conductor and Codex handle the same moments. A permanent **New mission** row sat at the foot of every project's list dressed as a mission, and the `+` beside a project opened a *draft tab* — a "New miss…" tab in the strip that was always reachable and looked like an open room with nothing in it. Clicking a project's name did two different things on two clicks: the first *navigated* — selected the project and moved the room to one of its missions — and the second collapsed the list. And a project's name rendered identically to the missions beneath it, so the rail had no visible hierarchy; selecting a mission also washed its project's heading grey, which read as the whole project being pressed.
+
+**Decision.** Three changes, one per fault.
+
+**Creation is a question, not a place.** `+` on a repository row, the strip's `+`, `⌘T`, the empty-room control, and the landing after Add project all open one small dialog: *What should Claude do?* Enter with words creates the mission — goal derived from them, the words becoming the first direction — and opens its room. Enter with nothing, `Esc`, or a click outside closes it and **nothing happens anywhere**: no draft, no tab, no row. This is Conductor's `+`-popover and Codex's compose-or-nothing in one surface. The permanent rail row and the draft tab are gone; the draft machinery in the working set remains beneath (a restored draft still dies quietly), but no surface creates one.
+
+**A project row is a disclosure and nothing more.** Click opens the list, click again closes it, and the room never moves. Landing somewhere is what clicking a *mission* does. One target, one behaviour — a row that navigated on its first press and toggled on its second was two controls wearing one label. Opening the app with nothing open no longer force-opens anything either; the empty state already offers the obvious next step.
+
+**The heading reads as one.** The project name takes weight 600 and `--text-1`; its missions sit at `--text-2`, lifting on hover and selection. The parent row never takes the selected wash or the hover wash — selection belongs to the mission row alone.
+
+**Alternatives.** Keeping the New mission row but styling it fainter (rejected: however faint, it is a non-mission living in a list of missions); creating the mission only on the composer's first message, Codex-style but in a full room (that was exactly the draft-tab flow being removed — the tab it required is the complaint); a first-click-selects, second-click-toggles compromise (rejected outright: it is the current behaviour).
+
+**Consequences.** The rail is nouns again. `openDraft` loses its last caller and stays only for restored state. Several end-to-end assertions in `e2e/navigation.spec.ts` and `e2e/runtime.spec.ts` pin the removed flow — the `new-mission` rail row, the draft tab, drafts surviving in the strip — and must be rewritten to drive the ask-dialog instead; this entry is the discussion AGENTS.md requires before those tests change. PROGRESS.md records them as stale until that happens.
+
+**Revisit when.** Mission creation needs more than words — a base-revision picker, criteria up front — at which point the dialog grows fields rather than the rail regrowing a row.
+
+## D-078 — The ask-dialog is the composer wearing a dialog; mission rows are inset chips
+
+**Context.** Two adjustments on sight of D-077's first build, both toward Conductor's shapes. The ask-dialog had a title, a subtitle, and a bordered box — a form about creating rather than the thing itself — where Conductor's is the project's name over one large prompt with the model and the Create action on its foot. And the rail's selected mission was a full-bleed sharp bar, which the standing radii rule mandated; the user wants the highlight rounded and the row a touch smaller.
+
+**Decision.** The ask-dialog is rebuilt around the **real Composer**: project name across the top, the composer's textarea as a large borderless body, and the composer's own foot — model chip, effort chip, send control — as the Create row. This is reuse, not resemblance: the model and effort chosen there are the same persisted choices the room's composer uses, Enter submits the same way, and the composer's border comes off inside the dialog because the dialog is already the container (D-076). The composer gains two narrow props to serve it: a placeholder override, and an empty-Enter handler — the room ignores an empty send; the dialog closes on one, because an empty ask is a dismissal (D-077).
+
+The radii rule is amended rather than broken: in the rail, **headings are full-bleed and sharp; mission rows are inset chips** — 28px tall, set in from the rail's edges, 6px-rounded highlight. What the old rule was protecting against — floating capsules with shadows, accent bars — stays prohibited.
+
+**Alternatives.** A look-alike foot with static model text (rejected: chips that look interactive and are not are dead controls, and a second copy of the model picker would drift from the real one); rounding every rail row including headings (rejected: the heading is the container's own line, and rounding it makes the rail a stack of pills).
+
+**Consequences.** DESIGN.md's radii rule and the D-077 creation paragraph are amended in the same change. Model/effort selection now genuinely works at creation time, which the hardcoded-default version of D-077 quietly did not offer.
+
+**Revisit when.** The dialog needs Conductor's remaining furniture — create-from-branch, create-more — at which point the foot grows controls rather than the header growing menus.

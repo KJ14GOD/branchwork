@@ -336,7 +336,14 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
       const message = body.success ? "Malformed mission id." : body.error.issues[0]?.message ?? "Invalid direction.";
       return deps.sendError(reply, params.success ? 422 : 400, "invalid_direction", message);
     }
-    const access = await missionAccess(deps.db, ctx, params.data.missionId);
+    // Resolved against the lane the direction names, so an approach's own
+    // controller decides its queue rather than the first lane's (D-074).
+    const access = await missionAccess(
+      deps.db,
+      ctx,
+      params.data.missionId,
+      body.data.workstreamId ?? null
+    );
     if (!access) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
     requireCapability(access, "direction.submit");
 

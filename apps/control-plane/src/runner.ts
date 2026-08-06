@@ -506,16 +506,17 @@ async function applyWorkspaceSideEffects(
         payload.name
       );
       await client.query(
-        `insert into verification_checks (chk_id, org_id, mission_id, exe_id, name, category, outcome,
-                                          origin, requested_by, command, exit_code, output, truncated,
-                                          environment, runner_id, started_at, completed_at, duration_ms,
-                                          checkpoint_sha, ending)
-         values ($1, $2, $3, null, $4, $5, $6, 'participant', $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                 $16, $17, $18)`,
+        `insert into verification_checks (chk_id, org_id, mission_id, wst_id, exe_id, name, category,
+                                          outcome, origin, requested_by, command, exit_code, output,
+                                          truncated, environment, runner_id, started_at, completed_at,
+                                          duration_ms, checkpoint_sha, ending)
+         values ($1, $2, $3, $4, null, $5, $6, $7, 'participant', $8, $9, $10, $11, $12, $13, $14, $15,
+                 $16, $17, $18, $19)`,
         [
           newCheckId(),
           ctx.orgId,
           ctx.missionId,
+          ctx.workstreamId,
           payload.name,
           payload.category,
           payload.outcome,
@@ -638,13 +639,14 @@ async function applySideEffects(
       return;
     case "verification.observed":
       await client.query(
-        `insert into verification_checks (chk_id, org_id, mission_id, exe_id, name, category, outcome,
-                                          command, output, truncated, environment, runner_id)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        `insert into verification_checks (chk_id, org_id, mission_id, wst_id, exe_id, name, category,
+                                          outcome, command, output, truncated, environment, runner_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
           newCheckId(),
           ctx.orgId,
           ctx.missionId,
+          ctx.workstreamId,
           execution.exe_id,
           event.payload.name,
           event.payload.category,
@@ -711,6 +713,45 @@ async function applySideEffects(
         failureReason: event.payload.reason
       });
       await endOpenApprovals(client, ctx, execution.exe_id, "the execution was interrupted");
+      return;
+    case "harness.usage":
+      // Added to the execution rather than overwriting it: one execution can
+      // run several turns, and what it has spent is all of them. Opaque
+      // metadata — nothing is billed from it and nothing is stopped by it
+      // (ARCHITECTURE.md#harness-protocol).
+      // Each column moves only when the harness actually reported that figure:
+      // `null` means it said nothing, and adding a zero would turn silence into
+      // a claim that a turn cost nothing. Every parameter is cast, because
+      // `coalesce($n, 0)` would otherwise infer integer from the literal and
+      // refuse a cost of $0.013929.
+      await client.query(
+        `update executions
+            set input_tokens = case when $2::bigint is null then input_tokens
+                                    else coalesce(input_tokens, 0) + $2::bigint end,
+                output_tokens = case when $3::bigint is null then output_tokens
+                                     else coalesce(output_tokens, 0) + $3::bigint end,
+                cache_read_tokens = case when $4::bigint is null then cache_read_tokens
+                                         else coalesce(cache_read_tokens, 0) + $4::bigint end,
+                cache_creation_tokens = case when $5::bigint is null then cache_creation_tokens
+                                             else coalesce(cache_creation_tokens, 0) + $5::bigint end,
+                cost_usd = case when $6::numeric is null then cost_usd
+                                else coalesce(cost_usd, 0) + $6::numeric end,
+                harness_duration_ms = case when $7::bigint is null then harness_duration_ms
+                                           else coalesce(harness_duration_ms, 0) + $7::bigint end,
+                harness_turns = case when $8::int is null then harness_turns
+                                     else coalesce(harness_turns, 0) + $8::int end
+          where exe_id = $1`,
+        [
+          execution.exe_id,
+          event.payload.inputTokens,
+          event.payload.outputTokens,
+          event.payload.cacheReadTokens,
+          event.payload.cacheCreationTokens,
+          event.payload.costUsd,
+          event.payload.durationMs,
+          event.payload.turns
+        ]
+      );
       return;
     case "harness.text":
     case "harness.tool":

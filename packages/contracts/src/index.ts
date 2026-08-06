@@ -33,6 +33,10 @@ export const MissionStateSchema = z.enum([
   "paused",
   "work_completed_unverified",
   "ready_for_review",
+  /** Somebody chose a result and said why. Deliberately not a terminal state
+   *  and deliberately not "done": nothing has been published, which is a
+   *  different fact and is said as one (D-075). */
+  "decision_recorded",
   "verification_failed",
   "execution_interrupted"
 ]);
@@ -46,6 +50,11 @@ export const MissionOverlaySchema = z.enum([
   "control_requested",
   "handoff_offered",
   "handoff_waiting_for_boundary",
+  /** The harness has reported nothing for long enough to say so. Never a limit
+   *  and never a stop: D-034 forbids a Novus-imposed ceiling, and a turn that
+   *  is quiet because it is running somebody's twenty-minute test suite is
+   *  still running. What this fixes is the room having no way to say it. */
+  "execution_stalled",
   "runner_offline"
 ]);
 export type MissionOverlay = z.infer<typeof MissionOverlaySchema>;
@@ -96,6 +105,10 @@ export type BaseRevision = z.infer<typeof BaseRevisionSchema>;
 export const BranchStatusSchema = z.enum(["pending", "created", "failed"]);
 export type BranchStatus = z.infer<typeof BranchStatusSchema>;
 
+/** How an approach must differ from the lane it forks. Required when the
+ *  approach flag is set, and never long enough to be a plan (D-074). */
+export const APPROACH_INTENT_MAX = 240;
+
 export const WorkstreamSchema = z.object({
   workstreamId: z.string().startsWith("wst_"),
   missionId: z.string().startsWith("msn_"),
@@ -104,9 +117,28 @@ export const WorkstreamSchema = z.object({
   baseSha: ShaSchema,
   missionBranch: z.string().min(1),
   branchStatus: BranchStatusSchema,
-  branchError: z.string().nullable()
+  branchError: z.string().nullable(),
+  /** A deliberately created competing implementation, never a retry (D-006). */
+  approach: z.boolean().default(false),
+  /** One sentence on how this attempt is meant to differ. Present exactly when
+   *  `approach` is true: an approach nobody can tell apart from its sibling is
+   *  a continuation wearing a lane's clothes. */
+  intent: z.string().max(APPROACH_INTENT_MAX).nullable().default(null),
+  /** The lane this forked from, and the exact revision it forked at — two
+   *  approaches are comparable because they started from the same commit. */
+  forkedFromWorkstreamId: z.string().startsWith("wst_").nullable().default(null),
+  originSha: z.string().nullable().default(null)
 });
 export type Workstream = z.infer<typeof WorkstreamSchema>;
+
+export const CreateApproachInputSchema = z.object({
+  /** The lane to fork. Its latest checkpoint becomes the new lane's origin. */
+  fromWorkstreamId: z.string().startsWith("wst_"),
+  intent: z.string().trim().min(1, "Say how this approach should differ.").max(APPROACH_INTENT_MAX),
+  /** Optional human label; the server names it when this is absent. */
+  name: z.string().trim().min(1).max(80).optional()
+});
+export type CreateApproachInput = z.infer<typeof CreateApproachInputSchema>;
 
 export const MissionSchema = z.object({
   missionId: z.string().startsWith("msn_"),
@@ -217,6 +249,13 @@ export const CapabilitySchema = z.enum([
   "direction.apply",
   "execution.start",
   "execution.stop",
+  /** Start a competing approach beside this lane. A decision about the
+   *  mission, not an operating verb on the lane being forked, so it is held by
+   *  role and never granted by the baton (D-074). */
+  "approach.create",
+  /** Record a decision, or ask for a revision instead. PRODUCT.md's capability
+   *  table has carried this since the first draft; D-075 implements it. */
+  "review.approve",
   "workspace.command",
   /** Answering a harness approval. Lease-held only — a Mission Admin who is not
    *  the controller cannot answer for them (PRODUCT.md#roles-and-capabilities). */
@@ -268,7 +307,12 @@ export type Direction = z.infer<typeof DirectionSchema>;
 export const DirectionInputSchema = z.object({
   body: z.string().trim().min(1, "Say what should happen").max(4000),
   model: ModelIdSchema.default(DEFAULT_MODEL),
-  effort: EffortSchema.default(DEFAULT_EFFORT)
+  effort: EffortSchema.default(DEFAULT_EFFORT),
+  /** Which lane this is for. Absent means the lane the mission started with,
+   *  which is every mission that never forked an approach (D-074). Control is
+   *  per lane, so this also decides whose baton the direction is judged
+   *  against. */
+  workstreamId: z.string().startsWith("wst_").optional()
 });
 export type DirectionInput = z.infer<typeof DirectionInputSchema>;
 
@@ -302,6 +346,32 @@ export const TERMINAL_EXECUTION_STATES: ExecutionState[] = [
   "failed"
 ];
 
+/**
+ * What a turn cost, as the harness reported it.
+ *
+ * An opaque claim, exactly as ARCHITECTURE.md#harness-protocol says: nothing is
+ * billed from it and nothing is enforced by it. It exists so a person can see
+ * what a long run is spending and a receipt can say what it spent. Counts are
+ * non-negative integers and the cost is the harness's own figure in US dollars;
+ * a harness that reports none leaves them null rather than zero, because "not
+ * reported" and "free" are different facts.
+ */
+export const HarnessUsageSchema = z
+  .object({
+    inputTokens: z.number().int().nonnegative().nullable().default(null),
+    outputTokens: z.number().int().nonnegative().nullable().default(null),
+    cacheReadTokens: z.number().int().nonnegative().nullable().default(null),
+    cacheCreationTokens: z.number().int().nonnegative().nullable().default(null),
+    /** The harness's own cost figure for this turn, in US dollars. */
+    costUsd: z.number().nonnegative().nullable().default(null),
+    /** How long the harness says the turn took, wall clock. */
+    durationMs: z.number().int().nonnegative().nullable().default(null),
+    /** Model round trips inside the turn, as the harness counts them. */
+    turns: z.number().int().nonnegative().nullable().default(null)
+  })
+  .strict();
+export type HarnessUsage = z.infer<typeof HarnessUsageSchema>;
+
 export const ExecutionSchema = z.object({
   executionId: z.string().startsWith("exe_"),
   workstreamId: z.string().startsWith("wst_"),
@@ -322,7 +392,10 @@ export const ExecutionSchema = z.object({
   resumedSession: z.boolean(),
   exitOutcome: z.string().nullable(),
   failureReason: z.string().nullable(),
-  latestCheckpointSha: z.string().nullable()
+  latestCheckpointSha: z.string().nullable(),
+  /** Every turn of this execution added up, as the harness reported them. A
+   *  claim about what the work cost, never a bill and never a limit. */
+  usage: HarnessUsageSchema
 });
 export type Execution = z.infer<typeof ExecutionSchema>;
 
@@ -337,6 +410,118 @@ export type Execution = z.infer<typeof ExecutionSchema>;
 // belongs in a durable row distributed to every participant. So a request
 // carries the tool's name and a **bounded, redacted summary** built from named
 // fields, and nothing else.
+
+// --- Approaches, and the decision between them (D-074, D-075) ---------------
+
+export const MAX_RATIONALE = 4_000;
+export const MAX_ACCEPTED_RISKS = 4_000;
+
+/**
+ * One approach, as the comparison surface reads it.
+ *
+ * Every field is either a durable record or arithmetic over durable records.
+ * There is deliberately **no** score, rank, total, or recommendation: the
+ * surface shows each lane's own evidence in the same shape and stops
+ * (PRODUCT.md#scope-and-non-goals, D-074). Absence is reported as absence —
+ * `checksRun` of 0 means nothing ran, which is a finding rather than a blank.
+ */
+export const ApproachSummarySchema = z.object({
+  workstreamId: z.string().startsWith("wst_"),
+  name: z.string().min(1),
+  /** Null on the lane the mission started with; required on every fork. */
+  intent: z.string().nullable(),
+  approach: z.boolean(),
+  missionBranch: z.string().min(1),
+  originSha: z.string().nullable(),
+  /** The lane's own primary state, projected exactly as a mission's is. */
+  state: MissionStateSchema,
+  controllerLogin: z.string().nullable(),
+  /** The revision its evidence is about, and what changed to reach it. */
+  checkpointSha: z.string().nullable(),
+  filesChanged: z.number().int().nonnegative(),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  paths: z.array(z.string()).max(200),
+  /** Verification, split so that what did *not* happen is as visible as what
+   *  did. `unresolvedChecks` counts checks that errored, were skipped, or prove
+   *  a revision this lane has moved past. */
+  checksRun: z.number().int().nonnegative(),
+  checksPassed: z.number().int().nonnegative(),
+  checksFailed: z.number().int().nonnegative(),
+  unresolvedChecks: z.number().int().nonnegative(),
+  /** What people did to it: direction they wrote, approvals they answered,
+   *  stops they pressed. Human intervention is evidence too. */
+  directions: z.number().int().nonnegative(),
+  approvalsAnswered: z.number().int().nonnegative(),
+  stops: z.number().int().nonnegative(),
+  /** Harness claims, carried as claims (D-071). */
+  usage: HarnessUsageSchema,
+  startedAt: z.string().datetime().nullable(),
+  endedAt: z.string().datetime().nullable()
+});
+export type ApproachSummary = z.infer<typeof ApproachSummarySchema>;
+
+/** A file more than one approach changed. Contested by construction and
+ *  resolved by nobody: Novus shows both diffs and merges nothing (D-074). */
+export const ContestedPathSchema = z.object({
+  path: z.string().min(1),
+  workstreamIds: z.array(z.string().startsWith("wst_")).min(2)
+});
+export type ContestedPath = z.infer<typeof ContestedPathSchema>;
+
+export const DecisionSchema = z.object({
+  decisionId: z.string().startsWith("dec_"),
+  missionId: z.string().startsWith("msn_"),
+  workstreamId: z.string().startsWith("wst_"),
+  /** The exact revision chosen. A decision without one is a claim about a
+   *  moving target. */
+  checkpointSha: z.string().nullable(),
+  decidedBy: z.string().startsWith("usr_"),
+  decidedByLogin: z.string().min(1),
+  /** The person's own words, and never empty (D-075). */
+  rationale: z.string().min(1).max(MAX_RATIONALE),
+  acceptedRisks: z.string().max(MAX_ACCEPTED_RISKS).nullable(),
+  /** What was still unverified at the moment of choosing, captured then rather
+   *  than recomputed later. */
+  unresolvedCheckIds: z.array(z.string()).max(200),
+  unresolvedSummary: z.array(z.string().max(200)).max(200),
+  decidedAt: z.string().datetime(),
+  /** When a later decision replaced this one. Reversals stay in the record. */
+  supersededAt: z.string().datetime().nullable()
+});
+export type Decision = z.infer<typeof DecisionSchema>;
+
+export const RecordDecisionInputSchema = z.object({
+  workstreamId: z.string().startsWith("wst_"),
+  rationale: z.string().trim().min(1, "Say why you chose this.").max(MAX_RATIONALE),
+  acceptedRisks: z.string().trim().max(MAX_ACCEPTED_RISKS).optional()
+});
+export type RecordDecisionInput = z.infer<typeof RecordDecisionInputSchema>;
+
+export const RequestRevisionInputSchema = z.object({
+  workstreamId: z.string().startsWith("wst_"),
+  reason: z.string().trim().min(1, "Say what needs to change.").max(MAX_RATIONALE)
+});
+export type RequestRevisionInput = z.infer<typeof RequestRevisionInputSchema>;
+
+/**
+ * The pull request a decision *would* open — a projection over durable state,
+ * never a stored draft and never a request that has been sent (D-075).
+ *
+ * Nothing here has contacted GitHub. It exists so a team can carry a decision
+ * out of Novus by hand while live publication is unbuilt, and so the surface
+ * can say "prepared" and mean it.
+ */
+export const PreparedPullRequestSchema = z.object({
+  title: z.string().min(1),
+  body: z.string().min(1),
+  baseRef: z.string().min(1),
+  headRef: z.string().min(1),
+  /** True only where a provider could actually receive this. A local folder
+   *  cannot, and the surface says so rather than offering a dead action. */
+  publishable: z.boolean()
+});
+export type PreparedPullRequest = z.infer<typeof PreparedPullRequestSchema>;
 
 export const ApprovalStateSchema = z.enum([
   "pending",
@@ -448,6 +633,10 @@ export type CommandEnding = z.infer<typeof CommandEndingSchema>;
 export const VerificationCheckSchema = z.object({
   checkId: z.string().startsWith("chk_"),
   executionId: z.string().nullable(),
+  /** The lane this proves. A participant-run check has no execution, so with a
+   *  mission holding competing approaches this is the only thing that says
+   *  which one it is evidence for (D-074). */
+  workstreamId: z.string().nullable(),
   name: z.string().min(1),
   category: CheckCategorySchema,
   outcome: CheckOutcomeSchema,
@@ -1173,6 +1362,19 @@ export const RunnerFileChangeSchema = z.object({
 });
 export type RunnerFileChange = z.infer<typeof RunnerFileChangeSchema>;
 
+/**
+ * Which of the harness's *own* workers produced this, when the harness says so.
+ *
+ * Claude Code can spawn internal subagents; with `--forward-subagent-text` it
+ * forwards what they say, tagged with the id of the tool call that started
+ * them. Novus carries that tag and nothing more: a subagent is the harness's
+ * business (PRODUCT.md#the-harness-boundary), so its activity groups under the
+ * turn that spawned it and is **never** given a branch, a controller, a
+ * checkpoint, or a workstream of its own. Null is the ordinary case — the
+ * harness itself speaking.
+ */
+const PARENT_TOOL_USE_ID = BOUNDED_LINE.nullable().default(null);
+
 export const RunnerEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("execution.starting"), payload: z.object({}).strict() }),
   z.object({
@@ -1183,10 +1385,23 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
     kind: z.literal("harness.session"),
     payload: z.object({ sessionId: BOUNDED_LINE, resumed: z.boolean() }).strict()
   }),
-  z.object({ kind: z.literal("harness.text"), payload: z.object({ text: BOUNDED_TEXT }).strict() }),
+  z.object({
+    kind: z.literal("harness.text"),
+    payload: z.object({ text: BOUNDED_TEXT, parentToolUseId: PARENT_TOOL_USE_ID }).strict()
+  }),
   z.object({
     kind: z.literal("harness.tool"),
-    payload: z.object({ tool: BOUNDED_LINE, detail: BOUNDED_LINE.nullable().default(null) }).strict()
+    payload: z
+      .object({
+        tool: BOUNDED_LINE,
+        detail: BOUNDED_LINE.nullable().default(null),
+        parentToolUseId: PARENT_TOOL_USE_ID
+      })
+      .strict()
+  }),
+  z.object({
+    kind: z.literal("harness.usage"),
+    payload: HarnessUsageSchema
   }),
   z.object({
     kind: z.literal("direction.applied"),
@@ -1382,6 +1597,14 @@ export const SequencedRunnerEventSchema = z.object({
 });
 export type SequencedRunnerEvent = z.infer<typeof SequencedRunnerEventSchema>;
 
+/**
+ * What a runner may actually put on the wire, as opposed to what the control
+ * plane holds after parsing it. A field with a stated default may be omitted —
+ * which is how a runner built against an older contract stays readable rather
+ * than being rejected for a field that did not exist when it shipped.
+ */
+export type ReportableRunnerEvent = z.input<typeof SequencedRunnerEventSchema>;
+
 export const ReportRunnerEventsInputSchema = z.object({
   /** Null for a workspace-scoped report: a setup or run command is not part of
    *  any turn and can happen before a turn has ever existed. The runner's
@@ -1428,8 +1651,22 @@ export const MissionListResponseSchema = z.object({
  *  demand so the poll stays small. */
 export const MissionDetailResponseSchema = z.object({
   mission: MissionSchema,
-  /** Null only for missions created before repository connection existed. */
+  /** The lane the room reads by default: the mission's first workstream. Null
+   *  only for missions created before repository connection existed. */
   workstream: WorkstreamSchema.nullable(),
+  /** Every lane this mission holds, in creation order — one for almost every
+   *  mission, more only where somebody deliberately forked an approach
+   *  (D-074). The room shows lane chrome only when this has more than one. */
+  workstreams: z.array(WorkstreamSchema),
+  /** The comparison the Decision Room reads, and nothing that ranks them. */
+  approaches: z.array(ApproachSummarySchema),
+  /** Files more than one approach changed. Empty with one lane. */
+  contested: z.array(ContestedPathSchema),
+  /** Every decision this mission has recorded, oldest first; the last one that
+   *  is not superseded is the current one. */
+  decisions: z.array(DecisionSchema),
+  /** What would be published, if a decision has been recorded (D-075). */
+  preparedPullRequest: PreparedPullRequestSchema.nullable(),
   events: z.array(EventSchema),
   participants: z.array(ParticipantSchema),
   directions: z.array(DirectionSchema),
@@ -1451,6 +1688,9 @@ export const MissionDetailResponseSchema = z.object({
   overlays: z.array(MissionOverlaySchema)
 });
 export type MissionDetailResponse = z.infer<typeof MissionDetailResponseSchema>;
+
+export const CreatedApproachSchema = z.object({ workstream: WorkstreamSchema });
+export const RecordedDecisionSchema = z.object({ decisionId: z.string().startsWith("dec_") });
 
 export const AvailableRepositoriesResponseSchema = z.object({
   repositories: z.array(AvailableRepositorySchema)
@@ -1516,7 +1756,10 @@ export const IpcDirectInputSchema = z.object({
   missionId: z.string().startsWith("msn_"),
   body: z.string().trim().min(1).max(4000),
   model: ModelIdSchema.default(DEFAULT_MODEL),
-  effort: EffortSchema.default(DEFAULT_EFFORT)
+  effort: EffortSchema.default(DEFAULT_EFFORT),
+  /** Which lane to direct. Absent means the one the mission started with — so
+   *  every mission that never forked is unchanged (D-074). */
+  workstreamId: z.string().startsWith("wst_").optional()
 });
 export type IpcDirectInput = z.infer<typeof IpcDirectInputSchema>;
 
@@ -1584,6 +1827,8 @@ export interface NovusBridge {
       body: string;
       model: ModelId;
       effort: Effort;
+      /** The lane this is for; absent means the mission's first (D-074). */
+      workstreamId?: string;
     }): Promise<IpcResult<{ directionId: string; dispatched: boolean; deferred: string | null }>>;
     resolveDirection(input: {
       directionId: string;
@@ -1607,6 +1852,36 @@ export interface NovusBridge {
       approvalId: string;
       decision: ApprovalDecision;
       reason?: string;
+    }): Promise<IpcResult<null>>;
+  };
+  /**
+   * Competing approaches and the decision between them (D-074, D-075).
+   *
+   * Every verb here is a request the server authorizes: `approach.create` and
+   * `review.approve` are role-held capabilities checked against durable state,
+   * and nothing the renderer does decides who may fork or who may choose.
+   */
+  approaches: {
+    /** Forks a sibling lane from the named workstream's latest checkpoint. The
+     *  intent is required and refused empty by the server as well as here. */
+    create(input: {
+      missionId: string;
+      fromWorkstreamId: string;
+      intent: string;
+      name?: string;
+    }): Promise<IpcResult<{ workstream: Workstream }>>;
+    /** Records a decision. Writes a record; publishes nothing. */
+    decide(input: {
+      missionId: string;
+      workstreamId: string;
+      rationale: string;
+      acceptedRisks?: string;
+    }): Promise<IpcResult<{ decisionId: string }>>;
+    /** Asks for a revision instead, which withdraws the current decision. */
+    requestRevision(input: {
+      missionId: string;
+      workstreamId: string;
+      reason: string;
     }): Promise<IpcResult<null>>;
   };
   control: {

@@ -142,7 +142,14 @@ function fakeApi(): ControlPlaneClient {
     listMissions: async () => [
       { missionId: MISSION_ID, repository: { provider: "local", providerRepoId: "local-1" } }
     ],
-    getMission: async () => ({ workstream: { workstreamId: WORKSTREAM_ID, missionBranch: MISSION_BRANCH } }),
+    // Every lane of the mission, which is how the agent discovers what to
+    // enrol for: one here, and one more for every approach (D-074).
+    getMission: async () => ({
+      workstream: { workstreamId: WORKSTREAM_ID, missionBranch: MISSION_BRANCH, branchStatus: "created" },
+      workstreams: [
+        { workstreamId: WORKSTREAM_ID, missionBranch: MISSION_BRANCH, branchStatus: "created" }
+      ]
+    }),
     registerRunner: async () => ({
       runnerId: "rnr_wsagent",
       credential: CREDENTIAL,
@@ -270,7 +277,7 @@ describe("workspace commands through the agent", () => {
     const readiness = plane.payloadsOf("workspace.readiness");
     expect(readiness.map((payload) => payload.readiness)).toEqual(["configuring", "ready"]);
     expect(readiness[1]?.portRangeStart).toBeGreaterThan(3000);
-    expect(existsSync(join(userData, "worktrees", MISSION_ID, "setup-ran.txt"))).toBe(true);
+    expect(existsSync(join(userData, "worktrees", WORKSTREAM_ID, "setup-ran.txt"))).toBe(true);
     // The command ran in the worktree, never in the user's own checkout.
     expect(existsSync(join(repo, "setup-ran.txt"))).toBe(false);
 
@@ -295,7 +302,7 @@ describe("workspace commands through the agent", () => {
     expect(started?.name).toBe("dev");
     expect(String(started?.processId)).toMatch(/^prc_/);
     await waitFor("the run command to write", () =>
-      existsSync(join(userData, "worktrees", MISSION_ID, "dev-ran.txt"))
+      existsSync(join(userData, "worktrees", WORKSTREAM_ID, "dev-ran.txt"))
     );
     // The command is acknowledged while the process carries on: a run command
     // does not hold its acknowledgement for the life of the server.
@@ -319,7 +326,7 @@ describe("workspace commands through the agent", () => {
     expect(check?.name).toBe("test");
     expect(check?.outcome).toBe("passed");
     expect(check?.category).toBe("test");
-    const head = (await git(join(userData, "worktrees", MISSION_ID), ["rev-parse", "HEAD"])).trim();
+    const head = (await git(join(userData, "worktrees", WORKSTREAM_ID), ["rev-parse", "HEAD"])).trim();
     expect(check?.checkpointSha).toBe(head);
   }, 40_000);
 
@@ -410,7 +417,7 @@ describe("stopping a coding-agent execution", () => {
 
     // The strongest assertion here: the turn never ran at all. A stop that
     // merely killed the process afterwards would still have left this file.
-    expect(existsSync(join(userData, "worktrees", MISSION_ID, "NOVUS_FAKE_TURN.md"))).toBe(false);
+    expect(existsSync(join(userData, "worktrees", WORKSTREAM_ID, "NOVUS_FAKE_TURN.md"))).toBe(false);
     expect(plane.kinds()).not.toContain("harness.session");
   }, 40_000);
 
@@ -435,7 +442,7 @@ describe("stopping a coding-agent execution", () => {
 
     await waitFor("the execution to end", () => terminals().length > 0);
     expect(terminals()).toEqual(["execution.completed"]);
-    expect(existsSync(join(userData, "worktrees", MISSION_ID, "NOVUS_FAKE_TURN.md"))).toBe(true);
+    expect(existsSync(join(userData, "worktrees", WORKSTREAM_ID, "NOVUS_FAKE_TURN.md"))).toBe(true);
   }, 40_000);
 
   it("stops the harness and leaves the project's own processes alone", async () => {
@@ -512,7 +519,7 @@ describe("approving what the harness asks to do", () => {
         ["execution.completed", "execution.stopped", "execution.failed", "execution.interrupted"].includes(kind)
       );
 
-  const writtenFile = (): string => join(userData, "worktrees", MISSION_ID, "NOVUS_FAKE_TURN.md");
+  const writtenFile = (): string => join(userData, "worktrees", WORKSTREAM_ID, "NOVUS_FAKE_TURN.md");
 
   it("reports the question and does nothing further until somebody answers", async () => {
     start({ fakeApproval: true }).discoverNow();

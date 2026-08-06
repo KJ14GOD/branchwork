@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunnerCommand, SequencedRunnerEvent } from "@novus/contracts";
@@ -48,6 +48,12 @@ class FakeControlPlane {
   readonly reported: { executionId: string; batch: SequencedRunnerEvent[] }[] = [];
   readonly commands: QueuedCommand[] = [];
   readonly registrations: string[] = [];
+  /** The mission's lanes. A second one is what a competing approach is. */
+  lanes: { workstreamId: string; missionBranch: string; branchStatus: string }[] = [
+    { workstreamId: WORKSTREAM_ID, missionBranch: MISSION_BRANCH, branchStatus: "created" }
+  ];
+  /** Which lane's credential is which, so a runner cannot poll another's. */
+  readonly credentials = new Map<string, string>([[CREDENTIAL, WORKSTREAM_ID]]);
   turnsStarted = 0;
 
   enqueue(command: Omit<QueuedCommand, "state">): void {
@@ -68,18 +74,25 @@ class FakeControlPlane {
 
   readonly fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
-    const authorized = String((init?.headers as Record<string, string> | undefined)?.authorization);
-    if (authorized !== `Runner ${CREDENTIAL}`) return json({ error: "no" }, 401);
+    const header = String((init?.headers as Record<string, string> | undefined)?.authorization ?? "");
+    const lane = this.credentials.get(header.replace("Runner ", ""));
+    if (!lane) return json({ error: "no" }, 401);
 
     if (url.pathname === "/runner/commands") {
-      const offered = this.commands.filter((command) => command.state !== "completed" && command.state !== "failed");
+      // A lane is offered its own commands and nobody else's, exactly as the
+      // real control plane scopes them to the credential (D-035).
+      const offered = this.commands.filter(
+        (command) =>
+          command.workstreamId === lane && command.state !== "completed" && command.state !== "failed"
+      );
       for (const command of offered) if (command.state === "pending") command.state = "delivered";
+      const branch = this.lanes.find((entry) => entry.workstreamId === lane)?.missionBranch ?? MISSION_BRANCH;
       return json({
         commands: offered.map(({ state: _state, ...command }) => command),
         workstream: {
-          workstreamId: WORKSTREAM_ID,
+          workstreamId: lane,
           missionId: MISSION_ID,
-          missionBranch: MISSION_BRANCH,
+          missionBranch: branch,
           baseSha: BASE_SHA,
           provider: "local",
           providerRepoId: "local-1",
@@ -123,12 +136,21 @@ function fakeApi(plane: FakeControlPlane): ControlPlaneClient {
         repository: { provider: "local", providerRepoId: "local-1" }
       }
     ],
-    getMission: async () => ({ workstream: { workstreamId: WORKSTREAM_ID, missionBranch: MISSION_BRANCH } }),
+    // Every lane of the mission, which is how the agent discovers what to
+    // enrol for: one here, and one more for every approach (D-074).
+    getMission: async () => ({
+      workstream: { workstreamId: WORKSTREAM_ID, missionBranch: MISSION_BRANCH, branchStatus: "created" },
+      workstreams: plane.lanes
+    }),
     registerRunner: async (workstreamId: string) => {
       plane.registrations.push(workstreamId);
+      // One credential per lane, which is what makes two approaches on one
+      // machine two runners rather than one with two jobs.
+      const credential = workstreamId === WORKSTREAM_ID ? CREDENTIAL : `${CREDENTIAL}-${workstreamId}`;
+      plane.credentials.set(credential, workstreamId);
       return {
-        runnerId: "rnr_agenttest",
-        credential: CREDENTIAL,
+        runnerId: `rnr_${workstreamId}`,
+        credential,
         expiresAt: new Date(Date.now() + 86_400_000).toISOString()
       };
     }
@@ -258,6 +280,65 @@ describe("the agent driving one command", () => {
 });
 
 describe("replay after a relaunch", () => {
+  /**
+   * A machine that died mid-turn, reconstructed the only way a test can: the
+   * memory file a killed launch would have left behind. Killing the real
+   * process is what happens in production; what matters here is the decision
+   * the next launch makes about what it finds.
+   */
+  function abandonedCommand(commandId: string, executionId: string | null): void {
+    writeFileSync(
+      join(userData, "runner-commands.json"),
+      JSON.stringify({ version: 2, commands: [{ id: commandId, state: "started", executionId }] })
+    );
+  }
+
+  it("does not run a turn a killed launch had already started", async () => {
+    plane.enqueue(command());
+    // The control plane saw the acknowledgement and is offering it again,
+    // which is exactly what a runner that crashed mid-turn comes back to.
+    const offered = plane.commands.find((candidate) => candidate.commandId === "cmd_first00000000000000");
+    if (offered) offered.state = "acknowledged";
+    abandonedCommand("cmd_first00000000000000", EXECUTION_ID);
+
+    start().discoverNow();
+
+    await waitFor("the command to settle", () => plane.stateOf("cmd_first00000000000000") === "failed");
+    // The whole point: no second harness process, no second checkpoint, no
+    // second commit against a worktree the first attempt had already changed.
+    expect(plane.turnsStarted).toBe(0);
+    expect(plane.kinds()).not.toContain("workspace.checkpoint");
+    // And the room is told the truth rather than left saying Running until the
+    // liveness sweep gets to it ninety seconds later.
+    expect(plane.kinds()).toContain("execution.interrupted");
+    const interrupted = plane
+      .events()
+      .find((item) => item.event.kind === "execution.interrupted")?.event as
+      | { payload: { reason: string } }
+      | undefined;
+    expect(interrupted?.payload.reason).toMatch(/restarted/i);
+  }, 30_000);
+
+  it("keeps its memory of an abandoned command across a second relaunch", async () => {
+    abandonedCommand("cmd_first00000000000000", EXECUTION_ID);
+    plane.enqueue(command());
+    const offered = plane.commands.find((candidate) => candidate.commandId === "cmd_first00000000000000");
+    if (offered) offered.state = "acknowledged";
+
+    start().discoverNow();
+    await waitFor("the first settlement", () => plane.stateOf("cmd_first00000000000000") === "failed");
+    await agent?.shutdown("relaunching");
+    agent = null;
+
+    // The control plane forgets again and re-offers the same command. A
+    // machine that answered "I began that and lost it" once must not later
+    // answer "never seen it" and run the turn after all.
+    if (offered) offered.state = "acknowledged";
+    start().discoverNow();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(plane.turnsStarted).toBe(0);
+  }, 30_000);
+
   it("settles a command it already ran instead of running it twice", async () => {
     plane.enqueue(command());
     start().discoverNow();
@@ -277,4 +358,69 @@ describe("replay after a relaunch", () => {
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(plane.turnsStarted).toBe(1);
   }, 30_000);
+});
+
+/**
+ * A mission with a competing approach, on one machine (D-074).
+ *
+ * The claim being tested is isolation, and it is structural: two lanes get two
+ * enrolments, two credentials, and two worktrees. There is no code path where
+ * one approach's turn can see the other's files, because there is no directory
+ * they share.
+ */
+describe("two approaches on one machine", () => {
+  const APPROACH_ID = "wst_agentapproach";
+  const APPROACH_BRANCH = "novus/m-ag3nt001-a2";
+
+  it("enrols for both lanes and gives each its own worktree", async () => {
+    await git(repo, ["branch", APPROACH_BRANCH]);
+    plane.lanes = [
+      { workstreamId: WORKSTREAM_ID, missionBranch: MISSION_BRANCH, branchStatus: "created" },
+      { workstreamId: APPROACH_ID, missionBranch: APPROACH_BRANCH, branchStatus: "created" }
+    ];
+    // One command per lane, each naming its own execution.
+    plane.enqueue(command());
+    plane.enqueue(
+      command({
+        commandId: "cmd_approach0000000000",
+        workstreamId: APPROACH_ID,
+        executionId: "exe_agentapproach",
+        payload: {
+          directionId: "dir_approach00000000",
+          body: "Try it the other way",
+          model: "claude-fable-5",
+          effort: "high",
+          resumeSessionId: null
+        }
+      })
+    );
+
+    start().discoverNow();
+    await waitFor(
+      "both turns to finish",
+      () =>
+        plane.reported.filter((delivery) =>
+          delivery.batch.some((item) => item.event.kind === "execution.completed")
+        ).length === 2,
+      30_000
+    );
+
+    // Two enrolments, one per lane — not one runner serving both.
+    expect(new Set(plane.registrations)).toEqual(new Set([WORKSTREAM_ID, APPROACH_ID]));
+
+    // Two worktrees, keyed by lane. The mission-keyed directory the old build
+    // used does not exist at all, which is the point: there is nothing shared.
+    const worktrees = join(userData, "worktrees");
+    expect(existsSync(join(worktrees, WORKSTREAM_ID))).toBe(true);
+    expect(existsSync(join(worktrees, APPROACH_ID))).toBe(true);
+    expect(existsSync(join(worktrees, MISSION_ID))).toBe(false);
+
+    // Each turn's file landed in its own lane, on its own branch.
+    const baseline = (await git(join(worktrees, WORKSTREAM_ID), ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+    const approach = (await git(join(worktrees, APPROACH_ID), ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+    expect(baseline).toBe(MISSION_BRANCH);
+    expect(approach).toBe(APPROACH_BRANCH);
+    expect(existsSync(join(worktrees, WORKSTREAM_ID, "NOVUS_FAKE_TURN.md"))).toBe(true);
+    expect(existsSync(join(worktrees, APPROACH_ID, "NOVUS_FAKE_TURN.md"))).toBe(true);
+  }, 60_000);
 });

@@ -80,7 +80,8 @@ Conceptual definitions. Each term has exactly one meaning, defined here; data re
 - **Invitation** (V0) — a mission-scoped, expiring, single-use grant that makes a User a Participant with a stated Role.
 - **Role** (V0) — a named bundle of capabilities within one authority scope. Organization roles: org owner, org member. Mission roles: Mission Admin, Operator, Contributor, Viewer (see [Roles and capabilities](#roles-and-capabilities)). Fixed archetypes in V0; no custom roles. "Controller" is not a role — it names whoever currently holds a workstream's ControlLease.
 - **Capability** (V0) — a single verb a participant may perform, enforced by the server on every mutating command. The interface renders from capabilities; it never grants them.
-- **Workstream** (V0) — a named lane of responsibility inside a mission. A workstream owns its dedicated mission branch, recorded base commit, control lease, direction queue, and workspace. Every mission has at least one; most have exactly one. A workstream may carry the **approach flag**, marking it as a deliberately created competing implementation for comparison. *Approach is a workstream attribute, not a separate object.* A new execution in the same workstream is a continuation — a retry, follow-up, or harness switch — never an approach. Approaches exist only when a participant explicitly creates one.
+- **Workstream** (V0) — a named lane of responsibility inside a mission. A workstream owns its dedicated mission branch, recorded base commit, control lease, direction queue, and workspace. Every mission has at least one; most have exactly one. A workstream may carry the **approach flag**, marking it as a deliberately created competing implementation for comparison. *Approach is a workstream attribute, not a separate object.* A new execution in the same workstream is a continuation — a retry, follow-up, or harness switch — never an approach. Approaches exist only when a participant explicitly creates one, and creating one requires a stated **intent**: one sentence saying how this attempt is meant to differ from the one it forks. An approach records the **origin revision** it forked from — the exact checkpoint of the workstream it was created beside — so two approaches are comparable because they started from the same place.
+- **Decision** (V0) — a participant's recorded choice of one workstream's result, naming the workstream, the exact checkpoint chosen, a **rationale in their own words**, the risks they accepted, and the verification that was still outstanding when they chose. A decision is a judgment, never a computation: Novus scores nothing, ranks nothing, and declares no winner. **Choosing is not applying.** A decision says what a team decided; publishing that result is a separate act that can be prepared, refused, or fail, and the mission says which of the two has happened. A later decision supersedes an earlier one and never erases it.
 - **Execution** (V0) — one harness working a workstream, from start to a terminal state. At most one active execution per workstream. An execution owns its turns, events, and changes.
 - **Run / turn** — a lower-level unit inside an execution (a harness turn or tool run), surfaced in the activity feed for legibility. Not addressable by users in V0.
 - **Harness** (V0) — a supported coding agent product (Claude Code, Codex in V0) operated through the adapter contract in [ARCHITECTURE.md](ARCHITECTURE.md#harness-protocol).
@@ -124,6 +125,7 @@ Capabilities are the enforcement unit, and they live in two scopes that never mi
 | `direction.submit` | ✓ | ✓ | ✓ | — | — |
 | `direction.apply` (apply, supersede, or reject queued direction) | — | — | — | — | ✓ |
 | `execution.start` | ✓ | ✓ | — | — | ✓ |
+| `approach.create` (start a competing approach beside this one) | ✓ | ✓ | — | — | — |
 | `execution.pause`, `execution.resume` | — | — | — | — | ✓ |
 | `workspace.sync` (apply a visible remote update at a safe boundary) | — | — | — | — | ✓ |
 | `execution.stop` | ✓ | ✓ | ✓ | — | ✓ |
@@ -134,11 +136,12 @@ Capabilities are the enforcement unit, and they live in two scopes that never mi
 | `control.accept` | ✓ | ✓ | ✓ | — | — |
 | `control.revoke` | ✓ | — | — | — | — |
 | `review.comment` | ✓ | ✓ | ✓ | — | — |
-| `review.approve` (accept result, request revision) | ✓ | ✓ | — | — | — |
+| `review.approve` (record a decision, request revision) | ✓ | ✓ | — | — | — |
 | `pr.manage` | ✓ | ✓ | — | — | — |
 
 Deliberate choices:
 - **Stopping is broad, operating is narrow.** Any non-viewer participant may stop a running execution (`execution.stop`); a wrong or dangerous direction must not be able to run until a handoff completes. Only the lease holder steers, pauses, resumes, and answers approvals.
+- **Forking the work is a mission act, not an operating one.** `approach.create` makes a *sibling* workstream with its own branch, workspace, and lease — it does not steer the workstream it forks — so it is held by role and never granted by the baton. `review.approve` covers both halves of resolving the work: recording a decision, and asking for a revision instead.
 - **The lease starts the work it authorizes.** An applied direction with no active execution has to be able to run, so the lease grants `execution.start` for its workstream whatever the holder's role (D-034). Starting an execution as a role capability remains an Operator-and-above act for anyone who is not the controller.
 - **Controlling a mission is not owning the host machine** (D-042). `workspace.command` invokes commands *the project itself declared* and nothing else, pinned to the version the participant authorized (D-043). An interactive shell on a workspace that lives on someone's laptop is never granted by the lease, by a role, or by anything the interface can offer; it belongs to the person whose machine it is. So does supplying a secret value: it is an act at the machine that has the value, with no route through the control plane (D-044).
 - **Non-controllers are not spectators.** Contributor verbs — submit direction to the queue, request control, comment on evidence, stop the work — are real, server-enforced operations, not chat.
@@ -232,6 +235,7 @@ The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-prese
 | Work completed but unverified | Execution finished; no or incomplete verification evidence. An honest, uncomfortable state — never dressed up as done. |
 | Ready for review | Changes and verification evidence complete; awaiting review. |
 | Revision requested | A reviewer requested changes; the request is the next direction's context. |
+| Decision recorded | A participant chose one workstream's result, with a rationale, the risks they accepted, and the verification still outstanding. **Nothing has been published**: the choice is made and the applying of it has not happened, which is a different fact and is said as one. Leaves when a pull request is opened, when a revision is requested, or when a later decision supersedes it. |
 | Pull request open | PR created/adopted; tracking checks, reviews, mergeability. |
 | Completed | Result accepted, PR resolved, receipt snapshotted. Terminal. |
 | Cancelled | Deliberately ended without acceptance; receipt records what happened and what was abandoned. Terminal. |
@@ -258,7 +262,7 @@ The canonical 20-step narrative lives in [README.md](README.md#the-golden-v0-wor
 4. **Handoff** (steps 10–13): Maya opens a ControlRequest; Kartik responds with a HandoffOffer; Maya accepts; the transfer completes at the next safe boundary. The room shows every step of that handshake.
 5. **Operate** (step 14): the controller steers, pauses, resumes, stops, or deliberately synchronizes a visible repository update at a safe boundary. Every action is an attributed event.
 6. **Evidence** (steps 15–16): the harness changes the repository and runs verification; both participants inspect the same diff and the same check ledger.
-7. **Resolve** (steps 17–18): review yields revision requests (back to phase 5) or acceptance; Novus creates or adopts the pull request and tracks it to resolution. Merging happens on GitHub, by humans, in V0 — Novus tracks the merge and never performs it.
+7. **Resolve** (steps 17–18): review yields a revision request (back to phase 5) or a **decision** — one workstream's result chosen, with a rationale, accepted risks, and the checks still outstanding, all recorded. Where competing approaches exist the team compares them on their own evidence and decides between them; Novus never ranks them. Novus then prepares the pull request and, when it is opened, tracks it to resolution. Merging happens on GitHub, by humans, in V0 — Novus tracks the merge and never performs it.
 8. **Record** (steps 19–20): the mission completes; the receipt is snapshotted; reopening the mission reconstructs the entire collaboration from the event history.
 
 ## Scope and non-goals
@@ -269,7 +273,7 @@ The canonical 20-step narrative lives in [README.md](README.md#the-golden-v0-wor
 - Two harnesses: Claude Code and Codex. The adapter contract is written for N harnesses; V0 ships two.
 - Execution ships **local-first** (D-032): the desktop app runs harnesses against local repositories as the first real execution surface. Cloud execution on the Novus-managed provider remains the architecture's spine and the multiplayer default; the runner protocol keeps both honest.
 - One dedicated GitHub branch per workstream, pinned to an exact base commit; explicit commit/checkpoint/push and sync operations; no automatic bidirectional filesystem mirroring.
-- One workstream per mission created by default; additional workstreams and the approach flag exist in the data model, and creating them is possible but plain — the UI never pushes parallelism.
+- One workstream per mission created by default. A second is created only by an explicit `approach.create` with a stated intent, gets its own branch, workspace, and lease, and forks from a recorded checkpoint of the workstream it is created beside. Comparison and the decision that follows are V0 surfaces — deliberately reached, never pushed: a room with one workstream shows no comparison chrome at all, and no ranking, score, or recommendation exists anywhere in the product.
 - Three surfaces: Missions, Mission Room, Review ([DESIGN.md](DESIGN.md#information-architecture)).
 - One client: a downloadable desktop application — an Electron shell over a single web-architecture client — like the tools teams already run agents in. Browser access is a later delivery of the same client, not a second codebase (D-018). "Two real clients" in the Golden V0 workflow means two people's desktop apps.
 
@@ -279,7 +283,7 @@ A full IDE; a generic Kanban board; a model marketplace; automatic approach rank
 
 ### Extension points (schema or protocol exists; no V0 UI)
 
-Additional harnesses (Droid, OpenCode); local, enterprise, and third-party execution providers; a local mirror that explicitly checks out a cloud workstream's branch; cross-org mission guests; org-definable policy (autonomy ceilings, retention); API-driven mission creation and automation; approach comparison workflows; org-level audit export.
+Additional harnesses (Droid, OpenCode); local, enterprise, and third-party execution providers; a local mirror that explicitly checks out a cloud workstream's branch; cross-org mission guests; org-definable policy (autonomy ceilings, retention); API-driven mission creation and automation; org-level audit export.
 
 ## Roadmap
 

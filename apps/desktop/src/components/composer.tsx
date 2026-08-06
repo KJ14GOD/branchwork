@@ -45,6 +45,8 @@ export function Composer({
   denialReason,
   isController,
   contextNote,
+  placeholderOverride,
+  onEmptySubmit,
   onSubmit
 }: {
   /** Null until the server has said what this viewer may do. The composer
@@ -56,6 +58,12 @@ export function Composer({
   denialReason?: string;
   isController: boolean;
   contextNote?: string | null;
+  /** Overrides the state-derived placeholder — the ask-dialog is a question,
+   *  not a room, and its placeholder is the question (D-077). */
+  placeholderOverride?: string;
+  /** Enter on an empty box. The room does nothing; the ask-dialog closes,
+   *  because an empty ask is a dismissal (D-077). */
+  onEmptySubmit?: () => void;
   onSubmit: (input: { body: string; model: ModelId; effort: Effort }) => Promise<SubmitOutcome>;
 }) {
   const [textValue, setTextValue] = useState("");
@@ -104,7 +112,11 @@ export function Composer({
 
   const send = async () => {
     const body = textValue.trim();
-    if (!body || sending || !enabled) return;
+    if (!body) {
+      onEmptySubmit?.();
+      return;
+    }
+    if (sending || !enabled) return;
     setSending(true);
     setError(null);
     setQueuedNote(null);
@@ -123,7 +135,7 @@ export function Composer({
     );
   };
 
-  const placeholder = !known
+  const placeholder = placeholderOverride ?? (!known
     ? "Loading this mission…"
     : !mayDirect
       // A refusal the person can act on belongs where they are looking, not
@@ -131,7 +143,7 @@ export function Composer({
       ? denialReason ?? "You can follow this mission — sending direction needs Contributor access"
       : isController
         ? "Direct Claude Code…"
-        : "Add direction to the queue…";
+        : "Add direction to the queue…");
 
   return (
     <div className="composer" data-testid="composer">

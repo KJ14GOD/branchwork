@@ -43,6 +43,11 @@ const novus: NovusBridge = {
     restore: (missionId) => ipcRenderer.invoke("novus:missions:restore", missionId),
     respondApproval: (input) => ipcRenderer.invoke("novus:missions:respond-approval", input)
   },
+  approaches: {
+    create: (input) => ipcRenderer.invoke("novus:approaches:create", input),
+    decide: (input) => ipcRenderer.invoke("novus:approaches:decide", input),
+    requestRevision: (input) => ipcRenderer.invoke("novus:approaches:request-revision", input)
+  },
   control: {
     request: (missionId) => ipcRenderer.invoke("novus:control:request", missionId),
     withdrawRequest: (missionId) => ipcRenderer.invoke("novus:control:withdraw-request", missionId),

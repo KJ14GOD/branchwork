@@ -6,7 +6,7 @@ import type {
   MissionEvent,
   VerificationCheck
 } from "@novus/contracts";
-import { clockTime, plural, shortSha } from "../format";
+import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../format";
 import { HarnessMark, HumanMark } from "./identity";
 
 /**
@@ -67,6 +67,19 @@ type Segment =
 interface ToolStep {
   label: string;
   detail: string | null;
+  /** Produced by one of the harness's **own** subagents rather than by the
+   *  harness itself. It is indented under the same disclosure — the harness
+   *  owns its workers, so their activity belongs to this turn and gets no
+   *  identity of its own (PRODUCT.md#the-harness-boundary). */
+  nested?: boolean;
+}
+
+/** What the harness said this turn cost, summed over the turns of one trace. */
+interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  durationMs: number | null;
 }
 
 interface TraceBlock {
@@ -79,6 +92,8 @@ interface TraceBlock {
   at: string | null;
   /** Harness machinery for this turn: subordinate, never in the header. */
   machinery: string | null;
+  /** What the harness reported this turn cost, when it reported anything. */
+  usage: UsageTotals | null;
   segments: Segment[];
   /** Who rejected, superseded, or cancelled it, when someone did. */
   resolvedBy: string | null;
@@ -249,6 +264,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       body: direction?.body ?? null,
       at: direction?.submittedAt ?? event?.occurredAt ?? null,
       machinery: null,
+      usage: null,
       segments: [],
       resolvedBy: null,
       toolSteps: []
@@ -316,15 +332,40 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
     switch (event.kind) {
       case "harness.text": {
         const body = text(event.payload.text);
-        if (body) push(block, { kind: "harness", key: event.eventId, texts: [body] });
+        if (!body) break;
+        const worker = text(event.payload.parentToolUseId);
+        if (worker) {
+          // One of the harness's own subagents. It is activity, not the answer
+          // the room is waiting for, so it never takes the speech position —
+          // and the reply that leads stays the harness's own (D-065).
+          block.toolSteps.push({ label: "said", detail: body, nested: true });
+          break;
+        }
+        push(block, { kind: "harness", key: event.eventId, texts: [body] });
         break;
       }
       case "harness.tool":
         block.toolSteps.push({
           label: text(event.payload.tool) ?? "tool",
-          detail: text(event.payload.detail)
+          detail: text(event.payload.detail),
+          nested: text(event.payload.parentToolUseId) !== null
         });
         break;
+      case "harness.usage": {
+        const totals = block.usage ?? { inputTokens: 0, outputTokens: 0, costUsd: null, durationMs: null };
+        const add = (current: number | null, value: unknown): number | null => {
+          const parsed = typeof value === "number" && Number.isFinite(value) ? value : null;
+          if (parsed === null) return current;
+          return (current ?? 0) + parsed;
+        };
+        block.usage = {
+          inputTokens: add(totals.inputTokens, event.payload.inputTokens) ?? 0,
+          outputTokens: add(totals.outputTokens, event.payload.outputTokens) ?? 0,
+          costUsd: add(totals.costUsd, event.payload.costUsd),
+          durationMs: add(totals.durationMs, event.payload.durationMs)
+        };
+        break;
+      }
       case "execution.started":
       case "execution.running": {
         const model = text(event.payload.model);
@@ -458,7 +499,14 @@ function TechnicalActivity({ steps }: { steps: ToolStep[] }) {
       </summary>
       <ul className="tool-list">
         {steps.map((step, index) => (
-          <li key={index} data-testid="tool-line">
+          <li
+            key={index}
+            data-testid="tool-line"
+            className={step.nested ? "tool-line-nested" : undefined}
+            // Indent is the grouping, as it is everywhere else in the trace: a
+            // worker's step sits under the turn that spawned it.
+            data-worker={step.nested ? "true" : undefined}
+          >
             <span className="mono tool-name">{step.label}</span>
             {step.detail && <span className="tool-detail">{step.detail}</span>}
           </li>
@@ -588,6 +636,25 @@ function SegmentView({
   }
 }
 
+/**
+ * What the turn cost, stated beside the model that ran it — apparatus, at the
+ * meta step, never a tile and never a chart (DESIGN.md prohibited pattern 16).
+ *
+ * A figure the harness did not report is left out rather than shown as zero:
+ * every number here is the harness's own claim, and inventing a zero would be
+ * Novus asserting something nobody told it.
+ */
+function usageLine(usage: UsageTotals | null): string | null {
+  if (!usage) return null;
+  const parts: string[] = [];
+  if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+    parts.push(`${compactCount(usage.inputTokens)} in`, `${compactCount(usage.outputTokens)} out`);
+  }
+  if (usage.costUsd !== null) parts.push(usd(usage.costUsd));
+  if (usage.durationMs !== null) parts.push(elapsed(usage.durationMs));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 /** Line treatment carries the direction's lifecycle: live threads keep the
  *  accent line, settled or waiting ones fall back to the neutral edge. */
 function traceStateClass(direction: Direction | null): string {
@@ -697,7 +764,11 @@ export function TraceView({
         </div>
       )}
 
-      {block.machinery && <div className="trace-machinery">{block.machinery}</div>}
+      {(block.machinery || block.usage) && (
+        <div className="trace-machinery" data-testid="trace-machinery">
+          {[block.machinery, usageLine(block.usage)].filter(Boolean).join(" · ")}
+        </div>
+      )}
 
       {speech.map((segment) => (
         <SegmentView

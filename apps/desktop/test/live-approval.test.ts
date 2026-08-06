@@ -31,6 +31,8 @@ import { startTurn, type RunningTurn, type TurnResult } from "../electron/execut
 const LIVE = process.env.NOVUS_LIVE_CLAUDE === "1";
 const MISSION_BRANCH = "novus/m-live0001";
 const MISSION_ID = "msn_liveapproval";
+/** Worktrees are keyed by the lane, not the mission (D-074). */
+const WORKSTREAM_ID = "wst_liveapproval";
 /** The cheapest model on the allowlist; this test is about permission, not prose. */
 const MODEL = "claude-haiku-4-5-20251001";
 
@@ -55,6 +57,7 @@ function begin(direction: string, resumeSessionId: string | null = null): Live {
   const turn = startTurn({
     executionId: "exe_live",
     missionId: MISSION_ID,
+    workstreamId: WORKSTREAM_ID,
     repositoryPath: repo,
     worktreeRoot,
     missionBranch: MISSION_BRANCH,
@@ -89,7 +92,7 @@ function payloadOf<K extends RunnerEvent["kind"]>(
   return found ? (found.payload as Extract<RunnerEvent, { kind: K }>["payload"]) : undefined;
 }
 
-const worktree = () => join(worktreeRoot, MISSION_ID);
+const worktree = () => join(worktreeRoot, WORKSTREAM_ID);
 
 beforeAll(async () => {
   if (!LIVE) return;

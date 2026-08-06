@@ -111,7 +111,7 @@ async function commitSettings(contents: string): Promise<void> {
   // Configuration travels with the branch, so it is committed on the branch —
   // in the worktree once one exists, because that is where the branch is
   // checked out.
-  const worktree = worktreeFor(userData, MISSION_ID);
+  const worktree = worktreeFor(userData, WORKSTREAM_ID);
   const where = existsSync(join(worktree, ".git")) ? worktree : repo;
   mkdirSync(join(where, ".novus"), { recursive: true });
   writeFileSync(join(where, ".novus", "settings.toml"), contents);
@@ -144,7 +144,7 @@ afterEach(async () => {
 describe("the worktree", () => {
   it("creates one from the mission branch and never touches the checkout", async () => {
     const proposal = await inspectWorkspace(target, host());
-    const worktree = worktreeFor(userData, MISSION_ID);
+    const worktree = worktreeFor(userData, WORKSTREAM_ID);
     expect(existsSync(join(worktree, ".git"))).toBe(true);
     expect(await git(worktree, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(MISSION_BRANCH);
     // A worktree holds tracked files and nothing else, which is exactly why
@@ -201,7 +201,7 @@ describe("a proposal is not a command", () => {
     await git(repo, ["branch", "-f", MISSION_BRANCH, "HEAD"]);
 
     const proposal = await inspectWorkspace(target, host());
-    const worktree = worktreeFor(userData, MISSION_ID);
+    const worktree = worktreeFor(userData, WORKSTREAM_ID);
     expect(proposal.run.length).toBeGreaterThan(0);
     expect(existsSync(join(worktree, "inspected.txt"))).toBe(false);
     expect(events).toEqual([]);
@@ -257,7 +257,7 @@ describe("commands the project declared", () => {
         `category = "test"`
       ].join("\n")
     );
-    const worktree = worktreeFor(userData, MISSION_ID);
+    const worktree = worktreeFor(userData, WORKSTREAM_ID);
     const running = runtime();
 
     await running.runSetup(context, await pin(running, "setup"));
@@ -292,7 +292,7 @@ describe("commands the project declared", () => {
     );
     const running = runtime();
     await running.runSetup(context, await pin(running, "setup"));
-    const seen = readFileSync(join(worktreeFor(userData, MISSION_ID), "novus-env.txt"), "utf8");
+    const seen = readFileSync(join(worktreeFor(userData, WORKSTREAM_ID), "novus-env.txt"), "utf8");
     expect(seen).toContain("NOVUS_WORKSPACE_ID=wsp_workspace");
     expect(seen).toContain(`NOVUS_MISSION_BRANCH=${MISSION_BRANCH}`);
     expect(seen).toMatch(/NOVUS_PORT=\d+/);
@@ -328,7 +328,7 @@ describe("commands the project declared", () => {
 describe("supplying local files", () => {
   it("copies the ignored file the project needs, and only that", async () => {
     const results = await prepareLocalFiles(target, [".env", "README.md"], host());
-    const worktree = worktreeFor(userData, MISSION_ID);
+    const worktree = worktreeFor(userData, WORKSTREAM_ID);
     expect(results.find((result) => result.path === ".env")?.copied).toBe(true);
     expect(results.find((result) => result.path === "README.md")?.copied).toBe(false);
     expect(readFileSync(join(worktree, ".env"), "utf8")).toContain("DATABASE_URL=");

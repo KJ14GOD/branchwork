@@ -5,6 +5,7 @@ import {
   AvailableRepositoriesResponseSchema,
   BaseRevisionSchema,
   CreateMissionResponseSchema,
+  CreatedApproachSchema,
   CreatedInvitationSchema,
   FileDiffResponseSchema,
   InvitationListResponseSchema,
@@ -12,6 +13,7 @@ import {
   MissionDetailResponseSchema,
   MissionListResponseSchema,
   OkResponseSchema,
+  RecordedDecisionSchema,
   RedeemInvitationResponseSchema,
   RegisterRunnerResponseSchema,
   RetryBranchResponseSchema,
@@ -51,13 +53,17 @@ export class ControlPlaneClient {
     private readonly getToken: () => string | null
   ) {}
 
-  private async request<T>(
+  // Generic over the *schema*, not over its output type. `z.ZodType<T>` fixes
+  // input and output to the same shape, so any contract carrying a `.default()`
+  // — where the parsed value is narrower than the accepted one — resolved to two
+  // incompatible copies of the same named type at the call site.
+  private async request<S extends z.ZodTypeAny>(
     method: string,
     path: string,
-    schema: z.ZodType<T>,
+    schema: S,
     body?: unknown,
     opts: { auth?: boolean } = { auth: true }
-  ): Promise<T> {
+  ): Promise<z.infer<S>> {
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
@@ -184,7 +190,7 @@ export class ControlPlaneClient {
 
   submitDirection(
     missionId: string,
-    input: { body: string; model: ModelId; effort: Effort }
+    input: { body: string; model: ModelId; effort: Effort; workstreamId?: string }
   ): Promise<z.infer<typeof SubmitDirectionResponseSchema>> {
     return this.request(
       "POST",
@@ -238,6 +244,46 @@ export class ControlPlaneClient {
     await this.request(
       "POST",
       `/approvals/${encodeURIComponent(approvalId)}/respond`,
+      OkResponseSchema,
+      input
+    );
+  }
+
+  // --- Approaches and the decision between them (D-074, D-075) --------------
+
+  async createApproach(
+    missionId: string,
+    input: { fromWorkstreamId: string; intent: string; name?: string }
+  ): Promise<Workstream> {
+    const body = await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/approaches`,
+      CreatedApproachSchema,
+      input
+    );
+    return body.workstream;
+  }
+
+  async recordDecision(
+    missionId: string,
+    input: { workstreamId: string; rationale: string; acceptedRisks?: string }
+  ): Promise<string> {
+    const body = await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/decision`,
+      RecordedDecisionSchema,
+      input
+    );
+    return body.decisionId;
+  }
+
+  async requestRevision(
+    missionId: string,
+    input: { workstreamId: string; reason: string }
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/revision`,
       OkResponseSchema,
       input
     );

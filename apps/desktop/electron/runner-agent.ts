@@ -118,6 +118,10 @@ const POLL_EVERY_MS = 2_000;
 const SHUTDOWN_GRACE_MS = 8_000;
 /** Bound on the remembered command ids: enough to cover a relaunch, not a log. */
 const COMMAND_MEMORY = 500;
+
+/** What a command a *previous* launch began says happened to it. */
+const RESTARTED_MID_COMMAND =
+  "This machine restarted while the command was still running, so it was not run again.";
 /** How far apart retries of a repository this machine cannot fetch may grow. */
 const CHECKOUT_RETRY_CAP_MS = 5 * 60_000;
 
@@ -134,6 +138,44 @@ const EnrolmentFileSchema = z.record(
     expiresAt: z.string()
   })
 );
+
+/**
+ * What this machine remembers about a command, and the whole reason it is two
+ * words rather than a set of ids.
+ *
+ * `settled` is "this ran to an end here": offered again after a relaunch, it is
+ * completed rather than repeated, which is what the memory has always done.
+ * `started` is the case that was missing — written *before* the work begins, so
+ * a machine that dies mid-turn leaves a record that it began. Without it the
+ * command came back on the next launch indistinguishable from a fresh one and
+ * the turn ran a second time, from scratch, against a worktree the first
+ * attempt had already changed.
+ */
+type CommandMemoryState = "started" | "settled";
+
+interface RememberedCommand {
+  id: string;
+  state: CommandMemoryState;
+  /** The execution the command belonged to, so an interrupted one can be
+   *  reported by name after the process that was running it is gone. */
+  executionId?: string | null;
+}
+
+/** The file, in either shape. The array is what earlier launches wrote — every
+ *  id in it had finished, so it reads forward as `settled`. */
+const CommandMemoryFileSchema = z.union([
+  z.array(z.string()),
+  z.object({
+    version: z.literal(2),
+    commands: z.array(
+      z.object({
+        id: z.string(),
+        state: z.enum(["started", "settled"]),
+        executionId: z.string().nullable().optional()
+      })
+    )
+  })
+]);
 
 interface ActiveTurn {
   executionId: string;
@@ -198,6 +240,10 @@ const ApprovalPayloadSchema = z.object({
  *  turn path and the never-started path must give the same account. */
 const STOPPED_BY_PARTICIPANT = "Stopped by a participant.";
 
+/** The commands that drive a harness turn, and are therefore the ones whose
+ *  abandonment leaves an execution the room is still describing. */
+const HARNESS_COMMANDS: RunnerCommand["kind"][] = ["start_execution", "apply_direction"];
+
 export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   const host = deps.host ?? electronHost();
   const httpFetch = deps.fetch ?? fetch;
@@ -218,7 +264,17 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   /** Executions this machine has begun and not yet ended, by workstream, so a
    *  quit mid-turn can close every one of them honestly. */
   const openExecutions = new Map<string, string>();
-  const settled = new Set<string>(loadCommandMemory());
+  const memory = new Map<string, RememberedCommand>(
+    loadCommandMemory().map((entry) => [entry.id, entry])
+  );
+  /**
+   * Commands a *previous* launch of this machine began and never finished.
+   * Snapshotted at start-up, because once this process starts writing `started`
+   * of its own the two cases are indistinguishable in the map.
+   */
+  const abandoned = new Map<string, RememberedCommand>(
+    [...memory.values()].filter((entry) => entry.state === "started").map((entry) => [entry.id, entry])
+  );
   const inFlight = new Set<string>();
   const chains = new Map<string, Promise<void>>();
   /** Executions a participant has stopped. Consulted by every turn before it
@@ -230,9 +286,9 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   /** The last configuration problem said out loud per workstream, so a broken
    *  settings file is one warning rather than one every discovery pass. */
   const announcedProblem = new Map<string, string>();
-  /** Missions whose branch this machine has confirmed it holds, so the check
-   *  above costs one `rev-parse` per mission per run rather than one every
-   *  fifteen seconds forever. */
+  /** Lanes whose branch this machine has confirmed it holds, keyed
+   *  `mission:workstream`, so the check above costs one `rev-parse` per lane
+   *  per run rather than one every fifteen seconds forever. */
   const fetched = new Set<string>();
 
   /**
@@ -307,29 +363,52 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     }
   }
 
-  function loadCommandMemory(): string[] {
+  function loadCommandMemory(): RememberedCommand[] {
     try {
       if (!existsSync(commandMemoryPath)) return [];
-      const parsed = z.array(z.string()).safeParse(JSON.parse(readFileSync(commandMemoryPath, "utf8")));
-      return parsed.success ? parsed.data : [];
+      const parsed = CommandMemoryFileSchema.safeParse(JSON.parse(readFileSync(commandMemoryPath, "utf8")));
+      if (!parsed.success) return [];
+      return Array.isArray(parsed.data)
+        ? parsed.data.map((id) => ({ id, state: "settled" as const }))
+        : parsed.data.commands;
     } catch {
       return [];
     }
   }
 
-  /** A command that already ran must be a no-op after a relaunch, even if its
-   *  acknowledgement never reached the control plane. */
-  function rememberCommand(commandId: string): void {
-    settled.add(commandId);
-    const recent = [...settled].slice(-COMMAND_MEMORY);
-    settled.clear();
-    for (const id of recent) settled.add(id);
+  /**
+   * Records where a command has got to, before and after it runs.
+   *
+   * Written before the work as well as after it, because the question a
+   * relaunch has to answer is not "did this finish" but "did this machine
+   * already begin it" — a turn that got halfway through editing a worktree and
+   * then lost its process must not be started again from the top.
+   */
+  function rememberCommand(
+    commandId: string,
+    state: CommandMemoryState,
+    executionId?: string | null
+  ): void {
+    const previous = memory.get(commandId);
+    memory.delete(commandId);
+    memory.set(commandId, {
+      id: commandId,
+      state,
+      executionId: executionId ?? previous?.executionId ?? null
+    });
+    const recent = [...memory.values()].slice(-COMMAND_MEMORY);
+    memory.clear();
+    for (const entry of recent) memory.set(entry.id, entry);
     try {
       mkdirSync(userData, { recursive: true });
-      writeFileSync(commandMemoryPath, JSON.stringify(recent), { mode: 0o600 });
+      writeFileSync(commandMemoryPath, JSON.stringify({ version: 2, commands: recent }), { mode: 0o600 });
     } catch (error) {
       console.warn("[runner] could not persist command memory:", messageOf(error));
     }
+  }
+
+  function isSettled(commandId: string): boolean {
+    return memory.get(commandId)?.state === "settled";
   }
 
   // --- Transport ------------------------------------------------------------
@@ -404,71 +483,73 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         const github = repository.provider === "github";
         if (!github && repository.provider !== "local") continue;
         if (!github && host.repositoryPath(repository.providerRepoId) === null) continue;
-        const known = workstreamByMission.get(mission.missionId);
-        const enrolled = known !== undefined && enrolments.has(known);
-        // A local repository is here or it is not. A GitHub one has a second
-        // question: this machine may hold the *repository* and not yet hold
-        // *this workstream's branch*, which is every mission after the first
-        // one on the same repository — and a worktree cannot be made from a ref
-        // that is not there.
-        if (enrolled && !github && fetched.has(mission.missionId)) continue;
-
         const detail = await deps.api.getMission(mission.missionId);
-        if (!detail.workstream) continue;
-        const workstreamId = detail.workstream.workstreamId;
-        const missionBranch = detail.workstream.missionBranch;
-        workstreamByMission.set(mission.missionId, workstreamId);
+        // Every lane of the mission, not just the one it started with: a
+        // competing approach is a sibling workstream with its own branch,
+        // worktree, credential and command queue (D-074).
+        const lanes = detail.workstreams?.length ? detail.workstreams : detail.workstream ? [detail.workstream] : [];
+        if (lanes.length === 0) continue;
+        workstreamByMission.set(mission.missionId, lanes[0]!.workstreamId);
 
-        const checkoutPath = host.repositoryPath(repository.providerRepoId);
-        const needsCheckout =
-          github && !(await hasMissionBranch(checkoutPath, missionBranch));
-        if (!needsCheckout) fetched.add(mission.missionId);
-        if (enrolled && !needsCheckout) continue;
+        for (const lane of lanes) {
+          const workstreamId = lane.workstreamId;
+          const missionBranch = lane.missionBranch;
+          // A branch the server has not finished allocating cannot be fetched
+          // and cannot be worktree'd; the next pass will find it created.
+          if (lane.branchStatus !== "created") continue;
+          const laneEnrolled = enrolments.has(workstreamId);
+          const laneKey = `${mission.missionId}:${workstreamId}`;
+          if (laneEnrolled && !github && fetched.has(laneKey)) continue;
 
-        if (!enrolments.has(workstreamId)) {
-          if (github && !shouldHostGithub(detail)) continue;
-          const registered = await deps.api.registerRunner(workstreamId, label);
-          enrolments.set(workstreamId, {
-            runnerId: registered.runnerId,
-            credential: registered.credential,
-            expiresAt: registered.expiresAt
-          });
-          persistEnrolments();
-        }
-        // Before anything asks for a worktree, so the mission branch the server
-        // allocated is here and the worktree starts from the right commit.
-        if (needsCheckout) {
-          await ensureCheckout(workstreamId, repository.providerRepoId, missionBranch);
-          if (await hasMissionBranch(host.repositoryPath(repository.providerRepoId), missionBranch)) {
-            fetched.add(mission.missionId);
+          const checkoutPath = host.repositoryPath(repository.providerRepoId);
+          const needsCheckout = github && !(await hasMissionBranch(checkoutPath, missionBranch));
+          if (!needsCheckout) fetched.add(laneKey);
+          if (laneEnrolled && !needsCheckout) continue;
+
+          if (!laneEnrolled) {
+            if (github && !shouldHostGithub(detail)) continue;
+            const registered = await deps.api.registerRunner(workstreamId, label);
+            enrolments.set(workstreamId, {
+              runnerId: registered.runnerId,
+              credential: registered.credential,
+              expiresAt: registered.expiresAt
+            });
+            persistEnrolments();
           }
-        }
-        // A mission whose branch is not on this machine is not announced at
-        // all (D-060). Publishing creates the worktree, and `git worktree add`
-        // on a repository that has no such ref fails with `fatal: invalid
-        // reference: novus/m-…` — which is the message this product has
-        // already been blamed for once. `ensureCheckout` returns silently
-        // while it is backing off from a failed fetch, so without this the
-        // announce fires on every fifteen-second pass of that window and the
-        // failure looks like a mission that can never have a workspace.
-        if (!fetched.has(mission.missionId)) continue;
+          // Before anything asks for a worktree, so the mission branch the
+          // server allocated is here and the worktree starts from the right
+          // commit.
+          if (needsCheckout) {
+            await ensureCheckout(workstreamId, repository.providerRepoId, missionBranch);
+            if (await hasMissionBranch(host.repositoryPath(repository.providerRepoId), missionBranch)) {
+              fetched.add(laneKey);
+            }
+          }
+          // A lane whose branch is not on this machine is not announced at
+          // all (D-060). Publishing creates the worktree, and `git worktree
+          // add` on a repository that has no such ref fails with `fatal:
+          // invalid reference: novus/m-…` — which is the message this product
+          // has already been blamed for once. `ensureCheckout` returns silently
+          // while it is backing off from a failed fetch, so without this the
+          // announce fires on every fifteen-second pass of that window and the
+          // failure looks like a mission that can never have a workspace.
+          if (!fetched.has(laneKey)) continue;
 
-        // Queued on this workstream's own chain, and not awaited here.
-        // Publishing reads the project and creates the worktree if it is not
-        // there, which is real work on the same files a turn uses — so it takes
-        // its turn in the lane rather than running beside one. Not awaiting it
-        // keeps discovery from delaying the first poll, which is how a command
-        // that is already queued gets picked up.
-        const workspaceId = detail.workspace?.workspaceId ?? null;
-        chain(workstreamId, () =>
-          announceCommands({
-            missionId: mission.missionId,
-            workstreamId,
-            providerRepoId: repository.providerRepoId,
-            missionBranch,
-            workspaceId
-          })
-        );
+          // Queued on this workstream's own chain, and not awaited here.
+          // Publishing reads the project and creates the worktree if it is not
+          // there, which is real work on the same files a turn uses — so it
+          // takes its turn in the lane rather than running beside one.
+          const workspaceId = detail.workspace?.workspaceId ?? null;
+          chain(workstreamId, () =>
+            announceCommands({
+              missionId: mission.missionId,
+              workstreamId,
+              providerRepoId: repository.providerRepoId,
+              missionBranch,
+              workspaceId
+            })
+          );
+        }
       }
       // Once this machine knows which workstreams are its own, it says what
       // is actually true about the processes the last run recorded — nothing
@@ -688,15 +769,45 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     enrolment: Enrolment
   ): Promise<void> {
     if (stopped) return;
-    if (settled.has(command.commandId)) {
+    if (isSettled(command.commandId)) {
       // Already done on a previous launch: settle it, do not run it again.
       await ack(enrolment, command.commandId, { state: "completed" });
       return;
     }
+    const begun = abandoned.get(command.commandId);
+    if (begun) {
+      // This machine started this command and lost its process before it
+      // ended. Running it again would repeat whatever the first attempt had
+      // already done to the worktree — a second harness turn from the top,
+      // against files the first one had half-edited, with no record that the
+      // first ever happened. So it is settled as what it was: begun here,
+      // interrupted here (D-034).
+      abandoned.delete(command.commandId);
+      rememberCommand(command.commandId, "settled");
+      const executionId = command.executionId ?? begun.executionId ?? null;
+      if (executionId && HARNESS_COMMANDS.includes(command.kind)) {
+        // The room stops saying *Running* about a turn whose process is gone,
+        // now rather than when the liveness sweep gets to it — and *Execution
+        // interrupted* is the state whose action is Restart, which is the human
+        // choice PRODUCT.md keeps for exactly this (D-034).
+        report(workstream.workstreamId, executionId, {
+          kind: "execution.interrupted",
+          payload: { reason: RESTARTED_MID_COMMAND }
+        });
+      }
+      await ack(enrolment, command.commandId, {
+        state: "failed",
+        failureReason: RESTARTED_MID_COMMAND
+      });
+      return;
+    }
+    // Before the work, not after it: the memory has to be able to say "this
+    // machine began it" even when nothing ever comes back to say how it ended.
+    rememberCommand(command.commandId, "started", command.executionId ?? null);
     await ack(enrolment, command.commandId, { state: "acknowledged" });
     try {
       await execute(command, workstream);
-      rememberCommand(command.commandId);
+      rememberCommand(command.commandId, "settled");
       await ack(enrolment, command.commandId, {
         state: "completed",
         ...(command.executionId ? { executionId: command.executionId } : {})
@@ -704,7 +815,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     } catch (error) {
       // The turn ran and failed; re-running it after a relaunch would repeat
       // whatever it already did to the worktree.
-      rememberCommand(command.commandId);
+      rememberCommand(command.commandId, "settled");
       const reason = messageOf(error).slice(0, 400);
       if (command.executionId && openExecutions.has(command.executionId)) {
         openExecutions.delete(command.executionId);
@@ -913,6 +1024,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     const turn = startTurn({
       executionId: args.executionId,
       missionId: args.missionId,
+      workstreamId: args.workstreamId,
       repositoryPath: args.repositoryPath,
       worktreeRoot,
       missionBranch: args.missionBranch,
@@ -977,7 +1089,11 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           command.kind === "apply_direction" &&
           command.executionId === executionId &&
           command.commandId !== currentCommandId &&
-          !settled.has(command.commandId)
+          !isSettled(command.commandId) &&
+          // A command a dead launch began is not more work waiting: it is
+          // about to be settled as interrupted, and counting it would hold the
+          // execution open for a turn that is never going to run.
+          !abandoned.has(command.commandId)
       );
     } catch {
       return false;

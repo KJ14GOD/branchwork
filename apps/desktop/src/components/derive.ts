@@ -98,7 +98,7 @@ export interface StateLineAction {
   label: string;
   /** What the action does; the room wires it to a real call or an inspector
    *  section. Never rendered without a real destination. */
-  kind: "stop" | "changes" | "verification" | "setup" | "preview" | "stopRun";
+  kind: "stop" | "changes" | "verification" | "setup" | "preview" | "stopRun" | "decision";
 }
 
 export interface StateLineView {
@@ -199,8 +199,34 @@ export function deriveStateLine(detail: MissionDetailResponse): StateLineView {
 function suffixFor(detail: MissionDetailResponse): string | null {
   const handoff = handoffSuffix(detail);
   if (handoff) return handoff;
+  // A question with nobody to answer it. First, because it is the only thing
+  // in the room that a person can fix and nobody else can: the harness is
+  // blocked, the lease lapsed, and claiming it is what unblocks the work
+  // (PRODUCT.md#control).
+  if (detail.state === "needs_approval" && detail.control.holderLogin === null) {
+    return "no one holds the baton — claim it to answer";
+  }
+  // Nothing has been heard from the harness for a while. Said as the fact it
+  // is — no progress reported — because the turn has not been stopped, nobody
+  // has lost authority, and a long tool call looks exactly like this from here
+  // (PRODUCT.md, *Execution stalled*).
+  if (detail.overlays.includes("execution_stalled")) {
+    const since = lastProgressAt(detail);
+    return since ? `no progress reported since ${clockTime(since)}` : "no progress reported for a while";
+  }
   if (detail.runner === null) return "no machine has connected to run this workstream yet";
   return null;
+}
+
+/** The last thing the running execution reported, for the stalled suffix to
+ *  name a time rather than a vague duration. */
+function lastProgressAt(detail: MissionDetailResponse): string | null {
+  const live = [...detail.executions]
+    .reverse()
+    .find((execution) => execution.state === "running" || execution.state === "starting");
+  if (!live) return null;
+  const events = detail.events.filter((event) => event.executionId === live.executionId);
+  return events[events.length - 1]?.occurredAt ?? live.createdAt;
 }
 
 function handoffSuffix(detail: MissionDetailResponse): string | null {
@@ -325,6 +351,23 @@ function primaryStateLine(
         action: { label: "Open changes", kind: "changes" },
         working: false
       };
+    case "decision_recorded": {
+      // Two facts, and the line refuses to collapse them: somebody chose, and
+      // nothing has been published (D-075). It never says "done".
+      const decision = detail.decisions.find((entry) => entry.supersededAt === null);
+      const chosen = detail.approaches.find(
+        (approach) => approach.workstreamId === decision?.workstreamId
+      );
+      return {
+        ...quiet,
+        tone: "neutral",
+        name: "Decision recorded",
+        detail: decision
+          ? `${decision.decidedByLogin} chose ${chosen?.name ?? "this approach"} — not published yet`
+          : "a result was chosen — not published yet",
+        action: { label: "Open the decision", kind: "decision" }
+      };
+    }
     case "verification_failed":
       return {
         tone: "danger",

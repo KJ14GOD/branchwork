@@ -169,7 +169,7 @@ beforeEach(async () => {
   await git(repo, ["add", "-A"]);
   await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "initial"]);
   await git(repo, ["branch", MISSION_BRANCH]);
-  worktree = worktreeFor(userData, MISSION_ID);
+  worktree = worktreeFor(userData, WORKSTREAM_ID);
   await git(repo, ["worktree", "add", "--", worktree, MISSION_BRANCH]);
 
   sessions = new TerminalSessions({

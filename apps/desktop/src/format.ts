@@ -44,6 +44,33 @@ export function plural(count: number, singular: string, pluralForm?: string): st
   return `${count} ${count === 1 ? singular : (pluralForm ?? `${singular}s`)}`;
 }
 
+/** A duration the harness reported in milliseconds, in the same shape as the
+ *  one derived from timestamps below. */
+export function elapsed(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/** Token counts, compact but never rounded into a lie: 940 stays 940, and
+ *  12 431 becomes 12.4k because the exact figure is not what a reader is
+ *  weighing. */
+export function compactCount(value: number): string {
+  if (value < 1000) return String(value);
+  if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`;
+  return `${(value / 1_000_000).toFixed(1)}m`;
+}
+
+/** What the harness said a turn cost. Three decimals, because a turn that
+ *  cost a tenth of a cent should not read as free — and anything smaller says
+ *  so rather than rounding to nothing. */
+export function usd(value: number): string {
+  if (value === 0) return "$0";
+  if (value < 0.001) return "<$0.001";
+  return `$${value < 1 ? value.toFixed(3) : value.toFixed(2)}`;
+}
+
 /** Elapsed time between two ISO timestamps, as a compact duration. */
 export function duration(fromIso: string, toIso: string): string | null {
   const from = new Date(fromIso).getTime();
