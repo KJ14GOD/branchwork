@@ -639,8 +639,10 @@ export const CheckCategorySchema = z.enum(["test", "typecheck", "build", "lint",
 export const CheckOutcomeSchema = z.enum(["passed", "failed", "skipped", "errored"]);
 
 /** Where a check came from. Collapsing these into one green row is the
- *  fabrication the ledger exists to prevent (D-037). */
-export const CheckOriginSchema = z.enum(["harness", "participant", "external"]);
+ *  fabrication the ledger exists to prevent (D-037). `automatic` is Novus
+ *  running the project's declared checks after a checkpoint that changed
+ *  files — nobody pressed Run, and the row says so. */
+export const CheckOriginSchema = z.enum(["harness", "participant", "external", "automatic"]);
 export type CheckOrigin = z.infer<typeof CheckOriginSchema>;
 
 /**
@@ -912,6 +914,10 @@ export const WorkspaceSettingsSchema = z.object({
   /** Whether two run commands may be alive at once. Default: no. */
   concurrentRuns: z.boolean().default(false),
   verify: z.array(VerificationCommandSchema).max(20).default([]),
+  /** Whether the declared checks run themselves after a checkpoint that
+   *  changed files. On unless the project says otherwise: a turn that landed
+   *  work unverified is the state this exists to prevent. */
+  autoVerify: z.boolean().default(true),
   /** The project's finite-command deadlines. Bounded by validation, visible in
    *  the file a team reviews, never a constant hidden in Novus. */
   timeouts: CommandTimeoutsSchema.default({}),
@@ -1494,6 +1500,12 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         startedAt: z.string().max(40),
         completedAt: z.string().max(40),
         durationMs: z.number().int().nonnegative(),
+        /** The two origins a runner-run check can honestly claim: a participant
+         *  pressed Run, or Novus ran the declared checks itself after a
+         *  checkpoint. Never `harness` (that is `verification.observed`) and
+         *  never `external`. The default keeps an older runner's reports
+         *  parsing as what they were. */
+        origin: z.enum(["participant", "automatic"]).default("participant"),
         /** The revision the check actually ran against. */
         checkpointSha: z.string().max(64).nullable().default(null),
         /** How it ended. A check that ran out of time or was cancelled is never

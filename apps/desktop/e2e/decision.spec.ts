@@ -169,6 +169,16 @@ beforeAll(async () => {
   const dir = mkdtempSync(join(tmpdir(), "novus-decision-repo-"));
   git(dir, ["init", "-b", "main"]);
   writeFileSync(join(dir, "README.md"), `# ${basename(dir)}\n`);
+  // A declared setup that writes a witness, so "the fork's setup auto-ran" is
+  // a fact on disk in the new lane's own worktree rather than a status word.
+  // The witness is git-ignored: a checkpoint commits every dirty file, and a
+  // setup artifact must never ride along in a lane's evidence.
+  mkdirSync(join(dir, ".novus"), { recursive: true });
+  writeFileSync(
+    join(dir, ".novus", "settings.toml"),
+    ["[setup]", 'command = "echo forked > setup-witness.txt"'].join("\n")
+  );
+  writeFileSync(join(dir, ".gitignore"), "setup-witness.txt\n");
   git(dir, ["add", "-A"]);
   git(dir, ["-c", "user.name=T", "-c", "user.email=t@l", "commit", "-m", "fixture"]);
   const headSha = git(dir, ["rev-parse", "HEAD"]);
@@ -332,6 +342,18 @@ describe("competing approaches, compared and decided", () => {
     expect(existsSync(join(worktreeRoot, baseline.workstreamId))).toBe(true);
     expect(existsSync(join(worktreeRoot, approach.workstreamId))).toBe(true);
     expect(existsSync(join(worktreeRoot, missionId))).toBe(false);
+
+    // A forked approach inherits its sibling's workspace setup: the project's
+    // declared setup runs in the new lane without anyone opening the setup UI,
+    // proven by the witness it writes in the fork's own worktree.
+    await expect
+      .poll(() => existsSync(join(worktreeRoot, approach.workstreamId, "setup-witness.txt")), {
+        timeout: 60_000
+      })
+      .toBe(true);
+    // In the fork specifically: nobody ran setup for the first lane, and
+    // nothing did it for them.
+    expect(existsSync(join(worktreeRoot, baseline.workstreamId, "setup-witness.txt"))).toBe(false);
 
     // --- The lane switcher: every lane's own facts, and the way across -----
     await page.getByTestId("approaches-switcher").click();

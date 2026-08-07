@@ -487,7 +487,7 @@ create unique index if not exists workspace_processes_one_live_per_name
 alter table verification_checks add column if not exists origin text not null default 'harness';
 alter table verification_checks drop constraint if exists verification_checks_origin_check;
 alter table verification_checks add constraint verification_checks_origin_check
-  check (origin in ('harness', 'participant', 'external'));
+  check (origin in ('harness', 'participant', 'external', 'automatic'));
 alter table verification_checks add column if not exists requested_by text references users(user_id);
 alter table verification_checks add column if not exists exit_code int;
 alter table verification_checks add column if not exists started_at timestamptz;

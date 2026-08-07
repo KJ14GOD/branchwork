@@ -1213,7 +1213,10 @@ function TryAnotherApproach({
               autoFocus
             />
           </label>
-          <p className="quiet">This starts an isolated workspace. {fromName} stays unchanged.</p>
+          <p className="quiet">
+            This starts an isolated workspace. {fromName} stays unchanged. The project&rsquo;s saved
+            setup and the local files already approved for this repository carry over automatically.
+          </p>
           <p className="quiet">
             Approaches should solve the same mission in meaningfully different ways. For unrelated
             work, create a new mission.

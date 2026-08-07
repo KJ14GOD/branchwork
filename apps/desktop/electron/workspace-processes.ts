@@ -256,9 +256,15 @@ export class WorkspaceProcesses {
   /**
    * One verification check. The revision it proves is read *before* the command
    * starts: a check that began while the agent was still writing must not claim
-   * a revision that did not exist when it ran (D-037).
+   * a revision that did not exist when it ran (D-037). The origin is decided by
+   * the caller — a participant's Run control, or Novus itself after a
+   * checkpoint — and travels with the report, because the room must never read
+   * "somebody ran this" about a check nobody pressed.
    */
-  async runVerification(invocation: Invocation): Promise<void> {
+  async runVerification(
+    invocation: Invocation,
+    origin: "participant" | "automatic" = "participant"
+  ): Promise<void> {
     const spec = invocation.command;
     const checkpointSha = await headSha(this.options.git, this.options.worktree);
     const startedAt = new Date();
@@ -280,6 +286,7 @@ export class WorkspaceProcesses {
           startedAt: startedAt.toISOString(),
           completedAt: completedAt.toISOString(),
           durationMs: completedAt.getTime() - startedAt.getTime(),
+          origin,
           checkpointSha,
           ending: "spawn_failed"
         }
@@ -301,6 +308,7 @@ export class WorkspaceProcesses {
         startedAt: startedAt.toISOString(),
         completedAt: completedAt.toISOString(),
         durationMs: completedAt.getTime() - startedAt.getTime(),
+        origin,
         checkpointSha,
         ending: outcome.ending
       }

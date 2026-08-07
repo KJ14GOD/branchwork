@@ -186,6 +186,8 @@ function originLine(check: VerificationCheck): string {
       return `Observed from Claude Code · ${where}`;
     case "participant":
       return `Run by ${check.requestedByLogin ?? "a participant"} · ${where}`;
+    case "automatic":
+      return `Run by Novus at the checkpoint · ${where}`;
     case "external":
       return `Reported by CI · ${where}`;
   }

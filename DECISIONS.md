@@ -1049,3 +1049,37 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** `Mission` gains `workstreamCount`; `MissionEvent` and `WorkspaceProcess` gain their lane; workspace/terminal IPC and the workspace command route accept a lane and resolve authority against it (ARCHITECTURE.md#authorization). DESIGN.md's lane-header sketch is replaced by the tab model, and the token table swaps `--alt` for the lane pair. The needs-attention lens still reads the default lane's state for missions nobody has open; a background Alternative that needs approval is visible in the room but not yet in the lens, and PROGRESS.md carries that as a gap.
 
 **Revisit when.** More lanes than fit a tab row turn out to be real — the switcher already scales, the tabs would need to collapse; or two people need to *share* a lane focus, at which point presence, not navigation, is the tool.
+
+## D-081 — A fork inherits its sibling's workspace, and consent is remembered, not re-invented
+
+**Context.** Creating an approach gave it its own everything (D-074) — including its own *nothing*: a bare worktree with no `.env`, no secrets context, and setup never run, so every fork opened on "Workspace needs setup" and the person who wanted to compare two solutions first re-performed the ceremony they had already done once. The secrets half was already right — values are keyed by repository, so every lane resolves them — but consented Git-ignored files and the setup run were per-worktree acts with no memory.
+
+**Decision.** On the machine that holds the checkout, a fork starts prepared, using only authority that already exists.
+
+**Consent is remembered per repository.** When a person approves copying Git-ignored files into a worktree, the successfully copied paths are recorded in a machine-local store (bounded, 0600, never leaving the machine). A new lane's worktree gets those same paths copied again through the same chokepoint — every per-file validation re-runs, so a path that stopped being ignored is refused now, and no consent is ever invented, only replayed.
+
+**Setup runs itself, as an ordinary authorized command.** After the fork's branch is cut, the desktop waits for the runner to enrol the lane and publish the declared list, then issues the same `workspace.command` a person's click would — authorized server-side, pinned to the published snapshot, attributed to the person who forked. The dialog says so before they click. No new trust path: a lane on a machine that does not hold the checkout gets nothing, exactly as before.
+
+**Alternatives.** Copying files worktree-to-worktree from the sibling (rejected: the user's checkout is the single consented source, and a second source is a second policy); auto-running setup from the runner without a control-plane command (rejected: it would bypass the authorization pinning D-043 exists for, when the ordinary path costs one poll); asking again per fork (rejected: it is the ceremony this entry removes — the person already answered, and the answers are replayable facts).
+
+**Consequences.** The fork dialog states the carry-over; PRODUCT.md's approach bullet carries it; "Workspace needs setup" on a fresh fork becomes the exception (no setup declared, machine elsewhere, or the run failing) rather than the rule.
+
+**Revisit when.** Forks are made from machines that do not hold the checkout, at which point the hosting runner — not the forker's desktop — must replay consents and setup, and the consent store's machine-locality becomes the constraint to redesign around.
+
+## D-082 — Declared checks run themselves at the checkpoint
+
+**Context.** Verification ran on a click. In practice nobody clicked after every turn, so the product's most common terminal state was *Work finished — nothing verified*, and the Decision Room — the surface whose entire purpose is comparing evidence — routinely rendered *Not verified — everything* in both columns. A product whose first principle is evidence over claims was structurally starving itself of evidence.
+
+**Decision.** When a harness turn ends with a committed checkpoint that changed files, the runner runs the project's declared verification commands itself and reports each result with origin **`automatic`**.
+
+**The honesty is in the origin.** `automatic` is a fourth origin beside harness-observed, participant-run, and external — never collapsed into them, rendered in words ("Run by Novus at the checkpoint"), with `requested_by` null because nobody asked. The wire shape admits only `participant` and `automatic` from a runner, so a runner cannot claim a check was harness-observed or external.
+
+**Sequencing and bounds are the existing ones.** The checks queue on the lane's own chain *behind* the turn's terminal report — the room hears the turn end first, and the checks can never touch a worktree the next turn holds. Each command runs against the snapshot the runner just republished, under the project's own declared deadline. A stopped turn triggers nothing: the participant asked for quiet. Setup and run kinds never auto-run.
+
+**Projects can decline.** `autoVerify = false` in `.novus/settings.toml` (or the local override) switches it off. Default is on, because a turn that landed work unverified is the state this exists to prevent.
+
+**Alternatives.** Leaving verification click-only (rejected: the evidence-starved Decision Room is the measured result); running checks inside the harness turn (rejected: the turn's end must be reported first, and a slow suite would silently stretch every turn); a server-side scheduler commanding `run_verification` after each checkpoint (rejected: the runner already holds the snapshot, the worktree, and the chain — a command round-trip adds an authorization actor for an act nobody performed); attributing automatic checks to the last person who pressed Run (rejected outright: it is a fabricated actor on evidence).
+
+**Consequences.** `CheckOriginSchema` gains `automatic`; the `verification.completed` wire payload carries its origin with a backward-compatible default; the ledger renders the fourth origin in the same quiet meta style; staleness, re-running, and the Decision Room's tallies treat automatic checks exactly like any other. PRODUCT.md's VerificationCheck origins and ARCHITECTURE.md's runner behavior say all of this canonically.
+
+**Revisit when.** Projects with slow suites want a subset ("run lint always, tests on demand"), at which point the declared command shape grows a per-command auto flag rather than the global boolean growing cases.

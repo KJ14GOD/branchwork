@@ -316,7 +316,14 @@ function checkpointAt(originSeq: number, at: string): SequencedRunnerEvent {
 
 function completedCheck(
   originSeq: number,
-  args: { name: string; outcome: "passed" | "failed"; checkpointSha: string | null }
+  args: {
+    name: string;
+    outcome: "passed" | "failed";
+    checkpointSha: string | null;
+    /** Who caused it: a participant's Run unless the report says Novus ran it
+     *  itself after a checkpoint. */
+    origin?: "participant" | "automatic";
+  }
 ): SequencedRunnerEvent {
   return {
     originSeq,
@@ -333,6 +340,7 @@ function completedCheck(
         startedAt: "2026-08-02T10:00:00.000Z",
         completedAt: "2026-08-02T10:00:04.500Z",
         durationMs: 4500,
+        origin: args.origin ?? "participant",
         checkpointSha: args.checkpointSha,
         ending: "exit"
       }
@@ -843,6 +851,42 @@ describe("what the runner reports about the machine", () => {
     expect(check.requestedByLogin).toBe(kartik.login);
     expect(check.executionId).toBeNull();
     expect(check.durationMs).toBe(4500);
+  });
+
+  it("persists an automatic check with no requester, and serves it as what it is", async () => {
+    const lane = await createLane();
+    // A person pressed Run for the same name earlier. The automatic report
+    // must not inherit them as its requester: Novus ran it, nobody asked.
+    expect((await invoke(kartik, lane.missionId, { kind: "verification", name: "unit" })).statusCode).toBe(200);
+    const executionId = await startExecution(lane);
+    await report(lane.credential, executionId, [checkpointAt(1, HEAD_SHA)]);
+    await report(lane.credential, null, [
+      completedCheck(1, { name: "unit", outcome: "passed", checkpointSha: HEAD_SHA, origin: "automatic" }),
+      // A second one against a revision the lane has moved past, and with a
+      // name nothing was ever enqueued for.
+      completedCheck(2, { name: "lint", outcome: "passed", checkpointSha: MOVED_SHA, origin: "automatic" })
+    ]);
+
+    const rows = await harness.db.query(
+      "select * from verification_checks where mission_id = $1 and origin = 'automatic' order by name",
+      [lane.missionId]
+    );
+    expect(rows.rowCount).toBe(2);
+    for (const row of rows.rows) {
+      expect(row.origin).toBe("automatic");
+      expect(row.requested_by).toBeNull();
+      // An automatic check follows a turn rather than belonging to one.
+      expect(row.exe_id).toBeNull();
+    }
+
+    const checks = (await detail(kartik, lane.missionId)).checks.filter(
+      (candidate: { origin: string }) => candidate.origin === "automatic"
+    ) as { name: string; origin: string; requestedByLogin: string | null; stale: boolean }[];
+    expect(checks.length).toBe(2);
+    for (const check of checks) expect(check.requestedByLogin).toBeNull();
+    // Staleness derives for an automatic check exactly as for any other.
+    expect(checks.find((check) => check.name === "unit")?.stale).toBe(false);
+    expect(checks.find((check) => check.name === "lint")?.stale).toBe(true);
   });
 
   it("de-duplicates a replayed report that has no execution behind it", async () => {

@@ -1065,6 +1065,30 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     }
     openExecutions.delete(args.executionId);
     report(args.workstreamId, args.executionId, result.terminal);
+
+    // A checkpoint that changed files is work nothing has verified yet, so the
+    // declared checks run now, by themselves. After the terminal report and on
+    // the lane's own chain rather than inside the turn: the room hears the turn
+    // end first, and the checks can never touch a worktree a next turn holds.
+    // A stopped execution stays quiet — the participant asked for nothing more
+    // to happen — and the deadline each check runs under is the project's own.
+    const checkpoint = result.checkpoint;
+    if (
+      result.terminal.kind !== "execution.stopped" &&
+      checkpoint !== null &&
+      checkpoint.outcome === "committed" &&
+      checkpoint.filesChanged > 0
+    ) {
+      chain(args.workstreamId, () =>
+        workspace.runAutoVerifications({
+          missionId: args.missionId,
+          workstreamId: args.workstreamId,
+          providerRepoId: args.providerRepoId,
+          missionBranch: args.missionBranch,
+          workspaceId: null
+        })
+      );
+    }
   }
 
   /**

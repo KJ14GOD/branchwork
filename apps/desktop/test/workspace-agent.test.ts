@@ -368,6 +368,113 @@ describe("workspace commands through the agent", () => {
 });
 
 /**
+ * Checks that run themselves (the `automatic` origin).
+ *
+ * A turn that commits a checkpoint with changed files is work nothing has
+ * verified, and that is the state most rooms used to end every turn in. The
+ * claim under test is the whole loop: the scripted turn ends, its terminal
+ * event is reported, and then — on the lane's own chain, from the runner's own
+ * declared list — every verification command runs and reports with origin
+ * `automatic`, bound to the checkpoint the turn just committed.
+ */
+describe("checks that run themselves after a checkpoint", () => {
+  const EXECUTION_ID = "exe_autocheck0000001";
+
+  const startExecution = (): RunnerCommand => ({
+    ...command("start_execution", { body: "write the fake turn file", model: "", effort: "" }),
+    executionId: EXECUTION_ID
+  });
+
+  /** Rewrites what the project declares and moves the mission branch to it,
+   *  before the agent has made a worktree — the turn then works from here. */
+  async function declare(lines: string[]): Promise<void> {
+    writeFileSync(join(repo, ".novus", "settings.toml"), lines.join("\n"));
+    await git(repo, ["add", "-A"]);
+    await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "declare"]);
+    await git(repo, ["branch", "-f", MISSION_BRANCH, "main"]);
+  }
+
+  it("runs every declared check, as itself, against the committed revision", async () => {
+    await declare([
+      `[[verify]]`,
+      `name = "test"`,
+      `command = "exit 0"`,
+      `category = "test"`,
+      ``,
+      `[[verify]]`,
+      `name = "types"`,
+      `command = "exit 1"`,
+      `category = "typecheck"`
+    ]);
+    start().discoverNow();
+    plane.enqueue(startExecution());
+
+    await waitFor("both checks to report", () => plane.payloadsOf("verification.completed").length >= 2);
+
+    // The turn ends and reports first; the checks follow it.
+    const kinds = plane.kinds();
+    expect(kinds.indexOf("execution.completed")).toBeLessThan(kinds.indexOf("verification.completed"));
+
+    // All of them, in declared order, each honestly its own verdict — and
+    // none claiming a person asked for it.
+    const checks = plane.payloadsOf("verification.completed");
+    expect(checks.map((check) => check.name)).toEqual(["test", "types"]);
+    expect(checks.map((check) => check.origin)).toEqual(["automatic", "automatic"]);
+    expect(checks.map((check) => check.outcome)).toEqual(["passed", "failed"]);
+
+    // Each check binds to the checkpoint the turn just committed.
+    const checkpoint = plane.payloadsOf("workspace.checkpoint")[0];
+    expect(checkpoint?.outcome).toBe("committed");
+    expect(checkpoint?.sha).toBeTruthy();
+    for (const check of checks) expect(check.checkpointSha).toBe(checkpoint?.sha);
+  }, 40_000);
+
+  it("does not start setup or run commands, only verification", async () => {
+    // The default fixture declares all three kinds; only the check may run.
+    start().discoverNow();
+    plane.enqueue(startExecution());
+
+    await waitFor("the check to report", () => plane.kinds().includes("verification.completed"));
+    expect(plane.payloadsOf("verification.completed")[0]?.origin).toBe("automatic");
+    const started = plane.payloadsOf("process.started");
+    expect(started.length).toBeGreaterThan(0);
+    expect(started.every((process) => process.kind === "verification")).toBe(true);
+  }, 40_000);
+
+  it("runs nothing when the project declares no verification", async () => {
+    await declare([`[[run]]`, `name = "dev"`, `command = "echo started; sleep 25"`]);
+    start().discoverNow();
+    plane.enqueue(startExecution());
+
+    await waitFor("the turn to finish", () => plane.kinds().includes("execution.completed"));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(plane.kinds()).not.toContain("verification.completed");
+    expect(plane.kinds()).not.toContain("process.started");
+  }, 40_000);
+
+  it("stays quiet when the project turned automatic checks off", async () => {
+    await declare([
+      `autoVerify = false`,
+      ``,
+      `[[verify]]`,
+      `name = "test"`,
+      `command = "exit 0"`,
+      `category = "test"`
+    ]);
+    start().discoverNow();
+    plane.enqueue(startExecution());
+
+    await waitFor("the turn to finish", () => plane.kinds().includes("execution.completed"));
+    await waitFor("the check to be declared", () =>
+      plane.declared().some((entry) => entry.kind === "verification")
+    );
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Declared, so the silence is the opt-out and not a missing declaration.
+    expect(plane.kinds()).not.toContain("verification.completed");
+  }, 40_000);
+});
+
+/**
  * Stop, driven through the agent rather than through the turn (D-053).
  *
  * `execution.test.ts` already proves that a turn told to stop kills its process

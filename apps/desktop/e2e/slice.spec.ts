@@ -136,7 +136,7 @@ async function sql(text: string, params: unknown[] = []): Promise<Record<string,
 async function recordCheck(input: {
   missionId: string;
   name: string;
-  origin: "harness" | "participant" | "external";
+  origin: "harness" | "participant" | "external" | "automatic";
   outcome: "passed" | "failed";
   command: string;
   checkpointSha: string | null;

@@ -37,6 +37,7 @@ import {
   resolveLocalBase
 } from "./local-repos";
 import { startRunnerAgent, type RunnerAgent } from "./runner-agent";
+import { consentedFilePaths, recordFileConsents } from "./workspace-consents";
 import {
   closeTerminal,
   forgetSecret,
@@ -103,6 +104,39 @@ async function stopRunner(): Promise<void> {
   const current = runner;
   runner = null;
   if (current) await current.shutdown("signed out");
+}
+
+/** Where this machine remembers which Git-ignored paths were consented per
+ *  repository. Computed lazily: userData is only settled once the app is ready. */
+function consentStorePath(): string {
+  return join(app.getPath("userData"), "local-file-consents.json");
+}
+
+/**
+ * Runs the project's declared setup in a lane that was just forked, without
+ * holding the IPC response open. The declared list only exists once the runner
+ * has enrolled the lane and published the configuration, so this waits for it;
+ * a lane whose setup never appears or fails is left in the "Workspace needs
+ * setup" state it would have been in anyway.
+ */
+async function autoRunSetup(missionId: string, workstreamId: string): Promise<void> {
+  const deadline = Date.now() + 90_000;
+  try {
+    while (Date.now() < deadline) {
+      const detail = await api.getMission(missionId, workstreamId);
+      const readiness = detail.workspace?.readiness;
+      // Someone — a person, or a second desktop — got there first.
+      if (readiness === "ready" || readiness === "configuring") return;
+      if (detail.workspace?.declared.some((command) => command.kind === "setup")) {
+        await api.workspaceCommand(missionId, { kind: "setup", workstreamId });
+        runner?.pollNow();
+        return;
+      }
+      await new Promise((settle) => setTimeout(settle, 2000));
+    }
+  } catch (error) {
+    console.warn("[approach] setup did not auto-run:", error);
+  }
 }
 
 function ok<T>(value: T): IpcResult<T> {
@@ -383,6 +417,26 @@ function registerIpc(): void {
       // So the new lane gets its own runner enrolment and its own worktree
       // without waiting for the next discovery tick.
       runner?.discoverNow();
+      // The sibling's workspace setup carries over (D-074): files this person
+      // already consented to for this repository go through `prepareLocalFiles`
+      // again — every per-file validation re-runs, so a path that stopped
+      // being ignored is refused now — and the declared setup is run once the
+      // runner enrols the lane. Neither is fatal: a lane they could not reach
+      // is exactly what "Workspace needs setup" already says.
+      if (repoId && pathForLocalRepo(repoId) !== null) {
+        const consented = consentedFilePaths(consentStorePath(), repoId);
+        if (consented.length > 0) {
+          try {
+            await prepareLocalFiles(
+              await targetFor(parsed.data.missionId, workstream.workstreamId),
+              consented
+            );
+          } catch (error) {
+            console.warn("[approach] consented files did not carry over:", error);
+          }
+        }
+        void autoRunSetup(parsed.data.missionId, workstream.workstreamId);
+      }
       return ok({ workstream });
     } catch (error) {
       return fail(error);
@@ -713,12 +767,20 @@ function registerIpc(): void {
   ipcMain.handle("novus:workspace:prepare-local-files", async (_event, raw: unknown) => {
     const parsed = PrepareLocalFilesInputSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed file list." };
-    return call(async () =>
-      prepareLocalFiles(
-        await targetFor(parsed.data.missionId, parsed.data.workstreamId),
-        parsed.data.paths
-      )
-    );
+    return call(async () => {
+      const target = await targetFor(parsed.data.missionId, parsed.data.workstreamId);
+      const prepared = await prepareLocalFiles(target, parsed.data.paths);
+      // What actually landed is remembered per repository, so a lane forked
+      // later starts with the same files without asking again. Best-effort:
+      // the copies above already happened, so a store that cannot be written
+      // must not turn them into a reported failure.
+      try {
+        recordFileConsents(consentStorePath(), target.localId, prepared);
+      } catch (error) {
+        console.warn("[workspace] could not remember file consents:", error);
+      }
+      return prepared;
+    });
   });
 
   ipcMain.handle("novus:workspace:command", async (_event, raw: unknown) => {

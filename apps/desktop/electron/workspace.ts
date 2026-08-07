@@ -775,6 +775,10 @@ export interface WorkspaceRuntime {
   runCommand(context: WorkspaceCommandContext, pinned: PinnedCommand): Promise<void>;
   stopCommand(context: WorkspaceCommandContext, name: string | null): Promise<void>;
   runVerification(context: WorkspaceCommandContext, pinned: PinnedCommand): Promise<void>;
+  /** Every declared check, run by Novus itself against whatever revision the
+   *  lane's worktree is at, each reported with origin `automatic`. The caller
+   *  queues this on the lane's own chain, so it can never race a turn. */
+  runAutoVerifications(context: WorkspaceCommandContext): Promise<void>;
   /** Reads the project's configuration and publishes what it declares, so every
    *  participant's Run control offers the same list and every authorization is
    *  pinned to a snapshot the server holds. */
@@ -980,6 +984,28 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
       const snapshot = pin(pinned, "verification");
       const { settings, range, supervisor } = await prepare(context);
       await supervisor.runVerification(invocationFor(context, snapshot, settings, range, range.start));
+    },
+
+    runAutoVerifications: async (context) => {
+      // No pinned snapshot: nobody authorized a name. What runs is what the
+      // configuration at this revision declares — preparing reads it fresh and
+      // publishes it, so these snapshots are the same shape the control plane
+      // pins for a participant's Run (D-043). Verification only, ever: a setup
+      // or run command is a decision a person makes.
+      const { settings, range, supervisor } = await prepare(context);
+      if (!settings.autoVerify) return;
+      const checks = declaredCommands(settings).filter((command) => command.kind === "verification");
+      for (const snapshot of checks) {
+        try {
+          await supervisor.runVerification(
+            invocationFor(context, snapshot, settings, range, range.start),
+            "automatic"
+          );
+        } catch {
+          // A check that could not start has already been reported as an
+          // errored check; the ones after it still owe the room their answer.
+        }
+      }
     },
 
     shutdown: async (reason) => {

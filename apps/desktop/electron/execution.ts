@@ -222,6 +222,10 @@ export interface TurnResult {
   terminal: TerminalEvent;
   /** The session the harness used, for the next turn to continue. */
   sessionId: string | null;
+  /** What the turn's checkpoint said, for the work that follows the turn on
+   *  the lane: a committed checkpoint that changed files is what the declared
+   *  checks run against. Null when the checkpoint threw before saying anything. */
+  checkpoint: { outcome: "committed" | "clean" | "failed"; sha: string | null; filesChanged: number } | null;
 }
 
 export interface RunningTurn {
@@ -538,6 +542,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
 
     // "Nothing changed" is evidence too, so a clean turn still checkpoints.
     let checkpointFailed: string | null = null;
+    let captured: TurnResult["checkpoint"] = null;
     try {
       const checkpoint = await captureCheckpoint(gitExec, worktreePath, {
         branch: request.missionBranch,
@@ -545,6 +550,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         sanitize
       });
       emit({ kind: "workspace.checkpoint", payload: checkpoint });
+      captured = { outcome: checkpoint.outcome, sha: checkpoint.sha, filesChanged: checkpoint.files.length };
       if (checkpoint.outcome === "failed") checkpointFailed = checkpoint.error ?? "The checkpoint failed.";
     } catch (error) {
       const reason = bounded(sanitize(messageOf(error)), MAX_REASON);
@@ -566,7 +572,8 @@ export function startTurn(request: TurnRequest): RunningTurn {
 
     return {
       terminal: classify(outcome, stream, checkpointFailed),
-      sessionId: stream.sessionId
+      sessionId: stream.sessionId,
+      checkpoint: captured
     };
   }
 
@@ -894,7 +901,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
    *  pending control transfer is never left waiting on a dead execution. */
   function terminate(terminal: TerminalEvent): TurnResult {
     emit({ kind: "boundary.reached", payload: { reason: "turn ended before the harness started" } });
-    return { terminal, sessionId: null };
+    return { terminal, sessionId: null, checkpoint: null };
   }
 }
 

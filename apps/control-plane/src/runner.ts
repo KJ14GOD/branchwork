@@ -499,19 +499,22 @@ async function applyWorkspaceSideEffects(
     }
     case "verification.completed": {
       const payload = event.payload;
-      const requestedBy = await requesterOf(
-        client,
-        ctx.workstreamId,
-        "run_verification",
-        payload.name
-      );
+      // The two origins the wire shape admits from a runner: `participant` and
+      // `automatic`. Only a participant-run check has a requester, and it is
+      // still read from the durable command the control plane enqueued — an
+      // automatic check was asked for by nobody, and looking one up would
+      // attribute it to whoever pressed Run last.
+      const requestedBy =
+        payload.origin === "participant"
+          ? await requesterOf(client, ctx.workstreamId, "run_verification", payload.name)
+          : null;
       await client.query(
         `insert into verification_checks (chk_id, org_id, mission_id, wst_id, exe_id, name, category,
                                           outcome, origin, requested_by, command, exit_code, output,
                                           truncated, environment, runner_id, started_at, completed_at,
                                           duration_ms, checkpoint_sha, ending)
-         values ($1, $2, $3, $4, null, $5, $6, $7, 'participant', $8, $9, $10, $11, $12, $13, $14, $15,
-                 $16, $17, $18, $19)`,
+         values ($1, $2, $3, $4, null, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                 $17, $18, $19, $20)`,
         [
           newCheckId(),
           ctx.orgId,
@@ -520,6 +523,7 @@ async function applyWorkspaceSideEffects(
           payload.name,
           payload.category,
           payload.outcome,
+          payload.origin,
           requestedBy,
           payload.command,
           payload.exitCode,

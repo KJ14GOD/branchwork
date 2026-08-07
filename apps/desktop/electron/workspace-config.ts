@@ -79,6 +79,7 @@ const SETTINGS_KEYS: SettingsKey[] = [
   "defaultRun",
   "concurrentRuns",
   "verify",
+  "autoVerify",
   "timeouts",
   "env",
   "secretNames",
@@ -158,6 +159,7 @@ function layer(shared: ScopedSettings | null, local: ScopedSettings | null): Wor
     defaultRun: states("defaultRun") ? over.defaultRun : base.defaultRun,
     concurrentRuns: states("concurrentRuns") ? over.concurrentRuns : base.concurrentRuns,
     verify: mergeNamed(base.verify, states("verify") ? over.verify : []),
+    autoVerify: states("autoVerify") ? over.autoVerify : base.autoVerify,
     // Single values, replaced wholesale when the local file states them: a
     // machine that overrides one deadline states both, which is one fewer way
     // for a layered timeout to be a surprise.
@@ -214,6 +216,7 @@ function toDocument(settings: WorkspaceSettings): Record<string, unknown> {
   const document: Record<string, unknown> = {};
   if (settings.defaultRun !== undefined) document.defaultRun = settings.defaultRun;
   if (settings.concurrentRuns) document.concurrentRuns = true;
+  if (!settings.autoVerify) document.autoVerify = false;
   if (settings.secretNames.length > 0) document.secretNames = settings.secretNames;
   if (settings.localFiles.length > 0) document.localFiles = settings.localFiles;
   if (
