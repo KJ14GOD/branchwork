@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { basename, join, resolve as resolvePath, sep } from "node:path";
 import {
   MIN_SECRET_LENGTH,
   type DeclaredCommand,
@@ -243,11 +243,65 @@ async function prepareWorktree(
   // path that exists. Removing it is safe *because* of the serialization
   // above: without that, this line is what deletes another caller's worktree.
   if (existsSync(worktree)) rmSync(worktree, { recursive: true, force: true });
-  const added = await git(repositoryPath, ["worktree", "add", "--", worktree, missionBranch]);
+  let added = await git(repositoryPath, ["worktree", "add", "--", worktree, missionBranch]);
+  if (added.code !== 0 && /already checked out at/.test(added.stderr)) {
+    // The pre-approaches layout keyed worktrees by *mission* (D-074 rekeyed
+    // them by workstream), so a mission from before that change still holds
+    // its branch checked out under the old name and git rightly refuses a
+    // second checkout. Retire the old worktree and retry — but only when it
+    // is Novus's own (inside this root, mission-keyed) and clean: the branch
+    // carries every checkpoint, so a clean legacy worktree holds nothing the
+    // branch does not, while a dirty one is surfaced rather than deleted.
+    const retired = await retireLegacyWorktree(git, repositoryPath, root, added.stderr);
+    if (retired) added = await git(repositoryPath, ["worktree", "add", "--", worktree, missionBranch]);
+  }
   if (added.code !== 0) {
     throw new WorkspaceCommandError(`This workspace could not be created: ${added.stderr.slice(0, 300)}`);
   }
   return worktree;
+}
+
+/**
+ * Removes a pre-D-074 mission-keyed worktree that still holds this branch.
+ *
+ * Returns true only when the conflicting checkout named in git's own error is
+ * inside this user-data's worktree root, carries the legacy `msn_` key, and
+ * has no uncommitted changes. Anything else — a path elsewhere on the machine,
+ * a workstream-keyed sibling, dirty files — is left exactly where it is, and
+ * a dirty legacy worktree is refused by name so nobody's uncommitted work is
+ * deleted by a migration.
+ */
+async function retireLegacyWorktree(
+  git: GitExec,
+  repositoryPath: string,
+  root: string,
+  stderr: string
+): Promise<boolean> {
+  const conflict = /already checked out at '([^']+)'/.exec(stderr)?.[1];
+  if (!conflict) return false;
+  // Real paths on both sides: git reports the physical path, and on macOS the
+  // user-data directory usually sits behind a symlink (`/var` → `/private/var`).
+  const real = (path: string): string => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return resolvePath(path);
+    }
+  };
+  const resolved = real(conflict);
+  const inRoot = resolved.startsWith(real(root) + sep);
+  const legacyKeyed = basename(resolved).startsWith("msn_");
+  if (!inRoot || !legacyKeyed) return false;
+  const status = await git(resolved, ["status", "--porcelain"]);
+  if (status.code !== 0 || status.stdout.trim() !== "") {
+    throw new WorkspaceCommandError(
+      "This mission's branch is checked out in a worktree from before competing approaches existed, and that worktree holds uncommitted changes. Commit or discard them there, then try again — Novus does not delete uncommitted work."
+    );
+  }
+  const removed = await git(repositoryPath, ["worktree", "remove", "--", resolved]);
+  if (removed.code !== 0) return false;
+  await git(repositoryPath, ["worktree", "prune"]);
+  return true;
 }
 
 /** The mask list every reported string passes through, so no path on this
