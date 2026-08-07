@@ -240,7 +240,29 @@ function registerIpc(): void {
   ipcMain.handle("novus:missions:retry-branch", async (_event, raw: unknown) => {
     const parsed = z.string().startsWith("wst_").safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed workstream id." };
-    return call(() => api.retryBranch(parsed.data));
+    return call(async () => {
+      let workstream = await api.retryBranch(parsed.data);
+      // An approach's branch is this machine's to cut when the checkout is
+      // here (D-080): the server deliberately does nothing for it, so a retry
+      // that stopped at the server would retry nothing.
+      if (workstream.branchStatus !== "created" && workstream.originSha) {
+        const detail = await api.getMission(workstream.missionId, workstream.workstreamId);
+        const repoId = detail.mission.repository?.providerRepoId;
+        if (repoId && pathForLocalRepo(repoId) !== null) {
+          const result = await ensureLocalBranch(
+            repoId,
+            workstream.missionBranch,
+            workstream.originSha
+          );
+          workstream = await api.reportBranch(
+            workstream.workstreamId,
+            result.ok ? { status: "created" } : { status: "failed", error: result.error }
+          );
+          runner?.discoverNow();
+        }
+      }
+      return workstream;
+    });
   });
 
   ipcMain.handle("novus:repos:add-local", async () => {
@@ -340,14 +362,16 @@ function registerIpc(): void {
           ? { expectedOriginSha: parsed.data.expectedOriginSha }
           : {})
       });
-      // A local branch is this machine's job, exactly as it is when a mission
-      // is created: cut the ref at the revision the approach forked from, and
-      // report the outcome as a claim.
+      // The approach's branch is cut where the checkout is — a folder the user
+      // picked and a GitHub repository the runner fetched are the same entry in
+      // the machine-local map (D-025, D-032). The provider is never asked: the
+      // origin is a checkpoint committed in this checkout, which the provider
+      // has never seen (D-080).
       const detail = await api.getMission(parsed.data.missionId);
-      const provider = detail.mission.repository?.provider;
-      if (provider === "local" && workstream.originSha) {
+      const repoId = detail.mission.repository?.providerRepoId;
+      if (repoId && pathForLocalRepo(repoId) !== null && workstream.originSha) {
         const result = await ensureLocalBranch(
-          detail.mission.repository!.providerRepoId,
+          repoId,
           workstream.missionBranch,
           workstream.originSha
         );

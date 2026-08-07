@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import type { ReportableRunnerEvent } from "@novus/contracts";
+import { FakeRepositoryProvider } from "../src/repo-provider.ts";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
 
 /**
@@ -33,7 +34,9 @@ interface Lane {
 }
 
 beforeAll(async () => {
-  harness = await createHarness("novus_test_approaches");
+  // A real provider stand-in, so a GitHub-backed mission can exist here too:
+  // the branch-ownership rule below is about exactly that case.
+  harness = await createHarness("novus_test_approaches", new FakeRepositoryProvider());
   kartik = await harness.signIn("kartik");
 }, 60_000);
 
@@ -358,6 +361,80 @@ describe("starting a competing approach", () => {
     });
     expect(pinned.statusCode).toBe(201);
     expect(pinned.json().workstream.originSha).toBe(shared);
+  });
+
+  it("leaves a GitHub-backed approach's branch to the machine that holds the checkout", async () => {
+    // A GitHub mission: the first lane's branch is the provider's to cut,
+    // because its base is a commit the provider genuinely has.
+    const base = await harness.app.inject({
+      method: "GET",
+      url: "/repositories/available/9001/base",
+      headers: bearer(kartik)
+    });
+    expect(base.statusCode).toBe(200);
+    const created = await harness.app.inject({
+      method: "POST",
+      url: "/missions",
+      headers: bearer(kartik),
+      payload: {
+        goal: "Make the session guard hold on GitHub",
+        successCriteria: "Sessions expire when they should",
+        provider: "github",
+        providerRepoId: "9001",
+        baseRef: base.json().ref,
+        baseSha: base.json().sha,
+        creationKey: randomUUID()
+      }
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().workstream.branchStatus).toBe("created");
+    const lane = await enrol(
+      created.json().mission.missionId as string,
+      created.json().workstream.workstreamId as string
+    );
+
+    // A checkpoint the runner committed in its own checkout — a commit the
+    // provider has never seen.
+    const executionId = await direct(lane, "Harden the session guard");
+    const localCommit = sha(`${lane.workstreamId}-local-only`);
+    await report(lane.credential, executionId, [checkpoint(1, localCommit, "src/session.ts")]);
+
+    // Forking must not ask the provider to cut a branch at that commit: the
+    // lane stays pending for the machine that holds the checkout, with no
+    // failure invented (D-080 — "the base revision no longer exists" was this
+    // exact path).
+    const forked = await fork(lane, "Try it in the middleware");
+    expect(forked.statusCode).toBe(201);
+    const approach = forked.json().workstream;
+    expect(approach.originSha).toBe(localCommit);
+    expect(approach.branchStatus).toBe("pending");
+    expect(approach.branchError).toBeNull();
+    const failures = await harness.db.query(
+      "select count(*)::int as n from events where workstream_id = $1 and kind = 'workstream.branch_failed'",
+      [approach.workstreamId]
+    );
+    expect(failures.rows[0].n).toBe(0);
+
+    // Retry does not hand it to the provider either.
+    const retried = await harness.app.inject({
+      method: "POST",
+      url: `/workstreams/${approach.workstreamId}/branch/retry`,
+      headers: bearer(kartik)
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().workstream.workstreamId).toBe(approach.workstreamId);
+    expect(retried.json().workstream.branchStatus).toBe("pending");
+    expect(retried.json().workstream.branchError).toBeNull();
+
+    // The machine's report settles it, exactly as a local repository's does.
+    const reported = await harness.app.inject({
+      method: "POST",
+      url: `/workstreams/${approach.workstreamId}/branch/report`,
+      headers: bearer(kartik),
+      payload: { status: "created" }
+    });
+    expect(reported.statusCode).toBe(200);
+    expect(reported.json().workstream.branchStatus).toBe("created");
   });
 
   it("is a role's act, not the baton's: a contributor is refused", async () => {

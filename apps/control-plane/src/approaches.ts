@@ -18,7 +18,6 @@ import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newDecisionId, newLeaseId, newWorkstreamId } from "./ids.ts";
-import { attemptBranchCreation } from "./missions.ts";
 import type { RouteDeps } from "./routes.ts";
 
 /**
@@ -449,10 +448,11 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
       );
     }
 
-    // A local branch is cut on the machine and reported back, exactly as the
-    // first lane's is; a GitHub one is created by the provider, for this lane
-    // alone rather than for whichever lane the mission started with.
-    await attemptBranchCreation(deps.db, deps.provider, ctx, access.missionId, outcome.workstreamId);
+    // The branch is cut on the machine that holds the checkout and reported
+    // back, whichever provider the repository came from: the origin is a
+    // checkpoint a runner committed locally, so the provider has never seen
+    // the commit and is never asked (D-080). The lane stays `pending` until a
+    // machine reports.
     const created = await deps.db.query("select * from workstreams where wst_id = $1", [
       outcome.workstreamId
     ]);

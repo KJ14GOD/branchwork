@@ -337,6 +337,12 @@ export async function attemptBranchCreation(
        join missions m on m.mission_id = w.mission_id
        join repositories r on r.repo_id = w.repo_id
       where w.mission_id = $1 and r.provider = 'github'
+        -- An approach forks at a checkpoint a runner committed in its own
+        -- checkout; the provider has never seen that commit, so asking it to
+        -- cut a branch there can only fail ("the base revision no longer
+        -- exists"). The machine holding the checkout cuts the ref and reports
+        -- it, exactly as a local repository's is (D-074, D-080).
+        and w.approach_flag = false
         and ($2::text is null or w.wst_id = $2)
       order by w.created_at, w.wst_id`,
     [missionId, workstreamId ?? null]
