@@ -300,9 +300,9 @@ describe("filing a mission away", () => {
     // An attempt with no command of its own, exactly as that collision left it.
     const stranded = `exe_${"stranded".padEnd(20, "0")}`;
     await harness.db.query(
-      `insert into executions (exe_id, org_id, mission_id, wst_id, harness, model, effort,
+      `insert into executions (exe_id, org_id, mission_id, wst_id, session_id, harness, model, effort,
                                runner_id, state, started_by)
-       select $1, org_id, mission_id, wst_id, harness, model, effort, runner_id, 'requested', started_by
+       select $1, org_id, mission_id, wst_id, session_id, harness, model, effort, runner_id, 'requested', started_by
          from executions where exe_id = $2`,
       [stranded, executionId]
     );

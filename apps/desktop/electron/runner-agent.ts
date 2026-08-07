@@ -218,7 +218,11 @@ const StartPayloadSchema = z.object({
   body: z.string().default(""),
   model: z.string().default(""),
   effort: z.string().default(""),
-  resumeSessionId: z.string().nullable().default(null)
+  resumeSessionId: z.string().nullable().default(null),
+  /** Which conversation this turn belongs to (D-083). Its presence is also a
+   *  statement: the server chose `resumeSessionId` deliberately, so a null
+   *  there means "start fresh" — never "fall back to the workstream's". */
+  sessionId: z.string().nullable().default(null)
 });
 
 /**
@@ -916,7 +920,15 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       directionId: payload.data.directionId ?? null,
       model: payload.data.model,
       effort: payload.data.effort,
-      resumeSessionId: payload.data.resumeSessionId ?? workstream.harnessSessionId,
+      // A session-aware server states the resume point outright, and a null
+      // from it means this conversation genuinely has no history — falling
+      // back to the workstream's would resume a *sibling's* transcript
+      // (D-083). The fallback survives only for a payload from before
+      // sessions, which named no session at all.
+      resumeSessionId:
+        payload.data.sessionId !== null
+          ? payload.data.resumeSessionId
+          : (payload.data.resumeSessionId ?? workstream.harnessSessionId),
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });

@@ -18,6 +18,7 @@ import { withTransaction } from "./db.ts";
 import { cancelDirection, resolveDirection, submitDirection } from "./directions.ts";
 import { recordEvent } from "./events.ts";
 import { newCommandId, newExecutionId } from "./ids.ts";
+import { sessionResumePoint } from "./sessions.ts";
 import type { RouteDeps } from "./routes.ts";
 
 /**
@@ -55,6 +56,8 @@ const RUNNER_GONE =
 const MissionParamsSchema = z.object({ missionId: z.string().startsWith("msn_") });
 const DirectionParamsSchema = z.object({ directionId: z.string().startsWith("dir_") });
 const ChangeParamsSchema = z.object({ changeId: z.string().startsWith("chg_") });
+/** Stop names its lane; absent means the lane the mission started with. */
+const StopInputSchema = z.object({ workstreamId: z.string().startsWith("wst_").optional() });
 
 export interface DispatchResult {
   executionId: string | null;
@@ -113,12 +116,34 @@ export async function enqueueCommand(client: pg.PoolClient, args: EnqueueArgs): 
   return existing.rows[0].cmd_id as string;
 }
 
-async function activeExecution(client: pg.PoolClient, workstreamId: string): Promise<string | null> {
+interface ActiveExecution {
+  executionId: string;
+  /** Whose turn it is (D-083): a direction for this session steers it, a
+   *  direction for a sibling waits for it. */
+  sessionId: string;
+}
+
+async function activeExecution(
+  client: pg.PoolClient,
+  workstreamId: string
+): Promise<ActiveExecution | null> {
   const result = await client.query(
-    "select exe_id from executions where wst_id = $1 and state = any($2::text[]) limit 1",
+    "select exe_id, session_id from executions where wst_id = $1 and state = any($2::text[]) limit 1",
     [workstreamId, ACTIVE_EXECUTION_STATES]
   );
-  return (result.rows[0]?.exe_id as string | undefined) ?? null;
+  const row = result.rows[0];
+  return row ? { executionId: row.exe_id as string, sessionId: row.session_id as string } : null;
+}
+
+/** The words the composer shows when a direction has to wait its turn. */
+async function busyWith(client: pg.PoolClient, sessionId: string): Promise<string> {
+  const result = await client.query("select title from workstream_sessions where csn_id = $1", [
+    sessionId
+  ]);
+  const title = (result.rows[0]?.title as string | null | undefined) ?? null;
+  return title
+    ? `Queued — "${title}" is running; this applies when it finishes.`
+    : "Queued — another session is running; this applies when it finishes.";
 }
 
 /**
@@ -143,6 +168,14 @@ export async function dispatchQueuedForController(
                             and l.holder_user_id = d.author_user_id
        join users u on u.user_id = d.author_user_id
       where d.wst_id = $1 and d.state = 'queued'
+        -- Only direction nothing has ever carried. "Queued" alone is not that:
+        -- a direction stays queued until the runner *acknowledges* it, so the
+        -- one that started the turn now completing still reads queued — and
+        -- re-dispatching it would run the same words twice (D-083's
+        -- completed-turn dispatch found this; the enrolment path shared it).
+        and not exists (select 1 from executions e where e.starting_direction_id = d.dir_id)
+        and not exists (select 1 from runner_commands c
+                         where c.wst_id = d.wst_id and c.payload->>'directionId' = d.dir_id)
       order by d.ordinal limit 1`,
     [workstreamId]
   );
@@ -150,8 +183,17 @@ export async function dispatchQueuedForController(
   if (!row) return null;
 
   // The author's own standing decides this, not the enroller's: authority is
-  // read from durable state at command time (ARCHITECTURE.md#authorization).
-  const access = await missionAccess(deps.db, { userId: row.user_id as string }, row.mission_id as string);
+  // read from durable state at command time (ARCHITECTURE.md#authorization) —
+  // and against *this* lane, not the mission's first. Resolved without the
+  // lane, an approach's own queued direction was judged by the wrong baton and
+  // then fetched against the wrong workstream, so it never dispatched (D-083's
+  // routing audit).
+  const access = await missionAccess(
+    deps.db,
+    { userId: row.user_id as string },
+    row.mission_id as string,
+    workstreamId
+  );
   if (!access || !access.isController) return null;
   if (!access.capabilities.includes("execution.start")) return null;
 
@@ -203,11 +245,12 @@ export async function dispatchDirection(
     }
 
     const direction = await client.query(
-      "select body from directions where dir_id = $1 and wst_id = $2",
+      "select body, session_id from directions where dir_id = $1 and wst_id = $2",
       [args.directionId, workstreamId]
     );
     const body = direction.rows[0]?.body as string | undefined;
-    if (body === undefined) {
+    const sessionId = direction.rows[0]?.session_id as string | undefined;
+    if (body === undefined || sessionId === undefined) {
       return { executionId: null, commandId: null, deferred: "That direction is no longer available." };
     }
 
@@ -229,29 +272,42 @@ export async function dispatchDirection(
       deferred: null
     });
 
+    // Whose turn the workspace is on decides everything (D-083): the same
+    // session's direction steers the running turn, a sibling session's waits
+    // for it — visibly, with the running session named — and is dispatched by
+    // the control plane itself when the turn completes. Steering a *different*
+    // conversation's turn would be the silent cross-talk this rule forbids.
     const running = await activeExecution(client, workstreamId);
-    if (running) return applyTo(running);
+    if (running) {
+      if (running.sessionId === sessionId) return applyTo(running.executionId);
+      return {
+        executionId: null,
+        commandId: null,
+        deferred: await busyWith(client, running.sessionId)
+      };
+    }
 
-    const session = await client.query("select harness_session_id from workstreams where wst_id = $1", [
-      workstreamId
-    ]);
-    const resumeSessionId = (session.rows[0]?.harness_session_id as string | null) ?? null;
+    // This conversation's own resume point, never a sibling's (D-083).
+    const resumeSessionId = await sessionResumePoint(client, sessionId);
     const executionId = newExecutionId();
 
     // The partial unique index is the concurrency guard, not a memory of what
     // this process already started. A second dispatch that loses the race
-    // becomes an apply against the winner's execution.
+    // becomes an apply against the winner's execution — but only when the
+    // winner is the same conversation; a sibling session's winner means this
+    // direction waits its turn.
     await client.query("savepoint start_execution");
     try {
       await client.query(
-        `insert into executions (exe_id, org_id, mission_id, wst_id, harness, model, effort,
+        `insert into executions (exe_id, org_id, mission_id, wst_id, session_id, harness, model, effort,
                                  runner_id, starting_direction_id, state, started_by)
-         values ($1, $2, $3, $4, 'claude-code', $5, $6, $7, $8, 'requested', $9)`,
+         values ($1, $2, $3, $4, $5, 'claude-code', $6, $7, $8, $9, 'requested', $10)`,
         [
           executionId,
           access.orgId,
           access.missionId,
           workstreamId,
+          sessionId,
           args.model,
           args.effort,
           runnerId,
@@ -265,7 +321,14 @@ export async function dispatchDirection(
       await client.query("rollback to savepoint start_execution");
       const winner = await activeExecution(client, workstreamId);
       if (!winner) throw error;
-      return applyTo(winner);
+      if (winner.sessionId !== sessionId) {
+        return {
+          executionId: null,
+          commandId: null,
+          deferred: await busyWith(client, winner.sessionId)
+        };
+      }
+      return applyTo(winner.executionId);
     }
 
     const commandId = await enqueueCommand(client, {
@@ -277,6 +340,7 @@ export async function dispatchDirection(
         body,
         model: args.model,
         effort: args.effort,
+        sessionId,
         resumeSessionId
       },
       // Keyed on the *execution*, not the direction. A direction that failed
@@ -300,7 +364,7 @@ export async function dispatchDirection(
       actorLogin: actor.login,
       causeDirectionId: args.directionId,
       causeLeaseId: access.leaseId,
-      payload: { harness: "claude-code", model: args.model, effort: args.effort }
+      payload: { harness: "claude-code", model: args.model, effort: args.effort, sessionId }
     });
     return { executionId, commandId, deferred: null };
   });
@@ -320,10 +384,21 @@ async function lastHarnessSettings(db: Db, workstreamId: string): Promise<{ mode
   };
 }
 
-/** The mission a direction belongs to, before any authorization is computed. */
-async function missionOfDirection(db: Db, directionId: string): Promise<string | null> {
-  const result = await db.query("select mission_id from directions where dir_id = $1", [directionId]);
-  return (result.rows[0]?.mission_id as string | undefined) ?? null;
+/** The mission — and the lane — a direction belongs to, before any
+ *  authorization is computed. The lane matters: resolving a queued direction
+ *  is judged against the *direction's* lane's lease, never the mission's
+ *  first (ARCHITECTURE.md#authorization, D-083's routing audit). */
+async function missionOfDirection(
+  db: Db,
+  directionId: string
+): Promise<{ missionId: string; workstreamId: string } | null> {
+  const result = await db.query("select mission_id, wst_id from directions where dir_id = $1", [
+    directionId
+  ]);
+  const row = result.rows[0];
+  return row
+    ? { missionId: row.mission_id as string, workstreamId: row.wst_id as string }
+    : null;
 }
 
 export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): void {
@@ -335,6 +410,16 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
     if (!params.success || !body.success) {
       const message = body.success ? "Malformed mission id." : body.error.issues[0]?.message ?? "Invalid direction.";
       return deps.sendError(reply, params.success ? 422 : 400, "invalid_direction", message);
+    }
+    // One direction, one target: naming a session and asking for a new one at
+    // once has no honest reading, so it is refused rather than guessed at.
+    if (body.data.sessionId && body.data.newSession) {
+      return deps.sendError(
+        reply,
+        400,
+        "invalid_direction",
+        "Name a session or ask for a new one, not both."
+      );
     }
     // Resolved against the lane the direction names, so an approach's own
     // controller decides its queue rather than the first lane's (D-074).
@@ -348,10 +433,20 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
     requireCapability(access, "direction.submit");
 
     const actor = { userId: ctx.userId, login: ctx.login };
-    const submitted = await submitDirection(deps.db, access, actor, body.data.body, {
-      model: body.data.model,
-      effort: body.data.effort
-    });
+    const submitted = await submitDirection(
+      deps.db,
+      access,
+      actor,
+      body.data.body,
+      {
+        model: body.data.model,
+        effort: body.data.effort
+      },
+      {
+        ...(body.data.sessionId ? { sessionId: body.data.sessionId } : {}),
+        newSession: body.data.newSession
+      }
+    );
     // Only the controller's own direction proceeds toward the harness; anyone
     // else's waits, visibly, for whoever holds the baton.
     const dispatch = submitted.authorIsController
@@ -377,9 +472,13 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
     if (!params.success || !body.success) {
       return deps.sendError(reply, 400, "bad_request", "Malformed resolution.");
     }
-    const missionId = await missionOfDirection(deps.db, params.data.directionId);
-    if (!missionId) return deps.sendError(reply, 404, "not_found", "No such direction.");
-    const access = await missionAccess(deps.db, ctx, missionId);
+    const owner = await missionOfDirection(deps.db, params.data.directionId);
+    if (!owner) return deps.sendError(reply, 404, "not_found", "No such direction.");
+    // Against the direction's own lane: an approach's queued direction is the
+    // approach's controller's to apply, and the first lane's baton must not
+    // reach across (D-080's rule, applied to a request that arrives through a
+    // row rather than a mission id — D-083).
+    const access = await missionAccess(deps.db, ctx, owner.missionId, owner.workstreamId);
     if (!access) return deps.sendError(reply, 404, "not_found", "No such direction.");
     requireCapability(access, "direction.apply");
 
@@ -409,9 +508,9 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
     if (!ctx) return;
     const params = DirectionParamsSchema.safeParse(request.params);
     if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed direction id.");
-    const missionId = await missionOfDirection(deps.db, params.data.directionId);
-    if (!missionId) return deps.sendError(reply, 404, "not_found", "No such direction.");
-    const access = await missionAccess(deps.db, ctx, missionId);
+    const owner = await missionOfDirection(deps.db, params.data.directionId);
+    if (!owner) return deps.sendError(reply, 404, "not_found", "No such direction.");
+    const access = await missionAccess(deps.db, ctx, owner.missionId, owner.workstreamId);
     if (!access) return deps.sendError(reply, 404, "not_found", "No such direction.");
     // Participation is the gate here; authorship is enforced inside, because
     // "only the author may cancel" is a rule about the row, not about a role.
@@ -426,7 +525,13 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
     if (!ctx) return;
     const params = MissionParamsSchema.safeParse(request.params);
     if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed mission id.");
-    const access = await missionAccess(deps.db, ctx, params.data.missionId);
+    const body = StopInputSchema.safeParse(request.body ?? {});
+    if (!body.success) return deps.sendError(reply, 400, "bad_request", "Malformed stop request.");
+    // The lane travels on the wire (D-080, D-083's routing audit): resolved
+    // without it, a Stop pressed while reading an Alternative reached the
+    // mission's *first* lane — a no-op there, while the Alternative's turn
+    // kept running under the very control that claimed to stop it.
+    const access = await missionAccess(deps.db, ctx, params.data.missionId, body.data.workstreamId ?? null);
     if (!access) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
     requireCapability(access, "execution.stop");
     const workstreamId = access.workstreamId;

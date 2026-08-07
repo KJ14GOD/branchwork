@@ -824,6 +824,7 @@ export function ApprovalRow({
   controllerLogin,
   busy,
   error,
+  askedIn,
   onRespond,
   onRequestControl
 }: {
@@ -832,6 +833,10 @@ export function ApprovalRow({
   controllerLogin: string | null;
   busy: boolean;
   error: string | null;
+  /** The session the question came from, named only while the lane holds more
+   *  than one conversation — the question blocks the lane's one workspace, so
+   *  the card renders whichever session is selected, attributed (D-083). */
+  askedIn?: string | null;
   onRespond: (decision: "approve" | "deny") => void;
   onRequestControl: (() => void) | null;
 }) {
@@ -845,6 +850,11 @@ export function ApprovalRow({
         <span className="approval-summary" data-testid="approval-summary">
           {approval.summary}
         </span>
+        {askedIn && (
+          <span className="approval-asked" data-testid="approval-asked-in">
+            asked in &quot;{askedIn}&quot;
+          </span>
+        )}
       </div>
       {mayAnswer ? (
         <div className="approval-actions">

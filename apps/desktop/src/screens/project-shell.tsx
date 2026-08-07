@@ -19,13 +19,16 @@ import { TerminalToggle } from "../components/runtime-dock";
 import { WorkspaceSetupDialog } from "../components/workspace-setup";
 import {
   activeTab as activeTabOf,
+  closeSession,
   closeTab,
   closeTabs,
   emptyWorkingSet,
   openMission,
+  openSession,
   promoteDraft,
   readWorkingSet,
   selectLane,
+  selectSession,
   selectTab,
   tabIsGone,
   writeWorkingSet,
@@ -1285,6 +1288,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               activeWorkstreamId={active.workstreamId}
               onSelectLane={(workstreamId) =>
                 setWorkingSet((previous) => selectLane(previous, active.id, workstreamId))
+              }
+              activeSessionId={active.sessionId}
+              openSessionIds={active.openSessionIds}
+              onSelectSession={(sessionId) =>
+                setWorkingSet((previous) => selectSession(previous, active.id, sessionId))
+              }
+              onOpenSession={(sessionId) =>
+                setWorkingSet((previous) => openSession(previous, active.id, sessionId))
+              }
+              onCloseSession={(sessionId) =>
+                setWorkingSet((previous) => closeSession(previous, active.id, sessionId))
               }
             />
           ) : currentProject ? (

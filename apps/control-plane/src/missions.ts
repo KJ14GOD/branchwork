@@ -10,6 +10,7 @@ import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent, recordEventAtSeq } from "./events.ts";
 import { newLeaseId, newMissionId, newRepoId, newWorkstreamId } from "./ids.ts";
+import { insertSession } from "./sessions.ts";
 import type { AuthedContext } from "./auth.ts";
 import { missionAccess } from "./authz.ts";
 import { missionDetail } from "./mission-detail.ts";
@@ -262,6 +263,15 @@ async function createMissionTx(
          values ($1, $2, $3, 'Current work', $4, $5, $6, 'pending')`,
       [workstreamId, missionId, repoId, input.baseRef, input.baseSha, missionBranch]
     );
+    // Every workstream holds at least one session, born with it; its first
+    // direction names it (D-083). No event of its own — it is part of the
+    // workstream's creation, exactly as the workstream is part of the mission's.
+    await insertSession(client, {
+      orgId: ctx.orgId,
+      missionId,
+      workstreamId,
+      createdBy: ctx.userId
+    });
     // The creator holds the first lease: a workstream is never born without a
     // controller (PRODUCT.md#control).
     const leaseId = newLeaseId();

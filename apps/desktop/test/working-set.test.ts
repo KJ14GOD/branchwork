@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   activeTab,
+  closeSession,
   closeTab,
   closeTabs,
   decodeWorkingSet,
@@ -8,8 +9,10 @@ import {
   encodeWorkingSet,
   openDraft,
   openMission,
+  openSession,
   promoteDraft,
   selectLane,
+  selectSession,
   selectTab,
   tabIsGone,
   type WorkingSet
@@ -224,5 +227,120 @@ describe("what a relaunch restores", () => {
     });
     const restored = decodeWorkingSet(raw, minter());
     expect(restored.tabs.map((tab) => tab.missionId)).toEqual(["msn_a"]);
+  });
+});
+
+describe("sessions in a tab (D-083)", () => {
+  it("selects a session for one tab alone, and null returns to the lane's first", () => {
+    const mint = minter();
+    let set = openMission(emptyWorkingSet, "msn_a", "local:one", mint);
+    set = openMission(set, "msn_b", "local:one", mint);
+    set = selectSession(set, set.tabs[0]!.id, "csn_two");
+    expect(set.tabs[0]!.sessionId).toBe("csn_two");
+    expect(set.tabs[1]!.sessionId).toBeNull();
+    // Selecting what is already selected changes nothing at all.
+    expect(selectSession(set, set.tabs[0]!.id, "csn_two")).toBe(set);
+    set = selectSession(set, set.tabs[0]!.id, null);
+    expect(set.tabs[0]!.sessionId).toBeNull();
+    // A tab that is not open cannot be given a session.
+    expect(selectSession(set, "nothing-like-this", "csn_two")).toBe(set);
+  });
+
+  it("opens a session as a tab and selects it, at most once", () => {
+    const mint = minter();
+    let set = openMission(emptyWorkingSet, "msn_a", "local:one", mint);
+    const tabId = set.tabs[0]!.id;
+    set = openSession(set, tabId, "csn_two");
+    expect(set.tabs[0]!.openSessionIds).toEqual(["csn_two"]);
+    expect(set.tabs[0]!.sessionId).toBe("csn_two");
+    // Opening the session already open and selected changes nothing at all.
+    expect(openSession(set, tabId, "csn_two")).toBe(set);
+    // Opening another adds beside it, in the order they were opened.
+    set = openSession(set, tabId, "csn_three");
+    expect(set.tabs[0]!.openSessionIds).toEqual(["csn_two", "csn_three"]);
+    expect(set.tabs[0]!.sessionId).toBe("csn_three");
+    // Reopening one that is open but not selected only moves the selection.
+    set = openSession(set, tabId, "csn_two");
+    expect(set.tabs[0]!.openSessionIds).toEqual(["csn_two", "csn_three"]);
+    expect(set.tabs[0]!.sessionId).toBe("csn_two");
+  });
+
+  it("closes a session tab and falls back to the lane's first when it was being read", () => {
+    const mint = minter();
+    let set = openMission(emptyWorkingSet, "msn_a", "local:one", mint);
+    const tabId = set.tabs[0]!.id;
+    set = openSession(set, tabId, "csn_two");
+    set = openSession(set, tabId, "csn_three");
+    // Closing a background session leaves the one being read alone.
+    set = closeSession(set, tabId, "csn_two");
+    expect(set.tabs[0]!.openSessionIds).toEqual(["csn_three"]);
+    expect(set.tabs[0]!.sessionId).toBe("csn_three");
+    // Closing the one being read falls back to the lane's first.
+    set = closeSession(set, tabId, "csn_three");
+    expect(set.tabs[0]!.openSessionIds).toEqual([]);
+    expect(set.tabs[0]!.sessionId).toBeNull();
+    // Closing what is not open changes nothing at all.
+    expect(closeSession(set, tabId, "csn_three")).toBe(set);
+  });
+
+  it("moving lanes returns to the new lane's first session — a session belongs to one lane", () => {
+    const mint = minter();
+    let set = openMission(emptyWorkingSet, "msn_a", "local:one", mint);
+    const tabId = set.tabs[0]!.id;
+    set = openSession(set, tabId, "csn_two");
+    set = selectLane(set, tabId, "wst_alternative");
+    expect(set.tabs[0]!.workstreamId).toBe("wst_alternative");
+    expect(set.tabs[0]!.sessionId).toBeNull();
+  });
+
+  it("restores the session being read and the tabs that were open", () => {
+    const mint = minter();
+    let set = openMission(emptyWorkingSet, "msn_a", "local:one", mint);
+    set = openSession(set, set.tabs[0]!.id, "csn_two");
+    set = openSession(set, set.tabs[0]!.id, "csn_three");
+    set = selectSession(set, set.tabs[0]!.id, "csn_two");
+    const restored = decodeWorkingSet(encodeWorkingSet(set), minter());
+    expect(restored.tabs[0]!.sessionId).toBe("csn_two");
+    expect(restored.tabs[0]!.openSessionIds).toEqual(["csn_two", "csn_three"]);
+  });
+
+  it("drops a malformed stored session rather than a whole tab", () => {
+    const raw = JSON.stringify({
+      missions: [
+        {
+          missionId: "msn_a",
+          projectKey: "local:one",
+          sessionId: "not-a-session",
+          openSessionIds: ["csn_ok", 7, "trm_no", null, "csn_ok"]
+        }
+      ],
+      activeMissionId: "msn_a"
+    });
+    const restored = decodeWorkingSet(raw, minter());
+    expect(restored.tabs.map((tab) => tab.missionId)).toEqual(["msn_a"]);
+    expect(restored.tabs[0]!.sessionId).toBeNull();
+    // Only entries that look like sessions survive, each once.
+    expect(restored.tabs[0]!.openSessionIds).toEqual(["csn_ok"]);
+  });
+
+  it("treats a store from before sessions as the lane's first with nothing open", () => {
+    const raw = JSON.stringify({
+      missions: [{ missionId: "msn_a", projectKey: "local:one", workstreamId: "wst_alt" }],
+      activeMissionId: "msn_a"
+    });
+    const restored = decodeWorkingSet(raw, minter());
+    expect(restored.tabs[0]!.sessionId).toBeNull();
+    expect(restored.tabs[0]!.openSessionIds).toEqual([]);
+    expect(restored.tabs[0]!.workstreamId).toBe("wst_alt");
+  });
+
+  it("a malformed openSessionIds shape is an empty open set, not a broken tab", () => {
+    const raw = JSON.stringify({
+      missions: [{ missionId: "msn_a", projectKey: "local:one", openSessionIds: "csn_two" }],
+      activeMissionId: "msn_a"
+    });
+    const restored = decodeWorkingSet(raw, minter());
+    expect(restored.tabs.map((tab) => tab.missionId)).toEqual(["msn_a"]);
+    expect(restored.tabs[0]!.openSessionIds).toEqual([]);
   });
 });

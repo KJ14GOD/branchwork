@@ -32,6 +32,14 @@ export interface OpenTab {
    *  reopening a mission puts you back in the lane you were directing, with
    *  the composer targeting it (D-080). */
   workstreamId: string | null;
+  /** The session this room is reading, null for the lane's first — the
+   *  conversation every lane is born with, which is the default and never
+   *  carried around as an id (D-083). Part of the tab for the same reason the
+   *  lane is: the composer's target must come back as it was left. */
+  sessionId: string | null;
+  /** Sessions this person explicitly opened as tabs on the room's strip. The
+   *  lane's first session is implicitly always open and never stored here. */
+  openSessionIds: string[];
 }
 
 export interface WorkingSet {
@@ -65,7 +73,14 @@ export function openMission(
 ): WorkingSet {
   const existing = tabFor(set, missionId);
   if (existing) return set.activeId === existing.id ? set : { ...set, activeId: existing.id };
-  const tab: OpenTab = { id: mint(), projectKey, missionId, workstreamId: null };
+  const tab: OpenTab = {
+    id: mint(),
+    projectKey,
+    missionId,
+    workstreamId: null,
+    sessionId: null,
+    openSessionIds: []
+  };
   return { tabs: [...set.tabs, tab].slice(-MAX_TABS), activeId: tab.id };
 }
 
@@ -77,7 +92,14 @@ export function openMission(
 export function openDraft(set: WorkingSet, projectKey: string, mint: () => string): WorkingSet {
   const existing = set.tabs.find((tab) => tab.missionId === null && tab.projectKey === projectKey);
   if (existing) return set.activeId === existing.id ? set : { ...set, activeId: existing.id };
-  const tab: OpenTab = { id: mint(), projectKey, missionId: null, workstreamId: null };
+  const tab: OpenTab = {
+    id: mint(),
+    projectKey,
+    missionId: null,
+    workstreamId: null,
+    sessionId: null,
+    openSessionIds: []
+  };
   return { tabs: [...set.tabs, tab].slice(-MAX_TABS), activeId: tab.id };
 }
 
@@ -97,7 +119,72 @@ export function selectLane(set: WorkingSet, tabId: string, workstreamId: string 
   if (!tab || tab.workstreamId === workstreamId) return set;
   return {
     ...set,
-    tabs: set.tabs.map((entry) => (entry.id === tabId ? { ...entry, workstreamId } : entry))
+    tabs: set.tabs.map((entry) =>
+      // A session belongs to one lane, so moving lanes returns to the new
+      // lane's first conversation rather than carrying a foreign id (D-083).
+      entry.id === tabId ? { ...entry, workstreamId, sessionId: null } : entry
+    )
+  };
+}
+
+/**
+ * Selects which session a tab is reading. Null returns to the lane's first —
+ * the conversation the lane was born with, which is the default and never
+ * stored as an id (D-083). The choice survives a relaunch exactly as the lane
+ * does, because the composer's target must come back as it was left.
+ */
+export function selectSession(set: WorkingSet, tabId: string, sessionId: string | null): WorkingSet {
+  const tab = set.tabs.find((entry) => entry.id === tabId);
+  if (!tab || tab.sessionId === sessionId) return set;
+  return {
+    ...set,
+    tabs: set.tabs.map((entry) => (entry.id === tabId ? { ...entry, sessionId } : entry))
+  };
+}
+
+/**
+ * Opens a session as a tab on the room's strip and selects it. A conversation
+ * is on the strip at most once: opening one that is already open just moves
+ * to it.
+ */
+export function openSession(set: WorkingSet, tabId: string, sessionId: string): WorkingSet {
+  const tab = set.tabs.find((entry) => entry.id === tabId);
+  if (!tab) return set;
+  const alreadyOpen = tab.openSessionIds.includes(sessionId);
+  if (alreadyOpen && tab.sessionId === sessionId) return set;
+  const openSessionIds = alreadyOpen ? tab.openSessionIds : [...tab.openSessionIds, sessionId];
+  return {
+    ...set,
+    tabs: set.tabs.map((entry) =>
+      entry.id === tabId ? { ...entry, openSessionIds, sessionId } : entry
+    )
+  };
+}
+
+/**
+ * Closes a session tab, and does nothing else.
+ *
+ * The conversation, its executions, and anything running go on exactly as
+ * they were — the session is still in the switcher and still the lane's. When
+ * the session being read is the one closed, reading falls back to the lane's
+ * first session, so the canvas never lands on nothing.
+ */
+export function closeSession(set: WorkingSet, tabId: string, sessionId: string): WorkingSet {
+  const tab = set.tabs.find((entry) => entry.id === tabId);
+  if (!tab) return set;
+  const wasSelected = tab.sessionId === sessionId;
+  if (!tab.openSessionIds.includes(sessionId) && !wasSelected) return set;
+  return {
+    ...set,
+    tabs: set.tabs.map((entry) =>
+      entry.id === tabId
+        ? {
+            ...entry,
+            openSessionIds: entry.openSessionIds.filter((id) => id !== sessionId),
+            sessionId: wasSelected ? null : entry.sessionId
+          }
+        : entry
+    )
   };
 }
 
@@ -156,6 +243,8 @@ interface StoredTab {
   missionId: string;
   projectKey: string;
   workstreamId?: string | null;
+  sessionId?: string | null;
+  openSessionIds?: string[];
 }
 
 interface StoredWorkingSet {
@@ -176,7 +265,9 @@ export function encodeWorkingSet(set: WorkingSet): string {
       .map((tab) => ({
         missionId: tab.missionId,
         projectKey: tab.projectKey,
-        workstreamId: tab.workstreamId
+        workstreamId: tab.workstreamId,
+        sessionId: tab.sessionId,
+        openSessionIds: tab.openSessionIds
       })),
     activeMissionId: active?.missionId ?? null
   };
@@ -203,7 +294,13 @@ export function decodeWorkingSet(raw: string | null, mint: () => string): Workin
   const tabs: OpenTab[] = [];
   for (const entry of record.missions) {
     if (typeof entry !== "object" || entry === null) continue;
-    const candidate = entry as { missionId?: unknown; projectKey?: unknown; workstreamId?: unknown };
+    const candidate = entry as {
+      missionId?: unknown;
+      projectKey?: unknown;
+      workstreamId?: unknown;
+      sessionId?: unknown;
+      openSessionIds?: unknown;
+    };
     if (typeof candidate.missionId !== "string" || typeof candidate.projectKey !== "string") continue;
     if (candidate.missionId === "" || seen.has(candidate.missionId)) continue;
     seen.add(candidate.missionId);
@@ -216,7 +313,24 @@ export function decodeWorkingSet(raw: string | null, mint: () => string): Workin
       workstreamId:
         typeof candidate.workstreamId === "string" && candidate.workstreamId.startsWith("wst_")
           ? candidate.workstreamId
-          : null
+          : null,
+      // The session being read comes back the same way: malformed means the
+      // lane's first conversation, never a broken tab (D-083).
+      sessionId:
+        typeof candidate.sessionId === "string" && candidate.sessionId.startsWith("csn_")
+          ? candidate.sessionId
+          : null,
+      // Only entries that look like sessions come back, each once; anything
+      // else is an empty open set rather than a corrupt strip.
+      openSessionIds: Array.isArray(candidate.openSessionIds)
+        ? [
+            ...new Set(
+              candidate.openSessionIds.filter(
+                (id): id is string => typeof id === "string" && id.startsWith("csn_")
+              )
+            )
+          ].slice(0, MAX_TABS)
+        : []
     });
     if (tabs.length === MAX_TABS) break;
   }

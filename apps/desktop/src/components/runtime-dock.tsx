@@ -459,7 +459,7 @@ export function RuntimeDock({
           a label a person has to maintain, are both words on screen doing no
           work (D-049). */}
       <div className="terminal-head">
-        <div className="terminal-tabs" role="tablist" aria-label="Terminal sessions">
+        <div className="terminal-tabs" role="tablist" aria-label="Terminal tabs">
           {sessions.map((session) => {
             const tone = stateOf(session);
             const selected = session.sessionId === activeId;
@@ -530,7 +530,7 @@ export function RuntimeDock({
       />
       {active?.state === "exited" && (
         <p className="terminal-ended" data-testid="terminal-ended">
-          This session ended{active.exitCode === null ? "" : ` with code ${active.exitCode}`}. Start a new
+          This shell ended{active.exitCode === null ? "" : ` with code ${active.exitCode}`}. Start a new
           one to keep working.
         </p>
       )}

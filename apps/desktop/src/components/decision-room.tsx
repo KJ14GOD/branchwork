@@ -228,7 +228,7 @@ function ApproachColumn({
         <p className="approach-intent" data-testid="approach-intent">
           {/* The baseline has no intent to state, and says so rather than
               leaving a gap somebody reads as an omission. */}
-          {approach.intent ?? "The lane this mission started with."}
+          {approach.intent ?? "The work this mission started with."}
         </p>
       </header>
 
@@ -571,7 +571,7 @@ function DecisionReceipt({
             {others.map((approach) => (
               <li key={approach.workstreamId}>
                 <span className="tool-name">{approach.name}</span>
-                <span className="tool-detail">{approach.intent ?? "the lane this mission started with"}</span>
+                <span className="tool-detail">{approach.intent ?? "the work this mission started with"}</span>
               </li>
             ))}
           </ul>

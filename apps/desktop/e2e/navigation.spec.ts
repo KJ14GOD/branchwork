@@ -546,7 +546,12 @@ describe("the missions a person has open", () => {
     await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
     await expect.poll(async () => (await tabLabels(page)).length, { timeout: 30_000 }).toBe(1);
     expect((await tabLabels(page))[0]).toContain("Alpha one");
-    expect(await page.getByTestId("room-goal").innerText()).toContain("Alpha one");
+    // Polled, not read instantly: the tab restores before the room's first
+    // detail fetch lands, and the room saying "Loading mission" for a poll
+    // tick is loading, not failure. The end state required is unchanged.
+    await expect
+      .poll(() => page.getByTestId("room-goal").innerText(), { timeout: 30_000 })
+      .toContain("Alpha one");
     await shot(page, "66-restored-minus-the-refused.png");
   }, 300_000);
 });

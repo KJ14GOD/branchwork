@@ -504,14 +504,20 @@ function registerIpc(): void {
         model: input.model,
         effort: input.effort,
         // Carried through, so a competing approach can actually be worked
-        // rather than every direction landing on the mission's first lane.
-        ...(input.workstreamId ? { workstreamId: input.workstreamId } : {})
+        // rather than every direction landing on the mission's first lane —
+        // and the session with it, for the same reason one level down (D-083).
+        ...(input.workstreamId ? { workstreamId: input.workstreamId } : {}),
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        ...(input.newSession ? { newSession: true } : {})
       })
     );
     if (!result.ok) return result;
     runner?.pollNow();
     return ok({
       directionId: result.value.direction.directionId,
+      // Where the words actually landed: the named session, the lane's first,
+      // or the one `newSession` just created — the renderer selects it.
+      sessionId: result.value.direction.sessionId,
       dispatched: result.value.dispatched,
       deferred: result.value.deferred
     });
@@ -544,10 +550,17 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("novus:missions:stop", async (_event, raw: unknown) => {
-    const parsed = MissionIdSchema.safeParse(raw);
+    // The lane rides along (D-080, D-083): a Stop pressed while reading an
+    // Alternative must stop the Alternative's turn, not the first lane's.
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        workstreamId: z.string().startsWith("wst_").optional()
+      })
+      .safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
     const result = await call(async () => {
-      await api.stopExecution(parsed.data);
+      await api.stopExecution(parsed.data.missionId, parsed.data.workstreamId);
       return null;
     });
     runner?.pollNow();

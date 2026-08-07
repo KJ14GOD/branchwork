@@ -636,3 +636,72 @@ create index if not exists decisions_by_mission on decisions (mission_id, decide
 -- One current decision per mission; the rest are history.
 create unique index if not exists decisions_one_current_per_mission
   on decisions (mission_id) where superseded_at is null;
+
+-- ---------------------------------------------------------------------------
+-- Sessions (D-083): parallel conversations inside one workstream. A session
+-- owns its direction thread, its executions, and its own harness continuity —
+-- and nothing else. No branch, no worktree, no workspace, no lease: sessions
+-- take turns in the workstream's single workspace, and the one-live-execution-
+-- per-workstream index above is the serialization.
+--
+-- `csn_` because `ses_` has always been the auth session's prefix; two objects
+-- sharing a prefix is what prefixes exist to prevent.
+-- ---------------------------------------------------------------------------
+
+create table if not exists workstream_sessions (
+  csn_id       text primary key,
+  org_id       text not null references organizations(org_id),
+  mission_id   text not null references missions(mission_id),
+  wst_id       text not null references workstreams(wst_id),
+  -- The session's own first words, truncated; null until it has any. Never a
+  -- form field and never renamed (D-083).
+  title        text,
+  created_by   text not null references users(user_id),
+  -- This conversation's own resume point. The workstream's legacy column stays
+  -- mirrored from the lane's first session for old readers.
+  harness_session_id text,
+  created_at   timestamptz not null default now()
+);
+create index if not exists workstream_sessions_by_lane
+  on workstream_sessions (wst_id, created_at, csn_id);
+
+-- Every workstream holds at least one session, created with it. Existing
+-- workstreams are migrated with one session adopting their history and their
+-- resume point. The id is derived from the lane so a rerun inserts nothing.
+insert into workstream_sessions (csn_id, org_id, mission_id, wst_id, title, created_by, harness_session_id, created_at)
+select 'csn_0' || left(md5(w.wst_id), 19), m.org_id, w.mission_id, w.wst_id, null, m.created_by,
+       w.harness_session_id, w.created_at
+  from workstreams w
+  join missions m on m.mission_id = w.mission_id
+ where not exists (select 1 from workstream_sessions s where s.wst_id = w.wst_id);
+
+-- A direction belongs to exactly one session; rows from before sessions land
+-- in their lane's first. NOT NULL after the backfill, so a write path that
+-- forgets the session fails loudly rather than minting an orphan thread.
+alter table directions add column if not exists session_id text references workstream_sessions(csn_id);
+update directions d
+   set session_id = s.csn_id
+  from (select distinct on (wst_id) wst_id, csn_id
+          from workstream_sessions order by wst_id, created_at, csn_id) s
+ where s.wst_id = d.wst_id and d.session_id is null;
+alter table directions alter column session_id set not null;
+create index if not exists directions_by_session on directions (session_id, ordinal);
+
+-- An execution is one session's turn, under the same backfill and the same
+-- refusal of null. The one-active-per-workstream index is deliberately
+-- untouched: sessions do not weaken the workspace's serialization.
+alter table executions add column if not exists session_id text references workstream_sessions(csn_id);
+update executions e
+   set session_id = s.csn_id
+  from (select distinct on (wst_id) wst_id, csn_id
+          from workstream_sessions order by wst_id, created_at, csn_id) s
+ where s.wst_id = e.wst_id and e.session_id is null;
+alter table executions alter column session_id set not null;
+
+-- A migrated session is titled by its first words, exactly as a new one is.
+-- Idempotent: only null titles move, and the oldest direction does not change.
+update workstream_sessions s
+   set title = left(regexp_replace(btrim(d.body), '\s+', ' ', 'g'), 80)
+  from (select distinct on (session_id) session_id, body
+          from directions order by session_id, ordinal) d
+ where d.session_id = s.csn_id and s.title is null and length(btrim(d.body)) > 0;

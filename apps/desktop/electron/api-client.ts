@@ -195,7 +195,14 @@ export class ControlPlaneClient {
 
   submitDirection(
     missionId: string,
-    input: { body: string; model: ModelId; effort: Effort; workstreamId?: string }
+    input: {
+      body: string;
+      model: ModelId;
+      effort: Effort;
+      workstreamId?: string;
+      sessionId?: string;
+      newSession?: boolean;
+    }
   ): Promise<z.infer<typeof SubmitDirectionResponseSchema>> {
     return this.request(
       "POST",
@@ -221,12 +228,12 @@ export class ControlPlaneClient {
     await this.request("POST", `/directions/${encodeURIComponent(directionId)}/cancel`, OkResponseSchema, {});
   }
 
-  async stopExecution(missionId: string): Promise<void> {
+  async stopExecution(missionId: string, workstreamId?: string): Promise<void> {
     await this.request(
       "POST",
       `/missions/${encodeURIComponent(missionId)}/execution/stop`,
       OkResponseSchema,
-      {}
+      workstreamId ? { workstreamId } : {}
     );
   }
 

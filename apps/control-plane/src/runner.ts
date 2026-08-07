@@ -148,6 +148,7 @@ function runnerAuthenticator(deps: RouteDeps) {
 interface ExecutionRow {
   exe_id: string;
   wst_id: string;
+  session_id: string;
   state: string;
   starting_direction_id: string | null;
 }
@@ -601,19 +602,28 @@ async function applySideEffects(
     case "execution.running":
       await setExecutionState(client, execution.exe_id, "running", { started: true });
       return;
-    case "harness.session":
+    case "harness.session": {
       await client.query(
         "update executions set harness_session_id = $2, resumed_session = $3 where exe_id = $1",
         [execution.exe_id, event.payload.sessionId, event.payload.resumed]
       );
-      // The workstream remembers the session so the next execution can continue
-      // the same conversation rather than starting cold. (This cited a decision
-      // number that has never existed; the reason is stated instead.)
-      await client.query("update workstreams set harness_session_id = $2 where wst_id = $1", [
-        ctx.workstreamId,
-        event.payload.sessionId
-      ]);
+      // The *session* remembers its own conversation, so the next turn of this
+      // session resumes it and a sibling session never replays it (D-083).
+      await client.query(
+        "update workstream_sessions set harness_session_id = $2 where csn_id = $1",
+        [execution.session_id, event.payload.sessionId]
+      );
+      // The workstream's own column stays a mirror of its first session's, for
+      // anything still reading the pre-session shape.
+      await client.query(
+        `update workstreams w set harness_session_id = $2
+          where w.wst_id = $1
+            and $3 = (select csn_id from workstream_sessions
+                       where wst_id = $1 order by created_at, csn_id limit 1)`,
+        [ctx.workstreamId, event.payload.sessionId, execution.session_id]
+      );
       return;
+    }
     case "direction.applied": {
       // Only a direction that belongs to this workstream can be marked applied
       // by this runner; a credential is scoped to one lane.
@@ -775,7 +785,7 @@ async function ingest(
    *  workstream's own sequence instead of an execution's. */
   execution: ExecutionRow | null,
   reported: SequencedRunnerEvent[]
-): Promise<{ accepted: number; duplicates: number }> {
+): Promise<{ accepted: number; duplicates: number; turnCompleted: boolean }> {
   // Ascending origin sequence, whatever order the delivery arrived in: a
   // retried batch after a partition must land in the order the runner observed.
   const ordered = [...reported].sort((left, right) => left.originSeq - right.originSeq);
@@ -784,6 +794,7 @@ async function ingest(
   return withTransaction(db, async (client) => {
     let accepted = 0;
     let duplicates = 0;
+    let turnCompleted = false;
     for (const item of ordered) {
       const cause =
         item.event.kind === "direction.applied"
@@ -815,6 +826,17 @@ async function ingest(
       }
       accepted += 1;
       await applySideEffects(client, ctx, execution, item.event);
+      // Only a *completed* turn frees the workspace for the next session's
+      // queued direction (D-083): a stop asked for quiet, and a failed or
+      // interrupted lane must not chain-fire. Read the same monotonic guard
+      // applySideEffects does, so a replayed report after the fact stays inert.
+      if (
+        item.event.kind === "execution.completed" &&
+        execution &&
+        !TERMINAL_EXECUTION_STATES.includes(execution.state as never)
+      ) {
+        turnCompleted = true;
+      }
     }
     // Only an execution-scoped report advances an execution's cursor. A
     // workspace report counts on the workstream's own sequence, and writing it
@@ -825,7 +847,7 @@ async function ingest(
         [execution.exe_id, highest]
       );
     }
-    return { accepted, duplicates };
+    return { accepted, duplicates, turnCompleted };
   });
 }
 
@@ -1058,14 +1080,25 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
     let execution: ExecutionRow | null = null;
     if (body.data.executionId !== null) {
       const found = await deps.db.query(
-        "select exe_id, wst_id, state, starting_direction_id from executions where exe_id = $1 and wst_id = $2",
+        "select exe_id, wst_id, session_id, state, starting_direction_id from executions where exe_id = $1 and wst_id = $2",
         [body.data.executionId, ctx.workstreamId]
       );
       execution = (found.rows[0] as ExecutionRow | undefined) ?? null;
       if (!execution) return deps.sendError(reply, 404, "not_found", "No such execution on this runner.");
     }
 
-    const { accepted, duplicates } = await ingest(deps.db, ctx, execution, body.data.events);
+    const { accepted, duplicates, turnCompleted } = await ingest(deps.db, ctx, execution, body.data.events);
+    // A completed turn frees the workspace: the baton holder's oldest queued
+    // direction — a sibling session's, waiting its turn — goes out now rather
+    // than sitting queued until somebody pokes it (D-083). After the ingest
+    // transaction committed, because dispatch opens its own.
+    if (turnCompleted) {
+      try {
+        await dispatchQueuedForController({ db: deps.db }, ctx.workstreamId);
+      } catch (error) {
+        request.log?.error?.(error);
+      }
+    }
     return { ok: true, accepted, duplicates };
   });
 

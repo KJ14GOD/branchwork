@@ -1654,6 +1654,50 @@ body {
   margin-top: var(--s-1);
 }
 
+/* The session switcher's popover mirrors the approaches one (D-083): one row
+   per conversation in creation order — title, state in words, Open — and no
+   row marked better, here or anywhere. */
+.sessions-menu {
+  top: calc(100% + var(--s-1));
+  bottom: auto;
+  min-width: 300px;
+  padding: var(--s-2);
+}
+
+.sessions-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 32px;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-control);
+}
+
+.sessions-name {
+  font: var(--type-row);
+  color: var(--text-1);
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessions-meta {
+  font: var(--type-meta);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.sessions-here {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
 /* The one sanctioned loop: the working indicator while an agent runs. */
 .breath {
   animation: breath var(--motion-breath) var(--ease) infinite;
@@ -2992,19 +3036,29 @@ body {
 .family-config { color: var(--term-green); background: color-mix(in srgb, var(--term-green) 14%, transparent); }
 .family-asset { color: var(--term-bright-magenta); background: color-mix(in srgb, var(--term-bright-magenta) 12%, transparent); }
 
-/* A file is its own tab beside the room's, marked as a file. */
-.file-tab {
+/* A file is its own tab beside the room's, marked as a file. A session tab is
+   the same shape — a glyph, a name, a close — so the strip stays one system,
+   and the species stay tellable by their glyphs alone (D-048, D-083). */
+.file-tab,
+.session-tab {
   display: inline-flex;
   align-items: center;
   padding-right: 2px;
   border-bottom: 2px solid transparent;
+  /* The base .tab budget would clip the whole row, and the row's tail is the
+     "· needs you" words — the one part that must never truncate. The title
+     span carries its own 22ch ellipsis, so the tab stays bounded without it. */
+  max-width: none;
+  overflow: visible;
 }
 
-.file-tab.active {
+.file-tab.active,
+.session-tab.active {
   border-bottom-color: var(--accent);
 }
 
-.file-tab-open {
+.file-tab-open,
+.session-tab-open {
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
@@ -3018,17 +3072,21 @@ body {
 }
 
 .file-tab.active .file-tab-open,
-.file-tab:hover .file-tab-open {
+.file-tab:hover .file-tab-open,
+.session-tab.active .session-tab-open,
+.session-tab:hover .session-tab-open {
   color: var(--text-1);
 }
 
-.file-tab-name {
+.file-tab-name,
+.session-tab-name {
   max-width: 22ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.file-tab-close {
+.file-tab-close,
+.session-tab-close {
   border: none;
   background: transparent;
   color: var(--text-3);
@@ -3039,9 +3097,22 @@ body {
   cursor: pointer;
 }
 
-.file-tab-close:hover {
+.file-tab-close:hover,
+.session-tab-close:hover {
   background: var(--hover);
   color: var(--text-1);
+}
+
+/* A conversation that has not written its own name yet reads "New session",
+   quietly — the title is its first words, never a form field (D-083). */
+.session-untitled {
+  color: var(--text-3);
+}
+
+/* "· needs you", in words — a background conversation waiting on a person.
+   Never a dot (DESIGN.md#status-semantics); the colour rides .tone-warn. */
+.session-needs {
+  white-space: nowrap;
 }
 
 /* A file takes the room: read at full measure or not at all, and with none of
@@ -3293,6 +3364,15 @@ body {
   color: var(--text-1);
   font: var(--type-body);
   overflow-wrap: anywhere;
+}
+
+/* Which conversation asked, when the lane holds more than one (D-083). The
+   question blocks the lane's one workspace, so the card renders whichever
+   session is selected — this line is the attribution. */
+.approval-asked {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
 }
 
 .approval-actions {

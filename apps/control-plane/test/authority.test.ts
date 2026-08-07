@@ -554,8 +554,10 @@ describe("transfer at a boundary", () => {
     // The execution rows are the runner slice's to write; this is the durable
     // state a live turn leaves behind, which is what the boundary rule reads.
     await h.db.query(
-      `insert into executions (exe_id, org_id, mission_id, wst_id, harness, model, effort, state, started_by)
-         values ($1, $2, $3, $4, 'claude-code', 'claude-fable-5', 'high', 'running', $5)`,
+      `insert into executions (exe_id, org_id, mission_id, wst_id, session_id, harness, model, effort, state, started_by)
+         values ($1, $2, $3, $4,
+                 (select csn_id from workstream_sessions where wst_id = $4 order by created_at, csn_id limit 1),
+                 'claude-code', 'claude-fable-5', 'high', 'running', $5)`,
       [`exe_${missionId.slice(4)}`, kartik.orgId, missionId, workstreamId, kartik.userId]
     );
     await post(ravi, `/missions/${missionId}/control/request`);

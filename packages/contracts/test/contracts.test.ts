@@ -5,7 +5,10 @@ import {
   CreateMissionInputSchema,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
+  DirectionInputSchema,
+  DirectionSchema,
   EventSchema,
+  ExecutionSchema,
   IpcAuthStatusSchema,
   IpcDirectInputSchema,
   MAX_APPROVAL_SUMMARY,
@@ -13,7 +16,8 @@ import {
   ModelIdSchema,
   ReportRunnerEventsInputSchema,
   RespondApprovalInputSchema,
-  RunnerEventSchema
+  RunnerEventSchema,
+  SessionSchema
 } from "../src/index.js";
 
 describe("contracts", () => {
@@ -49,6 +53,76 @@ describe("contracts", () => {
       }
     });
     expect(parsed.success).toBe(true);
+  });
+
+  it("accepts a canonical session shape, and refuses the auth session's prefix", () => {
+    const session = {
+      sessionId: "csn_abc",
+      workstreamId: "wst_abc",
+      // Untitled until its first direction: a title is words, never a field.
+      title: null,
+      createdBy: "usr_abc",
+      createdByLogin: "kartik",
+      createdAt: new Date().toISOString()
+    };
+    expect(SessionSchema.safeParse(session).success).toBe(true);
+    // `ses_` has always been the auth session's; a conversation is `csn_`, and
+    // the two must never parse as each other (D-083).
+    expect(SessionSchema.safeParse({ ...session, sessionId: "ses_abc" }).success).toBe(false);
+  });
+
+  it("pins every direction and execution to a session, and carries a named session through input", () => {
+    const direction = {
+      directionId: "dir_abc",
+      workstreamId: "wst_abc",
+      sessionId: "csn_abc",
+      authorUserId: "usr_abc",
+      authorLogin: "kartik",
+      body: "Keep going",
+      state: "queued",
+      ordinal: 1,
+      submittedAt: new Date().toISOString(),
+      appliedAt: null,
+      resolutionReason: null,
+      consumedByExecutionId: null
+    };
+    expect(DirectionSchema.safeParse(direction).success).toBe(true);
+    // A direction without a session would be a thread belonging to nobody —
+    // rows from before sessions are migrated, never nulled (D-083).
+    const unpinned: Record<string, unknown> = { ...direction };
+    delete unpinned.sessionId;
+    expect(DirectionSchema.safeParse(unpinned).success).toBe(false);
+
+    const execution = {
+      executionId: "exe_abc",
+      workstreamId: "wst_abc",
+      sessionId: "csn_abc",
+      harness: "claude-code",
+      model: "claude-fable-5",
+      effort: "high",
+      runnerId: null,
+      startingDirectionId: null,
+      state: "running",
+      startedBy: "usr_abc",
+      startedByLogin: "kartik",
+      createdAt: new Date().toISOString(),
+      startedAt: null,
+      endedAt: null,
+      harnessSessionId: null,
+      resumedSession: false,
+      exitOutcome: null,
+      failureReason: null,
+      latestCheckpointSha: null,
+      usage: {}
+    };
+    expect(ExecutionSchema.safeParse(execution).success).toBe(true);
+    expect(ExecutionSchema.safeParse({ ...execution, sessionId: undefined }).success).toBe(false);
+
+    // Naming a session survives the parse, and asking for none asks for none:
+    // `newSession` defaults off so nothing that predates sessions changes.
+    const input = DirectionInputSchema.safeParse({ body: "Keep going", sessionId: "csn_abc" });
+    expect(input.success && input.data.sessionId).toBe("csn_abc");
+    expect(input.success && input.data.newSession).toBe(false);
   });
 
   it("rejects an event with an unattributed actor", () => {

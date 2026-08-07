@@ -18,6 +18,7 @@ import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newDecisionId, newLeaseId, newWorkstreamId } from "./ids.ts";
+import { insertSession } from "./sessions.ts";
 import type { RouteDeps } from "./routes.ts";
 
 /**
@@ -388,6 +389,13 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
           missionBranch
         ]
       );
+      // Every workstream holds at least one session, born with it (D-083).
+      await insertSession(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId,
+        createdBy: ctx.userId
+      });
       // Its own lease, held by whoever created it: a lane is never born
       // without a controller (PRODUCT.md#control), and forking does not move
       // the baton on the lane that was forked.

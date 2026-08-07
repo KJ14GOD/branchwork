@@ -21,6 +21,7 @@ import {
   preparePullRequest,
   summarizeApproaches
 } from "./approaches.ts";
+import { listSessions } from "./sessions.ts";
 import type { Db } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
 import { listDirections } from "./directions.ts";
@@ -133,6 +134,7 @@ export async function listExecutions(db: Db, missionId: string): Promise<Executi
   return result.rows.map((row) => ({
     executionId: row.exe_id as string,
     workstreamId: row.wst_id as string,
+    sessionId: row.session_id as string,
     harness: row.harness as string,
     model: row.model as string,
     effort: row.effort as string,
@@ -560,6 +562,9 @@ export async function missionDetail(
   // never forked has exactly one of these and the room shows no lane chrome at
   // all (DESIGN.md#component-behavior).
   const workstreams = await listWorkstreams(db, access.missionId);
+  // Every session of every lane; the room filters to the lane it reads and
+  // shows session chrome only when that lane holds more than one (D-083).
+  const sessions = await listSessions(db, access.missionId);
   const laneOf = laneOfExecution;
   const stateOfLane = (workstreamId: string): MissionState =>
     projectMissionState({
@@ -676,6 +681,7 @@ export async function missionDetail(
     mission: { ...base.mission, primaryState: state },
     workstream: base.workstream,
     workstreams,
+    sessions,
     approaches,
     contested: contestedPaths(approaches),
     decisions,

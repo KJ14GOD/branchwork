@@ -869,7 +869,7 @@ export function Inspector({
                             : ""}
                         </>
                       ) : (
-                        "No runner has registered for this workstream."
+                        "No machine has registered to run this."
                       )}
                     </span>
                   </div>

@@ -148,6 +148,27 @@ export const CreateApproachInputSchema = z.object({
 });
 export type CreateApproachInput = z.infer<typeof CreateApproachInputSchema>;
 
+// --- Sessions (D-083) --------------------------------------------------------
+// Parallel conversations inside one workstream. A session owns its direction
+// thread, its executions, and its own harness continuity — and nothing else:
+// no branch, no worktree, no workspace, no lease. Sessions take turns in the
+// workstream's single workspace; the serialization is the control plane's.
+
+/** A title is the session's own first words, truncated — never a form field. */
+export const SESSION_TITLE_MAX = 80;
+
+export const SessionSchema = z.object({
+  /** `csn_` — `ses_` was already the auth session's prefix (ARCHITECTURE.md). */
+  sessionId: z.string().startsWith("csn_"),
+  workstreamId: z.string().startsWith("wst_"),
+  /** Null until the session's first direction names it (D-083). */
+  title: z.string().max(SESSION_TITLE_MAX).nullable(),
+  createdBy: z.string().startsWith("usr_"),
+  createdByLogin: z.string().min(1),
+  createdAt: z.string().datetime()
+});
+export type Session = z.infer<typeof SessionSchema>;
+
 export const MissionSchema = z.object({
   missionId: z.string().startsWith("msn_"),
   orgId: z.string().startsWith("org_"),
@@ -308,6 +329,10 @@ export type DirectionState = z.infer<typeof DirectionStateSchema>;
 export const DirectionSchema = z.object({
   directionId: z.string().startsWith("dir_"),
   workstreamId: z.string().startsWith("wst_"),
+  /** The conversation this belongs to. Never null: a submission that names no
+   *  session lands in the workstream's first, so nothing that predates
+   *  sessions changes (D-083). */
+  sessionId: z.string().startsWith("csn_"),
   authorUserId: z.string().startsWith("usr_"),
   authorLogin: z.string().min(1),
   body: z.string().min(1),
@@ -328,7 +353,15 @@ export const DirectionInputSchema = z.object({
    *  which is every mission that never forked an approach (D-074). Control is
    *  per lane, so this also decides whose baton the direction is judged
    *  against. */
-  workstreamId: z.string().startsWith("wst_").optional()
+  workstreamId: z.string().startsWith("wst_").optional(),
+  /** Which conversation this is for. Absent means the lane's first session.
+   *  A session that does not belong to the resolved lane is answered "no such
+   *  mission", exactly as a foreign lane is (D-083). */
+  sessionId: z.string().startsWith("csn_").optional(),
+  /** Creates a new session from this direction's own words and lands the
+   *  direction in it — sessions are words-first, like missions (D-077, D-083).
+   *  Refused when `sessionId` is also named: one direction, one target. */
+  newSession: z.boolean().default(false)
 });
 export type DirectionInput = z.infer<typeof DirectionInputSchema>;
 
@@ -391,6 +424,9 @@ export type HarnessUsage = z.infer<typeof HarnessUsageSchema>;
 export const ExecutionSchema = z.object({
   executionId: z.string().startsWith("exe_"),
   workstreamId: z.string().startsWith("wst_"),
+  /** The session whose turn this was. Never null: executions from before
+   *  sessions are migrated onto their lane's first (D-083). */
+  sessionId: z.string().startsWith("csn_"),
   harness: z.string().min(1),
   model: z.string().min(1),
   effort: z.string().min(1),
@@ -1726,6 +1762,10 @@ export const MissionDetailResponseSchema = z.object({
    *  mission, more only where somebody deliberately forked an approach
    *  (D-074). The room shows lane chrome only when this has more than one. */
   workstreams: z.array(WorkstreamSchema),
+  /** Every session of every lane, in creation order. The room filters to the
+   *  lane it is reading and shows session chrome only when that lane has more
+   *  than one (D-083). */
+  sessions: z.array(SessionSchema),
   /** The comparison the Decision Room reads, and nothing that ranks them. */
   approaches: z.array(ApproachSummarySchema),
   /** Files more than one approach changed. Empty with one lane. */
@@ -1827,7 +1867,11 @@ export const IpcDirectInputSchema = z.object({
   effort: EffortSchema.default(DEFAULT_EFFORT),
   /** Which lane to direct. Absent means the one the mission started with — so
    *  every mission that never forked is unchanged (D-074). */
-  workstreamId: z.string().startsWith("wst_").optional()
+  workstreamId: z.string().startsWith("wst_").optional(),
+  /** Which session to direct. Absent means the lane's first (D-083). */
+  sessionId: z.string().startsWith("csn_").optional(),
+  /** Creates a session from these words and directs it (D-083). */
+  newSession: z.boolean().default(false)
 });
 export type IpcDirectInput = z.infer<typeof IpcDirectInputSchema>;
 
@@ -1900,14 +1944,30 @@ export interface NovusBridge {
       effort: Effort;
       /** The lane this is for; absent means the mission's first (D-074). */
       workstreamId?: string;
-    }): Promise<IpcResult<{ directionId: string; dispatched: boolean; deferred: string | null }>>;
+      /** The session this is for; absent means the lane's first (D-083). */
+      sessionId?: string;
+      /** Creates a session from these words and directs it (D-083). */
+      newSession?: boolean;
+    }): Promise<
+      IpcResult<{
+        directionId: string;
+        /** The session the direction actually landed in — the named one, the
+         *  lane's first, or the one `newSession` just created. */
+        sessionId: string;
+        dispatched: boolean;
+        deferred: string | null;
+      }>
+    >;
     resolveDirection(input: {
       directionId: string;
       action: "apply" | "reject" | "supersede";
       reason?: string;
     }): Promise<IpcResult<null>>;
     cancelDirection(directionId: string): Promise<IpcResult<null>>;
-    stop(missionId: string): Promise<IpcResult<null>>;
+    /** Stops the named lane's running turn. The lane travels on the wire so a
+     *  Stop pressed in an Alternative can never land on the mission's first
+     *  lane (D-080, D-083); absent means the lane the mission started with. */
+    stop(missionId: string, workstreamId?: string): Promise<IpcResult<null>>;
     /**
      * Answers one harness approval (D-056). Asking is all this is: the server
      * checks `approval.respond` against the current lease, and a request that

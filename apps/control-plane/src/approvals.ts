@@ -258,7 +258,16 @@ export function registerApprovalRoutes(app: FastifyInstance, deps: RouteDeps): v
     );
     const approval = found.rows[0];
     if (!approval) return deps.sendError(reply, 404, "not_found", "No such approval.");
-    const access = await missionAccess(deps.db, ctx, approval.mission_id as string);
+    // Against the approval's own lane, not the mission's first: control is per
+    // lane (D-074), so an Alternative's question is its own baton holder's to
+    // answer, and the first lane's controller must not reach across (D-083's
+    // routing audit).
+    const access = await missionAccess(
+      deps.db,
+      ctx,
+      approval.mission_id as string,
+      approval.wst_id as string
+    );
     if (!access) return deps.sendError(reply, 404, "not_found", "No such approval.");
     // Lease-held only. A Mission Admin who is not the controller is refused
     // here — they may revoke control and answer, which is visible and logged,

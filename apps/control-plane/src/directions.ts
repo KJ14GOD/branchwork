@@ -4,6 +4,7 @@ import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newDirectionId } from "./ids.ts";
+import { resolveSessionForDirection, titleSessionFromFirstDirection } from "./sessions.ts";
 import type { MissionAccess } from "./authz.ts";
 import { AuthorizationError } from "./authz.ts";
 
@@ -27,6 +28,7 @@ import { AuthorizationError } from "./authz.ts";
 interface DirectionRow {
   dir_id: string;
   wst_id: string;
+  session_id: string;
   author_user_id: string;
   author_login: string;
   body: string;
@@ -39,7 +41,7 @@ interface DirectionRow {
 }
 
 const DIRECTION_SELECT = `
-  select d.dir_id, d.wst_id, d.author_user_id, u.login as author_login, d.body,
+  select d.dir_id, d.wst_id, d.session_id, d.author_user_id, u.login as author_login, d.body,
          d.state, d.ordinal, d.submitted_at, d.applied_at, d.resolution_reason,
          d.consumed_by_execution_id
     from directions d
@@ -49,6 +51,7 @@ export function toDirection(row: DirectionRow): Direction {
   return {
     directionId: row.dir_id,
     workstreamId: row.wst_id,
+    sessionId: row.session_id,
     authorUserId: row.author_user_id,
     authorLogin: row.author_login,
     body: row.body,
@@ -76,15 +79,18 @@ export interface SubmittedDirection {
 }
 
 /**
- * Records a submitted direction. The caller has already been checked for
- * `direction.submit`; this function decides only the resulting state.
+ * Records a submitted direction into one session of the workstream (D-083).
+ * The caller has already been checked for `direction.submit` and resolved the
+ * session against the same lane this access carries; this function decides
+ * only the resulting state. A session's first words become its title.
  */
 export async function submitDirection(
   db: Db,
   access: MissionAccess,
   author: { userId: string; login: string },
   body: string,
-  harness: { model: string; effort: string }
+  harness: { model: string; effort: string },
+  session: { sessionId?: string; newSession: boolean }
 ): Promise<SubmittedDirection> {
   if (!access.workstreamId) {
     throw new AuthorizationError("no_workstream", "This mission has no workstream yet.", 409);
@@ -94,12 +100,35 @@ export async function submitDirection(
   const dirId = newDirectionId();
 
   const row = await withTransaction(db, async (client) => {
+    const resolved = await resolveSessionForDirection(client, access, author, {
+      ...(session.sessionId ? { sessionId: session.sessionId } : {}),
+      newSession: session.newSession,
+      body
+    });
+    // A named session that is not this lane's is answered exactly like a named
+    // lane that is not this mission's: it does not exist for you.
+    if (!resolved) {
+      throw new AuthorizationError("not_found", "No such session in this workstream.", 404);
+    }
     const inserted = await client.query(
-      `insert into directions (dir_id, org_id, mission_id, wst_id, author_user_id, body, state, model, effort)
-       values ($1, $2, $3, $4, $5, $6, 'queued', $7, $8) returning dir_id`,
-      [dirId, access.orgId, access.missionId, workstreamId, author.userId, body, harness.model, harness.effort]
+      `insert into directions (dir_id, org_id, mission_id, wst_id, session_id, author_user_id, body, state, model, effort)
+       values ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9) returning dir_id`,
+      [
+        dirId,
+        access.orgId,
+        access.missionId,
+        workstreamId,
+        resolved.sessionId,
+        author.userId,
+        body,
+        harness.model,
+        harness.effort
+      ]
     );
     const id = inserted.rows[0]?.dir_id as string;
+    // The session's first words name it (D-083). A no-op for every session
+    // that already has a title, including the one `newSession` just made.
+    await titleSessionFromFirstDirection(client, resolved.sessionId, body);
     await recordEvent(client, {
       orgId: access.orgId,
       missionId: access.missionId,
@@ -110,7 +139,13 @@ export async function submitDirection(
       actorLogin: author.login,
       causeDirectionId: id,
       causeLeaseId: access.leaseId,
-      payload: { body, authorIsController, model: harness.model, effort: harness.effort }
+      payload: {
+        body,
+        authorIsController,
+        model: harness.model,
+        effort: harness.effort,
+        sessionId: resolved.sessionId
+      }
     });
     if (!authorIsController) {
       // The visible product state: attributed, queued, waiting for whoever

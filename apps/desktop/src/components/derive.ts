@@ -4,6 +4,7 @@ import {
   type FileChange,
   type MissionDetailResponse,
   type Participant,
+  type Session,
   type WorkspaceProcess
 } from "@novus/contracts";
 import { clockTime, plural } from "../format";
@@ -68,6 +69,86 @@ export function activeExecution(detail: MissionDetailResponse): Execution | null
     (execution) => !TERMINAL_EXECUTION_STATES.includes(execution.state)
   );
   return live[live.length - 1] ?? null;
+}
+
+/**
+ * The sessions of the lane this response was computed for, in creation order
+ * (D-083). The payload carries every lane's sessions because the Decision Room
+ * reads across lanes; the room reads its own lane's, and shows session chrome
+ * only when it holds more than one.
+ */
+export function laneSessions(detail: MissionDetailResponse): Session[] {
+  const lane = detail.workstream?.workstreamId ?? null;
+  if (lane === null) return [];
+  return detail.sessions
+    .filter((session) => session.workstreamId === lane)
+    .sort(
+      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.sessionId.localeCompare(b.sessionId)
+    );
+}
+
+/** The session whose turn is live right now, if any — at most one, because the
+ *  workstream's one workspace takes turns (D-083). */
+export function runningSession(detail: MissionDetailResponse): Session | null {
+  const live = activeExecution(detail);
+  if (!live) return null;
+  return laneSessions(detail).find((session) => session.sessionId === live.sessionId) ?? null;
+}
+
+/** Whether this session's turn is waiting on a person — the fact behind the
+ *  "· needs you" words on a background tab and on the switcher (D-083). */
+export function sessionNeedsYou(detail: MissionDetailResponse, sessionId: string): boolean {
+  return detail.executions.some(
+    (execution) =>
+      execution.sessionId === sessionId &&
+      (execution.state === "needs_approval" || execution.state === "needs_direction")
+  );
+}
+
+/**
+ * One session's view of the lane (D-083).
+ *
+ * Applied after laneView: the conversation — its directions, its executions,
+ * their checkpoints, and their events — narrows to one session, so a canvas
+ * never shows a sibling's transcript. Approvals, checks, and processes stay
+ * the lane's: the question blocks the lane's one workspace and the evidence
+ * is that shared workspace's, whichever conversation asked. Null means the
+ * lane's first session; a lane still carrying one session passes through
+ * untouched, exactly as before.
+ */
+export function sessionView(
+  detail: MissionDetailResponse,
+  sessionId: string | null
+): MissionDetailResponse {
+  const sessions = laneSessions(detail);
+  if (sessionId === null && sessions.length <= 1) return detail;
+  const target = sessionId ?? sessions[0]?.sessionId ?? null;
+  if (target === null) return detail;
+  const sessionOf = new Map(
+    detail.executions.map((execution) => [execution.executionId, execution.sessionId])
+  );
+  const directionSession = new Map(
+    detail.directions.map((direction) => [direction.directionId, direction.sessionId])
+  );
+  const executions = detail.executions.filter((execution) => execution.sessionId === target);
+  const executionIds = new Set(executions.map((execution) => execution.executionId));
+  return {
+    ...detail,
+    directions: detail.directions.filter((direction) => direction.sessionId === target),
+    executions,
+    checkpoints: detail.checkpoints.filter((checkpoint) => executionIds.has(checkpoint.executionId)),
+    // An event belongs to the conversation that caused it — through its
+    // execution or through its direction. Mission- and lane-level moments
+    // (control changing hands, a participant joining) name neither, and they
+    // belong to every session's story, so they stay.
+    events: detail.events.filter((event) => {
+      if (event.executionId === null && event.cause.directionId === null) return true;
+      if (event.executionId !== null && sessionOf.get(event.executionId) === target) return true;
+      return (
+        event.cause.directionId !== null && directionSession.get(event.cause.directionId) === target
+      );
+    })
+  };
 }
 
 
@@ -189,7 +270,13 @@ export function deriveStateLine(detail: MissionDetailResponse): StateLineView {
     };
   }
 
-  const base = primaryStateLine(detail, files.length, checks);
+  // Once the lane holds more than one conversation, the sentence names the
+  // one the harness is working in — the state itself stays the lane's, and a
+  // session still writing its title is simply not named (D-083).
+  const workingTitle =
+    laneSessions(detail).length > 1 ? (runningSession(detail)?.title ?? null) : null;
+
+  const base = primaryStateLine(detail, files.length, checks, workingTitle);
 
   // A queued direction that only the controller can apply is the room's real
   // state while nothing else is happening.
@@ -261,7 +348,7 @@ function suffixFor(detail: MissionDetailResponse): string | null {
     const since = lastProgressAt(detail);
     return since ? `no progress reported since ${clockTime(since)}` : "no progress reported for a while";
   }
-  if (detail.runner === null) return "no machine has connected to run this workstream yet";
+  if (detail.runner === null) return "no machine has connected to run this yet";
   return null;
 }
 
@@ -285,7 +372,10 @@ function handoffSuffix(detail: MissionDetailResponse): string | null {
 function primaryStateLine(
   detail: MissionDetailResponse,
   fileCount: number,
-  checks: { total: number; passed: number; failed: number }
+  checks: { total: number; passed: number; failed: number },
+  /** The working session's title, only while the lane holds more than one
+   *  conversation — the detail sentence names it then (D-083). */
+  workingTitle: string | null = null
 ): StateLineView {
   const quiet = { suffix: null, action: null, working: false };
   switch (detail.state) {
@@ -329,14 +419,18 @@ function primaryStateLine(
         ...quiet,
         tone: "active",
         name: "Starting",
-        detail: "preparing the mission worktree",
+        detail: workingTitle
+          ? `preparing the mission worktree for "${workingTitle}"`
+          : "preparing the mission worktree",
         working: true
       };
     case "agent_running":
       return {
         tone: "active",
         name: "Running",
-        detail: `${HARNESS_NAME} is working`,
+        detail: workingTitle
+          ? `${HARNESS_NAME} is working in "${workingTitle}"`
+          : `${HARNESS_NAME} is working`,
         suffix: null,
         action: { label: "Stop", kind: "stop" },
         working: true
@@ -345,7 +439,9 @@ function primaryStateLine(
       return {
         tone: "active",
         name: "Stopping",
-        detail: `${HARNESS_NAME} was asked to stop`,
+        detail: workingTitle
+          ? `${HARNESS_NAME} was asked to stop in "${workingTitle}"`
+          : `${HARNESS_NAME} was asked to stop`,
         suffix: null,
         // No action: the one that belongs here has been taken.
         action: null,
@@ -371,8 +467,12 @@ function primaryStateLine(
         // the thread, next to the work that raised it — saying it twice makes
         // the line long and the card redundant.
         detail: asking
-          ? `${HARNESS_NAME} asks to ${asking.displayName.toLowerCase()}`
-          : `${HARNESS_NAME} is waiting for a decision it cannot make itself`
+          ? `${HARNESS_NAME} asks to ${asking.displayName.toLowerCase()}${
+              workingTitle ? ` in "${workingTitle}"` : ""
+            }`
+          : `${HARNESS_NAME} is waiting${
+              workingTitle ? ` in "${workingTitle}"` : ""
+            } for a decision it cannot make itself`
       };
     }
     case "paused":
