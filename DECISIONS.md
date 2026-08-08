@@ -1187,3 +1187,19 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** `sessionId: null` on a tab now means the approach's overview where the lane holds several conversations, and the conversation itself where it holds one; the working set is untouched — the anchor was always a rendering rule. The sessions spec's tab counts are rewritten under this entry (creation opens exactly the one tab it made). The overview is composed from data the room already holds; nothing new is fetched.
 
 **Revisit when.** The overview wants evidence beyond the lane's own facts — at which point it is growing into the Compare column for one lane, and reusing that shape beats growing a second.
+
+## D-090 — Tabs reorder under the hand, not under the drop
+
+**Context.** D-089's drag passed its driven probe and still did nothing under the owner's own mouse. Two admissions in that sentence. First, the probe drove Chromium's debug protocol, which synthesizes a drag more willingly than macOS delivers one — it proved the handlers reachable, not the gesture usable. Second, the shipped gesture demanded precision no one owed it: nothing moved while dragging, and the reorder happened only if the release landed exactly on another session tab. And the owner's "let me move them around" had named the *file* tabs in the first place, which could not be dragged at all.
+
+**Decision.**
+
+- **The reorder happens during the drag, not at the drop.** While a tab is in hand, crossing a sibling past its midpoint moves the tab there at once, the way every browser's own tab strip behaves: the tabs shifting *are* the feedback, and the release needs no aim — wherever the hand lets go, the order is already what the drag made it. The whole working row accepts the release, so letting go over a gap or another species' tab ends the gesture where it stands instead of animating a snap-back.
+- **File tabs drag the same way.** Sessions reorder among sessions, files among files, each in the person's own order; the species never interleave.
+- **The dragged tab is known by a ref, not by the payload.** Chromium hides a drag's data until the drop, so live reordering carries the dragged id in component state set at dragstart and cleared at dragend; the dataTransfer payload remains for the drop's own bookkeeping.
+
+**Alternatives.** Keeping drop-targeting and adding an insertion indicator (rejected: an indicator is instruction for a gesture that should need none); pointer-event tracking instead of HTML5 drag (kept in reserve — it is the escape hatch if native drag initiation itself proves unreliable on a child button under a real mouse).
+
+**Consequences.** A reorder is applied and persisted continuously while dragging; an abandoned drag leaves the order wherever it was last carried, which is what the hand said. Verification is owed honestly: the synthesized-input probe was retired as evidence for gestures, the deterministic suites stay green, and the gesture itself is proven only by a person's hand on the running build — recorded in PROGRESS as exactly that.
+
+**Revisit when.** A real hand still cannot lift the tab — then the reserve applies: pointer-tracked reordering with no HTML5 drag at all.

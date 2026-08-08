@@ -124,6 +124,7 @@ export function ProjectRoom({
   onOpenSession,
   onCloseSession,
   onReorderSession,
+  onReorderFile,
   decisionOpen,
   onDecisionOpen,
   sessionDraft,
@@ -172,6 +173,7 @@ export function ProjectRoom({
   /** Moves an open session tab to a new position — the row is the person's
    *  own order (D-088). */
   onReorderSession: (sessionId: string, targetIndex: number) => void;
+  onReorderFile: (key: string, targetIndex: number) => void;
   /** Canvas modes the rail's tree drives (D-084): the Compare surface, and the
    *  new-session draft. The shell owns both, because the rows that open them
    *  live in the rail. */
@@ -188,6 +190,11 @@ export function ProjectRoom({
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
+  // What the hand is holding, while it is holding it. Refs, not dataTransfer:
+  // Chromium hides a drag's payload until the drop, and the live reorder
+  // needs to know the dragged tab on every dragover (D-090).
+  const dragSessionRef = useRef<string | null>(null);
+  const dragFileRef = useRef<string | null>(null);
 
   const isDraft = selectedMissionId === null;
   const raw = selectedMissionId === null ? undefined : details[selectedMissionId];
@@ -658,7 +665,24 @@ export function ProjectRoom({
           with one approach, one conversation and nothing open shows no strip
           at all. */}
       {(openFiles.length > 0 || decisionOpen || multiLane || sessionChrome) && (
-        <div className="tabbar" role="tablist" aria-label={`Open in ${title}`}>
+        <div
+          className="tabbar"
+          role="tablist"
+          aria-label={`Open in ${title}`}
+          // While a tab is in hand, the whole row accepts the release: the
+          // order was settled live during the drag, so letting go over a gap,
+          // another species' tab, or the row's empty tail must end the
+          // gesture where it stands rather than animating a snap-back (D-090).
+          onDragOver={(event) => {
+            if (dragSessionRef.current === null && dragFileRef.current === null) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+          }}
+          onDrop={(event) => {
+            if (dragSessionRef.current === null && dragFileRef.current === null) return;
+            event.preventDefault();
+          }}
+        >
           {multiLane ? (
             lanes.map((lane, index) => {
               // The approach tab is a page of its own (D-089): selected only
@@ -764,24 +788,38 @@ export function ProjectRoom({
                   data-workstream={session.workstreamId}
                   draggable={draggable}
                   onDragStart={(event) => {
+                    dragSessionRef.current = session.sessionId;
                     event.dataTransfer.setData("text/novus-session", session.sessionId);
                     event.dataTransfer.effectAllowed = "move";
                   }}
+                  onDragEnd={() => {
+                    dragSessionRef.current = null;
+                  }}
                   onDragOver={(event) => {
-                    if (event.dataTransfer.types.includes("text/novus-session")) event.preventDefault();
+                    // The reorder happens *during* the drag, the way a
+                    // browser's own tab strip moves: the tabs shifting are
+                    // the feedback, and the release needs no precision —
+                    // wherever the hand lets go, the order is already what
+                    // the drag made it (D-090).
+                    const dragged = dragSessionRef.current;
+                    if (dragged === null) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    if (dragged === session.sessionId) return;
+                    const from = openSessionIds.indexOf(dragged);
+                    const target = openSessionIds.indexOf(session.sessionId);
+                    if (from === -1 || target === -1) return;
+                    // Only once the pointer crosses this tab's midpoint in
+                    // the direction of travel — unequal widths would
+                    // otherwise flap the order under a still pointer.
+                    const box = event.currentTarget.getBoundingClientRect();
+                    const past = event.clientX - box.left > box.width / 2;
+                    if (from < target ? past : !past) onReorderSession(dragged, target);
                   }}
                   onDrop={(event) => {
-                    const dragged = event.dataTransfer.getData("text/novus-session");
-                    if (!dragged || dragged === session.sessionId) return;
-                    event.preventDefault();
-                    // Dropping on a tab takes its place. The one tab that can
-                    // be outside the stored order — a restored selection not
-                    // yet opened — sits last, so dropping on it means "last".
-                    const target = openSessionIds.indexOf(session.sessionId);
-                    onReorderSession(
-                      dragged,
-                      target === -1 ? openSessionIds.length - 1 : target
-                    );
+                    // Claimed so nothing animates back to where it was
+                    // picked up; the order was settled while dragging.
+                    if (dragSessionRef.current !== null) event.preventDefault();
                   }}
                 >
                   <button
@@ -890,6 +928,33 @@ export function ProjectRoom({
                 data-testid="file-tab"
                 data-path={file.path}
                 data-workstream={fileLaneId ?? undefined}
+                draggable
+                onDragStart={(event) => {
+                  dragFileRef.current = file.key;
+                  event.dataTransfer.setData("text/novus-file", file.key);
+                  event.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => {
+                  dragFileRef.current = null;
+                }}
+                onDragOver={(event) => {
+                  // Live, exactly as the session tabs move (D-090): files
+                  // reorder among files, in the person's own order.
+                  const dragged = dragFileRef.current;
+                  if (dragged === null) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  if (dragged === file.key) return;
+                  const from = openFiles.findIndex((entry) => entry.key === dragged);
+                  const target = openFiles.findIndex((entry) => entry.key === file.key);
+                  if (from === -1 || target === -1) return;
+                  const box = event.currentTarget.getBoundingClientRect();
+                  const past = event.clientX - box.left > box.width / 2;
+                  if (from < target ? past : !past) onReorderFile(dragged, target);
+                }}
+                onDrop={(event) => {
+                  if (dragFileRef.current !== null) event.preventDefault();
+                }}
               >
                 <button
                   role="tab"

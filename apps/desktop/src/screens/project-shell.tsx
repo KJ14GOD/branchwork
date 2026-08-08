@@ -1628,6 +1628,18 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               onReorderSession={(sessionId, targetIndex) =>
                 setWorkingSet((previous) => reorderSession(previous, active.id, sessionId, targetIndex))
               }
+              onReorderFile={(key, targetIndex) =>
+                setFilesByTab((previous) => {
+                  const current = previous[active.id] ?? [];
+                  const from = current.findIndex((entry) => entry.key === key);
+                  if (from === -1 || from === targetIndex) return previous;
+                  if (targetIndex < 0 || targetIndex >= current.length) return previous;
+                  const next = [...current];
+                  const [moved] = next.splice(from, 1);
+                  next.splice(targetIndex, 0, moved!);
+                  return { ...previous, [active.id]: next };
+                })
+              }
               decisionOpen={decisionOpen}
               onDecisionOpen={setDecisionOpen}
               sessionDraft={sessionDraft}

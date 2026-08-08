@@ -3072,16 +3072,18 @@ body {
   overflow: visible;
 }
 
-/* Reordering is a drag on the whole tab (D-088). The press almost always
-   lands on the button inside, and Chromium will not start the wrapper's drag
-   from an interactive child unless the wrapper claims the gesture itself —
-   without these two rules the drop handlers are unreachable code (D-089). */
-.session-tab[draggable="true"] {
+/* Reordering is a drag on the whole tab (D-088, files too since D-090). The
+   press almost always lands on the button inside, and Chromium will not start
+   the wrapper's drag from an interactive child unless the wrapper claims the
+   gesture itself — without these rules the drag handlers are unreachable
+   code (D-089). */
+.session-tab[draggable="true"],
+.file-tab[draggable="true"] {
   -webkit-user-drag: element;
 }
 
-.session-tab[draggable="true"] .session-tab-open,
-.session-tab[draggable="true"] .session-tab-close {
+.session-tab[draggable="true"] button,
+.file-tab[draggable="true"] button {
   -webkit-user-drag: none;
 }
 
