@@ -580,33 +580,69 @@ export function ProjectRoom({
   return (
     <div className="room" data-testid="project-room">
       <div className="room-main">
-      {/* This strip is the room's canvas switcher (D-048, D-084): the mission's
-          conversation, the Compare surface while it is open, and every open
-          file sit side by side as sibling tabs, one canvas showing at a time.
-          The mission's structure itself — approaches, sessions — is the rail's
-          tree, never a tab here. With nothing but the conversation to show
-          there is no strip at all. */}
-      {(openFiles.length > 0 || decisionOpen) && (
+      {/* This strip is the mission's working row (D-086): the top strip holds
+          one tab per mission, and this one — one level below, exactly where an
+          open file appears — holds the mission's approaches as colour-dotted
+          tabs, Compare while it is open, and every open file, side by side.
+          One canvas shows at a time; the colours tie a lane's tab to its
+          files. Sessions are never tabs here — they are the rail's tree. A
+          mission with one approach and nothing open shows no strip at all. */}
+      {(openFiles.length > 0 || decisionOpen || multiLane) && (
         <div className="tabbar" role="tablist" aria-label={`Open in ${title}`}>
-          <button
-            role="tab"
-            aria-selected={activeFile === null && !decisionOpen}
-            className={activeFile === null && !decisionOpen ? "tab active" : "tab"}
-            onClick={() => {
-              onSelectFile(null);
-              onDecisionOpen(false);
-              onSessionDraft(false);
-            }}
-            title={`Back to ${title}`}
-            data-testid="room-tab"
-          >
-            {/* Not the goal again. The window's strip above already names this
-                mission and the rail names it a third time; a fourth copy on the
-                way back from a file says nothing the reader cannot see, and the
-                only question this control answers is "what do I return to"
-                (D-061). */}
-            Mission
-          </button>
+          {multiLane ? (
+            lanes.map((lane, index) => {
+              const selected =
+                activeFile === null && !decisionOpen && lane.workstreamId === activeLaneId;
+              return (
+                <button
+                  key={lane.workstreamId}
+                  role="tab"
+                  aria-selected={selected}
+                  className={selected ? "tab lane-tab active" : "tab lane-tab"}
+                  onClick={() => {
+                    onSelectFile(null);
+                    onDecisionOpen(false);
+                    onSessionDraft(false);
+                    if (lane.workstreamId !== activeLaneId) {
+                      onSelectLane(lane.workstreamId === lanes[0]?.workstreamId ? null : lane.workstreamId);
+                    }
+                  }}
+                  title={
+                    lane.approach
+                      ? `${lane.name} — isolated workspace`
+                      : `${lane.name} — the work this mission started with`
+                  }
+                  data-testid="lane-tab"
+                  data-workstream={lane.workstreamId}
+                >
+                  <span
+                    className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
+                    aria-hidden="true"
+                  />
+                  {lane.name}
+                </button>
+              );
+            })
+          ) : (
+            <button
+              role="tab"
+              aria-selected={activeFile === null && !decisionOpen}
+              className={activeFile === null && !decisionOpen ? "tab active" : "tab"}
+              onClick={() => {
+                onSelectFile(null);
+                onDecisionOpen(false);
+                onSessionDraft(false);
+              }}
+              title={`Back to ${title}`}
+              data-testid="room-tab"
+            >
+              {/* Not the goal again. The window's strip above already names
+                  this mission and the rail names it a third time; the only
+                  question this control answers is "what do I return to"
+                  (D-061). With approaches, their tabs are the way back. */}
+              Mission
+            </button>
+          )}
           {/* Compare, while it is open, is a sibling tab rather than a swap:
               a person reads a file, comes back to the comparison, and reads
               another, without any canvas silently eating the last (D-084). */}

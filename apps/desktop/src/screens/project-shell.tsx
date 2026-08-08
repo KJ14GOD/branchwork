@@ -24,10 +24,10 @@ import {
   closeTab,
   closeTabs,
   emptyWorkingSet,
-  openLane,
   openMission,
   promoteDraft,
   readWorkingSet,
+  selectLane,
   selectSession,
   selectTab,
   tabIsGone,
@@ -1100,31 +1100,14 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     [projects]
   );
 
-  /** Which lane a view is, for the strip's identity dot (D-085). Nothing for a
-   *  mission with one lane: there is nothing to tell apart. */
-  const laneDotOf = useCallback(
-    (tab: OpenTab): "current" | "alt" | null => {
-      if (tab.missionId === null) return null;
-      const mission = (missions ?? []).find((candidate) => candidate.missionId === tab.missionId);
-      if (!mission || mission.workstreamCount <= 1) return null;
-      return tab.workstreamId === null ? "current" : "alt";
-    },
-    [missions]
-  );
-
-  /** Opens one lane of the active mission as its own tab, or moves to the tab
-   *  that view already has (D-085) — the strip's answer to "open", where the
-   *  old behaviour retargeted the one tab in place. */
-  const openLaneView = useCallback(
-    (workstreamId: string | null) => {
-      const current = activeTabOf(workingSetRef.current);
-      if (!current || current.missionId === null) return;
-      setWorkingSet((previous) =>
-        openLane(previous, current.missionId as string, current.projectKey, workstreamId, mintTabId)
-      );
-    },
-    []
-  );
+  /** Switches which approach the active mission's tab is reading, in place
+   *  (D-080, restored by D-086): the top strip holds missions, and the lane is
+   *  the tab's own state — the approach tabs live in the room's strip. */
+  const openLaneView = useCallback((workstreamId: string | null) => {
+    const current = activeTabOf(workingSetRef.current);
+    if (!current) return;
+    setWorkingSet((previous) => selectLane(previous, current.id, workstreamId));
+  }, []);
 
   return (
     <div className="shell-split">
@@ -1525,7 +1508,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               activeId={workingSet.activeId}
               labelOf={labelOf}
               projectOf={projectNameOf}
-              laneDotOf={laneDotOf}
               onSelect={(tab) => setWorkingSet((previous) => selectTab(previous, tab.id))}
               onClose={closeMissionTab}
               onNew={newMissionHere}

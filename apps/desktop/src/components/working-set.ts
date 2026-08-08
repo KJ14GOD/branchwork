@@ -60,10 +60,10 @@ export function tabFor(set: WorkingSet, missionId: string): OpenTab | null {
 }
 
 /**
- * Opens a mission's default view, or selects the tab that view already has.
- * Uniqueness is per **view** (D-085): one tab per (mission, lane), so opening
- * what is already open moves to it rather than making a second copy — while a
- * sibling lane's tab is a different view and sits beside it.
+ * Opens a mission, or selects the tab it already has. A mission is open at
+ * most once (D-061, restored by D-086): the top strip holds missions, and
+ * which approach a tab is reading is the tab's own state, switched in place —
+ * the approach tabs live one level down, in the room's strip.
  */
 export function openMission(
   set: WorkingSet,
@@ -71,31 +71,13 @@ export function openMission(
   projectKey: string,
   mint: () => string
 ): WorkingSet {
-  return openLane(set, missionId, projectKey, null, mint);
-}
-
-/**
- * Opens one lane of a mission as its own tab, or selects the tab that view
- * already has (D-085). Null is the lane the mission started with. Everything a
- * tab remembers — its session, its files, its canvas — belongs to this view
- * and to no other.
- */
-export function openLane(
-  set: WorkingSet,
-  missionId: string,
-  projectKey: string,
-  workstreamId: string | null,
-  mint: () => string
-): WorkingSet {
-  const existing = set.tabs.find(
-    (tab) => tab.missionId === missionId && tab.workstreamId === workstreamId
-  );
+  const existing = tabFor(set, missionId);
   if (existing) return set.activeId === existing.id ? set : { ...set, activeId: existing.id };
   const tab: OpenTab = {
     id: mint(),
     projectKey,
     missionId,
-    workstreamId,
+    workstreamId: null,
     sessionId: null
   };
   return { tabs: [...set.tabs, tab].slice(-MAX_TABS), activeId: tab.id };
@@ -279,11 +261,11 @@ export function decodeWorkingSet(raw: string | null, mint: () => string): Workin
       typeof candidate.workstreamId === "string" && candidate.workstreamId.startsWith("wst_")
         ? candidate.workstreamId
         : null;
-    // One tab per view (D-085): a mission may come back several times, once
-    // per lane, and the same view never twice.
-    const viewKey = `${candidate.missionId}:${workstreamId ?? "first"}`;
-    if (candidate.missionId === "" || seen.has(viewKey)) continue;
-    seen.add(viewKey);
+    // One tab per mission (D-061, restored by D-086): a store from the
+    // brief per-view era may carry a mission twice, and the first entry —
+    // with its lane and session — is the one that comes back.
+    if (candidate.missionId === "" || seen.has(candidate.missionId)) continue;
+    seen.add(candidate.missionId);
     tabs.push({
       id: mint(),
       projectKey: candidate.projectKey,
