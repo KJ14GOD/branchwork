@@ -580,18 +580,23 @@ export function ProjectRoom({
   return (
     <div className="room" data-testid="project-room">
       <div className="room-main">
-      {/* This strip exists for *files*, and only for files again (D-048,
-          D-055, D-084): the mission's structure — approaches, sessions,
-          Compare — is the rail's tree now, so the room carries no copy of it.
-          With no file open there is no strip at all; open one and the room
-          takes a tab of its own, which is the way back to it. */}
-      {openFiles.length > 0 && (
+      {/* This strip is the room's canvas switcher (D-048, D-084): the mission's
+          conversation, the Compare surface while it is open, and every open
+          file sit side by side as sibling tabs, one canvas showing at a time.
+          The mission's structure itself — approaches, sessions — is the rail's
+          tree, never a tab here. With nothing but the conversation to show
+          there is no strip at all. */}
+      {(openFiles.length > 0 || decisionOpen) && (
         <div className="tabbar" role="tablist" aria-label={`Open in ${title}`}>
           <button
             role="tab"
-            aria-selected={activeFile === null}
-            className={activeFile === null ? "tab active" : "tab"}
-            onClick={() => onSelectFile(null)}
+            aria-selected={activeFile === null && !decisionOpen}
+            className={activeFile === null && !decisionOpen ? "tab active" : "tab"}
+            onClick={() => {
+              onSelectFile(null);
+              onDecisionOpen(false);
+              onSessionDraft(false);
+            }}
             title={`Back to ${title}`}
             data-testid="room-tab"
           >
@@ -602,6 +607,38 @@ export function ProjectRoom({
                 (D-061). */}
             Mission
           </button>
+          {/* Compare, while it is open, is a sibling tab rather than a swap:
+              a person reads a file, comes back to the comparison, and reads
+              another, without any canvas silently eating the last (D-084). */}
+          {decisionOpen && (
+            <span
+              className={activeFile === null ? "tab file-tab active" : "tab file-tab"}
+              data-testid="compare-tab"
+            >
+              <button
+                role="tab"
+                aria-selected={activeFile === null}
+                className="file-tab-open"
+                onClick={() => {
+                  onSelectFile(null);
+                  onSessionDraft(false);
+                }}
+                title="Compare approaches"
+              >
+                <span className="file-tab-name">Compare</span>
+              </button>
+              <button
+                className="file-tab-close"
+                onClick={() => {
+                  onDecisionOpen(false);
+                }}
+                aria-label="Close the comparison"
+                title="Close the comparison"
+              >
+                ×
+              </button>
+            </span>
+          )}
           {openFiles.map((file) => {
             // Which lane's worktree this tab reads — its own fact, captured
             // when it was opened. The dot says so once approaches exist, and
