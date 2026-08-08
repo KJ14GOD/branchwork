@@ -8,6 +8,7 @@ import {
 } from "@novus/contracts";
 import { completeTransferAtBoundary } from "../src/authority.ts";
 import { withTransaction } from "../src/db.ts";
+import { sweepOffers } from "../src/reliability.ts";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
 
 /**
@@ -518,6 +519,54 @@ describe("handoff offers", () => {
     );
     expect(leases.rowCount).toBe(1); // two clients can never both hold control
   });
+
+  it("carries its expiry on the wire, ten minutes from creation (D-092)", async () => {
+    const { missionId } = await room("An offer that says when it lapses", [{ who: maya }]);
+    await post(kartik, `/missions/${missionId}/control/offer`, { toUserId: maya.userId });
+
+    const offer = (await detail(maya, missionId)).control.liveOffer;
+    const minutes =
+      (Date.parse(offer.expiresAt) - Date.parse(offer.createdAt)) / 60_000;
+    expect(minutes).toBeGreaterThan(9.9);
+    expect(minutes).toBeLessThan(10.1);
+  });
+
+  it("an unanswered offer lapses to expired with its event, and frees the slot", async () => {
+    const { missionId } = await room("Nobody answered", [{ who: maya }, { who: ravi }]);
+    await post(kartik, `/missions/${missionId}/control/offer`, { toUserId: maya.userId });
+    const offerId = (await detail(kartik, missionId)).control.liveOffer.offerId;
+
+    await h.db.query(
+      "update handoff_offers set expires_at = now() - interval '1 second' where offer_id = $1",
+      [offerId]
+    );
+    expect(await sweepOffers(h.db)).toBe(1);
+
+    const lapsed = await h.db.query("select state from handoff_offers where offer_id = $1", [offerId]);
+    expect(lapsed.rows[0].state).toBe("expired");
+    expect(await kinds(missionId)).toContain("control.offer_expired");
+    expect((await detail(kartik, missionId)).control.liveOffer).toBeNull();
+    // Control never moved, and the one-live-offer slot is free again.
+    expect((await detail(kartik, missionId)).control.holderUserId).toBe(kartik.userId);
+    const again = await post(kartik, `/missions/${missionId}/control/offer`, { toUserId: ravi.userId });
+    expect(again.statusCode).toBe(200);
+  });
+
+  it("an offer past its expiry cannot be accepted, sweep or no sweep", async () => {
+    const { missionId } = await room("Too late to accept", [{ who: maya }]);
+    await post(kartik, `/missions/${missionId}/control/offer`, { toUserId: maya.userId });
+    const offerId = (await detail(maya, missionId)).control.liveOffer.offerId;
+
+    await h.db.query(
+      "update handoff_offers set expires_at = now() - interval '1 second' where offer_id = $1",
+      [offerId]
+    );
+    // The sweep has not run: expiry is the offer's own fact, not its schedule.
+    const late = await post(maya, `/control/offers/${offerId}/accept`);
+    expect(late.statusCode).toBe(409);
+    expect(late.json().error.code).toBe("offer_settled");
+    expect((await detail(maya, missionId)).control.holderUserId).toBe(kartik.userId);
+  });
 });
 
 describe("transfer at a boundary", () => {
@@ -734,6 +783,12 @@ describe("two-client reconstruction", () => {
     await post(ravi, `/missions/${missionId}/control/request`);
     await post(kartik, `/missions/${missionId}/control/offer`, { toUserId: maya.userId });
 
+    // Both clients poll before comparing: a participant's connection state is
+    // earned by their own reading (D-091), so the first read of a room whose
+    // second person has never polled honestly says that person is offline.
+    // Once both have read, the rooms agree — including on presence.
+    await detail(kartik, missionId);
+    await detail(maya, missionId);
     const asKartik = await detail(kartik, missionId);
     const asMaya = await detail(maya, missionId);
 

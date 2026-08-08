@@ -388,6 +388,27 @@ function handoffSuffix(detail: MissionDetailResponse): string | null {
   return `Handing control to ${offer.toLogin} at the next safe point`;
 }
 
+/**
+ * The open offer's expiry, as DESIGN.md's *Handoff offered* countdown text.
+ * Words, not a clock face: minutes while minutes remain, seconds under the
+ * last minute — the render cadence is the room's own poll, so a seconds
+ * figure is a rough count-down, not a ticking one. Only an `open` offer
+ * counts down; once accepted the grant is durable and waits for the boundary
+ * however long that takes (PRODUCT.md#control). Null once past expiry: the
+ * sweep is about to say "expired" in the feed, and a row reading "expires in
+ * 0s" forever would be the lie this label exists to avoid.
+ */
+export function offerCountdownLabel(
+  offer: { state: string; expiresAt: string },
+  now: number
+): string | null {
+  if (offer.state !== "open") return null;
+  const remaining = Date.parse(offer.expiresAt) - now;
+  if (remaining <= 0) return null;
+  if (remaining >= 60_000) return `expires in ${Math.ceil(remaining / 60_000)}m`;
+  return `expires in ${Math.ceil(remaining / 1_000)}s`;
+}
+
 function primaryStateLine(
   detail: MissionDetailResponse,
   fileCount: number,

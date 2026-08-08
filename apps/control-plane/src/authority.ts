@@ -22,6 +22,7 @@ import {
   type MissionAccess
 } from "./authz.ts";
 import { enqueueCommand } from "./executions.ts";
+import { RELIABILITY_THRESHOLDS } from "./reliability.ts";
 import {
   newControlRequestId,
   newHandoffOfferId,
@@ -734,8 +735,8 @@ export function registerAuthorityRoutes(app: FastifyInstance, deps: RouteDeps): 
         );
       }
       const created = await client.query(
-        `insert into handoff_offers (offer_id, org_id, mission_id, wst_id, from_user_id, to_user_id, lease_id, state)
-           values ($1, $2, $3, $4, $5, $6, $7, 'open')
+        `insert into handoff_offers (offer_id, org_id, mission_id, wst_id, from_user_id, to_user_id, lease_id, state, expires_at)
+           values ($1, $2, $3, $4, $5, $6, $7, 'open', now() + ($8 || ' milliseconds')::interval)
            on conflict (wst_id) where state in ('open', 'accepted', 'waiting_for_boundary') do nothing
            returning offer_id`,
         [
@@ -745,7 +746,8 @@ export function registerAuthorityRoutes(app: FastifyInstance, deps: RouteDeps): 
           workstreamId,
           ctx.userId,
           body.data.toUserId,
-          lease.leaseId
+          lease.leaseId,
+          RELIABILITY_THRESHOLDS.OFFER_TTL_MS
         ]
       );
       if (created.rowCount === 0) {
@@ -901,11 +903,15 @@ export function registerAuthorityRoutes(app: FastifyInstance, deps: RouteDeps): 
     await withTransaction(db, async (client) => {
       await lockMission(client, standing.missionId);
       // Compare-and-swap on the offer: of two simultaneous accepts exactly one
-      // moves the row, and the loser is told the offer already settled.
+      // moves the row, and the loser is told the offer already settled. An
+      // offer past its expiry is refused here even before the sweep has moved
+      // it (D-092): expiry is the offer's own fact, not the sweep's schedule.
       const accepted = await client.query(
         `update handoff_offers set state = 'accepted', accepted_at = now()
-          where offer_id = $1 and state = 'open' returning offer_id`,
-        [offer.offer_id]
+          where offer_id = $1 and state = 'open'
+            and coalesce(expires_at, created_at + ($2 || ' milliseconds')::interval) > now()
+          returning offer_id`,
+        [offer.offer_id, RELIABILITY_THRESHOLDS.OFFER_TTL_MS]
       );
       if (accepted.rowCount === 0) {
         throw new AuthorizationError("offer_settled", "That handoff offer is no longer open.", 409);

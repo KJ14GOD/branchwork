@@ -17,6 +17,7 @@ import {
   deriveStateLine,
   laneSessions,
   laneView,
+  offerCountdownLabel,
   queuedPositionLabel,
   sessionNeedsYou,
   sessionView,
@@ -1338,6 +1339,16 @@ export function ProjectRoom({
                     <strong>{liveOffer.fromLogin}</strong> offers control to{" "}
                     {liveOffer.toUserId === detail.viewerUserId ? "you" : liveOffer.toLogin}
                   </span>
+                  {(() => {
+                    // DESIGN.md *Handoff offered*: expiry countdown as text.
+                    // Re-read on every poll render; no timer of its own.
+                    const countdown = offerCountdownLabel(liveOffer, Date.now());
+                    return countdown ? (
+                      <span className="trace-time" data-testid="offer-countdown">
+                        {countdown}
+                      </span>
+                    ) : null;
+                  })()}
                   <span className="trace-time">{clockTime(liveOffer.createdAt)}</span>
                   {liveOffer.toUserId === detail.viewerUserId ? (
                     <span className="inline-actions">

@@ -4,6 +4,7 @@ import {
   controller,
   deriveStateLine,
   laneView,
+  offerCountdownLabel,
   pendingDirections,
   queuedPositionLabel,
   runningSession,
@@ -34,6 +35,7 @@ function participant(overrides: Record<string, unknown> = {}) {
     role: "mission_admin",
     joinedAt: T(0),
     isController: false,
+    connection: "connected",
     ...overrides
   };
 }
@@ -159,7 +161,8 @@ function detail(overrides: Record<string, unknown> = {}): MissionDetailResponse 
       createdAt: T(0),
       repository: null,
       archivedAt: null,
-      archivedByLogin: null
+      archivedByLogin: null,
+      attention: null
     },
     workstream: workstream(),
     workstreams: [workstream()],
@@ -365,7 +368,8 @@ describe("connection and handoff presentation", () => {
           toUserId: MAYA,
           toLogin: "maya",
           state: "waiting_for_boundary",
-          createdAt: T(3)
+          createdAt: T(3),
+          expiresAt: T(9)
         }
       }
     });
@@ -483,5 +487,45 @@ describe("what one lane's room may show", () => {
     expect(conversation.directions.map((d) => d.directionId)).toEqual(["dir_2"]);
     expect(conversation.executions.map((e) => e.executionId)).toEqual(["exe_2"]);
     expect(conversation.events.map((e) => e.eventId)).toEqual(["evt_ctrl", "evt_two"]);
+  });
+});
+
+describe("the offer's expiry countdown (D-092)", () => {
+  const offer = (state: string) => ({ state, expiresAt: T(10) });
+
+  it("counts minutes while minutes remain, seconds under the last one", () => {
+    expect(offerCountdownLabel(offer("open"), Date.parse(T(3)))).toBe("expires in 7m");
+    expect(offerCountdownLabel(offer("open"), Date.parse(T(10)) - 40_000)).toBe("expires in 40s");
+  });
+
+  it("says nothing once past expiry — the feed's expired line takes over", () => {
+    expect(offerCountdownLabel(offer("open"), Date.parse(T(10)))).toBeNull();
+    expect(offerCountdownLabel(offer("open"), Date.parse(T(11)))).toBeNull();
+  });
+
+  it("only an open offer counts down: an accepted grant is durable and waits", () => {
+    expect(offerCountdownLabel(offer("accepted"), Date.parse(T(3)))).toBeNull();
+    expect(offerCountdownLabel(offer("waiting_for_boundary"), Date.parse(T(3)))).toBeNull();
+  });
+});
+
+describe("per-participant connection state arrives on the wire (D-091)", () => {
+  it("parses the three states the contract admits, and refuses a room without one", () => {
+    const room = detail({
+      participants: [
+        participant({ isController: true }),
+        participant({ userId: MAYA, login: "maya", role: "contributor", connection: "offline" })
+      ]
+    });
+    const maya = room.participants.find((person) => person.userId === MAYA);
+    expect(maya?.connection).toBe("offline");
+    expect(() =>
+      detail({ participants: [participant({ connection: "away" })] })
+    ).toThrow();
+    expect(() => {
+      const bare: Record<string, unknown> = participant();
+      delete bare.connection;
+      return detail({ participants: [bare] });
+    }).toThrow();
   });
 });

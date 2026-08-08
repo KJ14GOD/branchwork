@@ -44,6 +44,8 @@ describe("contracts", () => {
       // In the ordinary list: not filed away, by nobody (D-063).
       archivedAt: null,
       archivedByLogin: null,
+      // Demanding nothing of anyone, so naming no lane and no chat (D-093).
+      attention: null,
       repository: {
         repoId: "rep_abc",
         provider: "github",

@@ -135,6 +135,13 @@ create table if not exists participants (
   created_at  timestamptz not null default now(),
   primary key (mission_id, user_id)
 );
+-- When this participant's own client last read this mission. Presence is a
+-- projection over this timestamp, never a stored word (D-091): connected /
+-- reconnecting / offline are computed at read time against the same recovery
+-- window the runner's liveness uses. Ephemeral in meaning, durable in storage
+-- only because the projection needs somewhere to read from; it never appears
+-- in receipts (PRODUCT.md#presence-and-connection).
+alter table participants add column if not exists last_seen_at timestamptz;
 
 create table if not exists events (
   event_id       text primary key,
@@ -242,6 +249,10 @@ create table if not exists handoff_offers (
 -- At most one live offer per workstream: a second offer must withdraw the first.
 create unique index if not exists handoff_offers_one_live
   on handoff_offers (wst_id) where state in ('open', 'accepted', 'waiting_for_boundary');
+-- When an unanswered offer lapses (D-092). Nullable only for rows created
+-- before the column existed; the projection treats those as created_at plus
+-- the same TTL, so no offer is ever without an expiry on the wire.
+alter table handoff_offers add column if not exists expires_at timestamptz;
 
 -- ---------------------------------------------------------------------------
 -- Runners: the machine-side identity that reports harness-attributed activity.

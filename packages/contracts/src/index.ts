@@ -189,7 +189,24 @@ export const MissionSchema = z.object({
   /** How many lanes this mission holds — 1 for almost every mission, more only
    *  where somebody deliberately forked an approach. The rail's "2 approaches"
    *  line reads this rather than fetching every room (D-080). */
-  workstreamCount: z.number().int().positive().default(1)
+  workstreamCount: z.number().int().positive().default(1),
+  /** Where the mission's attention-demanding state actually is (D-093): the
+   *  lane whose own state decided the mission's word, and the conversation
+   *  whose execution is blocked, so the needs-attention lens can name the
+   *  exact background chat instead of only the mission. Null whenever the
+   *  mission is not asking for a person; sessionTitle is null for a session
+   *  its first direction has not yet titled, and both session fields are null
+   *  where the attention has no execution behind it (a failed workspace). The
+   *  room's own detail response leaves this null — there the rail tree's
+   *  "· needs you" already points at the row itself. */
+  attention: z
+    .object({
+      workstreamId: z.string().startsWith("wst_"),
+      workstreamName: z.string().min(1),
+      sessionId: z.string().startsWith("csn_").nullable(),
+      sessionTitle: z.string().nullable()
+    })
+    .nullable()
 });
 export type Mission = z.infer<typeof MissionSchema>;
 
@@ -304,13 +321,22 @@ export const CapabilitySchema = z.enum([
 ]);
 export type Capability = z.infer<typeof CapabilitySchema>;
 
+/** Per-participant connection state (PRODUCT.md#presence-and-connection).
+ *  Projected from the participant's own last read of the mission, never
+ *  stored as a word: connected while their client is polling, reconnecting
+ *  in the window where the machine is plausibly coming back, offline past
+ *  it — the same recovery window the runner's liveness uses (D-091). */
+export const ParticipantConnectionSchema = z.enum(["connected", "reconnecting", "offline"]);
+export type ParticipantConnection = z.infer<typeof ParticipantConnectionSchema>;
+
 export const ParticipantSchema = z.object({
   userId: z.string().startsWith("usr_"),
   login: z.string().min(1),
   name: z.string().nullable(),
   role: MissionRoleSchema,
   joinedAt: z.string().datetime(),
-  isController: z.boolean()
+  isController: z.boolean(),
+  connection: ParticipantConnectionSchema
 });
 export type Participant = z.infer<typeof ParticipantSchema>;
 
@@ -1332,7 +1358,12 @@ export const HandoffOfferSchema = z.object({
     "expired",
     "failed"
   ]),
-  createdAt: z.string().datetime()
+  createdAt: z.string().datetime(),
+  /** When an unanswered offer lapses (D-092). Set at creation, enforced by the
+   *  sweep and by the accept route, and rendered as DESIGN.md's countdown
+   *  text. Only an `open` offer expires: once accepted, the grant is durable
+   *  and completes at the boundary regardless (PRODUCT.md#control). */
+  expiresAt: z.string().datetime()
 });
 export type HandoffOfferView = z.infer<typeof HandoffOfferSchema>;
 

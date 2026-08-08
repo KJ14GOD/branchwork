@@ -877,10 +877,25 @@ export function Inspector({
                   <h3 className="inspector-heading">Participants</h3>
                   <ul className="participant-list" data-testid="participant-list">
                     {detail.participants.map((participant) => (
-                      <li key={participant.userId} className="participant-row">
+                      <li
+                        key={participant.userId}
+                        // A disconnected participant dims and never disappears
+                        // (DESIGN.md#component-behavior); the state itself is
+                        // said in words, never a dot.
+                        className={
+                          participant.connection === "connected"
+                            ? "participant-row"
+                            : "participant-row participant-away"
+                        }
+                      >
                         <HumanMark login={participant.login} name={participant.name} />
                         <span className="participant-name">{participant.name ?? participant.login}</span>
                         <span className="participant-role">{roleLabel(participant.role)}</span>
+                        {participant.connection !== "connected" && (
+                          <span className="participant-connection" data-testid="participant-connection">
+                            {participant.connection}
+                          </span>
+                        )}
                       </li>
                     ))}
                     {detail.participants.length === 0 && <li className="quiet">No participants recorded.</li>}

@@ -772,6 +772,26 @@ body {
   color: var(--text-1);
 }
 
+/* A needs-attention row says where: the goal, then the lane and conversation
+   that are actually asking, one quiet line beneath it (D-093). Column layout
+   only here — every other side row stays one line. */
+.attention-row {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  padding-top: var(--s-1);
+  padding-bottom: var(--s-1);
+}
+
+.attention-where {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 /* A project row is two controls in one line: disclose, and open. It is the
    list's heading, and reads as one: the name carries weight and --text-1
    while the missions under it sit quieter (D-077). It also never takes the
@@ -1821,6 +1841,18 @@ body {
 
 .participant-role {
   margin-left: auto;
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+/* A participant whose client is not reading the mission dims to 40% and never
+   disappears (DESIGN.md#component-behavior); the state is the word beside the
+   role — "reconnecting" or "offline" — never a dot. */
+.participant-away {
+  opacity: 0.4;
+}
+
+.participant-connection {
   font: var(--type-meta);
   color: var(--text-2);
 }

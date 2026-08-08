@@ -25,7 +25,12 @@ import { listSessions } from "./sessions.ts";
 import type { Db } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
 import { listDirections } from "./directions.ts";
-import { touchHeldLeases } from "./reliability.ts";
+import {
+  projectConnection,
+  RELIABILITY_THRESHOLDS,
+  touchHeldLeases,
+  touchPresence
+} from "./reliability.ts";
 import type { MissionAccess } from "./authz.ts";
 
 /**
@@ -46,7 +51,7 @@ export async function listParticipants(
   controllerUserId: string | null
 ): Promise<Participant[]> {
   const result = await db.query(
-    `select p.user_id, u.login, u.name, p.mission_role, p.created_at
+    `select p.user_id, u.login, u.name, p.mission_role, p.created_at, p.last_seen_at
        from participants p join users u on u.user_id = p.user_id
       where p.mission_id = $1
       order by p.created_at`,
@@ -58,7 +63,11 @@ export async function listParticipants(
     name: (row.name as string | null) ?? null,
     role: row.mission_role as Participant["role"],
     joinedAt: (row.created_at as Date).toISOString(),
-    isController: row.user_id === controllerUserId
+    isController: row.user_id === controllerUserId,
+    // Projected from the participant's own last read, never stored as a word
+    // (D-091) — the same fact the lease heartbeat reads, at presence's
+    // tighter thresholds.
+    connection: projectConnection((row.last_seen_at as Date | null) ?? null)
   }));
 }
 
@@ -86,7 +95,7 @@ export async function controlSnapshot(db: Db, workstreamId: string | null): Prom
     [workstreamId]
   );
   const offer = await db.query(
-    `select o.offer_id, o.from_user_id, o.to_user_id, o.state, o.created_at,
+    `select o.offer_id, o.from_user_id, o.to_user_id, o.state, o.created_at, o.expires_at,
             f.login as from_login, t.login as to_login
        from handoff_offers o
        join users f on f.user_id = o.from_user_id
@@ -118,7 +127,15 @@ export async function controlSnapshot(db: Db, workstreamId: string | null): Prom
           toUserId: offerRow.to_user_id as string,
           toLogin: offerRow.to_login as string,
           state: offerRow.state as "open" | "accepted" | "waiting_for_boundary",
-          createdAt: (offerRow.created_at as Date).toISOString()
+          createdAt: (offerRow.created_at as Date).toISOString(),
+          // A row from before the column existed reads as created_at plus the
+          // TTL, so no offer reaches the wire without an expiry (D-092).
+          expiresAt: (
+            (offerRow.expires_at as Date | null) ??
+            new Date(
+              (offerRow.created_at as Date).getTime() + RELIABILITY_THRESHOLDS.OFFER_TTL_MS
+            )
+          ).toISOString()
         }
       : null
   };
@@ -510,6 +527,11 @@ export async function missionDetail(
   // mission, whichever lane their room is showing — reading one approach must
   // not lapse the sibling's baton (D-074).
   await touchHeldLeases(db, access.missionId, viewerUserId);
+  // The same read is presence's signal (D-091): this viewer's client is alive
+  // in this mission, whatever they hold. Their own row reads connected while
+  // they poll; everyone else's row reads whatever that person's own polling
+  // has earned.
+  await touchPresence(db, access.missionId, viewerUserId);
 
   const checkpointsForSha = await listCheckpoints(db, access.missionId);
   // The revision a check has to match to still count as current evidence —

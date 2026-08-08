@@ -209,6 +209,10 @@ function controlLine(event: MissionEvent): ControlLine | null {
       const who = to ?? actor;
       return who ? plain(`${who} declined the offer of control`, who) : null;
     }
+    case "control.offer_expired": {
+      if (from && to) return plain(`${from}'s offer of control to ${to} expired unanswered`, from);
+      return plain("The offer of control expired unanswered", from);
+    }
     // Bookkeeping the lease emits alongside the moments above. Subordinate:
     // it belongs in the technical row, not in the stream.
     case "control.granted":

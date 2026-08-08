@@ -1203,3 +1203,52 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** A reorder is applied and persisted continuously while dragging; an abandoned drag leaves the order wherever it was last carried, which is what the hand said. Verification is owed honestly: the synthesized-input probe was retired as evidence for gestures, the deterministic suites stay green, and the gesture itself is proven only by a person's hand on the running build — recorded in PROGRESS as exactly that.
 
 **Revisit when.** A real hand still cannot lift the tab — then the reserve applies: pointer-tracked reordering with no HTML5 drag at all.
+
+## D-091 — Presence is a projection over the participant's own read
+
+**Context.** PRODUCT.md has always required per-participant connection state — connected, reconnecting, offline — and DESIGN.md has always had the rendering rule waiting for it (dim to 40%, never disappear). The 2026-08-08 multiplayer-UI audit recorded the gap plainly: the `Participant` view carried no connection field, so the rule had nothing to render. Meanwhile the product already had two liveness mechanisms, both projections over a last-seen time: the runner's (its polling) and the lease's (the holder's read of the mission).
+
+**Decision.**
+
+- **The signal is the participant's own read of the mission** — the same read that is already the lease heartbeat, throttled to one write per ten seconds onto a `last_seen_at` column on the participant row. No new verb, no client change: a client that is in the room is polling, and a client that is polling is present.
+- **The state is projected at read time, never stored as a word:** connected while seen within 30 seconds, reconnecting to 90 seconds — the same recovery window after which the runner sweep declares a machine gone, applied to a person's machine for the same reason — offline past it, and offline for a participant who has never read the mission at all, because never-arrived and departed are equally absent.
+- **Presence stays out of the record.** The column is overwritten in place; no event, no receipt, no history. ARCHITECTURE.md's "presence lives in memory only" is amended to say exactly this: ephemeral in meaning, one timestamp of storage because a projection needs somewhere to read from.
+
+**Alternatives.** An in-memory map in the control plane (rejected: a restart would flicker every participant to offline for no reason a user could see, and a second source of truth grows sideways); client-declared presence over a new verb (rejected: self-reporting is the one liveness signal that can lie); reusing the 30-minute lease TTL thresholds (rejected: presence distinguishes seconds, the lease distinguishes minutes — one number cannot serve both).
+
+**Consequences.** `ParticipantSchema` gains a required `connection` field, so every fixture and client states it. The Overview list dims disconnected people to 40% with the state in words. A viewer reading the room is connected by construction — their read is the signal. Two clients comparing rooms agree on presence only after both have polled, which the two-client suite now does before comparing.
+
+**Revisit when.** The control plane runs as more than one instance (the column already survives that; the throttle window may need tightening), or presence wants focus/typing, which this column deliberately cannot carry.
+
+## D-092 — A handoff offer expires in ten minutes, and says so
+
+**Context.** PRODUCT.md's HandoffOffer state machine has carried `expired` (TTL) from the start, ARCHITECTURE.md's row said "state, TTL", and DESIGN.md's *Handoff offered* overlay asks for an expiry countdown as text. None of it was real: `HandoffOfferSchema` had no expiry field, no sweep moved an offer, and an unanswered offer held the workstream's one live-offer slot forever — the 2026-08-08 audit's finding.
+
+**Decision.**
+
+- **Ten minutes.** An open offer is an interactive ask — "will you take this?" — not a durable grant. Ten minutes unanswered means the recipient is not there, and the controller deserves the slot back.
+- **Only `open` expires.** An accepted offer is a durable grant that survives disconnection and completes at the boundary however long that takes (PRODUCT.md#control); expiring it would contradict the sentence that defines it.
+- **Expiry is the offer's own fact, not the sweep's schedule.** `expires_at` is set at creation, carried on the wire, enforced twice: the reliability sweep lapses an overdue open offer (`control.offer_expired`, event-recorded so the controller learns it rather than finding the room silently reset), and the accept route refuses a lapsed offer the sweep has not reached yet.
+- **The countdown is words in the meta style** — "expires in 7m", seconds under the last minute, nothing once past expiry (the feed's expired line takes over). Its cadence is the room's poll; it is a rough count-down, not a ticking clock.
+
+**Alternatives.** No TTL, slot freed only by withdraw (rejected: it is the audited bug); expiring accepted offers too (rejected above); a shorter TTL like the 90-second recovery window (rejected: an offer can reasonably wait out a coffee; authority is not lost by it, only an unanswered question is).
+
+**Consequences.** Rows created before the column read as `created_at` plus the TTL in every projection, so no offer reaches the wire without an expiry. `ControlRequest`'s own `expired` state remains unimplemented — a request is a standing ask the controller is meant to see whenever they look, and nothing in this decision starts its clock.
+
+**Revisit when.** Real usage shows offers lapsing under people answering slowly on purpose — the number is a judgment, not a measurement.
+
+## D-093 — The needs-attention row names the lane and the conversation
+
+**Context.** Since the mission list's state became a per-lane projection (2026-08-08), the rail's lens surfaces a mission whose background lane waits on a person — but the row named only the mission. PROGRESS's Known gaps recorded the rest: the lane and the conversation were unnamed, opening the mission landed wherever the tab last was, and the tree's "· needs you" had to point the rest of the way.
+
+**Decision.**
+
+- **The list projection says where.** When a lane's attention-demanding state decides the mission's word, the same projection that decided it also names it: the lane's id and name, and — where the attention is an execution's fact (needs approval, needs direction, interrupted) — the conversation that execution belongs to, with its title. A failed workspace or failed verification is the lane's fact and names no conversation.
+- **`Mission.attention` is the wire shape**, null whenever the mission demands nothing, null in the room's own detail response where the rail tree already points at the row itself. It rides the one lateral join the list query already makes for the lane's latest execution, so naming costs no second query.
+- **The lens row renders it beneath the goal** in the meta style: the lane's name only while the mission holds more than one, the conversation's title when it has one — a one-lane mission whose only conversation is untitled has nothing further to name, and its row stays one line.
+
+**Alternatives.** Deriving the location client-side from fetched details (rejected: the lens works from the list alone after a reconnect, and a detail-dependent name would appear and disappear); naming the session on workspace failures too (rejected: attributing a lane's infrastructure failure to whichever conversation last ran would be a small lie).
+
+**Consequences.** Opening the row still lands on the lane the tab last read — the row now names the destination, and landing *on* the named conversation is deliberately left for the day the working set takes an "open at" instruction; PROGRESS keeps that honest. `MissionSchema` gains a required nullable `attention`, so builders and fixtures state it.
+
+**Revisit when.** Sessions gain their own needs-attention states beyond the lane's (D-083 declined this), or the lens is asked to show more than one blocked lane per mission — the projection names the first in creation order, which is the precedence rule, not a ranking.

@@ -308,6 +308,130 @@ describe("the mission's list state reads every lane", () => {
   });
 });
 
+describe("the attention-demanding lane and conversation are named on the list (D-093)", () => {
+  /** The mission's own list row, attention detail included. */
+  async function listedRow(missionId: string) {
+    const response = await harness.app.inject({
+      method: "GET",
+      url: "/missions",
+      headers: bearer(kartik)
+    });
+    expect(response.statusCode).toBe(200);
+    const row = (
+      response.json().missions as {
+        missionId: string;
+        attention: {
+          workstreamId: string;
+          workstreamName: string;
+          sessionId: string | null;
+          sessionTitle: string | null;
+        } | null;
+      }[]
+    ).find((candidate) => candidate.missionId === missionId);
+    expect(row).toBeDefined();
+    return row!;
+  }
+
+  it("a background approach blocked on an approval is named with its own conversation", async () => {
+    const { lane } = await laneWithFinishedTurn();
+    const created = await fork(lane, "Do it in the middleware instead");
+    expect(created.statusCode).toBe(201);
+    const approach = await enrol(lane.missionId, created.json().workstream.workstreamId as string);
+    const blocked = await direct(approach, "Go the middleware way");
+    await report(approach.credential, blocked, [...live(1), approvalRequested(3)]);
+
+    // The first lane finishes a later turn, exactly the drowning shape the
+    // projection exists to resist — and the row must say not only that the
+    // mission needs a person but *where*.
+    const later = await direct(lane, "Tidy the guard's naming");
+    await report(lane.credential, later, [
+      ...live(1),
+      checkpoint(3, sha(`${lane.workstreamId}-second`), "src/session.ts"),
+      completed(4)
+    ]);
+
+    const row = await listedRow(lane.missionId);
+    expect(row.attention).not.toBeNull();
+    expect(row.attention!.workstreamId).toBe(approach.workstreamId);
+    expect(row.attention!.workstreamName).toBe("Alternative");
+
+    // The conversation is the blocked execution's own session, wearing the
+    // title its first direction gave it — never a sibling's.
+    const execution = await harness.db.query("select session_id from executions where exe_id = $1", [
+      blocked
+    ]);
+    const sessionId = execution.rows[0].session_id as string;
+    expect(row.attention!.sessionId).toBe(sessionId);
+    const session = await harness.db.query("select title from workstream_sessions where csn_id = $1", [
+      sessionId
+    ]);
+    expect(row.attention!.sessionTitle).toBe(session.rows[0].title);
+    expect(row.attention!.sessionTitle).toBeTruthy();
+  });
+
+  it("a mission demanding nothing names nothing", async () => {
+    const { lane } = await laneWithFinishedTurn();
+    const row = await listedRow(lane.missionId);
+    expect(row.attention).toBeNull();
+  });
+});
+
+describe("presence is projected from each participant's own read (D-091)", () => {
+  /** One participant's connection word as another viewer's room reports it. */
+  async function connectionOf(missionId: string, login: string, as: SignedIn = kartik) {
+    const response = await harness.app.inject({
+      method: "GET",
+      url: `/missions/${missionId}`,
+      headers: bearer(as)
+    });
+    expect(response.statusCode).toBe(200);
+    const row = (
+      response.json().participants as { login: string; connection: string }[]
+    ).find((participant) => participant.login === login);
+    expect(row).toBeDefined();
+    return row!.connection;
+  }
+
+  it("reading marks you connected; a participant who has never read is offline", async () => {
+    const lane = await mission();
+    await joinAs(lane.missionId, "maya-presence", "contributor");
+
+    // Kartik's own read is his heartbeat; Maya's client has never polled this
+    // mission, and never-seen reads as offline, not as unknown.
+    expect(await connectionOf(lane.missionId, "kartik")).toBe("connected");
+    expect(await connectionOf(lane.missionId, "maya-presence")).toBe("offline");
+  });
+
+  it("a lapsed read decays to reconnecting, then offline, at the recovery thresholds", async () => {
+    const lane = await mission();
+    const maya = await joinAs(lane.missionId, "maya-lapsing", "contributor");
+    const read = await harness.app.inject({
+      method: "GET",
+      url: `/missions/${lane.missionId}`,
+      headers: bearer(maya)
+    });
+    expect(read.statusCode).toBe(200);
+    expect(await connectionOf(lane.missionId, "maya-lapsing")).toBe("connected");
+
+    // Sixty seconds of silence: past the connected window, inside the
+    // recovery window — the machine is plausibly coming back.
+    await harness.db.query(
+      `update participants set last_seen_at = now() - interval '60 seconds'
+        where mission_id = $1 and user_id = $2`,
+      [lane.missionId, maya.userId]
+    );
+    expect(await connectionOf(lane.missionId, "maya-lapsing")).toBe("reconnecting");
+
+    // Ten minutes: it is not.
+    await harness.db.query(
+      `update participants set last_seen_at = now() - interval '10 minutes'
+        where mission_id = $1 and user_id = $2`,
+      [lane.missionId, maya.userId]
+    );
+    expect(await connectionOf(lane.missionId, "maya-lapsing")).toBe("offline");
+  });
+});
+
 describe("reading the mission is the heartbeat for every held baton", () => {
   /** The lease's recorded heartbeat for one lane, as epoch millis. */
   async function heartbeatOf(workstreamId: string): Promise<number> {

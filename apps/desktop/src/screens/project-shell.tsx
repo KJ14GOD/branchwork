@@ -1181,17 +1181,35 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                 <div className="group-label">
                   Needs attention <span className="side-count">{attention.length}</span>
                 </div>
-                {attention.map((mission) => (
-                  <button
-                    key={mission.missionId}
-                    className="side-row"
-                    onClick={() => openAttention(mission)}
-                    title={mission.goal}
-                    data-testid="attention-row"
-                  >
-                    <span className="side-name">{truncateLabel(mission.goal, 24)}</span>
-                  </button>
-                ))}
+                {attention.map((mission) => {
+                  // Where the attention actually is (D-093): the lane, named
+                  // only while the mission holds more than one, and the exact
+                  // conversation whose turn is blocked, when it has a title.
+                  // A one-lane mission whose one conversation is untitled has
+                  // nothing further to name, and the row stays one line.
+                  const where = [
+                    mission.workstreamCount > 1 ? mission.attention?.workstreamName : null,
+                    mission.attention?.sessionTitle
+                  ]
+                    .filter((part): part is string => Boolean(part))
+                    .join(" · ");
+                  return (
+                    <button
+                      key={mission.missionId}
+                      className="side-row attention-row"
+                      onClick={() => openAttention(mission)}
+                      title={mission.goal}
+                      data-testid="attention-row"
+                    >
+                      <span className="side-name">{truncateLabel(mission.goal, 24)}</span>
+                      {where && (
+                        <span className="attention-where" data-testid="attention-where">
+                          {truncateLabel(where, 28)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </>
             )}
 

@@ -82,7 +82,10 @@ function toMission(row: MissionRow): Mission {
     repository: toRepository(row),
     // How many lanes the mission holds, so the rail can say "2 approaches"
     // without fetching every room (D-080). One for almost every mission.
-    workstreamCount: Number(row.workstream_count ?? 1)
+    workstreamCount: Number(row.workstream_count ?? 1),
+    // Only the list projection fills this in (D-093); everywhere else the
+    // rail tree's own rows already point at the lane and conversation.
+    attention: null
   };
 }
 
@@ -481,14 +484,17 @@ export async function listMissions(
   const ids = missions.map((mission) => mission.missionId);
   const summary = await db.query(
     `with lanes as (
-       select w.mission_id, w.wst_id, w.branch_status, w.created_at,
+       select w.mission_id, w.wst_id, w.name, w.branch_status, w.created_at,
               first_value(w.wst_id) over (partition by w.mission_id order by w.created_at, w.wst_id) as first_wst_id
          from workstreams w where w.mission_id = any($1::text[])
      )
      select l.mission_id,
+            l.wst_id,
+            l.name,
             l.branch_status,
-            (select e.state from executions e
-              where e.wst_id = l.wst_id order by e.created_at desc limit 1) as latest_state,
+            e.state as latest_state,
+            e.session_id as latest_session_id,
+            s.title as latest_session_title,
             (select ws.readiness from workspaces ws where ws.wst_id = l.wst_id) as readiness,
             exists (select 1 from checkpoints c
                       join executions e2 on e2.exe_id = c.exe_id
@@ -500,6 +506,14 @@ export async function listMissions(
                      where v.mission_id = l.mission_id and v.outcome in ('failed', 'errored')
                        and coalesce(v.wst_id, (select e3.wst_id from executions e3 where e3.exe_id = v.exe_id), l.first_wst_id) = l.wst_id) as broken
        from lanes l
+       -- The lane's latest execution as one row, because the attention detail
+       -- needs its session as well as its state (D-093) and two subqueries
+       -- could disagree about which execution is latest.
+       left join lateral (
+         select e.state, e.session_id from executions e
+          where e.wst_id = l.wst_id order by e.created_at desc limit 1
+       ) e on true
+       left join workstream_sessions s on s.csn_id = e.session_id
       order by l.mission_id, l.created_at, l.wst_id`,
     [ids]
   );
@@ -512,14 +526,19 @@ export async function listMissions(
   return missions.map((mission) => {
     const lanes = lanesOf.get(mission.missionId);
     if (!lanes || lanes.length === 0) return mission;
-    return { ...mission, primaryState: projectMissionListState(lanes) };
+    const projected = projectMissionListState(lanes);
+    return { ...mission, primaryState: projected.state, attention: projected.attention };
   });
 }
 
 interface LaneSummaryRow {
   mission_id: string;
+  wst_id: string;
+  name: string;
   branch_status: string;
   latest_state: string | null;
+  latest_session_id: string | null;
+  latest_session_title: string | null;
   readiness: string | null;
   changed: boolean;
   passed: boolean;
@@ -544,21 +563,54 @@ const RUNNING_STATES: ReadonlySet<Mission["primaryState"]> = new Set([
   "agent_stopping"
 ]);
 
+/** The states whose attention has an execution behind it — there the blocked
+ *  conversation is the latest execution's own session. A failed workspace or
+ *  failed verification is the lane's fact, not any conversation's (D-093). */
+const EXECUTION_ATTENTION_STATES: ReadonlySet<Mission["primaryState"]> = new Set([
+  "needs_approval",
+  "needs_direction",
+  "execution_interrupted"
+]);
+
 /**
  * The mission-level primary state over every lane
  * (PRODUCT.md#the-mission-state-model): attention-demanding states, then
  * running, then waiting. Within a class, creation order — lanes are never
  * ranked (D-074), so the earliest lane in the winning class speaks for it. A
  * mission of one lane reduces to that lane's own state.
+ *
+ * When the winning state demands a person, the projection also says **where**
+ * (D-093): the lane whose own state won, and — where the attention is an
+ * execution's — the conversation that execution belongs to, so the lens can
+ * name the exact background chat rather than only the mission.
  */
-function projectMissionListState(lanes: LaneSummaryRow[]): Mission["primaryState"] {
+function projectMissionListState(lanes: LaneSummaryRow[]): {
+  state: Mission["primaryState"];
+  attention: Mission["attention"];
+} {
   const states = lanes.map(projectListState);
-  return (
-    states.find((state) => ATTENTION_STATES.has(state)) ??
-    states.find((state) => RUNNING_STATES.has(state)) ??
-    states[0] ??
-    "new_mission"
-  );
+  for (let index = 0; index < lanes.length; index += 1) {
+    const lane = lanes[index];
+    const state = states[index];
+    if (!lane || !state || !ATTENTION_STATES.has(state)) continue;
+    const sessionKnown = EXECUTION_ATTENTION_STATES.has(state);
+    return {
+      state,
+      attention: {
+        workstreamId: lane.wst_id,
+        workstreamName: lane.name,
+        sessionId: sessionKnown ? lane.latest_session_id : null,
+        sessionTitle: sessionKnown ? lane.latest_session_title : null
+      }
+    };
+  }
+  return {
+    state:
+      states.find((state) => RUNNING_STATES.has(state)) ??
+      states[0] ??
+      "new_mission",
+    attention: null
+  };
 }
 
 /** The same state machine as the room's, over the columns a list can afford,
