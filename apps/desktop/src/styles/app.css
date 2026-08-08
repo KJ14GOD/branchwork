@@ -1447,6 +1447,63 @@ body {
   max-width: 720px;
 }
 
+/* ---------- Approach overview (D-089) ---------- */
+
+/* The approach's own page: a brief and its conversations as links. Text on
+   the ground, at the feed's measure — a page, not a panel. */
+.approach-overview {
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--s-4);
+}
+
+.overview-lead {
+  font: var(--type-body);
+  color: var(--text-1);
+  max-width: 720px;
+}
+
+.overview-facts {
+  margin-top: var(--s-2);
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.overview-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-top: var(--s-5);
+}
+
+.overview-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: var(--type-row);
+  padding: var(--s-1) 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.overview-row:hover {
+  color: var(--text-1);
+}
+
+.overview-row:hover .overview-row-name {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.overview-row-name {
+  max-width: 48ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------- Composer ---------- */
 
 .composer {
@@ -3015,6 +3072,19 @@ body {
   overflow: visible;
 }
 
+/* Reordering is a drag on the whole tab (D-088). The press almost always
+   lands on the button inside, and Chromium will not start the wrapper's drag
+   from an interactive child unless the wrapper claims the gesture itself —
+   without these two rules the drop handlers are unreachable code (D-089). */
+.session-tab[draggable="true"] {
+  -webkit-user-drag: element;
+}
+
+.session-tab[draggable="true"] .session-tab-open,
+.session-tab[draggable="true"] .session-tab-close {
+  -webkit-user-drag: none;
+}
+
 .session-tab.active {
   border-bottom-color: var(--accent);
 }
@@ -3072,7 +3142,8 @@ body {
 }
 
 /* Balanced sides: a closable tab ends in its close control; one without —
-   the anchor — regains that space as padding, so neither reads off-centre. */
+   the draft, which has nothing to close yet — regains that space as padding,
+   so neither reads off-centre. */
 .session-tab:not(:has(.session-tab-close)) .session-tab-open {
   padding-right: var(--s-3);
 }

@@ -1171,3 +1171,19 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** `working-set` stores the order (`reorderSession`, unit-covered); the room sources session tabs mission-wide and routes a foreign lane's tab through the same lane-jump file tabs use; the strip's base tab is a centred flex row, which also fixes the lane tabs' dot alignment. E2e stays unpinned on the new interactions per the standing no-tests call, recorded in PROGRESS.
 
 **Revisit when.** Reordering is wanted for file tabs too — the same stored-order shape lifts; or dragging between levels (a session onto another approach) is asked for, which is a product act, not a reorder.
+
+## D-089 — An approach lands on its overview, and only the person opens tabs
+
+**Context.** Three faults on sight of D-088. Clicking an approach tab dropped the reader into its first session's transcript, where the owner wanted a landing: "a brief on what this is doing and the list of chats which I can click to open" — the approach as a page of linked conversations, the way Notion links pages. Switching approaches conjured the new lane's first session into the tab row uninvited — the anchor rule swapping tabs nobody touched. And dragging a tab did nothing at all: Chromium will not start an HTML5 drag when the press lands on a child button unless the wrapper opts in with `-webkit-user-drag: element`.
+
+**Decision.**
+
+- **The approach tab is a page, not a shortcut.** Selecting an approach with more than one conversation lands on its **overview**: the intent (or that it is the work the mission started with), one quiet line of its own facts — conversations, files changed, checks — and the list of its sessions, each row a link that opens that conversation as a tab. A lane with one conversation keeps landing in it directly: the ordinary mission gains no page between a person and the words.
+- **No implicit tabs.** The anchor is gone. The row holds exactly the sessions a person opened, in their order, whatever approach is showing; switching lanes adds nothing, removes nothing, and swaps nothing. Every session tab closes, and closing the one being read falls back to its approach's overview — which is now the way back, so nothing needs to be unclosable.
+- **The drag works.** The wrapper declares `-webkit-user-drag: element` and its buttons decline the drag, which is the difference between a reorder and a dead gesture — verified by driving a real drag, not by reading the code.
+
+**Alternatives.** Keeping the first session as the landing with the overview behind a control (rejected: the owner named the landing he wants); an overview for single-conversation lanes too (rejected: a page between a person and their only conversation is ceremony); auto-opening a session's tab when its approach is selected (rejected by name — "don't do that unless I do it myself").
+
+**Consequences.** `sessionId: null` on a tab now means the approach's overview where the lane holds several conversations, and the conversation itself where it holds one; the working set is untouched — the anchor was always a rendering rule. The sessions spec's tab counts are rewritten under this entry (creation opens exactly the one tab it made). The overview is composed from data the room already holds; nothing new is fetched.
+
+**Revisit when.** The overview wants evidence beyond the lane's own facts — at which point it is growing into the Compare column for one lane, and reusing that shape beats growing a second.

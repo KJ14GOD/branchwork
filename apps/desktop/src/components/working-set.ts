@@ -32,14 +32,14 @@ export interface OpenTab {
    *  reopening a mission puts you back in the lane you were directing, with
    *  the composer targeting it (D-080). */
   workstreamId: string | null;
-  /** The session this room is reading, null for the lane's first — the
-   *  conversation every lane is born with, which is the default and never
-   *  carried around as an id (D-083). Part of the tab for the same reason the
-   *  lane is: the composer's target must come back as it was left. */
+  /** The session this room is reading. Null is the lane's own landing
+   *  (D-089): its one conversation while it has one, its overview page once
+   *  it holds several. Part of the tab for the same reason the lane is: the
+   *  composer's target must come back as it was left. */
   sessionId: string | null;
   /** Sessions this person explicitly opened as tabs on the room's working row
-   *  (D-087). The lane's first session is the anchor — implicitly always open
-   *  while session chrome shows — and is never stored here. */
+   *  (D-087, D-089). Exactly what was opened, in the person's order — nothing
+   *  is implicit, so nothing appears or swaps when the lane changes. */
   openSessionIds: string[];
 }
 
@@ -123,17 +123,19 @@ export function selectLane(set: WorkingSet, tabId: string, workstreamId: string 
     ...set,
     tabs: set.tabs.map((entry) =>
       // A session belongs to one lane, so moving lanes returns to the new
-      // lane's first conversation rather than carrying a foreign id (D-083).
+      // lane's own landing rather than carrying a foreign id (D-083, D-089).
+      // The open session tabs are untouched: only a person opens or closes
+      // them, never a lane switch.
       entry.id === tabId ? { ...entry, workstreamId, sessionId: null } : entry
     )
   };
 }
 
 /**
- * Selects which session a tab is reading. Null returns to the lane's first —
- * the conversation the lane was born with, which is the default and never
- * stored as an id (D-083). The choice survives a relaunch exactly as the lane
- * does, because the composer's target must come back as it was left.
+ * Selects which session a tab is reading. Null returns to the lane's own
+ * landing — its one conversation, or its overview once it holds several
+ * (D-083, D-089). The choice survives a relaunch exactly as the lane does,
+ * because the composer's target must come back as it was left.
  */
 export function selectSession(set: WorkingSet, tabId: string, sessionId: string | null): WorkingSet {
   const tab = set.tabs.find((entry) => entry.id === tabId);
@@ -147,7 +149,8 @@ export function selectSession(set: WorkingSet, tabId: string, sessionId: string 
 /**
  * Opens a session as a tab on the room's working row and selects it (D-087).
  * A conversation is on the row at most once: opening one already open just
- * moves to it. The lane's first session is the anchor and is never stored.
+ * moves to it. Every open tab is stored — nothing on the row is implicit
+ * (D-089).
  */
 export function openSession(set: WorkingSet, tabId: string, sessionId: string): WorkingSet {
   const tab = set.tabs.find((entry) => entry.id === tabId);
@@ -167,8 +170,8 @@ export function openSession(set: WorkingSet, tabId: string, sessionId: string): 
  * Closes a session tab, and does nothing else (D-087). The conversation, its
  * executions, and anything running go on exactly as they were — the session is
  * still in the rail's tree and still the lane's. When the session being read is
- * the one closed, reading falls back to the lane's first, so the canvas never
- * lands on nothing.
+ * the one closed, reading falls back to the lane's landing (D-089), so the
+ * canvas never lands on nothing.
  */
 export function closeSession(set: WorkingSet, tabId: string, sessionId: string): WorkingSet {
   const tab = set.tabs.find((entry) => entry.id === tabId);
@@ -349,7 +352,7 @@ export function decodeWorkingSet(raw: string | null, mint: () => string): Workin
       missionId: candidate.missionId,
       workstreamId,
       // The session being read comes back the same way: malformed means the
-      // lane's first conversation, never a broken tab (D-083).
+      // lane's own landing, never a broken tab (D-083, D-089).
       sessionId:
         typeof candidate.sessionId === "string" && candidate.sessionId.startsWith("csn_")
           ? candidate.sessionId

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  ApproachSummary,
   BaseRevision,
   Direction,
   Effort,
   Mission,
   MissionDetailResponse,
-  ModelId
+  ModelId,
+  Session,
+  Workstream
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { Composer, type SubmitOutcome } from "../components/composer";
@@ -423,37 +426,34 @@ export function ProjectRoom({
       : null;
   const readingSessionId = selectedSessionId ?? firstSessionId;
   const multiSession = sessions.length > 1;
-  /** Session tabs on the working row (D-087, D-088): the selected approach's
-   *  anchor always, everything explicitly opened — from any approach, in the
-   *  person's own order — and, so a restored selection is never invisible,
-   *  the one being read. Open tabs do not vanish when the lane changes. */
+  /** Where no conversation is selected in a lane that holds several, the
+   *  canvas is the approach's own page — its brief and its conversations as
+   *  links — not the first transcript (D-089). A lane with one conversation
+   *  keeps landing straight in it. */
+  const overviewShowing = multiSession && selectedSessionId === null;
+  /** Session tabs on the working row (D-087, D-088, D-089): exactly what this
+   *  person opened, in their order, from any approach — plus, so a restored
+   *  selection is never invisible, the one being read. Nothing appears,
+   *  vanishes, or swaps because the lane changed: only opening does. */
   const missionSessions = raw?.sessions ?? [];
   const sessionChrome = multiSession || sessionDraft || openSessionIds.length > 0;
   const openSessions = (() => {
-    const anchor = missionSessions.find((session) => session.sessionId === firstSessionId);
     const ordered = openSessionIds
       .map((id) => missionSessions.find((session) => session.sessionId === id))
       .filter((session): session is NonNullable<typeof session> => session !== undefined);
-    const rest = missionSessions.filter(
+    const reading = missionSessions.find(
       (session) =>
-        session.sessionId === selectedSessionId &&
-        session.sessionId !== firstSessionId &&
-        !openSessionIds.includes(session.sessionId)
+        session.sessionId === selectedSessionId && !openSessionIds.includes(session.sessionId)
     );
-    return [...(anchor ? [anchor] : []), ...ordered.filter((s) => s.sessionId !== firstSessionId), ...rest];
+    return [...ordered, ...(reading ? [reading] : [])];
   })();
-  /** The first session of one lane — where null lands for that lane. */
-  const firstSessionOf = (workstreamId: string): string | null =>
-    missionSessions.find((session) => session.workstreamId === workstreamId)?.sessionId ?? null;
   const selectSessionTab = (session: { sessionId: string; workstreamId: string }) => {
     // A tab from another approach moves the room there, exactly as a file
     // tab does: the colour and the conversation never disagree (D-088).
     if (session.workstreamId !== activeLaneId) {
       onSelectLane(session.workstreamId === lanes[0]?.workstreamId ? null : session.workstreamId);
     }
-    onSelectSession(
-      session.sessionId === firstSessionOf(session.workstreamId) ? null : session.sessionId
-    );
+    onSelectSession(session.sessionId);
     onSelectFile(null);
     onDecisionOpen(false);
     onSessionDraft(false);
@@ -652,16 +652,24 @@ export function ProjectRoom({
       {/* This strip is the mission's working row (D-086): the top strip holds
           one tab per mission, and this one — one level below, exactly where an
           open file appears — holds the mission's approaches as colour-dotted
-          tabs, Compare while it is open, and every open file, side by side.
-          One canvas shows at a time; the colours tie a lane's tab to its
-          files. Sessions are never tabs here — they are the rail's tree. A
-          mission with one approach and nothing open shows no strip at all. */}
+          tabs, the sessions this person opened (D-087), Compare while it is
+          open, and every open file, side by side. One canvas shows at a time;
+          the colours tie a lane's tab to its sessions and files. A mission
+          with one approach, one conversation and nothing open shows no strip
+          at all. */}
       {(openFiles.length > 0 || decisionOpen || multiLane || sessionChrome) && (
         <div className="tabbar" role="tablist" aria-label={`Open in ${title}`}>
           {multiLane ? (
             lanes.map((lane, index) => {
+              // The approach tab is a page of its own (D-089): selected only
+              // while its landing — the overview, or its one conversation —
+              // is the canvas, not while one of its session tabs is.
               const selected =
-                activeFile === null && !decisionOpen && lane.workstreamId === activeLaneId;
+                activeFile === null &&
+                !decisionOpen &&
+                !sessionDraft &&
+                lane.workstreamId === activeLaneId &&
+                selectedSessionId === null;
               return (
                 <button
                   key={lane.workstreamId}
@@ -672,6 +680,10 @@ export function ProjectRoom({
                     onSelectFile(null);
                     onDecisionOpen(false);
                     onSessionDraft(false);
+                    // Landing on the approach, not in a conversation: its own
+                    // page decides — and switching lanes never touches the
+                    // open session tabs (D-089).
+                    onSelectSession(null);
                     if (lane.workstreamId !== activeLaneId) {
                       onSelectLane(lane.workstreamId === lanes[0]?.workstreamId ? null : lane.workstreamId);
                     }
@@ -692,15 +704,22 @@ export function ProjectRoom({
                 </button>
               );
             })
-          ) : !sessionChrome ? (
+          ) : (
             <button
               role="tab"
-              aria-selected={activeFile === null && !decisionOpen}
-              className={activeFile === null && !decisionOpen ? "tab active" : "tab"}
+              aria-selected={
+                activeFile === null && !decisionOpen && !sessionDraft && selectedSessionId === null
+              }
+              className={
+                activeFile === null && !decisionOpen && !sessionDraft && selectedSessionId === null
+                  ? "tab active"
+                  : "tab"
+              }
               onClick={() => {
                 onSelectFile(null);
                 onDecisionOpen(false);
                 onSessionDraft(false);
+                onSelectSession(null);
               }}
               title={`Back to ${title}`}
               data-testid="room-tab"
@@ -708,21 +727,24 @@ export function ProjectRoom({
               {/* Not the goal again. The window's strip above already names
                   this mission and the rail names it a third time; the only
                   question this control answers is "what do I return to"
-                  (D-061). With approaches or open sessions, their tabs are
-                  the way back. */}
+                  (D-061). With one lane it is the way back even beside open
+                  session tabs, because every session tab closes now (D-089):
+                  it lands on the mission's own page — the conversation where
+                  there is one, the overview where there are several. */}
               Mission
             </button>
-          ) : null}
-          {/* One tab per open conversation of the selected approach (D-087):
-              a glyph and a title, closable except the lane's first — the
-              anchor, which is the way back when everything else is put away.
-              With one session and no draft there is no session chrome at all. */}
+          )}
+          {/* One tab per conversation this person opened (D-087, D-089): a
+              glyph and a title, every one closable — the approach tab is the
+              way back, so nothing needs to be permanent. With one session,
+              nothing opened and no draft there is no session chrome at all. */}
           {sessionChrome &&
             openSessions.map((session) => {
               const selected =
                 activeFile === null &&
                 !decisionOpen &&
                 !sessionDraft &&
+                !overviewShowing &&
                 session.sessionId === readingSessionId;
               // Mission-wide, because an open tab can be another approach's
               // conversation (D-088) — the raw detail holds every execution.
@@ -752,10 +774,14 @@ export function ProjectRoom({
                     const dragged = event.dataTransfer.getData("text/novus-session");
                     if (!dragged || dragged === session.sessionId) return;
                     event.preventDefault();
-                    // Dropping on a tab takes its place; the anchor is not in
-                    // the stored order, so dropping on it means "first".
+                    // Dropping on a tab takes its place. The one tab that can
+                    // be outside the stored order — a restored selection not
+                    // yet opened — sits last, so dropping on it means "last".
                     const target = openSessionIds.indexOf(session.sessionId);
-                    onReorderSession(dragged, target === -1 ? 0 : target);
+                    onReorderSession(
+                      dragged,
+                      target === -1 ? openSessionIds.length - 1 : target
+                    );
                   }}
                 >
                   <button
@@ -794,17 +820,15 @@ export function ProjectRoom({
                         on a person says so (DESIGN.md#status-semantics). */}
                     {needsYou && <span className="tone-warn session-needs"> · needs you</span>}
                   </button>
-                  {session.sessionId !== firstSessionId && (
-                    <button
-                      className="session-tab-close"
-                      onClick={() => onCloseSession(session.sessionId)}
-                      aria-label={`Close ${session.title ?? "this session"}`}
-                      title={`Close ${session.title ?? "this session"}`}
-                      data-testid="session-tab-close"
-                    >
-                      ×
-                    </button>
-                  )}
+                  <button
+                    className="session-tab-close"
+                    onClick={() => onCloseSession(session.sessionId)}
+                    aria-label={`Close ${session.title ?? "this session"}`}
+                    title={`Close ${session.title ?? "this session"}`}
+                    data-testid="session-tab-close"
+                  >
+                    ×
+                  </button>
                 </span>
               );
             })}
@@ -1106,6 +1130,20 @@ export function ProjectRoom({
             </div>
           </div>
         </div>
+      ) : overviewShowing && detail ? (
+        /* The approach's landing (D-089): its brief and its conversations as
+           links, instead of dropping the reader into the first transcript. */
+        <div className="feed-scroll">
+          <div className="feed">
+            <ApproachOverview
+              lane={activeLane}
+              summary={approaches.find((approach) => approach.workstreamId === activeLaneId)}
+              sessions={sessions}
+              detail={detail}
+              onOpenSession={onOpenSession}
+            />
+          </div>
+        </div>
       ) : (
       <div className="feed-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="feed" data-testid="chat">
@@ -1314,6 +1352,69 @@ export function ProjectRoom({
 
       </div>
 
+    </div>
+  );
+}
+
+/**
+ * The approach's own page (D-089): what this lane is doing, in words, and its
+ * conversations as links. An approach tab lands here when the lane holds more
+ * than one conversation — a person reads the brief, then chooses a chat, and
+ * clicking one opens it as a tab beside the others. Nothing opens by itself.
+ */
+function ApproachOverview({
+  lane,
+  summary,
+  sessions,
+  detail,
+  onOpenSession
+}: {
+  lane: Workstream | null;
+  summary: ApproachSummary | undefined;
+  sessions: Session[];
+  detail: MissionDetailResponse;
+  onOpenSession: (sessionId: string) => void;
+}) {
+  // The lane's own facts, from the same summary Compare reads — counted, not
+  // fetched. Checks appear only once something ran; zero run is the state
+  // line's finding to report, not this page's.
+  const facts = [
+    sessions.length === 1 ? "1 conversation" : `${sessions.length} conversations`,
+    `${summary?.filesChanged ?? 0} ${(summary?.filesChanged ?? 0) === 1 ? "file" : "files"} changed`,
+    ...(summary && summary.checksRun > 0
+      ? [`${summary.checksPassed}/${summary.checksRun} checks passed`]
+      : [])
+  ];
+  return (
+    <div className="approach-overview" data-testid="approach-overview">
+      <p className="overview-lead">{lane?.intent ?? "The work this mission started with."}</p>
+      <p className="overview-facts">{facts.join(" · ")}</p>
+      <div className="overview-list">
+        {sessions.map((session) => {
+          const needs = sessionNeedsYou(detail, session.sessionId);
+          return (
+            <button
+              key={session.sessionId}
+              className="overview-row"
+              onClick={() => onOpenSession(session.sessionId)}
+              title={`Open ${session.title ?? "this session"}`}
+              data-testid="overview-session-row"
+              data-session={session.sessionId}
+            >
+              <SessionGlyph />
+              <span
+                className={
+                  session.title === null ? "overview-row-name session-untitled" : "overview-row-name"
+                }
+              >
+                {session.title ?? "New session"}
+              </span>
+              {/* Words, never a dot (DESIGN.md#status-semantics). */}
+              {needs && <span className="tone-warn"> · needs you</span>}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

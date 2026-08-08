@@ -444,7 +444,7 @@ function MissionTree({
   sessionDraft: boolean;
   mayDirect: boolean;
   onSelectApproach: (workstreamId: string | null) => void;
-  onSelectSession: (sessionId: string | null) => void;
+  onSelectSession: (sessionId: string) => void;
   onCompare: () => void;
   onNewSession: () => void;
 }) {
@@ -454,17 +454,20 @@ function MissionTree({
   const laneSessions: Session[] = detail.sessions.filter(
     (session) => session.workstreamId === selectedLaneId
   );
-  const firstSessionId = laneSessions[0]?.sessionId ?? null;
+  // No conversation selected no longer means "reading the first" (D-089): it
+  // means the approach's own page, so no session row washes and the approach
+  // row does instead.
   const selectedSessionId =
     storedSessionId !== null && laneSessions.some((session) => session.sessionId === storedSessionId)
       ? storedSessionId
-      : firstSessionId;
+      : null;
   const showSessions = laneSessions.length > 1 || sessionDraft;
   if (lanes.length <= 1 && !showSessions) return null;
 
   // One wash in the rail: the deepest thing the canvas is showing.
   const washSession = !decisionOpen && !sessionDraft && showSessions;
-  const washApproach = !decisionOpen && !sessionDraft && !showSessions;
+  const washApproach =
+    !decisionOpen && !sessionDraft && (!showSessions || selectedSessionId === null);
 
   // The selected approach's conversations — rendered directly beneath its own
   // row, never after the last approach, or the first lane's sessions read as
@@ -482,9 +485,7 @@ function MissionTree({
           >
             <button
               className="side-open-mission"
-              onClick={() =>
-                onSelectSession(session.sessionId === firstSessionId ? null : session.sessionId)
-              }
+              onClick={() => onSelectSession(session.sessionId)}
               aria-current={selected}
               title={session.title ?? "New session"}
             >
@@ -1044,6 +1045,15 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     : [];
   const activeTreeShown =
     (openDetail?.workstreams.length ?? 0) > 1 || activeTreeSessions.length > 1 || sessionDraft;
+  /** The tree is shown but the canvas is the mission's own landing (D-089) —
+   *  no conversation selected, nothing else covering it. In a one-lane
+   *  mission no approach row exists to carry the wash, so the mission's own
+   *  row keeps it; with several lanes the approach row takes it instead. */
+  const activeLandingWashed =
+    (openDetail?.workstreams.length ?? 0) <= 1 &&
+    !decisionOpen &&
+    !sessionDraft &&
+    !activeTreeSessions.some((session) => session.sessionId === (active?.sessionId ?? ""));
 
   /** What the server said this viewer may do in that mission. Absent until its
    *  detail has been read, which is the honest answer to "may I" — so the
@@ -1249,9 +1259,12 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                           <div
                             className={`side-row side-child${
                               // When the tree renders, the wash moves to the
-                              // deepest selected row; the chip keeps only its
-                              // lifted type (D-084 — one selection per rail).
-                              isActive && !activeTreeShown ? " selected" : ""
+                              // deepest row the canvas is showing (D-084 —
+                              // one selection per rail); on the mission's own
+                              // landing that deepest row is this one (D-089).
+                              isActive && (!activeTreeShown || activeLandingWashed)
+                                ? " selected"
+                                : ""
                             }${isActive ? " active-mission" : ""}`}
                             data-testid="mission-row"
                           >
@@ -1321,22 +1334,24 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                               sessionDraft={sessionDraft}
                               mayDirect={missionDetail.capabilities.includes("direction.submit")}
                               onSelectApproach={(workstreamId) => {
-                                // Opening, not retargeting (D-085): the lane
-                                // arrives as its own tab beside the mission's
-                                // others, wearing its dot.
+                                // The approach row lands on the approach's
+                                // own page (D-089) — never in a conversation,
+                                // and never touching the open session tabs.
                                 openLaneView(workstreamId);
+                                setWorkingSet((previous) =>
+                                  selectSession(previous, active.id, null)
+                                );
                                 setDecisionOpen(false);
                                 setSessionDraft(false);
                                 setRailOpen(false);
                               }}
                               onSelectSession={(sessionId) => {
                                 // A row opens its session as a tab on the
-                                // working row (D-087); the anchor — null, the
-                                // lane's first — is only ever selected.
+                                // working row (D-087, D-089): every row, the
+                                // lane's first included — opening is always
+                                // this person's own act.
                                 setWorkingSet((previous) =>
-                                  sessionId === null
-                                    ? selectSession(previous, active.id, null)
-                                    : openSession(previous, active.id, sessionId)
+                                  openSession(previous, active.id, sessionId)
                                 );
                                 setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
                                 setDecisionOpen(false);
