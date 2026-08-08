@@ -463,9 +463,50 @@ function MissionTree({
   const washSession = !decisionOpen && !sessionDraft && showSessions;
   const washApproach = !decisionOpen && !sessionDraft && !showSessions;
 
+  // The selected approach's conversations — rendered directly beneath its own
+  // row, never after the last approach, or the first lane's sessions read as
+  // the last lane's children (found by eye in live use, 2026-08-08).
+  const sessionRows = showSessions
+    ? laneSessions.map((session) => {
+        const selected = session.sessionId === selectedSessionId && !sessionDraft;
+        const needs = !selected && sessionNeedsYou(detail, session.sessionId);
+        return (
+          <div
+            key={session.sessionId}
+            className={`side-row side-session${selected && washSession ? " selected" : ""}`}
+            data-testid="rail-session-row"
+            data-session={session.sessionId}
+          >
+            <button
+              className="side-open-mission"
+              onClick={() =>
+                onSelectSession(session.sessionId === firstSessionId ? null : session.sessionId)
+              }
+              aria-current={selected}
+              title={session.title ?? "New session"}
+            >
+              <span className={session.title === null ? "side-name side-untitled" : "side-name"}>
+                {truncateLabel(session.title ?? "New session", 24)}
+              </span>
+              {needs && <span className="tone-warn side-needs"> · needs you</span>}
+            </button>
+          </div>
+        );
+      })
+    : null;
+  /* The conversation being asked for: nothing exists yet, and leaving creates
+     nothing — the row only mirrors the canvas (D-077, D-083). */
+  const draftRow = sessionDraft ? (
+    <div className="side-row side-session selected" data-testid="rail-session-draft">
+      <span className="side-open-mission">
+        <span className="side-name side-untitled">New session</span>
+      </span>
+    </div>
+  ) : null;
+
   return (
     <div className="side-tree" data-testid="mission-tree">
-      {lanes.length > 1 &&
+      {lanes.length > 1 ? (
         lanes.map((lane, index) => {
           const selected = lane.workstreamId === selectedLaneId;
           const needs =
@@ -474,84 +515,58 @@ function MissionTree({
               .filter((session) => session.workstreamId === lane.workstreamId)
               .some((session) => sessionNeedsYou(detail, session.sessionId));
           return (
-            <div
-              key={lane.workstreamId}
-              className={`side-row side-approach${selected && washApproach ? " selected" : ""}`}
-              data-testid="rail-approach-row"
-              data-workstream={lane.workstreamId}
-            >
-              <button
-                className="side-open-mission"
-                onClick={() => onSelectApproach(lane.workstreamId === firstLaneId ? null : lane.workstreamId)}
-                aria-current={selected}
-                title={
-                  lane.approach
-                    ? `${lane.name} — isolated workspace`
-                    : `${lane.name} — the work this mission started with`
-                }
+            <Fragment key={lane.workstreamId}>
+              <div
+                className={`side-row side-approach${selected && washApproach ? " selected" : ""}`}
+                data-testid="rail-approach-row"
+                data-workstream={lane.workstreamId}
               >
-                <span
-                  className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
-                  aria-hidden="true"
-                />
-                <span className="side-name">{lane.name}</span>
-                {needs && <span className="tone-warn side-needs"> · needs you</span>}
-              </button>
-              {/* A parent's + creates its child, exactly as the project row's
-                  does for missions (D-077, D-084). Only on the approach being
-                  read: a session starts where you are. */}
-              {selected && mayDirect && (
                 <button
-                  className="side-new-mission"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onNewSession();
-                  }}
-                  aria-label={`New session in ${lane.name}`}
-                  title={`New session in ${lane.name}`}
-                  data-testid="rail-new-session"
+                  className="side-open-mission"
+                  onClick={() => onSelectApproach(lane.workstreamId === firstLaneId ? null : lane.workstreamId)}
+                  aria-current={selected}
+                  title={
+                    lane.approach
+                      ? `${lane.name} — isolated workspace`
+                      : `${lane.name} — the work this mission started with`
+                  }
                 >
-                  +
+                  <span
+                    className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
+                    aria-hidden="true"
+                  />
+                  <span className="side-name">{lane.name}</span>
+                  {needs && <span className="tone-warn side-needs"> · needs you</span>}
                 </button>
-              )}
-            </div>
+                {/* A parent's + creates its child, exactly as the project row's
+                    does for missions (D-077, D-084). Only on the approach being
+                    read: a session starts where you are. */}
+                {selected && mayDirect && (
+                  <button
+                    className="side-new-mission"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onNewSession();
+                    }}
+                    aria-label={`New session in ${lane.name}`}
+                    title={`New session in ${lane.name}`}
+                    data-testid="rail-new-session"
+                  >
+                    +
+                  </button>
+                )}
+              </div>
+              {/* Its children, under it and nowhere else. */}
+              {selected && sessionRows}
+              {selected && draftRow}
+            </Fragment>
           );
-        })}
-      {showSessions &&
-        laneSessions.map((session) => {
-          const selected = session.sessionId === selectedSessionId && !sessionDraft;
-          const needs = !selected && sessionNeedsYou(detail, session.sessionId);
-          return (
-            <div
-              key={session.sessionId}
-              className={`side-row side-session${selected && washSession ? " selected" : ""}`}
-              data-testid="rail-session-row"
-              data-session={session.sessionId}
-            >
-              <button
-                className="side-open-mission"
-                onClick={() =>
-                  onSelectSession(session.sessionId === firstSessionId ? null : session.sessionId)
-                }
-                aria-current={selected}
-                title={session.title ?? "New session"}
-              >
-                <span className={session.title === null ? "side-name side-untitled" : "side-name"}>
-                  {truncateLabel(session.title ?? "New session", 24)}
-                </span>
-                {needs && <span className="tone-warn side-needs"> · needs you</span>}
-              </button>
-            </div>
-          );
-        })}
-      {/* The conversation being asked for: nothing exists yet, and leaving
-          creates nothing — the row only mirrors the canvas (D-077, D-083). */}
-      {sessionDraft && (
-        <div className="side-row side-session selected" data-testid="rail-session-draft">
-          <span className="side-open-mission">
-            <span className="side-name side-untitled">New session</span>
-          </span>
-        </div>
+        })
+      ) : (
+        <>
+          {sessionRows}
+          {draftRow}
+        </>
       )}
       {lanes.length > 1 && (
         <div
