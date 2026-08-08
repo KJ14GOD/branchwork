@@ -592,6 +592,19 @@ function selectedLaneOf(detail: MissionDetailResponse | undefined, stored: strin
   return stored ?? detail.workstreams[0]?.workstreamId ?? null;
 }
 
+/** One open file tab: a path in one lane's worktree. The lane is stored as
+ *  the tab's own fact, so the pane reads the worktree it was opened from even
+ *  while the room is switching lanes underneath it (D-084). */
+export interface OpenFileTab {
+  key: string;
+  path: string;
+  /** Null means the lane the mission started with, exactly as everywhere. */
+  workstreamId: string | null;
+}
+
+const fileTabKey = (workstreamId: string | null, path: string): string =>
+  `${workstreamId ?? "first"}:${path}`;
+
 export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [missions, setMissions] = useState<Mission[] | null>(null);
   const [details, setDetails] = useState<Record<string, MissionDetailResponse>>({});
@@ -655,7 +668,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
    * store that only ever grows and that nobody asked for. Reopening a mission
    * therefore opens its trace, which is what the room is for.
    */
-  const [filesByTab, setFilesByTab] = useState<Record<string, string[]>>({});
+  /** A file open over one room's canvas — from one lane's worktree, which is
+   *  part of its identity: the same path open from two approaches is two tabs,
+   *  each wearing its lane's dot (D-084). `key` is lane + path. */
+  const [filesByTab, setFilesByTab] = useState<Record<string, OpenFileTab[]>>({});
   const [activeFileByTab, setActiveFileByTab] = useState<Record<string, string | null>>({});
   /** Which projects are showing their missions. Disclosure is the reader's
    *  choice and survives selection moving elsewhere. */
@@ -1548,16 +1564,16 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               terminalOpen={terminalOpen}
               openFiles={openFiles}
               activeFile={activeFile}
-              onSelectFile={(path) =>
-                setActiveFileByTab((previous) => ({ ...previous, [active.id]: path }))
+              onSelectFile={(key) =>
+                setActiveFileByTab((previous) => ({ ...previous, [active.id]: key }))
               }
-              onCloseFile={(path) => {
+              onCloseFile={(key) => {
                 setFilesByTab((previous) => ({
                   ...previous,
-                  [active.id]: (previous[active.id] ?? []).filter((entry) => entry !== path)
+                  [active.id]: (previous[active.id] ?? []).filter((entry) => entry.key !== key)
                 }));
                 setActiveFileByTab((previous) =>
-                  previous[active.id] === path ? { ...previous, [active.id]: null } : previous
+                  previous[active.id] === key ? { ...previous, [active.id]: null } : previous
                 );
               }}
               activeWorkstreamId={active.workstreamId}
@@ -1644,15 +1660,20 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           section={inspector}
           onSection={setInspector}
           hostedHere={currentProject?.onThisMachine === true}
-          openPath={activeFile}
+          openPath={openFiles.find((entry) => entry.key === activeFile)?.path ?? null}
           onOpenFile={(path) => {
+            // The lane is captured at the moment of opening: this tab is that
+            // worktree's copy of the file, whatever the room reads later. The
+            // same path opened from a sibling approach is a second tab.
+            const lane = active.workstreamId;
+            const key = fileTabKey(lane, path);
             setFilesByTab((previous) => {
               const current = previous[active.id] ?? [];
-              return current.includes(path)
+              return current.some((entry) => entry.key === key)
                 ? previous
-                : { ...previous, [active.id]: [...current, path] };
+                : { ...previous, [active.id]: [...current, { key, path, workstreamId: lane }] };
             });
-            setActiveFileByTab((previous) => ({ ...previous, [active.id]: path }));
+            setActiveFileByTab((previous) => ({ ...previous, [active.id]: key }));
           }}
           onClose={() => setInspector(null)}
           onDetail={handleDetail}

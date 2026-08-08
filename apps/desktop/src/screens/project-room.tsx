@@ -117,12 +117,15 @@ export function ProjectRoom({
    *  same toggle closes it, which is why the dock carries no Hide of its own. */
   terminalOpen: boolean;
   /** Files the reader opened from the panel. Each is a tab beside the
-   *  room's own, and while one is selected the room shows that file and
-   *  nothing about the mission above it (D-048). */
-  openFiles: string[];
+   *  room's own — a path in ONE lane's worktree, wearing that lane's identity
+   *  dot once the mission has competing approaches, because the same path open
+   *  from two worktrees is two different files (D-048, D-084). While one is
+   *  selected the room shows that file and nothing about the mission above it. */
+  openFiles: { key: string; path: string; workstreamId: string | null }[];
+  /** The selected tab's key, not its path: two lanes can hold one path. */
   activeFile: string | null;
-  onSelectFile: (path: string | null) => void;
-  onCloseFile: (path: string) => void;
+  onSelectFile: (key: string | null) => void;
+  onCloseFile: (key: string) => void;
   /** The approach lane this room is reading — null for the lane the mission
    *  started with. Everything lane-scoped follows it: the poll asks for it,
    *  the composer targets it, files and the terminal act in its worktree
@@ -570,6 +573,9 @@ export function ProjectRoom({
   };
 
   const title = isDraft ? "New mission" : (detail?.mission.goal ?? "Loading mission");
+  /** The file tab being read, resolved from its key — null when the canvas is
+   *  the mission's own. */
+  const activeFileEntry = openFiles.find((file) => file.key === activeFile) ?? null;
 
   return (
     <div className="room" data-testid="project-room">
@@ -596,37 +602,54 @@ export function ProjectRoom({
                 (D-061). */}
             Mission
           </button>
-          {openFiles.map((file) => (
-            <span
-              key={file}
-              className={file === activeFile ? "tab file-tab active" : "tab file-tab"}
-              data-testid="file-tab"
-              data-path={file}
-            >
-              <button
-                role="tab"
-                aria-selected={file === activeFile}
-                className="file-tab-open"
-                onClick={() => {
-                  onSelectFile(file);
-                  onSessionDraft(false);
-                }}
-                title={file}
+          {openFiles.map((file) => {
+            // Which lane's worktree this tab reads — its own fact, captured
+            // when it was opened. The dot says so once approaches exist, and
+            // choosing the tab puts the room in that lane, so the colour and
+            // the content can never disagree (D-084).
+            const fileLaneId = file.workstreamId ?? lanes[0]?.workstreamId ?? null;
+            const laneIndex = lanes.findIndex((lane) => lane.workstreamId === fileLaneId);
+            const laneName = lanes[laneIndex]?.name ?? null;
+            return (
+              <span
+                key={file.key}
+                className={file.key === activeFile ? "tab file-tab active" : "tab file-tab"}
+                data-testid="file-tab"
+                data-path={file.path}
+                data-workstream={fileLaneId ?? undefined}
               >
-                <FileGlyph />
-                <span className="file-tab-name">{file.split("/").pop() ?? file}</span>
-              </button>
-              <button
-                className="file-tab-close"
-                onClick={() => onCloseFile(file)}
-                aria-label={`Close ${file}`}
-                title={`Close ${file}`}
-                data-testid="file-tab-close"
-              >
-                ×
-              </button>
-            </span>
-          ))}
+                <button
+                  role="tab"
+                  aria-selected={file.key === activeFile}
+                  className="file-tab-open"
+                  onClick={() => {
+                    onSelectFile(file.key);
+                    if (file.workstreamId !== activeWorkstreamId) onSelectLane(file.workstreamId);
+                    onSessionDraft(false);
+                  }}
+                  title={multiLane && laneName ? `${file.path} — in ${laneName}` : file.path}
+                >
+                  {multiLane && laneIndex >= 0 && (
+                    <span
+                      className={laneIndex === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
+                      aria-hidden="true"
+                    />
+                  )}
+                  <FileGlyph />
+                  <span className="file-tab-name">{file.path.split("/").pop() ?? file.path}</span>
+                </button>
+                <button
+                  className="file-tab-close"
+                  onClick={() => onCloseFile(file.key)}
+                  aria-label={`Close ${file.path}`}
+                  title={`Close ${file.path}`}
+                  data-testid="file-tab-close"
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
         </div>
       )}
 
@@ -799,11 +822,15 @@ export function ProjectRoom({
         />
       )}
 
-      {activeFile !== null && selectedMissionId !== null ? (
+      {activeFileEntry !== null && selectedMissionId !== null ? (
+        // The pane reads the worktree the tab was opened from — the tab's own
+        // lane, never whichever lane the room happens to be reading — so the
+        // dot on the tab and the bytes on screen cannot disagree (D-084).
         <FileView
+          key={activeFileEntry.key}
           missionId={selectedMissionId}
-          workstreamId={activeLaneId ?? undefined}
-          path={activeFile}
+          workstreamId={activeFileEntry.workstreamId ?? undefined}
+          path={activeFileEntry.path}
         />
       ) : decisionOpen && detail ? (
         <div className="feed-scroll">
