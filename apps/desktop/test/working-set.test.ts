@@ -10,6 +10,7 @@ import {
   openDraft,
   openMission,
   openSession,
+  reorderSession,
   promoteDraft,
   selectLane,
   selectSession,
@@ -281,6 +282,24 @@ describe("sessions in a tab (D-083, presented per D-084)", () => {
     expect(set.tabs[0]!.sessionId).toBeNull();
     // Closing what is not open changes nothing at all.
     expect(closeSession(set, tabId, "csn_three")).toBe(set);
+  });
+
+  it("moves an open session to the person's chosen place, and nowhere else (D-088)", () => {
+    const mint = minter();
+    let set = openMission(emptyWorkingSet, "msn_a", "local:one", mint);
+    const tabId = set.tabs[0]!.id;
+    set = openSession(set, tabId, "csn_two");
+    set = openSession(set, tabId, "csn_three");
+    set = openSession(set, tabId, "csn_four");
+    set = reorderSession(set, tabId, "csn_four", 0);
+    expect(set.tabs[0]!.openSessionIds).toEqual(["csn_four", "csn_two", "csn_three"]);
+    set = reorderSession(set, tabId, "csn_two", 2);
+    expect(set.tabs[0]!.openSessionIds).toEqual(["csn_four", "csn_three", "csn_two"]);
+    // Nothing moves for an id that is not open, an index out of range, or a
+    // tab that does not exist.
+    expect(reorderSession(set, tabId, "csn_missing", 0)).toBe(set);
+    expect(reorderSession(set, tabId, "csn_two", 9)).toBe(set);
+    expect(reorderSession(set, "nothing-like-this", "csn_two", 0)).toBe(set);
   });
 
   it("restores the open session tabs beside the one being read", () => {

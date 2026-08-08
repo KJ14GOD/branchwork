@@ -1154,3 +1154,20 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** `working-set` regains `openSessionIds`, `openSession`, `closeSession`, and their persistence — with their unit coverage restored, since the gate runs it; the rail's session rows open rather than only select; the room renders the third tab species with the D-083 glyph and the never-truncate attention words; the Mission back-tab appears only where no lane and no session tabs exist to be the way back. The e2e specs keep their meaning and the tab interactions stay unpinned per the standing no-tests call, recorded in PROGRESS.
 
 **Revisit when.** Sessions from *different* approaches are wanted open at once — which is two lane tabs away today, and side-by-side panes, not more tabs, if it ever means simultaneously.
+
+## D-088 — Session tabs wear their approach's colour, stay open across lanes, and move by hand
+
+**Context.** With sessions on the working row (D-087), the owner named three gaps on sight: a session tab carried no mark of the approach it belongs to, so "part of that" was invisible; switching to another approach hid the tabs he had open, when they should stay side by side like anything else he opened; and the row's order was fixed, where he wants to arrange it. He also flagged the craft: tab content sits off-centre.
+
+**Decision.** D-087 amended in three ways, and one repair.
+
+- **The dot extends to session tabs.** Each session tab leads with its approach's identity dot — blue under the lane the mission started with, amber under an alternative — the same token pair, still identity and never quality. D-087 withheld the dot because a session sat under its own approach's tab; once tabs from several approaches share the row, the colour is what says whose each is.
+- **Open is open, whatever lane is showing.** The open set spans the mission: switching approaches hides nothing, and choosing a session tab from another approach moves the room to that approach and that conversation — the same rule file tabs already follow, colour and content never disagreeing. The anchor stays per selected approach: its first session is always present and never closable; every other open tab closes by hand.
+- **The row is the person's order.** Open session tabs drag to reorder; the order is theirs, stored with the open set, and never rewritten by the product.
+- **The repair:** tab content centres — the base tab becomes a centred flex row, and a tab without a close control regains the right padding the close was occupying, so nothing reads pushed to one side.
+
+**Alternatives.** Grouping session tabs under their approach's tab positionally (rejected: the owner asked to arrange them himself, and a forced grouping fights the drag); hiding other lanes' session tabs behind their approach tab (rejected by the owner on sight — "don't make those files go away"); a dot only when tabs from two approaches are actually open (rejected: a mark that comes and goes as siblings open reads as the tab changing meaning — D-066's rule for project labels).
+
+**Consequences.** `working-set` stores the order (`reorderSession`, unit-covered); the room sources session tabs mission-wide and routes a foreign lane's tab through the same lane-jump file tabs use; the strip's base tab is a centred flex row, which also fixes the lane tabs' dot alignment. E2e stays unpinned on the new interactions per the standing no-tests call, recorded in PROGRESS.
+
+**Revisit when.** Reordering is wanted for file tabs too — the same stored-order shape lifts; or dragging between levels (a session onto another approach) is asked for, which is a product act, not a reorder.

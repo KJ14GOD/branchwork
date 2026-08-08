@@ -1047,6 +1047,9 @@ body {
 }
 
 .tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
   font: var(--type-row);
   color: var(--text-2);
   background: transparent;
@@ -3066,6 +3069,12 @@ body {
   font: var(--type-meta);
   white-space: nowrap;
   flex: none;
+}
+
+/* Balanced sides: a closable tab ends in its close control; one without —
+   the anchor — regains that space as padding, so neither reads off-centre. */
+.session-tab:not(:has(.session-tab-close)) .session-tab-open {
+  padding-right: var(--s-3);
 }
 
 /* A file takes the room: read at full measure or not at all, and with none of

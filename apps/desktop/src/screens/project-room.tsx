@@ -120,6 +120,7 @@ export function ProjectRoom({
   onSelectSession,
   onOpenSession,
   onCloseSession,
+  onReorderSession,
   decisionOpen,
   onDecisionOpen,
   sessionDraft,
@@ -165,6 +166,9 @@ export function ProjectRoom({
   /** Opens a session as a tab on the working row and selects it. */
   onOpenSession: (sessionId: string) => void;
   onCloseSession: (sessionId: string) => void;
+  /** Moves an open session tab to a new position — the row is the person's
+   *  own order (D-088). */
+  onReorderSession: (sessionId: string, targetIndex: number) => void;
   /** Canvas modes the rail's tree drives (D-084): the Compare surface, and the
    *  new-session draft. The shell owns both, because the rows that open them
    *  live in the rail. */
@@ -419,18 +423,37 @@ export function ProjectRoom({
       : null;
   const readingSessionId = selectedSessionId ?? firstSessionId;
   const multiSession = sessions.length > 1;
-  /** Session tabs on the working row (D-087): the anchor always, everything
-   *  explicitly opened, and — so a restored selection is never invisible —
-   *  the one being read. Creation order, like everything about sessions. */
-  const sessionChrome = multiSession || sessionDraft;
-  const openSessions = sessions.filter(
-    (session) =>
-      session.sessionId === firstSessionId ||
-      openSessionIds.includes(session.sessionId) ||
-      session.sessionId === selectedSessionId
-  );
-  const selectSessionTab = (sessionId: string) => {
-    onSelectSession(sessionId === firstSessionId ? null : sessionId);
+  /** Session tabs on the working row (D-087, D-088): the selected approach's
+   *  anchor always, everything explicitly opened — from any approach, in the
+   *  person's own order — and, so a restored selection is never invisible,
+   *  the one being read. Open tabs do not vanish when the lane changes. */
+  const missionSessions = raw?.sessions ?? [];
+  const sessionChrome = multiSession || sessionDraft || openSessionIds.length > 0;
+  const openSessions = (() => {
+    const anchor = missionSessions.find((session) => session.sessionId === firstSessionId);
+    const ordered = openSessionIds
+      .map((id) => missionSessions.find((session) => session.sessionId === id))
+      .filter((session): session is NonNullable<typeof session> => session !== undefined);
+    const rest = missionSessions.filter(
+      (session) =>
+        session.sessionId === selectedSessionId &&
+        session.sessionId !== firstSessionId &&
+        !openSessionIds.includes(session.sessionId)
+    );
+    return [...(anchor ? [anchor] : []), ...ordered.filter((s) => s.sessionId !== firstSessionId), ...rest];
+  })();
+  /** The first session of one lane — where null lands for that lane. */
+  const firstSessionOf = (workstreamId: string): string | null =>
+    missionSessions.find((session) => session.workstreamId === workstreamId)?.sessionId ?? null;
+  const selectSessionTab = (session: { sessionId: string; workstreamId: string }) => {
+    // A tab from another approach moves the room there, exactly as a file
+    // tab does: the colour and the conversation never disagree (D-088).
+    if (session.workstreamId !== activeLaneId) {
+      onSelectLane(session.workstreamId === lanes[0]?.workstreamId ? null : session.workstreamId);
+    }
+    onSelectSession(
+      session.sessionId === firstSessionOf(session.workstreamId) ? null : session.sessionId
+    );
     onSelectFile(null);
     onDecisionOpen(false);
     onSessionDraft(false);
@@ -701,22 +724,62 @@ export function ProjectRoom({
                 !decisionOpen &&
                 !sessionDraft &&
                 session.sessionId === readingSessionId;
+              // Mission-wide, because an open tab can be another approach's
+              // conversation (D-088) — the raw detail holds every execution.
               const needsYou =
-                !selected && detail !== undefined && sessionNeedsYou(detail, session.sessionId);
+                !selected && raw !== undefined && sessionNeedsYou(raw, session.sessionId);
+              const laneIndex = lanes.findIndex(
+                (lane) => lane.workstreamId === session.workstreamId
+              );
+              const laneName = lanes[laneIndex]?.name ?? null;
+              const draggable = openSessionIds.includes(session.sessionId);
               return (
                 <span
                   key={session.sessionId}
                   className={selected ? "tab session-tab active" : "tab session-tab"}
                   data-testid="session-tab"
                   data-session={session.sessionId}
+                  data-workstream={session.workstreamId}
+                  draggable={draggable}
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData("text/novus-session", session.sessionId);
+                    event.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(event) => {
+                    if (event.dataTransfer.types.includes("text/novus-session")) event.preventDefault();
+                  }}
+                  onDrop={(event) => {
+                    const dragged = event.dataTransfer.getData("text/novus-session");
+                    if (!dragged || dragged === session.sessionId) return;
+                    event.preventDefault();
+                    // Dropping on a tab takes its place; the anchor is not in
+                    // the stored order, so dropping on it means "first".
+                    const target = openSessionIds.indexOf(session.sessionId);
+                    onReorderSession(dragged, target === -1 ? 0 : target);
+                  }}
                 >
                   <button
                     role="tab"
                     aria-selected={selected}
                     className="session-tab-open"
-                    onClick={() => selectSessionTab(session.sessionId)}
-                    title={session.title ?? "New session"}
+                    onClick={() => selectSessionTab(session)}
+                    title={
+                      multiLane && laneName
+                        ? `${session.title ?? "New session"} — in ${laneName}`
+                        : (session.title ?? "New session")
+                    }
                   >
+                    {/* Whose conversation this is (D-088): the approach's own
+                        identity dot, because tabs from several approaches sit
+                        side by side here. */}
+                    {multiLane && laneIndex >= 0 && (
+                      <span
+                        className={
+                          laneIndex === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"
+                        }
+                        aria-hidden="true"
+                      />
+                    )}
                     <SessionGlyph />
                     <span
                       className={

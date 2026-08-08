@@ -190,6 +190,31 @@ export function closeSession(set: WorkingSet, tabId: string, sessionId: string):
 }
 
 /**
+ * Moves an open session tab to a new position in its tab's row (D-088). The
+ * order is the person's own, stored with the open set; an id that is not open,
+ * a tab that does not exist, or an index out of range moves nothing.
+ */
+export function reorderSession(
+  set: WorkingSet,
+  tabId: string,
+  sessionId: string,
+  targetIndex: number
+): WorkingSet {
+  const tab = set.tabs.find((entry) => entry.id === tabId);
+  if (!tab) return set;
+  const from = tab.openSessionIds.indexOf(sessionId);
+  if (from === -1 || targetIndex < 0 || targetIndex >= tab.openSessionIds.length) return set;
+  if (from === targetIndex) return set;
+  const openSessionIds = [...tab.openSessionIds];
+  openSessionIds.splice(from, 1);
+  openSessionIds.splice(targetIndex, 0, sessionId);
+  return {
+    ...set,
+    tabs: set.tabs.map((entry) => (entry.id === tabId ? { ...entry, openSessionIds } : entry))
+  };
+}
+
+/**
  * The draft's first direction created a mission: the tab a person is already
  * looking at becomes that mission's tab, in place. It keeps its id, its
  * position, and the selection — a new tab appearing beside the one you just

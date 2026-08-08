@@ -29,6 +29,7 @@ import {
   promoteDraft,
   openSession,
   readWorkingSet,
+  reorderSession,
   selectLane,
   selectSession,
   selectTab,
@@ -1608,6 +1609,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               }
               onCloseSession={(sessionId) =>
                 setWorkingSet((previous) => closeSession(previous, active.id, sessionId))
+              }
+              onReorderSession={(sessionId, targetIndex) =>
+                setWorkingSet((previous) => reorderSession(previous, active.id, sessionId, targetIndex))
               }
               decisionOpen={decisionOpen}
               onDecisionOpen={setDecisionOpen}
