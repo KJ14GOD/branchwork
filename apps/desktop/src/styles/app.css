@@ -2998,6 +2998,76 @@ body {
   color: var(--text-1);
 }
 
+/* A session tab is the same shape as a file tab — a glyph, a name, a close —
+   so the working row stays one system and the species stay tellable by their
+   glyphs and dots alone (D-087). The base .tab width budget would clip the
+   row's tail, and the tail is the "· needs you" words — the one part that
+   must never truncate — so the title carries the ellipsis instead. */
+.session-tab {
+  display: inline-flex;
+  align-items: center;
+  padding-right: 2px;
+  border-bottom: 2px solid transparent;
+  max-width: none;
+  overflow: visible;
+}
+
+.session-tab.active {
+  border-bottom-color: var(--accent);
+}
+
+.session-tab-open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: var(--type-row);
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-3);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.session-tab.active .session-tab-open,
+.session-tab:hover .session-tab-open {
+  color: var(--text-1);
+}
+
+.session-tab-name {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font: var(--type-row);
+  line-height: 1;
+  padding: 2px var(--s-1);
+  border-radius: var(--r-control);
+  cursor: pointer;
+}
+
+.session-tab-close:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+/* A conversation that has not written its own name yet reads "New session",
+   quietly — the title is its first words, never a form field (D-083). */
+.session-untitled {
+  color: var(--text-3);
+}
+
+.session-needs {
+  font: var(--type-meta);
+  white-space: nowrap;
+  flex: none;
+}
+
 /* A file takes the room: read at full measure or not at all, and with none of
    the mission's own header above it. */
 .file-view {

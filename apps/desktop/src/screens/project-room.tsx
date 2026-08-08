@@ -14,6 +14,7 @@ import {
   deriveStateLine,
   laneSessions,
   laneView,
+  sessionNeedsYou,
   sessionView,
   viewerIsController
 } from "../components/derive";
@@ -45,6 +46,25 @@ function FileGlyph() {
     >
       <path d="M9 1.75H4.75a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h6.5a1 1 0 0 0 1-1V5z" />
       <path d="M9 1.75V5h3.25" />
+    </svg>
+  );
+}
+
+/** The mark that says a tab is a conversation rather than a file or a lane
+ *  (D-083, D-087): the same sanctioned stroke style as the file glyph. */
+function SessionGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="13"
+      height="13"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M13.25 4.25v5.5a1 1 0 0 1-1 1H8l-2.75 2.5v-2.5H3.75a1 1 0 0 1-1-1v-5.5a1 1 0 0 1 1-1h8.5a1 1 0 0 1 1 1z" />
     </svg>
   );
 }
@@ -96,7 +116,10 @@ export function ProjectRoom({
   activeWorkstreamId,
   onSelectLane,
   activeSessionId,
+  openSessionIds,
   onSelectSession,
+  onOpenSession,
+  onCloseSession,
   decisionOpen,
   onDecisionOpen,
   sessionDraft,
@@ -135,7 +158,13 @@ export function ProjectRoom({
   /** The session this room is reading — null for the lane's first, which is
    *  the default and never carried around as an id (D-083). */
   activeSessionId: string | null;
+  /** Sessions explicitly opened as tabs on the working row; the lane's first
+   *  is the anchor and implicitly always open (D-087). */
+  openSessionIds: string[];
   onSelectSession: (sessionId: string | null) => void;
+  /** Opens a session as a tab on the working row and selects it. */
+  onOpenSession: (sessionId: string) => void;
+  onCloseSession: (sessionId: string) => void;
   /** Canvas modes the rail's tree drives (D-084): the Compare surface, and the
    *  new-session draft. The shell owns both, because the rows that open them
    *  live in the rail. */
@@ -331,8 +360,9 @@ export function ProjectRoom({
       });
       if (!created.ok) return { ok: false, message: offlineOr(created.code, created.message) };
       onSessionDraft(false);
-      // The conversation exists now: its row joins the rail's tree, selected.
-      onSelectSession(created.value.sessionId);
+      // The conversation exists now: its tab joins the working row, selected,
+      // and its row the rail's tree (D-087).
+      onOpenSession(created.value.sessionId);
       return { ok: true, queued: !created.value.dispatched, deferred: created.value.deferred };
     }
     // Direction names the lane on screen, always (D-080): the server resolves
@@ -389,6 +419,22 @@ export function ProjectRoom({
       : null;
   const readingSessionId = selectedSessionId ?? firstSessionId;
   const multiSession = sessions.length > 1;
+  /** Session tabs on the working row (D-087): the anchor always, everything
+   *  explicitly opened, and — so a restored selection is never invisible —
+   *  the one being read. Creation order, like everything about sessions. */
+  const sessionChrome = multiSession || sessionDraft;
+  const openSessions = sessions.filter(
+    (session) =>
+      session.sessionId === firstSessionId ||
+      openSessionIds.includes(session.sessionId) ||
+      session.sessionId === selectedSessionId
+  );
+  const selectSessionTab = (sessionId: string) => {
+    onSelectSession(sessionId === firstSessionId ? null : sessionId);
+    onSelectFile(null);
+    onDecisionOpen(false);
+    onSessionDraft(false);
+  };
   /** Which conversation asked, for the approval card's quiet meta line —
    *  named only while the lane holds more than one (D-083). */
   const sessionTitleOf = (executionId: string): string | null => {
@@ -587,7 +633,7 @@ export function ProjectRoom({
           One canvas shows at a time; the colours tie a lane's tab to its
           files. Sessions are never tabs here — they are the rail's tree. A
           mission with one approach and nothing open shows no strip at all. */}
-      {(openFiles.length > 0 || decisionOpen || multiLane) && (
+      {(openFiles.length > 0 || decisionOpen || multiLane || sessionChrome) && (
         <div className="tabbar" role="tablist" aria-label={`Open in ${title}`}>
           {multiLane ? (
             lanes.map((lane, index) => {
@@ -623,7 +669,7 @@ export function ProjectRoom({
                 </button>
               );
             })
-          ) : (
+          ) : !sessionChrome ? (
             <button
               role="tab"
               aria-selected={activeFile === null && !decisionOpen}
@@ -639,9 +685,76 @@ export function ProjectRoom({
               {/* Not the goal again. The window's strip above already names
                   this mission and the rail names it a third time; the only
                   question this control answers is "what do I return to"
-                  (D-061). With approaches, their tabs are the way back. */}
+                  (D-061). With approaches or open sessions, their tabs are
+                  the way back. */}
               Mission
             </button>
+          ) : null}
+          {/* One tab per open conversation of the selected approach (D-087):
+              a glyph and a title, closable except the lane's first — the
+              anchor, which is the way back when everything else is put away.
+              With one session and no draft there is no session chrome at all. */}
+          {sessionChrome &&
+            openSessions.map((session) => {
+              const selected =
+                activeFile === null &&
+                !decisionOpen &&
+                !sessionDraft &&
+                session.sessionId === readingSessionId;
+              const needsYou =
+                !selected && detail !== undefined && sessionNeedsYou(detail, session.sessionId);
+              return (
+                <span
+                  key={session.sessionId}
+                  className={selected ? "tab session-tab active" : "tab session-tab"}
+                  data-testid="session-tab"
+                  data-session={session.sessionId}
+                >
+                  <button
+                    role="tab"
+                    aria-selected={selected}
+                    className="session-tab-open"
+                    onClick={() => selectSessionTab(session.sessionId)}
+                    title={session.title ?? "New session"}
+                  >
+                    <SessionGlyph />
+                    <span
+                      className={
+                        session.title === null
+                          ? "session-tab-name session-untitled"
+                          : "session-tab-name"
+                      }
+                    >
+                      {session.title ?? "New session"}
+                    </span>
+                    {/* Words, never a dot: a background conversation waiting
+                        on a person says so (DESIGN.md#status-semantics). */}
+                    {needsYou && <span className="tone-warn session-needs"> · needs you</span>}
+                  </button>
+                  {session.sessionId !== firstSessionId && (
+                    <button
+                      className="session-tab-close"
+                      onClick={() => onCloseSession(session.sessionId)}
+                      aria-label={`Close ${session.title ?? "this session"}`}
+                      title={`Close ${session.title ?? "this session"}`}
+                      data-testid="session-tab-close"
+                    >
+                      ×
+                    </button>
+                  )}
+                </span>
+              );
+            })}
+          {/* The draft: an empty conversation being asked for. Not a session —
+              nothing exists until words are typed, and leaving creates nothing
+              anywhere (D-077, D-083). */}
+          {sessionDraft && (
+            <span className="tab session-tab active" data-testid="session-tab-draft">
+              <span className="session-tab-open">
+                <SessionGlyph />
+                <span className="session-tab-name session-untitled">New session</span>
+              </span>
+            </span>
           )}
           {/* Compare, while it is open, is a sibling tab rather than a swap:
               a person reads a file, comes back to the comparison, and reads

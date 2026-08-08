@@ -21,11 +21,13 @@ import { TerminalToggle } from "../components/runtime-dock";
 import { WorkspaceSetupDialog } from "../components/workspace-setup";
 import {
   activeTab as activeTabOf,
+  closeSession,
   closeTab,
   closeTabs,
   emptyWorkingSet,
   openMission,
   promoteDraft,
+  openSession,
   readWorkingSet,
   selectLane,
   selectSession,
@@ -1327,7 +1329,14 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                                 setRailOpen(false);
                               }}
                               onSelectSession={(sessionId) => {
-                                setWorkingSet((previous) => selectSession(previous, active.id, sessionId));
+                                // A row opens its session as a tab on the
+                                // working row (D-087); the anchor — null, the
+                                // lane's first — is only ever selected.
+                                setWorkingSet((previous) =>
+                                  sessionId === null
+                                    ? selectSession(previous, active.id, null)
+                                    : openSession(previous, active.id, sessionId)
+                                );
                                 setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
                                 setDecisionOpen(false);
                                 setSessionDraft(false);
@@ -1590,8 +1599,15 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               activeWorkstreamId={active.workstreamId}
               onSelectLane={openLaneView}
               activeSessionId={active.sessionId}
+              openSessionIds={active.openSessionIds}
               onSelectSession={(sessionId) =>
                 setWorkingSet((previous) => selectSession(previous, active.id, sessionId))
+              }
+              onOpenSession={(sessionId) =>
+                setWorkingSet((previous) => openSession(previous, active.id, sessionId))
+              }
+              onCloseSession={(sessionId) =>
+                setWorkingSet((previous) => closeSession(previous, active.id, sessionId))
               }
               decisionOpen={decisionOpen}
               onDecisionOpen={setDecisionOpen}

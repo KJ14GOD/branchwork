@@ -35,10 +35,12 @@ export interface OpenTab {
   /** The session this room is reading, null for the lane's first — the
    *  conversation every lane is born with, which is the default and never
    *  carried around as an id (D-083). Part of the tab for the same reason the
-   *  lane is: the composer's target must come back as it was left. There is no
-   *  open/closed subset any more: the rail's tree lists every session of the
-   *  selected approach, so nothing closes (D-084). */
+   *  lane is: the composer's target must come back as it was left. */
   sessionId: string | null;
+  /** Sessions this person explicitly opened as tabs on the room's working row
+   *  (D-087). The lane's first session is the anchor — implicitly always open
+   *  while session chrome shows — and is never stored here. */
+  openSessionIds: string[];
 }
 
 export interface WorkingSet {
@@ -78,7 +80,8 @@ export function openMission(
     projectKey,
     missionId,
     workstreamId: null,
-    sessionId: null
+    sessionId: null,
+    openSessionIds: []
   };
   return { tabs: [...set.tabs, tab].slice(-MAX_TABS), activeId: tab.id };
 }
@@ -96,7 +99,8 @@ export function openDraft(set: WorkingSet, projectKey: string, mint: () => strin
     projectKey,
     missionId: null,
     workstreamId: null,
-    sessionId: null
+    sessionId: null,
+    openSessionIds: []
   };
   return { tabs: [...set.tabs, tab].slice(-MAX_TABS), activeId: tab.id };
 }
@@ -137,6 +141,51 @@ export function selectSession(set: WorkingSet, tabId: string, sessionId: string 
   return {
     ...set,
     tabs: set.tabs.map((entry) => (entry.id === tabId ? { ...entry, sessionId } : entry))
+  };
+}
+
+/**
+ * Opens a session as a tab on the room's working row and selects it (D-087).
+ * A conversation is on the row at most once: opening one already open just
+ * moves to it. The lane's first session is the anchor and is never stored.
+ */
+export function openSession(set: WorkingSet, tabId: string, sessionId: string): WorkingSet {
+  const tab = set.tabs.find((entry) => entry.id === tabId);
+  if (!tab) return set;
+  const alreadyOpen = tab.openSessionIds.includes(sessionId);
+  if (alreadyOpen && tab.sessionId === sessionId) return set;
+  const openSessionIds = alreadyOpen ? tab.openSessionIds : [...tab.openSessionIds, sessionId];
+  return {
+    ...set,
+    tabs: set.tabs.map((entry) =>
+      entry.id === tabId ? { ...entry, openSessionIds, sessionId } : entry
+    )
+  };
+}
+
+/**
+ * Closes a session tab, and does nothing else (D-087). The conversation, its
+ * executions, and anything running go on exactly as they were — the session is
+ * still in the rail's tree and still the lane's. When the session being read is
+ * the one closed, reading falls back to the lane's first, so the canvas never
+ * lands on nothing.
+ */
+export function closeSession(set: WorkingSet, tabId: string, sessionId: string): WorkingSet {
+  const tab = set.tabs.find((entry) => entry.id === tabId);
+  if (!tab) return set;
+  const wasSelected = tab.sessionId === sessionId;
+  if (!tab.openSessionIds.includes(sessionId) && !wasSelected) return set;
+  return {
+    ...set,
+    tabs: set.tabs.map((entry) =>
+      entry.id === tabId
+        ? {
+            ...entry,
+            openSessionIds: entry.openSessionIds.filter((id) => id !== sessionId),
+            sessionId: wasSelected ? null : entry.sessionId
+          }
+        : entry
+    )
   };
 }
 
@@ -196,6 +245,7 @@ interface StoredTab {
   projectKey: string;
   workstreamId?: string | null;
   sessionId?: string | null;
+  openSessionIds?: string[];
 }
 
 interface StoredWorkingSet {
@@ -220,7 +270,8 @@ export function encodeWorkingSet(set: WorkingSet): string {
         missionId: tab.missionId,
         projectKey: tab.projectKey,
         workstreamId: tab.workstreamId,
-        sessionId: tab.sessionId
+        sessionId: tab.sessionId,
+        openSessionIds: tab.openSessionIds
       })),
     activeMissionId: active?.missionId ?? null,
     activeWorkstreamId: active?.workstreamId ?? null
@@ -253,6 +304,7 @@ export function decodeWorkingSet(raw: string | null, mint: () => string): Workin
       projectKey?: unknown;
       workstreamId?: unknown;
       sessionId?: unknown;
+      openSessionIds?: unknown;
     };
     if (typeof candidate.missionId !== "string" || typeof candidate.projectKey !== "string") continue;
     // A stored lane comes back as it was left; anything malformed is the
@@ -272,13 +324,22 @@ export function decodeWorkingSet(raw: string | null, mint: () => string): Workin
       missionId: candidate.missionId,
       workstreamId,
       // The session being read comes back the same way: malformed means the
-      // lane's first conversation, never a broken tab (D-083). A store from
-      // the tab era may carry an open-session list; it is simply not read,
-      // because the tree lists every session now (D-084).
+      // lane's first conversation, never a broken tab (D-083).
       sessionId:
         typeof candidate.sessionId === "string" && candidate.sessionId.startsWith("csn_")
           ? candidate.sessionId
-          : null
+          : null,
+      // Only entries that look like sessions come back, each once; anything
+      // else is an empty open set rather than a corrupt row (D-087).
+      openSessionIds: Array.isArray(candidate.openSessionIds)
+        ? [
+            ...new Set(
+              candidate.openSessionIds.filter(
+                (id): id is string => typeof id === "string" && id.startsWith("csn_")
+              )
+            )
+          ].slice(0, MAX_TABS)
+        : []
     });
     if (tabs.length === MAX_TABS) break;
   }
