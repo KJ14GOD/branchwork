@@ -50,37 +50,6 @@ export function HarnessMark({ large }: { large?: boolean }) {
 }
 
 
-/**
- * The room header's only aggregate view of presence (DESIGN.md signature
- * element 4): up to five marks, then an overflow count. Everyone else appears
- * where they acted, inline in the trace.
- */
-export function ParticipantStack({ participants }: { participants: Participant[] }) {
-  const shown = participants.slice(0, 5);
-  const overflow = participants.length - shown.length;
-
-  return (
-    <span className="stack" data-testid="participant-stack">
-      {shown.map((participant) => (
-        <span
-          key={participant.userId}
-          className="stack-item"
-          title={`${participant.name ?? participant.login} · ${roleLabel(participant.role)}${
-            participant.isController ? " · holds the baton" : ""
-          }`}
-        >
-          <HumanMark login={participant.login} name={participant.name} />
-        </span>
-      ))}
-      {overflow > 0 && (
-        <span className="stack-overflow" title={`${overflow} more`}>
-          +{overflow}
-        </span>
-      )}
-    </span>
-  );
-}
-
 export function roleLabel(role: Participant["role"]): string {
   switch (role) {
     case "mission_admin":

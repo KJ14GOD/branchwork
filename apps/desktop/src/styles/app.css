@@ -268,24 +268,6 @@ body {
 
 
 
-.participant-stack {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-}
-
-.participant-stack .stack-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-1);
-}
-
-.stack-overflow {
-  font: var(--type-meta);
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-}
-
 .mono {
   font-family: var(--font-mono);
 }
@@ -1293,6 +1275,14 @@ body {
   min-height: 32px;
   font: var(--type-row);
   color: var(--text-1);
+}
+
+/* Where this direction stands while several wait — words at the meta step,
+   never a badge (DESIGN.md#status-semantics, *Direction queued*). */
+.queue-position {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
 }
 
 .harness-turn {

@@ -220,6 +220,25 @@ export function pendingDirections(detail: MissionDetailResponse) {
   );
 }
 
+/**
+ * Where a waiting direction stands in its lane's queue — "2 of 3" — stated in
+ * words on the thread's waiting row (DESIGN.md *Direction queued*: the thread
+ * shows queued position and its author). Named only while more than one
+ * direction waits: a queue of one is not a queue, and a number there would be
+ * apparatus saying nothing. Computed against the lane view, because the lane's
+ * one workspace is what the queue is for — sessions share it (D-083).
+ */
+export function queuedPositionLabel(
+  detail: MissionDetailResponse,
+  directionId: string
+): string | null {
+  const waiting = [...pendingDirections(detail)].sort((a, b) => a.ordinal - b.ordinal);
+  if (waiting.length <= 1) return null;
+  const index = waiting.findIndex((direction) => direction.directionId === directionId);
+  if (index === -1) return null;
+  return `${index + 1} of ${waiting.length}`;
+}
+
 export type StateTone = "neutral" | "active" | "warn" | "danger" | "ok";
 
 export interface StateLineAction {
