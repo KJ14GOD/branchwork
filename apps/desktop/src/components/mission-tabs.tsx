@@ -21,6 +21,7 @@ export function MissionTabs({
   activeId,
   labelOf,
   projectOf,
+  laneDotOf,
   onSelect,
   onClose,
   onNew
@@ -29,6 +30,10 @@ export function MissionTabs({
   activeId: string | null;
   labelOf: (tab: OpenTab) => string;
   projectOf: (tab: OpenTab) => string;
+  /** Which lane this view is, where the mission has more than one (D-085):
+   *  "current" or "alt" renders the identity dot, null renders nothing —
+   *  a mission with one lane has nothing to tell apart. */
+  laneDotOf: (tab: OpenTab) => "current" | "alt" | null;
   onSelect: (tab: OpenTab) => void;
   onClose: (tab: OpenTab) => void;
   onNew: () => void;
@@ -62,6 +67,7 @@ export function MissionTabs({
           const label = labelOf(tab);
           const project = projectOf(tab);
           const active = tab.id === activeId;
+          const dot = laneDotOf(tab);
           return (
             <span
               key={tab.id}
@@ -70,6 +76,7 @@ export function MissionTabs({
               data-testid="mission-tab"
               data-active={active}
               data-project={tab.projectKey}
+              data-workstream={tab.workstreamId ?? undefined}
             >
               <button
                 role="tab"
@@ -79,6 +86,14 @@ export function MissionTabs({
                 title={`${label} — ${project}`}
                 data-testid="mission-tab-open"
               >
+                {/* The colour says where this view lands (D-085): identity,
+                    never quality, and absent with nothing to tell apart. */}
+                {dot && (
+                  <span
+                    className={dot === "current" ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
+                    aria-hidden="true"
+                  />
+                )}
                 <span className="mission-tab-name">{truncateLabel(label, 18)}</span>
                 {/* Always, not only when two projects are open: a tab that
                     gains and loses its project label as siblings come and go is

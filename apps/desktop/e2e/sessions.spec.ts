@@ -130,10 +130,18 @@ async function compose(words: string): Promise<void> {
   await page.getByTestId("send").click();
 }
 
-/** Answers the one pending approval card on screen. Every fake turn asks. */
+/** Answers the approval the SERVER says is pending — by its own id, never
+ *  "whichever card is on screen": for up to a poll tick after an answer, the
+ *  settled card is still rendered, and clicking it again is refused while the
+ *  real question sits unanswered. */
 async function approvePending(): Promise<void> {
-  await page.getByTestId("approval-approve").first().waitFor({ timeout: 60_000 });
-  await page.getByTestId("approval-approve").first().click();
+  const value = await until("an approval to be pending", (current) =>
+    current.approvals.some((approval) => approval.state === "pending")
+  );
+  const id = value.approvals.find((approval) => approval.state === "pending")!.approvalId;
+  const card = page.locator(`[data-approval-id="${id}"]`);
+  await card.getByTestId("approval-approve").waitFor({ timeout: 60_000 });
+  await card.getByTestId("approval-approve").click();
 }
 
 beforeAll(async () => {
@@ -304,14 +312,19 @@ describe("shared sessions inside one approach", () => {
     await shot("93-two-sessions-in-one-approach.png");
 
     // --- Separate histories, separate continuity ----------------------------
+    // Polled: the room hears the settled approval a poll tick after the bridge
+    // does, and until then B's pending card legitimately renders in every
+    // session's view — the question blocks the lane's one workspace.
     await rows.nth(0).click();
-    const chatA = await page.getByTestId("chat").innerText();
-    expect(chatA).toContain("write the guard file");
-    expect(chatA).not.toContain("add the tests for the guard");
+    await expect
+      .poll(() => page.getByTestId("chat").innerText(), { timeout: 30_000 })
+      .not.toContain("add the tests for the guard");
+    expect(await page.getByTestId("chat").innerText()).toContain("write the guard file");
     await rows.nth(1).click();
-    const chatB = await page.getByTestId("chat").innerText();
-    expect(chatB).toContain("add the tests for the guard");
-    expect(chatB).not.toContain("write the guard file");
+    await expect
+      .poll(() => page.getByTestId("chat").innerText(), { timeout: 30_000 })
+      .not.toContain("write the guard file");
+    expect(await page.getByTestId("chat").innerText()).toContain("add the tests for the guard");
 
     const afterTwo = await detail();
     const execA1 = afterTwo.executions.find((execution) => execution.sessionId === sessionA.sessionId)!;

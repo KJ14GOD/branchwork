@@ -60,9 +60,10 @@ export function tabFor(set: WorkingSet, missionId: string): OpenTab | null {
 }
 
 /**
- * Opens a mission, or selects the tab it already has. A mission is open at most
- * once: asking for one that is already open moves to it rather than making a
- * second copy of the same room.
+ * Opens a mission's default view, or selects the tab that view already has.
+ * Uniqueness is per **view** (D-085): one tab per (mission, lane), so opening
+ * what is already open moves to it rather than making a second copy — while a
+ * sibling lane's tab is a different view and sits beside it.
  */
 export function openMission(
   set: WorkingSet,
@@ -70,13 +71,31 @@ export function openMission(
   projectKey: string,
   mint: () => string
 ): WorkingSet {
-  const existing = tabFor(set, missionId);
+  return openLane(set, missionId, projectKey, null, mint);
+}
+
+/**
+ * Opens one lane of a mission as its own tab, or selects the tab that view
+ * already has (D-085). Null is the lane the mission started with. Everything a
+ * tab remembers — its session, its files, its canvas — belongs to this view
+ * and to no other.
+ */
+export function openLane(
+  set: WorkingSet,
+  missionId: string,
+  projectKey: string,
+  workstreamId: string | null,
+  mint: () => string
+): WorkingSet {
+  const existing = set.tabs.find(
+    (tab) => tab.missionId === missionId && tab.workstreamId === workstreamId
+  );
   if (existing) return set.activeId === existing.id ? set : { ...set, activeId: existing.id };
   const tab: OpenTab = {
     id: mint(),
     projectKey,
     missionId,
-    workstreamId: null,
+    workstreamId,
     sessionId: null
   };
   return { tabs: [...set.tabs, tab].slice(-MAX_TABS), activeId: tab.id };
@@ -200,6 +219,9 @@ interface StoredTab {
 interface StoredWorkingSet {
   missions: StoredTab[];
   activeMissionId: string | null;
+  /** Which of the mission's views was showing (D-085). Absent in stores from
+   *  before lanes had tabs of their own, where a mission had exactly one. */
+  activeWorkstreamId?: string | null;
 }
 
 /**
@@ -218,7 +240,8 @@ export function encodeWorkingSet(set: WorkingSet): string {
         workstreamId: tab.workstreamId,
         sessionId: tab.sessionId
       })),
-    activeMissionId: active?.missionId ?? null
+    activeMissionId: active?.missionId ?? null,
+    activeWorkstreamId: active?.workstreamId ?? null
   };
   return JSON.stringify(stored);
 }
@@ -250,18 +273,22 @@ export function decodeWorkingSet(raw: string | null, mint: () => string): Workin
       sessionId?: unknown;
     };
     if (typeof candidate.missionId !== "string" || typeof candidate.projectKey !== "string") continue;
-    if (candidate.missionId === "" || seen.has(candidate.missionId)) continue;
-    seen.add(candidate.missionId);
+    // A stored lane comes back as it was left; anything malformed is the
+    // default lane rather than a broken tab.
+    const workstreamId =
+      typeof candidate.workstreamId === "string" && candidate.workstreamId.startsWith("wst_")
+        ? candidate.workstreamId
+        : null;
+    // One tab per view (D-085): a mission may come back several times, once
+    // per lane, and the same view never twice.
+    const viewKey = `${candidate.missionId}:${workstreamId ?? "first"}`;
+    if (candidate.missionId === "" || seen.has(viewKey)) continue;
+    seen.add(viewKey);
     tabs.push({
       id: mint(),
       projectKey: candidate.projectKey,
       missionId: candidate.missionId,
-      // A stored lane comes back as it was left; anything malformed is the
-      // default lane rather than a broken tab.
-      workstreamId:
-        typeof candidate.workstreamId === "string" && candidate.workstreamId.startsWith("wst_")
-          ? candidate.workstreamId
-          : null,
+      workstreamId,
       // The session being read comes back the same way: malformed means the
       // lane's first conversation, never a broken tab (D-083). A store from
       // the tab era may carry an open-session list; it is simply not read,
@@ -274,9 +301,21 @@ export function decodeWorkingSet(raw: string | null, mint: () => string): Workin
     if (tabs.length === MAX_TABS) break;
   }
   if (tabs.length === 0) return emptyWorkingSet;
+  // The exact view that was showing, where the store says which (D-085);
+  // any tab of the mission otherwise, and the first tab as the last resort.
+  const activeRecord = record as { activeWorkstreamId?: unknown };
+  const wantedLane =
+    typeof activeRecord.activeWorkstreamId === "string" &&
+    activeRecord.activeWorkstreamId.startsWith("wst_")
+      ? activeRecord.activeWorkstreamId
+      : null;
   const wanted =
     typeof record.activeMissionId === "string"
-      ? (tabs.find((tab) => tab.missionId === record.activeMissionId) ?? null)
+      ? (tabs.find(
+          (tab) => tab.missionId === record.activeMissionId && tab.workstreamId === wantedLane
+        ) ??
+        tabs.find((tab) => tab.missionId === record.activeMissionId) ??
+        null)
       : null;
   return { tabs, activeId: (wanted ?? tabs[0])?.id ?? null };
 }

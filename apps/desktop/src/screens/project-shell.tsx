@@ -24,10 +24,10 @@ import {
   closeTab,
   closeTabs,
   emptyWorkingSet,
+  openLane,
   openMission,
   promoteDraft,
   readWorkingSet,
-  selectLane,
   selectSession,
   selectTab,
   tabIsGone,
@@ -1100,6 +1100,32 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     [projects]
   );
 
+  /** Which lane a view is, for the strip's identity dot (D-085). Nothing for a
+   *  mission with one lane: there is nothing to tell apart. */
+  const laneDotOf = useCallback(
+    (tab: OpenTab): "current" | "alt" | null => {
+      if (tab.missionId === null) return null;
+      const mission = (missions ?? []).find((candidate) => candidate.missionId === tab.missionId);
+      if (!mission || mission.workstreamCount <= 1) return null;
+      return tab.workstreamId === null ? "current" : "alt";
+    },
+    [missions]
+  );
+
+  /** Opens one lane of the active mission as its own tab, or moves to the tab
+   *  that view already has (D-085) — the strip's answer to "open", where the
+   *  old behaviour retargeted the one tab in place. */
+  const openLaneView = useCallback(
+    (workstreamId: string | null) => {
+      const current = activeTabOf(workingSetRef.current);
+      if (!current || current.missionId === null) return;
+      setWorkingSet((previous) =>
+        openLane(previous, current.missionId as string, current.projectKey, workstreamId, mintTabId)
+      );
+    },
+    []
+  );
+
   return (
     <div className="shell-split">
       <div className="shell-column">
@@ -1309,8 +1335,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                               sessionDraft={sessionDraft}
                               mayDirect={missionDetail.capabilities.includes("direction.submit")}
                               onSelectApproach={(workstreamId) => {
-                                setWorkingSet((previous) => selectLane(previous, active.id, workstreamId));
-                                setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
+                                // Opening, not retargeting (D-085): the lane
+                                // arrives as its own tab beside the mission's
+                                // others, wearing its dot.
+                                openLaneView(workstreamId);
                                 setDecisionOpen(false);
                                 setSessionDraft(false);
                                 setRailOpen(false);
@@ -1497,6 +1525,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               activeId={workingSet.activeId}
               labelOf={labelOf}
               projectOf={projectNameOf}
+              laneDotOf={laneDotOf}
               onSelect={(tab) => setWorkingSet((previous) => selectTab(previous, tab.id))}
               onClose={closeMissionTab}
               onNew={newMissionHere}
@@ -1577,9 +1606,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                 );
               }}
               activeWorkstreamId={active.workstreamId}
-              onSelectLane={(workstreamId) =>
-                setWorkingSet((previous) => selectLane(previous, active.id, workstreamId))
-              }
+              onSelectLane={openLaneView}
               activeSessionId={active.sessionId}
               onSelectSession={(sessionId) =>
                 setWorkingSet((previous) => selectSession(previous, active.id, sessionId))
