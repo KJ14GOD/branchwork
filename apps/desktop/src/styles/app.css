@@ -1514,6 +1514,23 @@ body {
   text-overflow: ellipsis;
 }
 
+/* The chat's footprint and freshness, at the row's far end in the meta
+   style (D-094). */
+.overview-row-meta {
+  margin-left: var(--s-3);
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* Two chats on the same ground (D-094): one sentence between the facts and
+   the list, in words — the warn tone carries the finding, the count of
+   further overlaps stays quiet. */
+.overview-overlap {
+  margin-top: var(--s-2);
+  font: var(--type-meta);
+}
+
 /* ---------- Composer ---------- */
 
 .composer {
@@ -3163,6 +3180,15 @@ body {
   font: var(--type-meta);
   white-space: nowrap;
   flex: none;
+}
+
+/* The quiet chat states — "working", "queued · 2" — recede to --text-3 while
+   "needs you" keeps the warn tone (D-094): only the state a person must act
+   on asks for their eye. */
+.session-state,
+.side-state,
+.overview-row-state {
+  color: var(--text-3);
 }
 
 /* Balanced sides: a closable tab ends in its close control; one without —

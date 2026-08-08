@@ -13,13 +13,15 @@ import type {
 import { novus } from "../bridge";
 import { Composer, type SubmitOutcome } from "../components/composer";
 import {
+  contestedAcrossSessions,
   controller as controllerOf,
   deriveStateLine,
   laneSessions,
   laneView,
   offerCountdownLabel,
   queuedPositionLabel,
-  sessionNeedsYou,
+  sessionActivity,
+  sessionChangedFiles,
   sessionView,
   viewerIsController
 } from "../components/derive";
@@ -774,8 +776,11 @@ export function ProjectRoom({
                 session.sessionId === readingSessionId;
               // Mission-wide, because an open tab can be another approach's
               // conversation (D-088) — the raw detail holds every execution.
-              const needsYou =
-                !selected && raw !== undefined && sessionNeedsYou(raw, session.sessionId);
+              // Each tab wears its chat's own word (D-094); the selected one
+              // says nothing, its state being the room's state line.
+              const tabActivity =
+                !selected && raw !== undefined ? sessionActivity(raw, session.sessionId) : null;
+              const needsYou = tabActivity?.state === "needs_you";
               const laneIndex = lanes.findIndex(
                 (lane) => lane.workstreamId === session.workstreamId
               );
@@ -856,9 +861,18 @@ export function ProjectRoom({
                     >
                       {session.title ?? "New session"}
                     </span>
-                    {/* Words, never a dot: a background conversation waiting
-                        on a person says so (DESIGN.md#status-semantics). */}
-                    {needsYou && <span className="tone-warn session-needs"> · needs you</span>}
+                    {/* Words, never a dot: a background conversation says
+                        what it is doing (DESIGN.md#status-semantics, D-094). */}
+                    {tabActivity?.label && (
+                      <span
+                        className={
+                          needsYou ? "tone-warn session-needs" : "session-needs session-state"
+                        }
+                      >
+                        {" "}
+                        · {tabActivity.label}
+                      </span>
+                    )}
                   </button>
                   <button
                     className="session-tab-close"
@@ -1468,13 +1482,42 @@ function ApproachOverview({
       ? [`${summary.checksPassed}/${summary.checksRun} checks passed`]
       : [])
   ];
+  // Files more than one of this approach's chats have changed (D-094): said
+  // here, on the page that lists the chats, because the person deciding where
+  // to type is the person who needs to know two conversations are on the same
+  // ground. Evidence from checkpoints only — a warning, never a prediction.
+  const contested = contestedAcrossSessions(detail);
+  const overlap = contested[0];
   return (
     <div className="approach-overview" data-testid="approach-overview">
       <p className="overview-lead">{lane?.intent ?? "The work this mission started with."}</p>
       <p className="overview-facts">{facts.join(" · ")}</p>
+      {overlap && (
+        <p className="overview-overlap" data-testid="overview-overlap">
+          <span className="tone-warn">
+            {overlap.sessions.map((session) => session.title ?? "New session").join(" and ")} have
+            both changed <span className="mono">{overlap.path}</span>
+          </span>
+          {contested.length > 1 && (
+            <span className="quiet">
+              {" "}
+              · {contested.length - 1} more overlapping {contested.length === 2 ? "file" : "files"}
+            </span>
+          )}
+        </p>
+      )}
       <div className="overview-list">
         {sessions.map((session) => {
-          const needs = sessionNeedsYou(detail, session.sessionId);
+          // The chat's word, its footprint, and — while working — how fresh
+          // that claim is (D-094): everything a person needs to pick a row.
+          const activity = sessionActivity(detail, session.sessionId);
+          const files = sessionChangedFiles(detail, session.sessionId).length;
+          const meta = [
+            ...(files > 0 ? [`${files} ${files === 1 ? "file" : "files"}`] : []),
+            ...(activity.state === "working" && activity.lastHeardAt
+              ? [`last heard ${clockTime(activity.lastHeardAt)}`]
+              : [])
+          ];
           return (
             <button
               key={session.sessionId}
@@ -1493,7 +1536,13 @@ function ApproachOverview({
                 {session.title ?? "New session"}
               </span>
               {/* Words, never a dot (DESIGN.md#status-semantics). */}
-              {needs && <span className="tone-warn"> · needs you</span>}
+              {activity.label && (
+                <span className={activity.state === "needs_you" ? "tone-warn" : "overview-row-state"}>
+                  {" "}
+                  · {activity.label}
+                </span>
+              )}
+              {meta.length > 0 && <span className="overview-row-meta">{meta.join(" · ")}</span>}
             </button>
           );
         })}

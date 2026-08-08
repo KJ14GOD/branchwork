@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MissionDetailResponseSchema, type MissionDetailResponse } from "@novus/contracts";
 import {
+  contestedAcrossSessions,
   controller,
   deriveStateLine,
   laneView,
@@ -8,6 +9,8 @@ import {
   pendingDirections,
   queuedPositionLabel,
   runningSession,
+  sessionActivity,
+  sessionChangedFiles,
   sessionNeedsYou,
   sessionView,
   viewerIsController
@@ -527,5 +530,118 @@ describe("per-participant connection state arrives on the wire (D-091)", () => {
       delete bare.connection;
       return detail({ participants: [bare] });
     }).toThrow();
+  });
+});
+
+describe("each chat's own word and footprint (D-094)", () => {
+  const fileOf = (path: string, changeId: string) => ({
+    changeId,
+    path,
+    previousPath: null,
+    changeState: "modified",
+    additions: 3,
+    deletions: 1,
+    binary: false,
+    truncated: false
+  });
+  const checkpointOf = (
+    checkpointId: string,
+    executionId: string,
+    createdAt: string,
+    paths: string[]
+  ) => ({
+    checkpointId,
+    executionId,
+    outcome: "committed",
+    sha: SHA,
+    parentSha: null,
+    branch: "novus/msn_one",
+    filesChanged: paths.length,
+    additions: 3,
+    deletions: 1,
+    withheldSecrets: 0,
+    uncommitted: false,
+    environment: "local",
+    error: null,
+    createdAt,
+    files: paths.map((path, index) => fileOf(path, `chg_${checkpointId}${index}`))
+  });
+  /** Two chats in the lane; the second holds whatever the test stages. */
+  const twoChats = (overrides: Record<string, unknown> = {}) =>
+    detail({
+      sessions: [session(), session({ sessionId: "csn_two", title: "Tests" })],
+      ...overrides
+    });
+
+  it("a live turn reads working, with the turn's freshest reported moment", () => {
+    const room = twoChats({
+      executions: [execution({ sessionId: "csn_two", state: "running" })],
+      events: [
+        event({ eventId: "evt_a", kind: "harness.text", seq: 2, executionId: "exe_1", occurredAt: T(4) }),
+        event({ eventId: "evt_b", kind: "harness.text", seq: 3, executionId: "exe_1", occurredAt: T(6) })
+      ]
+    });
+    expect(sessionActivity(room, "csn_two")).toEqual({
+      state: "working",
+      label: "working",
+      lastHeardAt: T(6)
+    });
+    expect(sessionActivity(room, "csn_one")).toEqual({ state: "idle", label: null, lastHeardAt: null });
+  });
+
+  it("a blocked turn reads needs you, outranking working", () => {
+    const room = twoChats({
+      executions: [execution({ sessionId: "csn_two", state: "needs_approval" })]
+    });
+    expect(sessionActivity(room, "csn_two").state).toBe("needs_you");
+    expect(sessionActivity(room, "csn_two").label).toBe("needs you");
+  });
+
+  it("waiting direction reads queued, counted only past one", () => {
+    const one = twoChats({ directions: [direction({ sessionId: "csn_two" })] });
+    expect(sessionActivity(one, "csn_two").label).toBe("queued");
+    const two = twoChats({
+      directions: [
+        direction({ sessionId: "csn_two" }),
+        direction({ directionId: "dir_2", ordinal: 2, sessionId: "csn_two", state: "submitted" })
+      ]
+    });
+    expect(sessionActivity(two, "csn_two").label).toBe("queued · 2");
+  });
+
+  it("credits a chat only with its own turns' files, latest checkpoint winning", () => {
+    const room = twoChats({
+      executions: [
+        execution({ state: "completed", endedAt: T(3) }),
+        execution({ executionId: "exe_2", sessionId: "csn_two", state: "completed", endedAt: T(5) })
+      ],
+      checkpoints: [
+        checkpointOf("ckp_1", "exe_1", T(3), ["src/auth.ts", "src/session.ts"]),
+        checkpointOf("ckp_2", "exe_2", T(5), ["src/auth.ts"])
+      ]
+    });
+    expect(sessionChangedFiles(room, "csn_one").map((file) => file.path)).toEqual([
+      "src/auth.ts",
+      "src/session.ts"
+    ]);
+    expect(sessionChangedFiles(room, "csn_two").map((file) => file.path)).toEqual(["src/auth.ts"]);
+    const contested = contestedAcrossSessions(room);
+    expect(contested).toHaveLength(1);
+    expect(contested[0]?.path).toBe("src/auth.ts");
+    expect(contested[0]?.sessions.map((s) => s.sessionId)).toEqual(["csn_one", "csn_two"]);
+  });
+
+  it("warns about nothing when the chats stay on separate ground", () => {
+    const room = twoChats({
+      executions: [
+        execution({ state: "completed" }),
+        execution({ executionId: "exe_2", sessionId: "csn_two", state: "completed" })
+      ],
+      checkpoints: [
+        checkpointOf("ckp_1", "exe_1", T(3), ["src/auth.ts"]),
+        checkpointOf("ckp_2", "exe_2", T(5), ["test/auth.test.ts"])
+      ]
+    });
+    expect(contestedAcrossSessions(room)).toEqual([]);
   });
 });

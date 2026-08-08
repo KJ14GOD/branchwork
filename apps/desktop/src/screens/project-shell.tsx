@@ -38,7 +38,7 @@ import {
   type OpenTab,
   type WorkingSet
 } from "../components/working-set";
-import { laneView, sessionNeedsYou } from "../components/derive";
+import { laneView, sessionActivity, sessionNeedsYou } from "../components/derive";
 import { deriveGoal, plural, truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
 import { Inspector, type InspectorSection } from "../components/inspector";
@@ -475,7 +475,11 @@ function MissionTree({
   const sessionRows = showSessions
     ? laneSessions.map((session) => {
         const selected = session.sessionId === selectedSessionId && !sessionDraft;
-        const needs = !selected && sessionNeedsYou(detail, session.sessionId);
+        // Every chat's own word on its row (D-094): needs you in the warn
+        // tone, working and queued quietly, idle as nothing at all. The
+        // selected row says nothing — its state is the room's state line.
+        const activity = selected ? null : sessionActivity(detail, session.sessionId);
+        const needs = activity?.state === "needs_you";
         return (
           <div
             key={session.sessionId}
@@ -492,7 +496,12 @@ function MissionTree({
               <span className={session.title === null ? "side-name side-untitled" : "side-name"}>
                 {truncateLabel(session.title ?? "New session", 24)}
               </span>
-              {needs && <span className="tone-warn side-needs"> · needs you</span>}
+              {activity?.label && (
+                <span className={needs ? "tone-warn side-needs" : "side-needs side-state"}>
+                  {" "}
+                  · {activity.label}
+                </span>
+              )}
             </button>
           </div>
         );

@@ -1252,3 +1252,19 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** Opening the row still lands on the lane the tab last read — the row now names the destination, and landing *on* the named conversation is deliberately left for the day the working set takes an "open at" instruction; PROGRESS keeps that honest. `MissionSchema` gains a required nullable `attention`, so builders and fixtures state it.
 
 **Revisit when.** Sessions gain their own needs-attention states beyond the lane's (D-083 declined this), or the lens is asked to show more than one blocked lane per mission — the projection names the first in creation order, which is the precedence rule, not a ranking.
+
+## D-094 — Every chat answers "what are you doing?" without being opened
+
+**Context.** D-083 gave a lane parallel conversations and D-084–D-090 gave them rows and tabs, but a background chat said nothing about itself unless it was blocked ("· needs you"). Choosing where to type in a three-chat approach meant opening each one. The owner's Phase 2 direction names the felt problem: chats should read as a shared workspace, not as queued conversations — which begins with each one saying what it is doing, what it has touched, and when two of them are on the same ground.
+
+**Decision.**
+
+- **Four states, one word each, precedence by what a person must act on:** `needs you` (its turn is blocked — the existing warn-toned words, unchanged), `working` (its turn is live), `queued · {n}` (direction waiting for the shared workspace), and idle — which renders nothing, because ten quiet chats each announcing "idle" is apparatus. The words appear on the tree row, the session tab, and the overview link; the *selected* chat's row says nothing, its state being the room's state line. Warn tone only for needs-you; working and queued recede to `--text-3`.
+- **A chat's footprint is what its turns committed.** Per-chat changed files are derived from checkpoints through the executions that belong to the chat — git's account, latest checkpoint winning per path — and rendered as `{n} files` on the overview link, with `last heard {time}` beside a working chat so "working" carries its freshness.
+- **Overlap is warned from evidence, never predicted.** When two chats' checkpoint histories have changed the same file, the approach overview says so in one warn-toned sentence — the chats and the path, further overlapping files counted quietly. Nothing guesses what a direction *might* touch: a warning that can cry wolf teaches people to ignore the one that matters.
+
+**Alternatives.** Predictive conflict detection from direction text or live tool activity (rejected: unverifiable claims in a product whose whole culture is evidence); a per-chat state dot (prohibited — status is words, DESIGN.md#status-semantics); announcing idle (rejected as noise); filtering the evidence panel's file tree per chat (rejected: the worktree is genuinely shared, and a filtered tree would say otherwise).
+
+**Consequences.** `sessionActivity`, `sessionChangedFiles`, and `contestedAcrossSessions` are renderer derivations over the detail payload the room already polls — no contract change, no new fetch. The overlap sentence is also the groundwork for the concurrency slice: "serialize or confirm when edits conflict" needs exactly these facts.
+
+**Revisit when.** Simultaneous execution inside one approach is attempted — that is its own slice, it reverses D-083's deliberate "one live turn per lane," and it must answer the checkpoint-attribution problem (a second writer in one worktree makes `captureCheckpoint`'s whole-tree commit attribute one chat's half-done edits to another) before any scheduler work begins.

@@ -106,6 +106,114 @@ export function sessionNeedsYou(detail: MissionDetailResponse, sessionId: string
 }
 
 /**
+ * What one conversation is doing right now, in a word (D-094). The lane's
+ * chats share one workspace, so a person choosing where to type needs each
+ * row to answer "and what is this one doing?" without being opened. Four
+ * states, precedence in the order a person must act on them:
+ *
+ *  - `needs_you` — its turn is blocked on a person (approval or direction).
+ *  - `working` — its turn is live. `lastHeardAt` is the turn's latest
+ *    reported moment, so a row can say how fresh "working" is.
+ *  - `queued` — it has direction waiting for the workspace, with the count.
+ *  - `idle` — nothing to say; rows render no suffix at all, because ten
+ *    quiet chats each announcing "idle" is apparatus (DESIGN.md).
+ *
+ * The label is the row's words — "needs you", "working", "queued · 2" —
+ * always words, never a dot (DESIGN.md#status-semantics).
+ */
+export interface SessionActivity {
+  state: "needs_you" | "working" | "queued" | "idle";
+  label: string | null;
+  lastHeardAt: string | null;
+}
+
+export function sessionActivity(
+  detail: MissionDetailResponse,
+  sessionId: string
+): SessionActivity {
+  if (sessionNeedsYou(detail, sessionId)) {
+    return { state: "needs_you", label: "needs you", lastHeardAt: null };
+  }
+  const live = detail.executions.find(
+    (execution) =>
+      execution.sessionId === sessionId && !TERMINAL_EXECUTION_STATES.includes(execution.state)
+  );
+  if (live) {
+    const heard = detail.events
+      .filter((event) => event.executionId === live.executionId)
+      .map((event) => event.occurredAt)
+      .sort()
+      .at(-1);
+    return { state: "working", label: "working", lastHeardAt: heard ?? live.createdAt };
+  }
+  const waiting = detail.directions.filter(
+    (direction) =>
+      direction.sessionId === sessionId &&
+      (direction.state === "submitted" || direction.state === "queued")
+  ).length;
+  if (waiting > 0) {
+    return {
+      state: "queued",
+      label: waiting === 1 ? "queued" : `queued · ${waiting}`,
+      lastHeardAt: null
+    };
+  }
+  return { state: "idle", label: null, lastHeardAt: null };
+}
+
+/**
+ * The files one conversation's turns have changed, latest checkpoint winning
+ * per path — the chat's own footprint in the shared worktree (D-094). Derived
+ * entirely from checkpoints, which are git's account, so a chat is credited
+ * only with what its turns actually committed.
+ */
+export function sessionChangedFiles(
+  detail: MissionDetailResponse,
+  sessionId: string
+): FileChange[] {
+  const executionIds = new Set(
+    detail.executions
+      .filter((execution) => execution.sessionId === sessionId)
+      .map((execution) => execution.executionId)
+  );
+  const byPath = new Map<string, FileChange>();
+  const ordered = [...detail.checkpoints]
+    .filter((checkpoint) => executionIds.has(checkpoint.executionId))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const checkpoint of ordered) {
+    for (const file of checkpoint.files) byPath.set(file.path, file);
+  }
+  return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * Files more than one of the lane's conversations have changed (D-094) — the
+ * overlap warning's facts. Evidence-based only: it reads what checkpoints
+ * recorded, never predicts what a direction might touch, so it can warn
+ * honestly and cannot cry wolf. Paths in checkpoint order per session;
+ * result sorted by path, each with the sessions that touched it in lane
+ * order.
+ */
+export function contestedAcrossSessions(
+  detail: MissionDetailResponse
+): { path: string; sessions: Session[] }[] {
+  const sessions = laneSessions(detail);
+  if (sessions.length < 2) return [];
+  const touched = new Map<string, Session[]>();
+  for (const session of sessions) {
+    for (const file of sessionChangedFiles(detail, session.sessionId)) {
+      const list = touched.get(file.path) ?? [];
+      list.push(session);
+      touched.set(file.path, list);
+    }
+  }
+  return [...touched.entries()]
+    .filter(([, list]) => list.length > 1)
+    .map(([path, list]) => ({ path, sessions: list }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
  * One session's view of the lane (D-083).
  *
  * Applied after laneView: the conversation — its directions, its executions,
