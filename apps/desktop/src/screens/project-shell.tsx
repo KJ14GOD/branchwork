@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type Effort,
   type Mission,
   type ModelId,
   type MissionDetailResponse,
   type Organization,
-  type User
+  type Session,
+  type User,
+  type Workstream
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { AddProjectDialog, type PickedRepository } from "../components/add-project-dialog";
@@ -19,12 +21,10 @@ import { TerminalToggle } from "../components/runtime-dock";
 import { WorkspaceSetupDialog } from "../components/workspace-setup";
 import {
   activeTab as activeTabOf,
-  closeSession,
   closeTab,
   closeTabs,
   emptyWorkingSet,
   openMission,
-  openSession,
   promoteDraft,
   readWorkingSet,
   selectLane,
@@ -35,7 +35,7 @@ import {
   type OpenTab,
   type WorkingSet
 } from "../components/working-set";
-import { laneView } from "../components/derive";
+import { laneView, sessionNeedsYou } from "../components/derive";
 import { deriveGoal, plural, truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
 import { Inspector, type InspectorSection } from "../components/inspector";
@@ -414,6 +414,169 @@ const mintTabId = (): string => crypto.randomUUID();
  * questions with different answers — a project with nine missions and none open
  * puts nothing in the strip.
  */
+/**
+ * The active mission's structure, nested where its project is (D-084): one row
+ * per approach, the selected approach's sessions one level deeper, Compare at
+ * the mission level once there are two approaches to compare. Rows are
+ * navigation — this tree is what the room's lane and session tabs used to be —
+ * and it renders nothing at all for the ordinary mission of one approach and
+ * one conversation.
+ */
+function MissionTree({
+  detail,
+  storedLaneId,
+  storedSessionId,
+  decisionOpen,
+  sessionDraft,
+  mayDirect,
+  onSelectApproach,
+  onSelectSession,
+  onCompare,
+  onNewSession
+}: {
+  detail: MissionDetailResponse;
+  storedLaneId: string | null;
+  storedSessionId: string | null;
+  decisionOpen: boolean;
+  sessionDraft: boolean;
+  mayDirect: boolean;
+  onSelectApproach: (workstreamId: string | null) => void;
+  onSelectSession: (sessionId: string | null) => void;
+  onCompare: () => void;
+  onNewSession: () => void;
+}) {
+  const lanes: Workstream[] = detail.workstreams;
+  const firstLaneId = lanes[0]?.workstreamId ?? null;
+  const selectedLaneId = storedLaneId ?? firstLaneId;
+  const laneSessions: Session[] = detail.sessions.filter(
+    (session) => session.workstreamId === selectedLaneId
+  );
+  const firstSessionId = laneSessions[0]?.sessionId ?? null;
+  const selectedSessionId =
+    storedSessionId !== null && laneSessions.some((session) => session.sessionId === storedSessionId)
+      ? storedSessionId
+      : firstSessionId;
+  const showSessions = laneSessions.length > 1 || sessionDraft;
+  if (lanes.length <= 1 && !showSessions) return null;
+
+  // One wash in the rail: the deepest thing the canvas is showing.
+  const washSession = !decisionOpen && !sessionDraft && showSessions;
+  const washApproach = !decisionOpen && !sessionDraft && !showSessions;
+
+  return (
+    <div className="side-tree" data-testid="mission-tree">
+      {lanes.length > 1 &&
+        lanes.map((lane, index) => {
+          const selected = lane.workstreamId === selectedLaneId;
+          const needs =
+            !selected &&
+            detail.sessions
+              .filter((session) => session.workstreamId === lane.workstreamId)
+              .some((session) => sessionNeedsYou(detail, session.sessionId));
+          return (
+            <div
+              key={lane.workstreamId}
+              className={`side-row side-approach${selected && washApproach ? " selected" : ""}`}
+              data-testid="rail-approach-row"
+              data-workstream={lane.workstreamId}
+            >
+              <button
+                className="side-open-mission"
+                onClick={() => onSelectApproach(lane.workstreamId === firstLaneId ? null : lane.workstreamId)}
+                aria-current={selected}
+                title={
+                  lane.approach
+                    ? `${lane.name} — isolated workspace`
+                    : `${lane.name} — the work this mission started with`
+                }
+              >
+                <span
+                  className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
+                  aria-hidden="true"
+                />
+                <span className="side-name">{lane.name}</span>
+                {needs && <span className="tone-warn side-needs"> · needs you</span>}
+              </button>
+              {/* A parent's + creates its child, exactly as the project row's
+                  does for missions (D-077, D-084). Only on the approach being
+                  read: a session starts where you are. */}
+              {selected && mayDirect && (
+                <button
+                  className="side-new-mission"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onNewSession();
+                  }}
+                  aria-label={`New session in ${lane.name}`}
+                  title={`New session in ${lane.name}`}
+                  data-testid="rail-new-session"
+                >
+                  +
+                </button>
+              )}
+            </div>
+          );
+        })}
+      {showSessions &&
+        laneSessions.map((session) => {
+          const selected = session.sessionId === selectedSessionId && !sessionDraft;
+          const needs = !selected && sessionNeedsYou(detail, session.sessionId);
+          return (
+            <div
+              key={session.sessionId}
+              className={`side-row side-session${selected && washSession ? " selected" : ""}`}
+              data-testid="rail-session-row"
+              data-session={session.sessionId}
+            >
+              <button
+                className="side-open-mission"
+                onClick={() =>
+                  onSelectSession(session.sessionId === firstSessionId ? null : session.sessionId)
+                }
+                aria-current={selected}
+                title={session.title ?? "New session"}
+              >
+                <span className={session.title === null ? "side-name side-untitled" : "side-name"}>
+                  {truncateLabel(session.title ?? "New session", 24)}
+                </span>
+                {needs && <span className="tone-warn side-needs"> · needs you</span>}
+              </button>
+            </div>
+          );
+        })}
+      {/* The conversation being asked for: nothing exists yet, and leaving
+          creates nothing — the row only mirrors the canvas (D-077, D-083). */}
+      {sessionDraft && (
+        <div className="side-row side-session selected" data-testid="rail-session-draft">
+          <span className="side-open-mission">
+            <span className="side-name side-untitled">New session</span>
+          </span>
+        </div>
+      )}
+      {lanes.length > 1 && (
+        <div
+          className={`side-row side-compare${decisionOpen ? " selected" : ""}`}
+          data-testid="rail-compare"
+        >
+          <button className="side-open-mission" onClick={onCompare} aria-current={decisionOpen}>
+            <span className="side-name">Compare</span>
+            {detail.decisions.some((decision) => decision.supersededAt === null) && (
+              <span className="side-decision-note"> · decision recorded</span>
+            )}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The approach whose room is on screen, resolved the way the tree resolves
+ *  it: the stored lane, or the mission's first. */
+function selectedLaneOf(detail: MissionDetailResponse | undefined, stored: string | null): string | null {
+  if (!detail) return stored;
+  return stored ?? detail.workstreams[0]?.workstreamId ?? null;
+}
+
 export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [missions, setMissions] = useState<Mission[] | null>(null);
   const [details, setDetails] = useState<Record<string, MissionDetailResponse>>({});
@@ -642,6 +805,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     : null;
   const activeMissionId = active?.missionId ?? null;
 
+  /** Canvas modes of the active room, driven from the rail's tree (D-084):
+   *  Compare opens from its row, a new-session draft from the selected
+   *  approach row's `+`. Both are about the room on screen, so any change of
+   *  what that room is — tab, lane, or session — quietly ends them. */
+  const [decisionOpen, setDecisionOpen] = useState(false);
+  const [sessionDraft, setSessionDraft] = useState(false);
+  useEffect(() => {
+    setDecisionOpen(false);
+    setSessionDraft(false);
+  }, [active?.id, active?.workstreamId, active?.sessionId]);
+
   const forgetTabFiles = useCallback((tabId: string) => {
     setFilesByTab((previous) => {
       if (!(tabId in previous)) return previous;
@@ -828,6 +1002,14 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   }, []);
 
   const openDetail = activeMissionId ? details[activeMissionId] : undefined;
+  /** Whether the active mission's tree is on the rail — which is also where
+   *  the selection wash lives when it is (D-084). */
+  const activeTreeLaneId = selectedLaneOf(openDetail, active?.workstreamId ?? null);
+  const activeTreeSessions = openDetail
+    ? openDetail.sessions.filter((session) => session.workstreamId === activeTreeLaneId)
+    : [];
+  const activeTreeShown =
+    (openDetail?.workstreams.length ?? 0) > 1 || activeTreeSessions.length > 1 || sessionDraft;
 
   /** What the server said this viewer may do in that mission. Absent until its
    *  detail has been read, which is the honest answer to "may I" — so the
@@ -1016,46 +1198,116 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                       above carries the ones that are open, which is a different
                       list and usually a much shorter one. */}
                   {open &&
-                    project.missions.map((mission) => (
-                      <div
-                        key={mission.missionId}
-                        className={`side-row side-child${
-                          activeMissionId === mission.missionId ? " selected" : ""
-                        }`}
-                        data-testid="mission-row"
-                      >
-                        <button
-                          className="side-open-mission"
-                          onClick={() => openMissionTab(project.key, mission.missionId)}
-                          title={mission.goal}
-                        >
-                          <span className="side-name">{truncateLabel(mission.goal, 26)}</span>
-                          {/* A count and nothing else (D-080): the lanes
-                              themselves live inside the room, never as rows
-                              in this list. */}
-                          {mission.workstreamCount > 1 && (
-                            <span className="side-approaches" data-testid="mission-approaches-count">
-                              {mission.workstreamCount} approaches
-                            </span>
-                          )}
-                        </button>
-                        {/* One quiet control, revealed on hover or focus. A
-                            permanent icon on every row would put a destructive-
-                            looking mark beside work nobody is filing away, and
-                            most rows are never filed away (D-063). */}
-                        {capabilitiesFor(mission.missionId).includes("mission.archive") && (
-                          <button
-                            className="side-row-archive"
-                            onClick={() => void archiveMission(mission)}
-                            aria-label={`Archive ${mission.goal}`}
-                            title={`Archive ${mission.goal}`}
-                            data-testid="mission-archive"
+                    project.missions.map((mission) => {
+                      const isActive = activeMissionId === mission.missionId;
+                      const missionDetail = isActive ? details[mission.missionId] : undefined;
+                      return (
+                        <Fragment key={mission.missionId}>
+                          <div
+                            className={`side-row side-child${
+                              // When the tree renders, the wash moves to the
+                              // deepest selected row; the chip keeps only its
+                              // lifted type (D-084 — one selection per rail).
+                              isActive && !activeTreeShown ? " selected" : ""
+                            }${isActive ? " active-mission" : ""}`}
+                            data-testid="mission-row"
                           >
-                            Archive
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                            <button
+                              className="side-open-mission"
+                              onClick={() => openMissionTab(project.key, mission.missionId)}
+                              title={mission.goal}
+                            >
+                              <span className="side-name">{truncateLabel(mission.goal, 26)}</span>
+                              {/* A count, for every mission whose tree is not
+                                  the disclosed one (D-084). */}
+                              {mission.workstreamCount > 1 && (
+                                <span className="side-approaches" data-testid="mission-approaches-count">
+                                  {mission.workstreamCount} approaches
+                                </span>
+                              )}
+                            </button>
+                            {/* The + hangs on the new session's deepest visible
+                                parent (D-084): with one lane there are no
+                                approach rows, so the mission's own row is it. */}
+                            {isActive &&
+                              missionDetail &&
+                              missionDetail.workstreams.length <= 1 &&
+                              missionDetail.capabilities.includes("direction.submit") &&
+                              active && (
+                                <button
+                                  className="side-new-mission"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
+                                    setDecisionOpen(false);
+                                    setSessionDraft(true);
+                                  }}
+                                  aria-label={`New session in ${missionDetail.workstream?.name ?? "this mission"}`}
+                                  title={`New session in ${missionDetail.workstream?.name ?? "this mission"}`}
+                                  data-testid="rail-new-session"
+                                >
+                                  +
+                                </button>
+                              )}
+                            {/* One quiet control, revealed on hover or focus. A
+                                permanent icon on every row would put a destructive-
+                                looking mark beside work nobody is filing away, and
+                                most rows are never filed away (D-063). */}
+                            {capabilitiesFor(mission.missionId).includes("mission.archive") && (
+                              <button
+                                className="side-row-archive"
+                                onClick={() => void archiveMission(mission)}
+                                aria-label={`Archive ${mission.goal}`}
+                                title={`Archive ${mission.goal}`}
+                                data-testid="mission-archive"
+                              >
+                                Archive
+                              </button>
+                            )}
+                          </div>
+                          {/* The active mission's structure, nested where its
+                              project is (D-084). Only the active one: a rail
+                              showing every mission's tree is the tab soup
+                              relocated. */}
+                          {isActive && missionDetail && active && (
+                            <MissionTree
+                              detail={missionDetail}
+                              storedLaneId={active.workstreamId}
+                              storedSessionId={active.sessionId}
+                              decisionOpen={decisionOpen}
+                              sessionDraft={sessionDraft}
+                              mayDirect={missionDetail.capabilities.includes("direction.submit")}
+                              onSelectApproach={(workstreamId) => {
+                                setWorkingSet((previous) => selectLane(previous, active.id, workstreamId));
+                                setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
+                                setDecisionOpen(false);
+                                setSessionDraft(false);
+                                setRailOpen(false);
+                              }}
+                              onSelectSession={(sessionId) => {
+                                setWorkingSet((previous) => selectSession(previous, active.id, sessionId));
+                                setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
+                                setDecisionOpen(false);
+                                setSessionDraft(false);
+                                setRailOpen(false);
+                              }}
+                              onCompare={() => {
+                                setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
+                                setSessionDraft(false);
+                                setDecisionOpen(true);
+                                setRailOpen(false);
+                              }}
+                              onNewSession={() => {
+                                setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
+                                setDecisionOpen(false);
+                                setSessionDraft(true);
+                                setRailOpen(false);
+                              }}
+                            />
+                          )}
+                        </Fragment>
+                      );
+                    })}
 
                 </div>
               );
@@ -1183,20 +1435,28 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
 
         <section className="room-area">
         <header className={railHidden ? "topbar topbar-alone" : "topbar"}>
-          {/* Only while the rail is away — its own copy lives at the rail's
-              right edge, and two switches for one thing is one too many. */}
-          {railHidden && (
-            <button
-              className="icon-button"
-              onClick={() => setRailHidden(false)}
-              aria-pressed={false}
-              aria-label="Show the projects rail"
-              title="Show projects"
-              data-testid="rail-toggle"
-            >
-              <SidebarGlyph />
-            </button>
-          )}
+          {/* Visible only while the rail is away — hidden by choice at any
+              width, or collapsed to an overlay below 1200px, where this is the
+              way in (CSS decides which case is showing). Two switches for one
+              thing would be one too many, so the rail's own copy owns the wide
+              case and this one owns the narrow (D-084: the tree made the rail
+              load-bearing, and an overlay nothing could open was a dead end). */}
+          <button
+            className="icon-button rail-toggle"
+            onClick={() => {
+              if (window.matchMedia("(max-width: 1200px)").matches) {
+                setRailOpen((previous) => !previous);
+              } else {
+                setRailHidden(false);
+              }
+            }}
+            aria-pressed={false}
+            aria-label="Show the projects rail"
+            title="Show projects"
+            data-testid="rail-toggle"
+          >
+            <SidebarGlyph />
+          </button>
           {/* The open missions live in the window's own top row rather than in a
               band beneath it. The row was mostly empty and the tabs sat under it,
               so the window had two chrome edges where it needed one (D-066). */}
@@ -1290,16 +1550,13 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                 setWorkingSet((previous) => selectLane(previous, active.id, workstreamId))
               }
               activeSessionId={active.sessionId}
-              openSessionIds={active.openSessionIds}
               onSelectSession={(sessionId) =>
                 setWorkingSet((previous) => selectSession(previous, active.id, sessionId))
               }
-              onOpenSession={(sessionId) =>
-                setWorkingSet((previous) => openSession(previous, active.id, sessionId))
-              }
-              onCloseSession={(sessionId) =>
-                setWorkingSet((previous) => closeSession(previous, active.id, sessionId))
-              }
+              decisionOpen={decisionOpen}
+              onDecisionOpen={setDecisionOpen}
+              sessionDraft={sessionDraft}
+              onSessionDraft={setSessionDraft}
             />
           ) : currentProject ? (
             // Nothing open in this project. The rail lists what there is; this

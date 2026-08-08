@@ -96,7 +96,7 @@ export function runningSession(detail: MissionDetailResponse): Session | null {
 }
 
 /** Whether this session's turn is waiting on a person — the fact behind the
- *  "· needs you" words on a background tab and on the switcher (D-083). */
+ *  "· needs you" words on the rail tree's rows (D-083, D-084). */
 export function sessionNeedsYou(detail: MissionDetailResponse, sessionId: string): boolean {
   return detail.executions.some(
     (execution) =>
@@ -226,7 +226,7 @@ export interface StateLineAction {
   label: string;
   /** What the action does; the room wires it to a real call or an inspector
    *  section. Never rendered without a real destination. */
-  kind: "stop" | "changes" | "verification" | "setup" | "preview" | "stopRun" | "decision";
+  kind: "stop" | "changes" | "verification" | "setup" | "preview" | "stopRun";
 }
 
 export interface StateLineView {
@@ -511,8 +511,9 @@ function primaryStateLine(
         name: "Decision recorded",
         detail: decision
           ? `${decision.decidedByLogin} chose ${chosen?.name ?? "this approach"} — not published yet`
-          : "a result was chosen — not published yet",
-        action: { label: "Open the decision", kind: "decision" }
+          : "a result was chosen — not published yet"
+        // No button: the sentence is the state, and the decision is read on
+        // Compare, one rail row away (D-084).
       };
     }
     case "verification_failed":

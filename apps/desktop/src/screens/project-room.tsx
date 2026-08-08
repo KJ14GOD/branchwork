@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
-  ApproachSummary,
   BaseRevision,
   Direction,
   Effort,
-  Execution,
   Mission,
   MissionDetailResponse,
-  ModelId,
-  Session
+  ModelId
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { Composer, type SubmitOutcome } from "../components/composer";
@@ -17,7 +14,6 @@ import {
   deriveStateLine,
   laneSessions,
   laneView,
-  sessionNeedsYou,
   sessionView,
   viewerIsController
 } from "../components/derive";
@@ -53,26 +49,8 @@ function FileGlyph() {
   );
 }
 
-/** The mark that says a tab is a conversation rather than a file or a lane
- *  (D-083): the same sanctioned stroke style as the file glyph beside it. */
-function SessionGlyph() {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      width="13"
-      height="13"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M13.25 4.25v5.5a1 1 0 0 1-1 1H8l-2.75 2.5v-2.5H3.75a1 1 0 0 1-1-1v-5.5a1 1 0 0 1 1-1h8.5a1 1 0 0 1 1 1z" />
-    </svg>
-  );
-}
 import { RuntimeDock } from "../components/runtime-dock";
-import { clockTime, deriveGoal, plural, shortSha } from "../format";
+import { clockTime, deriveGoal, shortSha } from "../format";
 import type { Project } from "./project-shell";
 
 type BaseLoad =
@@ -118,10 +96,11 @@ export function ProjectRoom({
   activeWorkstreamId,
   onSelectLane,
   activeSessionId,
-  openSessionIds,
   onSelectSession,
-  onOpenSession,
-  onCloseSession
+  decisionOpen,
+  onDecisionOpen,
+  sessionDraft,
+  onSessionDraft
 }: {
   project: Project;
   details: Record<string, MissionDetailResponse>;
@@ -153,12 +132,14 @@ export function ProjectRoom({
   /** The session this room is reading — null for the lane's first, which is
    *  the default and never carried around as an id (D-083). */
   activeSessionId: string | null;
-  /** Sessions explicitly opened as tabs; the lane's first is implicitly open. */
-  openSessionIds: string[];
   onSelectSession: (sessionId: string | null) => void;
-  /** Opens a session as a tab on the strip and selects it. */
-  onOpenSession: (sessionId: string) => void;
-  onCloseSession: (sessionId: string) => void;
+  /** Canvas modes the rail's tree drives (D-084): the Compare surface, and the
+   *  new-session draft. The shell owns both, because the rows that open them
+   *  live in the rail. */
+  decisionOpen: boolean;
+  onDecisionOpen: (open: boolean) => void;
+  sessionDraft: boolean;
+  onSessionDraft: (open: boolean) => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -346,9 +327,9 @@ export function ProjectRoom({
         newSession: true
       });
       if (!created.ok) return { ok: false, message: offlineOr(created.code, created.message) };
-      setSessionDraft(false);
-      // The conversation exists now: its tab joins the strip, selected.
-      onOpenSession(created.value.sessionId);
+      onSessionDraft(false);
+      // The conversation exists now: its row joins the rail's tree, selected.
+      onSelectSession(created.value.sessionId);
       return { ok: true, queued: !created.value.dispatched, deferred: created.value.deferred };
     }
     // Direction names the lane on screen, always (D-080): the server resolves
@@ -372,12 +353,10 @@ export function ProjectRoom({
    * comparison is read at full measure or not at all, and the composer stays
    * because deciding is not a reason to stop being able to direct (D-074).
    */
-  const [decisionOpen, setDecisionOpen] = useState(false);
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [forking, setForking] = useState(false);
   const approaches = detail?.approaches ?? [];
-  const currentDecision = (detail?.decisions ?? []).find((entry) => entry.supersededAt === null) ?? null;
   /** Something to fork from: an approach only means anything beside a result
    *  that already exists, so the control is absent until the lane being read
    *  has a shared checkpoint a sibling could start at (D-079). */
@@ -406,40 +385,7 @@ export function ProjectRoom({
       ? activeSessionId
       : null;
   const readingSessionId = selectedSessionId ?? firstSessionId;
-  /** A second conversation being asked for: client-local, like the mission
-   *  draft above — typing creates it, leaving creates nothing (D-077, D-083). */
-  const [sessionDraft, setSessionDraft] = useState(false);
   const multiSession = sessions.length > 1;
-  const sessionChrome = multiSession || sessionDraft;
-  /** The session tabs on the strip: the lane's first always, everything
-   *  explicitly opened, and — so a restored selection is never invisible —
-   *  the one being read. Creation order, like everything about sessions. */
-  const openSessions = sessions.filter(
-    (session) =>
-      session.sessionId === firstSessionId ||
-      openSessionIds.includes(session.sessionId) ||
-      session.sessionId === selectedSessionId
-  );
-  /** Reading a session: the lane's first is the default and stored as null,
-   *  exactly as the first lane is (D-080, D-083). */
-  const selectSessionTab = (sessionId: string) => {
-    onSelectSession(sessionId === firstSessionId ? null : sessionId);
-    onSelectFile(null);
-    setDecisionOpen(false);
-    setSessionDraft(false);
-  };
-  const openSessionTab = (sessionId: string) => {
-    if (sessionId === firstSessionId) onSelectSession(null);
-    else onOpenSession(sessionId);
-    onSelectFile(null);
-    setDecisionOpen(false);
-    setSessionDraft(false);
-  };
-  const openSessionDraft = () => {
-    setSessionDraft(true);
-    onSelectFile(null);
-    setDecisionOpen(false);
-  };
   /** Which conversation asked, for the approval card's quiet meta line —
    *  named only while the lane holds more than one (D-083). */
   const sessionTitleOf = (executionId: string): string | null => {
@@ -447,17 +393,6 @@ export function ProjectRoom({
     const execution = detail.executions.find((entry) => entry.executionId === executionId);
     const session = sessions.find((entry) => entry.sessionId === execution?.sessionId);
     return session ? (session.title ?? "New session") : null;
-  };
-
-  /** Selecting a lane: the first lane is the default and stored as null, so a
-   *  mission that never forked never carries a lane id around. */
-  const selectLane = (workstreamId: string) => {
-    onSelectLane(workstreamId === lanes[0]?.workstreamId ? null : workstreamId);
-    onSelectFile(null);
-    setDecisionOpen(false);
-    // An unsent session draft belongs to the lane it was opened in; nothing
-    // was created, so nothing is said.
-    setSessionDraft(false);
   };
 
   /** The selected session's own view of the lane: the trace shows one
@@ -539,7 +474,10 @@ export function ProjectRoom({
     setDecisionBusy(false);
     setForking(false);
     if (!result.ok) setDecisionError(result.message);
-    else setDecisionOpen(true);
+    // The lane exists now: go to it. Its row is already in the rail's tree,
+    // and landing in the room you just made beats a comparison over one turn
+    // of nothing (D-084).
+    else onSelectLane(result.value.workstream.workstreamId);
   };
 
   const recordDecision = async (input: {
@@ -636,62 +574,13 @@ export function ProjectRoom({
   return (
     <div className="room" data-testid="project-room">
       <div className="room-main">
-      {/* This strip exists for *files*, and only for files (D-048, D-055).
-          Every mission of every project is the rail's list; the missions that
-          are *open* are the window's own strip above the shell — neither of
-          them belongs in the room, because a centre row repeating either was
-          the workstream chrome DESIGN.md#component-behavior forbids. With no
-          file open there is no strip at all; open one and the room takes a tab
-          of its own, which is the way back to it. */}
-      {(openFiles.length > 0 || multiLane || sessionChrome) && (
+      {/* This strip exists for *files*, and only for files again (D-048,
+          D-055, D-084): the mission's structure — approaches, sessions,
+          Compare — is the rail's tree now, so the room carries no copy of it.
+          With no file open there is no strip at all; open one and the room
+          takes a tab of its own, which is the way back to it. */}
+      {openFiles.length > 0 && (
         <div className="tabbar" role="tablist" aria-label={`Open in ${title}`}>
-          {multiLane ? (
-            <>
-              {/* One tab per lane, each a room of its own (D-080). The dot is
-                  identity, never quality: the first lane and its alternatives
-                  each keep one colour everywhere they appear. */}
-              {lanes.map((lane, index) => (
-                <button
-                  key={lane.workstreamId}
-                  role="tab"
-                  aria-selected={activeFile === null && !decisionOpen && lane.workstreamId === activeLaneId}
-                  className={
-                    activeFile === null && !decisionOpen && lane.workstreamId === activeLaneId
-                      ? "tab lane-tab active"
-                      : "tab lane-tab"
-                  }
-                  onClick={() => selectLane(lane.workstreamId)}
-                  title={
-                    lane.approach
-                      ? `${lane.name} — isolated workspace`
-                      : `${lane.name} — the work this mission started with`
-                  }
-                  data-testid="lane-tab"
-                  data-workstream={lane.workstreamId}
-                >
-                  <span
-                    className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
-                    aria-hidden="true"
-                  />
-                  {lane.name}
-                </button>
-              ))}
-              <button
-                role="tab"
-                aria-selected={activeFile === null && decisionOpen}
-                className={activeFile === null && decisionOpen ? "tab active" : "tab"}
-                onClick={() => {
-                  setDecisionOpen(true);
-                  onSelectFile(null);
-                  setSessionDraft(false);
-                }}
-                title="Compare approaches"
-                data-testid="compare-tab"
-              >
-                Compare
-              </button>
-            </>
-          ) : !sessionChrome ? (
           <button
             role="tab"
             aria-selected={activeFile === null}
@@ -707,73 +596,6 @@ export function ProjectRoom({
                 (D-061). */}
             Mission
           </button>
-          ) : null}
-          {/* One tab per open conversation, after the lane tabs and before the
-              files (D-083): a glyph and a title, closable except the lane's
-              first — the way back to the room is the session you were reading.
-              With one session there is no chrome here at all. */}
-          {sessionChrome &&
-            openSessions.map((session) => {
-              const selected =
-                activeFile === null &&
-                !decisionOpen &&
-                !sessionDraft &&
-                session.sessionId === readingSessionId;
-              const needsYou =
-                !selected && detail !== undefined && sessionNeedsYou(detail, session.sessionId);
-              return (
-                <span
-                  key={session.sessionId}
-                  className={selected ? "tab session-tab active" : "tab session-tab"}
-                  data-testid="session-tab"
-                  data-session={session.sessionId}
-                >
-                  <button
-                    role="tab"
-                    aria-selected={selected}
-                    className="session-tab-open"
-                    onClick={() => selectSessionTab(session.sessionId)}
-                    title={session.title ?? "New session"}
-                  >
-                    <SessionGlyph />
-                    <span
-                      className={
-                        session.title === null
-                          ? "session-tab-name session-untitled"
-                          : "session-tab-name"
-                      }
-                    >
-                      {session.title ?? "New session"}
-                    </span>
-                    {/* Words, never a dot: a background conversation waiting
-                        on a person says so (DESIGN.md#status-semantics). */}
-                    {needsYou && <span className="tone-warn session-needs"> · needs you</span>}
-                  </button>
-                  {session.sessionId !== firstSessionId && (
-                    <button
-                      className="session-tab-close"
-                      onClick={() => onCloseSession(session.sessionId)}
-                      aria-label={`Close ${session.title ?? "this session"}`}
-                      title={`Close ${session.title ?? "this session"}`}
-                      data-testid="session-tab-close"
-                    >
-                      ×
-                    </button>
-                  )}
-                </span>
-              );
-            })}
-          {/* The draft: an empty conversation being asked for. Not a session —
-              nothing exists until words are typed, and clicking any other tab
-              leaves nothing anywhere (D-077, D-083). */}
-          {sessionDraft && (
-            <span className="tab session-tab active" data-testid="session-tab-draft">
-              <button role="tab" aria-selected className="session-tab-open" onClick={openSessionDraft}>
-                <SessionGlyph />
-                <span className="session-tab-name session-untitled">New session</span>
-              </button>
-            </span>
-          )}
           {openFiles.map((file) => (
             <span
               key={file}
@@ -787,7 +609,7 @@ export function ProjectRoom({
                 className="file-tab-open"
                 onClick={() => {
                   onSelectFile(file);
-                  setSessionDraft(false);
+                  onSessionDraft(false);
                 }}
                 title={file}
               >
@@ -870,20 +692,11 @@ export function ProjectRoom({
                   {stateLine.action.label}
                 </button>
               )}
-              {stateLine.action?.kind === "decision" && (
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => setDecisionOpen(true)}
-                  data-testid="state-decision"
-                >
-                  {stateLine.action.label}
-                </button>
-              )}
               {/* Stop and Open preview are deliberately absent here: while a
                   run command is alive they live on the Run control, which is
                   where every run verb lives (DESIGN.md#component-behavior).
-                  Rendering them twice in one viewport would be two competing
-                  copies of one action, not one next step. */}
+                  So is any decision button (D-084): the sentence is the state,
+                  and the decision is read on Compare, one rail row away. */}
             </>
           ) : (
             <>
@@ -918,7 +731,7 @@ export function ProjectRoom({
                   </button>
                   {/* One quiet sentence, only while the mission has a single
                       lane and a reviewable result — the moment the control is
-                      for. Once approaches exist the switcher says the rest. */}
+                      for. Once approaches exist the rail's tree says the rest. */}
                   {approaches.length === 1 &&
                     (detail.state === "work_completed_unverified" ||
                       detail.state === "ready_for_review") && (
@@ -928,54 +741,9 @@ export function ProjectRoom({
                     )}
                 </>
               )}
-              {/* A further conversation must be startable before any session
-                  chrome exists, so the ask lives here, beside Try another
-                  approach — a quiet text control, present whenever the viewer
-                  may direct (D-083). */}
-              {detail.workstream && detail.capabilities.includes("direction.submit") && (
-                <button
-                  className="btn btn-text"
-                  onClick={openSessionDraft}
-                  title={`New session in ${activeLane?.name ?? detail.workstream.name}`}
-                  data-testid="new-session"
-                >
-                  New session
-                </button>
-              )}
-              {multiLane && (
-                <ApproachesSwitcher
-                  approaches={approaches}
-                  activeLaneId={activeLaneId}
-                  onOpenLane={selectLane}
-                  onCompare={() => {
-                    setDecisionOpen(true);
-                    onSelectFile(null);
-                    setSessionDraft(false);
-                  }}
-                />
-              )}
-              {multiSession && (
-                <SessionsSwitcher
-                  sessions={sessions}
-                  executions={detail.executions}
-                  selectedSessionId={readingSessionId}
-                  attention={sessions.some(
-                    (session) =>
-                      !openSessions.some((open) => open.sessionId === session.sessionId) &&
-                      sessionNeedsYou(detail, session.sessionId)
-                  )}
-                  onOpen={openSessionTab}
-                />
-              )}
-              {currentDecision && (
-                <button
-                  className="btn btn-text"
-                  onClick={() => setDecisionOpen(true)}
-                  data-testid="open-the-decision"
-                >
-                  The decision
-                </button>
-              )}
+              {/* Sessions, other approaches, Compare, and the decision have no
+                  controls here (D-084): the rail's tree is the one map of the
+                  mission's structure, and this row is about authority. */}
               <span className="controller-slot" data-testid="controller">
                 {controller ? (
                   <>
@@ -1046,7 +814,7 @@ export function ProjectRoom({
             onRecord={(input) => void recordDecision(input)}
             onRequestRevision={(input) => void requestRevision(input)}
             onInspectPath={() => onInspector("changes")}
-            onClose={() => setDecisionOpen(false)}
+            onClose={() => onDecisionOpen(false)}
           />
         </div>
       ) : sessionDraft ? (
@@ -1308,231 +1076,6 @@ function DraftCanvas({
         <span className="mono">{shortSha(draft.base.base.sha)}</span>
       </p>
     </div>
-  );
-}
-
-/**
- * The compact lane switcher (D-080): "Approaches 2 ▾".
- *
- * A popover, not a page — it answers "what lanes are there and where am I",
- * lets the reader open one, and offers the comparison. Each row is the lane's
- * own facts in the same shape (state, changes, verification), in creation
- * order, with no highlight on the better one — the ordering rule the Decision
- * Room keeps applies here too (D-074).
- */
-function ApproachesSwitcher({
-  approaches,
-  activeLaneId,
-  onOpenLane,
-  onCompare
-}: {
-  approaches: ApproachSummary[];
-  activeLaneId: string | null;
-  onOpenLane: (workstreamId: string) => void;
-  onCompare: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: MouseEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  // One shared checkpoint to state, when every fork genuinely started from the
-  // same revision; with mixed origins each row's own facts carry it instead.
-  const origins = [...new Set(approaches.filter((entry) => entry.approach).map((entry) => entry.originSha))];
-  const sharedOrigin = origins.length === 1 && origins[0] !== null ? origins[0] : null;
-
-  return (
-    <span className="chip-wrap" ref={wrapRef}>
-      <button
-        className="btn btn-text"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        data-testid="approaches-switcher"
-      >
-        Approaches {approaches.length} <span aria-hidden="true">▾</span>
-      </button>
-      {open && (
-        <div className="chip-menu approaches-menu" role="menu" data-testid="approaches-menu">
-          {sharedOrigin && (
-            <div className="approaches-shared" data-testid="approaches-shared">
-              Shared checkpoint · <span className="mono">{shortSha(sharedOrigin)}</span>
-            </div>
-          )}
-          {approaches.map((entry, index) => (
-            <div className="approaches-row" key={entry.workstreamId} data-testid="approaches-row">
-              <span
-                className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
-                aria-hidden="true"
-              />
-              <span className="approaches-name">{entry.name}</span>
-              <span className="approaches-meta">
-                {entry.state.replace(/_/g, " ")} ·{" "}
-                {entry.filesChanged === 0 ? "no files changed" : `${plural(entry.filesChanged, "file")} changed`} ·{" "}
-                {entry.checksRun === 0
-                  ? "Not verified"
-                  : `${entry.checksPassed} of ${plural(entry.checksRun, "check")} passed`}
-              </span>
-              {entry.workstreamId === activeLaneId ? (
-                <span className="approaches-here">Open now</span>
-              ) : (
-                <button
-                  className="btn btn-text"
-                  onClick={() => {
-                    onOpenLane(entry.workstreamId);
-                    setOpen(false);
-                  }}
-                  data-testid="approaches-open"
-                >
-                  Open
-                </button>
-              )}
-            </div>
-          ))}
-          <button
-            className="btn btn-text approaches-compare"
-            onClick={() => {
-              onCompare();
-              setOpen(false);
-            }}
-            data-testid="open-decision-room"
-          >
-            Compare approaches
-          </button>
-        </div>
-      )}
-    </span>
-  );
-}
-
-/** A session's state in plain lowercase words, from its own executions — the
- *  vocabulary is fixed: running / waiting for approval / waiting for direction
- *  / failed / interrupted / stopped / completed / idle (D-083). */
-function sessionStateWords(executions: Execution[], sessionId: string): string {
-  const own = executions.filter((execution) => execution.sessionId === sessionId);
-  const last = own[own.length - 1];
-  if (!last) return "idle";
-  switch (last.state) {
-    case "needs_approval":
-      return "waiting for approval";
-    case "needs_direction":
-      return "waiting for direction";
-    case "failed":
-      return "failed";
-    case "interrupted":
-      return "interrupted";
-    case "stopped":
-      return "stopped";
-    case "completed":
-      return "completed";
-    default:
-      // requested, starting, running, stopping: a live turn.
-      return "running";
-  }
-}
-
-/**
- * The compact session switcher (D-083): "Sessions 2 ▾".
- *
- * Mirrors the Approaches one: every session of the lane in creation order —
- * its title, its state in words, Open — and no row ranked, here or anywhere.
- * The trigger itself carries "· needs you" when a conversation with no tab on
- * screen is waiting on a person, because attention must survive a closed tab.
- */
-function SessionsSwitcher({
-  sessions,
-  executions,
-  selectedSessionId,
-  attention,
-  onOpen
-}: {
-  sessions: Session[];
-  executions: Execution[];
-  /** The session being read — its row says "Open now" instead of offering
-   *  Open, exactly as the approaches rows do. */
-  selectedSessionId: string | null;
-  /** Some session with no tab on screen is waiting on a person. */
-  attention: boolean;
-  onOpen: (sessionId: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: MouseEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  return (
-    <span className="chip-wrap" ref={wrapRef}>
-      <button
-        className="btn btn-text"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        data-testid="sessions-switcher"
-      >
-        Sessions {sessions.length} <span aria-hidden="true">▾</span>
-        {attention && <span className="tone-warn session-needs"> · needs you</span>}
-      </button>
-      {open && (
-        <div className="chip-menu sessions-menu" role="menu" data-testid="sessions-menu">
-          {sessions.map((session) => (
-            <div className="sessions-row" key={session.sessionId} data-testid="sessions-row">
-              <span
-                className={
-                  session.title === null ? "sessions-name session-untitled" : "sessions-name"
-                }
-              >
-                {session.title ?? "New session"}
-              </span>
-              <span className="sessions-meta">
-                {sessionStateWords(executions, session.sessionId)}
-              </span>
-              {session.sessionId === selectedSessionId ? (
-                <span className="sessions-here">Open now</span>
-              ) : (
-                <button
-                  className="btn btn-text"
-                  onClick={() => {
-                    onOpen(session.sessionId);
-                    setOpen(false);
-                  }}
-                  data-testid="sessions-open"
-                >
-                  Open
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </span>
   );
 }
 

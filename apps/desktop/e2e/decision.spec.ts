@@ -260,10 +260,10 @@ describe("competing approaches, compared and decided", () => {
   it("forks a second lane, compares them, and records a decision that publishes nothing", async () => {
     // --- Nothing to compare yet, so there is no comparison ------------------
     // Prohibited pattern 11: no decision or comparison UI over empty content.
-    expect(await page.getByTestId("open-decision-room").count()).toBe(0);
-    // And no lane chrome at all: a one-approach mission stays simple (D-080).
-    expect(await page.getByTestId("lane-tab").count()).toBe(0);
-    expect(await page.getByTestId("approaches-switcher").count()).toBe(0);
+    expect(await page.getByTestId("rail-compare").count()).toBe(0);
+    // And no structure chrome at all: a one-approach mission grows no tree in
+    // the rail (D-084) and no count on its row.
+    expect(await page.getByTestId("rail-approach-row").count()).toBe(0);
     expect(await page.getByTestId("mission-approaches-count").count()).toBe(0);
 
     // --- Try another approach, which requires saying how it differs ---------
@@ -297,24 +297,22 @@ describe("competing approaches, compared and decided", () => {
     expect(baseline.name).toBe("Current work");
     expect(approach.name).toBe("Alternative");
 
-    // --- The room grows lane tabs, and the rail a count — nothing else -----
-    const laneTabs = page.getByTestId("lane-tab");
-    await expect.poll(() => laneTabs.count(), { timeout: 30_000 }).toBe(2);
-    expect(await laneTabs.nth(0).innerText()).toContain("Current work");
-    expect(await laneTabs.nth(1).innerText()).toContain("Alternative");
-    // One mission row in the rail, carrying a count only (D-080).
+    // --- The rail grows the tree: one row per approach, under the mission ---
+    const laneRows = page.getByTestId("rail-approach-row");
+    await expect.poll(() => laneRows.count(), { timeout: 30_000 }).toBe(2);
+    expect(await laneRows.nth(0).innerText()).toContain("Current work");
+    expect(await laneRows.nth(1).innerText()).toContain("Alternative");
+    // The mission row keeps its count for when the tree is folded away, and
+    // there is still exactly one mission row (D-084).
     await expect
       .poll(() => page.getByTestId("mission-approaches-count").count(), { timeout: 30_000 })
       .toBe(1);
     expect(await page.getByTestId("mission-approaches-count").innerText()).toContain("2 approaches");
     expect(await page.getByTestId("mission-row").count()).toBe(1);
 
-    // --- Switching lanes is the tab, and everything follows it -------------
-    // The new lane opened automatically... it did not: opening is explicit
-    // here, which is one deliberate click on the tab that just appeared.
-    await laneTabs.nth(1).click();
-    // The room re-polls for the lane it now reads; the switch is complete when
-    // the header says so.
+    // --- The room lands in the lane that was just made ----------------------
+    // Start approach selects the new lane (D-084): the room you asked for is
+    // the room you get, its row washed in the tree beside its sibling's.
     await expect
       .poll(() => page.getByTestId("lane-context").innerText(), { timeout: 30_000 })
       .toContain("Alternative");
@@ -355,15 +353,13 @@ describe("competing approaches, compared and decided", () => {
     // nothing did it for them.
     expect(existsSync(join(worktreeRoot, baseline.workstreamId, "setup-witness.txt"))).toBe(false);
 
-    // --- The lane switcher: every lane's own facts, and the way across -----
-    await page.getByTestId("approaches-switcher").click();
-    await page.getByTestId("approaches-menu").waitFor({ timeout: 30_000 });
-    expect(await page.getByTestId("approaches-shared").innerText()).toMatch(/Shared checkpoint/i);
-    expect(await page.getByTestId("approaches-row").count()).toBe(2);
-    await shot("89-the-approaches-switcher.png");
+    // --- The tree is the switcher now: rows, and the way across -------------
+    expect(await laneRows.count()).toBe(2);
+    expect(await page.getByTestId("rail-compare").count()).toBe(1);
+    await shot("89-the-rail-tree.png");
 
     // --- The comparison ------------------------------------------------------
-    await page.getByTestId("open-decision-room").click();
+    await page.getByTestId("rail-compare").click();
     await page.getByTestId("decision-room").waitFor({ timeout: 30_000 });
     // The header states what the comparison is about, and leaving is not
     // deciding: the way out reads Keep exploring.
@@ -485,25 +481,50 @@ describe("competing approaches, compared and decided", () => {
     const lineAfter = await page.getByTestId("state-line").innerText();
     expect(lineAfter).toContain("Decision recorded");
 
-    // Back on the first lane, one click away, with its own room intact.
-    await page.getByTestId("lane-tab").first().click();
+    // Back on the first lane, one rail row away, with its own room intact.
+    // And the tree's Compare row carries the decision's standing in words.
+    expect(await page.getByTestId("rail-compare").innerText()).toContain("decision recorded");
+    await page.getByTestId("rail-approach-row").first().click();
     await expect
       .poll(async () => page.getByTestId("lane-context").innerText(), { timeout: 30_000 })
       .toContain("Current work");
     expect(await page.getByTestId("composer").innerText()).toContain("Directing Current work");
 
-    // --- The lane chrome at the other widths (DESIGN.md#responsive) ---------
-    // Not merely captured: the tabs and the switcher must still be present
-    // and operable rather than clipped away.
+    // --- The tree at the other widths (DESIGN.md#responsive) ----------------
+    // Below 1200 the rail is an overlay, so the structure is one toggle away
+    // rather than always on screen — and still operable, not clipped away.
     await app.evaluate(async ({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setContentSize(1000, 800);
     });
-    await expect.poll(() => page.getByTestId("lane-tab").count(), { timeout: 30_000 }).toBe(3);
+    // Reading the sidebar's box proves the overlay is genuinely off-canvas
+    // before the toggle is asked to open it. The toggle clicks are forced:
+    // after an Electron resize, Playwright's actionability hit-test is skewed
+    // by the titlebar inset and blames an off-canvas element, while the page's
+    // own elementFromPoint returns the toggle itself — and the row clicks
+    // inside the opened overlay just below stay ordinary, fully hit-tested
+    // clicks, which is where operability is actually proven.
+    await page.waitForTimeout(600);
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () => document.querySelector('[data-testid="sidebar"]')?.getBoundingClientRect().x ?? 0
+          ),
+        { timeout: 30_000 }
+      )
+      .toBeLessThan(0);
+    await page.screenshot().catch(() => undefined);
+    await page.getByTestId("rail-toggle").last().click({ force: true });
+    await expect.poll(() => page.getByTestId("rail-approach-row").count(), { timeout: 30_000 }).toBe(3);
     await shot("91-lanes-at-1000.png");
+    // Narrower still, with the overlay simply kept open across the resize:
+    // the tree — and the way into the comparison — survives the width.
     await app.evaluate(async ({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setContentSize(760, 720);
     });
-    await expect.poll(() => page.getByTestId("approaches-switcher").count(), { timeout: 30_000 }).toBe(1);
+    await page.waitForTimeout(600);
+    await expect.poll(() => page.getByTestId("rail-compare").count(), { timeout: 30_000 }).toBe(1);
+    await expect.poll(() => page.getByTestId("rail-approach-row").count(), { timeout: 30_000 }).toBe(3);
     await shot("92-lanes-at-760.png");
     await app.evaluate(async ({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setContentSize(1440, 900);

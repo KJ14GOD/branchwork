@@ -244,9 +244,9 @@ afterAll(async () => {
 
 describe("shared sessions inside one approach", () => {
   it("creates, routes, takes turns, survives a closed tab and a reload, and shares one worktree", async () => {
-    // --- One conversation, no session chrome at all --------------------------
-    expect(await page.getByTestId("session-tab").count()).toBe(0);
-    expect(await page.getByTestId("sessions-switcher").count()).toBe(0);
+    // --- One conversation, no structure chrome at all ------------------------
+    expect(await page.getByTestId("mission-tree").count()).toBe(0);
+    expect(await page.getByTestId("rail-session-row").count()).toBe(0);
 
     // --- The first turn, in the session every mission is born with ----------
     await compose("write the guard file");
@@ -263,7 +263,9 @@ describe("shared sessions inside one approach", () => {
     expect(sessionA.title).toBe("write the guard file");
 
     // --- A second session is words-first (D-083, D-077 one level down) ------
-    await page.getByTestId("new-session").click();
+    // The + hangs on the new session's deepest visible parent — with one lane,
+    // the active mission's own row in the rail (D-084).
+    await page.getByTestId("rail-new-session").click();
     await page.getByTestId("session-draft-lead").waitFor({ timeout: 30_000 });
     expect(await page.getByTestId("composer-input").getAttribute("placeholder")).toContain(
       "What should this session do"
@@ -274,11 +276,12 @@ describe("shared sessions inside one approach", () => {
     expect(sessionB.title).toBe("add the tests for the guard");
     expect(sessionB.workstreamId).toBe(sessionA.workstreamId);
 
-    // The chrome appears only now that there is something to tell apart.
-    const tabs = page.getByTestId("session-tab");
-    await expect.poll(() => tabs.count(), { timeout: 30_000 }).toBe(2);
-    expect(await tabs.nth(0).innerText()).toContain("write the guard file");
-    expect(await tabs.nth(1).innerText()).toContain("add the tests");
+    // The tree appears only now that there is something to tell apart: one
+    // row per conversation, nested under the mission in the rail (D-084).
+    const rows = page.getByTestId("rail-session-row");
+    await expect.poll(() => rows.count(), { timeout: 30_000 }).toBe(2);
+    expect(await rows.nth(0).innerText()).toContain("write the guard file");
+    expect(await rows.nth(1).innerText()).toContain("add the tests");
     // The composer names its target in words, on screen.
     expect(await page.getByTestId("composer").innerText()).toContain("add the tests");
 
@@ -301,11 +304,11 @@ describe("shared sessions inside one approach", () => {
     await shot("93-two-sessions-in-one-approach.png");
 
     // --- Separate histories, separate continuity ----------------------------
-    await tabs.nth(0).click();
+    await rows.nth(0).click();
     const chatA = await page.getByTestId("chat").innerText();
     expect(chatA).toContain("write the guard file");
     expect(chatA).not.toContain("add the tests for the guard");
-    await tabs.nth(1).click();
+    await rows.nth(1).click();
     const chatB = await page.getByTestId("chat").innerText();
     expect(chatB).toContain("add the tests for the guard");
     expect(chatB).not.toContain("write the guard file");
@@ -331,12 +334,14 @@ describe("shared sessions inside one approach", () => {
 
     // Reading session A while B works: the question still shows (it blocks the
     // lane's one workspace), attributed to the session that asked.
-    await tabs.nth(0).click();
+    await rows.nth(0).click();
     const card = await page.getByTestId("approval").first().innerText();
     expect(card).toContain("asked in");
     expect(card).toContain("add the tests");
-    // The background session's tab says, in words, that it needs a person.
-    expect(await tabs.nth(1).innerText()).toContain("needs you");
+    // The background session's row says, in words, that it needs a person.
+    await expect
+      .poll(() => rows.nth(1).innerText(), { timeout: 30_000 })
+      .toContain("needs you");
     // The state line names the working session rather than claiming the room.
     expect(await page.getByTestId("state-line").innerText()).toContain("add the tests");
 
@@ -355,22 +360,17 @@ describe("shared sessions inside one approach", () => {
     ).toBe(1);
     await shot("94-queued-behind-the-running-session.png");
 
-    // --- Closing a session tab stops nothing --------------------------------
-    await page.getByTestId("session-tab-close").first().click();
-    await expect.poll(() => tabs.count(), { timeout: 30_000 }).toBe(1);
-    // Still blocked on the same question: the execution outlived its tab.
+    // --- Leaving a session stops nothing ------------------------------------
+    // There is nothing to close any more: the tree lists every conversation
+    // (D-084), and reading a different one changes only the canvas. The turn
+    // blocked in the background stays blocked, waiting for its person.
     expect((await detail()).state).toBe("needs_approval");
-    // The inventory keeps it, with the attention words on the way in.
-    const switcher = page.getByTestId("sessions-switcher");
-    await switcher.waitFor({ timeout: 30_000 });
-    expect(await switcher.innerText()).toContain("needs you");
-    await switcher.click();
-    await page.getByTestId("sessions-menu").waitFor({ timeout: 30_000 });
-    expect(await page.getByTestId("sessions-row").count()).toBe(2);
-    await shot("95-the-sessions-switcher.png");
-    await page.getByTestId("sessions-open").first().click();
-    await expect.poll(() => tabs.count(), { timeout: 30_000 }).toBe(2);
-    expect(await page.getByTestId("chat").innerText()).toContain("add the tests for the guard");
+    expect(await rows.count()).toBe(2);
+    await shot("95-the-rail-tree-with-attention.png");
+    await rows.nth(1).click();
+    await expect
+      .poll(() => page.getByTestId("chat").innerText(), { timeout: 30_000 })
+      .toContain("add the tests for the guard");
 
     // --- Answering frees the workspace, and the queue moves itself ----------
     await approvePending();
@@ -405,13 +405,13 @@ describe("shared sessions inside one approach", () => {
     expect(execA2Done.harnessSessionId).toBe(execA1.harnessSessionId);
 
     // --- A reload restores the session being read ---------------------------
-    await tabs.nth(1).click();
+    await rows.nth(1).click();
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
     await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
     await page.getByTestId("state-line").waitFor({ timeout: 30_000 });
     await expect
-      .poll(() => page.getByTestId("session-tab").count(), { timeout: 30_000 })
+      .poll(() => page.getByTestId("rail-session-row").count(), { timeout: 30_000 })
       .toBe(2);
     expect(await page.getByTestId("composer").innerText()).toContain("add the tests");
     expect(await page.getByTestId("chat").innerText()).toContain("add the tests for the guard");
@@ -431,16 +431,45 @@ describe("shared sessions inside one approach", () => {
     await app.evaluate(async ({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setContentSize(1000, 800);
     });
-    await expect.poll(() => page.getByTestId("session-tab").count(), { timeout: 30_000 }).toBe(2);
-    // The window animates its resize; a shot taken mid-flight shows the room
-    // half-reflowed under the collapsing rail rather than the layout itself.
+    // Below 1200 the rail is an overlay (DESIGN.md#responsive), so the tree is
+    // one toggle away rather than always on screen — and still operable.
     await page.waitForTimeout(600);
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () => document.querySelector('[data-testid="sidebar"]')?.getBoundingClientRect().x ?? 0
+          ),
+        { timeout: 30_000 }
+      )
+      .toBeLessThan(0);
+    // A resized Electron window can hit-test against a stale frame until the
+    // compositor is forced to produce a fresh one; a captured frame is that
+    // force, and the click that follows is still a real click.
+    await page.screenshot().catch(() => undefined);
+    await page.getByTestId("rail-toggle").last().click({ force: true });
+    await expect.poll(() => page.getByTestId("rail-session-row").count(), { timeout: 30_000 }).toBe(2);
     await shot("97-sessions-at-1000.png");
+    await page.getByTestId("rail-session-row").nth(1).click();
     await app.evaluate(async ({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setContentSize(760, 720);
     });
-    await expect.poll(() => page.getByTestId("new-session").count(), { timeout: 30_000 }).toBe(1);
     await page.waitForTimeout(600);
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () => document.querySelector('[data-testid="sidebar"]')?.getBoundingClientRect().x ?? 0
+          ),
+        { timeout: 30_000 }
+      )
+      .toBeLessThan(0);
+    // A resized Electron window can hit-test against a stale frame until the
+    // compositor is forced to produce a fresh one; a captured frame is that
+    // force, and the click that follows is still a real click.
+    await page.screenshot().catch(() => undefined);
+    await page.getByTestId("rail-toggle").last().click({ force: true });
+    await expect.poll(() => page.getByTestId("rail-session-row").count(), { timeout: 30_000 }).toBe(2);
     await shot("98-sessions-at-760.png");
     await app.evaluate(async ({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setContentSize(1440, 900);

@@ -114,8 +114,13 @@ body {
 }
 
 .topbar .rail-toggle {
-  display: none; /* only when the sidebar collapses to an overlay */
+  display: none; /* shown when the rail is hidden by choice, or an overlay */
   margin-left: var(--s-8);
+}
+
+/* The rail is away by choice (any width): this is the way back. */
+.topbar-alone .rail-toggle {
+  display: inline-flex;
 }
 
 .topbar .spacer {
@@ -921,6 +926,8 @@ body {
 }
 
 .side-parent:hover .side-new-mission,
+.side-child:hover .side-new-mission,
+.side-approach:hover .side-new-mission,
 .side-new-mission:focus,
 .side-new-mission:focus-visible {
   opacity: 1;
@@ -1599,103 +1606,6 @@ body {
   margin-left: auto;
   font: var(--type-meta);
   color: var(--text-3);
-}
-
-/* The lane switcher's popover (D-080): opens downward from the authority row,
-   one row per lane in creation order, each the same shape. No highlight on
-   the better one — there is no better one here. */
-.approaches-menu {
-  top: calc(100% + var(--s-1));
-  bottom: auto;
-  min-width: 340px;
-  padding: var(--s-2);
-}
-
-.approaches-shared {
-  font: var(--type-meta);
-  color: var(--text-3);
-  padding: var(--s-1) var(--s-2) var(--s-2);
-}
-
-.approaches-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: 32px;
-  padding: 0 var(--s-2);
-  border-radius: var(--r-control);
-}
-
-.approaches-name {
-  font: var(--type-row);
-  color: var(--text-1);
-  white-space: nowrap;
-}
-
-.approaches-meta {
-  font: var(--type-meta);
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-}
-
-.approaches-here {
-  font: var(--type-meta);
-  color: var(--text-3);
-  white-space: nowrap;
-}
-
-.approaches-compare {
-  width: 100%;
-  justify-content: flex-start;
-  margin-top: var(--s-1);
-}
-
-/* The session switcher's popover mirrors the approaches one (D-083): one row
-   per conversation in creation order — title, state in words, Open — and no
-   row marked better, here or anywhere. */
-.sessions-menu {
-  top: calc(100% + var(--s-1));
-  bottom: auto;
-  min-width: 300px;
-  padding: var(--s-2);
-}
-
-.sessions-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: 32px;
-  padding: 0 var(--s-2);
-  border-radius: var(--r-control);
-}
-
-.sessions-name {
-  font: var(--type-row);
-  color: var(--text-1);
-  max-width: 22ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sessions-meta {
-  font: var(--type-meta);
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-}
-
-.sessions-here {
-  font: var(--type-meta);
-  color: var(--text-3);
-  white-space: nowrap;
 }
 
 /* The one sanctioned loop: the working indicator while an agent runs. */
@@ -3036,29 +2946,19 @@ body {
 .family-config { color: var(--term-green); background: color-mix(in srgb, var(--term-green) 14%, transparent); }
 .family-asset { color: var(--term-bright-magenta); background: color-mix(in srgb, var(--term-bright-magenta) 12%, transparent); }
 
-/* A file is its own tab beside the room's, marked as a file. A session tab is
-   the same shape — a glyph, a name, a close — so the strip stays one system,
-   and the species stay tellable by their glyphs alone (D-048, D-083). */
-.file-tab,
-.session-tab {
+/* A file is its own tab beside the room's, marked as a file (D-048). */
+.file-tab {
   display: inline-flex;
   align-items: center;
   padding-right: 2px;
   border-bottom: 2px solid transparent;
-  /* The base .tab budget would clip the whole row, and the row's tail is the
-     "· needs you" words — the one part that must never truncate. The title
-     span carries its own 22ch ellipsis, so the tab stays bounded without it. */
-  max-width: none;
-  overflow: visible;
 }
 
-.file-tab.active,
-.session-tab.active {
+.file-tab.active {
   border-bottom-color: var(--accent);
 }
 
-.file-tab-open,
-.session-tab-open {
+.file-tab-open {
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
@@ -3072,21 +2972,17 @@ body {
 }
 
 .file-tab.active .file-tab-open,
-.file-tab:hover .file-tab-open,
-.session-tab.active .session-tab-open,
-.session-tab:hover .session-tab-open {
+.file-tab:hover .file-tab-open {
   color: var(--text-1);
 }
 
-.file-tab-name,
-.session-tab-name {
+.file-tab-name {
   max-width: 22ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.file-tab-close,
-.session-tab-close {
+.file-tab-close {
   border: none;
   background: transparent;
   color: var(--text-3);
@@ -3097,22 +2993,9 @@ body {
   cursor: pointer;
 }
 
-.file-tab-close:hover,
-.session-tab-close:hover {
+.file-tab-close:hover {
   background: var(--hover);
   color: var(--text-1);
-}
-
-/* A conversation that has not written its own name yet reads "New session",
-   quietly — the title is its first words, never a form field (D-083). */
-.session-untitled {
-  color: var(--text-3);
-}
-
-/* "· needs you", in words — a background conversation waiting on a person.
-   Never a dot (DESIGN.md#status-semantics); the colour rides .tone-warn. */
-.session-needs {
-  white-space: nowrap;
 }
 
 /* A file takes the room: read at full measure or not at all, and with none of
@@ -3406,12 +3289,83 @@ body {
   cursor: pointer;
 }
 
-/* A mission with competing approaches says so in the rail with a count and
-   nothing else (D-080): the lanes are the room's, never rows in this list. */
+/* A mission with competing approaches carries a count on its row; the active
+   mission's structure nests beneath it as the tree (D-084). */
 .side-approaches {
   display: block;
   font: var(--type-meta);
   color: var(--text-3);
+}
+
+/* The active mission's structure, nested where its project is (D-084):
+   approach rows one step in from the mission chip, session rows one step
+   further, Compare at the mission level. Rows are the same 6px inset chips
+   mission rows are (D-078); depth is indentation and type, never a border. */
+.side-tree .side-row {
+  min-height: 28px;
+}
+
+.side-approach {
+  padding-left: calc(var(--s-4) + var(--s-3));
+}
+
+.side-approach .side-open-mission {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.side-session {
+  padding-left: calc(var(--s-6) + var(--s-2));
+}
+
+.side-compare {
+  padding-left: calc(var(--s-4) + var(--s-3));
+}
+
+.side-compare .side-name {
+  color: var(--text-2);
+}
+
+.side-compare.selected .side-name,
+.side-compare:hover .side-name {
+  color: var(--text-1);
+}
+
+/* An unwritten conversation reads "New session", quietly — its title is its
+   first words, never a form field (D-083). */
+.side-untitled {
+  color: var(--text-3);
+}
+
+/* "· needs you", in words — never a dot (DESIGN.md#status-semantics). The
+   words are the one part of a row that must never truncate: the title shrinks
+   with an ellipsis, the attention words keep their whole selves. */
+.side-tree .side-open-mission {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.side-tree .side-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-needs {
+  font: var(--type-meta);
+  white-space: nowrap;
+  flex: none;
+}
+
+.side-decision-note {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
 }
 
 .side-row-archive {
