@@ -17,6 +17,7 @@ import {
   deriveStateLine,
   laneSessions,
   laneView,
+  queuedPositionLabel,
   sessionNeedsYou,
   sessionView,
   viewerIsController
@@ -1244,6 +1245,12 @@ export function ProjectRoom({
                     onOpenChanges={() => onInspector("changes")}
                     onOpenVerification={() => onInspector("verification")}
                     actions={block.direction ? directionActions(block.direction) : null}
+                    // The queue is the lane's, not the conversation's: its one
+                    // workspace takes turns (D-083), so position is computed
+                    // against the lane view the session view narrows.
+                    queuePosition={
+                      block.direction ? queuedPositionLabel(detail, block.direction.directionId) : null
+                    }
                     // The question goes in the thread that raised it, so it is
                     // attached to the last block rather than floated anywhere.
                     approvals={

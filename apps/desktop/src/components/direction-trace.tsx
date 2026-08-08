@@ -680,7 +680,8 @@ export function TraceView({
   onOpenChanges,
   onOpenVerification,
   actions,
-  approvals
+  approvals,
+  queuePosition
 }: {
   block: TraceBlock;
   controllerUserId: string | null;
@@ -692,6 +693,10 @@ export function TraceView({
   actions?: React.ReactNode;
   /** Permission questions this execution is blocked on, if any. */
   approvals?: React.ReactNode;
+  /** "2 of 3" while several directions wait in this lane's queue; null when
+   *  the waiting row would be numbering a queue of one (DESIGN.md *Direction
+   *  queued*). */
+  queuePosition?: string | null;
 }) {
   const direction = block.direction;
   const waiting = direction?.state === "submitted" || direction?.state === "queued";
@@ -736,6 +741,11 @@ export function TraceView({
       {waiting && ownedByController && (
         <div className="trace-waiting-row" data-testid="direction-queued">
           <span>Queued — applies at the next safe point</span>
+          {queuePosition && (
+            <span className="queue-position" data-testid="queue-position">
+              {queuePosition} in the queue
+            </span>
+          )}
           {actions}
         </div>
       )}
@@ -748,6 +758,11 @@ export function TraceView({
                 ? `Waiting for ${controllerLogin} to apply this direction`
                 : "Waiting — no one holds the baton"}
           </span>
+          {queuePosition && (
+            <span className="queue-position" data-testid="queue-position">
+              {queuePosition} in the queue
+            </span>
+          )}
           {actions}
         </div>
       )}

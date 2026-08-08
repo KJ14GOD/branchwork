@@ -1295,6 +1295,14 @@ body {
   color: var(--text-1);
 }
 
+/* Where this direction stands while several wait — words at the meta step,
+   never a badge (DESIGN.md#status-semantics, *Direction queued*). */
+.queue-position {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
 .harness-turn {
   display: flex;
   flex-direction: column;
