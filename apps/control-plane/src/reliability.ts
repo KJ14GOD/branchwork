@@ -189,17 +189,24 @@ export async function sweepLeases(db: Db, now = new Date()): Promise<number> {
   return expired;
 }
 
-/** Refreshes a lease holder's liveness. Called wherever a holder exercises
- *  their authority, so a working controller never loses the baton. */
-export async function touchLease(db: Db, leaseId: string): Promise<void> {
+/** Refreshes a lease holder's liveness — every lease this person holds in the
+ *  mission they are reading, not only the lane their room is showing. The
+ *  heartbeat is the holder's client being alive (ARCHITECTURE.md#persistence),
+ *  and a person reading one approach of a mission is exactly as alive for the
+ *  sibling lane whose baton they also hold; before this took the mission, a
+ *  controller of a background lane who sat watching another lane for half an
+ *  hour lost that baton to the sweep while present. */
+export async function touchHeldLeases(db: Db, missionId: string, userId: string): Promise<void> {
   await db.query(
-    `update control_leases set last_heartbeat_at = now()
-      where lease_id = $1 and state in ('held', 'releasing')
+    `update control_leases l set last_heartbeat_at = now()
+       from workstreams w
+      where w.wst_id = l.wst_id and w.mission_id = $1
+        and l.holder_user_id = $2 and l.state in ('held', 'releasing')
         -- The room polls every two seconds; the TTL is half an hour. Writing on
         -- every poll would be thirty times the writes for none of the accuracy,
         -- so a heartbeat that is already fresh is left alone.
-        and (last_heartbeat_at is null or last_heartbeat_at < now() - interval '1 minute')`,
-    [leaseId]
+        and (l.last_heartbeat_at is null or l.last_heartbeat_at < now() - interval '1 minute')`,
+    [missionId, userId]
   );
 }
 

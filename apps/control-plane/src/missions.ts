@@ -473,40 +473,105 @@ export async function listMissions(
 
   // The list must not disagree with the room. Both states come from the same
   // projection over the same durable facts; the stored column is never read.
+  // The facts are read **per lane**: a mission holding competing approaches is
+  // projected over every one of them with fixed precedence — attention, then
+  // running, then waiting (PRODUCT.md#the-mission-state-model) — so a
+  // background Alternative waiting on a person surfaces on the mission itself
+  // rather than being hidden behind whichever lane ran last.
   const ids = missions.map((mission) => mission.missionId);
   const summary = await db.query(
-    `select m.mission_id,
+    `with lanes as (
+       select w.mission_id, w.wst_id, w.branch_status, w.created_at,
+              first_value(w.wst_id) over (partition by w.mission_id order by w.created_at, w.wst_id) as first_wst_id
+         from workstreams w where w.mission_id = any($1::text[])
+     )
+     select l.mission_id,
+            l.branch_status,
             (select e.state from executions e
-              where e.mission_id = m.mission_id order by e.created_at desc limit 1) as latest_state,
-            exists (select 1 from workstreams w
-                     where w.mission_id = m.mission_id and w.branch_status = 'created') as branch_ready,
-            (select ws.readiness from workspaces ws
-               join workstreams w2 on w2.wst_id = ws.wst_id
-              where w2.mission_id = m.mission_id limit 1) as readiness,
-            exists (select 1 from checkpoints c where c.mission_id = m.mission_id and c.files_changed > 0) as changed,
-            exists (select 1 from verification_checks v where v.mission_id = m.mission_id and v.outcome = 'passed') as passed,
-            exists (select 1 from verification_checks v where v.mission_id = m.mission_id and v.outcome in ('failed', 'errored')) as broken
-       from missions m where m.mission_id = any($1::text[])`,
+              where e.wst_id = l.wst_id order by e.created_at desc limit 1) as latest_state,
+            (select ws.readiness from workspaces ws where ws.wst_id = l.wst_id) as readiness,
+            exists (select 1 from checkpoints c
+                      join executions e2 on e2.exe_id = c.exe_id
+                     where e2.wst_id = l.wst_id and c.files_changed > 0) as changed,
+            exists (select 1 from verification_checks v
+                     where v.mission_id = l.mission_id and v.outcome = 'passed'
+                       and coalesce(v.wst_id, (select e3.wst_id from executions e3 where e3.exe_id = v.exe_id), l.first_wst_id) = l.wst_id) as passed,
+            exists (select 1 from verification_checks v
+                     where v.mission_id = l.mission_id and v.outcome in ('failed', 'errored')
+                       and coalesce(v.wst_id, (select e3.wst_id from executions e3 where e3.exe_id = v.exe_id), l.first_wst_id) = l.wst_id) as broken
+       from lanes l
+      order by l.mission_id, l.created_at, l.wst_id`,
     [ids]
   );
-  const byId = new Map(summary.rows.map((row) => [row.mission_id as string, row]));
+  const lanesOf = new Map<string, LaneSummaryRow[]>();
+  for (const row of summary.rows as LaneSummaryRow[]) {
+    const list = lanesOf.get(row.mission_id) ?? [];
+    list.push(row);
+    lanesOf.set(row.mission_id, list);
+  }
   return missions.map((mission) => {
-    const row = byId.get(mission.missionId);
-    if (!row) return mission;
-    return { ...mission, primaryState: projectListState(row) };
+    const lanes = lanesOf.get(mission.missionId);
+    if (!lanes || lanes.length === 0) return mission;
+    return { ...mission, primaryState: projectMissionListState(lanes) };
   });
 }
 
-/** The same state machine as the room's, over the columns a list can afford. */
-function projectListState(row: {
+interface LaneSummaryRow {
+  mission_id: string;
+  branch_status: string;
   latest_state: string | null;
-  branch_ready: boolean;
+  readiness: string | null;
+  changed: boolean;
+  passed: boolean;
+  broken: boolean;
+}
+
+/** The states in which a lane is waiting on a person. Precedence class one:
+ *  any lane here decides the mission, however busy its siblings are. */
+const ATTENTION_STATES: ReadonlySet<Mission["primaryState"]> = new Set([
+  "needs_approval",
+  "needs_direction",
+  "workspace_failed",
+  "verification_failed",
+  "execution_interrupted"
+]);
+
+/** Unattended progress. Outranks waiting, never attention. */
+const RUNNING_STATES: ReadonlySet<Mission["primaryState"]> = new Set([
+  "provisioning_workspace",
+  "agent_starting",
+  "agent_running",
+  "agent_stopping"
+]);
+
+/**
+ * The mission-level primary state over every lane
+ * (PRODUCT.md#the-mission-state-model): attention-demanding states, then
+ * running, then waiting. Within a class, creation order — lanes are never
+ * ranked (D-074), so the earliest lane in the winning class speaks for it. A
+ * mission of one lane reduces to that lane's own state.
+ */
+function projectMissionListState(lanes: LaneSummaryRow[]): Mission["primaryState"] {
+  const states = lanes.map(projectListState);
+  return (
+    states.find((state) => ATTENTION_STATES.has(state)) ??
+    states.find((state) => RUNNING_STATES.has(state)) ??
+    states[0] ??
+    "new_mission"
+  );
+}
+
+/** The same state machine as the room's, over the columns a list can afford,
+ *  for one lane. */
+function projectListState(row: {
+  branch_status: string;
+  latest_state: string | null;
   readiness: string | null;
   changed: boolean;
   passed: boolean;
   broken: boolean;
 }): Mission["primaryState"] {
-  if (!row.branch_ready) return "new_mission";
+  if (row.branch_status !== "created") return "new_mission";
   if (row.readiness === "configuring") return "provisioning_workspace";
   if (row.readiness === "failed") return "workspace_failed";
   const idle: Mission["primaryState"] =

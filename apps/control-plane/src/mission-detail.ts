@@ -25,7 +25,7 @@ import { listSessions } from "./sessions.ts";
 import type { Db } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
 import { listDirections } from "./directions.ts";
-import { touchLease } from "./reliability.ts";
+import { touchHeldLeases } from "./reliability.ts";
 import type { MissionAccess } from "./authz.ts";
 
 /**
@@ -506,10 +506,10 @@ export async function missionDetail(
   // Without this the sweep expired every lease thirty minutes after it was
   // created, whoever was watching, and every direction after that queued behind
   // a controller who no longer existed. The verb was written when the sweep was
-  // and never called (D-051).
-  if (access.leaseId !== null && access.controllerUserId === viewerUserId) {
-    await touchLease(db, access.leaseId);
-  }
+  // and never called (D-051). It covers every lease the viewer holds in this
+  // mission, whichever lane their room is showing — reading one approach must
+  // not lapse the sibling's baton (D-074).
+  await touchHeldLeases(db, access.missionId, viewerUserId);
 
   const checkpointsForSha = await listCheckpoints(db, access.missionId);
   // The revision a check has to match to still count as current evidence —

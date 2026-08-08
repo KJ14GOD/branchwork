@@ -766,19 +766,28 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     return [...map.values()];
   }, [missions, localRepos, opened, checkedOutHere]);
 
-  // Needs attention: only states the server actually reports. A mission whose
-  // branch failed, or one whose own state says it is waiting on a person.
+  // Needs attention: only states the server actually reports. The state read
+  // is the mission list's own, which the server projects over **every lane**
+  // with attention first (PRODUCT.md#the-mission-state-model) — so a closed
+  // mission whose background Alternative is waiting on an approval surfaces
+  // here, not only in its own room. Any lane's failed branch counts too, from
+  // the detail where one has been read; a detail is no longer required for the
+  // state part, so the lens works from the list alone after a reconnect.
   const attention = useMemo(
     () =>
       (missions ?? []).filter((mission) => {
+        if (
+          mission.primaryState === "needs_direction" ||
+          mission.primaryState === "needs_approval" ||
+          mission.primaryState === "verification_failed" ||
+          mission.primaryState === "execution_interrupted"
+        ) {
+          return true;
+        }
         const detail = details[mission.missionId];
         if (!detail) return false;
-        if (detail.workstream?.branchStatus === "failed") return true;
-        return (
-          detail.state === "needs_direction" ||
-          detail.state === "needs_approval" ||
-          detail.state === "verification_failed" ||
-          detail.state === "execution_interrupted"
+        return (detail.workstreams.length > 0 ? detail.workstreams : [detail.workstream]).some(
+          (lane) => lane?.branchStatus === "failed"
         );
       }),
     [missions, details]
