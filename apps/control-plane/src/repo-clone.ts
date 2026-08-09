@@ -52,6 +52,70 @@ export function canMintCloneCredential(provider: unknown): provider is CloneCred
   return typeof (provider as CloneCredentialMinter | null)?.mintCloneCredential === "function";
 }
 
+/**
+ * The write-scoped sibling (D-099): a provider that can mint a push
+ * credential — one repository, `contents: write`, one operation. Detected
+ * structurally like the clone minter, and deliberately a separate verb: a
+ * push is a different grant from a read, and nothing widens the read to get
+ * one.
+ */
+export interface PushCredentialMinter {
+  mintPushCredential(providerRepoId: string): Promise<CloneCredential>;
+}
+
+export function canMintPushCredential(provider: unknown): provider is PushCredentialMinter {
+  return typeof (provider as PushCredentialMinter | null)?.mintPushCredential === "function";
+}
+
+/**
+ * Mints the push credential for the repository behind one workstream — the
+ * same scope-from-credential rule as the clone half: the workstream is the
+ * caller's own, so repository scope follows from runner scope. Same
+ * no-row, no-event, no-log-line property: used and forgotten.
+ */
+export async function issuePushCredential(
+  db: Db,
+  provider: unknown,
+  args: { orgId: string; workstreamId: string }
+): Promise<CloneCredential> {
+  const found = await db.query(
+    `select repo.provider, repo.provider_repo_id
+       from workstreams w
+       join repositories repo on repo.repo_id = w.repo_id
+      where w.wst_id = $1 and repo.org_id = $2`,
+    [args.workstreamId, args.orgId]
+  );
+  const row = found.rows[0];
+  if (!row) {
+    throw new CloneCredentialError(404, "not_found", "No such workstream for this runner.");
+  }
+  if (row.provider !== "github") {
+    throw new CloneCredentialError(
+      409,
+      "push_not_needed",
+      "This repository is a folder on a machine; there is no host to push it to."
+    );
+  }
+  if (!canMintPushCredential(provider)) {
+    throw new CloneCredentialError(
+      503,
+      "push_unavailable",
+      "Repository access isn't configured for this organization yet, so nothing can be pushed."
+    );
+  }
+  try {
+    return await provider.mintPushCredential(row.provider_repo_id as string);
+  } catch (error) {
+    if (error instanceof UnknownRepositoryError) {
+      throw new CloneCredentialError(404, "unknown_repository", error.message);
+    }
+    if (error instanceof ProviderTransientError) {
+      throw new CloneCredentialError(502, "provider_unavailable", "GitHub could not issue repository access just now.");
+    }
+    throw error;
+  }
+}
+
 /** A refusal with a name and a status, so the runner learns what happened and
  *  the room can say it in words. */
 export class CloneCredentialError extends Error {

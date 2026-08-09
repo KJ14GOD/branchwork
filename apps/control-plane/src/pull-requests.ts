@@ -1,16 +1,38 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import type { BranchPush, PullRequest, ReviewThread } from "@novus/contracts";
-import { ReviewThreadSchema } from "@novus/contracts";
-import type { Db } from "./db.ts";
+import { RequestReviewInputSchema, ReviewThreadSchema } from "@novus/contracts";
+import { missionAccess, require as requireCapability } from "./authz.ts";
+import { withTransaction, type Db } from "./db.ts";
+import { recordEvent } from "./events.ts";
+import { newCommandId, newPullRequestId } from "./ids.ts";
+import { getMission } from "./missions.ts";
+import {
+  FakeRepositoryProvider,
+  ProviderTransientError,
+  PullRequestExistsError,
+  UnknownPullRequestError,
+  UnknownRepositoryError,
+  type HostPullRequest,
+  type RepositoryProvider
+} from "./repo-provider.ts";
+import type { RouteDeps } from "./routes.ts";
 
 /**
- * The tracked pull request (PRODUCT.md#domain-model, D-099) — reading half.
+ * The tracked pull request (PRODUCT.md#domain-model, D-099).
  *
  * The row starts existing when a request is actually opened on the host
- * (D-075's promise); from then on the mission tracks it. Everything here only
- * SELECTs, like mission-detail: the routes that create and steward one, and
- * the poller that ingests the host's side of the story, live with the route
- * module. There is no merge function in this file or any other — merging
- * happens on GitHub, by humans, and Novus records who.
+ * (D-075's promise); from then on the mission tracks it. This module owns:
+ *
+ *   POST /missions/:missionId/pull-request/push    (pr.manage — the remote-head guarantee)
+ *   POST /missions/:missionId/pull-request         (pr.manage — open the draft)
+ *   POST /pull-requests/:pullRequestId/request-review  (pr.manage)
+ *   POST /pull-requests/:pullRequestId/ready           (pr.manage)
+ *
+ * and the poll that ingests the host's side of the story. There is no merge
+ * route, no merge function, and no path that could grow one by accident —
+ * merging happens on GitHub, by humans, and Novus records who (the absence is
+ * asserted by the suite the way D-063 asserts the absent delete).
  */
 
 export interface PullRequestRow {
@@ -135,4 +157,576 @@ export async function branchPushFor(
     };
   }
   return { state: "pending", remoteHeadSha, failureReason: null };
+}
+
+// --- Publishing --------------------------------------------------------------
+
+const MissionParamsSchema = z.object({ missionId: z.string().startsWith("msn_") });
+const PullParamsSchema = z.object({ pullRequestId: z.string().startsWith("pr_") });
+const LaneBodySchema = z.object({ workstreamId: z.string().startsWith("wst_").optional() });
+
+interface PullContext {
+  pullRequestId: string;
+  missionId: string;
+  workstreamId: string;
+  orgId: string;
+  providerRepoId: string;
+  providerKind: string;
+  number: number;
+  state: string;
+}
+
+async function loadPullContext(db: Db, pullRequestId: string): Promise<PullContext | null> {
+  const result = await db.query(
+    `select p.pr_id, p.mission_id, p.wst_id, p.org_id, p.provider_number, p.state,
+            repo.provider_repo_id, repo.provider as provider_kind
+       from pull_requests p
+       join workstreams w on w.wst_id = p.wst_id
+       join repositories repo on repo.repo_id = w.repo_id
+      where p.pr_id = $1`,
+    [pullRequestId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    pullRequestId: row.pr_id as string,
+    missionId: row.mission_id as string,
+    workstreamId: row.wst_id as string,
+    orgId: row.org_id as string,
+    providerRepoId: row.provider_repo_id as string,
+    providerKind: row.provider_kind as string,
+    number: row.provider_number as number,
+    state: row.state as string
+  };
+}
+
+export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps): void {
+  /**
+   * The push half of publishing (D-099): enqueues `push_branch` toward the
+   * runner holding the worktree, carrying the exact revision the current
+   * decision chose. The runner pushes with a write-scoped per-operation
+   * credential and reports `workspace.pushed`; nothing here touches git.
+   */
+  app.post("/missions/:missionId/pull-request/push", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+    const params = MissionParamsSchema.safeParse(request.params);
+    if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed mission id.");
+    const body = LaneBodySchema.safeParse(request.body ?? {});
+    if (!body.success) return deps.sendError(reply, 400, "bad_lane", "Malformed workstream id.");
+    const access = await missionAccess(deps.db, ctx, params.data.missionId, body.data.workstreamId ?? null);
+    if (!access) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
+    requireCapability(access, "pr.manage");
+    const workstreamId = access.workstreamId;
+    if (!workstreamId) return deps.sendError(reply, 409, "no_workstream", "This mission has no workstream yet.");
+
+    const outcome = await withTransaction(deps.db, async (client) => {
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
+      const laneRow = await client.query(
+        `select w.mission_branch, repo.provider
+           from workstreams w join repositories repo on repo.repo_id = w.repo_id
+          where w.wst_id = $1`,
+        [workstreamId]
+      );
+      const lane = laneRow.rows[0] as { mission_branch: string; provider: string } | undefined;
+      if (!lane) return { kind: "no_workstream" as const };
+      if (lane.provider !== "github") return { kind: "not_publishable" as const };
+      const decisionRow = await client.query(
+        `select dec_id, checkpoint_sha from decisions
+          where mission_id = $1 and wst_id = $2 and superseded_at is null`,
+        [access.missionId, workstreamId]
+      );
+      const decision = decisionRow.rows[0] as { dec_id: string; checkpoint_sha: string | null } | undefined;
+      if (!decision) return { kind: "no_decision" as const };
+      if (!decision.checkpoint_sha) return { kind: "no_checkpoint" as const };
+      const runnerRow = await client.query(
+        `select runner_id from runners
+          where wst_id = $1 and revoked_at is null and expires_at > now()
+          order by created_at desc limit 1`,
+        [workstreamId]
+      );
+      const runnerId = (runnerRow.rows[0]?.runner_id as string | undefined) ?? null;
+      if (!runnerId) return { kind: "no_runner" as const };
+
+      // The double-click is answered by state, the workspace-command way
+      // (D-043's pattern): an unsettled push is reused, and a settled one —
+      // completed or failed — makes the next request a genuinely new command.
+      const pending = await client.query(
+        `select cmd_id from runner_commands
+          where wst_id = $1 and kind = 'push_branch'
+            and state in ('pending', 'delivered', 'acknowledged')
+          limit 1`,
+        [workstreamId]
+      );
+      if (pending.rows[0] !== undefined) return { kind: "already_queued" as const };
+
+      const commandId = newCommandId();
+      await client.query(
+        `insert into runner_commands (cmd_id, org_id, mission_id, wst_id, exe_id, runner_id, kind,
+                                      payload, idempotency_key, state)
+         values ($1, $2, $3, $4, null, $5, 'push_branch', $6, $7, 'pending')`,
+        [
+          commandId,
+          access.orgId,
+          access.missionId,
+          workstreamId,
+          runnerId,
+          JSON.stringify({
+            branch: lane.mission_branch,
+            sha: decision.checkpoint_sha,
+            requestedBy: ctx.userId
+          }),
+          `push:${workstreamId}:${decision.checkpoint_sha}:${commandId}`
+        ]
+      );
+      await recordEvent(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId,
+        kind: "pr.push_requested",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: { branch: lane.mission_branch, sha: decision.checkpoint_sha }
+      });
+      return { kind: "enqueued" as const };
+    });
+
+    switch (outcome.kind) {
+      case "no_workstream":
+        return deps.sendError(reply, 409, "no_workstream", "This mission has no workstream yet.");
+      case "not_publishable":
+        return deps.sendError(
+          reply,
+          409,
+          "not_publishable",
+          "This repository is a folder on a machine rather than a host that could receive a push."
+        );
+      case "no_decision":
+        return deps.sendError(reply, 409, "no_decision", "Record a decision first: publishing is what a decision becomes.");
+      case "no_checkpoint":
+        return deps.sendError(
+          reply,
+          409,
+          "no_checkpoint",
+          "The decision names no checkpoint, so there is no revision to push."
+        );
+      case "no_runner":
+        return deps.sendError(
+          reply,
+          409,
+          "no_runner",
+          "No machine is running this workstream, so there's nothing to push from."
+        );
+      case "already_queued":
+      case "enqueued":
+        return reply.code(202).send({ ok: true });
+    }
+  });
+
+  /**
+   * Opens the draft (D-099). Refused in words until the remote head equals
+   * the decided checkpoint — a request naming a revision the host does not
+   * serve would be the product's central lie — and always opened as a draft:
+   * readiness is a person's own later claim.
+   */
+  app.post("/missions/:missionId/pull-request", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+    const params = MissionParamsSchema.safeParse(request.params);
+    if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed mission id.");
+    const body = LaneBodySchema.safeParse(request.body ?? {});
+    if (!body.success) return deps.sendError(reply, 400, "bad_lane", "Malformed workstream id.");
+    const access = await missionAccess(deps.db, ctx, params.data.missionId, body.data.workstreamId ?? null);
+    if (!access) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
+    requireCapability(access, "pr.manage");
+    const workstreamId = access.workstreamId;
+    if (!workstreamId) return deps.sendError(reply, 409, "no_workstream", "This mission has no workstream yet.");
+
+    // One source of truth for what gets sent: the same projection the room
+    // shows as "prepared" (D-075). What is snapshotted is exactly what was
+    // read.
+    const detail = await getMission(deps.db, ctx, params.data.missionId, body.data.workstreamId);
+    if (!detail) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
+    const prepared = detail.preparedPullRequest;
+    const decision = detail.decisions.find((entry) => entry.supersededAt === null) ?? null;
+    const lane = detail.workstream;
+    if (!prepared || !decision || !lane) {
+      return deps.sendError(reply, 409, "no_decision", "Record a decision first: publishing is what a decision becomes.");
+    }
+    if (!prepared.publishable) {
+      return deps.sendError(
+        reply,
+        409,
+        "not_publishable",
+        "This repository is a folder on a machine rather than a host that could receive a pull request."
+      );
+    }
+    if (decision.workstreamId !== lane.workstreamId) {
+      return deps.sendError(
+        reply,
+        409,
+        "wrong_lane",
+        "The current decision chose a different approach; open the pull request from that lane."
+      );
+    }
+    if (!decision.checkpointSha) {
+      return deps.sendError(reply, 409, "no_checkpoint", "The decision names no checkpoint, so there is nothing to publish.");
+    }
+    if (lane.remoteHeadSha !== decision.checkpointSha) {
+      // The remote-head guarantee, stated as the next action.
+      return deps.sendError(
+        reply,
+        409,
+        "branch_not_pushed",
+        lane.remoteHeadSha === null
+          ? "The branch has never been pushed to GitHub. Push it first, so the request serves the decided revision."
+          : "The branch on GitHub does not serve the decided revision. Push it first."
+      );
+    }
+    const existing = await pullRequestForLane(deps.db, workstreamId);
+    if (existing && (existing.state === "draft" || existing.state === "ready")) {
+      return deps.sendError(reply, 409, "already_open", `PR #${existing.number} is already open for this approach.`);
+    }
+
+    const repoRow = await deps.db.query(
+      `select repo.provider_repo_id from workstreams w
+         join repositories repo on repo.repo_id = w.repo_id
+        where w.wst_id = $1`,
+      [workstreamId]
+    );
+    const providerRepoId = repoRow.rows[0]?.provider_repo_id as string | undefined;
+    if (!providerRepoId) return deps.sendError(reply, 409, "no_workstream", "This mission has no repository.");
+
+    let opened: HostPullRequest;
+    try {
+      opened = await deps.provider.createPullRequest(providerRepoId, {
+        title: prepared.title,
+        body: prepared.body,
+        headRef: prepared.headRef,
+        baseRef: prepared.baseRef
+      });
+    } catch (error) {
+      if (error instanceof PullRequestExistsError) {
+        return deps.sendError(reply, 409, "already_open", error.message);
+      }
+      if (error instanceof UnknownRepositoryError) {
+        return deps.sendError(reply, 404, "unknown_repository", error.message);
+      }
+      if (error instanceof ProviderTransientError) {
+        return deps.sendError(reply, 502, "provider_unavailable", `GitHub could not open the request: ${error.message}`);
+      }
+      throw error;
+    }
+
+    const pullRequestId = newPullRequestId();
+    await withTransaction(deps.db, async (client) => {
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
+      await client.query(
+        `insert into pull_requests (pr_id, org_id, mission_id, wst_id, dec_id, provider_number, url,
+                                    state, mergeable, title, body, base_ref, head_ref, head_sha,
+                                    requested_reviewers, review_threads, created_by, last_synced_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, '[]'::jsonb, '[]'::jsonb, $15, now())`,
+        [
+          pullRequestId,
+          access.orgId,
+          access.missionId,
+          workstreamId,
+          decision.decisionId,
+          opened.number,
+          opened.url,
+          opened.state,
+          opened.mergeable,
+          prepared.title,
+          prepared.body,
+          prepared.baseRef,
+          prepared.headRef,
+          lane.remoteHeadSha,
+          ctx.userId
+        ]
+      );
+      await recordEvent(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId,
+        kind: "pr.opened",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: {
+          pullRequestId,
+          number: opened.number,
+          url: opened.url,
+          headSha: lane.remoteHeadSha,
+          decisionId: decision.decisionId
+        }
+      });
+    });
+
+    const created = await pullRequestById(deps.db, pullRequestId);
+    return reply.code(201).send({ pullRequest: created });
+  });
+
+  app.post("/pull-requests/:pullRequestId/request-review", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+    const params = PullParamsSchema.safeParse(request.params);
+    if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed pull request id.");
+    const body = RequestReviewInputSchema.safeParse({
+      ...(request.body as Record<string, unknown> | null),
+      pullRequestId: params.data.pullRequestId
+    });
+    if (!body.success) {
+      return deps.sendError(reply, 422, "invalid_reviewers", body.error.issues[0]?.message ?? "Name at least one reviewer.");
+    }
+    const pull = await loadPullContext(deps.db, params.data.pullRequestId);
+    if (!pull) return deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    const access = await missionAccess(deps.db, ctx, pull.missionId, pull.workstreamId);
+    if (!access) return deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    requireCapability(access, "pr.manage");
+    if (pull.state === "merged" || pull.state === "closed") {
+      return deps.sendError(reply, 409, "resolved", "This pull request is already resolved on GitHub.");
+    }
+    try {
+      await deps.provider.requestReviewers(pull.providerRepoId, pull.number, body.data.reviewers);
+    } catch (error) {
+      if (error instanceof UnknownPullRequestError) {
+        return deps.sendError(reply, 404, "unknown_pull_request", error.message);
+      }
+      if (error instanceof ProviderTransientError) {
+        return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      }
+      throw error;
+    }
+    await withTransaction(deps.db, async (client) => {
+      await client.query(
+        `update pull_requests
+            set requested_reviewers = (
+              select coalesce(jsonb_agg(distinct reviewer), '[]'::jsonb)
+                from (
+                  select jsonb_array_elements_text(requested_reviewers) as reviewer from pull_requests where pr_id = $1
+                  union
+                  select unnest($2::text[])
+                ) merged
+            )
+          where pr_id = $1`,
+        [pull.pullRequestId, body.data.reviewers]
+      );
+      await recordEvent(client, {
+        orgId: pull.orgId,
+        missionId: pull.missionId,
+        workstreamId: pull.workstreamId,
+        kind: "pr.review_requested",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: { pullRequestId: pull.pullRequestId, number: pull.number, reviewers: body.data.reviewers }
+      });
+    });
+    return reply.send({ ok: true });
+  });
+
+  app.post("/pull-requests/:pullRequestId/ready", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+    const params = PullParamsSchema.safeParse(request.params);
+    if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed pull request id.");
+    const pull = await loadPullContext(deps.db, params.data.pullRequestId);
+    if (!pull) return deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    const access = await missionAccess(deps.db, ctx, pull.missionId, pull.workstreamId);
+    if (!access) return deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    requireCapability(access, "pr.manage");
+    if (pull.state !== "draft") {
+      return deps.sendError(reply, 409, "not_a_draft", "Only a draft can be marked ready, and this one no longer is one.");
+    }
+    try {
+      await deps.provider.markPullRequestReady(pull.providerRepoId, pull.number);
+    } catch (error) {
+      if (error instanceof UnknownPullRequestError) {
+        return deps.sendError(reply, 404, "unknown_pull_request", error.message);
+      }
+      if (error instanceof ProviderTransientError) {
+        return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      }
+      throw error;
+    }
+    await withTransaction(deps.db, async (client) => {
+      await client.query(`update pull_requests set state = 'ready' where pr_id = $1 and state = 'draft'`, [
+        pull.pullRequestId
+      ]);
+      await recordEvent(client, {
+        orgId: pull.orgId,
+        missionId: pull.missionId,
+        workstreamId: pull.workstreamId,
+        kind: "pr.marked_ready",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: { pullRequestId: pull.pullRequestId, number: pull.number }
+      });
+    });
+    return reply.send({ ok: true });
+  });
+
+  // There is deliberately no POST /pull-requests/:id/merge here, and there
+  // must never be: the suite asks for one and requires a 404 (D-099).
+
+  // --- The fake host's own side (NOVUS_FAKE_GITHUB only) ---------------------
+  // A deterministic suite has to *be* GitHub — comment, resolve, merge,
+  // close, conflict — or the ingestion half is untestable. Guarded twice:
+  // config.fakeGithub can never be set in production, and the routes only
+  // exist when the provider really is the in-memory fake.
+  if (deps.config.fakeGithub && deps.provider instanceof FakeRepositoryProvider) {
+    const provider = deps.provider;
+    const FakeActSchema = z.object({
+      providerRepoId: z.string().min(1),
+      number: z.number().int().positive(),
+      author: z.string().min(1).max(120).optional(),
+      body: z.string().max(2_000).optional(),
+      path: z.string().max(300).optional()
+    });
+    app.post("/fake/github/pulls/:action", async (request, reply) => {
+      const action = (request.params as { action: string }).action;
+      const body = FakeActSchema.safeParse(request.body);
+      if (!body.success) return deps.sendError(reply, 400, "bad_fake_act", "Malformed fake host act.");
+      try {
+        if (action === "comment") {
+          provider.fakeComment(body.data.providerRepoId, body.data.number, {
+            author: body.data.author ?? "reviewer",
+            body: body.data.body ?? "Looks close — one question.",
+            path: body.data.path ?? null
+          });
+        } else if (action === "resolve") {
+          provider.fakeResolveComments(body.data.providerRepoId, body.data.number);
+        } else if (action === "merge") {
+          provider.fakeMerge(body.data.providerRepoId, body.data.number, body.data.author ?? "maya");
+        } else if (action === "close") {
+          provider.fakeClose(body.data.providerRepoId, body.data.number);
+        } else if (action === "conflict") {
+          provider.fakeConflict(body.data.providerRepoId, body.data.number);
+        } else {
+          return deps.sendError(reply, 404, "unknown_act", "The fake host does not do that.");
+        }
+      } catch (error) {
+        if (error instanceof UnknownPullRequestError) {
+          return deps.sendError(reply, 404, "unknown_pull_request", error.message);
+        }
+        throw error;
+      }
+      return reply.send({ ok: true });
+    });
+  }
+}
+
+// --- Ingestion ---------------------------------------------------------------
+
+/**
+ * One poll pass over every open request (D-099): read the host's story, and
+ * record what changed as events with `actor.kind: external` — the host is a
+ * source Novus quotes, never an authority it invents. Poll-first because a
+ * local-first control plane has no public webhook endpoint; a deployed one
+ * grows webhooks with the same ingestion underneath (ARCHITECTURE.md).
+ */
+export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider): Promise<void> {
+  const open = await db.query(
+    `select p.pr_id, p.org_id, p.mission_id, p.wst_id, p.provider_number, p.state, p.mergeable,
+            p.review_threads, repo.provider_repo_id
+       from pull_requests p
+       join workstreams w on w.wst_id = p.wst_id
+       join repositories repo on repo.repo_id = w.repo_id
+      where p.state in ('draft', 'ready')`
+  );
+  for (const row of open.rows as {
+    pr_id: string;
+    org_id: string;
+    mission_id: string;
+    wst_id: string;
+    provider_number: number;
+    state: string;
+    mergeable: string;
+    review_threads: unknown;
+    provider_repo_id: string;
+  }[]) {
+    let host: HostPullRequest;
+    try {
+      host = await provider.getPullRequest(row.provider_repo_id, row.provider_number);
+    } catch {
+      // The host being unreachable is not news to record; the next pass asks
+      // again and last_synced_at stays honest about staleness.
+      continue;
+    }
+    const knownThreads = Array.isArray(row.review_threads) ? (row.review_threads as unknown[]).length : 0;
+    const openThreads = host.reviewThreads.filter((thread) => thread.state === "open").length;
+
+    await withTransaction(db, async (client) => {
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [row.mission_id]);
+      await client.query(
+        `update pull_requests
+            set state = $2, mergeable = $3, review_threads = $4::jsonb,
+                requested_reviewers = $5::jsonb,
+                merged_by = coalesce($6, merged_by),
+                merged_at = coalesce($7::timestamptz, merged_at),
+                closed_at = coalesce($8::timestamptz, closed_at),
+                last_synced_at = now()
+          where pr_id = $1`,
+        [
+          row.pr_id,
+          host.state,
+          host.mergeable,
+          JSON.stringify(host.reviewThreads.slice(0, 50)),
+          JSON.stringify(host.requestedReviewers.slice(0, 15)),
+          host.mergedBy,
+          host.mergedAt,
+          host.closedAt
+        ]
+      );
+      const record = (kind: string, payload: Record<string, unknown>) =>
+        recordEvent(client, {
+          orgId: row.org_id,
+          missionId: row.mission_id,
+          workstreamId: row.wst_id,
+          kind,
+          actorKind: "external",
+          actorId: "github",
+          actorLogin: null,
+          payload: { pullRequestId: row.pr_id, number: row.provider_number, ...payload }
+        });
+      if (host.state === "merged" && row.state !== "merged") {
+        await record("pr.merged", { mergedBy: host.mergedBy });
+      } else if (host.state === "closed" && row.state !== "closed") {
+        await record("pr.closed", {});
+      } else if (host.state === "ready" && row.state === "draft") {
+        // Marked ready on the host itself rather than through Novus — still
+        // the host's news, still recorded.
+        await record("pr.marked_ready_externally", {});
+      }
+      if (host.mergeable === "conflict" && row.mergeable !== "conflict") {
+        await record("pr.conflict", {});
+      }
+      if (host.reviewThreads.length > knownThreads) {
+        await record("pr.comments", {
+          added: host.reviewThreads.length - knownThreads,
+          open: openThreads
+        });
+      }
+    });
+  }
+}
+
+/** Started from main.ts beside the reliability sweep; never from buildServer,
+ *  so a server constructed for a test acquires no timer (main.ts's own rule). */
+export function startPullRequestSweep(
+  db: Db,
+  provider: RepositoryProvider,
+  everyMs = 15_000
+): () => void {
+  const timer = setInterval(() => {
+    void sweepPullRequestsOnce(db, provider).catch(() => undefined);
+  }, everyMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }

@@ -1,11 +1,14 @@
 import { createSign } from "node:crypto";
-import type { AvailableRepository, BaseRevision } from "@novus/contracts";
+import type { AvailableRepository, BaseRevision, ReviewThread } from "@novus/contracts";
 import type { CloneCredential, CloneCredentialMinter } from "./repo-clone.ts";
 import {
   BranchConflictError,
   ProviderTransientError,
+  PullRequestExistsError,
   UnknownBaseError,
+  UnknownPullRequestError,
   UnknownRepositoryError,
+  type HostPullRequest,
   type RepositoryProvider
 } from "./repo-provider.ts";
 
@@ -24,7 +27,7 @@ interface CachedRepo {
  * semantics the fake enforces; V0 binds to the app's first installation.
  */
 export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCredentialMinter {
-  readonly kind = "fake" as const; // narrow union kept until the contract widens; behavior is live
+  readonly kind = "github" as const; // the union widened (D-099); the label stops lying
   private token: { value: string; expiresAt: number } | null = null;
   private installation: number | null = null;
   private repoCache = new Map<string, CachedRepo>();
@@ -109,6 +112,36 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     };
   }
 
+  /**
+   * The push credential (D-099): one repository, `contents: write`, minted
+   * fresh for the one push that asked and never cached. A second,
+   * deliberately separate mint rather than a widening of the clone
+   * credential — reading a repository and writing to one are different
+   * grants, and every operation gets the narrowest one that does its job.
+   */
+  async mintPushCredential(providerRepoId: string): Promise<CloneCredential> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const numericId = Number(repo.providerRepoId);
+    if (!Number.isSafeInteger(numericId)) throw new UnknownRepositoryError();
+    const minted = await fetch(`${API}/app/installations/${await this.installationId()}/access_tokens`, {
+      method: "POST",
+      headers: { ...this.appHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        repository_ids: [numericId],
+        permissions: { contents: "write", metadata: "read" }
+      })
+    });
+    if (minted.status === 404) throw new UnknownRepositoryError();
+    if (!minted.ok) throw new ProviderTransientError(`push credential failed (${minted.status})`);
+    const body = (await minted.json()) as { token: string; expires_at: string };
+    return {
+      remoteUrl: `https://github.com/${repo.fullName}.git`,
+      username: "x-access-token",
+      token: body.token,
+      expiresAt: body.expires_at
+    };
+  }
+
   private async rest(path: string, init: RequestInit = {}): Promise<Response> {
     const token = await this.installationToken();
     return fetch(`${API}${path}`, {
@@ -184,5 +217,157 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     }
     if (create.status === 422) throw new UnknownBaseError();
     throw new ProviderTransientError(`branch creation failed (${create.status})`);
+  }
+
+  // --- Pull requests (D-099) -------------------------------------------------
+  // The write half is draft-create, reviewer-request, and mark-ready; there
+  // is no merge call here and never will be. Read is one GET per open
+  // request, for the poll that keeps the mission's story current.
+
+  private toHostPull(raw: {
+    number: number;
+    html_url: string;
+    state: string;
+    draft?: boolean;
+    merged_at: string | null;
+    closed_at: string | null;
+    merged_by?: { login: string } | null;
+    mergeable?: boolean | null;
+    mergeable_state?: string;
+    requested_reviewers?: { login: string }[];
+    head?: { sha?: string };
+  }): HostPullRequest {
+    const state: HostPullRequest["state"] =
+      raw.merged_at !== null
+        ? "merged"
+        : raw.state === "closed"
+          ? "closed"
+          : raw.draft
+            ? "draft"
+            : "ready";
+    // GitHub's mergeable is computed lazily: null means "still thinking", and
+    // the honest word for that is unknown, never either answer.
+    const mergeable: HostPullRequest["mergeable"] =
+      raw.mergeable === null || raw.mergeable === undefined
+        ? "unknown"
+        : raw.mergeable
+          ? "clean"
+          : "conflict";
+    return {
+      number: raw.number,
+      url: raw.html_url,
+      state,
+      mergeable,
+      requestedReviewers: (raw.requested_reviewers ?? []).map((reviewer) => reviewer.login),
+      reviewThreads: [],
+      mergedBy: raw.merged_by?.login ?? null,
+      mergedAt: raw.merged_at,
+      closedAt: raw.closed_at,
+      headSha: raw.head?.sha ?? null
+    };
+  }
+
+  async createPullRequest(
+    providerRepoId: string,
+    input: { title: string; body: string; headRef: string; baseRef: string }
+  ): Promise<HostPullRequest> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const created = await this.rest(`/repos/${repo.fullName}/pulls`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: input.title,
+        body: input.body,
+        head: input.headRef,
+        base: input.baseRef,
+        // Always a draft: the only way Novus opens one (D-099).
+        draft: true
+      })
+    });
+    if (created.status === 404) throw new UnknownRepositoryError();
+    if (created.status === 422) {
+      const body = (await created.json().catch(() => ({}))) as { errors?: { message?: string }[] };
+      const message = body.errors?.map((error) => error.message ?? "").join(" ") ?? "";
+      if (/already exists/i.test(message)) throw new PullRequestExistsError(input.headRef);
+      throw new ProviderTransientError(`pull request creation was refused (422): ${message.slice(0, 200)}`);
+    }
+    if (!created.ok) throw new ProviderTransientError(`pull request creation failed (${created.status})`);
+    return this.toHostPull((await created.json()) as Parameters<typeof this.toHostPull>[0]);
+  }
+
+  async getPullRequest(providerRepoId: string, number: number): Promise<HostPullRequest> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}`);
+    if (response.status === 404) throw new UnknownPullRequestError();
+    if (!response.ok) throw new ProviderTransientError(`pull request lookup failed (${response.status})`);
+    const pull = this.toHostPull((await response.json()) as Parameters<typeof this.toHostPull>[0]);
+    // Review comments ride the same poll, bounded like every ingested claim.
+    const comments = await this.rest(`/repos/${repo.fullName}/pulls/${number}/comments?per_page=50`);
+    if (comments.ok) {
+      const list = (await comments.json()) as {
+        user?: { login?: string };
+        body?: string;
+        path?: string | null;
+        html_url?: string;
+        created_at?: string;
+      }[];
+      pull.reviewThreads = list.slice(0, 50).map(
+        (comment): ReviewThread => ({
+          author: (comment.user?.login ?? "unknown").slice(0, 120),
+          body: (comment.body ?? "").slice(0, 2_000),
+          path: comment.path?.slice(0, 300) ?? null,
+          // The REST comments list does not carry thread resolution; the
+          // reflection stays honest by saying open until the threads API
+          // (GraphQL) joins a later slice with review.comment.
+          state: "open",
+          url: comment.html_url?.slice(0, 600) ?? null,
+          postedAt: comment.created_at ?? new Date().toISOString()
+        })
+      );
+    }
+    return pull;
+  }
+
+  async requestReviewers(providerRepoId: string, number: number, reviewers: string[]): Promise<void> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}/requested_reviewers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reviewers })
+    });
+    if (response.status === 404) throw new UnknownPullRequestError();
+    if (response.status === 422) {
+      throw new ProviderTransientError(
+        "GitHub refused the reviewer request — a named reviewer may not be a collaborator on the repository."
+      );
+    }
+    if (!response.ok) throw new ProviderTransientError(`reviewer request failed (${response.status})`);
+  }
+
+  async markPullRequestReady(providerRepoId: string, number: number): Promise<void> {
+    const repo = await this.cachedRepo(providerRepoId);
+    // REST cannot un-draft a pull request; this is the codebase's first and
+    // only GraphQL call, recorded as such in D-099.
+    const lookup = await this.rest(`/repos/${repo.fullName}/pulls/${number}`);
+    if (lookup.status === 404) throw new UnknownPullRequestError();
+    if (!lookup.ok) throw new ProviderTransientError(`pull request lookup failed (${lookup.status})`);
+    const nodeId = ((await lookup.json()) as { node_id: string }).node_id;
+    const token = await this.installationToken();
+    const response = await fetch(`${API}/graphql`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        query: "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }",
+        variables: { id: nodeId }
+      })
+    });
+    if (!response.ok) throw new ProviderTransientError(`mark ready failed (${response.status})`);
+    const body = (await response.json()) as { errors?: { message: string }[] };
+    if (body.errors?.length) {
+      throw new ProviderTransientError(`mark ready was refused: ${body.errors[0]?.message.slice(0, 200)}`);
+    }
   }
 }

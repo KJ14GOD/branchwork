@@ -26,7 +26,8 @@ import { nextSeq, recordEvent, recordEventAtSeq } from "./events.ts";
 import {
   CloneCredentialError,
   CloneCredentialRequestSchema,
-  issueCloneCredential
+  issueCloneCredential,
+  issuePushCredential
 } from "./repo-clone.ts";
 import {
   newCheckId,
@@ -350,6 +351,19 @@ async function applyWorkspaceSideEffects(
   event: RunnerEvent
 ): Promise<boolean> {
   switch (event.kind) {
+    case "workspace.pushed": {
+      // The remote-head guarantee's receipt (D-099): the branch landed, and
+      // the workstream records the exact revision the host now serves. The
+      // branch name is matched defensively — a report about some other branch
+      // moves nothing — and only ever this runner's own workstream, because
+      // the context came from the credential.
+      await client.query(
+        `update workstreams set remote_head_sha = $2
+          where wst_id = $1 and mission_branch = $3`,
+        [ctx.workstreamId, event.payload.sha, event.payload.branch]
+      );
+      return true;
+    }
     case "workspace.readiness": {
       const payload = event.payload;
       await client.query(
@@ -1158,6 +1172,32 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
     }
     try {
       return await issueCloneCredential(deps.db, deps.provider, {
+        orgId: ctx.orgId,
+        workstreamId: ctx.workstreamId
+      });
+    } catch (error) {
+      if (error instanceof CloneCredentialError) {
+        return deps.sendError(reply, error.status, error.code, error.message);
+      }
+      throw error;
+    }
+  });
+
+  // The write-scoped sibling (D-099): minted for the one push a `push_branch`
+  // command asked for, same scope-from-credential rule, same no-row,
+  // no-event, no-log-line property. A user session has no path to either.
+  app.post("/runner/push-credential", async (request, reply) => {
+    const ctx = await requireRunner(request, reply);
+    if (!ctx) return;
+    const body = CloneCredentialRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return deps.sendError(reply, 400, "bad_request", "Malformed push-credential request.");
+    }
+    if (body.data.workstreamId !== undefined && body.data.workstreamId !== ctx.workstreamId) {
+      return deps.sendError(reply, 404, "not_found", "No such workstream for this runner.");
+    }
+    try {
+      return await issuePushCredential(deps.db, deps.provider, {
         orgId: ctx.orgId,
         workstreamId: ctx.workstreamId
       });

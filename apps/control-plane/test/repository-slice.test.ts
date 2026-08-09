@@ -339,15 +339,16 @@ describe("retry after transient failure", () => {
 });
 
 describe("branch conflict", () => {
-  class ConflictProvider implements RepositoryProvider {
-    readonly kind = "fake" as const;
-    async listRepositories(): Promise<AvailableRepository[]> {
+  // Extends the fake so the interface's newer verbs (the pull-request set,
+  // D-099) ride along; only the three answers this suite is about differ.
+  class ConflictProvider extends FakeRepositoryProvider {
+    override async listRepositories(): Promise<AvailableRepository[]> {
       return [{ providerRepoId: "7001", name: "novus/occupied", defaultBranch: "main" }];
     }
-    async resolveBase(): Promise<BaseRevision> {
+    override async resolveBase(): Promise<BaseRevision> {
       return { ref: "main", sha: "a".repeat(40) };
     }
-    async ensureBranch(_repo: string, branch: string): Promise<{ alreadyExisted: boolean }> {
+    override async ensureBranch(_repo: string, branch: string): Promise<{ alreadyExisted: boolean }> {
       throw new BranchConflictError(branch);
     }
   }
