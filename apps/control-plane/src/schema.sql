@@ -319,11 +319,25 @@ alter table executions add column if not exists cache_creation_tokens bigint;
 alter table executions add column if not exists cost_usd numeric(12, 6);
 alter table executions add column if not exists harness_duration_ms bigint;
 alter table executions add column if not exists harness_turns integer;
+-- What the turn may do to the worktree (D-095). 'write' is the ordinary
+-- exclusive turn; 'read' runs alongside it — denied every permission request,
+-- capturing no checkpoint, never a transfer boundary.
+alter table executions add column if not exists access text not null default 'write'
+  check (access in ('write', 'read'));
 
 create index if not exists executions_by_workstream on executions (wst_id, created_at desc);
-create unique index if not exists executions_one_active_per_workstream
+-- One *writing* turn per lane: the worktree has one git index, and a second
+-- writer would make checkpoint capture commit one chat's half-done edits as
+-- another's evidence. Read turns run alongside (D-095), so the old
+-- access-blind index is retired by name.
+drop index if exists executions_one_active_per_workstream;
+create unique index if not exists executions_one_active_write_per_workstream
   on executions (wst_id)
-  where state in ('requested', 'starting', 'running', 'needs_direction', 'needs_approval', 'stopping');
+  where state in ('requested', 'starting', 'running', 'needs_direction', 'needs_approval', 'stopping')
+    and access = 'write';
+-- The matching per-conversation index lives with the sessions migration
+-- below (D-083's block), because `executions.session_id` does not exist yet
+-- at this point in a fresh database's first run.
 
 -- ---------------------------------------------------------------------------
 -- Direction (PRODUCT.md#direction). Attributed, ordered, durable; "applied"
@@ -708,6 +722,12 @@ update executions e
           from workstream_sessions order by wst_id, created_at, csn_id) s
  where s.wst_id = e.wst_id and e.session_id is null;
 alter table executions alter column session_id set not null;
+-- One turn per conversation, whatever its access (D-095): a session's turns
+-- resume its own harness session, and two at once would fork the transcript.
+-- Implied by the lane-wide index until read turns began bypassing it.
+create unique index if not exists executions_one_active_per_session
+  on executions (session_id)
+  where state in ('requested', 'starting', 'running', 'needs_direction', 'needs_approval', 'stopping');
 
 -- A migrated session is titled by its first words, exactly as a new one is.
 -- Idempotent: only null titles move, and the oldest direction does not change.

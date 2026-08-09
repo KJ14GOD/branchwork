@@ -171,7 +171,11 @@ function requireWorkstream(standing: MissionAccess): string {
  */
 async function hasActiveExecution(client: pg.PoolClient, workstreamId: string): Promise<boolean> {
   const result = await client.query(
-    "select 1 from executions where wst_id = $1 and state = any($2::text[]) limit 1",
+    // Write turns only (D-095): a read turn running alongside holds no claim
+    // on the worktree, so an otherwise-idle lane transfers immediately — the
+    // read turn keeps running under D-034's rule that transfer removes future
+    // authority and never ends authorized work (it could not write anyway).
+    "select 1 from executions where wst_id = $1 and state = any($2::text[]) and access = 'write' limit 1",
     [workstreamId, ACTIVE_EXECUTION_STATES]
   );
   return (result.rowCount ?? 0) > 0;

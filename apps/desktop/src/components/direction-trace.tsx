@@ -374,7 +374,15 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       case "execution.running": {
         const model = text(event.payload.model);
         const effort = text(event.payload.effort);
-        block.machinery = model ? (effort ? `${model} · effort ${effort}` : model) : block.machinery;
+        // A read-alongside turn says so on its machinery line (D-095): the
+        // trace reads normally, and the one word explains why this turn could
+        // only ever answer — never change the worktree.
+        const readOnly =
+          event.executionId !== null &&
+          detail.executions.find((execution) => execution.executionId === event.executionId)
+            ?.access === "read";
+        const base = model ? (effort ? `${model} · effort ${effort}` : model) : null;
+        block.machinery = base ? (readOnly ? `${base} · read-only` : base) : block.machinery;
         break;
       }
       case "harness.session": {

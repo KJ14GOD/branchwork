@@ -3182,6 +3182,16 @@ body {
   flex: none;
 }
 
+/* The queue-or-alongside question (D-095): one sentence naming the running
+   chat, then the two answers — Queue first because it is the default a second
+   Enter takes. Inline in the composer foot, no dialog: the question is about
+   the words already in the box. */
+.composer-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
 /* The quiet chat states — "working", "queued · 2" — recede to --text-3 while
    "needs you" keeps the warn tone (D-094): only the state a person must act
    on asks for their eye. */

@@ -506,12 +506,16 @@ export async function listMissions(
                      where v.mission_id = l.mission_id and v.outcome in ('failed', 'errored')
                        and coalesce(v.wst_id, (select e3.wst_id from executions e3 where e3.exe_id = v.exe_id), l.first_wst_id) = l.wst_id) as broken
        from lanes l
-       -- The lane's latest execution as one row, because the attention detail
-       -- needs its session as well as its state (D-093) and two subqueries
-       -- could disagree about which execution is latest.
+       -- The lane's latest *write* execution as one row (D-095): the list's
+       -- word is the workspace's story, and a read turn answering alongside
+       -- is its own chat's business, not the lane's. One row rather than two
+       -- subqueries, because the attention detail needs the session as well
+       -- as the state (D-093) and two subqueries could disagree about which
+       -- execution is latest.
        left join lateral (
          select e.state, e.session_id from executions e
-          where e.wst_id = l.wst_id order by e.created_at desc limit 1
+          where e.wst_id = l.wst_id and e.access = 'write'
+          order by e.created_at desc limit 1
        ) e on true
        left join workstream_sessions s on s.csn_id = e.session_id
       order by l.mission_id, l.created_at, l.wst_id`,

@@ -62,11 +62,13 @@ export function laneView(detail: MissionDetailResponse): MissionDetailResponse {
   };
 }
 
-/** The one execution that is still live, if any. At most one per workstream
- *  (PRODUCT.md#domain-model). */
+/** The workspace's own live turn — the one *write* execution, at most one per
+ *  workstream. A read turn answering alongside (D-095) holds nothing and is
+ *  not the workspace's story: its liveness is its chat's own word (D-094). */
 export function activeExecution(detail: MissionDetailResponse): Execution | null {
   const live = detail.executions.filter(
-    (execution) => !TERMINAL_EXECUTION_STATES.includes(execution.state)
+    (execution) =>
+      execution.access === "write" && !TERMINAL_EXECUTION_STATES.includes(execution.state)
   );
   return live[live.length - 1] ?? null;
 }

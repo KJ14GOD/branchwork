@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MissionDetailResponseSchema, type MissionDetailResponse } from "@novus/contracts";
 import {
+  activeExecution,
   contestedAcrossSessions,
   controller,
   deriveStateLine,
@@ -66,6 +67,7 @@ function execution(overrides: Record<string, unknown> = {}) {
     executionId: "exe_1",
     workstreamId: "wst_one",
     sessionId: "csn_one",
+    access: "write",
     harness: "claude-code",
     model: "claude-sonnet-5",
     effort: "medium",
@@ -643,5 +645,33 @@ describe("each chat's own word and footprint (D-094)", () => {
       ]
     });
     expect(contestedAcrossSessions(room)).toEqual([]);
+  });
+});
+
+describe("the workspace's turn is the write turn (D-095)", () => {
+  const twoChats = (executions: unknown[]) =>
+    detail({
+      sessions: [session(), session({ sessionId: "csn_two", title: "Review" })],
+      executions
+    });
+
+  it("a read turn alongside is its chat's word, never the workspace's turn", () => {
+    const room = twoChats([
+      execution({ state: "running" }),
+      execution({ executionId: "exe_2", sessionId: "csn_two", access: "read", state: "running" })
+    ]);
+    // The workspace's turn is the write one, however much newer the read is;
+    // the read turn's liveness belongs to its own chat's row.
+    expect(activeExecution(room)?.executionId).toBe("exe_1");
+    expect(sessionActivity(room, "csn_two").state).toBe("working");
+  });
+
+  it("with only a read turn live, the workspace has no turn at all", () => {
+    const room = twoChats([
+      execution({ state: "completed", endedAt: T(3) }),
+      execution({ executionId: "exe_2", sessionId: "csn_two", access: "read", state: "running" })
+    ]);
+    expect(activeExecution(room)).toBeNull();
+    expect(sessionActivity(room, "csn_two").state).toBe("working");
   });
 });

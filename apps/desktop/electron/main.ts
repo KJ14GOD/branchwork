@@ -65,6 +65,18 @@ import {
 } from "./workspace";
 import { SessionStore } from "./session-store";
 
+// The main process logs diagnostics with console.*, and those writes go to
+// whatever stdio spawned this app. When that pipe is gone — the launching
+// terminal closed, `pnpm dev`'s parent exited — a write raises EPIPE, and an
+// unhandled stream error crashes the whole main process with Electron's
+// uncaught-exception dialog. Found by the owner in live use 2026-08-08: the
+// runner outbox warned about a delivery problem into a dead pipe and the app
+// died for it. A diagnostic must never be load-bearing: swallow the stream
+// error and keep running.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", () => undefined);
+}
+
 // Test hooks (see DECISIONS.md D-027): both refuse to exist in packaged builds.
 const AUTO_VISIT = process.env.NOVUS_AUTH_AUTOVISIT === "1" && !app.isPackaged;
 /** Test-only: which deterministic fake identity this client signs in as, so an
@@ -508,7 +520,8 @@ function registerIpc(): void {
         // and the session with it, for the same reason one level down (D-083).
         ...(input.workstreamId ? { workstreamId: input.workstreamId } : {}),
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-        ...(input.newSession ? { newSession: true } : {})
+        ...(input.newSession ? { newSession: true } : {}),
+        ...(input.alongside ? { alongside: true } : {})
       })
     );
     if (!result.ok) return result;
@@ -555,12 +568,15 @@ function registerIpc(): void {
     const parsed = z
       .object({
         missionId: z.string().startsWith("msn_"),
-        workstreamId: z.string().startsWith("wst_").optional()
+        workstreamId: z.string().startsWith("wst_").optional(),
+        // And the conversation (D-095): with a read turn alongside, the lane
+        // holds two live turns and the stop means the one on screen.
+        sessionId: z.string().startsWith("csn_").optional()
       })
       .safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
     const result = await call(async () => {
-      await api.stopExecution(parsed.data.missionId, parsed.data.workstreamId);
+      await api.stopExecution(parsed.data.missionId, parsed.data.workstreamId, parsed.data.sessionId);
       return null;
     });
     runner?.pollNow();

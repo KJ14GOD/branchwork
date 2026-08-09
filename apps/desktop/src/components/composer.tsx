@@ -46,6 +46,7 @@ export function Composer({
   isController,
   contextNote,
   placeholderOverride,
+  alongsideOffer,
   onEmptySubmit,
   onSubmit
 }: {
@@ -61,10 +62,20 @@ export function Composer({
   /** Overrides the state-derived placeholder — the ask-dialog is a question,
    *  not a room, and its placeholder is the question (D-077). */
   placeholderOverride?: string;
+  /** Set while the workspace's turn belongs to another chat and this person
+   *  holds the baton (D-095): sending then asks — queue behind the named
+   *  running chat, or run this one alongside, read-only. Null keeps the
+   *  ordinary immediate submit. */
+  alongsideOffer?: { runningTitle: string | null } | null;
   /** Enter on an empty box. The room does nothing; the ask-dialog closes,
    *  because an empty ask is a dismissal (D-077). */
   onEmptySubmit?: () => void;
-  onSubmit: (input: { body: string; model: ModelId; effort: Effort }) => Promise<SubmitOutcome>;
+  onSubmit: (input: {
+    body: string;
+    model: ModelId;
+    effort: Effort;
+    alongside?: boolean;
+  }) => Promise<SubmitOutcome>;
 }) {
   const [textValue, setTextValue] = useState("");
   const [model, setModel] = useState<ModelId>(() => {
@@ -110,17 +121,16 @@ export function Composer({
     element.style.height = `${Math.min(element.scrollHeight, Math.floor(window.innerHeight * 0.4))}px`;
   };
 
-  const send = async () => {
+  const [pendingChoice, setPendingChoice] = useState(false);
+
+  const perform = async (alongside: boolean) => {
     const body = textValue.trim();
-    if (!body) {
-      onEmptySubmit?.();
-      return;
-    }
-    if (sending || !enabled) return;
+    if (!body || sending || !enabled) return;
+    setPendingChoice(false);
     setSending(true);
     setError(null);
     setQueuedNote(null);
-    const outcome = await onSubmit({ body, model, effort });
+    const outcome = await onSubmit({ body, model, effort, alongside });
     setSending(false);
     if (!outcome.ok) {
       setError(outcome.message ?? "That direction did not go through.");
@@ -134,6 +144,37 @@ export function Composer({
       outcome.queued ? (outcome.deferred ?? "Queued — applies at the next safe point") : null
     );
   };
+
+  const send = async () => {
+    const body = textValue.trim();
+    if (!body) {
+      onEmptySubmit?.();
+      return;
+    }
+    if (sending || !enabled) return;
+    // The workspace is on another chat's turn and the choice is this person's
+    // (D-095): asked once, here, before anything is sent. A second Enter takes
+    // the default — queueing, exactly what sending always did.
+    if (alongsideOffer && !pendingChoice) {
+      setPendingChoice(true);
+      return;
+    }
+    await perform(false);
+  };
+
+  // The question can go moot while it is being asked: the running turn ends —
+  // or was already over, seen through the poll's two-second lag — and there is
+  // nothing to run alongside any more. The person already pressed send, so
+  // their direction goes now, the ordinary way, instead of the click being
+  // silently swallowed (found by the sessions spec: one click, no submit).
+  useEffect(() => {
+    if (pendingChoice && !alongsideOffer) {
+      setPendingChoice(false);
+      void perform(false);
+    }
+    // Deliberately keyed on the question and its subject alone: `perform`
+    // reads the current state when it runs.
+  }, [pendingChoice, alongsideOffer]);
 
   const placeholder = placeholderOverride ?? (!known
     ? "Loading this mission…"
@@ -172,6 +213,9 @@ export function Composer({
           onChange={(event) => {
             setTextValue(event.target.value);
             setQueuedNote(null);
+            // Editing the words withdraws the question: the choice was about
+            // the direction as it stood (D-095).
+            setPendingChoice(false);
             grow(event.target);
           }}
           onKeyDown={(event) => {
@@ -179,6 +223,7 @@ export function Composer({
               event.preventDefault();
               void send();
             }
+            if (event.key === "Escape" && pendingChoice) setPendingChoice(false);
           }}
           aria-label="Direct Claude Code"
           data-testid="composer-input"
@@ -261,6 +306,29 @@ export function Composer({
           {queuedNote && (
             <span className="composer-note" data-testid="queued-note">
               {queuedNote}
+            </span>
+          )}
+          {pendingChoice && alongsideOffer && (
+            <span className="composer-choice" data-testid="composer-choice">
+              <span className="composer-note">
+                {alongsideOffer.runningTitle
+                  ? `"${alongsideOffer.runningTitle}" is running.`
+                  : "Another chat is running."}
+              </span>
+              <button
+                className="btn btn-secondary"
+                onClick={() => void perform(false)}
+                data-testid="choice-queue"
+              >
+                Queue
+              </button>
+              <button
+                className="btn btn-text"
+                onClick={() => void perform(true)}
+                data-testid="choice-alongside"
+              >
+                Run alongside · read-only
+              </button>
             </span>
           )}
 

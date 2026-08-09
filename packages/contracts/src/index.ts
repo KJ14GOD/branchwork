@@ -387,7 +387,14 @@ export const DirectionInputSchema = z.object({
   /** Creates a new session from this direction's own words and lands the
    *  direction in it — sessions are words-first, like missions (D-077, D-083).
    *  Refused when `sessionId` is also named: one direction, one target. */
-  newSession: z.boolean().default(false)
+  newSession: z.boolean().default(false),
+  /** Run this chat's turn alongside the workspace's, read-only, right now
+   *  (D-095) — instead of queueing behind the write turn. Baton holder only:
+   *  an alongside turn spends the host machine's quota exactly as an
+   *  immediate dispatch does. The turn may not change the worktree — every
+   *  permission request it raises is denied by policy — and it records no
+   *  checkpoint. */
+  alongside: z.boolean().default(false)
 });
 export type DirectionInput = z.infer<typeof DirectionInputSchema>;
 
@@ -447,12 +454,21 @@ export const HarnessUsageSchema = z
   .strict();
 export type HarnessUsage = z.infer<typeof HarnessUsageSchema>;
 
+/** What an execution may do to the worktree (D-095). `write` is the ordinary
+ *  turn — exclusive per lane, checkpointed, its approvals routed to the baton
+ *  holder. `read` runs alongside a write turn: it may look and speak but not
+ *  change — every permission request is denied by policy, no checkpoint is
+ *  captured, and it is never the lane's safe transfer boundary. */
+export const ExecutionAccessSchema = z.enum(["write", "read"]);
+export type ExecutionAccess = z.infer<typeof ExecutionAccessSchema>;
+
 export const ExecutionSchema = z.object({
   executionId: z.string().startsWith("exe_"),
   workstreamId: z.string().startsWith("wst_"),
   /** The session whose turn this was. Never null: executions from before
    *  sessions are migrated onto their lane's first (D-083). */
   sessionId: z.string().startsWith("csn_"),
+  access: ExecutionAccessSchema,
   harness: z.string().min(1),
   model: z.string().min(1),
   effort: z.string().min(1),
@@ -1902,7 +1918,9 @@ export const IpcDirectInputSchema = z.object({
   /** Which session to direct. Absent means the lane's first (D-083). */
   sessionId: z.string().startsWith("csn_").optional(),
   /** Creates a session from these words and directs it (D-083). */
-  newSession: z.boolean().default(false)
+  newSession: z.boolean().default(false),
+  /** Run this chat's turn alongside the workspace's, read-only (D-095). */
+  alongside: z.boolean().default(false)
 });
 export type IpcDirectInput = z.infer<typeof IpcDirectInputSchema>;
 
@@ -1979,6 +1997,9 @@ export interface NovusBridge {
       sessionId?: string;
       /** Creates a session from these words and directs it (D-083). */
       newSession?: boolean;
+      /** Run this chat alongside the workspace's turn, read-only (D-095).
+       *  Baton holder only; the server refuses anyone else in words. */
+      alongside?: boolean;
     }): Promise<
       IpcResult<{
         directionId: string;
@@ -1997,8 +2018,11 @@ export interface NovusBridge {
     cancelDirection(directionId: string): Promise<IpcResult<null>>;
     /** Stops the named lane's running turn. The lane travels on the wire so a
      *  Stop pressed in an Alternative can never land on the mission's first
-     *  lane (D-080, D-083); absent means the lane the mission started with. */
-    stop(missionId: string, workstreamId?: string): Promise<IpcResult<null>>;
+     *  lane (D-080, D-083); absent means the lane the mission started with.
+     *  The session travels too (D-095): a lane can hold a write turn and a
+     *  read-alongside turn at once, and the stop means the conversation on
+     *  screen; absent means the lane's write turn. */
+    stop(missionId: string, workstreamId?: string, sessionId?: string): Promise<IpcResult<null>>;
     /**
      * Answers one harness approval (D-056). Asking is all this is: the server
      * checks `approval.respond` against the current lease, and a request that

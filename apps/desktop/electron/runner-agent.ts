@@ -179,6 +179,7 @@ const CommandMemoryFileSchema = z.union([
 
 interface ActiveTurn {
   executionId: string;
+  workstreamId: string;
   turn: RunningTurn;
 }
 
@@ -222,7 +223,9 @@ const StartPayloadSchema = z.object({
   /** Which conversation this turn belongs to (D-083). Its presence is also a
    *  statement: the server chose `resumeSessionId` deliberately, so a null
    *  there means "start fresh" — never "fall back to the workstream's". */
-  sessionId: z.string().nullable().default(null)
+  sessionId: z.string().nullable().default(null),
+  /** What the turn may do to the worktree (D-095). Absent means write. */
+  access: z.enum(["write", "read"]).default("write")
 });
 
 /**
@@ -264,6 +267,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   const enrolments = new Map<string, Enrolment>(Object.entries(loadEnrolments()));
   const outboxes = new Map<string, EventOutbox>();
   const workstreamByMission = new Map<string, string>();
+  // Keyed by **execution**, not workstream: a lane can hold a write turn and
+  // a read-alongside turn at once (D-095), and a workstream key would let the
+  // second overwrite the first — a stop or an approval answer would then find
+  // the wrong turn, or none.
   const active = new Map<string, ActiveTurn>();
   /** Executions this machine has begun and not yet ended, by workstream, so a
    *  quit mid-turn can close every one of them honestly. */
@@ -754,11 +761,20 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     // about may be a turn blocked on an approval, and a question asked from
     // behind that turn could never be answered while the turn is the thing
     // holding the lane.
+    // A read-alongside turn (D-095) bypasses the lane's chain by design: the
+    // chain exists to keep worktree-touching work serial, and a read turn
+    // touches nothing — it neither writes files, nor runs git, nor captures a
+    // checkpoint. Chained, it would wait behind the very write turn it exists
+    // to run beside. Per-conversation seriality is the server's index.
+    const readAlongside =
+      command.kind === "start_execution" &&
+      (command.payload as { access?: string } | null)?.access === "read";
     const interrupt =
       command.kind === "stop_command" ||
       command.kind === "stop_execution" ||
       command.kind === "respond_approval" ||
-      command.kind === "boundary_request";
+      command.kind === "boundary_request" ||
+      readAlongside;
     const previous = interrupt ? Promise.resolve() : (chains.get(workstream.workstreamId) ?? Promise.resolve());
     const next = previous
       .then(() => handle(command, workstream, enrolment))
@@ -860,10 +876,12 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       // what was running would be silently swallowed while the turn it was
       // meant to prevent went ahead.
       stopRequested.add(command.executionId);
-      const running = active.get(workstreamId);
-      // Matched on the execution, because a stale stop re-offered after its own
-      // execution ended would otherwise kill whichever turn is running now.
-      if (running && running.executionId === command.executionId) {
+      // Keyed on the execution, because a stale stop re-offered after its own
+      // execution ended must not kill whichever turn is running now — and
+      // because a lane can hold two turns (D-095), only one of which this
+      // stop means.
+      const running = active.get(command.executionId);
+      if (running) {
         running.turn.stop(STOPPED_BY_PARTICIPANT);
       }
       return;
@@ -883,8 +901,14 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       // only person allowed to give — so it would wait for ever. The boundary
       // is declared here rather than assumed by the control plane, because only
       // this machine knows the harness is blocked.
-      const blocked = active.get(workstreamId);
-      if (blocked && blocked.turn.pendingApprovals().length > 0) {
+      // The lane's turn that is actually blocked on a question. Only a write
+      // turn can be — a read turn's requests are denied on the spot (D-095) —
+      // so scanning this lane's turns for pending approvals finds at most one.
+      const blocked = [...active.values()].find(
+        (candidate) =>
+          candidate.workstreamId === workstreamId && candidate.turn.pendingApprovals().length > 0
+      );
+      if (blocked) {
         report(workstreamId, blocked.executionId, {
           kind: "boundary.reached",
           payload: { reason: "permission prompt pending" }
@@ -929,6 +953,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         payload.data.sessionId !== null
           ? payload.data.resumeSessionId
           : (payload.data.resumeSessionId ?? workstream.harnessSessionId),
+      access: payload.data.access,
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });
@@ -947,11 +972,11 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
    * `stop_execution` is: a decision re-offered after a relaunch must not be
    * written into whatever turn happens to be running now.
    */
-  function respondToApproval(command: RunnerCommand, workstreamId: string): void {
+  function respondToApproval(command: RunnerCommand, _workstreamId: string): void {
     const payload = ApprovalPayloadSchema.safeParse(command.payload);
     if (!payload.success) throw new Error("the approval decision was malformed");
-    const running = active.get(workstreamId);
-    if (!running || running.executionId !== command.executionId) return;
+    const running = command.executionId ? active.get(command.executionId) : undefined;
+    if (!running) return;
     running.turn.respondApproval(
       payload.data.harnessRequestId,
       payload.data.decision,
@@ -998,6 +1023,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     model: string;
     effort: string;
     resumeSessionId: string | null;
+    /** What the turn may do to the worktree (D-095). */
+    access: "write" | "read";
     announceStart: boolean;
     pendingApplies: () => Promise<boolean>;
   }
@@ -1044,6 +1071,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       model: args.model,
       effort: args.effort,
       resumeSessionId: args.resumeSessionId,
+      access: args.access,
       announceStart: args.announceStart,
       fakeHarness,
       fakeApproval,
@@ -1053,14 +1081,14 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       secretValues: () => secretValuesFor(host, args.providerRepoId),
       emit
     });
-    active.set(args.workstreamId, { executionId: args.executionId, turn });
+    active.set(args.executionId, { executionId: args.executionId, workstreamId: args.workstreamId, turn });
     openExecutions.set(args.executionId, args.workstreamId);
 
     let result: TurnResult;
     try {
       result = await turn.finished;
     } finally {
-      active.delete(args.workstreamId);
+      active.delete(args.executionId);
     }
     if (stopped) return; // shutdown owns the terminal event
 

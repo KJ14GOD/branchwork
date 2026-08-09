@@ -150,6 +150,7 @@ interface ExecutionRow {
   wst_id: string;
   session_id: string;
   state: string;
+  access: string;
   starting_direction_id: string | null;
 }
 
@@ -642,6 +643,13 @@ async function applySideEffects(
       return;
     }
     case "boundary.reached":
+      // A read turn is never the lane's safe boundary (D-095): completing a
+      // waiting handoff on its say-so would move the baton while the write
+      // turn is mid-tool-call — the exact thing a boundary exists to prevent.
+      // The runner already suppresses this for read turns; refused here too
+      // because a boundary is an authority claim, and authority claims are
+      // validated server-side (ARCHITECTURE.md#authorization).
+      if (execution?.access === "read") return;
       await completeTransferAtBoundary(client, {
         orgId: ctx.orgId,
         missionId: ctx.missionId,
@@ -833,6 +841,11 @@ async function ingest(
       if (
         item.event.kind === "execution.completed" &&
         execution &&
+        // A read turn's completion counts too (D-095): a direction deferred
+        // behind its own chat's read answer is waiting on exactly this
+        // moment. The dispatcher re-checks the write turn and the session's
+        // own liveness itself, so firing here can never start a second
+        // writer.
         !TERMINAL_EXECUTION_STATES.includes(execution.state as never)
       ) {
         turnCompleted = true;
@@ -1080,7 +1093,7 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
     let execution: ExecutionRow | null = null;
     if (body.data.executionId !== null) {
       const found = await deps.db.query(
-        "select exe_id, wst_id, session_id, state, starting_direction_id from executions where exe_id = $1 and wst_id = $2",
+        "select exe_id, wst_id, session_id, state, access, starting_direction_id from executions where exe_id = $1 and wst_id = $2",
         [body.data.executionId, ctx.workstreamId]
       );
       execution = (found.rows[0] as ExecutionRow | undefined) ?? null;

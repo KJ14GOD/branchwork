@@ -174,6 +174,9 @@ const UNSUPPORTED_FLAG = /(unknown option|argument missing|unknown command)/i;
 
 /** What a denial says to the harness when the responder gave no words. */
 const DENIED = "A participant denied this in Novus.";
+/** What a read-alongside turn is told when it asks to act (D-095). */
+const READ_ONLY_DENIED =
+  "This chat is running alongside the workspace's turn, read-only. It may not change anything; answer in words, and ask again from a turn that holds the workspace.";
 
 export type TerminalEvent = Extract<
   RunnerEvent,
@@ -202,6 +205,12 @@ export interface TurnRequest {
   effort: string;
   /** The session this workstream continues, or null for a fresh one. */
   resumeSessionId: string | null;
+  /** What this turn may do to the worktree (D-095). `read` runs alongside the
+   *  lane's write turn: every permission request is denied on the spot with
+   *  the reason, no approval ever reaches the room, no checkpoint is captured,
+   *  and no boundary is declared — a read turn ending is not the safe point a
+   *  waiting handoff may complete at. Absent means `write`, the ordinary turn. */
+  access?: "write" | "read";
   /** Announce the execution's start; a follow-up turn inside the same
    *  execution does not repeat it. */
   announceStart: boolean;
@@ -316,7 +325,19 @@ export function startTurn(request: TurnRequest): RunningTurn {
   // projected into receipts. Process output has been redacted since D-044; this
   // is the same protection reaching the path that talks the most (D-052).
   const sanitize = (text: string): string => redact(maskPaths(text), request.secretValues());
-  const emit = (event: RunnerEvent): void => request.emit(sanitizeEvent(event, sanitize));
+  const readOnly = request.access === "read";
+  const emit = (event: RunnerEvent): void => {
+    // A read turn's permission questions never reach the room: they are
+    // answered deny at this machine the moment they arrive (D-095), so
+    // publishing the request would put a card in front of people about a
+    // question that no longer exists. The harness's own transcript still
+    // shows the attempt and the refusal. And a read turn declares no
+    // boundary from any source — not turn-complete, not the stream's
+    // prompt-pending, not the never-started path — because none of them says
+    // anything about whether the *write* turn is at a safe point.
+    if (readOnly && (event.kind === "approval.requested" || event.kind === "boundary.reached")) return;
+    request.emit(sanitizeEvent(event, sanitize));
+  };
 
   let stopReason: string | null = null;
   let child: ChildProcess | null = null;
@@ -372,6 +393,21 @@ export function startTurn(request: TurnRequest): RunningTurn {
    */
   const handleControl = (message: HarnessControlMessage): void => {
     if (message.kind === "approval") {
+      // A read-alongside turn may look but not act (D-095): the answer is
+      // deny, immediately, at this machine — no card, no waiting, no baton.
+      // The reason travels back on the harness's own channel, so the model
+      // knows why and can say so in its reply.
+      if (readOnly) {
+        writeControl({
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: message.requestId,
+            response: { behavior: "deny", message: READ_ONLY_DENIED }
+          }
+        });
+        return;
+      }
       pending.set(message.requestId, message);
       return;
     }
@@ -537,8 +573,23 @@ export function startTurn(request: TurnRequest): RunningTurn {
     for (const event of stream.end()) emit(event);
 
     // The harness has actually stopped working: this is the safe boundary a
-    // pending control transfer waits for (PRODUCT.md#control).
-    emit({ kind: "boundary.reached", payload: { reason: "turn complete" } });
+    // pending control transfer waits for (PRODUCT.md#control). A read turn
+    // declares none (D-095): it never held the worktree, so its ending says
+    // nothing about whether the *write* turn is at a safe point — a handoff
+    // completed on its word would move the baton mid-tool-call.
+    if (!readOnly) emit({ kind: "boundary.reached", payload: { reason: "turn complete" } });
+
+    // A read turn also captures nothing (D-095): committing the worktree now
+    // would take whatever half-done state the write turn has on disk and
+    // record it as this chat's evidence — the exact fabrication that keeps
+    // writes exclusive. Nothing changed by this turn, because nothing could.
+    if (readOnly) {
+      return {
+        terminal: classify(outcome, stream, null),
+        sessionId: stream.sessionId,
+        checkpoint: null
+      };
+    }
 
     // "Nothing changed" is evidence too, so a clean turn still checkpoints.
     let checkpointFailed: string | null = null;

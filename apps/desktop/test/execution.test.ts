@@ -262,3 +262,32 @@ describe("what the transcript is allowed to repeat", () => {
     expect(JSON.stringify(events.slice(1))).not.toContain(HELD);
   });
 });
+
+describe("a read-alongside turn (D-095)", () => {
+  it("denies its own permission question at this machine, publishes no approval, and writes nothing", async () => {
+    const { events, result } = await runFakeTurn({ access: "read", fakeApproval: true });
+
+    // The question was answered deny here, the moment it arrived: no card
+    // ever reaches the room, and the file the fake harness would have
+    // written on approval does not exist.
+    expect(events.some((event) => event.kind === "approval.requested")).toBe(false);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "NOVUS_FAKE_TURN.md"))).toBe(false);
+
+    // The turn still ends as a completed answer, not a failure: being told
+    // no is the read turn's ordinary life.
+    expect(result.terminal.kind).toBe("execution.completed");
+  });
+
+  it("captures no checkpoint and declares no boundary", async () => {
+    const { events, result } = await runFakeTurn({ access: "read", fakeApproval: true });
+
+    // No checkpoint: committing the worktree now would record whatever the
+    // write turn has half-done as this chat's evidence.
+    expect(events.some((event) => event.kind === "workspace.checkpoint")).toBe(false);
+    expect(result.checkpoint).toBeNull();
+    // No boundary: a read turn ending says nothing about whether the write
+    // turn is at a safe point, and a waiting handoff must not complete on it.
+    expect(events.some((event) => event.kind === "boundary.reached")).toBe(false);
+  });
+
+});

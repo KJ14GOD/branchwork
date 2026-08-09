@@ -13,6 +13,7 @@ import type {
 import { novus } from "../bridge";
 import { Composer, type SubmitOutcome } from "../components/composer";
 import {
+  activeExecution,
   contestedAcrossSessions,
   controller as controllerOf,
   deriveStateLine,
@@ -311,11 +312,13 @@ export function ProjectRoom({
   const submit = async ({
     body,
     model,
-    effort
+    effort,
+    alongside = false
   }: {
     body: string;
     model: ModelId;
     effort: Effort;
+    alongside?: boolean;
   }): Promise<SubmitOutcome> => {
     setActionError(null);
     if (isDraft) {
@@ -374,7 +377,8 @@ export function ProjectRoom({
         model,
         effort,
         workstreamId: detail.workstream.workstreamId,
-        newSession: true
+        newSession: true,
+        ...(alongside ? { alongside: true } : {})
       });
       if (!created.ok) return { ok: false, message: offlineOr(created.code, created.message) };
       onSessionDraft(false);
@@ -393,7 +397,8 @@ export function ProjectRoom({
       model,
       effort,
       workstreamId: detail.workstream.workstreamId,
-      ...(selectedSessionId !== null ? { sessionId: selectedSessionId } : {})
+      ...(selectedSessionId !== null ? { sessionId: selectedSessionId } : {}),
+      ...(alongside ? { alongside: true } : {})
     });
     if (!result.ok) return { ok: false, message: offlineOr(result.code, result.message) };
     return { ok: true, queued: !result.value.dispatched, deferred: result.value.deferred };
@@ -515,6 +520,32 @@ export function ProjectRoom({
   const stateLine = detail ? deriveStateLine(detail) : null;
   const controller = detail ? controllerOf(detail) : null;
   const isController = detail ? viewerIsController(detail) : false;
+  /** The workspace's own live turn — the write turn (D-095). */
+  const workspaceTurn = detail ? activeExecution(detail) : null;
+  /** The chat on screen, answering alongside read-only, if it is (D-095). */
+  const readTurnOnScreen =
+    detail && readingSessionId !== null
+      ? (detail.executions.find(
+          (execution) =>
+            execution.sessionId === readingSessionId &&
+            execution.access === "read" &&
+            !["completed", "stopped", "failed", "interrupted"].includes(execution.state)
+        ) ?? null)
+      : null;
+  /**
+   * Sending while the workspace's turn belongs to another chat asks the baton
+   * holder: queue, or run alongside read-only (D-095). Not offered on the
+   * running chat itself — its direction steers the running turn — and not to
+   * anyone without the baton, whose direction queues for the controller
+   * exactly as before.
+   */
+  const alongsideOffer =
+    detail && isController && workspaceTurn !== null && (sessionDraft || readingSessionId !== workspaceTurn.sessionId)
+      ? {
+          runningTitle:
+            sessions.find((session) => session.sessionId === workspaceTurn.sessionId)?.title ?? null
+        }
+      : null;
   /**
    * The permission questions this mission is blocked on.
    *
@@ -1053,6 +1084,36 @@ export function ProjectRoom({
                   Stop
                 </GatedAction>
               )}
+              {readTurnOnScreen && detail && (
+                <>
+                  {/* The chat on screen is answering alongside, read-only
+                      (D-095). The lane's own state line stays the write
+                      turn's story; this suffix is the read turn's, with its
+                      own Stop — the lane-level Stop above always means the
+                      workspace's turn. */}
+                  <span className="state-detail" data-testid="read-turn-note">
+                    · answering read-only
+                  </span>
+                  <GatedAction
+                    capability="execution.stop"
+                    capabilities={detail.capabilities}
+                    denialReason="Only participants who can stop this execution may stop it."
+                    onClick={() =>
+                      void runAction(
+                        novus().missions.stop(
+                          detail.mission.missionId,
+                          activeLaneId ?? undefined,
+                          readTurnOnScreen.sessionId
+                        )
+                      )
+                    }
+                    variant="text"
+                    testid="stop-read-turn"
+                  >
+                    Stop
+                  </GatedAction>
+                </>
+              )}
               {(stateLine.action?.kind === "changes" || stateLine.action?.kind === "verification") && (
                 <button
                   className="btn btn-secondary"
@@ -1433,6 +1494,7 @@ export function ProjectRoom({
         isController={isController || isDraft}
         contextNote={composerTarget}
         placeholderOverride={sessionDraft ? "What should this session do?" : undefined}
+        alongsideOffer={alongsideOffer}
         onSubmit={submit}
       />
 

@@ -152,6 +152,7 @@ export async function listExecutions(db: Db, missionId: string): Promise<Executi
     executionId: row.exe_id as string,
     workstreamId: row.wst_id as string,
     sessionId: row.session_id as string,
+    access: (row.access as Execution["access"] | null) ?? "write",
     harness: row.harness as string,
     model: row.model as string,
     effort: row.effort as string,
@@ -386,6 +387,11 @@ export function projectMissionState(args: {
   checkpoints: Checkpoint[];
   checks: VerificationCheck[];
 }): MissionState {
+  // The lane's state is the workspace's story, and the workspace is held by
+  // write turns alone (D-095): a read turn answering alongside neither makes
+  // an idle lane "running" nor masks what the write turn is doing. Its
+  // activity is its own chat's word (D-094), not the lane's.
+  const executions = args.executions.filter((execution) => execution.access === "write");
   if (!args.hasWorkstream || !args.branchReady) return "new_mission";
   // A workspace mid-setup is being prepared, which is what *Provisioning
   // workspace* has always meant; one that was never configured says so rather
@@ -400,7 +406,7 @@ export function projectMissionState(args: {
       ? "workspace_needs_setup"
       : "ready_for_instruction";
 
-  const latest = args.executions[args.executions.length - 1];
+  const latest = executions[executions.length - 1];
   if (!latest) return idle;
 
   switch (latest.state) {
@@ -494,7 +500,10 @@ export function projectOverlays(args: {
  * amount of silence from the harness should be dressed up as a fault.
  */
 function lastProgressOf(executions: Execution[], events: EventRow[]): Date | null {
-  const latest = executions[executions.length - 1];
+  // The stall overlay watches the workspace's turn. A read turn chatting
+  // alongside must not mask a wedged write turn's silence (D-095).
+  const writes = executions.filter((execution) => execution.access === "write");
+  const latest = writes[writes.length - 1];
   if (!latest) return null;
   if (latest.state !== "running" && latest.state !== "starting") return null;
   let last: Date | null = null;

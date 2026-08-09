@@ -202,6 +202,7 @@ export class ControlPlaneClient {
       workstreamId?: string;
       sessionId?: string;
       newSession?: boolean;
+      alongside?: boolean;
     }
   ): Promise<z.infer<typeof SubmitDirectionResponseSchema>> {
     return this.request(
@@ -228,12 +229,15 @@ export class ControlPlaneClient {
     await this.request("POST", `/directions/${encodeURIComponent(directionId)}/cancel`, OkResponseSchema, {});
   }
 
-  async stopExecution(missionId: string, workstreamId?: string): Promise<void> {
+  async stopExecution(missionId: string, workstreamId?: string, sessionId?: string): Promise<void> {
     await this.request(
       "POST",
       `/missions/${encodeURIComponent(missionId)}/execution/stop`,
       OkResponseSchema,
-      workstreamId ? { workstreamId } : {}
+      {
+        ...(workstreamId ? { workstreamId } : {}),
+        ...(sessionId ? { sessionId } : {})
+      }
     );
   }
 

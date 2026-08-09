@@ -472,6 +472,96 @@ describe("a permission the harness asks for", () => {
     await maya.app.close();
     await kartik.app.close();
   }, 300_000);
+
+  it("answers a second chat alongside, read-only, while the write turn stays blocked (D-095)", async () => {
+    const { kartik, maya, missionId, worktreeOf } = await twoClientsOnOneMission("alongside");
+
+    // --- Chat A: the write turn, blocked on its real question ----------------
+    await kartik.page.evaluate(async (id) => {
+      const result = await window.novus.missions.direct({ missionId: id, body: "write the fake turn file" });
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+    }, missionId);
+    await until(
+      kartik,
+      missionId,
+      (value) => value.approvals.some((approval) => approval.state === "pending"),
+      "the harness to ask"
+    );
+
+    // --- Chat B: alongside, read-only, started while A is blocked ------------
+    // The same call the composer's "Run alongside · read-only" makes.
+    const review = await kartik.page.evaluate(async (id) => {
+      const result = await window.novus.missions.direct({
+        missionId: id,
+        body: "Explain what the blocked turn is about to do",
+        newSession: true,
+        alongside: true
+      });
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      return result.value;
+    }, missionId);
+    expect(review.dispatched).toBe(true);
+
+    // B finishes its whole answer while A has not moved: the read turn ran
+    // beside the blocked write turn instead of queueing behind it.
+    const answered = await until(
+      kartik,
+      missionId,
+      (value) =>
+        value.executions.some(
+          (execution) => execution.access === "read" && execution.state === "completed"
+        ),
+      "the read turn to finish beside the blocked write turn",
+      120_000
+    );
+    const readExecution = answered.executions.find((execution) => execution.access === "read");
+    expect(answered.executions.find((execution) => execution.access === "write")?.state).toBe(
+      "needs_approval"
+    );
+    // B's own write attempt was denied at the machine (the scripted harness
+    // asks in this mode too): no second card ever reached the room, and no
+    // checkpoint was captured for the read turn.
+    expect(answered.approvals.filter((approval) => approval.state === "pending")).toHaveLength(1);
+    expect(
+      answered.checkpoints.some((checkpoint) => checkpoint.executionId === readExecution?.executionId)
+    ).toBe(false);
+    expect(existsSync(join(worktreeOf(), "NOVUS_FAKE_TURN.md"))).toBe(false);
+
+    // --- The window: A's question is still the room's, and answering it in
+    // the real frame unblocks the write turn exactly as before ---------------
+    await openRoom(kartik, missionId);
+    // Two conversations now, so the room lands on the approach's overview
+    // (D-089); the question renders in a conversation's own view. Chat A is
+    // the first row — and the overview says what it is doing.
+    const rowA = kartik.page.getByTestId("overview-session-row").first();
+    await rowA.waitFor({ timeout: 30_000 });
+    await expect
+      .poll(async () => (await rowA.textContent()) ?? "", { timeout: 15_000 })
+      .toContain("needs you");
+    await rowA.click();
+    const approve = kartik.page.getByTestId("approval-approve");
+    await approve.waitFor({ timeout: 30_000 });
+    await snap(kartik, "101-read-turn-answered-while-blocked");
+    await approve.click();
+    const finished = await until(
+      kartik,
+      missionId,
+      (value) =>
+        value.executions.find((execution) => execution.access === "write")?.state === "completed",
+      "the write turn to finish after the approval",
+      120_000
+    );
+    // The write turn's work happened; the read turn changed nothing.
+    expect(existsSync(join(worktreeOf(), "NOVUS_FAKE_TURN.md"))).toBe(true);
+    expect(
+      finished.checkpoints.every(
+        (checkpoint) => checkpoint.executionId !== readExecution?.executionId
+      )
+    ).toBe(true);
+
+    await maya.app.close();
+    await kartik.app.close();
+  }, 300_000);
 });
 
 describe("filing a mission away", () => {

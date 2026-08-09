@@ -358,8 +358,14 @@ describe("shared sessions inside one approach", () => {
     // The state line names the working session rather than claiming the room.
     expect(await page.getByTestId("state-line").innerText()).toContain("add the tests");
 
-    // A direction for idle session A queues, naming the session it waits for.
+    // A direction for idle session A: since D-095 the baton holder is asked
+    // first — queue behind the running chat, or run alongside read-only. The
+    // choice names the running session; Queue is the default this test takes,
+    // and everything after it is exactly the pre-D-095 story.
     await compose("tighten the guard checks");
+    await page.getByTestId("composer-choice").waitFor({ timeout: 30_000 });
+    expect(await page.getByTestId("composer-choice").innerText()).toContain("add the tests");
+    await page.getByTestId("choice-queue").click();
     await page.getByTestId("queued-note").waitFor({ timeout: 30_000 });
     const note = await page.getByTestId("queued-note").innerText();
     expect(note).toContain("add the tests");

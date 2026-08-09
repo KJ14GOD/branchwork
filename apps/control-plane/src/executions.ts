@@ -56,8 +56,14 @@ const RUNNER_GONE =
 const MissionParamsSchema = z.object({ missionId: z.string().startsWith("msn_") });
 const DirectionParamsSchema = z.object({ directionId: z.string().startsWith("dir_") });
 const ChangeParamsSchema = z.object({ changeId: z.string().startsWith("chg_") });
-/** Stop names its lane; absent means the lane the mission started with. */
-const StopInputSchema = z.object({ workstreamId: z.string().startsWith("wst_").optional() });
+/** Stop names its lane; absent means the lane the mission started with. With
+ *  read turns alongside (D-095) a lane can hold two live executions, so stop
+ *  may also name the conversation whose turn it means; absent means the
+ *  lane's write turn — the historical meaning — or the one turn running. */
+const StopInputSchema = z.object({
+  workstreamId: z.string().startsWith("wst_").optional(),
+  sessionId: z.string().startsWith("csn_").optional()
+});
 
 export interface DispatchResult {
   executionId: string | null;
@@ -123,13 +129,31 @@ interface ActiveExecution {
   sessionId: string;
 }
 
-async function activeExecution(
+/** The lane's one *writing* turn, if any — the turn that holds the worktree.
+ *  Read turns running alongside (D-095) hold nothing and are invisible here:
+ *  they neither absorb a same-session steer nor make a sibling wait. */
+async function activeWriteExecution(
   client: pg.PoolClient,
   workstreamId: string
 ): Promise<ActiveExecution | null> {
   const result = await client.query(
-    "select exe_id, session_id from executions where wst_id = $1 and state = any($2::text[]) limit 1",
+    `select exe_id, session_id from executions
+      where wst_id = $1 and state = any($2::text[]) and access = 'write' limit 1`,
     [workstreamId, ACTIVE_EXECUTION_STATES]
+  );
+  const row = result.rows[0];
+  return row ? { executionId: row.exe_id as string, sessionId: row.session_id as string } : null;
+}
+
+/** This one conversation's live turn, whatever its access — a session's turns
+ *  are serial because they share one harness transcript (D-095's index). */
+async function sessionLiveExecution(
+  client: pg.PoolClient,
+  sessionId: string
+): Promise<ActiveExecution | null> {
+  const result = await client.query(
+    "select exe_id, session_id from executions where session_id = $1 and state = any($2::text[]) limit 1",
+    [sessionId, ACTIVE_EXECUTION_STATES]
   );
   const row = result.rows[0];
   return row ? { executionId: row.exe_id as string, sessionId: row.session_id as string } : null;
@@ -277,13 +301,29 @@ export async function dispatchDirection(
     // for it — visibly, with the running session named — and is dispatched by
     // the control plane itself when the turn completes. Steering a *different*
     // conversation's turn would be the silent cross-talk this rule forbids.
-    const running = await activeExecution(client, workstreamId);
+    // Only the write turn holds the workspace (D-095): a read turn running
+    // alongside blocks nothing here.
+    const running = await activeWriteExecution(client, workstreamId);
     if (running) {
       if (running.sessionId === sessionId) return applyTo(running.executionId);
       return {
         executionId: null,
         commandId: null,
         deferred: await busyWith(client, running.sessionId)
+      };
+    }
+
+    // The workspace is free, but this conversation itself may be mid-answer:
+    // a session's turns are serial whatever their access, because they share
+    // one harness transcript (D-095). The direction waits for its own chat and
+    // is dispatched when that turn completes, exactly like waiting for a
+    // sibling's write turn.
+    const ownTurn = await sessionLiveExecution(client, sessionId);
+    if (ownTurn) {
+      return {
+        executionId: null,
+        commandId: null,
+        deferred: await busyWith(client, ownTurn.sessionId)
       };
     }
 
@@ -319,16 +359,27 @@ export async function dispatchDirection(
     } catch (error) {
       if ((error as { code?: string }).code !== "23505") throw error;
       await client.query("rollback to savepoint start_execution");
-      const winner = await activeExecution(client, workstreamId);
-      if (!winner) throw error;
-      if (winner.sessionId !== sessionId) {
-        return {
-          executionId: null,
-          commandId: null,
-          deferred: await busyWith(client, winner.sessionId)
-        };
+      // Two indexes can refuse this insert now (D-095): another write turn
+      // won the lane, or this conversation's own read turn started between
+      // the check above and here. Either way the loser waits or steers.
+      const winner = await activeWriteExecution(client, workstreamId);
+      if (winner) {
+        if (winner.sessionId !== sessionId) {
+          return {
+            executionId: null,
+            commandId: null,
+            deferred: await busyWith(client, winner.sessionId)
+          };
+        }
+        return applyTo(winner.executionId);
       }
-      return applyTo(winner.executionId);
+      const own = await sessionLiveExecution(client, sessionId);
+      if (!own) throw error;
+      return {
+        executionId: null,
+        commandId: null,
+        deferred: await busyWith(client, own.sessionId)
+      };
     }
 
     const commandId = await enqueueCommand(client, {
@@ -365,6 +416,135 @@ export async function dispatchDirection(
       causeDirectionId: args.directionId,
       causeLeaseId: access.leaseId,
       payload: { harness: "claude-code", model: args.model, effort: args.effort, sessionId }
+    });
+    return { executionId, commandId, deferred: null };
+  });
+}
+
+/**
+ * Starts a direction's turn alongside the workspace's, read-only, right now
+ * (D-095). No queueing and no steering: the read turn is its conversation's
+ * own answer, started immediately whatever the write turn is doing. What it
+ * may never do is hold the worktree — the runner denies its every permission
+ * request and captures no checkpoint, and the indexes admit any number of
+ * read turns per lane but only one turn per conversation.
+ */
+export async function dispatchAlongside(
+  deps: { db: RouteDeps["db"] },
+  access: MissionAccess,
+  actor: { userId: string; login: string },
+  args: { directionId: string; model: string; effort: string }
+): Promise<DispatchResult> {
+  const workstreamId = access.workstreamId;
+  if (!workstreamId) {
+    return { executionId: null, commandId: null, deferred: "This mission has no workstream yet." };
+  }
+
+  return withTransaction(deps.db, async (client) => {
+    const runner = await client.query(
+      `select runner_id from runners
+        where wst_id = $1 and revoked_at is null and expires_at > now()
+        order by created_at desc limit 1`,
+      [workstreamId]
+    );
+    const runnerId = runner.rows[0]?.runner_id as string | undefined;
+    if (!runnerId) {
+      return {
+        executionId: null,
+        commandId: null,
+        deferred: "No runner is registered for this workstream yet."
+      };
+    }
+
+    const direction = await client.query(
+      "select body, session_id from directions where dir_id = $1 and wst_id = $2",
+      [args.directionId, workstreamId]
+    );
+    const body = direction.rows[0]?.body as string | undefined;
+    const sessionId = direction.rows[0]?.session_id as string | undefined;
+    if (body === undefined || sessionId === undefined) {
+      return { executionId: null, commandId: null, deferred: "That direction is no longer available." };
+    }
+
+    // One turn per conversation, whatever its access: two turns resuming one
+    // harness transcript would fork it (D-095's per-session index; checked
+    // here for the words, enforced there for the race).
+    if (await sessionLiveExecution(client, sessionId)) {
+      return {
+        executionId: null,
+        commandId: null,
+        deferred: "This chat is already answering; direct it again when it finishes."
+      };
+    }
+
+    const resumeSessionId = await sessionResumePoint(client, sessionId);
+    const executionId = newExecutionId();
+    await client.query("savepoint start_read_execution");
+    try {
+      await client.query(
+        `insert into executions (exe_id, org_id, mission_id, wst_id, session_id, harness, model, effort,
+                                 runner_id, starting_direction_id, state, started_by, access)
+         values ($1, $2, $3, $4, $5, 'claude-code', $6, $7, $8, $9, 'requested', $10, 'read')`,
+        [
+          executionId,
+          access.orgId,
+          access.missionId,
+          workstreamId,
+          sessionId,
+          args.model,
+          args.effort,
+          runnerId,
+          args.directionId,
+          actor.userId
+        ]
+      );
+      await client.query("release savepoint start_read_execution");
+    } catch (error) {
+      if ((error as { code?: string }).code !== "23505") throw error;
+      await client.query("rollback to savepoint start_read_execution");
+      return {
+        executionId: null,
+        commandId: null,
+        deferred: "This chat is already answering; direct it again when it finishes."
+      };
+    }
+
+    const commandId = await enqueueCommand(client, {
+      orgId: access.orgId,
+      missionId: access.missionId,
+      workstreamId,
+      runnerId,
+      executionId,
+      kind: "start_execution",
+      payload: {
+        directionId: args.directionId,
+        body,
+        model: args.model,
+        effort: args.effort,
+        sessionId,
+        resumeSessionId,
+        access: "read"
+      },
+      idempotencyKey: `start:${executionId}`
+    });
+    await recordEvent(client, {
+      orgId: access.orgId,
+      missionId: access.missionId,
+      workstreamId,
+      executionId,
+      kind: "execution.requested",
+      actorKind: "user",
+      actorId: actor.userId,
+      actorLogin: actor.login,
+      causeDirectionId: args.directionId,
+      causeLeaseId: access.leaseId,
+      payload: {
+        harness: "claude-code",
+        model: args.model,
+        effort: args.effort,
+        sessionId,
+        access: "read"
+      }
     });
     return { executionId, commandId, deferred: null };
   });
@@ -432,6 +612,19 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
     if (!access) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
     requireCapability(access, "direction.submit");
 
+    // Running alongside is the baton holder's call (D-095): it spends the
+    // host machine's quota exactly as an immediate dispatch does, and quota
+    // is what the baton already gates. Refused in words, not silently queued
+    // — never do something different from what was asked.
+    if (body.data.alongside && !access.isController) {
+      return deps.sendError(
+        reply,
+        403,
+        "not_controller",
+        "Only the person holding the baton can run a chat alongside."
+      );
+    }
+
     const actor = { userId: ctx.userId, login: ctx.login };
     const submitted = await submitDirection(
       deps.db,
@@ -448,14 +641,21 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
       }
     );
     // Only the controller's own direction proceeds toward the harness; anyone
-    // else's waits, visibly, for whoever holds the baton.
-    const dispatch = submitted.authorIsController
-      ? await dispatchDirection(deps, access, actor, {
-          directionId: submitted.direction.directionId,
-          model: body.data.model,
-          effort: body.data.effort
-        })
-      : null;
+    // else's waits, visibly, for whoever holds the baton. Alongside starts a
+    // read turn immediately instead of queueing (D-095).
+    const dispatch = !submitted.authorIsController
+      ? null
+      : body.data.alongside
+        ? await dispatchAlongside(deps, access, actor, {
+            directionId: submitted.direction.directionId,
+            model: body.data.model,
+            effort: body.data.effort
+          })
+        : await dispatchDirection(deps, access, actor, {
+            directionId: submitted.direction.directionId,
+            model: body.data.model,
+            effort: body.data.effort
+          });
 
     return {
       direction: submitted.direction,
@@ -539,14 +739,20 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
 
     await withTransaction(deps.db, async (client) => {
       const running = await client.query(
-        "select exe_id, runner_id from executions where wst_id = $1 and state = any($2::text[]) for update",
+        "select exe_id, runner_id, session_id, access from executions where wst_id = $1 and state = any($2::text[]) for update",
         [workstreamId, ACTIVE_EXECUTION_STATES]
       );
-      const row = running.rows[0];
+      // Which turn the stop means (D-095): the named conversation's; else the
+      // write turn, which is what stop has always meant; else the one turn
+      // running. A named session with nothing live is nothing to stop.
+      const rows = running.rows as { exe_id: string; runner_id: string | null; session_id: string; access: string }[];
+      const row = body.data.sessionId
+        ? rows.find((candidate) => candidate.session_id === body.data.sessionId)
+        : (rows.find((candidate) => candidate.access === "write") ?? (rows.length === 1 ? rows[0] : undefined));
       // Nothing is running: stopping is already true, so say so by doing
       // nothing rather than recording a stop that never happened.
       if (!row) return;
-      const executionId = row.exe_id as string;
+      const executionId = row.exe_id;
 
       const runner = await client.query(
         `select runner_id, last_seen_at from runners

@@ -99,6 +99,8 @@ describe("contracts", () => {
       executionId: "exe_abc",
       workstreamId: "wst_abc",
       sessionId: "csn_abc",
+      // The ordinary exclusive turn; 'read' is the alongside answer (D-095).
+      access: "write",
       harness: "claude-code",
       model: "claude-fable-5",
       effort: "high",
