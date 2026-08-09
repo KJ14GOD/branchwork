@@ -27,6 +27,7 @@ import {
   hasMissionBranch,
   type CloneCredential
 } from "./workspace-clone";
+import { pushMissionBranch } from "./workspace-push";
 
 /**
  * OWNER: the runner plane's desktop half (D-035).
@@ -235,6 +236,13 @@ const StartPayloadSchema = z.object({
    *  authorized, not whatever the row says by the time it runs. Null means
    *  unscoped — the whole workspace, exclusively. */
   scope: z.array(z.string()).nullable().default(null)
+});
+
+/** The push the control plane authorized (D-099): the branch, and the exact
+ *  decided revision the remote must serve afterwards. */
+const PushPayloadSchema = z.object({
+  branch: z.string().min(1).max(200),
+  sha: z.string().regex(/^[0-9a-f]{40}$/)
 });
 
 /**
@@ -704,6 +712,21 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     return parsed.data;
   }
 
+  /** The write-scoped sibling (D-099): one push, one credential, forgotten. */
+  async function pushCredential(enrolment: Enrolment, workstreamId: string): Promise<CloneCredential> {
+    const response = await runnerFetch(enrolment, "/runner/push-credential", "POST", { workstreamId });
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) {
+      const named = ApiErrorSchema.safeParse(body);
+      throw new Error(
+        named.success ? named.data.error.message : `Novus could not get push access (${response.status}).`
+      );
+    }
+    const parsed = CloneCredentialSchema.safeParse(body);
+    if (!parsed.success) throw new Error("The control plane answered push access in an unexpected shape.");
+    return parsed.data;
+  }
+
   // --- Command loop ---------------------------------------------------------
 
   async function poll(): Promise<void> {
@@ -941,6 +964,30 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       command.kind === "run_verification"
     ) {
       await runWorkspaceCommand(command, workstream);
+      return;
+    }
+    if (command.kind === "push_branch") {
+      // The remote-head guarantee's working half (D-099): push the decided
+      // revision to the host, with a write-scoped credential minted for this
+      // one push and forgotten. Success is reported as the workstream's own
+      // fact; failure settles the command with its reason and moves nothing.
+      const payload = PushPayloadSchema.safeParse(command.payload);
+      if (!payload.success) throw new Error("the push command payload was malformed");
+      const repositoryPath = host.repositoryPath(workstream.providerRepoId);
+      if (!repositoryPath) throw new Error("this repository's checkout lives on another machine");
+      const enrolment = enrolments.get(workstreamId);
+      if (!enrolment) throw new Error("this machine is no longer enrolled for that workstream");
+      const credential = await pushCredential(enrolment, workstreamId);
+      const pushed = await pushMissionBranch({
+        repositoryPath,
+        branch: payload.data.branch,
+        sha: payload.data.sha,
+        credential
+      });
+      outboxFor(workstreamId).append(null, {
+        kind: "workspace.pushed",
+        payload: { branch: payload.data.branch, sha: pushed.sha }
+      });
       return;
     }
 
