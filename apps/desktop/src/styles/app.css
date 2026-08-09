@@ -2971,6 +2971,13 @@ body {
   white-space: nowrap;
 }
 
+.dock-preview {
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dock-state,
 .dock-reason {
   color: var(--text-3);

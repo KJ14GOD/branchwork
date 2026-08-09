@@ -175,6 +175,15 @@ export function ProcessLogView({
         <span className="dock-state" data-testid="dock-state">
           {endingLabel(active)}
         </span>
+        {/* Where this run said it could be opened — the address the preview
+            bridge validated against (D-045, D-098). Part of the run's own
+            record, so "what was the preview showing" is answerable after the
+            process ended, without storing anything new. */}
+        {active.previewUrl && (
+          <span className="dock-preview mono" data-testid="dock-preview">
+            {active.previewUrl}
+          </span>
+        )}
         {active.failureReason && (
           <span className="dock-reason" data-testid="dock-reason">
             {active.failureReason}
