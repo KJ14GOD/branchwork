@@ -1286,3 +1286,19 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** `ExecutionSchema.access` is required, so every fixture states it. A read turn advances its chat's harness session — the next write turn of that chat remembers the conversation, which is the point. The fake harness honors the deny path, so the whole story is provable deterministically: `alongside.test.ts` (dispatch, refusals, state, stop, boundary), `execution.test.ts` (deny-at-machine, no checkpoint, no boundary), and the approval spec's in-window run (a read turn answered beside a blocked write turn, one card, the file only after approval).
 
 **Revisit when.** A non-controller wants a read turn (the baton gate is a quota judgment, not a safety one — the safety is the deny policy); or read turns want tools beyond the CLI's default-allowed reads, at which point the deny list becomes a policy surface rather than a constant.
+
+## D-096 — A check is attributed to the chat whose checkpoint it ran at
+
+**Context.** Checks are lane evidence: they run in the approach's one worktree and bind to the revision they proved (D-043, D-082). With several chats sharing that worktree, the owner asked for per-chat verification — "which chat produced which evidence." The naïve reading is a lie waiting to be recorded: Novus does not know which tests cover which files, and the worktree at any revision holds **every** chat's work so far, so "chat A's tests passed" would claim a scope no run ever had. D-083 declined per-session verification outright; this decision does the honest half of it.
+
+**Decision.**
+
+- **Attribution by trigger, never by content.** Every check already pins the revision it proved; every checkpoint belongs to one turn and every turn to one conversation. The join — check → `checkpointSha` → checkpoint → execution → session — names the chat *at whose checkpoint* the check ran. That sentence is the ceiling of what is knowable, and the words on screen say exactly it.
+- **A renderer derivation, no wire change.** `sessionOfCheck` / `sessionChecks` compute the join from the payload the room already holds. Checks still *run* as lane evidence against the shared worktree — readiness, staleness, and re-running are untouched.
+- **Two surfaces.** The approach overview's chat rows gain `{p}/{n} checks at its checkpoints`; the evidence ledger's provenance line gains `· "{title}"'s checkpoint` while the lane holds more than one conversation. A check with no recorded revision, or one whose revision no checkpoint claims, is attributed to nobody rather than to a guess.
+
+**Alternatives.** Content-based attribution — mapping test files to changed files (rejected: Novus cannot know a project's coverage topology, and a wrong attribution is fabricated evidence); running checks in per-chat sandboxes at the chat's own revision (rejected: that is per-chat worktrees through the back door, and D-095 just drew that line); tagging checks with a session id on the wire (rejected for now: the revision join derives it losslessly, and a stored duplicate can drift).
+
+**Consequences.** An automatic check (D-082) lands at the checkpoint that triggered it, so it reads as that chat's row — which is the intuition the owner named, made true by construction. A participant-run check attributes to whichever chat's checkpoint the worktree stood at, which is honest even when surprising. "Screenshot: captured"-style visual evidence stays out of scope until the artifact store (D-022) exists.
+
+**Revisit when.** CI ingestion arrives (external checks bind to commits, so the same join works — but their revisions may be merge commits no checkpoint claims), or a project declares which checks cover which paths, at which point content-scoped attribution stops being a guess.

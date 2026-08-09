@@ -5,6 +5,7 @@ import {
   type MissionDetailResponse,
   type Participant,
   type Session,
+  type VerificationCheck,
   type WorkspaceProcess
 } from "@novus/contracts";
 import { clockTime, plural } from "../format";
@@ -186,6 +187,42 @@ export function sessionChangedFiles(
     for (const file of checkpoint.files) byPath.set(file.path, file);
   }
   return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * The chat whose checkpoint a check ran against (D-096). Honest attribution
+ * only: a check proves a **revision**, and the worktree at that revision
+ * holds every chat's work so far — so a check is never "chat A's tests",
+ * it is "a check run at chat A's checkpoint". That checkpoint belongs to
+ * one turn, the turn to one conversation, and the join is exactly that:
+ * check → checkpointSha → checkpoint → execution → session. Null for a
+ * check with no recorded revision, or one whose revision no checkpoint of
+ * this payload claims.
+ */
+export function sessionOfCheck(
+  detail: MissionDetailResponse,
+  check: VerificationCheck
+): Session | null {
+  if (check.checkpointSha === null) return null;
+  const checkpoint = detail.checkpoints.find((candidate) => candidate.sha === check.checkpointSha);
+  if (!checkpoint) return null;
+  const execution = detail.executions.find(
+    (candidate) => candidate.executionId === checkpoint.executionId
+  );
+  if (!execution) return null;
+  return (
+    detail.sessions.find((session) => session.sessionId === execution.sessionId) ?? null
+  );
+}
+
+/** The checks run at one conversation's checkpoints (D-096), ledger order. */
+export function sessionChecks(
+  detail: MissionDetailResponse,
+  sessionId: string
+): VerificationCheck[] {
+  return detail.checks.filter(
+    (check) => sessionOfCheck(detail, check)?.sessionId === sessionId
+  );
 }
 
 /**

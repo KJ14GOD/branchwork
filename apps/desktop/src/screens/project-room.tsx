@@ -23,6 +23,7 @@ import {
   queuedPositionLabel,
   sessionActivity,
   sessionChangedFiles,
+  sessionChecks,
   sessionView,
   viewerIsController
 } from "../components/derive";
@@ -1570,12 +1571,20 @@ function ApproachOverview({
       )}
       <div className="overview-list">
         {sessions.map((session) => {
-          // The chat's word, its footprint, and — while working — how fresh
-          // that claim is (D-094): everything a person needs to pick a row.
+          // The chat's word, its footprint, its evidence, and — while
+          // working — how fresh that claim is (D-094, D-096): everything a
+          // person needs to pick a row. Checks are attributed by the
+          // checkpoint they ran at, which is the only honest join: the
+          // worktree they exercised holds every chat's work so far.
           const activity = sessionActivity(detail, session.sessionId);
           const files = sessionChangedFiles(detail, session.sessionId).length;
+          const checks = sessionChecks(detail, session.sessionId);
+          const passed = checks.filter((check) => check.outcome === "passed").length;
           const meta = [
             ...(files > 0 ? [`${files} ${files === 1 ? "file" : "files"}`] : []),
+            ...(checks.length > 0
+              ? [`${passed}/${checks.length} checks at its checkpoints`]
+              : []),
             ...(activity.state === "working" && activity.lastHeardAt
               ? [`last heard ${clockTime(activity.lastHeardAt)}`]
               : [])

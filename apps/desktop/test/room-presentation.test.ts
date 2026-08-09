@@ -12,7 +12,9 @@ import {
   runningSession,
   sessionActivity,
   sessionChangedFiles,
+  sessionChecks,
   sessionNeedsYou,
+  sessionOfCheck,
   sessionView,
   viewerIsController
 } from "../src/components/derive";
@@ -673,5 +675,78 @@ describe("the workspace's turn is the write turn (D-095)", () => {
     ]);
     expect(activeExecution(room)).toBeNull();
     expect(sessionActivity(room, "csn_two").state).toBe("working");
+  });
+});
+
+describe("a check is attributed to the chat whose checkpoint it ran at (D-096)", () => {
+  const SHA_A = "b".repeat(40);
+  const SHA_B = "c".repeat(40);
+  const checkOf = (checkId: string, checkpointSha: string | null, outcome = "passed") => ({
+    checkId,
+    executionId: null,
+    workstreamId: "wst_one",
+    name: "tests",
+    category: "test",
+    outcome,
+    origin: "automatic",
+    requestedByLogin: null,
+    command: "pnpm test",
+    ending: "exit",
+    exitCode: outcome === "passed" ? 0 : 1,
+    output: null,
+    truncated: false,
+    environment: "local",
+    startedAt: T(4),
+    completedAt: T(5),
+    durationMs: 60_000,
+    checkpointSha,
+    stale: false,
+    observedAt: T(5)
+  });
+  const checkpointOf = (checkpointId: string, executionId: string, sha: string) => ({
+    checkpointId,
+    executionId,
+    outcome: "committed",
+    sha,
+    parentSha: null,
+    branch: "novus/msn_one",
+    filesChanged: 1,
+    additions: 3,
+    deletions: 1,
+    withheldSecrets: 0,
+    uncommitted: false,
+    environment: "local",
+    error: null,
+    createdAt: T(3),
+    files: []
+  });
+  const room = () =>
+    detail({
+      sessions: [session(), session({ sessionId: "csn_two", title: "Tests" })],
+      executions: [
+        execution({ state: "completed", endedAt: T(3) }),
+        execution({ executionId: "exe_2", sessionId: "csn_two", state: "completed", endedAt: T(4) })
+      ],
+      checkpoints: [checkpointOf("ckp_1", "exe_1", SHA_A), checkpointOf("ckp_2", "exe_2", SHA_B)],
+      checks: [
+        checkOf("chk_a", SHA_A),
+        checkOf("chk_b", SHA_B, "failed"),
+        // No revision recorded: history, but nobody's checkpoint.
+        checkOf("chk_none", null)
+      ]
+    });
+
+  it("joins check → revision → checkpoint → turn → chat, and never crosses chats", () => {
+    const fixture = room();
+    expect(sessionChecks(fixture, "csn_one").map((check) => check.checkId)).toEqual(["chk_a"]);
+    expect(sessionChecks(fixture, "csn_two").map((check) => check.checkId)).toEqual(["chk_b"]);
+    expect(sessionOfCheck(fixture, fixture.checks[2]!)).toBeNull();
+  });
+
+  it("a revision no checkpoint of the payload claims belongs to nobody", () => {
+    const fixture = detail({
+      checks: [checkOf("chk_orphan", "d".repeat(40))]
+    });
+    expect(sessionOfCheck(fixture, fixture.checks[0]!)).toBeNull();
   });
 });

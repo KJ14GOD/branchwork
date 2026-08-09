@@ -10,7 +10,7 @@ import type {
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { clockTime, plural, shortSha } from "../format";
-import { changedFiles, checkTallies } from "./derive";
+import { changedFiles, checkTallies, laneSessions, sessionOfCheck } from "./derive";
 import { GatedAction } from "./gated";
 import { FileTree } from "./file-tree";
 import { ProcessLogView } from "./process-log";
@@ -202,8 +202,11 @@ function elapsed(ms: number): string {
 }
 
 /** The revision a check proves, its exit code, and how long it took. A stale
- *  row says outright that what it proved is no longer what is there. */
-function provenanceLine(check: VerificationCheck): string {
+ *  row says outright that what it proved is no longer what is there. With
+ *  several conversations in the lane, the row also says whose checkpoint the
+ *  revision was (D-096) — never "whose tests", because the worktree a check
+ *  exercised holds every chat's work so far. */
+function provenanceLine(check: VerificationCheck, provedIn: string | null): string {
   const parts: string[] = [];
   if (check.checkpointSha === null) {
     parts.push("no revision recorded");
@@ -213,6 +216,7 @@ function provenanceLine(check: VerificationCheck): string {
         ? `proved ${shortSha(check.checkpointSha)}, since changed`
         : `proved ${shortSha(check.checkpointSha)}`
     );
+    if (provedIn) parts.push(`"${provedIn}"'s checkpoint`);
   }
   if (check.exitCode !== null) parts.push(`exit ${check.exitCode}`);
   if (check.durationMs !== null) parts.push(elapsed(check.durationMs));
@@ -227,12 +231,16 @@ function provenanceLine(check: VerificationCheck): string {
  */
 function LedgerEntry({
   check,
+  provedIn,
   capabilities,
   holderLogin,
   busy,
   onRerun
 }: {
   check: VerificationCheck;
+  /** The conversation whose checkpoint this check ran at, named only while
+   *  the lane holds more than one (D-096); null otherwise. */
+  provedIn: string | null;
   capabilities: MissionDetailResponse["capabilities"];
   holderLogin: string | null;
   busy: boolean;
@@ -274,7 +282,7 @@ function LedgerEntry({
         {originLine(check)}
       </div>
       <div className="mono ledger-facts" data-testid="ledger-facts">
-        {provenanceLine(check)}
+        {provenanceLine(check, provedIn)}
       </div>
       {check.output && (check.outcome === "failed" || check.outcome === "errored") && (
         <details className="disclosure">
@@ -717,6 +725,14 @@ export function Inspector({
                     <LedgerEntry
                       key={check.checkId}
                       check={check}
+                      // Whose checkpoint the check ran at (D-096) — said only
+                      // while the lane holds several conversations; with one,
+                      // there is nobody to tell apart.
+                      provedIn={
+                        laneSessions(detail).length > 1
+                          ? (sessionOfCheck(detail, check)?.title ?? null)
+                          : null
+                      }
                       capabilities={detail.capabilities}
                       holderLogin={detail.control.holderLogin}
                       busy={rerunning === check.name}
