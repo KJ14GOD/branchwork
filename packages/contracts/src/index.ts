@@ -157,6 +157,31 @@ export type CreateApproachInput = z.infer<typeof CreateApproachInputSchema>;
 /** A title is the session's own first words, truncated — never a form field. */
 export const SESSION_TITLE_MAX = 80;
 
+/**
+ * One pattern of a chat's file scope (D-097): a repository-relative path
+ * glob — `server/**`, `src/*.ts`, `docs/README.md`. Forward slashes, no
+ * leading `./`, never absolute, never `..`. `**` crosses directories, `*`
+ * stays within one.
+ */
+export const ScopePatternSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine(
+    (pattern) =>
+      !pattern.startsWith("/") &&
+      !pattern.startsWith("./") &&
+      !/(^|\/)\.\.(\/|$)/.test(pattern) &&
+      !pattern.includes("\\"),
+    "a scope pattern is a repository-relative path with forward slashes"
+  );
+
+/** A chat's declared file ownership (D-097): the paths its write turns may
+ *  change. Bounded — a scope of forty patterns is a scope of none. */
+export const SessionScopeSchema = z.array(ScopePatternSchema).min(1).max(40);
+export type SessionScope = z.infer<typeof SessionScopeSchema>;
+
 export const SessionSchema = z.object({
   /** `csn_` — `ses_` was already the auth session's prefix (ARCHITECTURE.md). */
   sessionId: z.string().startsWith("csn_"),
@@ -165,7 +190,14 @@ export const SessionSchema = z.object({
   title: z.string().max(SESSION_TITLE_MAX).nullable(),
   createdBy: z.string().startsWith("usr_"),
   createdByLogin: z.string().min(1),
-  createdAt: z.string().datetime()
+  createdAt: z.string().datetime(),
+  /** The files this chat owns (D-097), set by the baton holder. Null means
+   *  unscoped: its write turns take the whole workspace exclusively, exactly
+   *  as before scopes existed. A scoped chat's write turns may run in
+   *  parallel with other scoped chats whose patterns are provably disjoint,
+   *  may write only inside the scope — enforced at the runner — and
+   *  checkpoint only their own paths. */
+  scope: SessionScopeSchema.nullable()
 });
 export type Session = z.infer<typeof SessionSchema>;
 
@@ -709,7 +741,9 @@ export const CheckpointSchema = z.object({
   environment: z.string().min(1),
   error: z.string().nullable(),
   createdAt: z.string().datetime(),
-  files: z.array(FileChangeSchema)
+  files: z.array(FileChangeSchema),
+  /** Paths a scoped turn changed outside its scope, uncommitted (D-097). */
+  driftPaths: z.array(z.string()).default([])
 });
 export type Checkpoint = z.infer<typeof CheckpointSchema>;
 
@@ -1421,6 +1455,70 @@ export const RedeemInvitationInputSchema = z.object({
   token: z.string().min(32).max(200)
 });
 
+// --- Chat file scopes (D-097) -----------------------------------------------
+// One implementation for every judge of a scope: the runner enforcing a
+// write, the server deciding whether two chats may run in parallel, and the
+// renderer predicting what the server will decide. Two copies would drift,
+// and a drifted matcher is a security judgment made twice.
+
+/** Compiles one scope pattern to a regular expression over a repository-
+ *  relative path. `**` crosses directory boundaries, `*` stays within one;
+ *  a pattern naming a directory (`server/**`) matches everything under it. */
+function scopePatternRegex(pattern: string): RegExp {
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, " ")
+    .replace(/\*/g, "[^/]*")
+    .replace(/ /g, ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
+/** Whether a repository-relative path is inside a chat's scope (D-097). */
+export function pathInScope(path: string, scope: readonly string[]): boolean {
+  const normalized = path.replace(/^\.\//, "");
+  return scope.some((pattern) => scopePatternRegex(pattern).test(normalized));
+}
+
+/** The literal directory-path prefix of a pattern — the segments before the
+ *  first segment containing a wildcard. `server/api/**` → `server/api`;
+ *  `*.ts` → ``. */
+function literalPrefix(pattern: string): string {
+  const segments = pattern.split("/");
+  const literal: string[] = [];
+  for (const segment of segments) {
+    if (segment.includes("*")) break;
+    literal.push(segment);
+  }
+  return literal.join("/");
+}
+
+/**
+ * Whether two scopes are **provably disjoint** (D-097) — the test that
+ * decides if two chats' write turns may share the worktree at once. It is
+ * deliberately conservative: scopes count as disjoint only when every
+ * pattern pair's literal prefixes diverge — neither a path-prefix of the
+ * other — so `server/**` and `apps/desktop/**` are disjoint while
+ * `server/**` and `server/api/*.ts` are not, and any pattern with no
+ * literal prefix at all (`*.ts`, `**`) overlaps everything. When this
+ * cannot prove disjointness it says overlap, and the turns take turns:
+ * a wrong "overlap" costs a queue wait, a wrong "disjoint" costs the
+ * evidence.
+ */
+export function scopesDisjoint(a: readonly string[], b: readonly string[]): boolean {
+  for (const left of a) {
+    const leftPrefix = literalPrefix(left);
+    if (leftPrefix === "") return false;
+    for (const right of b) {
+      const rightPrefix = literalPrefix(right);
+      if (rightPrefix === "") return false;
+      const shorter = leftPrefix.length <= rightPrefix.length ? leftPrefix : rightPrefix;
+      const longer = leftPrefix.length <= rightPrefix.length ? rightPrefix : leftPrefix;
+      if (longer === shorter || longer.startsWith(`${shorter}/`)) return false;
+    }
+  }
+  return true;
+}
+
 // --- Runner plane (D-035) ---------------------------------------------------
 
 export const RunnerStatusSchema = z.object({
@@ -1555,6 +1653,18 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
     payload: z.object({ reason: BOUNDED_LINE }).strict()
   }),
   z.object({
+    /** Parallel scoped work has drained but the worktree is not clean
+     *  (D-097): unattributed changes — drift, or a person's own edits — sit
+     *  uncommitted, so the integration checks will not run against a tree
+     *  that no recorded revision describes. A person settles the paths
+     *  (commit them with an unscoped turn, or revert them) and the next
+     *  drain integrates. */
+    kind: z.literal("integration.blocked"),
+    payload: z
+      .object({ paths: z.array(z.string().max(300)).max(50).default([]) })
+      .strict()
+  }),
+  z.object({
     kind: z.literal("workspace.checkpoint"),
     payload: z
       .object({
@@ -1565,7 +1675,13 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         withheldSecrets: z.number().int().nonnegative().max(1000).default(0),
         uncommitted: z.boolean().default(false),
         error: BOUNDED_LINE.nullable().default(null),
-        files: z.array(RunnerFileChangeSchema).max(150).default([])
+        files: z.array(RunnerFileChangeSchema).max(150).default([]),
+        /** Paths that changed during a scoped turn but lie outside its scope
+         *  (D-097): observed, reported, and deliberately NOT committed by this
+         *  checkpoint — attributing them to this chat would be a guess. They
+         *  wait in the worktree for a person or an unscoped turn, and they
+         *  block the integration pass until settled. Masked, bounded. */
+        driftPaths: z.array(z.string().max(300)).max(50).default([])
       })
       .strict()
   }),
@@ -2014,6 +2130,14 @@ export interface NovusBridge {
       directionId: string;
       action: "apply" | "reject" | "supersede";
       reason?: string;
+    }): Promise<IpcResult<null>>;
+    /** Declares or clears a chat's file scope (D-097). Baton holder only —
+     *  a scope is standing write authority inside its patterns, and standing
+     *  authority is the baton's to grant. Null clears it. */
+    setSessionScope(input: {
+      missionId: string;
+      sessionId: string;
+      scope: SessionScope | null;
     }): Promise<IpcResult<null>>;
     cancelDirection(directionId: string): Promise<IpcResult<null>>;
     /** Stops the named lane's running turn. The lane travels on the wire so a

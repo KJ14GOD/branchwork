@@ -297,6 +297,7 @@ function checkpointAt(originSeq: number, at: string): SequencedRunnerEvent {
         withheldSecrets: 0,
         uncommitted: false,
         error: null,
+        driftPaths: [],
         files: [
           {
             path: "src/health.ts",

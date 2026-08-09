@@ -1,9 +1,12 @@
 import type { Session } from "@novus/contracts";
-import { SESSION_TITLE_MAX } from "@novus/contracts";
+import { SESSION_TITLE_MAX, SessionScopeSchema } from "@novus/contracts";
 import type pg from "pg";
+import { z } from "zod";
 import type { Db } from "./db.ts";
+import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newWorkstreamSessionId } from "./ids.ts";
+import { missionAccess } from "./authz.ts";
 import type { MissionAccess } from "./authz.ts";
 
 /**
@@ -24,12 +27,21 @@ interface SessionRow {
   created_by: string;
   created_by_login: string;
   created_at: Date;
+  scope: unknown;
 }
 
 const SESSION_SELECT = `
-  select s.csn_id, s.wst_id, s.title, s.created_by, u.login as created_by_login, s.created_at
+  select s.csn_id, s.wst_id, s.title, s.created_by, u.login as created_by_login, s.created_at, s.scope
     from workstream_sessions s
     join users u on u.user_id = s.created_by`;
+
+/** The stored scope, defensively: a malformed row reads as unscoped —
+ *  exclusive, the conservative direction — rather than crashing the room. */
+export function scopeOf(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const patterns = raw.filter((entry): entry is string => typeof entry === "string");
+  return patterns.length === raw.length ? patterns : null;
+}
 
 function toSession(row: SessionRow): Session {
   return {
@@ -38,7 +50,8 @@ function toSession(row: SessionRow): Session {
     title: row.title,
     createdBy: row.created_by,
     createdByLogin: row.created_by_login,
-    createdAt: row.created_at.toISOString()
+    createdAt: row.created_at.toISOString(),
+    scope: scopeOf(row.scope)
   };
 }
 
@@ -171,4 +184,78 @@ export async function sessionResumePoint(
     [sessionId]
   );
   return (result.rows[0]?.harness_session_id as string | null | undefined) ?? null;
+}
+
+/**
+ * OWNER of POST /missions/:missionId/sessions/:sessionId/scope (D-097).
+ *
+ * Declaring a chat's file scope is a grant of standing write authority
+ * inside its patterns — every in-scope Write stops asking — so it belongs to
+ * the baton exactly as answering an approval does. Null clears the scope,
+ * returning the chat to unscoped exclusivity. The change is event-recorded;
+ * turns already running keep the scope pinned at their dispatch (D-043's
+ * pattern), so an edit mid-turn changes the next turn, never the running one.
+ */
+export function registerSessionRoutes(
+  app: import("fastify").FastifyInstance,
+  deps: import("./routes.ts").RouteDeps
+): void {
+  app.post("/missions/:missionId/sessions/:sessionId/scope", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+    const params = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        sessionId: z.string().startsWith("csn_")
+      })
+      .safeParse(request.params);
+    if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed id.");
+    const body = z
+      .object({ scope: SessionScopeSchema.nullable() })
+      .safeParse(request.body ?? {});
+    if (!body.success) {
+      return deps.sendError(
+        reply,
+        422,
+        "invalid_scope",
+        body.error.issues[0]?.message ?? "That scope is not a valid pattern list."
+      );
+    }
+
+    const owner = await deps.db.query(
+      "select wst_id from workstream_sessions where csn_id = $1 and mission_id = $2",
+      [params.data.sessionId, params.data.missionId]
+    );
+    const workstreamId = owner.rows[0]?.wst_id as string | undefined;
+    if (!workstreamId) return deps.sendError(reply, 404, "not_found", "No such session.");
+    const access = await missionAccess(deps.db, ctx, params.data.missionId, workstreamId);
+    if (!access) return deps.sendError(reply, 404, "not_found", "No such session.");
+    if (!access.isController) {
+      return deps.sendError(
+        reply,
+        403,
+        "not_controller",
+        "Only the person holding the baton can set a chat's scope."
+      );
+    }
+
+    await withTransaction(deps.db, async (client) => {
+      await client.query("update workstream_sessions set scope = $2 where csn_id = $1", [
+        params.data.sessionId,
+        body.data.scope === null ? null : JSON.stringify(body.data.scope)
+      ]);
+      await recordEvent(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId,
+        kind: "session.scoped",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: { sessionId: params.data.sessionId, scope: body.data.scope }
+      });
+    });
+    return { ok: true };
+  });
 }

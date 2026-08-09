@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -180,6 +181,9 @@ const CommandMemoryFileSchema = z.union([
 interface ActiveTurn {
   executionId: string;
   workstreamId: string;
+  /** The turn's pinned scope (D-097), so a sibling's checkpoint can tell
+   *  this turn's in-flight territory from genuine drift. */
+  scope: string[] | null;
   turn: RunningTurn;
 }
 
@@ -225,7 +229,12 @@ const StartPayloadSchema = z.object({
    *  there means "start fresh" — never "fall back to the workstream's". */
   sessionId: z.string().nullable().default(null),
   /** What the turn may do to the worktree (D-095). Absent means write. */
-  access: z.enum(["write", "read"]).default("write")
+  access: z.enum(["write", "read"]).default("write"),
+  /** The chat's file scope, pinned at dispatch (D-097, the D-043 pattern):
+   *  this turn enforces the scope the controller had approved when it was
+   *  authorized, not whatever the row says by the time it runs. Null means
+   *  unscoped — the whole workspace, exclusively. */
+  scope: z.array(z.string()).nullable().default(null)
 });
 
 /**
@@ -765,16 +774,25 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     // chain exists to keep worktree-touching work serial, and a read turn
     // touches nothing — it neither writes files, nor runs git, nor captures a
     // checkpoint. Chained, it would wait behind the very write turn it exists
-    // to run beside. Per-conversation seriality is the server's index.
-    const readAlongside =
-      command.kind === "start_execution" &&
-      (command.payload as { access?: string } | null)?.access === "read";
+    // to run beside. Per-conversation seriality is the server's index. A
+    // *scoped* write turn (D-097) bypasses it for the same reason it was
+    // admitted at all: the server already proved its files disjoint from
+    // every running sibling's, and chaining it here would undo the
+    // parallelism the scopes exist to grant — checkpoint capture holds its
+    // own per-worktree lock for the one step that truly shares state.
+    const startPayload =
+      command.kind === "start_execution"
+        ? (command.payload as { access?: string; scope?: unknown } | null)
+        : null;
+    const parallelStart =
+      startPayload !== null &&
+      (startPayload.access === "read" || Array.isArray(startPayload.scope));
     const interrupt =
       command.kind === "stop_command" ||
       command.kind === "stop_execution" ||
       command.kind === "respond_approval" ||
       command.kind === "boundary_request" ||
-      readAlongside;
+      parallelStart;
     const previous = interrupt ? Promise.resolve() : (chains.get(workstream.workstreamId) ?? Promise.resolve());
     const next = previous
       .then(() => handle(command, workstream, enrolment))
@@ -954,6 +972,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           ? payload.data.resumeSessionId
           : (payload.data.resumeSessionId ?? workstream.harnessSessionId),
       access: payload.data.access,
+      scope: payload.data.scope,
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });
@@ -1025,6 +1044,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     resumeSessionId: string | null;
     /** What the turn may do to the worktree (D-095). */
     access: "write" | "read";
+    /** The chat's file scope, pinned at dispatch (D-097); null unscoped. */
+    scope: string[] | null;
     announceStart: boolean;
     pendingApplies: () => Promise<boolean>;
   }
@@ -1072,6 +1093,15 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       effort: args.effort,
       resumeSessionId: args.resumeSessionId,
       access: args.access,
+      scope: args.scope,
+      siblingScopes: () =>
+        [...active.values()]
+          .filter(
+            (turn) =>
+              turn.workstreamId === args.workstreamId && turn.executionId !== args.executionId
+          )
+          .map((turn) => turn.scope)
+          .filter((siblingScope): siblingScope is string[] => siblingScope !== null),
       announceStart: args.announceStart,
       fakeHarness,
       fakeApproval,
@@ -1081,7 +1111,12 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       secretValues: () => secretValuesFor(host, args.providerRepoId),
       emit
     });
-    active.set(args.executionId, { executionId: args.executionId, workstreamId: args.workstreamId, turn });
+    active.set(args.executionId, {
+      executionId: args.executionId,
+      workstreamId: args.workstreamId,
+      scope: args.scope,
+      turn
+    });
     openExecutions.set(args.executionId, args.workstreamId);
 
     let result: TurnResult;
@@ -1112,12 +1147,21 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     // end first, and the checks can never touch a worktree a next turn holds.
     // A stopped execution stays quiet — the participant asked for nothing more
     // to happen — and the deadline each check runs under is the project's own.
+    //
+    // A **scoped** turn defers this to the drain (D-097): while a parallel
+    // sibling is still writing, any check would exercise a moving tree and
+    // bind its verdict to a revision that does not describe it. When the
+    // lane's last turn ends, one integration pass runs the declared checks
+    // against the settled result — unless unattributed changes sit
+    // uncommitted, which is reported instead: a check against a tree no
+    // recorded revision describes would be evidence about nothing.
     const checkpoint = result.checkpoint;
     if (
       result.terminal.kind !== "execution.stopped" &&
       checkpoint !== null &&
       checkpoint.outcome === "committed" &&
-      checkpoint.filesChanged > 0
+      checkpoint.filesChanged > 0 &&
+      args.scope === null
     ) {
       chain(args.workstreamId, () =>
         workspace.runAutoVerifications({
@@ -1128,6 +1172,49 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           workspaceId: null
         })
       );
+    }
+    if (
+      args.scope !== null &&
+      result.terminal.kind === "execution.completed" &&
+      ![...active.values()].some((turn) => turn.workstreamId === args.workstreamId)
+    ) {
+      const scopedCommitted = checkpoint !== null && checkpoint.outcome === "committed";
+      chain(args.workstreamId, async () => {
+        const dirty = await worktreeDirtyPaths(join(worktreeRoot, args.workstreamId));
+        if (dirty === null) return; // the worktree could not even be asked
+        if (dirty.length > 0) {
+          report(args.workstreamId, args.executionId, {
+            kind: "integration.blocked",
+            payload: { paths: dirty.slice(0, 50).map((path) => path.slice(0, 300)) }
+          });
+          return;
+        }
+        if (!scopedCommitted) return;
+        await workspace.runAutoVerifications({
+          missionId: args.missionId,
+          workstreamId: args.workstreamId,
+          providerRepoId: args.providerRepoId,
+          missionBranch: args.missionBranch,
+          workspaceId: null
+        });
+      });
+    }
+  }
+
+  /** The worktree's uncommitted paths, or null when git itself failed. */
+  async function worktreeDirtyPaths(worktree: string): Promise<string[] | null> {
+    try {
+      const output = await new Promise<string>((resolve, rejectWith) => {
+        execFile("git", ["-C", worktree, "status", "--porcelain"], (error: Error | null, stdout: string) =>
+          error ? rejectWith(error) : resolve(stdout)
+        );
+      });
+      return output
+        .split("\n")
+        .map((line) => line.slice(3).trim())
+        .filter((line) => line.length > 0);
+    } catch {
+      return null;
     }
   }
 

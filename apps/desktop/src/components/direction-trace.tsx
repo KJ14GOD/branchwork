@@ -567,7 +567,17 @@ function CheckpointRow({ segment, onOpenChanges }: { segment: Segment & { kind: 
         )}
         {segment.sha && <span className="mono milestone-sha"> {shortSha(segment.sha)}</span>}
         {checkpoint?.withheldSecrets ? ` · ${plural(checkpoint.withheldSecrets, "secret")} withheld` : ""}
-        {checkpoint?.uncommitted ? " · uncommitted" : ""}
+        {/* A scoped turn's shell side-effects, or a parallel sibling's work in
+            flight: named, never committed by this turn (D-097). */}
+        {checkpoint && checkpoint.driftPaths.length > 0 ? (
+          <span className="tone-warn" data-testid="checkpoint-drift">
+            {` · ${plural(checkpoint.driftPaths.length, "file")} outside its scope, uncommitted`}
+          </span>
+        ) : checkpoint?.uncommitted ? (
+          " · uncommitted"
+        ) : (
+          ""
+        )}
       </span>
       {checkpoint && checkpoint.filesChanged > 0 && (
         <button className="btn btn-text milestone-action" onClick={onOpenChanges} data-testid="trace-open-changes">

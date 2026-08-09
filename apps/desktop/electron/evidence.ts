@@ -1,4 +1,5 @@
 import type { FileChangeState, RunnerEvent, RunnerFileChange } from "@novus/contracts";
+import { pathInScope } from "@novus/contracts";
 import { isSecretPath } from "./secret-policy";
 
 /**
@@ -201,6 +202,18 @@ export interface CheckpointOptions {
   /** Replaces machine-local paths in anything reported. */
   sanitize?: (text: string) => string;
   maxFiles?: number;
+  /** The turn's file scope (D-097). When set, only dirty paths inside it are
+   *  staged and committed; dirty paths outside it are reported as
+   *  `driftPaths` and deliberately left in the worktree — committing them
+   *  would attribute a sibling's in-flight work, or this turn's own shell
+   *  side-effects, to this chat. Null or absent commits everything, as every
+   *  unscoped turn always has. */
+  scope?: readonly string[] | null;
+  /** The scopes of parallel sibling turns still running (D-097). Dirty paths
+   *  inside one of these are a sibling's declared territory mid-flight — its
+   *  own capture commits them moments from now — so they are left silently
+   *  rather than reported as drift. Only paths in *nobody's* scope are drift. */
+  siblingScopes?: readonly (readonly string[])[];
 }
 
 /**
@@ -232,7 +245,8 @@ export async function captureCheckpoint(
     withheldSecrets: 0,
     uncommitted: false,
     error: null,
-    files: []
+    files: [],
+    driftPaths: []
   };
 
   let entries: StatusEntry[];
@@ -243,9 +257,30 @@ export async function captureCheckpoint(
   }
 
   const withheld = entries.filter((entry) => isSecretPath(entry.path));
-  const safe = entries.filter((entry) => !isSecretPath(entry.path));
+  const clean = entries.filter((entry) => !isSecretPath(entry.path));
+  // A scoped turn commits only its own paths (D-097). Everything else dirty
+  // at its boundary is drift: observed, named, and left alone — some of it
+  // is a parallel sibling's work mid-flight, some this turn's own shell
+  // side-effects, and no machine can tell those apart honestly.
+  const scope = options.scope ?? null;
+  const siblingScopes = options.siblingScopes ?? [];
+  const safe = scope === null ? clean : clean.filter((entry) => pathInScope(entry.path, scope));
+  const drift =
+    scope === null
+      ? []
+      : clean.filter(
+          (entry) =>
+            !pathInScope(entry.path, scope) &&
+            !siblingScopes.some((sibling) => pathInScope(entry.path, [...sibling]))
+        );
+  const driftPaths = drift.slice(0, 50).map((entry) => sanitize(entry.path).slice(0, 300));
   if (safe.length === 0) {
-    return { ...base, withheldSecrets: withheld.length, uncommitted: withheld.length > 0 };
+    return {
+      ...base,
+      withheldSecrets: withheld.length,
+      uncommitted: withheld.length > 0 || drift.length > 0,
+      driftPaths
+    };
   }
 
   const states = new Map(safe.map((entry) => [entry.path, entry]));
@@ -271,8 +306,13 @@ export async function captureCheckpoint(
       // The commit failed; the work did not. Reporting an empty file list here
       // told the room "nothing happened" about a turn that had changed things
       // and could not save them, which is the one moment those files matter
-      // most (D-054).
-      files: await uncommittedChanges(git, cwd, sanitize, maxFiles).catch(() => [])
+      // most (D-054). Scoped turns list only their own paths even here — a
+      // failure path must not disclose a parallel sibling's in-flight work
+      // as this chat's (D-097).
+      files: await uncommittedChanges(git, cwd, sanitize, maxFiles)
+        .then((all) => (scope === null ? all : all.filter((file) => pathInScope(file.path, scope))))
+        .catch(() => []),
+      driftPaths
     };
   }
 
@@ -284,7 +324,10 @@ export async function captureCheckpoint(
       withheldSecrets: withheld.length,
       uncommitted: true,
       error: "The checkpoint commit could not be read back.",
-      files: await uncommittedChanges(git, cwd, sanitize, maxFiles).catch(() => [])
+      files: await uncommittedChanges(git, cwd, sanitize, maxFiles)
+        .then((all) => (scope === null ? all : all.filter((file) => pathInScope(file.path, scope))))
+        .catch(() => []),
+      driftPaths
     };
   }
 
@@ -304,11 +347,13 @@ export async function captureCheckpoint(
     parentSha,
     branch: options.branch,
     withheldSecrets: withheld.length,
-    // Whatever was withheld is still sitting in the worktree, so the checkpoint
-    // says so rather than implying the tree is clean.
-    uncommitted: withheld.length > 0,
+    // Whatever was withheld — and whatever drifted outside the scope — is
+    // still sitting in the worktree, so the checkpoint says so rather than
+    // implying the tree is clean.
+    uncommitted: withheld.length > 0 || drift.length > 0,
     error: null,
-    files
+    files,
+    driftPaths
   };
 }
 

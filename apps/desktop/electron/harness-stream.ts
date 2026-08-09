@@ -59,6 +59,12 @@ export interface HarnessApprovalRequest {
   toolName: string;
   displayName: string;
   summary: string;
+  /** The raw filesystem targets of a path-carrying tool (Write, Edit,
+   *  NotebookEdit), for the scope policy a scoped turn enforces (D-097).
+   *  Process-local only, never masked because it never leaves this process:
+   *  the durable summary above stays the D-052-masked sentence. Empty for
+   *  every tool whose targets the request does not name (Bash above all). */
+  targetPaths: string[];
 }
 
 /**
@@ -182,6 +188,20 @@ export function classifyCommand(command: string): CheckCategory | null {
   if (/\blint\b/.test(text)) return "lint";
   if (/\bbuild\b/.test(text)) return "build";
   return null;
+}
+
+/** The filesystem targets a tool request names outright — `file_path`,
+ *  `notebook_path` — for the scope policy (D-097). Only what the input
+ *  itself declares: a Bash command's effects are not declared anywhere, so
+ *  Bash yields nothing and stays a human question. */
+function targetPathsOf(input: Record<string, unknown> | undefined): string[] {
+  if (!input) return [];
+  const paths: string[] = [];
+  for (const key of ["file_path", "notebook_path", "path"]) {
+    const value = input[key];
+    if (typeof value === "string" && value.length > 0) paths.push(value);
+  }
+  return paths;
 }
 
 /** Outcome comes from the tool result's own error flag, never from prose. */
@@ -353,7 +373,8 @@ export class HarnessStream {
       toolUseId: typeof request.tool_use_id === "string" ? bound(request.tool_use_id, MAX_LINE) : null,
       toolName: bound(this.sanitize(toolName), MAX_LINE),
       displayName: bound(this.sanitize(displayName), MAX_LINE),
-      summary
+      summary,
+      targetPaths: targetPathsOf(request.input)
     };
     this.onControl(approval);
     return [

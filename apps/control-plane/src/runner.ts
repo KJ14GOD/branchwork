@@ -241,8 +241,8 @@ async function recordCheckpoint(
   await client.query(
     `insert into checkpoints (ckp_id, org_id, mission_id, wst_id, exe_id, outcome, sha, parent_sha,
                               branch, files_changed, additions, deletions, withheld_secrets,
-                              uncommitted, runner_id, environment, error)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+                              uncommitted, runner_id, environment, error, drift_paths)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
     [
       checkpointId,
       ctx.orgId,
@@ -260,7 +260,8 @@ async function recordCheckpoint(
       payload.uncommitted,
       ctx.runnerId,
       environmentOf(ctx),
-      payload.error
+      payload.error,
+      JSON.stringify(payload.driftPaths)
     ]
   );
   for (const file of payload.files) {
@@ -642,20 +643,33 @@ async function applySideEffects(
       });
       return;
     }
-    case "boundary.reached":
+    case "boundary.reached": {
       // A read turn is never the lane's safe boundary (D-095): completing a
-      // waiting handoff on its say-so would move the baton while the write
+      // waiting handoff on its say-so would move the baton while a write
       // turn is mid-tool-call — the exact thing a boundary exists to prevent.
       // The runner already suppresses this for read turns; refused here too
       // because a boundary is an authority claim, and authority claims are
       // validated server-side (ARCHITECTURE.md#authorization).
       if (execution?.access === "read") return;
+      // And with scoped writers running in parallel (D-097), one writer's
+      // boundary is not the lane's: the transfer waits until every other
+      // write turn is finished or itself blocked on a question — a blocked
+      // turn is at a boundary by PRODUCT.md's own definition.
+      const stillWorking = await client.query(
+        `select 1 from executions
+          where wst_id = $1 and access = 'write' and exe_id <> $2
+            and state in ('requested', 'starting', 'running', 'stopping')
+          limit 1`,
+        [ctx.workstreamId, execution?.exe_id ?? ""]
+      );
+      if ((stillWorking.rowCount ?? 0) > 0) return;
       await completeTransferAtBoundary(client, {
         orgId: ctx.orgId,
         missionId: ctx.missionId,
         workstreamId: ctx.workstreamId
       });
       return;
+    }
     case "workspace.checkpoint":
       await recordCheckpoint(client, ctx, execution, event.payload);
       return;

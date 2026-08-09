@@ -326,15 +326,15 @@ alter table executions add column if not exists access text not null default 'wr
   check (access in ('write', 'read'));
 
 create index if not exists executions_by_workstream on executions (wst_id, created_at desc);
--- One *writing* turn per lane: the worktree has one git index, and a second
--- writer would make checkpoint capture commit one chat's half-done edits as
--- another's evidence. Read turns run alongside (D-095), so the old
--- access-blind index is retired by name.
+-- Writing turns take the worktree by scope (D-095, D-097): unscoped turns are
+-- exclusive, and scoped turns whose declared file sets are provably disjoint
+-- run in parallel. That judgment reads the sessions table, which an index on
+-- this one cannot, so the concurrency guard is the dispatch transaction under
+-- the mission's advisory lock — the write-exclusivity index D-095 introduced
+-- is retired by name along with its access-blind predecessor. The per-session
+-- index below survives as the race backstop: one turn per conversation.
 drop index if exists executions_one_active_per_workstream;
-create unique index if not exists executions_one_active_write_per_workstream
-  on executions (wst_id)
-  where state in ('requested', 'starting', 'running', 'needs_direction', 'needs_approval', 'stopping')
-    and access = 'write';
+drop index if exists executions_one_active_write_per_workstream;
 -- The matching per-conversation index lives with the sessions migration
 -- below (D-083's block), because `executions.session_id` does not exist yet
 -- at this point in a fresh database's first run.
@@ -689,6 +689,14 @@ create table if not exists workstream_sessions (
 );
 create index if not exists workstream_sessions_by_lane
   on workstream_sessions (wst_id, created_at, csn_id);
+-- The chat's declared file scope (D-097): a json array of repository-relative
+-- glob patterns, null for unscoped. Set by the baton holder; a scoped chat's
+-- write turns run in parallel with provably disjoint siblings and may write
+-- only inside the scope.
+alter table workstream_sessions add column if not exists scope jsonb;
+-- What a scoped turn changed outside its scope, observed and deliberately not
+-- committed (D-097). Empty for every unscoped checkpoint.
+alter table checkpoints add column if not exists drift_paths jsonb not null default '[]'::jsonb;
 
 -- Every workstream holds at least one session, created with it. Existing
 -- workstreams are migrated with one session adopting their history and their

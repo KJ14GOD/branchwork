@@ -16,6 +16,7 @@ import {
   ReadWorkspaceFileInputSchema,
   RespondApprovalInputSchema,
   SaveWorkspaceSettingsInputSchema,
+  SessionScopeSchema,
   SupplySecretInputSchema,
   TerminalRenameInputSchema,
   TerminalResizeInputSchema,
@@ -547,6 +548,29 @@ function registerIpc(): void {
         action: parsed.data.action,
         reason: parsed.data.reason
       });
+      return null;
+    });
+    runner?.pollNow();
+    return result;
+  });
+
+  ipcMain.handle("novus:missions:set-session-scope", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        sessionId: z.string().startsWith("csn_"),
+        scope: SessionScopeSchema.nullable()
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "invalid_scope",
+        message: parsed.error.issues[0]?.message ?? "That scope is not a valid pattern list."
+      };
+    }
+    const result = await call(async () => {
+      await api.setSessionScope(parsed.data.missionId, parsed.data.sessionId, parsed.data.scope);
       return null;
     });
     runner?.pollNow();

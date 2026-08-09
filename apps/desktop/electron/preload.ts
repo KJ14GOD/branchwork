@@ -41,6 +41,7 @@ const novus: NovusBridge = {
     retryBranch: (workstreamId) => ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
     direct: (input) => ipcRenderer.invoke("novus:missions:direct", input),
     resolveDirection: (input) => ipcRenderer.invoke("novus:missions:resolve-direction", input),
+    setSessionScope: (input) => ipcRenderer.invoke("novus:missions:set-session-scope", input),
     cancelDirection: (directionId) => ipcRenderer.invoke("novus:missions:cancel-direction", directionId),
     stop: (missionId, workstreamId, sessionId) =>
       ipcRenderer.invoke(

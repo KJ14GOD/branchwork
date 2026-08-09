@@ -291,3 +291,36 @@ describe("a read-alongside turn (D-095)", () => {
   });
 
 });
+
+describe("a scoped turn (D-097)", () => {
+  it("auto-allows a write inside its scope: no card, no prompt boundary, the file lands", async () => {
+    const { events, result } = await runFakeTurn({
+      direction: "[fake-write:server/api.md] build the server half",
+      scope: ["server/**"],
+      fakeApproval: true
+    });
+    expect(events.some((event) => event.kind === "approval.requested")).toBe(false);
+    // The stream's "permission prompt pending" boundary is suppressed with
+    // the card — nothing pended — while the honest turn-complete boundary of
+    // a write turn stays.
+    const boundaries = events
+      .filter((event) => event.kind === "boundary.reached")
+      .map((event) => (event.payload as { reason: string }).reason);
+    expect(boundaries).toEqual(["turn complete"]);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "server/api.md"))).toBe(true);
+    expect(result.terminal.kind).toBe("execution.completed");
+    expect(result.checkpoint?.filesChanged).toBe(1);
+  });
+
+  it("auto-denies a write outside its scope, with the reason, and nothing is written", async () => {
+    const { events, result } = await runFakeTurn({
+      direction: "[fake-write:docs/notes.md] wander off",
+      scope: ["server/**"],
+      fakeApproval: true
+    });
+    expect(events.some((event) => event.kind === "approval.requested")).toBe(false);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "docs/notes.md"))).toBe(false);
+    // Being told no is a scoped turn's ordinary life, not a failure.
+    expect(result.terminal.kind).toBe("execution.completed");
+  });
+});

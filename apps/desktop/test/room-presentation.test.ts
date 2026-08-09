@@ -118,6 +118,7 @@ function session(overrides: Record<string, unknown> = {}) {
     createdBy: KARTIK,
     createdByLogin: "kartik",
     createdAt: T(0),
+    scope: null,
     ...overrides
   };
 }

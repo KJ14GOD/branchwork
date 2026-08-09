@@ -5,6 +5,7 @@ import {
   DirectionInputSchema,
   DirectionResolutionSchema,
   ExecutionStateSchema,
+  scopesDisjoint,
   TERMINAL_EXECUTION_STATES,
   type FileDiffResponse
 } from "@novus/contracts";
@@ -18,7 +19,7 @@ import { withTransaction } from "./db.ts";
 import { cancelDirection, resolveDirection, submitDirection } from "./directions.ts";
 import { recordEvent } from "./events.ts";
 import { newCommandId, newExecutionId } from "./ids.ts";
-import { sessionResumePoint } from "./sessions.ts";
+import { scopeOf, sessionResumePoint } from "./sessions.ts";
 import type { RouteDeps } from "./routes.ts";
 
 /**
@@ -129,20 +130,34 @@ interface ActiveExecution {
   sessionId: string;
 }
 
-/** The lane's one *writing* turn, if any — the turn that holds the worktree.
- *  Read turns running alongside (D-095) hold nothing and are invisible here:
- *  they neither absorb a same-session steer nor make a sibling wait. */
-async function activeWriteExecution(
+interface LiveWriter {
+  executionId: string;
+  sessionId: string;
+  /** The scope the writer's session declares now. The turn itself enforces
+   *  the scope pinned at its dispatch; this one decides who may join it. */
+  scope: string[] | null;
+  title: string | null;
+}
+
+/** The lane's *writing* turns — one when any is unscoped (exclusivity), and
+ *  possibly several provably-disjoint scoped ones (D-097). Read turns hold
+ *  nothing and are invisible here (D-095). */
+async function liveWriteExecutions(
   client: pg.PoolClient,
   workstreamId: string
-): Promise<ActiveExecution | null> {
+): Promise<LiveWriter[]> {
   const result = await client.query(
-    `select exe_id, session_id from executions
-      where wst_id = $1 and state = any($2::text[]) and access = 'write' limit 1`,
+    `select e.exe_id, e.session_id, s.scope, s.title from executions e
+       join workstream_sessions s on s.csn_id = e.session_id
+      where e.wst_id = $1 and e.state = any($2::text[]) and e.access = 'write'`,
     [workstreamId, ACTIVE_EXECUTION_STATES]
   );
-  const row = result.rows[0];
-  return row ? { executionId: row.exe_id as string, sessionId: row.session_id as string } : null;
+  return result.rows.map((row) => ({
+    executionId: row.exe_id as string,
+    sessionId: row.session_id as string,
+    scope: scopeOf(row.scope),
+    title: (row.title as string | null) ?? null
+  }));
 }
 
 /** This one conversation's live turn, whatever its access — a session's turns
@@ -251,6 +266,12 @@ export async function dispatchDirection(
   }
 
   return withTransaction(deps.db, async (client) => {
+    // The dispatch decision reads scopes across two tables, which no unique
+    // index can guard (D-097): the mission's advisory lock serializes every
+    // dispatch for the mission instead, so two racing directions cannot both
+    // conclude the coast is clear.
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
+
     // No runner means no execution. Inventing one would put the room in
     // "Agent starting" with nothing behind it.
     const runner = await client.query(
@@ -269,11 +290,14 @@ export async function dispatchDirection(
     }
 
     const direction = await client.query(
-      "select body, session_id from directions where dir_id = $1 and wst_id = $2",
+      `select d.body, d.session_id, s.scope from directions d
+         join workstream_sessions s on s.csn_id = d.session_id
+        where d.dir_id = $1 and d.wst_id = $2`,
       [args.directionId, workstreamId]
     );
     const body = direction.rows[0]?.body as string | undefined;
     const sessionId = direction.rows[0]?.session_id as string | undefined;
+    const scope = scopeOf(direction.rows[0]?.scope);
     if (body === undefined || sessionId === undefined) {
       return { executionId: null, commandId: null, deferred: "That direction is no longer available." };
     }
@@ -297,23 +321,32 @@ export async function dispatchDirection(
     });
 
     // Whose turn the workspace is on decides everything (D-083): the same
-    // session's direction steers the running turn, a sibling session's waits
-    // for it — visibly, with the running session named — and is dispatched by
-    // the control plane itself when the turn completes. Steering a *different*
-    // conversation's turn would be the silent cross-talk this rule forbids.
-    // Only the write turn holds the workspace (D-095): a read turn running
-    // alongside blocks nothing here.
-    const running = await activeWriteExecution(client, workstreamId);
-    if (running) {
-      if (running.sessionId === sessionId) return applyTo(running.executionId);
+    // session's direction steers the running turn; a sibling session's waits —
+    // unless both chats are scoped and their scopes are provably disjoint
+    // (D-097), in which case the sibling's turn starts in parallel: the
+    // worktree is shared but their files are not. An unscoped chat, on either
+    // side, means exclusivity exactly as before scopes existed.
+    const writers = await liveWriteExecutions(client, workstreamId);
+    const own = writers.find((writer) => writer.sessionId === sessionId);
+    if (own) return applyTo(own.executionId);
+    const blocking = writers.find(
+      (writer) =>
+        scope === null || writer.scope === null || !scopesDisjoint(writer.scope, scope)
+    );
+    if (blocking) {
       return {
         executionId: null,
         commandId: null,
-        deferred: await busyWith(client, running.sessionId)
+        deferred:
+          scope !== null && blocking.scope !== null
+            ? blocking.title
+              ? `Queued — its files overlap "${blocking.title}"'s scope; this applies when that turn finishes.`
+              : "Queued — its files overlap a running chat's scope; this applies when that turn finishes."
+            : await busyWith(client, blocking.sessionId)
       };
     }
 
-    // The workspace is free, but this conversation itself may be mid-answer:
+    // The workspace has room, but this conversation itself may be mid-answer:
     // a session's turns are serial whatever their access, because they share
     // one harness transcript (D-095). The direction waits for its own chat and
     // is dispatched when that turn completes, exactly like waiting for a
@@ -359,26 +392,19 @@ export async function dispatchDirection(
     } catch (error) {
       if ((error as { code?: string }).code !== "23505") throw error;
       await client.query("rollback to savepoint start_execution");
-      // Two indexes can refuse this insert now (D-095): another write turn
-      // won the lane, or this conversation's own read turn started between
-      // the check above and here. Either way the loser waits or steers.
-      const winner = await activeWriteExecution(client, workstreamId);
-      if (winner) {
-        if (winner.sessionId !== sessionId) {
-          return {
-            executionId: null,
-            commandId: null,
-            deferred: await busyWith(client, winner.sessionId)
-          };
-        }
-        return applyTo(winner.executionId);
+      // Only the per-session index can refuse this insert now (D-097): the
+      // mission lock above serializes writer admission, so a conflict means
+      // this conversation's own turn appeared — steer it or wait for it.
+      const claimed = await sessionLiveExecution(client, sessionId);
+      if (!claimed) throw error;
+      const writers = await liveWriteExecutions(client, workstreamId);
+      if (writers.some((writer) => writer.executionId === claimed.executionId)) {
+        return applyTo(claimed.executionId);
       }
-      const own = await sessionLiveExecution(client, sessionId);
-      if (!own) throw error;
       return {
         executionId: null,
         commandId: null,
-        deferred: await busyWith(client, own.sessionId)
+        deferred: await busyWith(client, claimed.sessionId)
       };
     }
 
@@ -392,7 +418,10 @@ export async function dispatchDirection(
         model: args.model,
         effort: args.effort,
         sessionId,
-        resumeSessionId
+        resumeSessionId,
+        // Pinned at dispatch (D-097, the D-043 pattern): the turn enforces
+        // the scope the controller had approved when it was authorized.
+        scope
       },
       // Keyed on the *execution*, not the direction. A direction that failed
       // and is directed again is a new attempt and needs a new command; keyed

@@ -229,6 +229,19 @@ export class ControlPlaneClient {
     await this.request("POST", `/directions/${encodeURIComponent(directionId)}/cancel`, OkResponseSchema, {});
   }
 
+  async setSessionScope(
+    missionId: string,
+    sessionId: string,
+    scope: string[] | null
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/sessions/${encodeURIComponent(sessionId)}/scope`,
+      OkResponseSchema,
+      { scope }
+    );
+  }
+
   async stopExecution(missionId: string, workstreamId?: string, sessionId?: string): Promise<void> {
     await this.request(
       "POST",

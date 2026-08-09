@@ -231,7 +231,11 @@ export async function listCheckpoints(db: Db, missionId: string): Promise<Checkp
     environment: row.environment as string,
     error: (row.error as string | null) ?? null,
     createdAt: (row.created_at as Date).toISOString(),
-    files: byCheckpoint.get(row.ckp_id as string) ?? []
+    files: byCheckpoint.get(row.ckp_id as string) ?? [],
+    // What a scoped turn changed outside its scope, uncommitted (D-097).
+    driftPaths: Array.isArray(row.drift_paths)
+      ? (row.drift_paths as unknown[]).filter((path): path is string => typeof path === "string")
+      : []
   }));
 }
 

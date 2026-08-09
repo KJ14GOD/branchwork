@@ -1514,6 +1514,37 @@ body {
   text-overflow: ellipsis;
 }
 
+/* A chat row and its baton-only Scope control, side by side (D-097): the
+   row stays the one click target, the control a quiet word after it. */
+.overview-row-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+}
+
+.overview-scope-button {
+  flex: none;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.overview-scope-button:hover {
+  color: var(--text-1);
+}
+
+/* The scope's pattern list: one per line, mono via the shared class, the
+   dialog's own field. */
+.scope-input {
+  width: 100%;
+  resize: vertical;
+  background: var(--surface-1);
+  color: var(--text-1);
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: var(--s-2) var(--s-3);
+}
+
 /* The chat's footprint and freshness, at the row's far end in the meta
    style (D-094). */
 .overview-row-meta {

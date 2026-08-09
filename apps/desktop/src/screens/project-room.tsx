@@ -13,7 +13,6 @@ import type {
 import { novus } from "../bridge";
 import { Composer, type SubmitOutcome } from "../components/composer";
 import {
-  activeExecution,
   contestedAcrossSessions,
   controller as controllerOf,
   deriveStateLine,
@@ -79,7 +78,8 @@ function SessionGlyph() {
 }
 
 import { RuntimeDock } from "../components/runtime-dock";
-import { clockTime, deriveGoal, shortSha } from "../format";
+import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
+import { scopesDisjoint } from "@novus/contracts";
 import type { Project } from "./project-shell";
 
 type BaseLoad =
@@ -521,8 +521,15 @@ export function ProjectRoom({
   const stateLine = detail ? deriveStateLine(detail) : null;
   const controller = detail ? controllerOf(detail) : null;
   const isController = detail ? viewerIsController(detail) : false;
-  /** The workspace's own live turn — the write turn (D-095). */
-  const workspaceTurn = detail ? activeExecution(detail) : null;
+  /** Every live write turn — several at once when scoped chats run in
+   *  parallel (D-097); the workspace's story stays the write side's. */
+  const liveWriters = detail
+    ? detail.executions.filter(
+        (execution) =>
+          execution.access === "write" &&
+          !["completed", "stopped", "failed", "interrupted"].includes(execution.state)
+      )
+    : [];
   /** The chat on screen, answering alongside read-only, if it is (D-095). */
   const readTurnOnScreen =
     detail && readingSessionId !== null
@@ -536,17 +543,67 @@ export function ProjectRoom({
   /**
    * Sending while the workspace's turn belongs to another chat asks the baton
    * holder: queue, or run alongside read-only (D-095). Not offered on the
-   * running chat itself — its direction steers the running turn — and not to
-   * anyone without the baton, whose direction queues for the controller
-   * exactly as before.
+   * running chat itself — its direction steers the running turn — not to
+   * anyone without the baton, whose direction queues exactly as before, and
+   * not when the target chat's scope is provably disjoint from every running
+   * writer's (D-097): the server will start that turn in parallel, so there
+   * is nothing to choose. The same matcher the server judges with decides
+   * the prediction, so the composer cannot promise what dispatch refuses.
    */
+  const targetScope = sessionDraft
+    ? null
+    : (sessions.find((session) => session.sessionId === readingSessionId)?.scope ?? null);
+  const blockingWriter = detail
+    ? liveWriters.find((writer) => {
+        if (!sessionDraft && writer.sessionId === readingSessionId) return false;
+        const writerScope =
+          detail.sessions.find((session) => session.sessionId === writer.sessionId)?.scope ?? null;
+        return (
+          targetScope === null || writerScope === null || !scopesDisjoint(writerScope, targetScope)
+        );
+      })
+    : undefined;
   const alongsideOffer =
-    detail && isController && workspaceTurn !== null && (sessionDraft || readingSessionId !== workspaceTurn.sessionId)
+    detail && isController && blockingWriter
       ? {
           runningTitle:
-            sessions.find((session) => session.sessionId === workspaceTurn.sessionId)?.title ?? null
+            sessions.find((session) => session.sessionId === blockingWriter.sessionId)?.title ?? null
         }
       : null;
+
+  /** The chat whose scope is being declared, while the dialog is up (D-097). */
+  const [scopeEditing, setScopeEditing] = useState<Session | null>(null);
+  const [scopeBusy, setScopeBusy] = useState(false);
+  const [scopeError, setScopeError] = useState<string | null>(null);
+  const saveScope = async (scope: string[] | null) => {
+    if (!detail || !scopeEditing) return;
+    setScopeBusy(true);
+    setScopeError(null);
+    const result = await novus().missions.setSessionScope({
+      missionId: detail.mission.missionId,
+      sessionId: scopeEditing.sessionId,
+      scope
+    });
+    setScopeBusy(false);
+    if (!result.ok) {
+      setScopeError(offlineOr(result.code, result.message));
+      return;
+    }
+    setScopeEditing(null);
+  };
+  /** The first proposal for an unscoped chat: the top-level directories its
+   *  own turns have touched — derived from evidence, never guessed from
+   *  words (D-097). */
+  const scopeProposal =
+    detail && scopeEditing
+      ? [
+          ...new Set(
+            sessionChangedFiles(detail, scopeEditing.sessionId).map((file) =>
+              file.path.includes("/") ? `${file.path.split("/")[0]}/**` : file.path
+            )
+          )
+        ]
+      : [];
   /**
    * The permission questions this mission is blocked on.
    *
@@ -1238,6 +1295,21 @@ export function ProjectRoom({
         />
       )}
 
+      {scopeEditing !== null && (
+        <ScopeDialog
+          key={scopeEditing.sessionId}
+          session={scopeEditing}
+          proposal={scopeProposal}
+          busy={scopeBusy}
+          error={scopeError}
+          onCancel={() => {
+            setScopeEditing(null);
+            setScopeError(null);
+          }}
+          onSave={(scope) => void saveScope(scope)}
+        />
+      )}
+
       {activeFileEntry !== null && selectedMissionId !== null ? (
         // The pane reads the worktree the tab was opened from — the tab's own
         // lane, never whichever lane the room happens to be reading — so the
@@ -1284,6 +1356,8 @@ export function ProjectRoom({
               sessions={sessions}
               detail={detail}
               onOpenSession={onOpenSession}
+              mayScope={isController}
+              onEditScope={(session) => setScopeEditing(session)}
             />
           </div>
         </div>
@@ -1527,13 +1601,19 @@ function ApproachOverview({
   summary,
   sessions,
   detail,
-  onOpenSession
+  onOpenSession,
+  mayScope,
+  onEditScope
 }: {
   lane: Workstream | null;
   summary: ApproachSummary | undefined;
   sessions: Session[];
   detail: MissionDetailResponse;
   onOpenSession: (sessionId: string) => void;
+  /** Whether this viewer holds the baton — declaring a scope is a grant of
+   *  standing write authority, so it is the baton's act (D-097). */
+  mayScope: boolean;
+  onEditScope: (session: Session) => void;
 }) {
   // The lane's own facts, from the same summary Compare reads — counted, not
   // fetched. Checks appear only once something ran; zero run is the state
@@ -1581,6 +1661,8 @@ function ApproachOverview({
           const checks = sessionChecks(detail, session.sessionId);
           const passed = checks.filter((check) => check.outcome === "passed").length;
           const meta = [
+            // What this chat owns (D-097), before what it did with it.
+            ...(session.scope !== null ? [`owns ${truncateLabel(session.scope.join(", "), 40)}`] : []),
             ...(files > 0 ? [`${files} ${files === 1 ? "file" : "files"}`] : []),
             ...(checks.length > 0
               ? [`${passed}/${checks.length} checks at its checkpoints`]
@@ -1590,35 +1672,129 @@ function ApproachOverview({
               : [])
           ];
           return (
-            <button
-              key={session.sessionId}
-              className="overview-row"
-              onClick={() => onOpenSession(session.sessionId)}
-              title={`Open ${session.title ?? "this session"}`}
-              data-testid="overview-session-row"
-              data-session={session.sessionId}
-            >
-              <SessionGlyph />
-              <span
-                className={
-                  session.title === null ? "overview-row-name session-untitled" : "overview-row-name"
-                }
+            <div className="overview-row-wrap" key={session.sessionId}>
+              <button
+                className="overview-row"
+                onClick={() => onOpenSession(session.sessionId)}
+                title={`Open ${session.title ?? "this session"}`}
+                data-testid="overview-session-row"
+                data-session={session.sessionId}
               >
-                {session.title ?? "New session"}
-              </span>
-              {/* Words, never a dot (DESIGN.md#status-semantics). */}
-              {activity.label && (
-                <span className={activity.state === "needs_you" ? "tone-warn" : "overview-row-state"}>
-                  {" "}
-                  · {activity.label}
+                <SessionGlyph />
+                <span
+                  className={
+                    session.title === null ? "overview-row-name session-untitled" : "overview-row-name"
+                  }
+                >
+                  {session.title ?? "New session"}
                 </span>
+                {/* Words, never a dot (DESIGN.md#status-semantics). */}
+                {activity.label && (
+                  <span className={activity.state === "needs_you" ? "tone-warn" : "overview-row-state"}>
+                    {" "}
+                    · {activity.label}
+                  </span>
+                )}
+                {meta.length > 0 && <span className="overview-row-meta">{meta.join(" · ")}</span>}
+              </button>
+              {mayScope && (
+                <button
+                  className="btn btn-text overview-scope-button"
+                  onClick={() => onEditScope(session)}
+                  title={`Declare which files "${session.title ?? "this session"}" owns`}
+                  data-testid="overview-scope"
+                >
+                  Scope
+                </button>
               )}
-              {meta.length > 0 && <span className="overview-row-meta">{meta.join(" · ")}</span>}
-            </button>
+            </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+/**
+ * Declaring a chat's file scope (D-097): the ownership proposal, shown and
+ * approved before it stands. One pattern per line — the proposal is prefilled
+ * from the directories the chat has already touched, which is the only
+ * derivation that is not a guess — and saving it is the baton holder's
+ * approval: in-scope writes stop asking, out-of-scope writes are refused,
+ * and provably-disjoint chats run their turns at the same time.
+ */
+function ScopeDialog({
+  session,
+  proposal,
+  busy,
+  error,
+  onCancel,
+  onSave
+}: {
+  session: Session;
+  /** Patterns derived from the chat's own touched files, for an unscoped
+   *  chat's first proposal. */
+  proposal: string[];
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onSave: (scope: string[] | null) => void;
+}) {
+  const [text, setText] = useState((session.scope ?? proposal).join("\n"));
+  const patterns = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return (
+    <Dialog label="Scope" onClose={onCancel} testId="scope-dialog">
+      <header className="dialog-head">
+        <h2>Scope — {session.title ?? "New session"}</h2>
+      </header>
+      <div className="dialog-body">
+        <p className="quiet">
+          The files this chat owns, one pattern per line (<span className="mono">server/**</span>,{" "}
+          <span className="mono">src/*.ts</span>). Writes inside them stop asking; writes outside
+          them are refused; chats with provably separate files run at the same time. Bash still
+          asks — a shell command declares its targets nowhere.
+        </p>
+        <textarea
+          className="scope-input mono"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          rows={6}
+          aria-label="Scope patterns, one per line"
+          data-testid="scope-input"
+        />
+        {error && (
+          <p className="inline-error" role="alert" data-testid="scope-error">
+            {error}
+          </p>
+        )}
+      </div>
+      <div className="dialog-actions">
+        {session.scope !== null && (
+          <button
+            className="btn btn-text"
+            onClick={() => onSave(null)}
+            disabled={busy}
+            data-testid="scope-clear"
+          >
+            Clear scope
+          </button>
+        )}
+        <button className="btn btn-text" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+        <button
+          className="btn btn-secondary"
+          onClick={() => onSave(patterns)}
+          disabled={busy || patterns.length === 0}
+          data-testid="scope-save"
+        >
+          {busy ? "Saving…" : "Set scope"}
+        </button>
+      </div>
+    </Dialog>
   );
 }
 

@@ -237,7 +237,11 @@ describe("control traffic is not transcript", () => {
         toolUseId: "toolu_01F7ELutbP7PJy5EwZg3iVrZ",
         toolName: "Write",
         displayName: "Write",
-        summary: "/Users/someone/work/repo/PROBE.md"
+        summary: "/Users/someone/work/repo/PROBE.md",
+        // The raw target, process-local for the scope policy (D-097): unmasked
+        // here because it never leaves the process — the durable summary above
+        // is the masked sentence, exactly as before.
+        targetPaths: ["/Users/someone/work/repo/PROBE.md"]
       }
     ]);
     // Nothing about a control message is ever the harness speaking.

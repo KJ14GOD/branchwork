@@ -663,6 +663,7 @@ describe("event ingestion", () => {
             withheldSecrets: 1,
             uncommitted: false,
             error: null,
+            driftPaths: [],
             files: [
               {
                 path: "src/health.ts",

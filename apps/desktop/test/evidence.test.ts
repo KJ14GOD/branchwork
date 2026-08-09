@@ -270,3 +270,60 @@ describe("a checkpoint that could not commit", () => {
     expect(JSON.stringify(checkpoint)).not.toContain("not-a-real-token");
   });
 });
+
+describe("a scoped checkpoint (D-097)", () => {
+  it("commits only the scope's paths, names the rest as drift, and leaves them in the worktree", async () => {
+    write("server/api.ts", "export const api = 1;\n");
+    write("apps/desktop/view.tsx", "export const view = 1;\n");
+    write("scratch.log", "shell side-effect\n");
+
+    const checkpoint = await captureCheckpoint(git, repo, {
+      branch: "novus/m-abc123",
+      summary: "server work",
+      scope: ["server/**"]
+    });
+    expect(checkpoint.outcome).toBe("committed");
+    expect(checkpoint.files.map((file) => file.path)).toEqual(["server/api.ts"]);
+    // The rest is drift: observed and named, never committed by this turn —
+    // it could be a parallel sibling's in-flight work, and attributing it
+    // would be a guess.
+    expect(checkpoint.driftPaths.sort()).toEqual(["apps/desktop/view.tsx", "scratch.log"]);
+    expect(checkpoint.uncommitted).toBe(true);
+
+    // The commit itself holds only the scoped path; the drift is still dirty.
+    const committed = await git(repo, ["show", "--name-only", "--format=", checkpoint.sha!]);
+    expect(committed.trim().split("\n")).toEqual(["server/api.ts"]);
+    const still = await dirtyEntries(git, repo);
+    expect(still.map((entry) => entry.path).sort()).toEqual(["apps/desktop/view.tsx", "scratch.log"]);
+  });
+
+  it("a scoped turn that changed nothing in its scope is clean, drift or no drift", async () => {
+    write("elsewhere.md", "someone else's ground\n");
+    const checkpoint = await captureCheckpoint(git, repo, {
+      branch: "novus/m-abc123",
+      summary: "looked around",
+      scope: ["server/**"]
+    });
+    expect(checkpoint.outcome).toBe("clean");
+    expect(checkpoint.sha).toBeNull();
+    expect(checkpoint.driftPaths).toEqual(["elsewhere.md"]);
+    expect(checkpoint.uncommitted).toBe(true);
+  });
+
+  it("leaves a parallel sibling's declared territory silent — only nobody's paths are drift", async () => {
+    write("server/api.ts", "export const api = 1;\n");
+    write("ui/view.tsx", "export const view = 1;\n");
+    write("scratch.log", "shell side-effect\n");
+
+    const checkpoint = await captureCheckpoint(git, repo, {
+      branch: "novus/m-abc123",
+      summary: "server work beside the ui chat",
+      scope: ["server/**"],
+      siblingScopes: [["ui/**"]]
+    });
+    expect(checkpoint.files.map((file) => file.path)).toEqual(["server/api.ts"]);
+    // The sibling's file is its own capture's business, moments from now;
+    // the scratch file belongs to nobody and stays loud.
+    expect(checkpoint.driftPaths).toEqual(["scratch.log"]);
+  });
+});

@@ -1,12 +1,13 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import {
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
   EffortSchema,
   ModelIdSchema,
+  pathInScope,
   type ApprovalDecision,
   type RunnerEvent
 } from "@novus/contracts";
@@ -177,6 +178,30 @@ const DENIED = "A participant denied this in Novus.";
 /** What a read-alongside turn is told when it asks to act (D-095). */
 const READ_ONLY_DENIED =
   "This chat is running alongside the workspace's turn, read-only. It may not change anything; answer in words, and ask again from a turn that holds the workspace.";
+/** What a scoped turn is told when it reaches outside its files (D-097). */
+const SCOPE_DENIED =
+  "That path is outside this chat's declared scope. Work only inside the files this chat owns; changes elsewhere belong to another chat or to an unscoped turn.";
+
+/** The tools whose requests name their filesystem targets outright, and can
+ *  therefore be decided by scope policy (D-097). Bash is deliberately not
+ *  here: a shell command's effects are declared nowhere, so it stays a human
+ *  question however scoped the turn is. */
+const PATH_SCOPED_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "MultiEdit"]);
+
+/** Serializes checkpoint capture per worktree (D-097): parallel scoped turns
+ *  share one git index, and two captures interleaving `add` and `commit`
+ *  would stage each other's files. The lock is the whole capture, status to
+ *  commit, so what each one stages is exactly what it commits. */
+const captureLocks = new Map<string, Promise<unknown>>();
+function withCaptureLock<T>(worktree: string, work: () => Promise<T>): Promise<T> {
+  const previous = captureLocks.get(worktree) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(work);
+  captureLocks.set(
+    worktree,
+    next.catch(() => undefined)
+  );
+  return next;
+}
 
 export type TerminalEvent = Extract<
   RunnerEvent,
@@ -211,6 +236,18 @@ export interface TurnRequest {
    *  and no boundary is declared — a read turn ending is not the safe point a
    *  waiting handoff may complete at. Absent means `write`, the ordinary turn. */
   access?: "write" | "read";
+  /** The chat's file scope, pinned at dispatch (D-097). A scoped write turn's
+   *  path-carrying tools are decided here by policy — inside the scope
+   *  auto-allowed (the controller approved the scope, which is what a scope
+   *  is), outside it auto-denied with the reason — while Bash and every other
+   *  tool whose targets the request does not name stay human questions
+   *  exactly as before. Its checkpoint commits only scoped paths. Null means
+   *  unscoped: the whole workspace, every act asked about, as always. */
+  scope?: readonly string[] | null;
+  /** The scopes of parallel sibling turns still running in this worktree,
+   *  read at checkpoint time (D-097) — their territory in flight is theirs,
+   *  not this turn's drift. */
+  siblingScopes?: () => readonly (readonly string[])[];
   /** Announce the execution's start; a follow-up turn inside the same
    *  execution does not repeat it. */
   announceStart: boolean;
@@ -326,6 +363,12 @@ export function startTurn(request: TurnRequest): RunningTurn {
   // is the same protection reaching the path that talks the most (D-052).
   const sanitize = (text: string): string => redact(maskPaths(text), request.secretValues());
   const readOnly = request.access === "read";
+  const scope = request.scope ?? null;
+  /** Requests the scope policy already answered (D-097): their card must not
+   *  reach the room, and the prompt boundary the stream declares for them is
+   *  not real — nothing is pending. */
+  const policyDecided = new Set<string>();
+  let suppressPromptBoundary = 0;
   const emit = (event: RunnerEvent): void => {
     // A read turn's permission questions never reach the room: they are
     // answered deny at this machine the moment they arrive (D-095), so
@@ -336,7 +379,42 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // prompt-pending, not the never-started path — because none of them says
     // anything about whether the *write* turn is at a safe point.
     if (readOnly && (event.kind === "approval.requested" || event.kind === "boundary.reached")) return;
+    // The same suppression, narrowly, for a scoped turn's policy-decided
+    // writes (D-097): no card for a question that no longer exists, and no
+    // "permission prompt pending" boundary for a prompt that never pended.
+    if (
+      event.kind === "approval.requested" &&
+      policyDecided.has((event.payload as { requestId?: string }).requestId ?? "")
+    ) {
+      suppressPromptBoundary += 1;
+      return;
+    }
+    if (
+      event.kind === "boundary.reached" &&
+      (event.payload as { reason?: string }).reason === "permission prompt pending" &&
+      suppressPromptBoundary > 0
+    ) {
+      suppressPromptBoundary -= 1;
+      return;
+    }
     request.emit(sanitizeEvent(event, sanitize));
+  };
+
+  /** The scope policy's answer for one request (D-097): allow inside the
+   *  scope, deny outside it or outside the worktree entirely, null for any
+   *  tool whose targets the request does not name — that stays a human
+   *  question. */
+  const scopeVerdictFor = (message: HarnessApprovalRequest): "allow" | "deny" | null => {
+    if (scope === null || readOnly) return null;
+    if (!PATH_SCOPED_TOOLS.has(message.toolName)) return null;
+    if (message.targetPaths.length === 0) return null;
+    for (const target of message.targetPaths) {
+      const absolute = isAbsolute(target) ? target : join(worktree, target);
+      const relativePath = relative(worktree, absolute);
+      if (relativePath.startsWith("..") || isAbsolute(relativePath)) return "deny";
+      if (!pathInScope(relativePath.split(sep).join("/"), scope)) return "deny";
+    }
+    return "allow";
   };
 
   let stopReason: string | null = null;
@@ -404,6 +482,27 @@ export function startTurn(request: TurnRequest): RunningTurn {
             subtype: "success",
             request_id: message.requestId,
             response: { behavior: "deny", message: READ_ONLY_DENIED }
+          }
+        });
+        return;
+      }
+      // A scoped turn's path-naming writes are policy, not questions (D-097):
+      // the controller approved the scope, and the scope is the answer —
+      // allow inside it, deny outside it, both decided here with no card.
+      // A tool that does not name its targets (Bash) falls through to the
+      // human exactly as before.
+      const verdict = scopeVerdictFor(message);
+      if (verdict !== null) {
+        policyDecided.add(message.requestId);
+        writeControl({
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: message.requestId,
+            response:
+              verdict === "allow"
+                ? { behavior: "allow" }
+                : { behavior: "deny", message: SCOPE_DENIED }
           }
         });
         return;
@@ -592,14 +691,21 @@ export function startTurn(request: TurnRequest): RunningTurn {
     }
 
     // "Nothing changed" is evidence too, so a clean turn still checkpoints.
+    // Captured under the worktree's own lock (D-097): parallel scoped turns
+    // share one git index, and what a capture stages must be exactly what it
+    // commits.
     let checkpointFailed: string | null = null;
     let captured: TurnResult["checkpoint"] = null;
     try {
-      const checkpoint = await captureCheckpoint(gitExec, worktreePath, {
-        branch: request.missionBranch,
-        summary: bounded(request.direction.replace(/\s+/g, " ").trim(), 72),
-        sanitize
-      });
+      const checkpoint = await withCaptureLock(worktreePath, () =>
+        captureCheckpoint(gitExec, worktreePath, {
+          branch: request.missionBranch,
+          summary: bounded(request.direction.replace(/\s+/g, " ").trim(), 72),
+          sanitize,
+          scope,
+          siblingScopes: request.siblingScopes?.() ?? []
+        })
+      );
       emit({ kind: "workspace.checkpoint", payload: checkpoint });
       captured = { outcome: checkpoint.outcome, sha: checkpoint.sha, filesChanged: checkpoint.files.length };
       if (checkpoint.outcome === "failed") checkpointFailed = checkpoint.error ?? "The checkpoint failed.";
@@ -616,7 +722,8 @@ export function startTurn(request: TurnRequest): RunningTurn {
           withheldSecrets: 0,
           uncommitted: true,
           error: reason,
-          files: []
+          files: [],
+          driftPaths: []
         }
       });
     }
@@ -758,7 +865,12 @@ export function startTurn(request: TurnRequest): RunningTurn {
     };
     try {
       const sessionId = request.resumeSessionId ?? randomUUID();
-      const filePath = join(worktreePath, "NOVUS_FAKE_TURN.md");
+      // The deterministic turn writes one file. A direction may name which —
+      // `[fake-write:relative/path.md]` — so a test can stage two scoped
+      // chats writing genuinely different files at once (D-097); without the
+      // token it stays the fixed root file every existing test knows.
+      const namedTarget = /\[fake-write:([^\]\s]+)\]/.exec(request.direction)?.[1] ?? null;
+      const filePath = join(worktreePath, namedTarget ?? "NOVUS_FAKE_TURN.md");
       const lines = [
         JSON.stringify({ type: "system", subtype: "init", session_id: sessionId, model: "fake-harness" }),
         JSON.stringify({
@@ -852,7 +964,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
         emit(event);
       }
       // A denial is the whole point: the file is not written.
-      if (allowed) writeFileSync(filePath, `# Fake turn\n\n${request.direction}\n`);
+      if (allowed) {
+        mkdirSync(join(filePath, ".."), { recursive: true });
+        writeFileSync(filePath, `# Fake turn\n\n${request.direction}\n`);
+      }
       // No trailing newline: the flush path is part of what is being exercised.
       stream.push(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Done." }));
       return { code: 0, signal: null, stderr: "", spawnError: null };

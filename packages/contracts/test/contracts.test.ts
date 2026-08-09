@@ -18,6 +18,10 @@ import {
   RespondApprovalInputSchema,
   RunnerEventSchema,
   SessionSchema
+,
+  pathInScope,
+  scopesDisjoint,
+  ScopePatternSchema
 } from "../src/index.js";
 
 describe("contracts", () => {
@@ -65,7 +69,10 @@ describe("contracts", () => {
       title: null,
       createdBy: "usr_abc",
       createdByLogin: "kartik",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      // Unscoped: the whole workspace, exclusively, as every chat was before
+      // scopes existed (D-097).
+      scope: null
     };
     expect(SessionSchema.safeParse(session).success).toBe(true);
     // `ses_` has always been the auth session's; a conversation is `csn_`, and
@@ -308,5 +315,38 @@ describe("the runner event union", () => {
       events: [{ originSeq: 0, event: { kind: "execution.starting", payload: {} } }]
     });
     expect(bad.success).toBe(false);
+  });
+});
+
+describe("chat file scopes (D-097)", () => {
+  it("matches paths the way the patterns read: ** crosses directories, * does not", () => {
+    expect(pathInScope("server/api/routes.ts", ["server/**"])).toBe(true);
+    expect(pathInScope("server/api.md", ["server/**"])).toBe(true);
+    expect(pathInScope("apps/desktop/view.tsx", ["server/**"])).toBe(false);
+    expect(pathInScope("src/a.ts", ["src/*.ts"])).toBe(true);
+    expect(pathInScope("src/deep/a.ts", ["src/*.ts"])).toBe(false);
+    expect(pathInScope("docs/README.md", ["docs/README.md"])).toBe(true);
+    expect(pathInScope("./docs/README.md", ["docs/README.md"])).toBe(true);
+    expect(pathInScope("docs/README.md.bak", ["docs/README.md"])).toBe(false);
+  });
+
+  it("declares scopes disjoint only when it can prove it, and overlap otherwise", () => {
+    expect(scopesDisjoint(["server/**"], ["apps/desktop/**"])).toBe(true);
+    expect(scopesDisjoint(["server/api/**"], ["server/**"])).toBe(false);
+    expect(scopesDisjoint(["server/**"], ["server/api/*.ts"])).toBe(false);
+    // A pattern with no literal prefix could reach anywhere: overlap, always.
+    expect(scopesDisjoint(["*.ts"], ["docs/**"])).toBe(false);
+    expect(scopesDisjoint(["**"], ["docs/**"])).toBe(false);
+    // Sibling files under one directory are still divergent prefixes.
+    expect(scopesDisjoint(["docs/a.md"], ["docs/b.md"])).toBe(true);
+    // `server` the file and `server-tools/**`: diverging, not prefix-related.
+    expect(scopesDisjoint(["server/**"], ["server-tools/**"])).toBe(true);
+  });
+
+  it("refuses patterns that leave the repository", () => {
+    expect(ScopePatternSchema.safeParse("../outside/**").success).toBe(false);
+    expect(ScopePatternSchema.safeParse("/absolute/**").success).toBe(false);
+    expect(ScopePatternSchema.safeParse("a/../b/**").success).toBe(false);
+    expect(ScopePatternSchema.safeParse("server/**").success).toBe(true);
   });
 });
