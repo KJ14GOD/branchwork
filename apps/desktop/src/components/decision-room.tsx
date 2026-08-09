@@ -8,6 +8,7 @@ import type {
 } from "@novus/contracts";
 import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../format";
 import { Dialog } from "./dialog";
+import { PullRequestPanel } from "./pull-request";
 
 /**
  * The Decision Room (D-074, D-075): where competing approaches are compared and
@@ -129,6 +130,7 @@ export function DecisionRoom({
 
       {decision ? (
         <DecisionReceipt
+          detail={detail}
           decision={decision}
           approaches={detail.approaches}
           prepared={detail.preparedPullRequest}
@@ -509,11 +511,13 @@ function RequestRevisionDialog({
  * carry it, prepared and unsent.
  */
 function DecisionReceipt({
+  detail,
   decision,
   approaches,
   prepared,
   superseded
 }: {
+  detail: MissionDetailResponse;
   decision: Decision;
   approaches: ApproachSummary[];
   prepared: PreparedPullRequest | null;
@@ -584,12 +588,17 @@ function DecisionReceipt({
         </p>
       )}
 
-      {prepared && (
+      {/* The tracked request, or the way to open one (D-099). The prepared
+          projection below stays for the un-opened case; once a request
+          exists, its own page carries the snapshot that was actually sent. */}
+      {detail.pullRequest === null && prepared && (
         <section className="prepared-pr" data-testid="prepared-pr">
           <h3 className="field-label">Pull request, prepared</h3>
           <p className="quiet">
-            Nothing has been sent. Novus does not open or merge pull requests
-            {prepared.publishable ? "" : ", and this repository is a folder on a machine rather than a host that could receive one"}.
+            Nothing has been sent yet.
+            {prepared.publishable
+              ? " Novus opens only a draft, and never merges."
+              : " Novus does not open or merge pull requests, and this repository is a folder on a machine rather than a host that could receive one."}
           </p>
           <p className="receipt-line mono">
             {prepared.headRef} → {prepared.baseRef}
@@ -609,6 +618,9 @@ function DecisionReceipt({
             {copied ? "Copied" : "Copy"}
           </button>
         </section>
+      )}
+      {(detail.pullRequest !== null || prepared?.publishable) && (
+        <PullRequestPanel detail={detail} decision={decision} />
       )}
     </section>
   );

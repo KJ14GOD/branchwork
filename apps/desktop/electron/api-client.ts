@@ -13,6 +13,7 @@ import {
   MissionDetailResponseSchema,
   MissionListResponseSchema,
   OkResponseSchema,
+  CreatedPullRequestSchema,
   RecordedDecisionSchema,
   RedeemInvitationResponseSchema,
   RegisterRunnerResponseSchema,
@@ -315,6 +316,46 @@ export class ControlPlaneClient {
       `/missions/${encodeURIComponent(missionId)}/revision`,
       OkResponseSchema,
       input
+    );
+  }
+
+  // --- Publishing a decision (D-099) ----------------------------------------
+
+  async pushBranch(missionId: string, workstreamId?: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/pull-request/push`,
+      OkResponseSchema,
+      workstreamId ? { workstreamId } : {}
+    );
+  }
+
+  async createPullRequest(
+    missionId: string,
+    workstreamId?: string
+  ): Promise<z.infer<typeof CreatedPullRequestSchema>> {
+    return this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/pull-request`,
+      CreatedPullRequestSchema,
+      workstreamId ? { workstreamId } : {}
+    );
+  }
+
+  async requestReview(pullRequestId: string, reviewers: string[]): Promise<void> {
+    await this.request(
+      "POST",
+      `/pull-requests/${encodeURIComponent(pullRequestId)}/request-review`,
+      OkResponseSchema,
+      { reviewers }
+    );
+  }
+
+  async markPullRequestReady(pullRequestId: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/pull-requests/${encodeURIComponent(pullRequestId)}/ready`,
+      OkResponseSchema
     );
   }
 

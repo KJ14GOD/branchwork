@@ -515,6 +515,54 @@ function registerIpc(): void {
     }
   });
 
+  // --- Publishing a decision (D-099) -----------------------------------------
+  // Every verb is a control-plane request gated on pr.manage. There is no
+  // merge handler here, on the server, or in the runner vocabulary.
+
+  ipcMain.handle("novus:pulls:push", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ missionId: MissionIdSchema, workstreamId: z.string().startsWith("wst_").optional() })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed push request." };
+    const result = await call(async () => {
+      await api.pushBranch(parsed.data.missionId, parsed.data.workstreamId);
+      return null;
+    });
+    runner?.pollNow();
+    return result;
+  });
+
+  ipcMain.handle("novus:pulls:create", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ missionId: MissionIdSchema, workstreamId: z.string().startsWith("wst_").optional() })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    return call(() => api.createPullRequest(parsed.data.missionId, parsed.data.workstreamId));
+  });
+
+  ipcMain.handle("novus:pulls:request-review", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        pullRequestId: z.string().startsWith("pr_"),
+        reviewers: z.array(z.string().trim().min(1).max(120)).min(1).max(15)
+      })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Name at least one reviewer." };
+    return call(async () => {
+      await api.requestReview(parsed.data.pullRequestId, parsed.data.reviewers);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:pulls:mark-ready", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("pr_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed pull request id." };
+    return call(async () => {
+      await api.markPullRequestReady(parsed.data);
+      return null;
+    });
+  });
+
   // --- Direction and execution ---------------------------------------------
   // The renderer asks; the control plane decides. It authorizes the direction,
   // records it, and — only when the author holds the lease — enqueues a

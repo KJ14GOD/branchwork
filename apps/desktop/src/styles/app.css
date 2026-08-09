@@ -4196,6 +4196,37 @@ body.resizing {
   gap: var(--s-1);
 }
 
+/* Publishing a decision, and the tracked request's page (D-099): the same
+   receipt anatomy — quiet head labels, one column, words doing the work. */
+.pull-publish,
+.pull-page {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--edge);
+  width: 100%;
+}
+
+.pull-page a {
+  color: var(--text-2);
+  text-decoration: underline;
+}
+
+.pull-page a:hover {
+  color: var(--text-1);
+}
+
+.pull-review-controls {
+  width: 100%;
+}
+
+.pull-review-controls .input {
+  max-width: 320px;
+}
+
 .field {
   display: flex;
   flex-direction: column;

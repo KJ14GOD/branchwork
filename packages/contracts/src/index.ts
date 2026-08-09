@@ -2154,6 +2154,7 @@ export type MissionDetailResponse = z.infer<typeof MissionDetailResponseSchema>;
 
 export const CreatedApproachSchema = z.object({ workstream: WorkstreamSchema });
 export const RecordedDecisionSchema = z.object({ decisionId: z.string().startsWith("dec_") });
+export const CreatedPullRequestSchema = z.object({ pullRequest: PullRequestSchema });
 
 export const AvailableRepositoriesResponseSchema = z.object({
   repositories: z.array(AvailableRepositorySchema)
