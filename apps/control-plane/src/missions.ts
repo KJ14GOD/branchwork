@@ -54,6 +54,7 @@ interface WorkstreamRow {
   intent?: string | null;
   forked_from_wst_id?: string | null;
   origin_sha?: string | null;
+  remote_head_sha?: string | null;
 }
 
 function toRepository(row: MissionRow): RepositoryRef | null {
@@ -104,7 +105,8 @@ function toWorkstream(row: WorkstreamRow): Workstream {
     approach: Boolean(row.approach_flag),
     intent: row.intent ?? null,
     forkedFromWorkstreamId: row.forked_from_wst_id ?? null,
-    originSha: row.origin_sha ?? null
+    originSha: row.origin_sha ?? null,
+    remoteHeadSha: row.remote_head_sha ?? null
   };
 }
 

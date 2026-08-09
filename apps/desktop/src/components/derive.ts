@@ -687,20 +687,50 @@ function primaryStateLine(
       };
     case "decision_recorded": {
       // Two facts, and the line refuses to collapse them: somebody chose, and
-      // nothing has been published (D-075). It never says "done".
+      // what has happened to publication (D-075, D-099). It never says "done".
       const decision = detail.decisions.find((entry) => entry.supersededAt === null);
       const chosen = detail.approaches.find(
         (approach) => approach.workstreamId === decision?.workstreamId
       );
+      const who = decision
+        ? `${decision.decidedByLogin} chose ${chosen?.name ?? "this approach"}`
+        : "a result was chosen";
+      // A resolved pull request is how publication ended, and the sentence
+      // names it rather than going back to "not published yet" — which would
+      // be a lie the moment a merge happened (D-099).
+      const resolved =
+        detail.pullRequest &&
+        (detail.pullRequest.state === "merged" || detail.pullRequest.state === "closed")
+          ? detail.pullRequest
+          : null;
       return {
         ...quiet,
         tone: "neutral",
         name: "Decision recorded",
-        detail: decision
-          ? `${decision.decidedByLogin} chose ${chosen?.name ?? "this approach"} — not published yet`
-          : "a result was chosen — not published yet"
+        detail: resolved
+          ? resolved.state === "merged"
+            ? `${who} — published as PR #${resolved.number}, merged${resolved.mergedBy ? ` by ${resolved.mergedBy}` : ""} on GitHub`
+            : `${who} — PR #${resolved.number} was closed on GitHub without merging`
+          : `${who} — not published yet`
         // No button: the sentence is the state, and the decision is read on
         // Compare, one rail row away (D-084).
+      };
+    }
+    case "pull_request_open": {
+      // The tracked request is the mission's story now (D-099). The sentence
+      // says what stands and where resolution happens; it never offers a
+      // merge, because no verb for one exists.
+      const pr = detail.pullRequest;
+      const openThreads = pr?.reviewThreads.filter((thread) => thread.state === "open").length ?? 0;
+      return {
+        ...quiet,
+        tone: "neutral",
+        name: pr?.state === "ready" ? "Pull request ready" : "Pull request open",
+        detail: pr
+          ? `PR #${pr.number} ${pr.state === "draft" ? "is a draft" : "awaits review"}${
+              openThreads > 0 ? ` · ${plural(openThreads, "open comment")}` : ""
+            }${pr.mergeable === "conflict" ? " · conflicts with its base" : ""} — merging happens on GitHub`
+          : "a pull request is being tracked"
       };
     }
     case "verification_failed":

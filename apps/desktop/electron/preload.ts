@@ -61,6 +61,14 @@ const novus: NovusBridge = {
     decide: (input) => ipcRenderer.invoke("novus:approaches:decide", input),
     requestRevision: (input) => ipcRenderer.invoke("novus:approaches:request-revision", input)
   },
+  // Publishing a decision as a pull request (D-099). No merge verb exists on
+  // this bridge, on the server, or in the runner vocabulary.
+  pulls: {
+    push: (input) => ipcRenderer.invoke("novus:pulls:push", input),
+    create: (input) => ipcRenderer.invoke("novus:pulls:create", input),
+    requestReview: (input) => ipcRenderer.invoke("novus:pulls:request-review", input),
+    markReady: (pullRequestId) => ipcRenderer.invoke("novus:pulls:mark-ready", pullRequestId)
+  },
   control: {
     request: (missionId) => ipcRenderer.invoke("novus:control:request", missionId),
     withdrawRequest: (missionId) => ipcRenderer.invoke("novus:control:withdraw-request", missionId),

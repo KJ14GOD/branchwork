@@ -608,11 +608,15 @@ create index if not exists approval_requests_pending on approval_requests (exe_i
   where state = 'pending';
 
 -- The controller's typed answer is a runner command like any other.
+-- `push_branch` (D-099) puts the mission branch on the repository host; there
+-- is deliberately no merge in this vocabulary, and never will be by accident,
+-- because this is the one place it is written.
 alter table runner_commands drop constraint if exists runner_commands_kind_check;
 alter table runner_commands add constraint runner_commands_kind_check
   check (kind in ('start_execution', 'apply_direction', 'stop_execution', 'boundary_request',
                   'respond_approval',
-                  'run_setup', 'run_command', 'stop_command', 'run_verification'));
+                  'run_setup', 'run_command', 'stop_command', 'run_verification',
+                  'push_branch'));
 
 -- A check proves one lane's revision (D-074). Harness-observed checks could
 -- always be traced through their execution; participant-run ones carry no
@@ -661,6 +665,59 @@ create index if not exists decisions_by_mission on decisions (mission_id, decide
 -- One current decision per mission; the rest are history.
 create unique index if not exists decisions_one_current_per_mission
   on decisions (mission_id) where superseded_at is null;
+
+-- ---------------------------------------------------------------------------
+-- Pull requests (PRODUCT.md#domain-model, D-099). The row D-075 promised: it
+-- starts existing when a request is actually opened on the host, and from
+-- then on Novus tracks it — state, reviews, mergeability — to a resolution
+-- that happens on GitHub, by humans. There is no merge verb anywhere in this
+-- schema, in any route, or in the runner vocabulary above, deliberately.
+-- ---------------------------------------------------------------------------
+
+create table if not exists pull_requests (
+  pr_id            text primary key,
+  org_id           text not null references organizations(org_id),
+  mission_id       text not null references missions(mission_id),
+  wst_id           text not null references workstreams(wst_id),
+  -- The decision this publishes. Publishing is what a decision becomes,
+  -- never a shortcut around one.
+  dec_id           text not null references decisions(dec_id),
+  provider_number  integer not null check (provider_number > 0),
+  url              text not null,
+  state            text not null check (state in ('draft', 'ready', 'merged', 'closed')),
+  mergeable        text not null default 'unknown'
+                   check (mergeable in ('unknown', 'clean', 'conflict')),
+  -- Exactly what was sent, snapshotted at publication: the record of the
+  -- receipt that travelled (D-075's stored-draft rejection, resolved by
+  -- D-099 for the opened case).
+  title            text not null check (length(btrim(title)) > 0),
+  body             text not null check (length(btrim(body)) > 0),
+  base_ref         text not null,
+  head_ref         text not null,
+  -- The revision the remote served when this was opened — the remote-head
+  -- guarantee's receipt.
+  head_sha         text check (head_sha ~ '^[0-9a-f]{40}$'),
+  requested_reviewers jsonb not null default '[]'::jsonb,
+  -- Review threads, ingested read-only and bounded (D-099). A table of their
+  -- own arrives with review.comment; a reflection does not need one.
+  review_threads   jsonb not null default '[]'::jsonb,
+  created_by       text not null references users(user_id),
+  merged_by        text,
+  merged_at        timestamptz,
+  closed_at        timestamptz,
+  created_at       timestamptz not null default now(),
+  last_synced_at   timestamptz
+);
+create index if not exists pull_requests_by_mission on pull_requests (mission_id, created_at);
+-- At most one request that is still open — draft or ready — per lane.
+create unique index if not exists pull_requests_one_open_per_workstream
+  on pull_requests (wst_id) where state in ('draft', 'ready');
+
+-- The remote-head half of the guarantee (D-099): the revision the host is
+-- known to serve for this lane's branch, written only by an observed
+-- successful push. Null is the ordinary local-first state.
+alter table workstreams add column if not exists remote_head_sha text
+  check (remote_head_sha is null or remote_head_sha ~ '^[0-9a-f]{40}$');
 
 -- ---------------------------------------------------------------------------
 -- Sessions (D-083): parallel conversations inside one workstream. A session

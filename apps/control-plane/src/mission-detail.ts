@@ -22,6 +22,7 @@ import {
   summarizeApproaches
 } from "./approaches.ts";
 import { listSessions } from "./sessions.ts";
+import { branchPushFor, pullRequestForLane } from "./pull-requests.ts";
 import type { Db } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
 import { listDirections } from "./directions.ts";
@@ -662,6 +663,15 @@ export async function missionDetail(
   const decisions = await listDecisions(db, access.missionId);
   const current = decisions.find((decision) => decision.supersededAt === null) ?? null;
 
+  // The selected lane's publication story (D-099): its tracked pull request,
+  // and where its branch stands on the remote. Both null-ish for the ordinary
+  // mission that has never published anything.
+  const detailLane = base.workstream;
+  const pullRequest = detailLane ? await pullRequestForLane(db, detailLane.workstreamId) : null;
+  const branchPush = detailLane
+    ? await branchPushFor(db, detailLane.workstreamId, detailLane.remoteHeadSha)
+    : null;
+
   // The state and overlays are the *selected lane's* own (D-080): a mission
   // with a fresh Alternative open must read as a lane with nothing in it, not
   // as its sibling's finished work. With one lane these filters are identity.
@@ -691,7 +701,13 @@ export async function missionDetail(
       )
     : processes;
 
-  const state = current
+  const state = pullRequest && (pullRequest.state === "draft" || pullRequest.state === "ready")
+    ? // A tracked request that is still open is what the mission is now about
+      // (D-099). A merged or closed one falls through to decision_recorded,
+      // whose sentence names how publication ended — `completed` is a
+      // lifecycle this build has not earned.
+      ("pull_request_open" as MissionState)
+    : current
     ? // A recorded decision is what the mission is now about, and the state's
       // whole job is to say that nothing has been published (D-075).
       ("decision_recorded" as MissionState)
@@ -727,6 +743,8 @@ export async function missionDetail(
       workstreams.find((lane) => lane.workstreamId === current?.workstreamId),
       base.mission.repository?.provider ?? null
     ),
+    pullRequest,
+    branchPush,
     events: (eventRows.rows as EventRow[]).map(toMissionEvent),
     participants,
     directions,

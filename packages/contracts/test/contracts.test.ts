@@ -21,7 +21,11 @@ import {
 ,
   pathInScope,
   scopesDisjoint,
-  ScopePatternSchema
+  ScopePatternSchema,
+  MissionStateSchema,
+  PullRequestSchema,
+  RunnerCommandKindSchema,
+  RequestReviewInputSchema
 } from "../src/index.js";
 
 describe("contracts", () => {
@@ -348,5 +352,73 @@ describe("chat file scopes (D-097)", () => {
     expect(ScopePatternSchema.safeParse("/absolute/**").success).toBe(false);
     expect(ScopePatternSchema.safeParse("a/../b/**").success).toBe(false);
     expect(ScopePatternSchema.safeParse("server/**").success).toBe(true);
+  });
+});
+
+describe("the tracked pull request (D-099)", () => {
+  it("pins the new vocabulary: the capability, the state, and the push command", () => {
+    // Server-side enforcement is asserted in the control-plane suite; this
+    // only pins that the words exist to enforce.
+    expect(CapabilitySchema.safeParse("pr.manage").success).toBe(true);
+    expect(MissionStateSchema.safeParse("pull_request_open").success).toBe(true);
+    expect(RunnerCommandKindSchema.safeParse("push_branch").success).toBe(true);
+  });
+
+  it("has no merge word anywhere — not a capability, not a command, not a state", () => {
+    // The absence is the guarantee (D-063's pattern): Novus can put a branch
+    // on a host and can never combine one with another. The route-level half
+    // is asserted in the control-plane suite by asking for a merge and being
+    // told no such thing exists.
+    for (const word of ["pr.merge", "merge.perform", "pull_request.merge"]) {
+      expect(CapabilitySchema.safeParse(word).success, word).toBe(false);
+    }
+    for (const word of ["merge_pull_request", "merge_branch", "merge"]) {
+      expect(RunnerCommandKindSchema.safeParse(word).success, word).toBe(false);
+    }
+    expect(MissionStateSchema.safeParse("merging").success).toBe(false);
+  });
+
+  it("admits only a request that names its decision, its snapshot, and its provenance", () => {
+    const parsed = PullRequestSchema.safeParse({
+      pullRequestId: "pr_a",
+      missionId: "msn_a",
+      workstreamId: "wst_a",
+      decisionId: "dec_a",
+      number: 4,
+      url: "https://github.com/novus/demo-app/pull/4",
+      state: "draft",
+      mergeable: "unknown",
+      title: "Ship the auth change",
+      body: "## What this is\nreal body",
+      baseRef: "main",
+      headRef: "novus/m-abc",
+      headSha: "a".repeat(40),
+      requestedReviewers: ["maya"],
+      reviewThreads: [],
+      createdBy: "usr_a",
+      createdByLogin: "kartik",
+      mergedBy: null,
+      mergedAt: null,
+      closedAt: null,
+      createdAt: new Date().toISOString(),
+      lastSyncedAt: null
+    });
+    expect(parsed.success).toBe(true);
+    // A pull request without the decision it publishes cannot exist.
+    expect(
+      PullRequestSchema.safeParse({
+        ...(parsed.success ? parsed.data : {}),
+        decisionId: undefined
+      }).success
+    ).toBe(false);
+  });
+
+  it("requires at least one named reviewer to ask for review", () => {
+    expect(
+      RequestReviewInputSchema.safeParse({ pullRequestId: "pr_a", reviewers: [] }).success
+    ).toBe(false);
+    expect(
+      RequestReviewInputSchema.safeParse({ pullRequestId: "pr_a", reviewers: ["maya"] }).success
+    ).toBe(true);
   });
 });

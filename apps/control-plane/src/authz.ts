@@ -31,6 +31,11 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     // instead. Also role-held: choosing between approaches is not an operating
     // verb on either of them (D-075).
     "review.approve",
+    // Publishing the decision and stewarding its pull request — push, open
+    // draft, request review, mark ready. Role-held for the same reason as
+    // review.approve, and never a merge: no capability grants one, because no
+    // verb for one exists (D-099).
+    "pr.manage",
     "workspace.command",
     "control.request",
     "control.accept",
@@ -43,6 +48,7 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     "execution.stop",
     "approach.create",
     "review.approve",
+    "pr.manage",
     "workspace.command",
     "control.request",
     "control.accept"

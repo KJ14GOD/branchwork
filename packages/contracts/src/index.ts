@@ -37,6 +37,12 @@ export const MissionStateSchema = z.enum([
    *  and deliberately not "done": nothing has been published, which is a
    *  different fact and is said as one (D-075). */
   "decision_recorded",
+  /** A tracked pull request exists and is not yet resolved — draft or ready,
+   *  reviews and mergeability tracked (D-099). Merging happens on GitHub, by
+   *  humans; a merged or closed request returns the mission to
+   *  `decision_recorded`, whose sentence then names how publication ended,
+   *  because `completed` is a lifecycle this build has not earned yet. */
+  "pull_request_open",
   "verification_failed",
   "execution_interrupted"
 ]);
@@ -127,7 +133,11 @@ export const WorkstreamSchema = z.object({
   /** The lane this forked from, and the exact revision it forked at — two
    *  approaches are comparable because they started from the same commit. */
   forkedFromWorkstreamId: z.string().startsWith("wst_").nullable().default(null),
-  originSha: z.string().nullable().default(null)
+  originSha: z.string().nullable().default(null),
+  /** The revision the repository host is known to serve for this branch —
+   *  written only by an observed successful push (D-099). Null means nothing
+   *  has ever been pushed, which is the ordinary local-first state. */
+  remoteHeadSha: ShaSchema.nullable().default(null)
 });
 export type Workstream = z.infer<typeof WorkstreamSchema>;
 
@@ -342,6 +352,10 @@ export const CapabilitySchema = z.enum([
   /** Record a decision, or ask for a revision instead. PRODUCT.md's capability
    *  table has carried this since the first draft; D-075 implements it. */
   "review.approve",
+  /** Publish and steward the mission's pull request: push the branch, open
+   *  the draft, request reviewers, mark it ready. Never merge — no capability
+   *  grants that, because no verb for it exists anywhere (D-099). */
+  "pr.manage",
   "workspace.command",
   /** Answering a harness approval. Lease-held only — a Mission Admin who is not
    *  the controller cannot answer for them (PRODUCT.md#roles-and-capabilities). */
@@ -653,6 +667,98 @@ export const PreparedPullRequestSchema = z.object({
   publishable: z.boolean()
 });
 export type PreparedPullRequest = z.infer<typeof PreparedPullRequestSchema>;
+
+// --- The tracked pull request (D-099) ----------------------------------------
+// The row D-075 promised: it starts existing when a request is actually
+// opened, and from then on the mission tracks it — state, reviews,
+// mergeability — to a resolution that happens on GitHub, by humans. Novus
+// opens drafts, requests review, and marks ready; there is no merge verb in
+// this file, in any route, or in any runner command, deliberately.
+
+export const PullRequestStateSchema = z.enum([
+  /** Opened as a draft — the only way Novus opens one. */
+  "draft",
+  /** Marked ready for review, by a person, through pr.manage. */
+  "ready",
+  /** Merged on GitHub. Novus observed it; nothing here performed it. */
+  "merged",
+  /** Closed on GitHub without merging. */
+  "closed"
+]);
+export type PullRequestState = z.infer<typeof PullRequestStateSchema>;
+
+/** What the host says about merging cleanly. `unknown` while it is still
+ *  computing — an honest third state, never collapsed into either answer. */
+export const MergeableStateSchema = z.enum(["unknown", "clean", "conflict"]);
+export type MergeableState = z.infer<typeof MergeableStateSchema>;
+
+/** One review comment thread, ingested read-only (D-099): resolving happens
+ *  on the host, and Novus reflects it rather than owning it. Bounded like
+ *  every ingested claim. */
+export const ReviewThreadSchema = z.object({
+  author: z.string().max(120),
+  body: z.string().max(2_000),
+  /** The file the comment anchors to, when it anchors to one. */
+  path: z.string().max(300).nullable(),
+  state: z.enum(["open", "resolved"]),
+  url: z.string().max(600).nullable(),
+  postedAt: z.string().max(40)
+});
+export type ReviewThread = z.infer<typeof ReviewThreadSchema>;
+
+export const PullRequestSchema = z.object({
+  pullRequestId: z.string().startsWith("pr_"),
+  missionId: z.string().startsWith("msn_"),
+  workstreamId: z.string().startsWith("wst_"),
+  /** The decision this publishes. A pull request without one cannot exist:
+   *  publishing is what a decision becomes, never a shortcut around one. */
+  decisionId: z.string().startsWith("dec_"),
+  number: z.number().int().positive(),
+  url: z.string().max(600),
+  state: PullRequestStateSchema,
+  mergeable: MergeableStateSchema,
+  title: z.string().min(1).max(300),
+  /** Exactly what was sent, snapshotted at publication — the record of the
+   *  receipt that travelled, where the *prepared* projection stays live for
+   *  the un-opened case (D-075, D-099). */
+  body: z.string().min(1).max(20_000),
+  baseRef: z.string().min(1).max(300),
+  headRef: z.string().min(1).max(300),
+  /** The revision the remote branch served when this was opened — the
+   *  remote-head guarantee's receipt (D-099). */
+  headSha: ShaSchema.nullable(),
+  requestedReviewers: z.array(z.string().max(120)).max(15),
+  reviewThreads: z.array(ReviewThreadSchema).max(50),
+  createdBy: z.string().startsWith("usr_"),
+  createdByLogin: z.string().min(1),
+  /** Who merged it on the host, as the host reports them. */
+  mergedBy: z.string().max(120).nullable(),
+  mergedAt: z.string().datetime().nullable(),
+  closedAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+  lastSyncedAt: z.string().datetime().nullable()
+});
+export type PullRequest = z.infer<typeof PullRequestSchema>;
+
+/** Where the mission branch stands on the remote — the push half of the
+ *  remote-head guarantee, read from the one push command in flight or the
+ *  workstream's recorded remote head (D-099). */
+export const BranchPushSchema = z.object({
+  state: z.enum(["none", "pending", "completed", "failed"]),
+  /** The revision the remote is known to serve, null until a push landed. */
+  remoteHeadSha: ShaSchema.nullable(),
+  failureReason: z.string().max(400).nullable()
+});
+export type BranchPush = z.infer<typeof BranchPushSchema>;
+
+export const RequestReviewInputSchema = z.object({
+  pullRequestId: z.string().startsWith("pr_"),
+  reviewers: z
+    .array(z.string().trim().min(1).max(120))
+    .min(1, "Name at least one reviewer.")
+    .max(15)
+});
+export type RequestReviewInput = z.infer<typeof RequestReviewInputSchema>;
 
 export const ApprovalStateSchema = z.enum([
   "pending",
@@ -1614,7 +1720,13 @@ export const RunnerCommandKindSchema = z.enum([
   "run_setup",
   "run_command",
   "stop_command",
-  "run_verification"
+  "run_verification",
+  /** Push the mission branch to the repository host, up to the decided
+   *  checkpoint — the remote-head guarantee's working half (D-099). The
+   *  credential is minted per operation, write-scoped, and never stored.
+   *  There is deliberately no merge command: this vocabulary can put a
+   *  branch on a host and can never combine one with another. */
+  "push_branch"
 ]);
 
 export const RunnerCommandSchema = z.object({
@@ -1784,6 +1896,19 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         command: BOUNDED_LINE,
         output: z.string().max(4_000).nullable().default(null),
         truncated: z.boolean().default(false)
+      })
+      .strict()
+  }),
+  z.object({
+    /** The mission branch landed on the repository host (D-099): the branch,
+     *  and the exact revision the remote now serves. Only success reports —
+     *  a failed push settles its command as failed with the reason, and the
+     *  remote head simply does not move. */
+    kind: z.literal("workspace.pushed"),
+    payload: z
+      .object({
+        branch: BOUNDED_LINE,
+        sha: z.string().regex(/^[0-9a-f]{40}$/)
       })
       .strict()
   }),
@@ -1998,6 +2123,13 @@ export const MissionDetailResponseSchema = z.object({
   decisions: z.array(DecisionSchema),
   /** What would be published, if a decision has been recorded (D-075). */
   preparedPullRequest: PreparedPullRequestSchema.nullable(),
+  /** The tracked pull request, once one was actually opened (D-099). At most
+   *  one that is not closed per workstream; the detail carries the selected
+   *  lane's. */
+  pullRequest: PullRequestSchema.nullable().default(null),
+  /** Where the selected lane's branch stands on the remote — the push half
+   *  of publishing (D-099). */
+  branchPush: BranchPushSchema.nullable().default(null),
   events: z.array(EventSchema),
   participants: z.array(ParticipantSchema),
   directions: z.array(DirectionSchema),
@@ -2256,6 +2388,27 @@ export interface NovusBridge {
       workstreamId: string;
       reason: string;
     }): Promise<IpcResult<null>>;
+  };
+  /**
+   * Publishing a decision as a pull request, and stewarding it (D-099).
+   * Every verb is a server request gated on `pr.manage`; there is no merge
+   * verb here, on the server, or in the runner vocabulary — merging happens
+   * on GitHub, by humans, and Novus tracks it.
+   */
+  pulls: {
+    /** Pushes the mission branch to the host, up to the decided checkpoint —
+     *  the remote-head guarantee (D-099). Enqueued to the runner holding the
+     *  worktree; progress is read from the mission detail's branchPush. */
+    push(input: { missionId: string; workstreamId?: string }): Promise<IpcResult<null>>;
+    /** Opens the draft pull request from the current decision. Refused in
+     *  words until the remote head equals the decided checkpoint. */
+    create(input: {
+      missionId: string;
+      workstreamId?: string;
+    }): Promise<IpcResult<{ pullRequest: PullRequest }>>;
+    requestReview(input: { pullRequestId: string; reviewers: string[] }): Promise<IpcResult<null>>;
+    /** Marks the draft ready for review. A person's act, like every other. */
+    markReady(pullRequestId: string): Promise<IpcResult<null>>;
   };
   control: {
     request(missionId: string): Promise<IpcResult<null>>;

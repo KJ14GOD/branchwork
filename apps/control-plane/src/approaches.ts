@@ -72,7 +72,8 @@ export function toWorkstream(row: Record<string, unknown>): Workstream {
     approach: Boolean(row.approach_flag),
     intent: (row.intent as string | null) ?? null,
     forkedFromWorkstreamId: (row.forked_from_wst_id as string | null) ?? null,
-    originSha: (row.origin_sha as string | null) ?? null
+    originSha: (row.origin_sha as string | null) ?? null,
+    remoteHeadSha: (row.remote_head_sha as string | null) ?? null
   };
 }
 

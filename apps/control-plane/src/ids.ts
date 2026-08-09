@@ -47,6 +47,10 @@ export const newDecisionId = () => `dec_${opaque(20)}`;
 // above has always been the auth session's prefix.
 export const newWorkstreamSessionId = () => `csn_${opaque(20)}`;
 
+// The tracked pull request — the row that starts existing when one is
+// actually opened (D-075's promise, D-099's delivery).
+export const newPullRequestId = () => `pr_${opaque(20)}`;
+
 /** Single-use secrets handed out exactly once: invitation tokens and runner
  *  credentials. Only their SHA-256 hash is ever stored. */
 export const newSecretToken = () => randomBytes(32).toString("base64url");
