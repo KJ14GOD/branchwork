@@ -7,8 +7,7 @@ import { buildServer } from "../src/server.ts";
 import {
   BranchConflictError,
   FakeRepositoryProvider,
-  UnconfiguredRepositoryProvider,
-  type RepositoryProvider
+  UnconfiguredRepositoryProvider
 } from "../src/repo-provider.ts";
 
 // Deterministic tests for the repository/workstream slice against a real

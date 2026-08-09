@@ -663,13 +663,17 @@ export async function missionDetail(
   const decisions = await listDecisions(db, access.missionId);
   const current = decisions.find((decision) => decision.supersededAt === null) ?? null;
 
-  // The selected lane's publication story (D-099): its tracked pull request,
-  // and where its branch stands on the remote. Both null-ish for the ordinary
-  // mission that has never published anything.
-  const detailLane = base.workstream;
-  const pullRequest = detailLane ? await pullRequestForLane(db, detailLane.workstreamId) : null;
-  const branchPush = detailLane
-    ? await branchPushFor(db, detailLane.workstreamId, detailLane.remoteHeadSha)
+  // The publication story (D-099): the tracked pull request and the branch's
+  // remote standing — for the **decision's** lane once a decision stands,
+  // because publishing is what a decision becomes, whichever lane the reader
+  // happens to have on screen; the selected lane's otherwise. Both null-ish
+  // for the ordinary mission that has never published anything.
+  const publishLane = current
+    ? (workstreams.find((lane) => lane.workstreamId === current.workstreamId) ?? base.workstream)
+    : base.workstream;
+  const pullRequest = publishLane ? await pullRequestForLane(db, publishLane.workstreamId) : null;
+  const branchPush = publishLane
+    ? await branchPushFor(db, publishLane.workstreamId, publishLane.remoteHeadSha)
     : null;
 
   // The state and overlays are the *selected lane's* own (D-080): a mission

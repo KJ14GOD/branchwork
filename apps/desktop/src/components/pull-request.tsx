@@ -32,8 +32,13 @@ export function PullRequestPanel({
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const missionId = detail.mission.missionId;
-  const workstreamId = detail.workstream?.workstreamId;
-  const lane = detail.workstream;
+  // Publishing is the decision's act: every verb targets the decided lane,
+  // whichever lane the reader has on screen (D-099). The detail's pullRequest
+  // and branchPush are already computed for the same lane by the server.
+  const workstreamId = decision.workstreamId;
+  const lane =
+    detail.workstreams.find((entry) => entry.workstreamId === decision.workstreamId) ??
+    detail.workstream;
   const push = detail.branchPush;
   const pull = detail.pullRequest;
 
@@ -70,11 +75,7 @@ export function PullRequestPanel({
             capabilities={detail.capabilities}
             denialReason={DENIAL}
             holderLogin={detail.control.holderLogin}
-            onClick={() =>
-              void act(() =>
-                novus().pulls.push({ missionId, ...(workstreamId ? { workstreamId } : {}) })
-              )
-            }
+            onClick={() => void act(() => novus().pulls.push({ missionId, workstreamId }))}
             variant="secondary"
             testid="push-branch"
           >
@@ -85,11 +86,7 @@ export function PullRequestPanel({
             capabilities={detail.capabilities}
             denialReason={DENIAL}
             holderLogin={detail.control.holderLogin}
-            onClick={() =>
-              void act(() =>
-                novus().pulls.create({ missionId, ...(workstreamId ? { workstreamId } : {}) })
-              )
-            }
+            onClick={() => void act(() => novus().pulls.create({ missionId, workstreamId }))}
             variant="secondary"
             disabled={busy || !decidedServed}
             disabledReason="The draft opens once GitHub serves the decided revision — push the branch first."
