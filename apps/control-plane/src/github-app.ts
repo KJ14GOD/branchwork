@@ -16,7 +16,13 @@ export function registerGithubAppSetup(app: FastifyInstance, config: Config): vo
       url: config.publicBaseUrl,
       redirect_url: `${config.publicBaseUrl}/setup/github-app/callback`,
       public: false,
-      default_permissions: { contents: "write", metadata: "read" },
+      // `pull_requests: write` covers the whole D-099 surface: draft create,
+      // reviewer requests, mark-ready, and reading reviews/comments. There is
+      // deliberately no scope here a merge would need beyond it — the absence
+      // of a merge verb is Novus's own (D-099) — and an app created before
+      // this scope was added needs the permission added in its GitHub
+      // settings and the installation re-approved by its owner.
+      default_permissions: { contents: "write", metadata: "read", pull_requests: "write" },
       default_events: []
     };
     return reply.type("text/html").send(
