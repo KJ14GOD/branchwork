@@ -99,6 +99,22 @@ const novus: NovusBridge = {
     supplySecret: (input) => ipcRenderer.invoke("novus:workspace:supply-secret", input),
     forgetSecret: (input) => ipcRenderer.invoke("novus:workspace:forget-secret", input),
     openPreview: (input) => ipcRenderer.invoke("novus:workspace:open-preview", input),
+    // The embedded preview surface (D-098). The renderer reserves a rectangle
+    // and reads a status; the view, its address, and its navigation belong to
+    // the main process.
+    preview: {
+      open: (input) => ipcRenderer.invoke("novus:preview:open", input),
+      setBounds: (bounds) => ipcRenderer.invoke("novus:preview:set-bounds", bounds),
+      hide: () => ipcRenderer.invoke("novus:preview:hide"),
+      reload: () => ipcRenderer.invoke("novus:preview:reload"),
+      close: () => ipcRenderer.invoke("novus:preview:close"),
+      status: () => ipcRenderer.invoke("novus:preview:status"),
+      onStatus: (listener) => {
+        const wrapped = (_event: unknown, status: Parameters<typeof listener>[0]) => listener(status);
+        ipcRenderer.on("novus:preview-status", wrapped);
+        return () => ipcRenderer.removeListener("novus:preview-status", wrapped);
+      }
+    },
     listFiles: (input) => ipcRenderer.invoke("novus:workspace:list-files", input),
     readFile: (input) => ipcRenderer.invoke("novus:workspace:read-file", input),
     writeFile: (input) => ipcRenderer.invoke("novus:workspace:write-file", input)

@@ -12,6 +12,7 @@ import {
   MissionRoleSchema,
   OpenPreviewInputSchema,
   OpenTerminalInputSchema,
+  PreviewBoundsSchema,
   PrepareLocalFilesInputSchema,
   ReadWorkspaceFileInputSchema,
   RespondApprovalInputSchema,
@@ -64,6 +65,18 @@ import {
   writeTerminal,
   type WorkspaceTarget
 } from "./workspace";
+import { resolvePreviewTarget } from "./preview-policy";
+import {
+  attachPreviewHost,
+  closeEmbeddedPreview,
+  embeddedPreviewStatus,
+  hideEmbeddedPreview,
+  noteProcessChunk,
+  onEmbeddedPreviewStatus,
+  openEmbeddedPreview,
+  reloadEmbeddedPreview,
+  setEmbeddedPreviewBounds
+} from "./workspace-preview";
 import { SessionStore } from "./session-store";
 
 // The main process logs diagnostics with console.*, and those writes go to
@@ -945,9 +958,68 @@ function registerIpc(): void {
     });
   });
 
+  // The embedded preview surface (D-098). Every verb is local, and every gate
+  // stays in this process: the address is validated against the workstream's
+  // own live processes here, and the view's navigation is confined here — the
+  // renderer only reserves a rectangle and reads what happened.
+
+  ipcMain.handle("novus:preview:open", async (_event, raw: unknown) => {
+    const parsed = OpenPreviewInputSchema.and(z.object({ bounds: PreviewBoundsSchema })).safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed preview request." };
+    return call(async () => {
+      const target = await targetFor(parsed.data.missionId, parsed.data.workstreamId);
+      const resolved = resolvePreviewTarget(
+        parsed.data.url,
+        processLogsFor(target.workstreamId)
+      );
+      return openEmbeddedPreview(target.workstreamId, resolved, parsed.data.bounds);
+    });
+  });
+
+  ipcMain.handle("novus:preview:set-bounds", async (_event, raw: unknown) => {
+    const parsed = PreviewBoundsSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed bounds." };
+    return call(async () => {
+      setEmbeddedPreviewBounds(parsed.data);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:preview:hide", async () => {
+    return call(async () => {
+      hideEmbeddedPreview();
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:preview:reload", async () => {
+    return call(async () => {
+      reloadEmbeddedPreview();
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:preview:close", async () => {
+    return call(async () => {
+      closeEmbeddedPreview();
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:preview:status", async () => {
+    return call(async () => embeddedPreviewStatus());
+  });
+
+  onEmbeddedPreviewStatus((status) => window?.webContents.send("novus:preview-status", status));
+
   // Process output goes to this window and stops there, exactly like terminal
   // output: it is never an event, never reported, and never evidence.
-  onProcessLog((chunk) => window?.webContents.send("novus:process-log", chunk));
+  onProcessLog((chunk) => {
+    // The preview hears it first: a stopped process must take its page down
+    // before anything else reads the room.
+    noteProcessChunk(chunk);
+    window?.webContents.send("novus:process-log", chunk);
+  });
 
   ipcMain.handle("novus:workspace:stop", async (_event, raw: unknown) => {
     const parsed = z
@@ -1067,6 +1139,7 @@ function createWindow(): void {
     }
   });
   window.loadFile(join(__dirname, "..", "dist-renderer", "index.html"));
+  attachPreviewHost(window);
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://")) shell.openExternal(url);
     return { action: "deny" };

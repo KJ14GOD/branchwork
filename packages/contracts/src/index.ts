@@ -1204,6 +1204,66 @@ export const OpenPreviewInputSchema = z.object({
   url: z.string().min(1).max(2_000)
 });
 
+// --- The preview surface (D-098) ---------------------------------------------
+// The embedded, interactive view of a running local application, inside the
+// window instead of handed to an external browser. Same gates as D-045 —
+// loopback `http`/`https` only, no credentials, no control characters, and
+// only an address a **live** process of this workstream actually reported —
+// enforced in the Electron main process, which also owns the embedded view's
+// navigation outright: the top frame may go nowhere but the approved origin.
+// This is not a browser. No address-bar verb exists on this bridge, and the
+// renderer can only name a URL the room already showed it.
+
+/** Where the embedded view sits, in the window's own CSS pixels — the
+ *  renderer measures the rectangle it reserved and the main process places
+ *  the native view over exactly that. */
+export const PreviewBoundsSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  width: z.number().finite().min(0).max(20_000),
+  height: z.number().finite().min(0).max(20_000)
+});
+export type PreviewBounds = z.infer<typeof PreviewBoundsSchema>;
+
+/**
+ * What the embedded page itself is doing. Deliberately not the application's
+ * readiness: a page can render while the declared readiness signal is still
+ * unanswered, and readiness stays the process's own declared fact (D-045).
+ * `ready` here claims one thing only — the page loaded — never that the
+ * application is correct.
+ */
+export const PreviewPhaseSchema = z.enum([
+  /** The view exists and the page is loading. */
+  "loading",
+  /** The page finished loading. A fact about one HTTP response, nothing more. */
+  "ready",
+  /** The page could not load — the address did not answer. */
+  "unreachable",
+  /** The embedded page's own renderer died. */
+  "crashed",
+  /** The process that reported this address has ended; the view is down and
+   *  the surface says so rather than showing a page nothing is serving. */
+  "stopped"
+]);
+export type PreviewPhase = z.infer<typeof PreviewPhaseSchema>;
+
+export const PreviewStatusSchema = z.object({
+  workstreamId: z.string().startsWith("wst_"),
+  /** The validated address the view is showing, rebuilt from parsed parts. */
+  url: LoopbackUrl,
+  /** The approved origin; the top frame can navigate nowhere else. */
+  origin: z.string().max(300),
+  /** The live run process that reported this address — the preview's identity
+   *  is that process's, and it opens for no other reason (D-045, D-098). */
+  processId: z.string().startsWith("prc_"),
+  processName: z.string().min(1),
+  phase: PreviewPhaseSchema,
+  /** The phase in words where there are any — a load error's description, or
+   *  how the process ended. Sanitized like all process reporting. */
+  detail: z.string().max(400).nullable()
+});
+export type PreviewStatus = z.infer<typeof PreviewStatusSchema>;
+
 // --- The runtime dock (D-045) ------------------------------------------------
 // Setup, run, and verification output, bounded and redacted, for the machine
 // that ran it. It crosses the local IPC bridge and stops there — exactly like
@@ -2265,6 +2325,37 @@ export interface NovusBridge {
     /** Opens a loopback preview in the operating system's browser. No shell
      *  command is involved and nothing but loopback http/https is accepted. */
     openPreview(input: { missionId: string; workstreamId?: string; url: string }): Promise<IpcResult<null>>;
+    /**
+     * The embedded preview surface (D-098). Local, like the terminal: the
+     * page it shows is served by a process on this machine, so there is no
+     * control-plane route and nothing for a remote participant to reach. The
+     * main process validates the address against the workstream's own live
+     * processes, owns the view, and confines its navigation to the approved
+     * origin; the renderer only reserves the rectangle and reads the status.
+     */
+    preview: {
+      /** Shows the embedded view for an address a live run process of this
+       *  workstream reported. Reopening with the same address reuses the
+       *  existing view and its state; it never restarts anything. */
+      open(input: {
+        missionId: string;
+        workstreamId?: string;
+        url: string;
+        bounds: PreviewBounds;
+      }): Promise<IpcResult<PreviewStatus>>;
+      /** Where the reserved rectangle currently is. Also shows a hidden view. */
+      setBounds(bounds: PreviewBounds): Promise<IpcResult<null>>;
+      /** Takes the view off screen without discarding it — the tab lost the
+       *  canvas, not the person's place in the page. */
+      hide(): Promise<IpcResult<null>>;
+      /** Reloads the page. The process is not touched. */
+      reload(): Promise<IpcResult<null>>;
+      /** Discards the view. The process is never stopped by this. */
+      close(): Promise<IpcResult<null>>;
+      /** The current embedded preview, if one exists. */
+      status(): Promise<IpcResult<PreviewStatus | null>>;
+      onStatus(listener: (status: PreviewStatus | null) => void): () => void;
+    };
     /**
      * The workspace's own files (D-048). Local, like the terminal: the worktree
      * is on this machine, every path is resolved against it and refused if it
