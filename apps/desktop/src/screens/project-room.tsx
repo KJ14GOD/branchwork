@@ -38,6 +38,8 @@ import type { InspectorSection } from "../components/inspector";
 import { DecisionRoom } from "../components/decision-room";
 import { Dialog } from "../components/dialog";
 import { FileView } from "../components/file-view";
+import { PreviewSurface } from "../components/preview-surface";
+import { PREVIEW_TAB_KEY, type OpenPreviewTab } from "../components/preview";
 
 /** The mark that says a tab is a file rather than the room itself. */
 function FileGlyph() {
@@ -134,7 +136,10 @@ export function ProjectRoom({
   decisionOpen,
   onDecisionOpen,
   sessionDraft,
-  onSessionDraft
+  onSessionDraft,
+  previewTab,
+  onClosePreview,
+  onReopenPreview
 }: {
   project: Project;
   details: Record<string, MissionDetailResponse>;
@@ -187,6 +192,13 @@ export function ProjectRoom({
   onDecisionOpen: (open: boolean) => void;
   sessionDraft: boolean;
   onSessionDraft: (open: boolean) => void;
+  /** The preview tab, at most one per mission (D-098). Selection rides
+   *  `activeFile` under `PREVIEW_TAB_KEY`, so everything that selects another
+   *  canvas already deselects it. The shell owns the entry, because the Run
+   *  control that opens it lives in the top bar. */
+  previewTab: OpenPreviewTab | null;
+  onClosePreview: () => void;
+  onReopenPreview: (url: string) => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -745,6 +757,9 @@ export function ProjectRoom({
   /** The file tab being read, resolved from its key — null when the canvas is
    *  the mission's own. */
   const activeFileEntry = openFiles.find((file) => file.key === activeFile) ?? null;
+  /** The preview taking the canvas (D-098): the sentinel where a file key
+   *  would be, and a tab to show it for. */
+  const previewSelected = activeFile === PREVIEW_TAB_KEY && previewTab !== null;
 
   return (
     <div className="room" data-testid="project-room">
@@ -757,7 +772,7 @@ export function ProjectRoom({
           the colours tie a lane's tab to its sessions and files. A mission
           with one approach, one conversation and nothing open shows no strip
           at all. */}
-      {(openFiles.length > 0 || decisionOpen || multiLane || sessionChrome) && (
+      {(openFiles.length > 0 || decisionOpen || previewTab !== null || multiLane || sessionChrome) && (
         <div
           className="tabbar"
           role="tablist"
@@ -1013,6 +1028,43 @@ export function ProjectRoom({
                 }}
                 aria-label="Close the comparison"
                 title="Close the comparison"
+              >
+                ×
+              </button>
+            </span>
+          )}
+          {/* The preview, while it is open, is a closable sibling like
+              Compare (D-098): the window onto the running app sits beside the
+              conversation and the files, and closing it never stops the app. */}
+          {previewTab !== null && (
+            <span
+              className={previewSelected ? "tab file-tab active" : "tab file-tab"}
+              data-testid="preview-tab"
+            >
+              <button
+                role="tab"
+                aria-selected={previewSelected}
+                className="file-tab-open"
+                onClick={() => {
+                  // The tab's own lane, exactly as a file tab moves the room
+                  // to its worktree (D-084): the preview shows one lane's app.
+                  if (previewTab.workstreamId !== activeWorkstreamId) {
+                    onSelectLane(previewTab.workstreamId);
+                  }
+                  onSelectFile(PREVIEW_TAB_KEY);
+                  onDecisionOpen(false);
+                  onSessionDraft(false);
+                }}
+                title={`Preview — ${previewTab.url}`}
+              >
+                <span className="file-tab-name">Preview</span>
+              </button>
+              <button
+                className="file-tab-close"
+                onClick={onClosePreview}
+                aria-label="Close the preview"
+                title="Close the preview — the app keeps running"
+                data-testid="preview-tab-close"
               >
                 ×
               </button>
@@ -1319,6 +1371,16 @@ export function ProjectRoom({
           missionId={selectedMissionId}
           workstreamId={activeFileEntry.workstreamId ?? undefined}
           path={activeFileEntry.path}
+        />
+      ) : previewSelected && previewTab !== null && selectedMissionId !== null ? (
+        <PreviewSurface
+          key={`${previewTab.workstreamId ?? "first"}:${previewTab.url}`}
+          missionId={selectedMissionId}
+          workstreamId={previewTab.workstreamId}
+          url={previewTab.url}
+          name={previewTab.name}
+          detail={detail ?? null}
+          onReopen={onReopenPreview}
         />
       ) : decisionOpen && detail ? (
         <div className="feed-scroll">

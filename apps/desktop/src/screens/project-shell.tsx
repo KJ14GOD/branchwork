@@ -38,7 +38,8 @@ import {
   type OpenTab,
   type WorkingSet
 } from "../components/working-set";
-import { laneView, sessionActivity, sessionNeedsYou } from "../components/derive";
+import { laneView, liveRunProcess, sessionActivity, sessionNeedsYou } from "../components/derive";
+import { PREVIEW_TAB_KEY, type OpenPreviewTab } from "../components/preview";
 import { deriveGoal, plural, truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
 import { Inspector, type InspectorSection } from "../components/inspector";
@@ -686,6 +687,12 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
    *  each wearing its lane's dot (D-084). `key` is lane + path. */
   const [filesByTab, setFilesByTab] = useState<Record<string, OpenFileTab[]>>({});
   const [activeFileByTab, setActiveFileByTab] = useState<Record<string, string | null>>({});
+  /** The preview tab per open mission (D-098): at most one, ephemeral exactly
+   *  like the file tabs above — the app it shows is a process, not view
+   *  state, and reopening a mission reopens its trace. Selection rides
+   *  `activeFileByTab` under `PREVIEW_TAB_KEY`, so everything that selects
+   *  another canvas already deselects the preview. */
+  const [previewByTab, setPreviewByTab] = useState<Record<string, OpenPreviewTab | null>>({});
   /** Which projects are showing their missions. Disclosure is the reader's
    *  choice and survives selection moving elsewhere. */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -913,6 +920,22 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     (tab: OpenTab) => {
       setWorkingSet((previous) => closeTab(previous, tab.id));
       forgetTabFiles(tab.id);
+      // The preview tab goes with its mission tab. If the one native view is
+      // this tab's, it is asked down too — the process it showed keeps
+      // running (D-098). Another mission's view is left alone.
+      setPreviewByTab((previous) => {
+        const entry = previous[tab.id];
+        if (entry === undefined) return previous;
+        const next = { ...previous };
+        delete next[tab.id];
+        void (async () => {
+          const status = await novus().workspace.preview.status();
+          if (status.ok && status.value !== null && entry !== null && status.value.url === entry.url) {
+            await novus().workspace.preview.close();
+          }
+        })();
+        return next;
+      });
     },
     [forgetTabFiles]
   );
@@ -1115,6 +1138,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   };
   const openFiles = active ? (filesByTab[active.id] ?? []) : [];
   const activeFile = active ? (activeFileByTab[active.id] ?? null) : null;
+  const previewTab = active ? (previewByTab[active.id] ?? null) : null;
 
   const labelOf = useCallback(
     (tab: OpenTab): string => {
@@ -1138,6 +1162,50 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     const current = activeTabOf(workingSetRef.current);
     if (!current) return;
     setWorkingSet((previous) => selectLane(previous, current.id, workstreamId));
+  }, []);
+
+  /**
+   * Opens the preview as a tab on the room's working row (D-098). The address
+   * is the one the Run control showed — a URL a live process reported — and
+   * the lane is captured as the tab's own fact, exactly like a file tab's.
+   * The main process validates it all again; this only reserves the place.
+   */
+  const openPreviewTab = useCallback(
+    (url: string) => {
+      const current = activeTabOf(workingSetRef.current);
+      if (!current) return;
+      const detail = current.missionId !== null ? details[current.missionId] : undefined;
+      const name = detail ? (liveRunProcess(laneView(detail))?.name ?? "app") : "app";
+      setPreviewByTab((previous) => ({
+        ...previous,
+        [current.id]: { url, workstreamId: current.workstreamId, name }
+      }));
+      setActiveFileByTab((previous) => ({ ...previous, [current.id]: PREVIEW_TAB_KEY }));
+      setDecisionOpen(false);
+      setSessionDraft(false);
+    },
+    [details]
+  );
+
+  const closePreviewTab = useCallback(() => {
+    const current = activeTabOf(workingSetRef.current);
+    if (!current) return;
+    setPreviewByTab((previous) => ({ ...previous, [current.id]: null }));
+    setActiveFileByTab((previous) =>
+      previous[current.id] === PREVIEW_TAB_KEY ? { ...previous, [current.id]: null } : previous
+    );
+    // Closing the tab discards the view, never the process (D-098).
+    void novus().workspace.preview.close();
+  }, []);
+
+  /** A stopped app serving again: the tab's record follows the new address. */
+  const reopenPreview = useCallback((url: string) => {
+    const current = activeTabOf(workingSetRef.current);
+    if (!current) return;
+    setPreviewByTab((previous) => {
+      const entry = previous[current.id];
+      return entry ? { ...previous, [current.id]: { ...entry, url } } : previous;
+    });
   }, []);
 
   return (
@@ -1583,7 +1651,11 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               vanishes when you switch tabs reads as a layout bug, and the
               house rule is disabled-with-reason, never hidden (DESIGN.md). */}
           {openDetail && openDetail.workstream ? (
-            <RunControl detail={laneView(openDetail)} onSetup={() => setSetupOpen(true)} />
+            <RunControl
+              detail={laneView(openDetail)}
+              onSetup={() => setSetupOpen(true)}
+              onOpenPreview={openPreviewTab}
+            />
           ) : (
             <button
               className="btn btn-secondary run-trigger"
@@ -1680,6 +1752,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               onDecisionOpen={setDecisionOpen}
               sessionDraft={sessionDraft}
               onSessionDraft={setSessionDraft}
+              previewTab={previewTab}
+              onClosePreview={closePreviewTab}
+              onReopenPreview={reopenPreview}
             />
           ) : currentProject ? (
             // Nothing open in this project. The rail lists what there is; this

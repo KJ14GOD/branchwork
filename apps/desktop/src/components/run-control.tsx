@@ -48,12 +48,16 @@ const DENIAL = "Invoking a command this project declared needs the workspace.com
 
 export function RunControl({
   detail,
-  onSetup
+  onSetup,
+  onOpenPreview
 }: {
   detail: MissionDetailResponse;
   /** Opens the bounded setup dialog. Owned by the shell, because the state
    *  line opens the same dialog. */
   onSetup: () => void;
+  /** Opens the preview surface in the room (D-098). Owned by the shell,
+   *  because the tab it opens sits on the room's working row. */
+  onOpenPreview: (url: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [proposal, setProposal] = useState<Proposal>({ kind: "unread" });
@@ -146,21 +150,11 @@ export function RunControl({
     setNote(result.ok ? null : result.message);
   };
 
-  /**
-   * Opens a local preview through the narrow bridge (D-045). The main process
-   * accepts a loopback `http`/`https` address that a process of this workstream
-   * actually reported, and hands it to the operating system's own browser — no
-   * shell command is involved, and there is no path here for an arbitrary
-   * address to reach one.
-   */
-  const preview = async (url: string) => {
-    const result = await novus().workspace.openPreview({
-      missionId,
-      ...(workstreamId ? { workstreamId } : {}),
-      url
-    });
-    setNote(result.ok ? null : result.message);
-  };
+  // Opens the preview inside the room (D-098). The main process validates the
+  // address against the workstream's own live processes before any view
+  // exists, so there is still no path here for an arbitrary address to reach
+  // one; the external-browser bridge (D-045) lives on the surface itself as
+  // "Open in browser".
 
   return (
     <span className="run-control" ref={wrapRef}>
@@ -173,7 +167,7 @@ export function RunControl({
           {/* Only when the process itself reported one: the room never invents
               an address for something that never said it had one. */}
           {previewUrl !== null && (
-            <button className="btn btn-text" onClick={() => void preview(previewUrl)} data-testid="open-preview">
+            <button className="btn btn-text" onClick={() => onOpenPreview(previewUrl)} data-testid="open-preview">
               Open preview
             </button>
           )}
