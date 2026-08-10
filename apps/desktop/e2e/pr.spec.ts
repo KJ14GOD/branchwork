@@ -408,10 +408,21 @@ describe("shipping a decision through GitHub (D-099)", () => {
       expect(pull.headSha).toBe(decision.checkpointSha);
       expect(pull.body).toContain("The baseline holds");
 
+      // The room's sentence carries the open request while its header shows.
+      await expect
+        .poll(async () => page.getByTestId("state-line").innerText(), { timeout: 30_000 })
+        .toContain("Pull request open");
+      // The receipt collapses to its sentence; the page is the request's own
+      // tab, opened by a person — from the receipt here, and the rail row
+      // carries the same way in (D-100, D-089).
+      await page.getByTestId("rail-pull").waitFor({ timeout: 30_000 });
+      expect(await page.getByTestId("rail-pull").innerText()).toContain("PR #1");
+      await page.getByTestId("open-pull-tab").click();
+      await page.getByTestId("pull-tab").waitFor({ timeout: 20_000 });
+      expect(await page.getByTestId("pull-tab").innerText()).toContain("draft");
       await page.getByTestId("pull-page").waitFor({ timeout: 30_000 });
       expect(await page.getByTestId("pull-headline").innerText()).toContain("is a draft");
       expect(await page.getByTestId("pull-branches").innerText()).toContain("→ main");
-      expect(await page.getByTestId("state-line").innerText()).toContain("Pull request open");
       // A draft offers no merge control — readiness precedes the verb — and
       // the sentence carries the never-silent rule (D-100).
       expect(await page.locator("button", { hasText: /^Merge/ }).count()).toBe(0);
@@ -485,10 +496,12 @@ describe("shipping a decision through GitHub (D-099)", () => {
           value.pullRequest?.readiness?.behindBy === 2,
         60_000
       );
-      // The room's own poll carries it to the screen a beat later.
+      // The gate lives on the page's own Checks sub-tab, count on the label.
+      await page.getByTestId("pull-tab-checks").click();
       await expect
         .poll(async () => page.getByTestId("pull-readiness").innerText(), { timeout: 30_000 })
         .toContain("ci · required");
+      expect(await page.getByTestId("pull-tab-checks").innerText()).toContain("Checks 1/2");
       const readiness = await page.getByTestId("pull-readiness").innerText();
       expect(readiness).toContain("lint");
       expect(readiness).toContain("failed");
@@ -503,6 +516,8 @@ describe("shipping a decision through GitHub (D-099)", () => {
         (value) => value.pullRequest?.readiness?.behindBy === 0,
         60_000
       );
+
+      await shot("114-pull-request-tab.png");
 
       // --- The merge is Novus's control and GitHub's act (D-100) ------------
       // The confirm restates the one remaining blocker (lint, non-required)
@@ -534,9 +549,17 @@ describe("shipping a decision through GitHub (D-099)", () => {
       );
       expect(merged.state).toBe("decision_recorded");
       await expect
+        .poll(async () => page.getByTestId("pull-headline").innerText(), { timeout: 30_000 })
+        .toContain("was merged");
+      await shot("113-merged-from-novus.png");
+      // The room's own sentence names how publication ended — read where the
+      // header shows, on the lane's canvas, then come back to the tab.
+      await page.getByTestId("lane-tab").first().click();
+      await expect
         .poll(async () => page.getByTestId("state-line").innerText(), { timeout: 30_000 })
         .toContain("published as PR #1, merged");
-      await shot("113-merged-from-novus.png");
+      await page.getByTestId("pull-tab").locator(".file-tab-open").click();
+      await page.getByTestId("pull-page").waitFor({ timeout: 20_000 });
 
       // --- Completion's tail: delete the branch, archive the mission --------
       await page.getByTestId("delete-branch").click();

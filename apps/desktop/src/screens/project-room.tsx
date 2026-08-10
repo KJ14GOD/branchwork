@@ -39,7 +39,8 @@ import { DecisionRoom } from "../components/decision-room";
 import { Dialog } from "../components/dialog";
 import { FileView } from "../components/file-view";
 import { PreviewSurface } from "../components/preview-surface";
-import { PREVIEW_TAB_KEY, type OpenPreviewTab } from "../components/preview";
+import { PREVIEW_TAB_KEY, PULL_TAB_KEY, type OpenPreviewTab } from "../components/preview";
+import { PullRequestPage, pullStateWord } from "../components/pull-request";
 
 /** The mark that says a tab is a file rather than the room itself. */
 function FileGlyph() {
@@ -139,7 +140,10 @@ export function ProjectRoom({
   onSessionDraft,
   previewTab,
   onClosePreview,
-  onReopenPreview
+  onReopenPreview,
+  pullTabOpen,
+  onOpenPull,
+  onClosePull
 }: {
   project: Project;
   details: Record<string, MissionDetailResponse>;
@@ -199,6 +203,11 @@ export function ProjectRoom({
   previewTab: OpenPreviewTab | null;
   onClosePreview: () => void;
   onReopenPreview: (url: string) => void;
+  /** The pull request's own tab (D-100): opened by a person from the rail
+   *  or the receipt, selection riding `activeFile` under `PULL_TAB_KEY`. */
+  pullTabOpen: boolean;
+  onOpenPull: () => void;
+  onClosePull: () => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -760,6 +769,10 @@ export function ProjectRoom({
   /** The preview taking the canvas (D-098): the sentinel where a file key
    *  would be, and a tab to show it for. */
   const previewSelected = activeFile === PREVIEW_TAB_KEY && previewTab !== null;
+  /** The pull request's tab, showing only while one exists to show. */
+  const pullTab = pullTabOpen && detail?.pullRequest ? detail.pullRequest : null;
+  const pullSelected = activeFile === PULL_TAB_KEY && pullTab !== null;
+  const currentDecision = detail?.decisions.find((entry) => entry.supersededAt === null) ?? null;
 
   return (
     <div className="room" data-testid="project-room">
@@ -772,7 +785,7 @@ export function ProjectRoom({
           the colours tie a lane's tab to its sessions and files. A mission
           with one approach, one conversation and nothing open shows no strip
           at all. */}
-      {(openFiles.length > 0 || decisionOpen || previewTab !== null || multiLane || sessionChrome) && (
+      {(openFiles.length > 0 || decisionOpen || previewTab !== null || pullTab !== null || multiLane || sessionChrome) && (
         <div
           className="tabbar"
           role="tablist"
@@ -1065,6 +1078,38 @@ export function ProjectRoom({
                 aria-label="Close the preview"
                 title="Close the preview — the app keeps running"
                 data-testid="preview-tab-close"
+              >
+                ×
+              </button>
+            </span>
+          )}
+          {/* The pull request's own tab (D-100, the Conductor shape): opened
+              only by a person, a closable sibling like Compare and Preview. */}
+          {pullTab !== null && (
+            <span
+              className={pullSelected ? "tab file-tab active" : "tab file-tab"}
+              data-testid="pull-tab"
+            >
+              <button
+                role="tab"
+                aria-selected={pullSelected}
+                className="file-tab-open"
+                onClick={() => {
+                  onSelectFile(PULL_TAB_KEY);
+                  onDecisionOpen(false);
+                  onSessionDraft(false);
+                }}
+                title={`PR #${pullTab.number} — ${pullTab.title}`}
+              >
+                <span className="file-tab-name">PR #{pullTab.number}</span>
+                <span className="session-needs session-state"> · {pullStateWord(pullTab)}</span>
+              </button>
+              <button
+                className="file-tab-close"
+                onClick={onClosePull}
+                aria-label="Close the pull request tab"
+                title="Close the tab — the pull request stays exactly as it is"
+                data-testid="pull-tab-close"
               >
                 ×
               </button>
@@ -1382,6 +1427,12 @@ export function ProjectRoom({
           detail={detail ?? null}
           onReopen={onReopenPreview}
         />
+      ) : pullSelected && detail && currentDecision ? (
+        <div className="feed-scroll">
+          <div className="feed">
+            <PullRequestPage detail={detail} decision={currentDecision} />
+          </div>
+        </div>
       ) : decisionOpen && detail ? (
         <div className="feed-scroll">
           <DecisionRoom
@@ -1391,6 +1442,7 @@ export function ProjectRoom({
             onRecord={(input) => void recordDecision(input)}
             onRequestRevision={(input) => void requestRevision(input)}
             onInspectPath={() => onInspector("changes")}
+            onOpenPull={onOpenPull}
             onClose={() => onDecisionOpen(false)}
           />
         </div>

@@ -4254,6 +4254,13 @@ body.resizing {
   width: 100%;
 }
 
+/* Inside the page's own column, an action row starts where the words do —
+   the auto margin is for rows that share a line with content. */
+.pull-publish .inline-actions,
+.pull-page .inline-actions {
+  margin-left: 0;
+}
+
 .pull-file {
   width: 100%;
 }

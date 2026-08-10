@@ -20,6 +20,11 @@ import type { PreviewStatus, WorkspaceProcess } from "@novus/contracts";
  */
 export const PREVIEW_TAB_KEY = "::preview";
 
+/** The pull request's own tab rides the same mechanism (D-100, the
+ *  Conductor shape): opened only by a person, deselected by everything that
+ *  selects another canvas. */
+export const PULL_TAB_KEY = "::pull";
+
 /** One open preview tab: an address in one lane's workspace, captured when it
  *  was opened, exactly as a file tab captures its lane (D-084, D-098). */
 export interface OpenPreviewTab {

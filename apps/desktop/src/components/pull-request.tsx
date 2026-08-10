@@ -33,10 +33,13 @@ type Act = () => Promise<{ ok: boolean; message?: string }>;
 
 export function PullRequestPanel({
   detail,
-  decision
+  decision,
+  onOpenPull
 }: {
   detail: MissionDetailResponse;
   decision: Decision;
+  /** Opens the request's own tab on the working row (D-100). */
+  onOpenPull?: () => void;
 }) {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -115,7 +118,79 @@ export function PullRequestPanel({
     );
   }
 
+  // Once the request exists, the receipt keeps only its sentence: the page
+  // that operates it is the request's own tab on the working row (D-100, the
+  // Conductor shape), opened by a person exactly as every tab is (D-089).
+  return (
+    <section className="pull-page" data-testid="pull-summary">
+      <PullHeadline detail={detail} pull={pull} busy={busy} onAct={act} />
+      {onOpenPull && (
+        <button className="btn btn-secondary" onClick={onOpenPull} data-testid="open-pull-tab">
+          Open PR #{pull.number}
+        </button>
+      )}
+      {note && (
+        <p className="inline-error" role="alert" data-testid="pull-note">
+          {note}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The tab's own quiet state word, session-tab style. */
+export function pullStateWord(pull: PullRequest): string {
+  return pull.state === "draft"
+    ? "draft"
+    : pull.state === "ready"
+      ? "ready"
+      : pull.state === "merged"
+        ? "merged"
+        : "closed";
+}
+
+/**
+ * The pull request's own page (D-100, the Conductor anatomy the owner named):
+ * the headline and description first, one action row, then Comments, Checks
+ * with its count, and Changes as the page's own sub-tabs — one canvas, the
+ * house segment control, everything else the same pieces the receipt grew.
+ */
+export function PullRequestPage({
+  detail,
+  decision
+}: {
+  detail: MissionDetailResponse;
+  decision: Decision;
+}) {
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [section, setSection] = useState<"comments" | "checks" | "changes">("comments");
+  const missionId = detail.mission.missionId;
+  const pull = detail.pullRequest;
+
+  const act = async (call: Act) => {
+    setBusy(true);
+    setNote(null);
+    const result = await call();
+    setBusy(false);
+    if (!result.ok) setNote(result.message ?? "That did not work.");
+    return result.ok;
+  };
+
+  if (!pull) {
+    return (
+      <p className="quiet" data-testid="pull-page-empty">
+        No pull request exists yet; the receipt on Compare is where one opens.
+      </p>
+    );
+  }
+
   const chosen = detail.approaches.find((approach) => approach.workstreamId === pull.workstreamId);
+  const checks = pull.readiness?.checks ?? [];
+  const checksPassed = checks.filter((check) => check.status === "passed").length;
+  const checksLabel =
+    checks.length > 0 ? `Checks ${checksPassed}/${checks.length}` : "Checks";
+
   return (
     <section className="pull-page" data-testid="pull-page">
       <PullHeadline detail={detail} pull={pull} busy={busy} onAct={act} />
@@ -127,24 +202,57 @@ export function PullRequestPanel({
         {pull.headRef} → {pull.baseRef}
         {pull.headSha ? ` · ${shortSha(pull.headSha)}` : ""}
       </p>
-
-      <ReadinessLedger detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} />
-      <PullChanges pull={pull} detail={detail} busy={busy} onAct={act} />
-      <PullReview detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} setNote={setNote} />
-
-      {/* Visual evidence: the honest sentence until the artifact store exists. */}
-      <h3 className="field-label">Screenshots and videos</h3>
-      <p className="quiet" data-testid="pull-visuals">
-        No visual evidence is attached — capturing and storing it is not built yet. The checks and
-        the diff above are the evidence this request carries.
-      </p>
-
-      <h3 className="field-label">What was sent</h3>
       <pre className="prepared-body" data-testid="pull-body">
         {pull.body}
       </pre>
+      <p className="quiet">Exactly what was sent at publication — the receipt that travelled.</p>
 
       <Completion detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} missionId={missionId} />
+
+      <div className="segment" role="tablist" aria-label="Pull request sections">
+        <button
+          role="tab"
+          aria-selected={section === "comments"}
+          className={section === "comments" ? "segment-tab active" : "segment-tab"}
+          onClick={() => setSection("comments")}
+          data-testid="pull-tab-comments"
+        >
+          Comments
+        </button>
+        <button
+          role="tab"
+          aria-selected={section === "checks"}
+          className={section === "checks" ? "segment-tab active" : "segment-tab"}
+          onClick={() => setSection("checks")}
+          data-testid="pull-tab-checks"
+        >
+          {checksLabel}
+        </button>
+        <button
+          role="tab"
+          aria-selected={section === "changes"}
+          className={section === "changes" ? "segment-tab active" : "segment-tab"}
+          onClick={() => setSection("changes")}
+          data-testid="pull-tab-changes"
+        >
+          Changes
+        </button>
+      </div>
+
+      {section === "comments" && (
+        <PullReview detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} setNote={setNote} />
+      )}
+      {section === "checks" && (
+        <>
+          <ReadinessLedger detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} />
+          <p className="quiet" data-testid="pull-visuals">
+            No visual evidence is attached — capturing and storing it is not built yet. The checks
+            and the diff are the evidence this request carries.
+          </p>
+        </>
+      )}
+      {section === "changes" && <PullChanges pull={pull} detail={detail} busy={busy} onAct={act} />}
+
       {note && (
         <p className="inline-error" role="alert" data-testid="pull-note">
           {note}

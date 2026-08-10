@@ -39,7 +39,7 @@ import {
   type WorkingSet
 } from "../components/working-set";
 import { laneView, liveRunProcess, sessionActivity, sessionNeedsYou } from "../components/derive";
-import { PREVIEW_TAB_KEY, type OpenPreviewTab } from "../components/preview";
+import { PREVIEW_TAB_KEY, PULL_TAB_KEY, type OpenPreviewTab } from "../components/preview";
 import { deriveGoal, plural, truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
 import { Inspector, type InspectorSection } from "../components/inspector";
@@ -436,7 +436,9 @@ function MissionTree({
   onSelectApproach,
   onSelectSession,
   onCompare,
-  onNewSession
+  onNewSession,
+  pullSelected,
+  onOpenPull
 }: {
   detail: MissionDetailResponse;
   storedLaneId: string | null;
@@ -448,6 +450,10 @@ function MissionTree({
   onSelectSession: (sessionId: string) => void;
   onCompare: () => void;
   onNewSession: () => void;
+  /** The pull request's rail row (D-100): present once one exists, opening
+   *  its tab on the working row. */
+  pullSelected: boolean;
+  onOpenPull: () => void;
 }) {
   const lanes: Workstream[] = detail.workstreams;
   const firstLaneId = lanes[0]?.workstreamId ?? null;
@@ -595,6 +601,17 @@ function MissionTree({
           </button>
         </div>
       )}
+      {detail.pullRequest && (
+        <div
+          className={`side-row side-compare${pullSelected ? " selected" : ""}`}
+          data-testid="rail-pull"
+        >
+          <button className="side-open-mission" onClick={onOpenPull} aria-current={pullSelected}>
+            <span className="side-name">PR #{detail.pullRequest.number}</span>
+            <span className="side-decision-note"> · {detail.pullRequest.state}</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -693,6 +710,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
    *  `activeFileByTab` under `PREVIEW_TAB_KEY`, so everything that selects
    *  another canvas already deselects the preview. */
   const [previewByTab, setPreviewByTab] = useState<Record<string, OpenPreviewTab | null>>({});
+  /** The pull request's own tab (D-100): opened by a person, per mission,
+   *  ephemeral like the file tabs. Content derives from the detail's own
+   *  pullRequest; this only remembers that the tab was opened. */
+  const [pullOpenByTab, setPullOpenByTab] = useState<Record<string, boolean>>({});
   /** Which projects are showing their missions. Disclosure is the reader's
    *  choice and survives selection moving elsewhere. */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -920,6 +941,12 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     (tab: OpenTab) => {
       setWorkingSet((previous) => closeTab(previous, tab.id));
       forgetTabFiles(tab.id);
+      setPullOpenByTab((previous) => {
+        if (!(tab.id in previous)) return previous;
+        const next = { ...previous };
+        delete next[tab.id];
+        return next;
+      });
       // The preview tab goes with its mission tab. If the one native view is
       // this tab's, it is asked down too — the process it showed keeps
       // running (D-098). Another mission's view is left alone.
@@ -1139,6 +1166,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const openFiles = active ? (filesByTab[active.id] ?? []) : [];
   const activeFile = active ? (activeFileByTab[active.id] ?? null) : null;
   const previewTab = active ? (previewByTab[active.id] ?? null) : null;
+  const pullTabOpen = active ? (pullOpenByTab[active.id] ?? false) : false;
 
   const labelOf = useCallback(
     (tab: OpenTab): string => {
@@ -1206,6 +1234,25 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       const entry = previous[current.id];
       return entry ? { ...previous, [current.id]: { ...entry, url } } : previous;
     });
+  }, []);
+
+  /** Opens the pull request's own tab and selects it (D-100). */
+  const openPullTab = useCallback(() => {
+    const current = activeTabOf(workingSetRef.current);
+    if (!current) return;
+    setPullOpenByTab((previous) => ({ ...previous, [current.id]: true }));
+    setActiveFileByTab((previous) => ({ ...previous, [current.id]: PULL_TAB_KEY }));
+    setDecisionOpen(false);
+    setSessionDraft(false);
+  }, []);
+
+  const closePullTab = useCallback(() => {
+    const current = activeTabOf(workingSetRef.current);
+    if (!current) return;
+    setPullOpenByTab((previous) => ({ ...previous, [current.id]: false }));
+    setActiveFileByTab((previous) =>
+      previous[current.id] === PULL_TAB_KEY ? { ...previous, [current.id]: null } : previous
+    );
   }, []);
 
   return (
@@ -1472,6 +1519,11 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                                 setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
                                 setDecisionOpen(false);
                                 setSessionDraft(true);
+                                setRailOpen(false);
+                              }}
+                              pullSelected={activeFile === PULL_TAB_KEY}
+                              onOpenPull={() => {
+                                openPullTab();
                                 setRailOpen(false);
                               }}
                             />
@@ -1755,6 +1807,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               previewTab={previewTab}
               onClosePreview={closePreviewTab}
               onReopenPreview={reopenPreview}
+              pullTabOpen={pullTabOpen}
+              onOpenPull={openPullTab}
+              onClosePull={closePullTab}
             />
           ) : currentProject ? (
             // Nothing open in this project. The rail lists what there is; this

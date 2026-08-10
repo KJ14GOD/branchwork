@@ -36,6 +36,8 @@ export interface DecisionRoomProps {
   onRecord: (input: { workstreamId: string; rationale: string; acceptedRisks: string }) => void;
   onRequestRevision: (input: { workstreamId: string; reason: string }) => void;
   onInspectPath: (path: string) => void;
+  /** Opens the pull request's own tab (D-100); threaded to the receipt. */
+  onOpenPull: () => void;
   onClose: () => void;
 }
 
@@ -46,6 +48,7 @@ export function DecisionRoom({
   onRecord,
   onRequestRevision,
   onInspectPath,
+  onOpenPull,
   onClose
 }: DecisionRoomProps) {
   const decision = detail.decisions.find((entry) => entry.supersededAt === null) ?? null;
@@ -130,6 +133,7 @@ export function DecisionRoom({
 
       {decision ? (
         <DecisionReceipt
+          onOpenPull={onOpenPull}
           detail={detail}
           decision={decision}
           approaches={detail.approaches}
@@ -511,12 +515,14 @@ function RequestRevisionDialog({
  * carry it, prepared and unsent.
  */
 function DecisionReceipt({
+  onOpenPull,
   detail,
   decision,
   approaches,
   prepared,
   superseded
 }: {
+  onOpenPull: () => void;
   detail: MissionDetailResponse;
   decision: Decision;
   approaches: ApproachSummary[];
@@ -620,7 +626,7 @@ function DecisionReceipt({
         </section>
       )}
       {(detail.pullRequest !== null || prepared?.publishable) && (
-        <PullRequestPanel detail={detail} decision={decision} />
+        <PullRequestPanel detail={detail} decision={decision} onOpenPull={onOpenPull} />
       )}
     </section>
   );
