@@ -19,6 +19,18 @@ import { initials } from "../format";
 const faces = new Map<string, string | null>();
 const asked = new Map<string, Promise<string | null>>();
 
+/**
+ * The signed-in person's own picture, handed over with the auth status the
+ * main process resolved before it announced sign-in — so their mark is right
+ * on the first frame instead of turning from initials into a face a beat
+ * later (D-105).
+ */
+export function seedFace(login: string, face: string | null): void {
+  const key = login.toLowerCase();
+  if (face === null && faces.get(key)) return;
+  faces.set(key, face);
+}
+
 function useFace(login: string): string | null {
   const key = login.toLowerCase();
   const [face, setFace] = useState<string | null>(() => faces.get(key) ?? null);

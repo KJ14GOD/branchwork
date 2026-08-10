@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { IpcAuthStatus } from "@novus/contracts";
 import { novus } from "./bridge";
+import { seedFace } from "./components/identity";
 import { SetupSurface } from "./screens/setup";
 import { ProjectShell } from "./screens/project-shell";
 
@@ -11,9 +12,17 @@ export function App() {
   const [inSetup, setInSetup] = useState<boolean | null>(null);
   const decided = useRef(false);
 
+  // The status carries the signed-in person's picture (D-105); it lands in the
+  // identity cache before anything renders it, so no mark starts as initials
+  // and turns into a face.
+  const take = (status: IpcAuthStatus) => {
+    if (status.state === "signed_in") seedFace(status.user.login, status.avatar);
+    setAuth(status);
+  };
+
   useEffect(() => {
-    novus().auth.status().then(setAuth);
-    return novus().auth.onChanged(setAuth);
+    novus().auth.status().then(take);
+    return novus().auth.onChanged(take);
   }, []);
 
   useEffect(() => {

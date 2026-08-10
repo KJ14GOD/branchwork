@@ -2307,7 +2307,19 @@ export type ApiError = z.infer<typeof ApiErrorSchema>;
 export const IpcAuthStatusSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("signed_out") }),
   z.object({ state: z.literal("waiting_for_browser") }),
-  z.object({ state: z.literal("signed_in"), user: UserSchema, org: OrganizationSchema }),
+  z.object({
+    state: z.literal("signed_in"),
+    user: UserSchema,
+    org: OrganizationSchema,
+    /**
+     * The signed-in person's own picture as a `data:` URI, resolved by the
+     * main process *before* it says signed_in (D-105). It rides along here so
+     * the first frame the shell paints already has the face: a picture that
+     * arrives a beat after the initials is a flicker in the corner of the
+     * window every single launch. Null means there is none to show.
+     */
+    avatar: z.string().nullable().default(null)
+  }),
   z.object({ state: z.literal("failed"), message: z.string() })
 ]);
 export type IpcAuthStatus = z.infer<typeof IpcAuthStatusSchema>;

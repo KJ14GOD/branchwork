@@ -202,11 +202,24 @@ const MissionTargetSchema = z.union([
   })
 ]);
 
+/**
+ * Signed in, with the person's face already in hand (D-105). The picture is
+ * resolved *before* the status is announced — from this machine's own copy
+ * when it holds one, so a relaunch never waits — because a face that arrives
+ * after the first frame is a flicker in the corner of every launch.
+ */
+async function signedIn(
+  user: { userId: string; login: string; name: string | null },
+  org: { orgId: string; name: string }
+): Promise<IpcAuthStatus> {
+  return { state: "signed_in", user, org, avatar: await avatarFor(user.login) };
+}
+
 async function restoreSession(): Promise<void> {
   if (!store.load()) return;
   try {
     const me = await api.me();
-    setAuthStatus({ state: "signed_in", user: me.user, org: me.org });
+    setAuthStatus(await signedIn(me.user, me.org));
   } catch (error) {
     if (error instanceof ApiError && error.code === "unauthenticated") store.clear();
     // Offline: stay signed_out visually; the surface shows the offline notice on data load.
@@ -235,7 +248,7 @@ async function beginSignIn(): Promise<IpcResult<null>> {
         if (!claim) return; // browser leg still pending
         if (pollTimer) clearInterval(pollTimer);
         store.save(claim.token);
-        setAuthStatus({ state: "signed_in", user: claim.user, org: claim.org });
+        setAuthStatus(await signedIn(claim.user, claim.org));
       } catch (error) {
         if (pollTimer) clearInterval(pollTimer);
         setAuthStatus({
