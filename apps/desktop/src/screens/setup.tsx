@@ -3,7 +3,7 @@ import { siClaudecode, siGithub } from "simple-icons";
 import codexIcon from "../assets/codex-icon.png";
 import type { HarnessProbe, IpcAuthStatus, SetupProbeResponse } from "@novus/contracts";
 import { novus } from "../bridge";
-import { applyTheme, themePreference, type ThemePreference } from "../theme";
+import { applyTheme, themePreference, THEME_CHOICES, type ThemePreference } from "../theme";
 
 function Glyph({ path, title }: { path: string; title: string }) {
   return (
@@ -20,12 +20,6 @@ function harnessStatus(probe: HarnessProbe | null): { text: string; muted: boole
   // Installed but the account state is unknowable — never claim "not signed in".
   return { text: `✓ Installed${probe.version ? ` · ${probe.version}` : ""}`, muted: false };
 }
-
-const THEMES: { value: ThemePreference; label: string }[] = [
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
-  { value: "system", label: "System" }
-];
 
 /**
  * First-run setup room (DESIGN.md, D-028/D-029). GitHub connects for real;
@@ -133,7 +127,7 @@ export function SetupSurface({
             <div className="setup-row-desc">Light, dark, or follow the system.</div>
           </div>
           <div className="segment" role="group" aria-label="Theme">
-            {THEMES.map((option) => (
+            {THEME_CHOICES.map((option) => (
               <button
                 key={option.value}
                 className="btn btn-secondary"

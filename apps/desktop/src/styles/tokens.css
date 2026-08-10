@@ -1,6 +1,6 @@
 /* Design tokens — the only file in the client where raw color values exist.
    Values are canonical in DESIGN.md#tokens; a change here requires a DESIGN.md
-   change in the same commit. V0 is dark-only. */
+   change in the same commit. Dark is the default and the reference. */
 
 :root {
   /* Color. The application background is near-black rather than graphite, so
@@ -105,8 +105,8 @@
   --traffic-inset: 78px;
 }
 
-/* Light theme: token-for-token override, provisional until screen-proven
-   (DESIGN.md#tokens, D-029). Authority inverts to warm ink. */
+/* Light theme: token-for-token override, screen-proven 2026-08-10
+   (DESIGN.md#tokens, D-029, D-102). Authority inverts to warm ink. */
 :root[data-theme="light"] {
   --bg: #f2f0ec;
   --surface-1: #faf9f6;

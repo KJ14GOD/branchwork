@@ -4363,6 +4363,15 @@ body.resizing {
   color: var(--text-1);
 }
 
+/* The settings surface (D-102): the setup room's row anatomy inside a
+   dialog, so the two theme controls are one shape. The setup margin is a
+   page rhythm; in a dialog the head's own spacing carries it. */
+.settings-row {
+  margin-top: var(--s-4);
+  padding: 0 var(--s-5) var(--s-5);
+  align-items: center;
+}
+
 .dialog-sub {
   font: var(--type-meta);
   color: var(--text-2);

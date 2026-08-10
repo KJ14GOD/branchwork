@@ -4,6 +4,7 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalKind, TerminalSession } from "@novus/contracts";
 import { novus } from "../bridge";
+import { THEME_EVENT } from "../theme";
 
 /**
  * The terminal (DESIGN.md#component-behavior). A bottom dock in the room,
@@ -304,6 +305,18 @@ export function RuntimeDock({
       live = false;
     };
   }, [missionId, workstreamId]);
+
+  // A theme change moves the terminal with everything else (D-046): the
+  // palette was copied out of CSS at pane creation, so live panes are handed
+  // the newly resolved tokens when the person flips theme.
+  useEffect(() => {
+    const repaint = () => {
+      const palette = terminalTheme();
+      for (const [, pane] of panes.current) pane.terminal.options.theme = palette;
+    };
+    window.addEventListener(THEME_EVENT, repaint);
+    return () => window.removeEventListener(THEME_EVENT, repaint);
+  }, [panes]);
 
   // Output is streamed from this machine's own main process and written into
   // the pane. It goes nowhere else (D-041).
