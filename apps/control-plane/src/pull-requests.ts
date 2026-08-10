@@ -1185,11 +1185,23 @@ async function syncPullRow(db: Db, provider: RepositoryProvider, row: SyncRow): 
       // again and last_synced_at stays honest about staleness.
       return;
     }
-    const knownThreads = Array.isArray(row.review_threads) ? (row.review_threads as unknown[]).length : 0;
     const openThreads = host.reviewThreads.filter((thread) => thread.state === "open").length;
 
     await withTransaction(db, async (client) => {
       await client.query("select pg_advisory_xact_lock(hashtext($1))", [row.mission_id]);
+      // The comparison baseline is read under the lock, not from the caller's
+      // snapshot: two deliveries for one merge arrive concurrently, and both
+      // would measure change against the same stale 'ready' otherwise —
+      // recording the merge twice.
+      const held = await client.query(
+        "select state, mergeable, review_threads from pull_requests where pr_id = $1",
+        [row.pr_id]
+      );
+      if (held.rowCount === 0) return;
+      const before = held.rows[0] as Pick<SyncRow, "state" | "mergeable" | "review_threads">;
+      const knownThreads = Array.isArray(before.review_threads)
+        ? (before.review_threads as unknown[]).length
+        : 0;
       await client.query(
         `update pull_requests
             set state = $2, mergeable = $3, review_threads = $4::jsonb,
@@ -1223,16 +1235,16 @@ async function syncPullRow(db: Db, provider: RepositoryProvider, row: SyncRow): 
           actorLogin: null,
           payload: { pullRequestId: row.pr_id, number: row.provider_number, ...payload }
         });
-      if (host.state === "merged" && row.state !== "merged") {
+      if (host.state === "merged" && before.state !== "merged") {
         await record("pr.merged", { mergedBy: host.mergedBy });
-      } else if (host.state === "closed" && row.state !== "closed") {
+      } else if (host.state === "closed" && before.state !== "closed") {
         await record("pr.closed", {});
-      } else if (host.state === "ready" && row.state === "draft") {
+      } else if (host.state === "ready" && before.state === "draft") {
         // Marked ready on the host itself rather than through Novus — still
         // the host's news, still recorded.
         await record("pr.marked_ready_externally", {});
       }
-      if (host.mergeable === "conflict" && row.mergeable !== "conflict") {
+      if (host.mergeable === "conflict" && before.mergeable !== "conflict") {
         await record("pr.conflict", {});
       }
       if (host.reviewThreads.length > knownThreads) {

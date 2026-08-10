@@ -106,7 +106,7 @@ describe.skipIf(!LIVE)("the poll ingests a real human's acts on a real pull requ
       const checkout = join(scratchDir, "repo");
       git(checkout, ["fetch", "origin", missionBranch]);
       git(checkout, ["checkout", missionBranch]);
-      writeFileSync(join(checkout, "live-ingest.txt"), "a line for a human to comment on\n");
+      writeFileSync(join(checkout, "live-ingest.txt"), `a line for a human to comment on ${randomUUID()}\n`);
       git(checkout, ["add", "-A"]);
       git(checkout, [
         "-c",
@@ -158,8 +158,27 @@ describe.skipIf(!LIVE)("the poll ingests a real human's acts on a real pull requ
         ]
       );
 
-      // --- The reverse direction: a real human comments on GitHub ----------
+      // --- The forward direction, attributed (D-101): the person's own
+      // token authors a comment through the exact provider path the comment
+      // route uses, and the real host shows *them* — not the App — as the
+      // author. The token is gh's, supplied at run time, never stored.
       const human = gh(["api", "user", "--jq", ".login"]);
+      const userToken = process.env.NOVUS_LIVE_USER_TOKEN ?? "";
+      expect(userToken, "NOVUS_LIVE_USER_TOKEN must carry the person's token").not.toBe("");
+      await provider.createPullComment(
+        providerRepoId,
+        opened.number,
+        { body: "Attributed live probe: this comment should wear my own name.", path: "live-ingest.txt", line: 1 },
+        { token: userToken, login: human }
+      );
+      const authored = gh([
+        "api",
+        `repos/${TARGET}/pulls/${opened.number}/comments`,
+        "--jq",
+        `.[] | select(.body | contains("wear my own name")) | .user.login`
+      ]);
+      expect(authored).toBe(human);
+      console.warn(`[live-ingest] a Novus-sent comment on ${opened.url} is authored by ${authored}`);
       gh([
         "api",
         `repos/${TARGET}/pulls/${opened.number}/comments`,
