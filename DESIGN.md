@@ -123,7 +123,7 @@ One approved set (stroke style, 1.5px stroke, 16px default). No icon without adj
 
 ### Identity marks
 
-- Humans: circular mark, 20px (inline) or 24px (headers), initials on `--surface-2`, 1px edge. No photos in V0.
+- Humans: circular mark, 20px (inline) or 24px (headers), 1px edge, wearing **the person's own GitHub picture** — everyone here signed in with GitHub, so the face is already theirs and initials on `--surface-2` are the fallback when there is no picture to show (D-105, reversing "no photos in V0"). The mark's size, shape and edge never change with it; a photo fills the circle and is cropped by it, and it is the only image the product renders as identity. No pile of them anywhere ([Signature elements](#signature-elements), 4).
 - Agents/harnesses: rounded-square mark, same sizes, harness glyph, always paired with the harness name in text. Agents are visually distinct from humans at a glance (circle = person, square = machine) and never rendered as characters or mascots.
 
 ### Status semantics

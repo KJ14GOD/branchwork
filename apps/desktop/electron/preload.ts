@@ -22,6 +22,9 @@ const novus: NovusBridge = {
   setup: {
     probe: () => ipcRenderer.invoke("novus:setup:probe")
   },
+  people: {
+    avatar: (login) => ipcRenderer.invoke("novus:people:avatar", login)
+  },
   repos: {
     available: () => ipcRenderer.invoke("novus:repos:available"),
     base: (providerRepoId, ref) => ipcRenderer.invoke("novus:repos:base", { providerRepoId, ref }),

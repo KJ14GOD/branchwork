@@ -13,7 +13,7 @@ import { novus } from "../bridge";
 import { AddProjectDialog, type PickedRepository } from "../components/add-project-dialog";
 import { Composer } from "../components/composer";
 import { Dialog } from "../components/dialog";
-import { HumanMark } from "../components/identity";
+import { HumanMark, SignOutGlyph } from "../components/identity";
 import { MissionTabs } from "../components/mission-tabs";
 import { ColumnHandle, useColumnWidth } from "../components/resizable";
 import { RunControl } from "../components/run-control";
@@ -1594,12 +1594,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                 onToggle={() => setSettingsOpen((previous) => !previous)}
                 onClose={() => setSettingsOpen(false)}
               />
+              {/* Beside the theme block, and shaped like it: the account
+                  corner is icons, and a door with an arrow out of it says
+                  leaving as plainly as the word did (D-105). */}
               <button
-                className="btn btn-text"
+                className="icon-button"
                 onClick={() => novus().auth.signOut()}
+                aria-label="Sign out"
+                title="Sign out"
                 data-testid="sign-out"
               >
-                Sign out
+                <SignOutGlyph />
               </button>
             </div>
           </div>

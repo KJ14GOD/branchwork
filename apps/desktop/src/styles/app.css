@@ -251,6 +251,16 @@ body {
 
 .mark-human {
   border-radius: 999px;
+  overflow: hidden;
+}
+
+/* The person's own GitHub picture, filling the circle it replaces (D-105).
+   The mark keeps its size, its edge and its shape; only the initials go. */
+.mark-face {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .mark-harness {

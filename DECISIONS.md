@@ -1428,3 +1428,15 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** The popover evidence is re-shot (115–116); the choice-set stays one list, the glyphs living beside the control that draws them.
 
 **Revisit when.** A fourth appearance choice ever exists (it will not fit a glyph row quietly).
+
+## D-105 — A person wears their GitHub picture, and leaving is a glyph
+
+**Context.** The rail's account corner read `(KJ) KJ14G… ☾ Sign out`: an initials disc for a person who has a real profile picture, a login truncated beside it, and the only worded control in a row that had otherwise become icons (D-104). The owner named both on sight — the mark is a GitHub account's face, so show the face; and the word beside two glyphs should be the third glyph.
+
+**Decision.** Every human identity mark wears **the person's own GitHub avatar**, initials remaining the fallback whenever there is no picture. The address is the login the person already signed in with: GitHub's own `https://github.com/{login}.png` redirect, so **nothing is added to the user row, the contract, or any API response** — no `avatar_url` column, no new field to keep fresh, no picture stored by Novus. The fetch happens **in the main process**, which answers the renderer with a `data:` URI, so the window's content policy stays `default-src 'self'; img-src 'self' data:` — no page in this product reaches the network on its own and one picture is not the reason to start. The result is cached per login for the life of the process, on both sides of the bridge, and a miss is remembered as a miss. **Sign out becomes an icon button** — a door with an arrow leaving it — with `Sign out` on `aria-label` and `title`, beside the theme glyph in the same corner.
+
+**Alternatives.** Reading `avatar_url` from GitHub's `/user` at sign-in and storing it (rejected: a column, a migration, a contract field and a staleness problem, for a URL derivable from the login — and it would still have to reach the renderer as a fetched image); widening `img-src` to `avatars.githubusercontent.com` and letting the renderer load the picture directly (rejected: it makes the renderer a network client for the first time, which is a security posture change, not a portrait); keeping initials (rejected on the owner's direct call); a worded Sign out (rejected: it is the last word in a row of glyphs).
+
+**Consequences.** DESIGN.md's "no photos in V0" is reversed for identity marks only — the mark's size, shape, and 1px edge are untouched, and a photo is cropped by the circle it fills. Every mark in the product — rail, participants, trace, handoffs — takes the picture from the same component, so a participant is recognisable wherever they acted. Offline, the product looks exactly as it did before. `people.avatar` is the one bridge verb added; it grants nothing and reads nothing local.
+
+**Revisit when.** Novus ever hosts an identity that is not a GitHub account, or a person asks to show no picture at all — the second is a preference this decision does not invent.

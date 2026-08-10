@@ -2374,6 +2374,17 @@ export interface NovusBridge {
   setup: {
     probe(): Promise<IpcResult<SetupProbeResponse>>;
   };
+  /**
+   * The face a person already has. Everyone in a mission signed in with
+   * GitHub, so their picture is theirs and Novus stores none of it: the main
+   * process fetches it by login and hands back a `data:` URI, which is why the
+   * renderer's `img-src` stays `'self' data:` (D-105). Null means there is no
+   * picture to show — offline, unknown login, anything — and the mark falls
+   * back to initials.
+   */
+  people: {
+    avatar(login: string): Promise<IpcResult<string | null>>;
+  };
   repos: {
     available(): Promise<IpcResult<AvailableRepository[]>>;
     base(providerRepoId: string, ref?: string): Promise<IpcResult<BaseRevision>>;

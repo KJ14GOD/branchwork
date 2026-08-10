@@ -32,6 +32,7 @@ import {
 } from "@novus/contracts";
 import { z } from "zod";
 import { ApiError, ControlPlaneClient } from "./api-client";
+import { avatarFor } from "./avatars";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
 import {
@@ -274,6 +275,12 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("novus:auth:start", () => beginSignIn());
+
+  ipcMain.handle("novus:people:avatar", async (_event, raw: unknown) => {
+    const parsed = z.string().min(1).max(39).safeParse(raw);
+    if (!parsed.success) return ok(null);
+    return ok(await avatarFor(parsed.data));
+  });
 
   ipcMain.handle("novus:auth:signout", async () => {
     await stopRunner();
