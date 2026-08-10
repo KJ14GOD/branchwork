@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
+
+// Set before the harness builds its config: the webhook endpoint exists only
+// with a secret to verify against (D-101).
+process.env.NOVUS_GITHUB_WEBHOOK_SECRET = "novus-test-webhook-secret";
 import type { ReportableRunnerEvent } from "@novus/contracts";
 import { FakeRepositoryProvider } from "../src/repo-provider.ts";
 import { sweepPullRequestsOnce } from "../src/pull-requests.ts";
@@ -416,6 +420,67 @@ describe("publishing a decision (D-099)", () => {
   // acceptance — and that no *runner* merge exists, which is still true and
   // still pinned in contracts.test.ts.
 
+  it("hears the host's own knock: a signed webhook syncs exactly the named request (D-101)", async () => {
+    const lane = await githubMission();
+    await decide(lane);
+    await reportPushed(lane, lane.checkpointSha);
+    const created = await createPull(lane);
+    expect(created.statusCode).toBe(201);
+    const number = created.json().pullRequest.number as number;
+
+    // The host's story changes — and instead of waiting for the poll, GitHub
+    // knocks. The signature is over the raw bytes with the shared secret.
+    provider.fakeMerge("9001", number, "maya");
+    const payload = JSON.stringify({
+      action: "closed",
+      repository: { id: 9001 },
+      pull_request: { number, merged: true }
+    });
+    const signature = `sha256=${createHmac("sha256", "novus-test-webhook-secret").update(payload).digest("hex")}`;
+
+    // A wrong signature is refused and syncs nothing.
+    const forged = await harness.app.inject({
+      method: "POST",
+      url: "/webhooks/github",
+      headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-hub-signature-256": `sha256=${"0".repeat(64)}` },
+      payload
+    });
+    expect(forged.statusCode).toBe(401);
+    let detail = await detailOf(lane);
+    expect(detail.pullRequest.state).toBe("draft");
+
+    // The genuine knock lands, and the row and events move without any sweep.
+    const knocked = await harness.app.inject({
+      method: "POST",
+      url: "/webhooks/github",
+      headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-hub-signature-256": signature },
+      payload
+    });
+    expect(knocked.statusCode).toBe(202);
+    detail = await detailOf(lane);
+    expect(detail.pullRequest.state).toBe("merged");
+    expect(detail.pullRequest.mergedBy).toBe("maya");
+    const event = await harness.db.query(
+      `select actor_kind from events where mission_id = $1 and kind = 'pr.merged'`,
+      [lane.missionId]
+    );
+    expect(event.rows[0].actor_kind).toBe("external");
+
+    // A request Novus does not track is not Novus's news.
+    const strangerPayload = JSON.stringify({ action: "opened", repository: { id: 9001 }, pull_request: { number: 9999 } });
+    const stranger = await harness.app.inject({
+      method: "POST",
+      url: "/webhooks/github",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": `sha256=${createHmac("sha256", "novus-test-webhook-secret").update(strangerPayload).digest("hex")}`
+      },
+      payload: strangerPayload
+    });
+    expect(stranger.statusCode).toBe(204);
+  });
+
   it("merges only past the two-tier gate: host refusals outright, named blockers acknowledged (D-100)", async () => {
     const lane = await githubMission();
     await decide(lane);
@@ -565,7 +630,9 @@ describe("publishing a decision (D-099)", () => {
     detail = await detailOf(lane);
     expect(detail.pullRequest.readiness.behindBy).toBe(0);
 
-    // A comment from Novus is authored by the App and attributed in the body.
+    // A comment from Novus is authored as the person themselves where their
+    // OAuth token is held — which sign-in now stores (D-101, rewriting the
+    // D-100 assertion that pinned the App-authored fallback with its prefix).
     const commented = await harness.app.inject({
       method: "POST",
       url: `/pull-requests/${pullId}/comment`,
@@ -578,8 +645,31 @@ describe("publishing a decision (D-099)", () => {
     const sent = detail.pullRequest.reviewThreads.find((thread: { body: string }) =>
       thread.body.includes("Bounded at fifty")
     );
-    expect(sent.body).toContain("kartik via Novus:");
+    expect(sent.author).toBe("kartik");
+    expect(sent.body).toBe("Bounded at fifty, see the schema.");
     expect(sent.state).toBe("open");
+
+    // Without a held token — a person from before the scope existed — the
+    // App authors it, attributed in the body, exactly the D-100 fallback.
+    await harness.db.query("update users set github_token = null where user_id = $1", [kartik.userId]);
+    const fallback = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/comment`,
+      headers: bearer(kartik),
+      payload: { body: "And bounded at twenty above." }
+    });
+    expect(fallback.statusCode).toBe(200);
+    await sweepPullRequestsOnce(harness.db, provider);
+    detail = await detailOf(lane);
+    const appAuthored = detail.pullRequest.reviewThreads.find((thread: { body: string }) =>
+      thread.body.includes("bounded at twenty")
+    );
+    expect(appAuthored.author).toBe("app/novus");
+    expect(appAuthored.body).toContain("kartik via Novus:");
+    await harness.db.query("update users set github_token = $2 where user_id = $1", [
+      kartik.userId,
+      "gho_fake_kartik"
+    ]);
 
     // Resolving from Novus reflects immediately and lands on the host.
     const resolved = await harness.app.inject({

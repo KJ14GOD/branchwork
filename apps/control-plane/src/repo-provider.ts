@@ -147,11 +147,14 @@ export interface RepositoryProvider {
   deleteBranchRef(providerRepoId: string, branch: string): Promise<void>;
   /** The request's changed files with bounded patches, and its commits. */
   listPullFiles(providerRepoId: string, number: number): Promise<PullFilesResponse>;
-  /** One comment — inline when a path anchors it, conversation otherwise. */
+  /** One comment — inline when a path anchors it, conversation otherwise.
+   *  With `asUser`, the host sees the person as the author (their own OAuth
+   *  token performs the call, D-101); without, the App authors it. */
   createPullComment(
     providerRepoId: string,
     number: number,
-    input: { body: string; path?: string; line?: number }
+    input: { body: string; path?: string; line?: number },
+    asUser?: { token: string; login: string }
   ): Promise<void>;
   /** Resolves one review thread by the host's own thread id. */
   resolveReviewThread(providerRepoId: string, threadId: string): Promise<void>;
@@ -490,12 +493,15 @@ export class FakeRepositoryProvider implements RepositoryProvider {
   async createPullComment(
     providerRepoId: string,
     number: number,
-    input: { body: string; path?: string; line?: number }
+    input: { body: string; path?: string; line?: number },
+    asUser?: { token: string; login: string }
   ): Promise<void> {
     const pull = this.pull(providerRepoId, number);
     pull.reviewThreads.push({
       threadId: `thr_${this.nextThread}`,
-      author: "app/novus",
+      // The fake host reads the author off the token's identity, exactly as
+      // the live host would (D-101).
+      author: asUser?.login ?? "app/novus",
       body: input.body,
       path: input.path ?? null,
       line: input.line ?? null,

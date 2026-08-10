@@ -612,15 +612,29 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
   async createPullComment(
     providerRepoId: string,
     number: number,
-    input: { body: string; path?: string; line?: number }
+    input: { body: string; path?: string; line?: number },
+    asUser?: { token: string; login: string }
   ): Promise<void> {
     const repo = await this.cachedRepo(providerRepoId);
+    // The author is whoever's token performs the call (D-101): the person's
+    // own where one is held, the App's otherwise.
+    const authed = async (path: string, init: RequestInit): Promise<Response> => {
+      if (!asUser) return this.rest(path, init);
+      return fetch(`${API}${path}`, {
+        ...init,
+        headers: {
+          ...(init.headers as Record<string, string> | undefined),
+          authorization: `Bearer ${asUser.token}`,
+          accept: "application/vnd.github+json"
+        }
+      });
+    };
     if (input.path !== undefined && input.line !== undefined) {
       const pullResponse = await this.rest(`/repos/${repo.fullName}/pulls/${number}`);
       if (pullResponse.status === 404) throw new UnknownPullRequestError();
       if (!pullResponse.ok) throw new ProviderTransientError(`pull request lookup failed (${pullResponse.status})`);
       const pull = (await pullResponse.json()) as { head: { sha: string } };
-      const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}/comments`, {
+      const response = await authed(`/repos/${repo.fullName}/pulls/${number}/comments`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -641,7 +655,7 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
       if (!response.ok) throw new ProviderTransientError(`comment failed (${response.status})`);
       return;
     }
-    const response = await this.rest(`/repos/${repo.fullName}/issues/${number}/comments`, {
+    const response = await authed(`/repos/${repo.fullName}/issues/${number}/comments`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ body: input.body })

@@ -13,6 +13,10 @@ export interface Config {
   sessionTtlHours: number;
   githubAppId: string;
   githubAppPem: string;
+  /** Verifies X-Hub-Signature-256 on /webhooks/github (D-101). Empty means
+   *  the endpoint answers 404 — a local-first control plane has nothing a
+   *  webhook could reach, and the poll is its transport. */
+  githubWebhookSecret: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -30,6 +34,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     fakeGithub,
     sessionTtlHours: Number(env.NOVUS_SESSION_TTL_HOURS ?? 24 * 30),
     githubAppId: env.NOVUS_GHAPP_ID ?? "",
+    githubWebhookSecret: env.NOVUS_GITHUB_WEBHOOK_SECRET ?? "",
     githubAppPem: env.NOVUS_GHAPP_PEM_B64
       ? Buffer.from(env.NOVUS_GHAPP_PEM_B64, "base64").toString("utf8")
       : ""

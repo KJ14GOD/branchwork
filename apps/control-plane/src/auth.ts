@@ -9,6 +9,11 @@ export interface GithubIdentity {
   githubId: number;
   login: string;
   name: string | null;
+  /** The person's own OAuth access token (D-101): held by the control plane
+   *  alone so a comment from Novus can be authored as them on the host.
+   *  Never served to a client, a runner, or an event. Null where the
+   *  exchange returned none, or for rows from before the scope existed. */
+  accessToken: string | null;
 }
 
 export interface AuthedContext {
@@ -38,7 +43,7 @@ export async function startFlow(
   const callback = `${config.publicBaseUrl}/auth/github/callback`;
   const authorizeUrl = config.fakeGithub
     ? `${config.publicBaseUrl}/auth/fake/authorize?state=${state}`
-    : `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(config.githubClientId)}&redirect_uri=${encodeURIComponent(callback)}&state=${state}&scope=read:user`;
+    : `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(config.githubClientId)}&redirect_uri=${encodeURIComponent(callback)}&state=${state}&scope=${encodeURIComponent("read:user repo")}`;
   return { state, authorizeUrl };
 }
 
@@ -62,7 +67,14 @@ export async function exchangeGithubCode(
       login === "spike-user"
         ? 1_000_001
         : 1_000_000 + (Number.parseInt(createHash("sha256").update(login).digest("hex").slice(0, 8), 16) % 900_000) + 100;
-    return { githubId, login, name: login.replace(/(^|-)([a-z])/g, (_, sep, ch) => sep + ch.toUpperCase()) };
+    return {
+      githubId,
+      login,
+      name: login.replace(/(^|-)([a-z])/g, (_, sep, ch) => sep + ch.toUpperCase()),
+      // Deterministic, obviously fake: what the attribution path stores and
+      // the fake host reads back as the author's own hand.
+      accessToken: `gho_fake_${login}`
+    };
   }
   const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
@@ -82,7 +94,7 @@ export async function exchangeGithubCode(
   });
   if (!userResponse.ok) throw new Error(`github user lookup failed: ${userResponse.status}`);
   const user = (await userResponse.json()) as { id: number; login: string; name: string | null };
-  return { githubId: user.id, login: user.login, name: user.name ?? null };
+  return { githubId: user.id, login: user.login, name: user.name ?? null, accessToken: tokenBody.access_token };
 }
 
 /**
@@ -113,20 +125,20 @@ export async function completeFlow(
 async function upsertUser(client: pg.PoolClient, identity: GithubIdentity): Promise<{ userId: string }> {
   const existing = await client.query("select user_id from users where github_id = $1", [identity.githubId]);
   if (existing.rowCount && existing.rows[0]) {
-    await client.query("update users set login = $2, name = $3 where github_id = $1", [
-      identity.githubId,
-      identity.login,
-      identity.name
-    ]);
+    // The token refreshes on every sign-in and never clears on a flow that
+    // did not carry one — a re-auth under the old scope must not delete the
+    // attribution a person already granted.
+    await client.query(
+      "update users set login = $2, name = $3, github_token = coalesce($4, github_token) where github_id = $1",
+      [identity.githubId, identity.login, identity.name, identity.accessToken]
+    );
     return { userId: existing.rows[0].user_id as string };
   }
   const userId = newUserId();
-  await client.query("insert into users (user_id, github_id, login, name) values ($1, $2, $3, $4)", [
-    userId,
-    identity.githubId,
-    identity.login,
-    identity.name
-  ]);
+  await client.query(
+    "insert into users (user_id, github_id, login, name, github_token) values ($1, $2, $3, $4, $5)",
+    [userId, identity.githubId, identity.login, identity.name, identity.accessToken]
+  );
   return { userId };
 }
 

@@ -23,7 +23,15 @@ export function registerGithubAppSetup(app: FastifyInstance, config: Config): vo
       // this scope was added needs the permission added in its GitHub
       // settings and the installation re-approved by its owner.
       default_permissions: { contents: "write", metadata: "read", pull_requests: "write" },
-      default_events: []
+      // A public control plane subscribes to the request's own story (D-101);
+      // a loopback one declares no hook, because GitHub could never reach it
+      // and the poll is its transport.
+      ...(config.publicBaseUrl.includes("127.0.0.1") || config.publicBaseUrl.includes("localhost")
+        ? { default_events: [] }
+        : {
+            hook_attributes: { url: `${config.publicBaseUrl}/webhooks/github` },
+            default_events: ["pull_request", "pull_request_review", "pull_request_review_comment", "issue_comment"]
+          })
     };
     return reply.type("text/html").send(
       `<!doctype html><meta charset="utf-8"><title>Novus</title>` +

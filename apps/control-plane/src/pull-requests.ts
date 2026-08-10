@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { BranchPush, MergeReadiness, PullRequest, ReviewThread } from "@novus/contracts";
@@ -925,14 +926,25 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
     const acted = await stewardingAct(deps, request, reply, { openOnly: true });
     if (!acted) return;
     const { pull, access } = acted;
+    // The person's own token authors the comment where one is held (D-101);
+    // the App authors it with in-body attribution otherwise. The token never
+    // leaves this process: it is read here and handed to the provider call.
+    const tokenRow = await deps.db.query("select github_token from users where user_id = $1", [
+      ctx.userId
+    ]);
+    const userToken = (tokenRow.rows[0]?.github_token as string | null | undefined) ?? null;
+    const asUser = userToken ? { token: userToken, login: ctx.login } : undefined;
     try {
-      await deps.provider.createPullComment(pull.providerRepoId, pull.number, {
-        // Authored by the App, attributed in the body until user-token
-        // identity exists (D-100).
-        body: `**${ctx.login} via Novus:** ${body.data.body}`,
-        ...(body.data.path !== undefined ? { path: body.data.path } : {}),
-        ...(body.data.line !== undefined ? { line: body.data.line } : {})
-      });
+      await deps.provider.createPullComment(
+        pull.providerRepoId,
+        pull.number,
+        {
+          body: asUser ? body.data.body : `**${ctx.login} via Novus:** ${body.data.body}`,
+          ...(body.data.path !== undefined ? { path: body.data.path } : {}),
+          ...(body.data.line !== undefined ? { line: body.data.line } : {})
+        },
+        asUser
+      );
     } catch (error) {
       if (error instanceof UnknownPullRequestError) return deps.sendError(reply, 404, "unknown_pull_request", error.message);
       if (error instanceof ProviderTransientError) return deps.sendError(reply, 502, "provider_unavailable", error.message);
@@ -940,7 +952,9 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
     }
     await recordAct(deps.db, pull, ctx, access.leaseId, "pr.comment_sent", {
       path: body.data.path ?? null,
-      line: body.data.line ?? null
+      line: body.data.line ?? null,
+      // Whether the host saw the person or the App as the author (D-101).
+      authoredAs: asUser ? "user" : "app"
     });
     return reply.send({ ok: true });
   });
@@ -1129,26 +1143,34 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
  * local-first control plane has no public webhook endpoint; a deployed one
  * grows webhooks with the same ingestion underneath (ARCHITECTURE.md).
  */
-export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider): Promise<void> {
-  const open = await db.query(
-    `select p.pr_id, p.org_id, p.mission_id, p.wst_id, p.provider_number, p.state, p.mergeable,
+interface SyncRow {
+  pr_id: string;
+  org_id: string;
+  mission_id: string;
+  wst_id: string;
+  provider_number: number;
+  state: string;
+  mergeable: string;
+  review_threads: unknown;
+  provider_repo_id: string;
+}
+
+const SYNC_SELECT = `select p.pr_id, p.org_id, p.mission_id, p.wst_id, p.provider_number, p.state, p.mergeable,
             p.review_threads, repo.provider_repo_id
        from pull_requests p
        join workstreams w on w.wst_id = p.wst_id
-       join repositories repo on repo.repo_id = w.repo_id
-      where p.state in ('draft', 'ready')`
-  );
-  for (const row of open.rows as {
-    pr_id: string;
-    org_id: string;
-    mission_id: string;
-    wst_id: string;
-    provider_number: number;
-    state: string;
-    mergeable: string;
-    review_threads: unknown;
-    provider_repo_id: string;
-  }[]) {
+       join repositories repo on repo.repo_id = w.repo_id`;
+
+export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider): Promise<void> {
+  const open = await db.query(`${SYNC_SELECT} where p.state in ('draft', 'ready')`);
+  for (const row of open.rows as SyncRow[]) {
+    await syncPullRow(db, provider, row);
+  }
+}
+
+/** One request's sync — the sweep's body, callable for a single row so a
+ *  webhook can poke exactly the request the host says changed (D-101). */
+async function syncPullRow(db: Db, provider: RepositoryProvider, row: SyncRow): Promise<void> {
     let host: HostPullRequest;
     let readiness: MergeReadiness | null = null;
     try {
@@ -1161,7 +1183,7 @@ export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider
     } catch {
       // The host being unreachable is not news to record; the next pass asks
       // again and last_synced_at stays honest about staleness.
-      continue;
+      return;
     }
     const knownThreads = Array.isArray(row.review_threads) ? (row.review_threads as unknown[]).length : 0;
     const openThreads = host.reviewThreads.filter((thread) => thread.state === "open").length;
@@ -1220,7 +1242,70 @@ export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider
         });
       }
     });
-  }
+}
+
+// --- The webhook receiver (D-101) --------------------------------------------
+// GitHub's own notification that a request changed: verified against the
+// shared secret over the raw bytes, then answered by syncing exactly the
+// named request through the same path the poll uses. With no secret
+// configured the endpoint does not exist — a local-first control plane has
+// nothing a webhook could reach, and the poll is its transport.
+
+export function registerWebhookRoutes(app: FastifyInstance, deps: RouteDeps): void {
+  if (deps.config.githubWebhookSecret === "") return;
+  const secret = deps.config.githubWebhookSecret;
+  void app.register(async (scope) => {
+    // Raw bytes inside this scope only: the signature is over the payload as
+    // sent, and a re-serialized JSON body would verify nothing.
+    scope.addContentTypeParser(
+      "application/json",
+      { parseAs: "buffer" },
+      (_request, body, done) => done(null, body)
+    );
+    scope.post("/webhooks/github", async (request, reply) => {
+      const raw = request.body as Buffer;
+      const signature = request.headers["x-hub-signature-256"];
+      const expected = `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`;
+      if (
+        typeof signature !== "string" ||
+        signature.length !== expected.length ||
+        !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+      ) {
+        return reply.code(401).send({ error: { code: "bad_signature", message: "The signature does not verify." } });
+      }
+      const event = request.headers["x-github-event"];
+      if (
+        event !== "pull_request" &&
+        event !== "pull_request_review" &&
+        event !== "pull_request_review_comment" &&
+        event !== "issue_comment"
+      ) {
+        return reply.code(204).send();
+      }
+      let payload: {
+        repository?: { id?: number };
+        pull_request?: { number?: number };
+        issue?: { number?: number };
+      };
+      try {
+        payload = JSON.parse(raw.toString("utf8")) as typeof payload;
+      } catch {
+        return reply.code(400).send({ error: { code: "bad_payload", message: "The payload is not JSON." } });
+      }
+      const repoId = payload.repository?.id;
+      const number = payload.pull_request?.number ?? payload.issue?.number;
+      if (repoId === undefined || number === undefined) return reply.code(204).send();
+      const found = await deps.db.query(
+        `${SYNC_SELECT} where repo.provider_repo_id = $1 and p.provider_number = $2`,
+        [String(repoId), number]
+      );
+      const row = found.rows[0] as SyncRow | undefined;
+      // A request Novus does not track is not Novus's news.
+      if (!row) return reply.code(204).send();
+      await syncPullRow(deps.db, deps.provider, row);
+      return reply.code(202).send({ ok: true });
+    });
+  });
 }
 
 /** Started from main.ts beside the reliability sweep; never from buildServer,

@@ -26,6 +26,7 @@ Novus is three planes with three trust levels. The planes are an isolation contr
 | Repo access token (GitHub App installation token: ~1h, repo-scoped) | Issued per workspace, held by the **runner supervisor** | The harness process's readable environment |
 | Harness/provider API credential | Scoped per execution where the harness supports it | Other missions, other orgs |
 | Per-project environment secrets | Injected into the workspace encrypted-at-rest, decrypted at provision | Control-plane logs, events, receipts |
+| User OAuth access token (D-101: authors the person's own PR comments) | Control plane, on the user row; refreshed at sign-in | Clients, runners, events, receipts |
 
 ### The supervisor/harness boundary
 
@@ -207,7 +208,7 @@ Adapters declare a capability manifest (steer granularity, resume support, appro
 
 ## GitHub ingestion
 
-The control plane ingests GitHub App webhooks — pull-request state, reviews, check runs — and normalizes them into mission events with `actor.kind: external`. This is data ingestion, not execution: payloads are parsed and recorded; nothing runs. CI check results arrive this way and are recorded as evidence claims attributed to the CI environment, exactly as runner-reported verification is attributed to its runner. Polling is the fallback when webhook delivery lapses — and for the local-first deployment, which has no public endpoint a webhook could reach, the poll **is** the transport (D-099): a sweep beside the reliability sweep refreshes every open pull request — state, draft flag, mergeability, review threads — and records what changed as external-actor events. A deployed control plane grows webhooks over the same ingestion underneath.
+The control plane ingests GitHub App webhooks — pull-request state, reviews, check runs — and normalizes them into mission events with `actor.kind: external`. This is data ingestion, not execution: payloads are parsed and recorded; nothing runs. CI check results arrive this way and are recorded as evidence claims attributed to the CI environment, exactly as runner-reported verification is attributed to its runner. Polling is the fallback when webhook delivery lapses — and for the local-first deployment, which has no public endpoint a webhook could reach, the poll **is** the transport (D-099): a sweep beside the reliability sweep refreshes every open pull request — state, draft flag, mergeability, review threads — and records what changed as external-actor events. **The webhook receiver exists (D-101)**: `POST /webhooks/github`, present only when a shared secret is configured, verifying `X-Hub-Signature-256` over the raw bytes in constant time, and answering a genuine knock by syncing exactly the named request through the same per-row path the poll uses — the payload names what to re-read and is never applied as state itself. The App manifest declares the hook and its events only when the control plane's public URL is not loopback.
 
 Pushing is the runner's act, never the control plane's: a `push_branch` command pushes the decided revision itself (`{sha}:refs/heads/{branch}`) with a per-operation, write-scoped credential minted separately from the read-scoped clone credential, injected through the same pipe, and never stored. There is no force push anywhere; a non-fast-forward is surfaced in words.
 

@@ -726,6 +726,12 @@ alter table workstreams add column if not exists remote_head_sha text
 alter table pull_requests add column if not exists labels jsonb not null default '[]'::jsonb;
 alter table pull_requests add column if not exists readiness jsonb;
 
+-- The person's own OAuth access token (D-101): held here alone so a comment
+-- from Novus can be authored as them on the host. Never served to a client,
+-- a runner, or an event; refreshed at sign-in; null until a person signs in
+-- under the repo scope. ARCHITECTURE.md#secret-placement carries the row.
+alter table users add column if not exists github_token text;
+
 -- ---------------------------------------------------------------------------
 -- Sessions (D-083): parallel conversations inside one workstream. A session
 -- owns its direction thread, its executions, and its own harness continuity —
