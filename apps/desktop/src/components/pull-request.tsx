@@ -702,13 +702,12 @@ function PullReview({
   const openState = pull.state === "draft" || pull.state === "ready";
   const openThreads = pull.reviewThreads.filter((thread) => thread.state === "open");
 
-  const sendToChat = (thread: PullRequest["reviewThreads"][number]) =>
+  const direct = (body: string) =>
     void onAct(async () => {
-      const quoted = thread.body.length > 400 ? `${thread.body.slice(0, 399)}…` : thread.body;
       const result = await novus().missions.direct({
         missionId: detail.mission.missionId,
         workstreamId: decision.workstreamId,
-        body: `Address this review comment from ${thread.author}${thread.path ? ` on ${thread.path}` : ""}: "${quoted}"`,
+        body,
         model: DEFAULT_MODEL,
         effort: DEFAULT_EFFORT
       });
@@ -722,6 +721,25 @@ function PullReview({
       return result;
     });
 
+  const sendToChat = (thread: PullRequest["reviewThreads"][number]) => {
+    const quoted = thread.body.length > 400 ? `${thread.body.slice(0, 399)}…` : thread.body;
+    direct(
+      `Address this review comment from ${thread.author}${thread.path ? ` on ${thread.path}` : ""}: "${quoted}"`
+    );
+  };
+
+  /** Conductor's own move, asked for by name (D-100): every open comment as
+   *  one direction, so a round of review becomes one turn of fixes. */
+  const sendAllToChat = () => {
+    const listed = openThreads.slice(0, 20).map((thread, index) => {
+      const quoted = thread.body.length > 300 ? `${thread.body.slice(0, 299)}…` : thread.body;
+      return `${index + 1}. ${thread.author}${thread.path ? ` on ${thread.path}${thread.line !== null ? `:${thread.line}` : ""}` : ""}: "${quoted}"`;
+    });
+    const truncated =
+      openThreads.length > 20 ? `\n(and ${openThreads.length - 20} more on the pull request)` : "";
+    direct(`Address these review comments from the pull request:\n${listed.join("\n")}${truncated}`);
+  };
+
   return (
     <section className="pull-review" data-testid="pull-review">
       <h3 className="field-label">Review</h3>
@@ -730,6 +748,14 @@ function PullReview({
           ? "Nobody has been asked for review yet."
           : `Review requested from ${pull.requestedReviewers.join(", ")}.`}
         {openThreads.length > 0 ? ` ${plural(openThreads.length, "comment")} open.` : ""}
+        {openState && openThreads.length > 1 && (
+          <>
+            {" "}
+            <button className="btn btn-text" onClick={sendAllToChat} data-testid="send-all-to-chat">
+              Add all comments to chat
+            </button>
+          </>
+        )}
       </p>
       {pull.reviewThreads.length > 0 && (
         <ul className="tool-list" data-testid="pull-threads">
