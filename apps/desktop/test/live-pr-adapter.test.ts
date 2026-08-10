@@ -120,6 +120,26 @@ describe.skipIf(!LIVE)("the live GitHub adapter publishes a decision (D-099)", (
           await new Promise((settle) => setTimeout(settle, 1_000));
         }
         expect(state).toBe("ready");
+
+        // The gate, read from the real host (D-100): the repository's own
+        // allowed methods, and whatever checks and reviews it actually has.
+        const readiness = await provider.getMergeReadiness(providerRepoId, opened.number);
+        expect(readiness.allowedMergeMethods.length).toBeGreaterThan(0);
+        expect(readiness.syncedAt).toBeTruthy();
+
+        // The merge, performed by GitHub on this explicit ask — into the
+        // scratch repository's own main, which is what scratch is for.
+        const method = readiness.allowedMergeMethods.includes("squash")
+          ? ("squash" as const)
+          : readiness.allowedMergeMethods[0]!;
+        const mergedResult = await provider.mergePullRequest(providerRepoId, opened.number, method);
+        expect(mergedResult.sha).toMatch(/^[0-9a-f]{40}$/);
+        const afterMerge = await provider.getPullRequest(providerRepoId, opened.number);
+        expect(afterMerge.state).toBe("merged");
+        console.warn(`[live-pr] merged ${opened.url} via ${method} → ${mergedResult.sha}`);
+
+        // And the branch deletion, the explicitly separate act.
+        await provider.deleteBranchRef(providerRepoId, branch);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

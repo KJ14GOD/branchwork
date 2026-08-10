@@ -412,13 +412,15 @@ describe("shipping a decision through GitHub (D-099)", () => {
       expect(await page.getByTestId("pull-headline").innerText()).toContain("is a draft");
       expect(await page.getByTestId("pull-branches").innerText()).toContain("→ main");
       expect(await page.getByTestId("state-line").innerText()).toContain("Pull request open");
-      // No merge control exists anywhere on the page, and the sentence says
-      // where merging happens instead.
+      // A draft offers no merge control — readiness precedes the verb — and
+      // the sentence carries the never-silent rule (D-100).
       expect(await page.locator("button", { hasText: /^Merge/ }).count()).toBe(0);
-      expect(await page.getByTestId("pull-no-merge").innerText()).toContain("Novus never merges");
+      expect(await page.getByTestId("pull-no-silent-merge").innerText()).toContain(
+        "nothing ever merges silently"
+      );
       await shot("109-pull-request-page.png");
 
-      // --- Review: asked from here, answered on the host --------------------
+      // --- Review: asked from here, answered here (D-100) -------------------
       await page.getByTestId("reviewer-input").fill("maya");
       await page.getByTestId("request-review").click();
       await expect
@@ -434,7 +436,30 @@ describe("shipping a decision through GitHub (D-099)", () => {
       expect(await page.getByTestId("pull-threads").innerText()).toContain("Is the guard bounded?");
       expect(await page.getByTestId("pull-reviewers").innerText()).toContain("1 comment open");
 
-      await hostActs("resolve", { number: pull.number });
+      // Send to chat: the comment becomes a direction for the decided lane's
+      // conversation, and the chat genuinely takes it.
+      const directionsBefore = (await detail()).directions.length;
+      await page.getByTestId("send-to-chat").click();
+      const withSent = await until(
+        "the comment to become a direction",
+        (value) => value.directions.length > directionsBefore,
+        60_000
+      );
+      const sent = withSent.directions[withSent.directions.length - 1]!;
+      expect(sent.body).toContain("Is the guard bounded?");
+      expect(sent.body).toContain("maya");
+      await until(
+        "the chat's turn to finish",
+        (value) =>
+          value.executions.length > 0 &&
+          value.executions.every((execution) =>
+            ["completed", "stopped", "failed", "interrupted"].includes(execution.state)
+          ),
+        120_000
+      );
+
+      // Resolving happens from Novus now, and lands on the host.
+      await page.getByTestId("resolve-thread").click();
       await until(
         "the resolution to be reflected",
         (value) => value.pullRequest?.reviewThreads[0]?.state === "resolved",
@@ -448,26 +473,94 @@ describe("shipping a decision through GitHub (D-099)", () => {
         .poll(async () => page.getByTestId("pull-headline").innerText(), { timeout: 30_000 })
         .toContain("awaits review");
 
-      // --- A human merges on GitHub; Novus records who ----------------------
-      await hostActs("merge", { number: pull.number, author: "maya" });
-      const merged = await until(
-        "the merge to be ingested",
-        (value) => value.pullRequest?.state === "merged",
+      // --- The readiness gate fills from the host's own story ---------------
+      await hostActs("check", { number: pull.number, checkName: "ci", checkStatus: "passed", required: true });
+      await hostActs("check", { number: pull.number, checkName: "lint", checkStatus: "failed", required: false });
+      await hostActs("review", { number: pull.number, verdict: "approve" });
+      await hostActs("behind", { number: pull.number, behindBy: 2 });
+      await until(
+        "readiness to be ingested",
+        (value) =>
+          (value.pullRequest?.readiness?.checks.length ?? 0) >= 2 &&
+          value.pullRequest?.readiness?.behindBy === 2,
         60_000
       );
-      expect(merged.pullRequest?.mergedBy).toBe("maya");
-      // The mission returns to the decision, whose sentence names publication.
+      // The room's own poll carries it to the screen a beat later.
+      await expect
+        .poll(async () => page.getByTestId("pull-readiness").innerText(), { timeout: 30_000 })
+        .toContain("ci · required");
+      const readiness = await page.getByTestId("pull-readiness").innerText();
+      expect(readiness).toContain("lint");
+      expect(readiness).toContain("failed");
+      expect(readiness).toContain("approved (1)");
+      expect(readiness).toContain("2 commits behind main");
+      await shot("111-merge-readiness.png");
+
+      // Update branch is one click, and the gate follows.
+      await page.getByTestId("update-branch").click();
+      await until(
+        "the branch to catch up",
+        (value) => value.pullRequest?.readiness?.behindBy === 0,
+        60_000
+      );
+
+      // --- The merge is Novus's control and GitHub's act (D-100) ------------
+      // The confirm restates the one remaining blocker (lint, non-required)
+      // and proceeding accepts exactly it — never silently.
+      await page.getByTestId("merge-open").click();
+      await page.getByTestId("merge-blockers").waitFor({ timeout: 20_000 });
+      const confirm = await page.getByTestId("merge-blockers").innerText();
+      expect(confirm).toContain("deliberately");
+      await page.getByTestId("method-squash").check();
+      await shot("112-merge-confirm.png");
+      await page.getByTestId("merge-confirm").click();
+      // The sweep may ingest the host's merged state a beat before the
+      // route's own transaction commits; the recorded act is what to wait on.
+      const merged = await until(
+        "the merge to land with the person's act recorded",
+        (value) =>
+          value.pullRequest?.state === "merged" &&
+          value.events.some((event) => event.kind === "pr.merge_performed"),
+        60_000
+      );
+      // The person's act is recorded with what was accepted; the host
+      // performed it, and the sentence names how publication ended.
+      const performed = merged.events.find((event) => event.kind === "pr.merge_performed");
+      expect(performed).toBeTruthy();
+      expect(String((performed!.payload as { acceptedBlockers: string[] }).acceptedBlockers)).toContain(
+        "lint"
+      );
       expect(merged.state).toBe("decision_recorded");
       await expect
         .poll(async () => page.getByTestId("state-line").innerText(), { timeout: 30_000 })
-        .toContain("merged by maya");
-      await shot("110-merged-by-a-human.png");
+        .toContain("published as PR #1, merged");
+      await shot("113-merged-from-novus.png");
 
-      // The event record carries the host's acts as external claims.
-      const events = merged.events.filter((event) => event.kind.startsWith("pr."));
-      const kinds = events.map((event) => event.kind);
+      // --- Completion's tail: delete the branch, archive the mission --------
+      await page.getByTestId("delete-branch").click();
+      await page.getByTestId("delete-branch-confirm").click();
+      await until(
+        "the deletion to be recorded",
+        (value) => value.events.some((event) => event.kind === "pr.branch_deleted"),
+        30_000
+      );
+      await page.getByTestId("archive-after-merge").click();
+      await expect
+        .poll(
+          async () =>
+            page.evaluate(async () => {
+              const result = await window.novus.missions.list();
+              return result.ok ? result.value.length : -1;
+            }),
+          { timeout: 30_000 }
+        )
+        .toBe(0);
+
+      const kinds = merged.events.filter((event) => event.kind.startsWith("pr.")).map((event) => event.kind);
       expect(kinds).toContain("pr.opened");
-      expect(kinds).toContain("pr.merged");
+      expect(kinds).toContain("pr.branch_updated");
+      expect(kinds).toContain("pr.thread_resolved");
+      expect(kinds).toContain("pr.merge_performed");
     },
     300_000
   );
