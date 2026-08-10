@@ -4376,20 +4376,14 @@ body.resizing {
   position: absolute;
   bottom: calc(100% + var(--s-1));
   left: var(--s-2);
-  right: var(--s-2);
   z-index: 40;
-  display: flex;
-  gap: var(--s-2);
-  padding: var(--s-2);
+  display: inline-flex;
+  gap: var(--s-1);
+  padding: var(--s-1);
   background: var(--surface-2);
   border: 1px solid var(--edge);
   border-radius: var(--r-button);
   box-shadow: var(--elev-2);
-}
-
-.theme-popover .btn {
-  flex: 1;
-  padding: var(--s-1) var(--s-2);
 }
 
 .dialog-sub {

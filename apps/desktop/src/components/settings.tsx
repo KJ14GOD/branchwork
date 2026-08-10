@@ -41,6 +41,22 @@ function MoonGlyph() {
   );
 }
 
+function DisplayGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+      strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
+      <rect x="1.75" y="2.75" width="12.5" height="8.5" rx="1.25" />
+      <path d="M6 13.75h4M8 11.25v2.5" />
+    </svg>
+  );
+}
+
+const CHOICE_GLYPHS: Record<ThemePreference, () => React.ReactElement> = {
+  light: SunGlyph,
+  dark: MoonGlyph,
+  system: DisplayGlyph
+};
+
 /**
  * The theme control at the rail's foot (D-103, reversing D-102's dialog on
  * the owner's direction): the trigger wears the *resolved* theme — a
@@ -100,17 +116,22 @@ export function ThemeControl({
       </button>
       {open && (
         <div className="theme-popover" role="group" aria-label="Theme" data-testid="theme-popover">
-          {THEME_CHOICES.map((option) => (
-            <button
-              key={option.value}
-              className="btn btn-secondary"
-              aria-pressed={theme === option.value}
-              data-testid={`theme-${option.value}`}
-              onClick={() => pick(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
+          {THEME_CHOICES.map((option) => {
+            const Glyph = CHOICE_GLYPHS[option.value];
+            return (
+              <button
+                key={option.value}
+                className={theme === option.value ? "icon-button active" : "icon-button"}
+                aria-pressed={theme === option.value}
+                aria-label={option.label}
+                title={option.label}
+                data-testid={`theme-${option.value}`}
+                onClick={() => pick(option.value)}
+              >
+                <Glyph />
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

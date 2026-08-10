@@ -224,16 +224,16 @@ describe("the theme choice after first run (D-102)", () => {
           page.evaluate(() => getComputedStyle(document.body).backgroundColor)
         )
         .toBe(await tokenAsRgb(page, "--bg"));
-      // The buttons ease their background over --m-press; the evidence shot
-      // waits for the settled --surface-1, not a frame mid-transition.
+      // The popover plane consumes --surface-2; polling it settles any
+      // eased backgrounds before the evidence shot.
       await expect
         .poll(async () =>
           page.evaluate(() => {
-            const button = document.querySelector('[data-testid="theme-dark"]');
-            return button ? getComputedStyle(button).backgroundColor : "gone";
+            const block = document.querySelector('[data-testid="theme-popover"]');
+            return block ? getComputedStyle(block).backgroundColor : "gone";
           })
         )
-        .toBe(await tokenAsRgb(page, "--surface-1"));
+        .toBe(await tokenAsRgb(page, "--surface-2"));
       await shot(page, "116-theme-popover-light.png");
 
       // Esc puts the block away, leaving the populated room in light for the
