@@ -623,14 +623,22 @@ function InlineCommentDialog({
   const [body, setBody] = useState("");
   return (
     <Dialog label={`Comment on ${anchor.path}:${anchor.line}`} onClose={onClose}>
-      <textarea
-        className="input pull-comment-input"
-        value={body}
-        onChange={(event) => setBody(event.target.value)}
-        placeholder="Say it here; it lands on the GitHub thread."
-        aria-label="Inline comment"
-        data-testid="inline-comment-input"
-      />
+      <header className="dialog-head">
+        <h2>Comment on the line</h2>
+        <p className="dialog-sub mono">
+          {anchor.path}:{anchor.line}
+        </p>
+      </header>
+      <div className="dialog-body">
+        <textarea
+          className="input pull-comment-input"
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          placeholder="Say it here; it lands on the GitHub thread."
+          aria-label="Inline comment"
+          data-testid="inline-comment-input"
+        />
+      </div>
       <footer className="dialog-actions">
         <button className="btn btn-text" onClick={onClose}>
           Cancel
@@ -999,38 +1007,46 @@ function Completion({
 
       {confirming === "merge" && (
         <Dialog label={`Merge PR #${pull.number}`} onClose={() => setConfirming(null)}>
-          <p className="prose">
-            GitHub performs the merge into <span className="mono">{pull.baseRef}</span>. This is not
-            undoable from Novus.
-          </p>
-          <div className="pull-methods" role="radiogroup" aria-label="Merge method">
-            {methods.map((candidate) => (
-              <label key={candidate} className="pull-method">
-                <input
-                  type="radio"
-                  name="merge-method"
-                  checked={method === candidate}
-                  onChange={() => setMethod(candidate)}
-                  data-testid={`method-${candidate}`}
-                />
-                {candidate}
-              </label>
-            ))}
-          </div>
-          {blockers.length > 0 && (
-            <>
-              <p className="prose tone-warn" data-testid="merge-blockers">
-                Outstanding, and merged over deliberately if you proceed:
-              </p>
-              <ul className="tool-list">
-                {blockers.map((blocker, index) => (
-                  <li key={index}>
-                    <span className="tool-name">{blocker}</span>
-                  </li>
+          {/* The dialog's own axis (D-076): one head naming the act with its
+              consequence beneath, the choice and the accepted facts as the
+              body, the two actions at the foot. A confirmation is a quiet
+              room, not a form. */}
+          <header className="dialog-head">
+            <h2>Merge PR #{pull.number}</h2>
+            <p className="dialog-sub">
+              GitHub performs the merge into <span className="mono">{pull.baseRef}</span>. This is
+              not undoable from Novus.
+            </p>
+          </header>
+          <div className="dialog-body">
+            <div className="confirm-field">
+              <span className="field-label">Method</span>
+              <div className="segment" role="radiogroup" aria-label="Merge method">
+                {methods.map((candidate) => (
+                  <button
+                    key={candidate}
+                    role="radio"
+                    aria-checked={method === candidate}
+                    className={method === candidate ? "segment-tab active" : "segment-tab"}
+                    onClick={() => setMethod(candidate)}
+                    data-testid={`method-${candidate}`}
+                  >
+                    {candidate}
+                  </button>
                 ))}
-              </ul>
-            </>
-          )}
+              </div>
+            </div>
+            {blockers.length > 0 && (
+              <div className="confirm-field" data-testid="merge-blockers">
+                <span className="field-label tone-warn">Merged over deliberately, if you proceed</span>
+                <ul className="confirm-facts">
+                  {blockers.map((blocker, index) => (
+                    <li key={index}>{blocker}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
           <footer className="dialog-actions">
             <button className="btn btn-text" onClick={() => setConfirming(null)}>
               Cancel
@@ -1058,10 +1074,13 @@ function Completion({
       )}
       {confirming === "close" && (
         <Dialog label={`Close PR #${pull.number}`} onClose={() => setConfirming(null)}>
-          <p className="prose">
-            The request closes on GitHub without merging. The branch and the mission stay exactly as
-            they are.
-          </p>
+          <header className="dialog-head">
+            <h2>Close PR #{pull.number}</h2>
+            <p className="dialog-sub">
+              The request closes on GitHub without merging. The branch and the mission stay exactly
+              as they are.
+            </p>
+          </header>
           <footer className="dialog-actions">
             <button className="btn btn-text" onClick={() => setConfirming(null)}>
               Cancel
@@ -1085,10 +1104,13 @@ function Completion({
       )}
       {confirming === "delete" && (
         <Dialog label={`Delete ${pull.headRef}`} onClose={() => setConfirming(null)}>
-          <p className="prose">
-            Deletes the branch on GitHub. The mission branch in this machine's checkout is not
-            touched, and nothing about the merged history changes.
-          </p>
+          <header className="dialog-head">
+            <h2>Delete the remote branch</h2>
+            <p className="dialog-sub">
+              Deletes <span className="mono">{pull.headRef}</span> on GitHub. The mission branch in
+              this machine's checkout is not touched, and nothing about the merged history changes.
+            </p>
+          </header>
           <footer className="dialog-actions">
             <button className="btn btn-text" onClick={() => setConfirming(null)}>
               Cancel

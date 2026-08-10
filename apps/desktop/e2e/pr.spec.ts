@@ -509,9 +509,11 @@ describe("shipping a decision through GitHub (D-099)", () => {
       // and proceeding accepts exactly it — never silently.
       await page.getByTestId("merge-open").click();
       await page.getByTestId("merge-blockers").waitFor({ timeout: 20_000 });
-      const confirm = await page.getByTestId("merge-blockers").innerText();
+      // The label renders in the house micro-caps; the words are what matter.
+      const confirm = (await page.getByTestId("merge-blockers").innerText()).toLowerCase();
       expect(confirm).toContain("deliberately");
-      await page.getByTestId("method-squash").check();
+      await page.getByTestId("method-squash").click();
+      expect(await page.getByTestId("method-squash").getAttribute("aria-checked")).toBe("true");
       await shot("112-merge-confirm.png");
       await page.getByTestId("merge-confirm").click();
       // The sweep may ingest the host's merged state a beat before the

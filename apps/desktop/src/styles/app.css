@@ -4320,17 +4320,22 @@ body.resizing {
   max-width: 480px;
 }
 
-.pull-methods {
+/* The confirm's body rows: a micro label over its value, and the accepted
+   facts as a quiet list — the dialog is the container, nothing inside it
+   carries a second border. */
+.confirm-field {
   display: flex;
-  gap: var(--s-4);
+  flex-direction: column;
+  gap: var(--s-2);
 }
 
-.pull-method {
-  display: inline-flex;
-  align-items: center;
+.confirm-facts {
+  display: flex;
+  flex-direction: column;
   gap: var(--s-1);
   font: var(--type-row);
-  color: var(--text-1);
+  color: var(--text-2);
+  list-style: none;
 }
 
 .field {
