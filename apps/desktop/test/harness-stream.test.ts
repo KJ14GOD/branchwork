@@ -62,7 +62,12 @@ describe("stream parsing", () => {
     );
     expect(events.map((event) => event.kind)).toEqual(["harness.text", "harness.tool"]);
     expect(payloadOf(events, "harness.text")).toEqual({ text: "Looking at the auth module.", parentToolUseId: null });
-    expect(payloadOf(events, "harness.tool")).toEqual({ tool: "Read", detail: "src/auth.ts", parentToolUseId: null });
+    expect(payloadOf(events, "harness.tool")).toEqual({
+      tool: "Read",
+      detail: "src/auth.ts",
+      parentToolUseId: null,
+      toolUseId: "t1"
+    });
   });
 
   it("ignores malformed lines instead of dying on them", () => {
@@ -421,5 +426,58 @@ describe("what the turn cost, and who was speaking", () => {
     // its own. A subagent is the harness's business (PRODUCT.md#the-harness-boundary).
     expect(payloadOf(worker, "harness.text")?.parentToolUseId).toBe("toolu_task_1");
     expect(payloadOf(worker, "harness.tool")?.parentToolUseId).toBe("toolu_task_1");
+  });
+
+  it("records the spawning Task call's own id, so a worker's events join to it (D-107)", () => {
+    const stream = new HarnessStream();
+    const spawn = stream.push(
+      assistant([
+        {
+          type: "tool_use",
+          id: "toolu_task_1",
+          name: "Task",
+          input: { description: "Research the repository" }
+        }
+      ])
+    );
+    expect(payloadOf(spawn, "harness.tool")).toEqual({
+      tool: "Task",
+      detail: "Research the repository",
+      parentToolUseId: null,
+      toolUseId: "toolu_task_1"
+    });
+  });
+
+  it("reports a worker's end from the Task's own tool result — outcome and report as stated (D-107)", () => {
+    const stream = new HarnessStream();
+    stream.push(
+      assistant([
+        { type: "tool_use", id: "toolu_task_1", name: "Task", input: { description: "Run API tests" } }
+      ])
+    );
+    const ended = stream.push(toolResult("toolu_task_1", "All 14 tests pass."));
+    expect(ended.map((event) => event.kind)).toEqual(["harness.worker.ended"]);
+    expect(payloadOf(ended, "harness.worker.ended")).toEqual({
+      toolUseId: "toolu_task_1",
+      failed: false,
+      report: "All 14 tests pass."
+    });
+
+    // Failure comes from the result's own error flag, never from prose.
+    stream.push(
+      assistant([
+        { type: "tool_use", id: "toolu_task_2", name: "Task", input: { description: "Review changes" } }
+      ])
+    );
+    const failed = stream.push(toolResult("toolu_task_2", "Agent crashed.", true));
+    expect(payloadOf(failed, "harness.worker.ended")).toEqual({
+      toolUseId: "toolu_task_2",
+      failed: true,
+      report: "Agent crashed."
+    });
+
+    // A result whose Task call was never seen proves nothing and emits
+    // nothing: an end without a recorded start is not a worker.
+    expect(stream.push(toolResult("toolu_task_unseen", "done"))).toEqual([]);
   });
 });

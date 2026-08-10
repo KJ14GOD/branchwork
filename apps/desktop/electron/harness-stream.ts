@@ -476,7 +476,12 @@ export class HarnessStream {
         payload: {
           tool: bound(tool, MAX_LINE),
           detail: detail === null ? null : bound(this.sanitize(detail), MAX_LINE),
-          parentToolUseId
+          parentToolUseId,
+          // The call's own id, so a worker's children — which carry it as
+          // their parent — can be joined to the call that spawned them
+          // (D-107). Before this, the id they pointed at appeared nowhere
+          // else in the log.
+          toolUseId: typeof block.id === "string" && block.id ? bound(block.id, MAX_LINE) : null
         }
       });
     }
@@ -499,6 +504,22 @@ export class HarnessStream {
       if (block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
       const call = this.pending.get(block.tool_use_id);
       this.pending.delete(block.tool_use_id);
+      // A Task's result is a worker ending (D-107): the one lifecycle fact
+      // the harness exposes about its own subagents' completion. The result's
+      // error flag and the worker's handed-back report are recorded as
+      // stated — never inferred, never summarized.
+      if (call?.name === "Task") {
+        const report = this.sanitize(textOfContent(block.content));
+        events.push({
+          kind: "harness.worker.ended",
+          payload: {
+            toolUseId: bound(block.tool_use_id, MAX_LINE),
+            failed: block.is_error === true,
+            report: report ? bound(report, MAX_TEXT) : null
+          }
+        });
+        continue;
+      }
       // Only a shell command Novus can name is evidence; everything else was
       // the harness working, which the tool line already reported.
       if (!call?.command) continue;

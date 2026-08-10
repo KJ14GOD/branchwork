@@ -1918,7 +1918,36 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
       .object({
         tool: BOUNDED_LINE,
         detail: BOUNDED_LINE.nullable().default(null),
-        parentToolUseId: PARENT_TOOL_USE_ID
+        parentToolUseId: PARENT_TOOL_USE_ID,
+        /**
+         * The tool call's *own* id, as the harness stated it (D-107). This is
+         * the missing half of the worker join: a subagent's events carry
+         * `parentToolUseId`, and until this field existed the id they pointed
+         * at appeared nowhere else in the log, so parent and child could never
+         * be connected after the fact. Null when the harness gave the call no
+         * id. Recording it grants nothing — a worker still has no branch,
+         * controller, checkpoint, or workstream (D-071).
+         */
+        toolUseId: BOUNDED_LINE.nullable().default(null)
+      })
+      .strict()
+  }),
+  z.object({
+    /**
+     * One of the harness's own workers finished: the tool result of the Task
+     * call that spawned it came back on the stream (D-107). `toolUseId` is the
+     * spawning call's own id — the same value its children carried as
+     * `parentToolUseId` — `failed` is the result's own error flag, and
+     * `report` is what the worker handed back, bounded like all harness text.
+     * This is the only lifecycle fact the harness exposes about a worker's
+     * end; Novus records it and invents nothing beyond it.
+     */
+    kind: z.literal("harness.worker.ended"),
+    payload: z
+      .object({
+        toolUseId: BOUNDED_LINE,
+        failed: z.boolean(),
+        report: BOUNDED_TEXT.nullable().default(null)
       })
       .strict()
   }),
