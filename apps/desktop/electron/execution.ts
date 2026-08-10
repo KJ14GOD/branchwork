@@ -955,6 +955,65 @@ export function startTurn(request: TurnRequest): RunningTurn {
       }
 
       if (stopReason !== null) return { code: null, signal: "SIGTERM", stderr: "", spawnError: null };
+
+      // Two of the harness's own workers, in the exact line shapes the real
+      // CLI emits and through the same parser (D-107): the Task spawns, their
+      // tagged activity, and the Task results — one success, one failure — so
+      // an end-to-end test drives the production worker join.
+      if (/\[fake-workers\]/.test(request.direction)) {
+        const workerLines = [
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              content: [
+                { type: "tool_use", id: "toolu_fake_w1", name: "Task", input: { description: "Research the repository" } },
+                { type: "tool_use", id: "toolu_fake_w2", name: "Task", input: { description: "Run API tests" } }
+              ]
+            }
+          }),
+          JSON.stringify({
+            type: "assistant",
+            parent_tool_use_id: "toolu_fake_w1",
+            message: {
+              content: [
+                { type: "text", text: "Found three call sites." },
+                { type: "tool_use", id: "toolu_fake_w1_read", name: "Read", input: { file_path: "src/auth.ts" } }
+              ]
+            }
+          }),
+          JSON.stringify({
+            type: "assistant",
+            parent_tool_use_id: "toolu_fake_w2",
+            message: {
+              content: [
+                { type: "tool_use", id: "toolu_fake_w2_read", name: "Read", input: { file_path: "test/api.test.ts" } }
+              ]
+            }
+          }),
+          JSON.stringify({
+            type: "user",
+            message: {
+              content: [
+                { type: "tool_result", tool_use_id: "toolu_fake_w1", content: "Three call sites documented." }
+              ]
+            }
+          }),
+          JSON.stringify({
+            type: "user",
+            message: {
+              content: [
+                { type: "tool_result", tool_use_id: "toolu_fake_w2", content: "The tests could not start.", is_error: true }
+              ]
+            }
+          })
+        ];
+        for (const workerLine of workerLines) {
+          if (stopReason !== null) return { code: null, signal: "SIGTERM", stderr: "", spawnError: null };
+          for (const event of stream.push(`${workerLine}\n`)) emit(event);
+          await delay(perLine);
+        }
+      }
+
       for (const event of stream.push(
         `${JSON.stringify({
           type: "assistant",

@@ -1385,6 +1385,112 @@ body {
   white-space: nowrap;
 }
 
+/* The harness's own workers, grouped inside the technical disclosure
+   (D-107). Words and rows only: state is a word, counts are text, and the
+   one identity a worker wears is the purpose the harness itself stated. */
+.worker-block {
+  padding: var(--s-1) 0 0 calc(14px + var(--s-2));
+}
+
+.worker-head {
+  display: flex;
+  gap: var(--s-2);
+  font: var(--type-meta);
+}
+
+.worker-list {
+  list-style: none;
+  padding: var(--s-1) 0 0 var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.worker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: var(--type-meta);
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.worker-row:hover .worker-purpose {
+  color: var(--text-1);
+}
+
+.worker-purpose {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worker-facts {
+  color: var(--text-3);
+  flex: none;
+}
+
+.worker-state {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-3);
+}
+
+.worker-state.tone-danger {
+  color: var(--danger);
+}
+
+/* One worker on the canvas (D-107): the same plane as the conversation it
+   came from, one border level, no card in a card. */
+.worker-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: var(--s-5) 0;
+}
+
+.worker-inspector-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  justify-content: space-between;
+}
+
+.worker-inspector-title {
+  font: var(--type-title);
+  color: var(--text-1);
+}
+
+.worker-inspector-sub {
+  font: var(--type-meta);
+  color: var(--text-3);
+  margin-top: var(--s-1);
+}
+
+.worker-inspector-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-bottom: var(--s-2);
+}
+
+.worker-report {
+  font: var(--type-body);
+  color: var(--text-2);
+  white-space: pre-wrap;
+}
+
+.worker-inspector-foot {
+  border-top: 1px solid var(--edge);
+  padding-top: var(--s-3);
+}
+
 /* Evidence milestones: dense rows, tabular numbers, no cards. */
 .milestone {
   display: flex;

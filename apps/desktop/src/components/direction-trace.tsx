@@ -68,10 +68,54 @@ interface ToolStep {
   label: string;
   detail: string | null;
   /** Produced by one of the harness's **own** subagents rather than by the
-   *  harness itself. It is indented under the same disclosure — the harness
-   *  owns its workers, so their activity belongs to this turn and gets no
-   *  identity of its own (PRODUCT.md#the-harness-boundary). */
+   *  harness itself, but not joinable to a recorded spawn — old logs, or a
+   *  parent id the stream never explained. It stays what it always was:
+   *  indented grouped activity, no identity claimed (D-107). */
   nested?: boolean;
+}
+
+/**
+ * One of the harness's own workers, joined entirely from what the stream
+ * stated (D-107): the Task call's own id and description, its children's
+ * tagged activity, and the Task result's own outcome flag and report. A
+ * worker has no branch, checkpoint, controller, workstream, or cost — the
+ * CLI states usage per turn only, and Novus does not compute figures the
+ * vendor did not report.
+ */
+export interface WorkerView {
+  /** The spawning Task call's own id. */
+  id: string;
+  /** The Task call's description — the only identity the harness stated. */
+  purpose: string | null;
+  /** When the spawn appeared on the stream. */
+  at: string | null;
+  /** What the worker said and did, in stream order. */
+  steps: ToolStep[];
+  /** The Task result, when it arrived. Null is "not stated", never "fine". */
+  ended: { failed: boolean; report: string | null; at: string | null } | null;
+}
+
+/**
+ * A worker's state, in a word — or in nothing. `working` only while the
+ * parent turn is itself live: once the turn has settled without the Task
+ * result arriving, the worker's end was never stated, and an unstated end is
+ * not a state (D-094's rule — evidence, never prediction).
+ */
+export function workerState(worker: WorkerView, turnSettled: boolean): "working" | "done" | "failed" | null {
+  if (worker.ended) return worker.ended.failed ? "failed" : "done";
+  return turnSettled ? null : "working";
+}
+
+/** The files a worker's own tool activity named — its footprint as stated,
+ *  never the checkpoint's (a worker has no checkpoint, D-071). */
+export function workerFiles(worker: WorkerView): string[] {
+  const files = new Set<string>();
+  for (const step of worker.steps) {
+    if ((step.label === "Write" || step.label === "Edit" || step.label === "NotebookEdit") && step.detail) {
+      files.add(step.detail);
+    }
+  }
+  return [...files];
 }
 
 /** What the harness said this turn cost, summed over the turns of one trace. */
@@ -100,6 +144,12 @@ interface TraceBlock {
   /** All of this direction's technical activity, in ONE disclosure — not one
    *  per gap between harness messages. */
   toolSteps: ToolStep[];
+  /** The harness's own workers this turn spawned, joined by the ids the
+   *  stream stated (D-107). Inside the disclosure, never beside the speech. */
+  workers: WorkerView[];
+  /** Whether a terminal execution event has arrived, so a worker without a
+   *  stated end stops reading as `working` once the turn itself is over. */
+  settled: boolean;
 }
 
 interface ControlBlock {
@@ -271,7 +321,9 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       usage: null,
       segments: [],
       resolvedBy: null,
-      toolSteps: []
+      toolSteps: [],
+      workers: [],
+      settled: false
     };
     blocks.push(block);
     if (direction) traces.set(direction.directionId, block);
@@ -337,24 +389,62 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       case "harness.text": {
         const body = text(event.payload.text);
         if (!body) break;
-        const worker = text(event.payload.parentToolUseId);
-        if (worker) {
+        const parent = text(event.payload.parentToolUseId);
+        if (parent) {
           // One of the harness's own subagents. It is activity, not the answer
           // the room is waiting for, so it never takes the speech position —
-          // and the reply that leads stays the harness's own (D-065).
-          block.toolSteps.push({ label: "said", detail: body, nested: true });
+          // and the reply that leads stays the harness's own (D-065). Joined
+          // to its worker when the spawn id was recorded (D-107); grouped
+          // activity as before when it was not.
+          const worker = block.workers.find((candidate) => candidate.id === parent);
+          if (worker) worker.steps.push({ label: "said", detail: body });
+          else block.toolSteps.push({ label: "said", detail: body, nested: true });
           break;
         }
         push(block, { kind: "harness", key: event.eventId, texts: [body] });
         break;
       }
-      case "harness.tool":
-        block.toolSteps.push({
-          label: text(event.payload.tool) ?? "tool",
-          detail: text(event.payload.detail),
-          nested: text(event.payload.parentToolUseId) !== null
-        });
+      case "harness.tool": {
+        const label = text(event.payload.tool) ?? "tool";
+        const detail = text(event.payload.detail);
+        const parent = text(event.payload.parentToolUseId);
+        const own = text(event.payload.toolUseId);
+        if (label === "Task" && own && !parent) {
+          // The spawn itself. The Task row becomes the worker's own row in
+          // the Workers rollup rather than a flat step — same disclosure,
+          // same facts, grouped where its children will land (D-107).
+          block.workers.push({ id: own, purpose: detail, at: event.occurredAt, steps: [], ended: null });
+          break;
+        }
+        if (parent) {
+          const worker = block.workers.find((candidate) => candidate.id === parent);
+          if (worker) {
+            worker.steps.push({ label, detail });
+            break;
+          }
+          // A parent the log never explained: grouped activity, no identity
+          // claimed (D-107).
+          block.toolSteps.push({ label, detail, nested: true });
+          break;
+        }
+        block.toolSteps.push({ label, detail });
         break;
+      }
+      case "harness.worker.ended": {
+        const own = text(event.payload.toolUseId);
+        const worker = own ? block.workers.find((candidate) => candidate.id === own) : undefined;
+        // An end whose start was never recorded proves nothing and renders
+        // nothing — the parser already refuses to emit one, but an old log
+        // is read with the same honesty.
+        if (worker) {
+          worker.ended = {
+            failed: event.payload.failed === true,
+            report: text(event.payload.report),
+            at: event.occurredAt
+          };
+        }
+        break;
+      }
       case "harness.usage": {
         const totals = block.usage ?? { inputTokens: 0, outputTokens: 0, costUsd: null, durationMs: null };
         const add = (current: number | null, value: unknown): number | null => {
@@ -415,9 +505,11 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         break;
       }
       case "execution.completed":
+        block.settled = true;
         push(block, { kind: "outcome", key: event.eventId, text: "Turn completed", tone: "neutral" });
         break;
       case "execution.stopped":
+        block.settled = true;
         push(block, {
           kind: "outcome",
           key: event.eventId,
@@ -426,6 +518,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         });
         break;
       case "execution.failed":
+        block.settled = true;
         push(block, {
           kind: "outcome",
           key: event.eventId,
@@ -434,6 +527,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         });
         break;
       case "execution.interrupted":
+        block.settled = true;
         push(block, {
           kind: "outcome",
           key: event.eventId,
@@ -501,14 +595,86 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
 
 /** One disclosure per trace: every tool call and every unnamed event the
  *  direction produced, counted honestly and out of the way. */
-function TechnicalActivity({ steps }: { steps: ToolStep[] }) {
+/** The states of a turn's workers, in words: `1 working · 1 done · 1 failed`.
+ *  Counts are text in a row, never tiles (DESIGN.md prohibited pattern 16). */
+function workerSummary(workers: WorkerView[], settled: boolean): string {
+  const counts = new Map<string, number>();
+  for (const worker of workers) {
+    const state = workerState(worker, settled);
+    if (state) counts.set(state, (counts.get(state) ?? 0) + 1);
+  }
+  return ["working", "done", "failed"]
+    .filter((state) => counts.has(state))
+    .map((state) => `${counts.get(state)} ${state}`)
+    .join(" · ");
+}
+
+function TechnicalActivity({
+  steps,
+  workers,
+  settled,
+  onOpenWorker
+}: {
+  steps: ToolStep[];
+  workers: WorkerView[];
+  settled: boolean;
+  onOpenWorker?: (workerId: string) => void;
+}) {
+  const activity = steps.length + workers.reduce((sum, worker) => sum + worker.steps.length, 0);
+  const summary = workerSummary(workers, settled);
   return (
     <details className="disclosure" data-testid="technical-activity">
       <summary>
         <Chevron />
         Technical activity
-        <span className="disclosure-count">{plural(steps.length, "step")}</span>
+        <span className="disclosure-count">{plural(activity, "step")}</span>
       </summary>
+      {/* The harness's own workers, grouped by the ids the stream stated
+          (D-107). Inside the disclosure because they are apparatus, not
+          speech; a row of words, never dots or tiles. */}
+      {workers.length > 0 && (
+        <div className="worker-block" data-testid="worker-rollup">
+          <div className="worker-head">
+            <span className="mono tool-name">Workers</span>
+            <span className="tool-detail">
+              {workers.length}
+              {summary ? ` · ${summary}` : ""}
+            </span>
+          </div>
+          <ul className="worker-list">
+            {workers.map((worker) => {
+              const state = workerState(worker, settled);
+              const files = workerFiles(worker).length;
+              const facts = [
+                plural(worker.steps.length, "step"),
+                files > 0 ? plural(files, "file") : null
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              return (
+                <li key={worker.id}>
+                  <button
+                    className="worker-row"
+                    data-testid="worker-row"
+                    onClick={() => onOpenWorker?.(worker.id)}
+                  >
+                    <span className="worker-purpose">{worker.purpose ?? "Worker"}</span>
+                    <span className="worker-facts">{facts}</span>
+                    {state && (
+                      <span
+                        className={state === "failed" ? "worker-state tone-danger" : "worker-state"}
+                        data-testid="worker-state"
+                      >
+                        {state}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
       <ul className="tool-list">
         {steps.map((step, index) => (
           <li
@@ -701,6 +867,7 @@ export function TraceView({
   viewerIsController,
   onOpenChanges,
   onOpenVerification,
+  onOpenWorker,
   actions,
   approvals,
   queuePosition
@@ -711,6 +878,8 @@ export function TraceView({
   viewerIsController: boolean;
   onOpenChanges: () => void;
   onOpenVerification: () => void;
+  /** Opens one worker's own view on the canvas (D-107). */
+  onOpenWorker?: (workerId: string) => void;
   /** Apply / Reject / Cancel for a direction still awaiting judgment. */
   actions?: React.ReactNode;
   /** Permission questions this execution is blocked on, if any. */
@@ -816,7 +985,14 @@ export function TraceView({
         />
       ))}
 
-      {block.toolSteps.length > 0 && <TechnicalActivity steps={block.toolSteps} />}
+      {(block.toolSteps.length > 0 || block.workers.length > 0) && (
+        <TechnicalActivity
+          steps={block.toolSteps}
+          workers={block.workers}
+          settled={block.settled}
+          onOpenWorker={onOpenWorker}
+        />
+      )}
 
       {evidence.map((segment) => (
         <SegmentView

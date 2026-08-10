@@ -34,6 +34,7 @@ import {
 } from "../components/direction-trace";
 import { GatedAction } from "../components/gated";
 import { HumanMark } from "../components/identity";
+import { WorkerInspector } from "../components/worker-inspector";
 import type { InspectorSection } from "../components/inspector";
 import { DecisionRoom } from "../components/decision-room";
 import { Dialog } from "../components/dialog";
@@ -217,6 +218,12 @@ export function ProjectRoom({
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
+  /** One of the turn's workers opened on the canvas (D-107). Room-local, like
+   *  a disclosure: never a tab, never a rail row, never the working set's. */
+  const [openWorker, setOpenWorker] = useState<{ blockKey: string; workerId: string } | null>(null);
+  /** Where the reader was in the conversation when they opened a worker, so
+   *  Back to chat returns them there rather than to the top. */
+  const savedScrollRef = useRef<number | null>(null);
   // What the hand is holding, while it is holding it. Refs, not dataTransfer:
   // Chromium hides a drag's payload until the drop, and the live reorder
   // needs to know the dragged tab on every dragover (D-090).
@@ -512,6 +519,40 @@ export function ProjectRoom({
     [detail, selectedSessionId]
   );
   const feed = useMemo(() => (sessionDetail ? buildFeed(sessionDetail) : null), [sessionDetail]);
+
+  // Leaving the conversation puts the worker view away; it belongs to the
+  // turn being read, not to the room (D-107).
+  useEffect(() => {
+    setOpenWorker(null);
+    savedScrollRef.current = null;
+  }, [selectedMissionId, readingSessionId]);
+
+  /** The opened worker, freshly resolved from the feed each poll so the view
+   *  updates while the worker is live. Null when it no longer resolves. */
+  const openWorkerView = useMemo(() => {
+    if (!openWorker || !feed) return null;
+    const block = feed.blocks.find(
+      (candidate) => candidate.kind === "trace" && candidate.key === openWorker.blockKey
+    );
+    if (!block || block.kind !== "trace") return null;
+    const worker = block.workers.find((candidate) => candidate.id === openWorker.workerId);
+    return worker ? { worker, settled: block.settled } : null;
+  }, [openWorker, feed]);
+
+  const openWorkerOn = (blockKey: string) => (workerId: string) => {
+    savedScrollRef.current = scrollRef.current?.scrollTop ?? null;
+    setOpenWorker({ blockKey, workerId });
+  };
+  const closeWorker = () => setOpenWorker(null);
+
+  // Back where the reader was: the feed unmounts while a worker occupies the
+  // canvas, so its scroll position is put back by hand on return.
+  useEffect(() => {
+    if (openWorker !== null || savedScrollRef.current === null) return;
+    const element = scrollRef.current;
+    if (element) element.scrollTop = savedScrollRef.current;
+    savedScrollRef.current = null;
+  }, [openWorker]);
 
   /** The composer's foot names its whole target (D-080, D-083): the lane once
    *  more than one exists, the conversation once more than one exists, and a
@@ -1475,6 +1516,20 @@ export function ProjectRoom({
             />
           </div>
         </div>
+      ) : openWorkerView ? (
+        /* One worker, looked at closely (D-107): the canvas, not a tab — the
+           conversation stays the stable parent and Back to chat returns to
+           it at the position the reader left. */
+        <div className="feed-scroll">
+          <div className="feed">
+            <WorkerInspector
+              worker={openWorkerView.worker}
+              settled={openWorkerView.settled}
+              chatTitle={sessionName}
+              onBack={closeWorker}
+            />
+          </div>
+        </div>
       ) : (
       <div className="feed-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="feed" data-testid="chat">
@@ -1509,6 +1564,7 @@ export function ProjectRoom({
                     viewerIsController={isController}
                     onOpenChanges={() => onInspector("changes")}
                     onOpenVerification={() => onInspector("verification")}
+                    onOpenWorker={openWorkerOn(block.key)}
                     actions={block.direction ? directionActions(block.direction) : null}
                     // The queue is the lane's, not the conversation's: its one
                     // workspace takes turns (D-083), so position is computed
