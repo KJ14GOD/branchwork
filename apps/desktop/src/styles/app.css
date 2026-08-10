@@ -981,6 +981,8 @@ body {
   padding: var(--s-2) var(--s-3) 0;
   margin-top: var(--s-2);
   border-top: 1px solid var(--edge);
+  /* The theme popover anchors to this row and spans it (D-103). */
+  position: relative;
 }
 
 .sidebar-login {
@@ -4363,13 +4365,31 @@ body.resizing {
   color: var(--text-1);
 }
 
-/* The settings surface (D-102): the setup room's row anatomy inside a
-   dialog, so the two theme controls are one shape. The setup margin is a
-   page rhythm; in a dialog the head's own spacing carries it. */
-.settings-row {
-  margin-top: var(--s-4);
-  padding: 0 var(--s-5) var(--s-5);
-  align-items: center;
+/* The theme control at the rail's foot (D-103): a block anchored where the
+   trigger is, never a page. The popover spans the identity row it opens
+   from, one plane above the rail, carrying the setup room's segment. */
+.theme-anchor {
+  position: static;
+}
+
+.theme-popover {
+  position: absolute;
+  bottom: calc(100% + var(--s-1));
+  left: var(--s-2);
+  right: var(--s-2);
+  z-index: 40;
+  display: flex;
+  gap: var(--s-2);
+  padding: var(--s-2);
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-button);
+  box-shadow: var(--elev-2);
+}
+
+.theme-popover .btn {
+  flex: 1;
+  padding: var(--s-1) var(--s-2);
 }
 
 .dialog-sub {

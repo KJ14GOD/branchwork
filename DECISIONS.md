@@ -1404,3 +1404,15 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** The light palette is finally screen-proven — populated room, rail, dialog, and a relaunch resolving light before first paint (evidence 115–118, `theme.spec.ts` driving the gear, `⌘,`, System-follows-OS, and persistence across a real relaunch) — and DESIGN.md's "provisional" wording retires. `.settings-row` reuses the setup row's classes inside the dialog. Future preferences land in this dialog, not in new corners.
 
 **Revisit when.** Settings holds more than presentation preferences (it then earns sections and perhaps a window), or a second control tries to move into the identity row.
+
+## D-103 — The theme control is a block at the rail's foot, and the glyph is the resolved theme
+
+**Context.** D-102 put the theme choice in a Settings dialog. On the first rendered screen the owner reversed it: a centred modal for one row reads as a page, and they wanted the choice to appear *where the control is* — a small block at the rail's foot — with the trigger's icon telling the truth about the current mode instead of wearing a generic mark.
+
+**Decision.** No dialog. The trigger in the rail's identity row **is the resolved theme**: a crescent while the product is dark, a sun while it is light — System wearing whichever it currently resolves to, kept live off the same event the terminal repaints on. Clicking it opens a **block anchored to the identity row** — the setup room's three-option segment spanning the row's width, one plane above the rail (surface-2, one edge, elev-2) — applied immediately, closed by a click outside or `Esc`, with no scrim and no focus ceremony. `⌘,` toggles the same block, revealing the rail first when it was hidden so the block has somewhere to open. D-102's placement survey, shared choice-set, terminal repaint, and screen-proof all stand; only the dialog is reversed.
+
+**Alternatives.** Keeping the dialog and restyling it (rejected: the owner's objection was the page-ness, not the styling); a bare two-state sun/moon toggle (rejected: it cannot say "System", which is the default most people should keep); a menu-style vertical list (rejected: the segment is the anatomy setup already taught).
+
+**Consequences.** `SettingsDialog` becomes `ThemeControl` (trigger + anchored block in one component); the settings-dialog evidence is re-shot as the popover (115–116); a future real Settings surface is a new decision, not a resurrection of this dialog.
+
+**Revisit when.** Novus accrues genuine preferences beyond presentation — that surface will not be this popover.

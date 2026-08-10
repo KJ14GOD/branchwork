@@ -19,7 +19,7 @@ import { ColumnHandle, useColumnWidth } from "../components/resizable";
 import { RunControl } from "../components/run-control";
 import { TerminalToggle } from "../components/runtime-dock";
 import { WorkspaceSetupDialog } from "../components/workspace-setup";
-import { SettingsDialog } from "../components/settings";
+import { ThemeControl } from "../components/settings";
 import {
   activeTab as activeTabOf,
   closeSession,
@@ -320,16 +320,6 @@ function SearchGlyph() {
       strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
       <circle cx="7.25" cy="7.25" r="4.25" />
       <path d="m10.5 10.5 2.75 2.75" />
-    </svg>
-  );
-}
-
-function GearGlyph() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
-      strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-      <circle cx="8" cy="8" r="2.25" />
-      <path d="M8 1.75v2M8 12.25v2M1.75 8h2M12.25 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6 11 5M5 11l-1.4 1.4" />
     </svg>
   );
 }
@@ -1020,7 +1010,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         newMissionHere();
       } else if (event.key === ",") {
         event.preventDefault();
-        setSettingsOpen(true);
+        // The popover is anchored in the rail; the chord shows the rail
+        // first when it was put away, so the block has somewhere to open.
+        setRailHidden(false);
+        setSettingsOpen((previous) => !previous);
       } else if (/^[1-9]$/.test(event.key)) {
         if (!currentProject) return;
         const mission = currentProject.missions[Number(event.key) - 1];
@@ -1593,17 +1586,14 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             <div className="sidebar-identity">
               <HumanMark login={user.login} name={user.name} />
               <span className="sidebar-login">{user.login}</span>
-              {/* Where desktop apps keep it: the account corner of the rail,
-                  opening the settings surface ⌘, also reaches (D-102). */}
-              <button
-                className="icon-button"
-                onClick={() => setSettingsOpen(true)}
-                aria-label="Settings"
-                title="Settings (⌘,)"
-                data-testid="open-settings"
-              >
-                <GearGlyph />
-              </button>
+              {/* Where desktop apps keep it: the account corner of the rail.
+                  A block opens right here — never a page — and the glyph is
+                  the resolved theme itself (D-103). */}
+              <ThemeControl
+                open={settingsOpen}
+                onToggle={() => setSettingsOpen((previous) => !previous)}
+                onClose={() => setSettingsOpen(false)}
+              />
               <button
                 className="btn btn-text"
                 onClick={() => novus().auth.signOut()}
@@ -1866,8 +1856,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           )}
         </section>
       </div>
-
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
 
       {dialogOpen && (
         <AddProjectDialog

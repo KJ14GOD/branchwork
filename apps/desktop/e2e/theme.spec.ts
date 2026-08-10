@@ -14,8 +14,9 @@ declare global {
 }
 
 /**
- * The theme choice after first run (D-102, D-029): the gear in the rail's
- * identity row — and ⌘, — open Settings; picking Light moves the whole
+ * The theme choice after first run (D-103, D-029): the sun-or-crescent at
+ * the rail's foot — and ⌘, — open a block anchored right there; picking
+ * Light moves the whole
  * product at once (the resolved theme lands on the document root, which is
  * the one thing every token consumer keys from); the preference survives a
  * relaunch and resolves before first paint. Screenshots are the light
@@ -193,19 +194,29 @@ afterAll(async () => {
 
 describe("the theme choice after first run (D-102)", () => {
   it(
-    "the gear opens Settings, Light moves the product, and the choice survives a relaunch",
+    "the block opens at the rail's foot, Light moves the product, and the choice survives a relaunch",
     async () => {
-      // Dark is the default and the reference (DESIGN.md#tokens).
+      // Dark is the default and the reference (DESIGN.md#tokens), and the
+      // trigger wears the resolved theme: a crescent while dark (D-103).
       expect(await resolvedTheme(page)).toBe("dark");
+      await expect
+        .poll(async () => page.getByTestId("open-theme").getAttribute("data-resolved"))
+        .toBe("dark");
 
-      // Where desktop apps keep it: the account corner of the rail.
-      await page.getByTestId("open-settings").click();
-      await page.getByTestId("settings-dialog").waitFor({ timeout: 10_000 });
-      await shot(page, "115-settings-dialog-dark.png");
+      // Where desktop apps keep it: the account corner of the rail. The
+      // control opens a block right there, never a page.
+      await page.getByTestId("open-theme").click();
+      await page.getByTestId("theme-popover").waitFor({ timeout: 10_000 });
+      expect(await page.getByTestId("dialog-scrim").count()).toBe(0);
+      await shot(page, "115-theme-popover-dark.png");
 
-      // Picking Light applies immediately — no confirm, no restart.
+      // Picking Light applies immediately — no confirm, no restart — and the
+      // trigger's glyph turns to the sun with it.
       await page.getByTestId("theme-light").click();
       expect(await resolvedTheme(page)).toBe("light");
+      await expect
+        .poll(async () => page.getByTestId("open-theme").getAttribute("data-resolved"))
+        .toBe("light");
       // The ground itself moved: the body consumes light --bg, not a value of
       // its own.
       await expect
@@ -223,27 +234,31 @@ describe("the theme choice after first run (D-102)", () => {
           })
         )
         .toBe(await tokenAsRgb(page, "--surface-1"));
-      await shot(page, "116-settings-dialog-light.png");
+      await shot(page, "116-theme-popover-light.png");
 
-      // Esc closes the dialog (the Dialog primitive's own behaviour), leaving
-      // the populated room in light for the screen-proof.
+      // Esc puts the block away, leaving the populated room in light for the
+      // screen-proof.
       await page.keyboard.press("Escape");
       await expect
-        .poll(async () => page.getByTestId("settings-dialog").count())
+        .poll(async () => page.getByTestId("theme-popover").count())
         .toBe(0);
       await shot(page, "117-mission-room-light.png");
 
-      // ⌘, is the platform's own chord for Settings.
+      // ⌘, is the platform's own chord for it.
       await page.keyboard.press("Meta+Comma");
-      await page.getByTestId("settings-dialog").waitFor({ timeout: 10_000 });
+      await page.getByTestId("theme-popover").waitFor({ timeout: 10_000 });
 
       // System follows the OS: the resolved theme must equal what the OS
-      // reports, whichever that is on this machine.
+      // reports, whichever that is on this machine — and the glyph follows
+      // the resolution, not the word "System" (D-103).
       await page.getByTestId("theme-system").click();
       const osPrefers = await page.evaluate(() =>
         window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"
       );
       expect(await resolvedTheme(page)).toBe(osPrefers);
+      await expect
+        .poll(async () => page.getByTestId("open-theme").getAttribute("data-resolved"))
+        .toBe(osPrefers);
 
       // Back to Light, then relaunch: the preference persists and resolves
       // before first paint — the setup surface never flashes dark first.
@@ -258,10 +273,13 @@ describe("the theme choice after first run (D-102)", () => {
       await shot(page, "118-shell-light-after-relaunch.png");
 
       // And back to the reference for whoever runs the suite next.
-      await page.getByTestId("open-settings").click();
-      await page.getByTestId("settings-dialog").waitFor({ timeout: 10_000 });
+      await page.getByTestId("open-theme").click();
+      await page.getByTestId("theme-popover").waitFor({ timeout: 10_000 });
       await page.getByTestId("theme-dark").click();
       expect(await resolvedTheme(page)).toBe("dark");
+      await expect
+        .poll(async () => page.getByTestId("open-theme").getAttribute("data-resolved"))
+        .toBe("dark");
     },
     240_000
   );
