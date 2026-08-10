@@ -68,6 +68,13 @@ body {
   outline-offset: 2px;
 }
 
+/* Focus handed back by a closing dialog, not taken by a person (D-106). The
+   element holds the keyboard; it just does not wear the ring until the next
+   key press, which restores it. */
+[data-focus-quiet]:focus-visible {
+  outline: none;
+}
+
 /* A text field already has an edge; focus brightens that edge instead of
    drawing a ring around it. Still visible, still not colour alone — the
    contrast step is large and the caret is in it. */

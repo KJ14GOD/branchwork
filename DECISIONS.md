@@ -1442,3 +1442,15 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** DESIGN.md's "no photos in V0" is reversed for identity marks only — the mark's size, shape, and 1px edge are untouched, and a photo is cropped by the circle it fills. Every mark in the product — rail, participants, trace, handoffs — takes the picture from the same component, so a participant is recognisable wherever they acted. Offline, the product looks exactly as it did before. `people.avatar` is the one bridge verb added; it grants nothing and reads nothing local.
 
 **Revisit when.** Novus ever hosts an identity that is not a GitHub account, or a person asks to show no picture at all — the second is a preference this decision does not invent.
+
+## D-106 — Focus handed back by a closing dialog wears no ring
+
+**Context.** Pressing `+` on a project row opens the new-mission dialog; `Esc` closes it and the Dialog primitive hands focus back to the button it came from (D-076). The owner saw the result: a white box around the `+`, clipped by the rail's edge into an L. `Esc` is a key press, so the browser treats the restored focus as keyboard navigation and draws the `:focus-visible` ring — on a control that only exists on hover, at the rail's edge, aimed at by nobody.
+
+**Decision.** The restored element keeps the focus and **does not wear the mark**: the Dialog stamps `data-focus-quiet` on the opener as it hands focus back, one rule suppresses the outline while that attribute is present, and the **next key press removes it**, restoring the ring in place. Blur removes it too. Nothing is blurred, no `tabindex` is moved, and focus order is untouched — a person who Escapes a dialog and then presses Tab or Enter sees exactly what they saw before.
+
+**Alternatives.** Dropping the ring on `.side-new-mission` (rejected: it removes the mark for the person who *did* Tab there — DESIGN.md's ring is never removed); not restoring focus at all (rejected: it dumps the keyboard at the top of the document, which is the failure D-076's primitive exists to prevent); `focus({ focusVisible: false })` alone (rejected: not dependable across the engines this product will meet, and it says nothing about what happens next — the attribute is also what makes the next key press restore the ring); making the ring inset so it stops being clipped (rejected: it fixes the shape of a mark that should not be there, and would change focus everywhere).
+
+**Consequences.** DESIGN.md's Focus section gains the one sanctioned suppression, named and bounded. Every dialog in the product inherits it, because they all come through the one primitive.
+
+**Revisit when.** A popover or drawer that is not a Dialog starts restoring focus of its own — it should be handed the same behaviour rather than a second copy of it.

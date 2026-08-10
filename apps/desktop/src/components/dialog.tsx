@@ -44,8 +44,23 @@ export function Dialog({
     return () => {
       window.removeEventListener("keydown", onKey);
       // Back where it came from, so closing a dialog does not dump the
-      // keyboard at the top of the document.
-      restoreTo.current?.focus?.();
+      // keyboard at the top of the document — but quietly (D-106). Closing
+      // with Esc is a key press, so the browser calls the restored focus
+      // keyboard navigation and draws the ring; on a control that only exists
+      // on hover, at the rail's edge, that ring is a white box around a button
+      // nobody navigated to. The mark is suppressed until the person actually
+      // uses the keyboard again, and the focus itself is untouched.
+      const opener = restoreTo.current;
+      if (!opener?.focus) return;
+      opener.dataset.focusQuiet = "true";
+      opener.focus({ preventScroll: true });
+      const speak = () => {
+        delete opener.dataset.focusQuiet;
+        opener.removeEventListener("blur", speak);
+        window.removeEventListener("keydown", speak, true);
+      };
+      opener.addEventListener("blur", speak);
+      window.addEventListener("keydown", speak, true);
     };
   }, []);
 

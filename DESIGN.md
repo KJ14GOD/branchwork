@@ -111,6 +111,8 @@ The one place hues appear outside their semantic tokens, and the exception is na
 
 A **1px** `--accent` ring at 2px offset, on `:focus-visible` only — never removed. A text field is the exception and shows focus on **its own edge** rather than wearing a second one: a ring around a box that already has a border is the border drawn twice, and at 2px it reads as a white slab stuck to whatever you touched (D-076). Focus is the accent's home turf: always visible, always the same, never loud.
 
+**Focus handed back is not focus taken** (D-106). When a dialog closes, the keyboard returns to whatever opened it — but the ring does not, because nobody navigated there: closing with `Esc` is a key press, so the browser calls the restored focus keyboard navigation and rings a control the person never aimed at, which on a hover-only control at the rail's edge is a white box around a `+`. The element keeps the focus and wears no mark until the **next key press**, which restores the ring in place. This is the only suppression of the ring in the product, it is never applied to focus a person moved themselves, and it never blurs anything to achieve it.
+
 ### Motion
 
 - Durations: 120ms (hover/press), 180ms (reveal/collapse), 240ms (overlays, the baton handoff). Easing: `cubic-bezier(0.3, 0.7, 0.3, 1)`.
