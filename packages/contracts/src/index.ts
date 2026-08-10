@@ -692,19 +692,127 @@ export type PullRequestState = z.infer<typeof PullRequestStateSchema>;
 export const MergeableStateSchema = z.enum(["unknown", "clean", "conflict"]);
 export type MergeableState = z.infer<typeof MergeableStateSchema>;
 
-/** One review comment thread, ingested read-only (D-099): resolving happens
- *  on the host, and Novus reflects it rather than owning it. Bounded like
- *  every ingested claim. */
+/** One review comment thread, ingested from the host (D-099) and — since
+ *  D-100 — resolvable from Novus: the host's own thread id travels so the
+ *  resolve verb can name it. Bounded like every ingested claim. */
 export const ReviewThreadSchema = z.object({
+  /** The host's thread identifier, for resolution. Null on a comment the
+   *  host exposes without one. */
+  threadId: z.string().max(200).nullable().default(null),
   author: z.string().max(120),
   body: z.string().max(2_000),
   /** The file the comment anchors to, when it anchors to one. */
   path: z.string().max(300).nullable(),
+  /** The line it anchors to, when it anchors to one. */
+  line: z.number().int().positive().nullable().default(null),
   state: z.enum(["open", "resolved"]),
   url: z.string().max(600).nullable(),
   postedAt: z.string().max(40)
 });
 export type ReviewThread = z.infer<typeof ReviewThreadSchema>;
+
+// --- Merge readiness and completion (D-100) ----------------------------------
+// The Conductor-shaped gate: one aggregated projection of everything that
+// usually decides whether a request is ready, each unmet item a named
+// blocker. Completion verbs are explicit human acts GitHub performs
+// underneath; the two-tier rule is the honesty — what the host itself cannot
+// do is refused, everything else is stated and deliberately accepted.
+
+export const HostCheckSchema = z.object({
+  name: z.string().max(200),
+  status: z.enum(["pending", "passed", "failed", "skipped"]),
+  /** Whether the host's branch protection requires it. A failing required
+   *  check is a host-tier refusal, never an acceptable blocker. */
+  required: z.boolean().default(false),
+  /** The host's own bucket: a check run, a commit status, or a deployment. */
+  kind: z.enum(["check", "status", "deployment"]).default("check"),
+  url: z.string().max(600).nullable().default(null)
+});
+export type HostCheck = z.infer<typeof HostCheckSchema>;
+
+export const ReviewDecisionSchema = z.enum([
+  /** Nothing recorded either way. */
+  "none",
+  "approved",
+  "changes_requested",
+  /** The host requires a review nobody has given yet. */
+  "review_required"
+]);
+export type ReviewDecision = z.infer<typeof ReviewDecisionSchema>;
+
+export const MergeMethodSchema = z.enum(["merge", "squash", "rebase"]);
+export type MergeMethod = z.infer<typeof MergeMethodSchema>;
+
+export const MergeReadinessSchema = z.object({
+  checks: z.array(HostCheckSchema).max(50),
+  reviewDecision: ReviewDecisionSchema,
+  approvals: z.number().int().nonnegative().max(100),
+  changesRequested: z.number().int().nonnegative().max(100),
+  /** How far the branch is behind its base — what Update branch fixes. */
+  behindBy: z.number().int().nonnegative().nullable(),
+  aheadBy: z.number().int().nonnegative().nullable(),
+  /** The repository's own allowed methods, read from the host, never
+   *  assumed. Merge offers exactly these. */
+  allowedMergeMethods: z.array(MergeMethodSchema).max(3),
+  syncedAt: z.string().datetime().nullable()
+});
+export type MergeReadiness = z.infer<typeof MergeReadinessSchema>;
+
+/** How one file changed — shared by checkpoint evidence (D-037) and the
+ *  pull request's own file list (D-100). */
+export const FileChangeStateSchema = z.enum(["added", "modified", "deleted", "renamed"]);
+export type FileChangeState = z.infer<typeof FileChangeStateSchema>;
+
+/** One changed file of the pull request as the host reports it, with its
+ *  bounded patch for the in-house diff (D-100). */
+export const PullFileSchema = z.object({
+  path: z.string().max(300),
+  changeState: FileChangeStateSchema,
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  patch: z.string().max(12_000).nullable()
+});
+export type PullFile = z.infer<typeof PullFileSchema>;
+
+export const PullCommitSchema = z.object({
+  sha: z.string().max(64),
+  message: z.string().max(400),
+  author: z.string().max(120)
+});
+export type PullCommit = z.infer<typeof PullCommitSchema>;
+
+export const PullFilesResponseSchema = z.object({
+  files: z.array(PullFileSchema).max(150),
+  commits: z.array(PullCommitSchema).max(100)
+});
+export type PullFilesResponse = z.infer<typeof PullFilesResponseSchema>;
+
+export const MergeInputSchema = z.object({
+  pullRequestId: z.string().startsWith("pr_"),
+  method: MergeMethodSchema,
+  /** Deliberate acceptance of the stated non-host blockers. Absent or false,
+   *  a merge with blockers outstanding is refused with them named — never
+   *  performed silently (D-100). */
+  acknowledgeBlockers: z.boolean().default(false)
+});
+export type MergeInput = z.infer<typeof MergeInputSchema>;
+
+export const PullCommentInputSchema = z.object({
+  pullRequestId: z.string().startsWith("pr_"),
+  body: z.string().trim().min(1, "Say something.").max(2_000),
+  /** Anchors an inline comment; absent means a conversation comment. */
+  path: z.string().max(300).optional(),
+  line: z.number().int().positive().optional()
+});
+export type PullCommentInput = z.infer<typeof PullCommentInputSchema>;
+
+export const PullMetadataInputSchema = z.object({
+  pullRequestId: z.string().startsWith("pr_"),
+  title: z.string().trim().min(1).max(300).optional(),
+  body: z.string().max(20_000).optional(),
+  labels: z.array(z.string().trim().min(1).max(100)).max(20).optional()
+});
+export type PullMetadataInput = z.infer<typeof PullMetadataInputSchema>;
 
 export const PullRequestSchema = z.object({
   pullRequestId: z.string().startsWith("pr_"),
@@ -729,6 +837,10 @@ export const PullRequestSchema = z.object({
   headSha: ShaSchema.nullable(),
   requestedReviewers: z.array(z.string().max(120)).max(15),
   reviewThreads: z.array(ReviewThreadSchema).max(50),
+  labels: z.array(z.string().max(100)).max(20).default([]),
+  /** The aggregated gate (D-100), refreshed by the same poll that carries
+   *  everything else the host says. Null until the first refresh. */
+  readiness: MergeReadinessSchema.nullable().default(null),
   createdBy: z.string().startsWith("usr_"),
   createdByLogin: z.string().min(1),
   /** Who merged it on the host, as the host reports them. */
@@ -814,9 +926,7 @@ export const RespondApprovalInputSchema = z.object({
 export type RespondApprovalInput = z.infer<typeof RespondApprovalInputSchema>;
 
 // --- Evidence: changes and verification (D-037) -----------------------------
-
-export const FileChangeStateSchema = z.enum(["added", "modified", "deleted", "renamed"]);
-export type FileChangeState = z.infer<typeof FileChangeStateSchema>;
+// FileChangeStateSchema lives above the pull-request block that also uses it.
 
 export const FileChangeSchema = z.object({
   changeId: z.string().startsWith("chg_"),
@@ -2410,6 +2520,31 @@ export interface NovusBridge {
     requestReview(input: { pullRequestId: string; reviewers: string[] }): Promise<IpcResult<null>>;
     /** Marks the draft ready for review. A person's act, like every other. */
     markReady(pullRequestId: string): Promise<IpcResult<null>>;
+    /**
+     * Completion (D-100): explicit human acts GitHub performs underneath,
+     * each gated on pr.manage and event-recorded with what was accepted.
+     * A merge with non-host blockers outstanding is refused with them named
+     * unless `acknowledgeBlockers` is true; a merge the host itself cannot
+     * perform is refused outright. Nothing here is ever automatic.
+     */
+    merge(input: MergeInput): Promise<IpcResult<{ sha: string | null }>>;
+    /** Brings the branch up to date with its base, host-side. */
+    updateBranch(pullRequestId: string): Promise<IpcResult<null>>;
+    /** Closes without merging. */
+    close(pullRequestId: string): Promise<IpcResult<null>>;
+    /** Deletes the remote branch — offered only after merge or close, and
+     *  only ever on this explicit ask (D-100). */
+    deleteBranch(pullRequestId: string): Promise<IpcResult<null>>;
+    /** The request's own commits and changed files with bounded patches,
+     *  fetched on demand for the in-house diff. */
+    files(pullRequestId: string): Promise<IpcResult<PullFilesResponse>>;
+    /** An inline or conversation comment, authored by the App and attributed
+     *  in the body as "{login} via Novus" until user-token identity exists. */
+    comment(input: PullCommentInput): Promise<IpcResult<null>>;
+    /** Resolves one review thread on the host. */
+    resolveThread(input: { pullRequestId: string; threadId: string }): Promise<IpcResult<null>>;
+    /** Title, description, labels — host-patched, event-recorded. */
+    setMetadata(input: PullMetadataInput): Promise<IpcResult<null>>;
   };
   control: {
     request(missionId: string): Promise<IpcResult<null>>;

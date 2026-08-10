@@ -1,7 +1,14 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { BranchPush, PullRequest, ReviewThread } from "@novus/contracts";
-import { RequestReviewInputSchema, ReviewThreadSchema } from "@novus/contracts";
+import type { BranchPush, MergeReadiness, PullRequest, ReviewThread } from "@novus/contracts";
+import {
+  MergeInputSchema,
+  MergeReadinessSchema,
+  PullCommentInputSchema,
+  PullMetadataInputSchema,
+  RequestReviewInputSchema,
+  ReviewThreadSchema
+} from "@novus/contracts";
 import { missionAccess, require as requireCapability } from "./authz.ts";
 import { withTransaction, type Db } from "./db.ts";
 import { recordEvent } from "./events.ts";
@@ -9,6 +16,7 @@ import { newCommandId, newPullRequestId } from "./ids.ts";
 import { getMission } from "./missions.ts";
 import {
   FakeRepositoryProvider,
+  MergeRefusedError,
   ProviderTransientError,
   PullRequestExistsError,
   UnknownPullRequestError,
@@ -51,6 +59,8 @@ export interface PullRequestRow {
   head_sha: string | null;
   requested_reviewers: unknown;
   review_threads: unknown;
+  labels?: unknown;
+  readiness?: unknown;
   created_by: string;
   created_by_login?: string;
   merged_by: string | null;
@@ -58,6 +68,12 @@ export interface PullRequestRow {
   closed_at: Date | null;
   created_at: Date;
   last_synced_at: Date | null;
+}
+
+function readinessOf(raw: unknown): MergeReadiness | null {
+  if (raw === null || raw === undefined) return null;
+  const parsed = MergeReadinessSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 function threads(raw: unknown): ReviewThread[] {
@@ -89,6 +105,8 @@ export function toPullRequest(row: PullRequestRow): PullRequest {
       ? (row.requested_reviewers as string[]).slice(0, 15).map(String)
       : [],
     reviewThreads: threads(row.review_threads),
+    labels: Array.isArray(row.labels) ? (row.labels as string[]).slice(0, 20).map(String) : [],
+    readiness: readinessOf(row.readiness),
     createdBy: row.created_by,
     createdByLogin: row.created_by_login ?? "unknown",
     mergedBy: row.merged_by,
@@ -198,6 +216,106 @@ async function loadPullContext(db: Db, pullRequestId: string): Promise<PullConte
     number: row.provider_number as number,
     state: row.state as string
   };
+}
+
+/**
+ * The second gating tier (D-100): blockers a person may accept deliberately,
+ * each a named sentence. What the host itself refuses never appears here —
+ * that tier refuses outright and is not acceptable by anyone.
+ */
+export function acceptableBlockers(
+  readiness: MergeReadiness,
+  row: PullRequest | null
+): string[] {
+  const blockers: string[] = [];
+  if (readiness.changesRequested > 0) {
+    blockers.push(
+      `${readiness.changesRequested} change request${readiness.changesRequested === 1 ? "" : "s"} outstanding`
+    );
+  }
+  const openThreads = row?.reviewThreads.filter((thread) => thread.state === "open").length ?? 0;
+  if (openThreads > 0) {
+    blockers.push(`${openThreads} review comment${openThreads === 1 ? "" : "s"} unresolved`);
+  }
+  const failing = readiness.checks.filter((check) => !check.required && check.status === "failed");
+  for (const check of failing.slice(0, 5)) blockers.push(`check ${check.name} failing`);
+  const pending = readiness.checks.filter((check) => check.status === "pending").length;
+  if (pending > 0) blockers.push(`${pending} check${pending === 1 ? "" : "s"} still running`);
+  if (readiness.behindBy !== null && readiness.behindBy > 0) {
+    blockers.push(`the branch is ${readiness.behindBy} commit${readiness.behindBy === 1 ? "" : "s"} behind its base`);
+  }
+  return blockers;
+}
+
+interface StewardingContext {
+  pull: PullContext;
+  ctx: { userId: string; login: string };
+  access: { leaseId: string | null };
+}
+
+/** The shared front half of every stewarding verb: resolve, authorize on
+ *  pr.manage, and check the request is in a state the act makes sense for. */
+async function stewardingAct(
+  deps: RouteDeps,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  gate: { openOnly?: boolean; resolvedOnly?: boolean }
+): Promise<StewardingContext | null> {
+  const ctx = await deps.requireAuth(request, reply);
+  if (!ctx) return null;
+  const params = PullParamsSchema.safeParse(request.params);
+  if (!params.success) {
+    await deps.sendError(reply, 400, "bad_id", "Malformed pull request id.");
+    return null;
+  }
+  const pull = await loadPullContext(deps.db, params.data.pullRequestId);
+  if (!pull) {
+    await deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    return null;
+  }
+  const access = await missionAccess(deps.db, ctx, pull.missionId, pull.workstreamId);
+  if (!access) {
+    await deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    return null;
+  }
+  requireCapability(access, "pr.manage");
+  if (gate.openOnly && (pull.state === "merged" || pull.state === "closed")) {
+    await deps.sendError(reply, 409, "resolved", "This pull request is already resolved on GitHub.");
+    return null;
+  }
+  if (gate.resolvedOnly && pull.state !== "merged" && pull.state !== "closed") {
+    await deps.sendError(
+      reply,
+      409,
+      "still_open",
+      "The branch is still an open pull request's; resolve the request before deleting it."
+    );
+    return null;
+  }
+  return { pull, ctx, access };
+}
+
+async function recordAct(
+  db: Db,
+  pull: PullContext,
+  ctx: { userId: string; login: string },
+  leaseId: string | null,
+  kind: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  await withTransaction(db, async (client) => {
+    await recordEvent(client, {
+      orgId: pull.orgId,
+      missionId: pull.missionId,
+      workstreamId: pull.workstreamId,
+      kind,
+      actorKind: "user",
+      actorId: ctx.userId,
+      actorLogin: ctx.login,
+      causeLeaseId: leaseId,
+      payload: { pullRequestId: pull.pullRequestId, number: pull.number, ...payload }
+    });
+  });
 }
 
 export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps): void {
@@ -572,8 +690,366 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
     return reply.send({ ok: true });
   });
 
-  // There is deliberately no POST /pull-requests/:id/merge here, and there
-  // must never be: the suite asks for one and requires a 404 (D-099).
+  // --- Completion (D-100) ----------------------------------------------------
+  // Explicit human acts GitHub performs underneath. The two-tier gate is the
+  // honesty: what the host itself cannot do — a draft, a conflict, a failing
+  // *required* check — is refused outright in words; every other blocker is
+  // named, and proceeding requires acknowledging exactly the named set, which
+  // the event then records. Nothing here is ever automatic or silent.
+
+  app.post("/pull-requests/:pullRequestId/merge", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+    const params = PullParamsSchema.safeParse(request.params);
+    if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed pull request id.");
+    const body = MergeInputSchema.safeParse({
+      ...(request.body as Record<string, unknown> | null),
+      pullRequestId: params.data.pullRequestId
+    });
+    if (!body.success) {
+      return deps.sendError(reply, 422, "invalid_merge", body.error.issues[0]?.message ?? "Malformed merge request.");
+    }
+    const pull = await loadPullContext(deps.db, params.data.pullRequestId);
+    if (!pull) return deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    const access = await missionAccess(deps.db, ctx, pull.missionId, pull.workstreamId);
+    if (!access) return deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    requireCapability(access, "pr.manage");
+
+    if (pull.state === "merged") return deps.sendError(reply, 409, "resolved", "This pull request is already merged.");
+    if (pull.state === "closed") return deps.sendError(reply, 409, "resolved", "This pull request is closed.");
+    if (pull.state === "draft") {
+      return deps.sendError(reply, 409, "still_a_draft", "A draft cannot be merged; mark it ready first.");
+    }
+
+    // Fresh readiness at the moment of asking, never a stale row.
+    let readiness: MergeReadiness;
+    try {
+      readiness = await deps.provider.getMergeReadiness(pull.providerRepoId, pull.number);
+    } catch (error) {
+      if (error instanceof ProviderTransientError) {
+        return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      }
+      throw error;
+    }
+    if (!readiness.allowedMergeMethods.includes(body.data.method)) {
+      return deps.sendError(
+        reply,
+        409,
+        "method_not_allowed",
+        `This repository does not allow ${body.data.method} merges; it allows ${readiness.allowedMergeMethods.join(", ")}.`
+      );
+    }
+    const requiredFailing = readiness.checks.filter(
+      (check) => check.required && check.status === "failed"
+    );
+    if (requiredFailing.length > 0) {
+      return deps.sendError(
+        reply,
+        409,
+        "host_refuses",
+        `A required check is failing (${requiredFailing[0]?.name}); branch protection refuses the merge.`
+      );
+    }
+    const row = await pullRequestById(deps.db, pull.pullRequestId);
+    if (row?.mergeable === "conflict") {
+      return deps.sendError(
+        reply,
+        409,
+        "host_refuses",
+        "The branch has conflicts with its base that must be resolved first."
+      );
+    }
+
+    // The second tier: named, acceptable, never silent.
+    const blockers = acceptableBlockers(readiness, row);
+    if (blockers.length > 0 && !body.data.acknowledgeBlockers) {
+      return deps.sendError(
+        reply,
+        409,
+        "blockers_outstanding",
+        `Outstanding before this merges: ${blockers.join("; ")}. Confirm with the blockers acknowledged to proceed deliberately.`
+      );
+    }
+
+    let merged: { sha: string | null };
+    try {
+      merged = await deps.provider.mergePullRequest(pull.providerRepoId, pull.number, body.data.method);
+    } catch (error) {
+      if (error instanceof MergeRefusedError) {
+        return deps.sendError(reply, 409, "host_refuses", error.message);
+      }
+      if (error instanceof UnknownPullRequestError) {
+        return deps.sendError(reply, 404, "unknown_pull_request", error.message);
+      }
+      if (error instanceof ProviderTransientError) {
+        return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      }
+      throw error;
+    }
+
+    // The host performed it; ingest the host's own account immediately.
+    const host = await deps.provider.getPullRequest(pull.providerRepoId, pull.number).catch(() => null);
+    await withTransaction(deps.db, async (client) => {
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [pull.missionId]);
+      await client.query(
+        `update pull_requests
+            set state = 'merged',
+                merged_by = $2,
+                merged_at = coalesce($3::timestamptz, now()),
+                mergeable = 'clean',
+                last_synced_at = now()
+          where pr_id = $1`,
+        [pull.pullRequestId, host?.mergedBy ?? "app/novus", host?.mergedAt ?? null]
+      );
+      await recordEvent(client, {
+        orgId: pull.orgId,
+        missionId: pull.missionId,
+        workstreamId: pull.workstreamId,
+        kind: "pr.merge_performed",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: {
+          pullRequestId: pull.pullRequestId,
+          number: pull.number,
+          method: body.data.method,
+          sha: merged.sha,
+          // Exactly what was accepted, durable: "merged with two open
+          // comments" is a sentence, never a secret (D-100).
+          acceptedBlockers: blockers
+        }
+      });
+    });
+    return reply.send({ sha: merged.sha });
+  });
+
+  app.post("/pull-requests/:pullRequestId/update-branch", async (request, reply) => {
+    const acted = await stewardingAct(deps, request, reply, { openOnly: true });
+    if (!acted) return;
+    const { pull, ctx, access } = acted;
+    try {
+      await deps.provider.updatePullRequestBranch(pull.providerRepoId, pull.number);
+    } catch (error) {
+      if (error instanceof MergeRefusedError) return deps.sendError(reply, 409, "host_refuses", error.message);
+      if (error instanceof UnknownPullRequestError) return deps.sendError(reply, 404, "unknown_pull_request", error.message);
+      if (error instanceof ProviderTransientError) return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      throw error;
+    }
+    await recordAct(deps.db, pull, ctx, access.leaseId, "pr.branch_updated", {});
+    return reply.send({ ok: true });
+  });
+
+  app.post("/pull-requests/:pullRequestId/close", async (request, reply) => {
+    const acted = await stewardingAct(deps, request, reply, { openOnly: true });
+    if (!acted) return;
+    const { pull, ctx, access } = acted;
+    try {
+      await deps.provider.closePullRequest(pull.providerRepoId, pull.number);
+    } catch (error) {
+      if (error instanceof MergeRefusedError) return deps.sendError(reply, 409, "host_refuses", error.message);
+      if (error instanceof UnknownPullRequestError) return deps.sendError(reply, 404, "unknown_pull_request", error.message);
+      if (error instanceof ProviderTransientError) return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      throw error;
+    }
+    await withTransaction(deps.db, async (client) => {
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [pull.missionId]);
+      await client.query(
+        `update pull_requests set state = 'closed', closed_at = now(), last_synced_at = now() where pr_id = $1`,
+        [pull.pullRequestId]
+      );
+      await recordEvent(client, {
+        orgId: pull.orgId,
+        missionId: pull.missionId,
+        workstreamId: pull.workstreamId,
+        kind: "pr.close_performed",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: { pullRequestId: pull.pullRequestId, number: pull.number }
+      });
+    });
+    return reply.send({ ok: true });
+  });
+
+  app.post("/pull-requests/:pullRequestId/delete-branch", async (request, reply) => {
+    const acted = await stewardingAct(deps, request, reply, { resolvedOnly: true });
+    if (!acted) return;
+    const { pull, ctx, access } = acted;
+    const row = await pullRequestById(deps.db, pull.pullRequestId);
+    if (!row) return deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    try {
+      await deps.provider.deleteBranchRef(pull.providerRepoId, row.headRef);
+    } catch (error) {
+      if (error instanceof ProviderTransientError) return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      // A ref already gone is the asked-for end state, said plainly.
+      return deps.sendError(reply, 409, "branch_missing", "That branch no longer exists on the host.");
+    }
+    await recordAct(deps.db, pull, ctx, access.leaseId, "pr.branch_deleted", { branch: row.headRef });
+    return reply.send({ ok: true });
+  });
+
+  // --- Operating review in-house (D-100) ------------------------------------
+
+  app.get("/pull-requests/:pullRequestId/files", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+    const params = PullParamsSchema.safeParse(request.params);
+    if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed pull request id.");
+    const pull = await loadPullContext(deps.db, params.data.pullRequestId);
+    if (!pull) return deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    const access = await missionAccess(deps.db, ctx, pull.missionId, pull.workstreamId);
+    if (!access) return deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
+    try {
+      return await deps.provider.listPullFiles(pull.providerRepoId, pull.number);
+    } catch (error) {
+      if (error instanceof UnknownPullRequestError) return deps.sendError(reply, 404, "unknown_pull_request", error.message);
+      if (error instanceof ProviderTransientError) return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      throw error;
+    }
+  });
+
+  app.post("/pull-requests/:pullRequestId/comment", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+    const params = PullParamsSchema.safeParse(request.params);
+    if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed pull request id.");
+    const body = PullCommentInputSchema.safeParse({
+      ...(request.body as Record<string, unknown> | null),
+      pullRequestId: params.data.pullRequestId
+    });
+    if (!body.success) {
+      return deps.sendError(reply, 422, "invalid_comment", body.error.issues[0]?.message ?? "Say something.");
+    }
+    const acted = await stewardingAct(deps, request, reply, { openOnly: true });
+    if (!acted) return;
+    const { pull, access } = acted;
+    try {
+      await deps.provider.createPullComment(pull.providerRepoId, pull.number, {
+        // Authored by the App, attributed in the body until user-token
+        // identity exists (D-100).
+        body: `**${ctx.login} via Novus:** ${body.data.body}`,
+        ...(body.data.path !== undefined ? { path: body.data.path } : {}),
+        ...(body.data.line !== undefined ? { line: body.data.line } : {})
+      });
+    } catch (error) {
+      if (error instanceof UnknownPullRequestError) return deps.sendError(reply, 404, "unknown_pull_request", error.message);
+      if (error instanceof ProviderTransientError) return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      throw error;
+    }
+    await recordAct(deps.db, pull, ctx, access.leaseId, "pr.comment_sent", {
+      path: body.data.path ?? null,
+      line: body.data.line ?? null
+    });
+    return reply.send({ ok: true });
+  });
+
+  app.post("/pull-requests/:pullRequestId/resolve-thread", async (request, reply) => {
+    const acted = await stewardingAct(deps, request, reply, { openOnly: true });
+    if (!acted) return;
+    const { pull, ctx, access } = acted;
+    const body = z.object({ threadId: z.string().min(1).max(200) }).safeParse(request.body);
+    if (!body.success) return deps.sendError(reply, 400, "bad_thread", "Malformed thread id.");
+    try {
+      await deps.provider.resolveReviewThread(pull.providerRepoId, body.data.threadId);
+    } catch (error) {
+      if (error instanceof UnknownPullRequestError) return deps.sendError(reply, 404, "unknown_thread", "No such review thread.");
+      if (error instanceof ProviderTransientError) return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      throw error;
+    }
+    await withTransaction(deps.db, async (client) => {
+      // Reflect immediately rather than waiting a poll: the person just did it.
+      await client.query(
+        `update pull_requests
+            set review_threads = (
+              select coalesce(jsonb_agg(
+                case when thread->>'threadId' = $2 then jsonb_set(thread, '{state}', '"resolved"') else thread end
+              ), '[]'::jsonb)
+              from jsonb_array_elements(review_threads) as thread
+            )
+          where pr_id = $1`,
+        [pull.pullRequestId, body.data.threadId]
+      );
+      await recordEvent(client, {
+        orgId: pull.orgId,
+        missionId: pull.missionId,
+        workstreamId: pull.workstreamId,
+        kind: "pr.thread_resolved",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: { pullRequestId: pull.pullRequestId, number: pull.number, threadId: body.data.threadId }
+      });
+    });
+    return reply.send({ ok: true });
+  });
+
+  app.post("/pull-requests/:pullRequestId/metadata", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+    const params = PullParamsSchema.safeParse(request.params);
+    if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed pull request id.");
+    const body = PullMetadataInputSchema.safeParse({
+      ...(request.body as Record<string, unknown> | null),
+      pullRequestId: params.data.pullRequestId
+    });
+    if (!body.success) {
+      return deps.sendError(reply, 422, "invalid_metadata", body.error.issues[0]?.message ?? "Malformed metadata.");
+    }
+    const acted = await stewardingAct(deps, request, reply, { openOnly: true });
+    if (!acted) return;
+    const { pull, access } = acted;
+    try {
+      await deps.provider.setPullRequestMetadata(pull.providerRepoId, pull.number, {
+        ...(body.data.title !== undefined ? { title: body.data.title } : {}),
+        ...(body.data.body !== undefined ? { body: body.data.body } : {}),
+        ...(body.data.labels !== undefined ? { labels: body.data.labels } : {})
+      });
+    } catch (error) {
+      if (error instanceof UnknownPullRequestError) return deps.sendError(reply, 404, "unknown_pull_request", error.message);
+      if (error instanceof ProviderTransientError) return deps.sendError(reply, 502, "provider_unavailable", error.message);
+      throw error;
+    }
+    await withTransaction(deps.db, async (client) => {
+      // The title and labels follow the host; the stored body stays the
+      // snapshot of what was *sent* at publication — that is the receipt, and
+      // editing the host's description does not rewrite history (D-100).
+      if (body.data.title !== undefined) {
+        await client.query(`update pull_requests set title = $2 where pr_id = $1`, [
+          pull.pullRequestId,
+          body.data.title
+        ]);
+      }
+      if (body.data.labels !== undefined) {
+        await client.query(`update pull_requests set labels = $2::jsonb where pr_id = $1`, [
+          pull.pullRequestId,
+          JSON.stringify(body.data.labels.slice(0, 20))
+        ]);
+      }
+      await recordEvent(client, {
+        orgId: pull.orgId,
+        missionId: pull.missionId,
+        workstreamId: pull.workstreamId,
+        kind: "pr.metadata_edited",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: {
+          pullRequestId: pull.pullRequestId,
+          number: pull.number,
+          edited: [
+            ...(body.data.title !== undefined ? ["title"] : []),
+            ...(body.data.body !== undefined ? ["description"] : []),
+            ...(body.data.labels !== undefined ? ["labels"] : [])
+          ]
+        }
+      });
+    });
+    return reply.send({ ok: true });
+  });
 
   // --- The fake host's own side (NOVUS_FAKE_GITHUB only) ---------------------
   // A deterministic suite has to *be* GitHub — comment, resolve, merge,
@@ -587,7 +1063,12 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
       number: z.number().int().positive(),
       author: z.string().min(1).max(120).optional(),
       body: z.string().max(2_000).optional(),
-      path: z.string().max(300).optional()
+      path: z.string().max(300).optional(),
+      checkName: z.string().max(200).optional(),
+      checkStatus: z.enum(["pending", "passed", "failed", "skipped"]).optional(),
+      required: z.boolean().optional(),
+      verdict: z.enum(["approve", "request_changes"]).optional(),
+      behindBy: z.number().int().nonnegative().optional()
     });
     app.post("/fake/github/pulls/:action", async (request, reply) => {
       const action = (request.params as { action: string }).action;
@@ -608,6 +1089,23 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
           provider.fakeClose(body.data.providerRepoId, body.data.number);
         } else if (action === "conflict") {
           provider.fakeConflict(body.data.providerRepoId, body.data.number);
+        } else if (action === "check") {
+          // The host side of CI (D-100): a named check ran with a verdict.
+          provider.fakeCheck(body.data.providerRepoId, body.data.number, {
+            name: body.data.checkName ?? "ci",
+            status: body.data.checkStatus ?? "passed",
+            required: body.data.required ?? false,
+            kind: "check",
+            url: null
+          });
+        } else if (action === "review") {
+          provider.fakeReview(
+            body.data.providerRepoId,
+            body.data.number,
+            body.data.verdict ?? "approve"
+          );
+        } else if (action === "behind") {
+          provider.fakeBehind(body.data.providerRepoId, body.data.number, body.data.behindBy ?? 1);
         } else {
           return deps.sendError(reply, 404, "unknown_act", "The fake host does not do that.");
         }
@@ -652,8 +1150,14 @@ export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider
     provider_repo_id: string;
   }[]) {
     let host: HostPullRequest;
+    let readiness: MergeReadiness | null = null;
     try {
       host = await provider.getPullRequest(row.provider_repo_id, row.provider_number);
+      // The gate rides the same poll (D-100). Its absence is survivable —
+      // the row keeps its last answer and the surface says when it synced.
+      readiness = await provider
+        .getMergeReadiness(row.provider_repo_id, row.provider_number)
+        .catch(() => null);
     } catch {
       // The host being unreachable is not news to record; the next pass asks
       // again and last_synced_at stays honest about staleness.
@@ -671,6 +1175,7 @@ export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider
                 merged_by = coalesce($6, merged_by),
                 merged_at = coalesce($7::timestamptz, merged_at),
                 closed_at = coalesce($8::timestamptz, closed_at),
+                readiness = coalesce($9::jsonb, readiness),
                 last_synced_at = now()
           where pr_id = $1`,
         [
@@ -681,7 +1186,8 @@ export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider
           JSON.stringify(host.requestedReviewers.slice(0, 15)),
           host.mergedBy,
           host.mergedAt,
-          host.closedAt
+          host.closedAt,
+          readiness === null ? null : JSON.stringify(readiness)
         ]
       );
       const record = (kind: string, payload: Record<string, unknown>) =>

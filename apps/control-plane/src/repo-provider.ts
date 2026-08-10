@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import type { AvailableRepository, BaseRevision, ReviewThread } from "@novus/contracts";
+import type {
+  AvailableRepository,
+  BaseRevision,
+  HostCheck,
+  MergeMethod,
+  MergeReadiness,
+  PullFilesResponse,
+  ReviewThread
+} from "@novus/contracts";
 import type { Config } from "./config.ts";
 import type { CloneCredential } from "./repo-clone.ts";
 
@@ -41,6 +49,26 @@ export class PullRequestExistsError extends Error {
   constructor(headRef: string) {
     super(`An open pull request for ${headRef} already exists on the provider.`);
   }
+}
+/** The host itself cannot or will not perform the act — conflicts, failing
+ *  required checks, a draft, branch protection. The first gating tier of
+ *  D-100: refused in the host's own words, never overridable. */
+export class MergeRefusedError extends Error {}
+
+/** The fake host's own record of one request: the host view plus the knobs
+ *  the test-only driver routes turn. */
+interface FakePull extends HostPullRequest {
+  headRef: string;
+  title: string;
+  body: string;
+  labels: string[];
+  checks: HostCheck[];
+  approvals: number;
+  changesRequested: number;
+  behindBy: number;
+  aheadBy: number;
+  files: PullFilesResponse["files"];
+  commits: PullFilesResponse["commits"];
 }
 
 /**
@@ -93,6 +121,46 @@ export interface RepositoryProvider {
   requestReviewers(providerRepoId: string, number: number, reviewers: string[]): Promise<void>;
   /** Marks a draft ready for review. A person's act, relayed. */
   markPullRequestReady(providerRepoId: string, number: number): Promise<void>;
+  /**
+   * The aggregated gate (D-100): the host's checks with their required flags,
+   * the review decision, how far the branch is behind its base, and the
+   * repository's own allowed merge methods — read, never assumed.
+   */
+  getMergeReadiness(providerRepoId: string, number: number): Promise<MergeReadiness>;
+  /**
+   * Performs the merge a person explicitly asked for (D-100). The host does
+   * the merging and stays the source of truth; a host that cannot — draft,
+   * conflict, failing required check, protection — answers MergeRefusedError
+   * in its own words. Novus never calls this on its own account.
+   */
+  mergePullRequest(
+    providerRepoId: string,
+    number: number,
+    method: MergeMethod
+  ): Promise<{ sha: string | null }>;
+  /** Brings the branch up to date with its base, host-side. */
+  updatePullRequestBranch(providerRepoId: string, number: number): Promise<void>;
+  /** Closes without merging. */
+  closePullRequest(providerRepoId: string, number: number): Promise<void>;
+  /** Deletes one branch ref. The route above this gates it to a resolved
+   *  request; the provider just does what it is told. */
+  deleteBranchRef(providerRepoId: string, branch: string): Promise<void>;
+  /** The request's changed files with bounded patches, and its commits. */
+  listPullFiles(providerRepoId: string, number: number): Promise<PullFilesResponse>;
+  /** One comment — inline when a path anchors it, conversation otherwise. */
+  createPullComment(
+    providerRepoId: string,
+    number: number,
+    input: { body: string; path?: string; line?: number }
+  ): Promise<void>;
+  /** Resolves one review thread by the host's own thread id. */
+  resolveReviewThread(providerRepoId: string, threadId: string): Promise<void>;
+  /** Title, description, labels — patched on the host. */
+  setPullRequestMetadata(
+    providerRepoId: string,
+    number: number,
+    input: { title?: string; body?: string; labels?: string[] }
+  ): Promise<void>;
 }
 
 export class UnconfiguredRepositoryProvider implements RepositoryProvider {
@@ -116,6 +184,33 @@ export class UnconfiguredRepositoryProvider implements RepositoryProvider {
     throw new ProviderUnconfiguredError();
   }
   async markPullRequestReady(): Promise<void> {
+    throw new ProviderUnconfiguredError();
+  }
+  async getMergeReadiness(): Promise<MergeReadiness> {
+    throw new ProviderUnconfiguredError();
+  }
+  async mergePullRequest(): Promise<{ sha: string | null }> {
+    throw new ProviderUnconfiguredError();
+  }
+  async updatePullRequestBranch(): Promise<void> {
+    throw new ProviderUnconfiguredError();
+  }
+  async closePullRequest(): Promise<void> {
+    throw new ProviderUnconfiguredError();
+  }
+  async deleteBranchRef(): Promise<void> {
+    throw new ProviderUnconfiguredError();
+  }
+  async listPullFiles(): Promise<PullFilesResponse> {
+    throw new ProviderUnconfiguredError();
+  }
+  async createPullComment(): Promise<void> {
+    throw new ProviderUnconfiguredError();
+  }
+  async resolveReviewThread(): Promise<void> {
+    throw new ProviderUnconfiguredError();
+  }
+  async setPullRequestMetadata(): Promise<void> {
     throw new ProviderUnconfiguredError();
   }
 }
@@ -224,14 +319,21 @@ export class FakeRepositoryProvider implements RepositoryProvider {
   // There is no merge on the RepositoryProvider interface; `fakeMerge` is the
   // host's own act, which is exactly the distinction the product draws.
 
-  private readonly pulls = new Map<string, Map<number, HostPullRequest & { headRef: string }>>();
+  private readonly pulls = new Map<string, Map<number, FakePull>>();
   private nextNumber = 1;
+  private nextThread = 1;
 
-  private repoPulls(providerRepoId: string): Map<number, HostPullRequest & { headRef: string }> {
+  private repoPulls(providerRepoId: string): Map<number, FakePull> {
     this.repo(providerRepoId);
     const existing = this.pulls.get(providerRepoId) ?? new Map();
     this.pulls.set(providerRepoId, existing);
     return existing;
+  }
+
+  private pull(providerRepoId: string, number: number): FakePull {
+    const found = this.repoPulls(providerRepoId).get(number);
+    if (!found) throw new UnknownPullRequestError();
+    return found;
   }
 
   async createPullRequest(
@@ -249,7 +351,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     const repo = this.repo(providerRepoId);
     const number = this.nextNumber;
     this.nextNumber += 1;
-    const created: HostPullRequest & { headRef: string } = {
+    const created: FakePull = {
       number,
       url: `https://github.com/${repo.name}/pull/${number}`,
       state: "draft",
@@ -260,15 +362,40 @@ export class FakeRepositoryProvider implements RepositoryProvider {
       mergedAt: null,
       closedAt: null,
       headSha: this.branches.get(providerRepoId)?.get(input.headRef) ?? null,
-      headRef: input.headRef
+      headRef: input.headRef,
+      title: input.title,
+      body: input.body,
+      labels: [],
+      checks: [],
+      approvals: 0,
+      changesRequested: 0,
+      behindBy: 0,
+      aheadBy: 1,
+      // One synthetic file and commit, so the in-house diff has something
+      // real-shaped to show without the fake growing a git of its own.
+      files: [
+        {
+          path: "live-change.txt",
+          changeState: "modified" as const,
+          additions: 3,
+          deletions: 0,
+          patch: "@@ -0,0 +1,3 @@\n+the change\n+this request\n+publishes"
+        }
+      ],
+      commits: [
+        {
+          sha: this.branches.get(providerRepoId)?.get(input.headRef) ?? "0".repeat(40),
+          message: "The decided revision",
+          author: "novus"
+        }
+      ]
     };
     pulls.set(number, created);
     return { ...created };
   }
 
   async getPullRequest(providerRepoId: string, number: number): Promise<HostPullRequest> {
-    const pull = this.repoPulls(providerRepoId).get(number);
-    if (!pull) throw new UnknownPullRequestError();
+    const pull = this.pull(providerRepoId, number);
     // Mergeability settles on read, the way GitHub computes it lazily: clean
     // unless the test marked a conflict.
     if (pull.mergeable === "unknown" && pull.state !== "merged" && pull.state !== "closed") {
@@ -278,18 +405,130 @@ export class FakeRepositoryProvider implements RepositoryProvider {
   }
 
   async requestReviewers(providerRepoId: string, number: number, reviewers: string[]): Promise<void> {
-    const pull = this.repoPulls(providerRepoId).get(number);
-    if (!pull) throw new UnknownPullRequestError();
+    const pull = this.pull(providerRepoId, number);
     for (const reviewer of reviewers) {
       if (!pull.requestedReviewers.includes(reviewer)) pull.requestedReviewers.push(reviewer);
     }
   }
 
   async markPullRequestReady(providerRepoId: string, number: number): Promise<void> {
-    const pull = this.repoPulls(providerRepoId).get(number);
-    if (!pull) throw new UnknownPullRequestError();
+    const pull = this.pull(providerRepoId, number);
     if (pull.state === "draft") pull.state = "ready";
   }
+
+  // --- The gate and the completion verbs (D-100) -----------------------------
+
+  async getMergeReadiness(providerRepoId: string, number: number): Promise<MergeReadiness> {
+    const pull = this.pull(providerRepoId, number);
+    return {
+      checks: pull.checks.map((check) => ({ ...check })),
+      reviewDecision:
+        pull.changesRequested > 0 ? "changes_requested" : pull.approvals > 0 ? "approved" : "none",
+      approvals: pull.approvals,
+      changesRequested: pull.changesRequested,
+      behindBy: pull.behindBy,
+      aheadBy: pull.aheadBy,
+      allowedMergeMethods: ["merge", "squash", "rebase"],
+      syncedAt: new Date().toISOString()
+    };
+  }
+
+  async mergePullRequest(
+    providerRepoId: string,
+    number: number,
+    method: MergeMethod
+  ): Promise<{ sha: string | null }> {
+    const pull = this.pull(providerRepoId, number);
+    // The host's own refusals, mirrored, or host-tier bugs pass silently: a
+    // draft cannot merge, a conflict cannot merge, a failing required check
+    // cannot merge past protection.
+    if (pull.state === "merged") throw new MergeRefusedError("This pull request is already merged.");
+    if (pull.state === "closed") throw new MergeRefusedError("This pull request is closed.");
+    if (pull.state === "draft") throw new MergeRefusedError("A draft cannot be merged; mark it ready first.");
+    if (pull.mergeable === "conflict") {
+      throw new MergeRefusedError("The branch has conflicts with its base that must be resolved.");
+    }
+    if (pull.checks.some((check) => check.required && check.status === "failed")) {
+      throw new MergeRefusedError("A required check is failing; branch protection refuses the merge.");
+    }
+    void method;
+    pull.state = "merged";
+    // The token's identity performs the merge, which for Novus is the App.
+    pull.mergedBy = "app/novus";
+    pull.mergedAt = new Date().toISOString();
+    pull.mergeable = "clean";
+    const sha = fixedSha(`merge:${providerRepoId}:${number}`);
+    return { sha };
+  }
+
+  async updatePullRequestBranch(providerRepoId: string, number: number): Promise<void> {
+    const pull = this.pull(providerRepoId, number);
+    pull.behindBy = 0;
+  }
+
+  async closePullRequest(providerRepoId: string, number: number): Promise<void> {
+    const pull = this.pull(providerRepoId, number);
+    if (pull.state === "merged") throw new MergeRefusedError("This pull request is already merged.");
+    pull.state = "closed";
+    pull.closedAt = new Date().toISOString();
+  }
+
+  async deleteBranchRef(providerRepoId: string, branch: string): Promise<void> {
+    const repoBranches = this.branches.get(providerRepoId);
+    if (!repoBranches?.has(branch)) throw new UnknownBaseError();
+    repoBranches.delete(branch);
+  }
+
+  async listPullFiles(providerRepoId: string, number: number): Promise<PullFilesResponse> {
+    const pull = this.pull(providerRepoId, number);
+    return {
+      files: pull.files.map((file) => ({ ...file })),
+      commits: pull.commits.map((commit) => ({ ...commit }))
+    };
+  }
+
+  async createPullComment(
+    providerRepoId: string,
+    number: number,
+    input: { body: string; path?: string; line?: number }
+  ): Promise<void> {
+    const pull = this.pull(providerRepoId, number);
+    pull.reviewThreads.push({
+      threadId: `thr_${this.nextThread}`,
+      author: "app/novus",
+      body: input.body,
+      path: input.path ?? null,
+      line: input.line ?? null,
+      state: "open",
+      url: `${pull.url}#discussion_r${this.nextThread}`,
+      postedAt: new Date().toISOString()
+    });
+    this.nextThread += 1;
+  }
+
+  async resolveReviewThread(providerRepoId: string, threadId: string): Promise<void> {
+    for (const pull of this.repoPulls(providerRepoId).values()) {
+      const thread = pull.reviewThreads.find((candidate) => candidate.threadId === threadId);
+      if (thread) {
+        thread.state = "resolved";
+        return;
+      }
+    }
+    throw new UnknownPullRequestError();
+  }
+
+  async setPullRequestMetadata(
+    providerRepoId: string,
+    number: number,
+    input: { title?: string; body?: string; labels?: string[] }
+  ): Promise<void> {
+    const pull = this.pull(providerRepoId, number);
+    if (input.title !== undefined) pull.title = input.title;
+    if (input.body !== undefined) pull.body = input.body;
+    if (input.labels !== undefined) pull.labels = [...input.labels];
+  }
+
+  // --- The fake host's own hands ---------------------------------------------
 
   /** The host side of review: somebody commented on GitHub. */
   fakeComment(
@@ -297,36 +536,57 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     number: number,
     comment: { author: string; body: string; path?: string | null }
   ): void {
-    const pull = this.repoPulls(providerRepoId).get(number);
-    if (!pull) throw new UnknownPullRequestError();
+    const pull = this.pull(providerRepoId, number);
     pull.reviewThreads.push({
+      threadId: `thr_${this.nextThread}`,
       author: comment.author,
       body: comment.body,
       path: comment.path ?? null,
+      line: null,
       state: "open",
-      url: `${pull.url}#discussion_r${pull.reviewThreads.length + 1}`,
+      url: `${pull.url}#discussion_r${this.nextThread}`,
       postedAt: new Date().toISOString()
     });
+    this.nextThread += 1;
   }
 
   /** The host side of resolution: a thread was resolved on GitHub. */
   fakeResolveComments(providerRepoId: string, number: number): void {
-    const pull = this.repoPulls(providerRepoId).get(number);
-    if (!pull) throw new UnknownPullRequestError();
+    const pull = this.pull(providerRepoId, number);
     for (const thread of pull.reviewThreads) thread.state = "resolved";
   }
 
   /** The host side of conflict: the base moved and the branch no longer merges. */
   fakeConflict(providerRepoId: string, number: number): void {
-    const pull = this.repoPulls(providerRepoId).get(number);
-    if (!pull) throw new UnknownPullRequestError();
+    const pull = this.pull(providerRepoId, number);
     pull.mergeable = "conflict";
   }
 
-  /** A human merged it on GitHub. The one act Novus can only ever observe. */
+  /** The host side of CI: a check ran on GitHub. Replaces by name. */
+  fakeCheck(providerRepoId: string, number: number, check: HostCheck): void {
+    const pull = this.pull(providerRepoId, number);
+    const at = pull.checks.findIndex((candidate) => candidate.name === check.name);
+    if (at === -1) pull.checks.push({ ...check });
+    else pull.checks[at] = { ...check };
+  }
+
+  /** The host side of review decisions: an approval or a change request. */
+  fakeReview(providerRepoId: string, number: number, verdict: "approve" | "request_changes"): void {
+    const pull = this.pull(providerRepoId, number);
+    if (verdict === "approve") pull.approvals += 1;
+    else pull.changesRequested += 1;
+  }
+
+  /** The base moved: the branch is now behind by this many commits. */
+  fakeBehind(providerRepoId: string, number: number, behindBy: number): void {
+    const pull = this.pull(providerRepoId, number);
+    pull.behindBy = behindBy;
+  }
+
+  /** A human merged it on GitHub. Novus can also ask (D-100); either way the
+   *  host performs it and this is the host performing it. */
   fakeMerge(providerRepoId: string, number: number, mergedBy: string): void {
-    const pull = this.repoPulls(providerRepoId).get(number);
-    if (!pull) throw new UnknownPullRequestError();
+    const pull = this.pull(providerRepoId, number);
     pull.state = "merged";
     pull.mergedBy = mergedBy;
     pull.mergedAt = new Date().toISOString();
@@ -335,8 +595,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
 
   /** A human closed it on GitHub without merging. */
   fakeClose(providerRepoId: string, number: number): void {
-    const pull = this.repoPulls(providerRepoId).get(number);
-    if (!pull) throw new UnknownPullRequestError();
+    const pull = this.pull(providerRepoId, number);
     pull.state = "closed";
     pull.closedAt = new Date().toISOString();
   }

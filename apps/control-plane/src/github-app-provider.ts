@@ -1,8 +1,17 @@
 import { createSign } from "node:crypto";
-import type { AvailableRepository, BaseRevision, ReviewThread } from "@novus/contracts";
+import type {
+  AvailableRepository,
+  BaseRevision,
+  HostCheck,
+  MergeMethod,
+  MergeReadiness,
+  PullFilesResponse,
+  ReviewThread
+} from "@novus/contracts";
 import type { CloneCredential, CloneCredentialMinter } from "./repo-clone.ts";
 import {
   BranchConflictError,
+  MergeRefusedError,
   ProviderTransientError,
   PullRequestExistsError,
   UnknownBaseError,
@@ -300,32 +309,384 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}`);
     if (response.status === 404) throw new UnknownPullRequestError();
     if (!response.ok) throw new ProviderTransientError(`pull request lookup failed (${response.status})`);
-    const pull = this.toHostPull((await response.json()) as Parameters<typeof this.toHostPull>[0]);
-    // Review comments ride the same poll, bounded like every ingested claim.
-    const comments = await this.rest(`/repos/${repo.fullName}/pulls/${number}/comments?per_page=50`);
-    if (comments.ok) {
-      const list = (await comments.json()) as {
-        user?: { login?: string };
-        body?: string;
-        path?: string | null;
-        html_url?: string;
-        created_at?: string;
-      }[];
-      pull.reviewThreads = list.slice(0, 50).map(
-        (comment): ReviewThread => ({
-          author: (comment.user?.login ?? "unknown").slice(0, 120),
-          body: (comment.body ?? "").slice(0, 2_000),
-          path: comment.path?.slice(0, 300) ?? null,
-          // The REST comments list does not carry thread resolution; the
-          // reflection stays honest by saying open until the threads API
-          // (GraphQL) joins a later slice with review.comment.
-          state: "open",
-          url: comment.html_url?.slice(0, 600) ?? null,
-          postedAt: comment.created_at ?? new Date().toISOString()
-        })
-      );
+    const raw = (await response.json()) as Parameters<typeof this.toHostPull>[0] & { node_id?: string };
+    const pull = this.toHostPull(raw);
+    // Review threads ride the same poll — the GraphQL threads API, which is
+    // the one place resolution state and thread ids live (D-100; it also
+    // retires D-099's REST limitation of every comment reading as open).
+    if (raw.node_id) {
+      try {
+        const data = (await this.graphql(
+          `query($id: ID!) { node(id: $id) { ... on PullRequest { reviewThreads(first: 50) { nodes {
+             id isResolved comments(first: 1) { nodes { author { login } body path line url createdAt } } } } } } }`,
+          { id: raw.node_id }
+        )) as {
+          node?: {
+            reviewThreads?: {
+              nodes?: {
+                id?: string;
+                isResolved?: boolean;
+                comments?: {
+                  nodes?: {
+                    author?: { login?: string } | null;
+                    body?: string;
+                    path?: string | null;
+                    line?: number | null;
+                    url?: string;
+                    createdAt?: string;
+                  }[];
+                };
+              }[];
+            };
+          };
+        };
+        const nodes = data.node?.reviewThreads?.nodes ?? [];
+        pull.reviewThreads = nodes.slice(0, 50).flatMap((thread): ReviewThread[] => {
+          const first = thread.comments?.nodes?.[0];
+          if (!first) return [];
+          return [
+            {
+              threadId: thread.id?.slice(0, 200) ?? null,
+              author: (first.author?.login ?? "unknown").slice(0, 120),
+              body: (first.body ?? "").slice(0, 2_000),
+              path: first.path?.slice(0, 300) ?? null,
+              line: first.line ?? null,
+              state: thread.isResolved ? "resolved" : "open",
+              url: first.url?.slice(0, 600) ?? null,
+              postedAt: first.createdAt ?? new Date().toISOString()
+            }
+          ];
+        });
+      } catch {
+        // Threads are enrichment on this read; the pull itself already
+        // answered. The next poll asks again.
+      }
     }
     return pull;
+  }
+
+  private async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+    const token = await this.installationToken();
+    const response = await fetch(`${API}/graphql`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ query, variables })
+    });
+    if (!response.ok) throw new ProviderTransientError(`GraphQL failed (${response.status})`);
+    const body = (await response.json()) as { data?: unknown; errors?: { message: string }[] };
+    if (body.errors?.length) {
+      throw new ProviderTransientError(`GraphQL was refused: ${body.errors[0]?.message.slice(0, 200)}`);
+    }
+    return body.data ?? {};
+  }
+
+  // --- The gate and the completion verbs (D-100) -----------------------------
+
+  async getMergeReadiness(providerRepoId: string, number: number): Promise<MergeReadiness> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const pullResponse = await this.rest(`/repos/${repo.fullName}/pulls/${number}`);
+    if (pullResponse.status === 404) throw new UnknownPullRequestError();
+    if (!pullResponse.ok) throw new ProviderTransientError(`pull request lookup failed (${pullResponse.status})`);
+    const pull = (await pullResponse.json()) as {
+      head: { sha: string; ref: string };
+      base: { ref: string };
+    };
+
+    // Which contexts branch protection requires. Degrades to "none required"
+    // where the App cannot read protection — the merge call itself remains
+    // the authority on what the host refuses.
+    let required = new Set<string>();
+    const protection = await this.rest(
+      `/repos/${repo.fullName}/branches/${encodeURIComponent(pull.base.ref)}/protection/required_status_checks`
+    );
+    if (protection.ok) {
+      const body = (await protection.json()) as { contexts?: string[] };
+      required = new Set(body.contexts ?? []);
+    }
+
+    const checks: HostCheck[] = [];
+    const runs = await this.rest(`/repos/${repo.fullName}/commits/${pull.head.sha}/check-runs?per_page=50`);
+    if (runs.ok) {
+      const body = (await runs.json()) as {
+        check_runs?: { name: string; status: string; conclusion: string | null; html_url?: string | null }[];
+      };
+      for (const run of (body.check_runs ?? []).slice(0, 50)) {
+        const status: HostCheck["status"] =
+          run.status !== "completed"
+            ? "pending"
+            : run.conclusion === "success"
+              ? "passed"
+              : run.conclusion === "skipped" || run.conclusion === "neutral"
+                ? "skipped"
+                : "failed";
+        checks.push({
+          name: run.name.slice(0, 200),
+          status,
+          required: required.has(run.name),
+          kind: "check",
+          url: run.html_url?.slice(0, 600) ?? null
+        });
+      }
+    }
+    const statuses = await this.rest(`/repos/${repo.fullName}/commits/${pull.head.sha}/status`);
+    if (statuses.ok) {
+      const body = (await statuses.json()) as {
+        statuses?: { context: string; state: string; target_url?: string | null }[];
+      };
+      for (const status of (body.statuses ?? []).slice(0, 50 - checks.length)) {
+        checks.push({
+          name: status.context.slice(0, 200),
+          status: status.state === "success" ? "passed" : status.state === "pending" ? "pending" : "failed",
+          required: required.has(status.context),
+          kind: "status",
+          url: status.target_url?.slice(0, 600) ?? null
+        });
+      }
+    }
+
+    // The latest review per person is their standing answer.
+    let approvals = 0;
+    let changesRequested = 0;
+    const reviews = await this.rest(`/repos/${repo.fullName}/pulls/${number}/reviews?per_page=100`);
+    if (reviews.ok) {
+      const list = (await reviews.json()) as { user?: { login?: string }; state?: string }[];
+      const latest = new Map<string, string>();
+      for (const review of list) {
+        const login = review.user?.login;
+        const state = review.state;
+        if (!login || !state) continue;
+        if (state === "APPROVED" || state === "CHANGES_REQUESTED") latest.set(login, state);
+      }
+      for (const state of latest.values()) {
+        if (state === "APPROVED") approvals += 1;
+        else changesRequested += 1;
+      }
+    }
+
+    let behindBy: number | null = null;
+    let aheadBy: number | null = null;
+    const compare = await this.rest(
+      `/repos/${repo.fullName}/compare/${encodeURIComponent(pull.base.ref)}...${encodeURIComponent(pull.head.ref)}`
+    );
+    if (compare.ok) {
+      const body = (await compare.json()) as { ahead_by?: number; behind_by?: number };
+      aheadBy = body.ahead_by ?? null;
+      behindBy = body.behind_by ?? null;
+    }
+
+    // The repository's own allowed methods, read fresh — never assumed.
+    const allowed: MergeMethod[] = [];
+    const repoResponse = await this.rest(`/repositories/${encodeURIComponent(providerRepoId)}`);
+    if (repoResponse.ok) {
+      const body = (await repoResponse.json()) as {
+        allow_merge_commit?: boolean;
+        allow_squash_merge?: boolean;
+        allow_rebase_merge?: boolean;
+      };
+      if (body.allow_merge_commit !== false) allowed.push("merge");
+      if (body.allow_squash_merge !== false) allowed.push("squash");
+      if (body.allow_rebase_merge !== false) allowed.push("rebase");
+    } else {
+      allowed.push("merge", "squash", "rebase");
+    }
+
+    return {
+      checks,
+      reviewDecision: changesRequested > 0 ? "changes_requested" : approvals > 0 ? "approved" : "none",
+      approvals,
+      changesRequested,
+      behindBy,
+      aheadBy,
+      allowedMergeMethods: allowed,
+      syncedAt: new Date().toISOString()
+    };
+  }
+
+  async mergePullRequest(
+    providerRepoId: string,
+    number: number,
+    method: MergeMethod
+  ): Promise<{ sha: string | null }> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}/merge`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ merge_method: method })
+    });
+    if (response.status === 404) throw new UnknownPullRequestError();
+    if (response.status === 405 || response.status === 409 || response.status === 422) {
+      const body = (await response.json().catch(() => ({}))) as { message?: string };
+      // The host's own refusal, in the host's own words — the first gating
+      // tier of D-100, never overridable from Novus.
+      throw new MergeRefusedError(body.message?.slice(0, 300) ?? "GitHub refused the merge.");
+    }
+    if (!response.ok) throw new ProviderTransientError(`merge failed (${response.status})`);
+    const body = (await response.json()) as { sha?: string; merged?: boolean };
+    if (body.merged !== true) throw new MergeRefusedError("GitHub did not perform the merge.");
+    return { sha: body.sha ?? null };
+  }
+
+  async updatePullRequestBranch(providerRepoId: string, number: number): Promise<void> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}/update-branch`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    if (response.status === 404) throw new UnknownPullRequestError();
+    if (response.status === 422) {
+      const body = (await response.json().catch(() => ({}))) as { message?: string };
+      throw new MergeRefusedError(body.message?.slice(0, 300) ?? "GitHub could not update the branch.");
+    }
+    if (!response.ok && response.status !== 202) {
+      throw new ProviderTransientError(`update-branch failed (${response.status})`);
+    }
+  }
+
+  async closePullRequest(providerRepoId: string, number: number): Promise<void> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ state: "closed" })
+    });
+    if (response.status === 404) throw new UnknownPullRequestError();
+    if (!response.ok) throw new ProviderTransientError(`close failed (${response.status})`);
+  }
+
+  async deleteBranchRef(providerRepoId: string, branch: string): Promise<void> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const response = await this.rest(
+      `/repos/${repo.fullName}/git/refs/heads/${encodeURIComponent(branch)}`,
+      { method: "DELETE" }
+    );
+    if (response.status === 404 || response.status === 422) throw new UnknownBaseError();
+    if (!response.ok && response.status !== 204) {
+      throw new ProviderTransientError(`branch deletion failed (${response.status})`);
+    }
+  }
+
+  async listPullFiles(providerRepoId: string, number: number): Promise<PullFilesResponse> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const filesResponse = await this.rest(`/repos/${repo.fullName}/pulls/${number}/files?per_page=100`);
+    if (filesResponse.status === 404) throw new UnknownPullRequestError();
+    if (!filesResponse.ok) throw new ProviderTransientError(`file listing failed (${filesResponse.status})`);
+    const rawFiles = (await filesResponse.json()) as {
+      filename: string;
+      status: string;
+      additions: number;
+      deletions: number;
+      patch?: string;
+    }[];
+    const files = rawFiles.slice(0, 150).map((file) => ({
+      path: file.filename.slice(0, 300),
+      changeState:
+        file.status === "added" || file.status === "copied"
+          ? ("added" as const)
+          : file.status === "removed"
+            ? ("deleted" as const)
+            : file.status === "renamed"
+              ? ("renamed" as const)
+              : ("modified" as const),
+      additions: file.additions,
+      deletions: file.deletions,
+      patch: file.patch?.slice(0, 12_000) ?? null
+    }));
+    const commitsResponse = await this.rest(`/repos/${repo.fullName}/pulls/${number}/commits?per_page=100`);
+    const commits = commitsResponse.ok
+      ? ((await commitsResponse.json()) as {
+          sha: string;
+          commit: { message: string; author?: { name?: string } };
+          author?: { login?: string } | null;
+        }[])
+          .slice(0, 100)
+          .map((commit) => ({
+            sha: commit.sha.slice(0, 64),
+            message: (commit.commit.message.split("\n")[0] ?? "").slice(0, 400),
+            author: (commit.author?.login ?? commit.commit.author?.name ?? "unknown").slice(0, 120)
+          }))
+      : [];
+    return { files, commits };
+  }
+
+  async createPullComment(
+    providerRepoId: string,
+    number: number,
+    input: { body: string; path?: string; line?: number }
+  ): Promise<void> {
+    const repo = await this.cachedRepo(providerRepoId);
+    if (input.path !== undefined && input.line !== undefined) {
+      const pullResponse = await this.rest(`/repos/${repo.fullName}/pulls/${number}`);
+      if (pullResponse.status === 404) throw new UnknownPullRequestError();
+      if (!pullResponse.ok) throw new ProviderTransientError(`pull request lookup failed (${pullResponse.status})`);
+      const pull = (await pullResponse.json()) as { head: { sha: string } };
+      const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}/comments`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          body: input.body,
+          commit_id: pull.head.sha,
+          path: input.path,
+          line: input.line,
+          side: "RIGHT"
+        })
+      });
+      if (response.status === 404) throw new UnknownPullRequestError();
+      if (response.status === 422) {
+        const body = (await response.json().catch(() => ({}))) as { message?: string };
+        throw new ProviderTransientError(
+          `GitHub refused the inline comment: ${body.message?.slice(0, 200) ?? "the line may not be part of the diff"}`
+        );
+      }
+      if (!response.ok) throw new ProviderTransientError(`comment failed (${response.status})`);
+      return;
+    }
+    const response = await this.rest(`/repos/${repo.fullName}/issues/${number}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ body: input.body })
+    });
+    if (response.status === 404) throw new UnknownPullRequestError();
+    if (!response.ok && response.status !== 201) {
+      throw new ProviderTransientError(`comment failed (${response.status})`);
+    }
+  }
+
+  async resolveReviewThread(providerRepoId: string, threadId: string): Promise<void> {
+    void providerRepoId; // resolution is by the host's own global thread id
+    await this.graphql(
+      `mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { isResolved } } }`,
+      { id: threadId }
+    );
+  }
+
+  async setPullRequestMetadata(
+    providerRepoId: string,
+    number: number,
+    input: { title?: string; body?: string; labels?: string[] }
+  ): Promise<void> {
+    const repo = await this.cachedRepo(providerRepoId);
+    if (input.title !== undefined || input.body !== undefined) {
+      const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...(input.title !== undefined ? { title: input.title } : {}),
+          ...(input.body !== undefined ? { body: input.body } : {})
+        })
+      });
+      if (response.status === 404) throw new UnknownPullRequestError();
+      if (!response.ok) throw new ProviderTransientError(`metadata update failed (${response.status})`);
+    }
+    if (input.labels !== undefined) {
+      const response = await this.rest(`/repos/${repo.fullName}/issues/${number}/labels`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ labels: input.labels })
+      });
+      if (response.status === 404) throw new UnknownPullRequestError();
+      if (!response.ok) throw new ProviderTransientError(`label update failed (${response.status})`);
+    }
   }
 
   async requestReviewers(providerRepoId: string, number: number, reviewers: string[]): Promise<void> {

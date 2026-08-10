@@ -409,33 +409,251 @@ describe("publishing a decision (D-099)", () => {
     expect(byKind.get("pr.merged")).toBe("external");
   });
 
-  it("offers no way to merge a pull request at all", async () => {
+  // The absence-of-merge test that stood here under D-099 was rewritten
+  // deliberately under D-100, which reversed the absence into a gated verb:
+  // what the tests now pin is that the merge is never silent and never the
+  // host's to skip — the two-tier gate, the named blockers, the recorded
+  // acceptance — and that no *runner* merge exists, which is still true and
+  // still pinned in contracts.test.ts.
+
+  it("merges only past the two-tier gate: host refusals outright, named blockers acknowledged (D-100)", async () => {
     const lane = await githubMission();
     await decide(lane);
     await reportPushed(lane, lane.checkpointSha);
     const created = await createPull(lane);
     expect(created.statusCode).toBe(201);
     const pullId = created.json().pullRequest.pullRequestId as string;
+    const number = created.json().pullRequest.number as number;
 
-    // The D-063 pattern: the absence is asserted by asking. Every spelling a
-    // merge verb could reasonably wear answers "no such thing".
-    for (const attempt of [
-      { method: "POST" as const, url: `/pull-requests/${pullId}/merge` },
-      { method: "PUT" as const, url: `/pull-requests/${pullId}/merge` },
-      { method: "POST" as const, url: `/missions/${lane.missionId}/merge` },
-      { method: "POST" as const, url: `/missions/${lane.missionId}/pull-request/merge` }
-    ]) {
-      const response = await harness.app.inject({
-        method: attempt.method,
-        url: attempt.url,
-        headers: bearer(kartik),
-        payload: {}
-      });
-      expect(response.statusCode, attempt.url).toBe(404);
-    }
-    // And the request is exactly as it was: still a draft, merged by nobody.
+    // A draft cannot merge, and the words say what to do instead.
+    const draft = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/merge`,
+      headers: bearer(kartik),
+      payload: { method: "squash" }
+    });
+    expect(draft.statusCode).toBe(409);
+    expect(draft.json().error.code).toBe("still_a_draft");
+
+    await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/ready`,
+      headers: bearer(kartik)
+    });
+
+    // A failing *required* check is the host's tier: refused, not acceptable.
+    provider.fakeCheck("9001", number, {
+      name: "ci",
+      status: "failed",
+      required: true,
+      kind: "check",
+      url: null
+    });
+    const protectedRefusal = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/merge`,
+      headers: bearer(kartik),
+      payload: { method: "squash", acknowledgeBlockers: true }
+    });
+    expect(protectedRefusal.statusCode).toBe(409);
+    expect(protectedRefusal.json().error.code).toBe("host_refuses");
+
+    // A failing non-required check and an open comment are the second tier:
+    // named, and refused until deliberately acknowledged.
+    provider.fakeCheck("9001", number, {
+      name: "ci",
+      status: "passed",
+      required: true,
+      kind: "check",
+      url: null
+    });
+    provider.fakeCheck("9001", number, {
+      name: "lint",
+      status: "failed",
+      required: false,
+      kind: "check",
+      url: null
+    });
+    provider.fakeComment("9001", number, { author: "maya", body: "One question." });
+    await sweepPullRequestsOnce(harness.db, provider);
+
+    const unacknowledged = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/merge`,
+      headers: bearer(kartik),
+      payload: { method: "squash" }
+    });
+    expect(unacknowledged.statusCode).toBe(409);
+    expect(unacknowledged.json().error.code).toBe("blockers_outstanding");
+    expect(unacknowledged.json().error.message).toContain("lint failing");
+    expect(unacknowledged.json().error.message).toContain("1 review comment unresolved");
+
+    // Acknowledged, the merge proceeds — and the event records exactly what
+    // was accepted, so nothing about it is silent.
+    const merged = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/merge`,
+      headers: bearer(kartik),
+      payload: { method: "squash", acknowledgeBlockers: true }
+    });
+    expect(merged.statusCode).toBe(200);
+    expect(merged.json().sha).toMatch(/^[0-9a-f]{40}$/);
+
     const detail = await detailOf(lane);
-    expect(detail.pullRequest.state).toBe("draft");
-    expect(detail.pullRequest.mergedBy).toBeNull();
+    expect(detail.pullRequest.state).toBe("merged");
+    const event = await harness.db.query(
+      `select payload, actor_kind from events where mission_id = $1 and kind = 'pr.merge_performed'`,
+      [lane.missionId]
+    );
+    expect(event.rowCount).toBe(1);
+    expect(event.rows[0].actor_kind).toBe("user");
+    expect(event.rows[0].payload.method).toBe("squash");
+    expect(event.rows[0].payload.acceptedBlockers.join(" ")).toContain("lint failing");
+
+    // Merging twice is refused; the record stays what it was.
+    const again = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/merge`,
+      headers: bearer(kartik),
+      payload: { method: "squash", acknowledgeBlockers: true }
+    });
+    expect(again.statusCode).toBe(409);
+  });
+
+  it("refuses a merge the host reports conflicted, whatever anyone acknowledges", async () => {
+    const lane = await githubMission();
+    await decide(lane);
+    await reportPushed(lane, lane.checkpointSha);
+    const created = await createPull(lane);
+    const pullId = created.json().pullRequest.pullRequestId as string;
+    const number = created.json().pullRequest.number as number;
+    await harness.app.inject({ method: "POST", url: `/pull-requests/${pullId}/ready`, headers: bearer(kartik) });
+    provider.fakeConflict("9001", number);
+    await sweepPullRequestsOnce(harness.db, provider);
+    const refused = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/merge`,
+      headers: bearer(kartik),
+      payload: { method: "merge", acknowledgeBlockers: true }
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error.code).toBe("host_refuses");
+    const detail = await detailOf(lane);
+    expect(detail.pullRequest.state).toBe("ready");
+  });
+
+  it("operates the rest in-house: update branch, comment with attribution, resolve, metadata, files, close, delete (D-100)", async () => {
+    const lane = await githubMission();
+    await decide(lane);
+    await reportPushed(lane, lane.checkpointSha);
+    const created = await createPull(lane);
+    const pullId = created.json().pullRequest.pullRequestId as string;
+    const number = created.json().pullRequest.number as number;
+
+    // Behind its base: readiness says so after a sweep, update-branch fixes it.
+    provider.fakeBehind("9001", number, 3);
+    await sweepPullRequestsOnce(harness.db, provider);
+    let detail = await detailOf(lane);
+    expect(detail.pullRequest.readiness.behindBy).toBe(3);
+    const updated = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/update-branch`,
+      headers: bearer(kartik)
+    });
+    expect(updated.statusCode).toBe(200);
+    await sweepPullRequestsOnce(harness.db, provider);
+    detail = await detailOf(lane);
+    expect(detail.pullRequest.readiness.behindBy).toBe(0);
+
+    // A comment from Novus is authored by the App and attributed in the body.
+    const commented = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/comment`,
+      headers: bearer(kartik),
+      payload: { body: "Bounded at fifty, see the schema.", path: "live-change.txt", line: 1 }
+    });
+    expect(commented.statusCode).toBe(200);
+    await sweepPullRequestsOnce(harness.db, provider);
+    detail = await detailOf(lane);
+    const sent = detail.pullRequest.reviewThreads.find((thread: { body: string }) =>
+      thread.body.includes("Bounded at fifty")
+    );
+    expect(sent.body).toContain("kartik via Novus:");
+    expect(sent.state).toBe("open");
+
+    // Resolving from Novus reflects immediately and lands on the host.
+    const resolved = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/resolve-thread`,
+      headers: bearer(kartik),
+      payload: { threadId: sent.threadId }
+    });
+    expect(resolved.statusCode).toBe(200);
+    detail = await detailOf(lane);
+    expect(
+      detail.pullRequest.reviewThreads.find((thread: { threadId: string }) => thread.threadId === sent.threadId)
+        .state
+    ).toBe("resolved");
+
+    // Title and labels follow the host; the sent snapshot stays the receipt.
+    const bodyBefore = detail.pullRequest.body as string;
+    const edited = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/metadata`,
+      headers: bearer(kartik),
+      payload: { title: "Ship the session guard, retitled", labels: ["novus", "auth"] }
+    });
+    expect(edited.statusCode).toBe(200);
+    detail = await detailOf(lane);
+    expect(detail.pullRequest.title).toBe("Ship the session guard, retitled");
+    expect(detail.pullRequest.labels).toEqual(["novus", "auth"]);
+    expect(detail.pullRequest.body).toBe(bodyBefore);
+
+    // The in-house diff: the host's files and commits, bounded.
+    const files = await harness.app.inject({
+      method: "GET",
+      url: `/pull-requests/${pullId}/files`,
+      headers: bearer(kartik)
+    });
+    expect(files.statusCode).toBe(200);
+    expect(files.json().files[0].path).toBe("live-change.txt");
+    expect(files.json().files[0].patch).toContain("@@");
+    expect(files.json().commits.length).toBeGreaterThan(0);
+
+    // Deleting the branch is gated on resolution: refused while open, in words.
+    const early = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/delete-branch`,
+      headers: bearer(kartik)
+    });
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error.code).toBe("still_open");
+
+    const closed = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/close`,
+      headers: bearer(kartik)
+    });
+    expect(closed.statusCode).toBe(200);
+    detail = await detailOf(lane);
+    expect(detail.pullRequest.state).toBe("closed");
+
+    const deleted = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${pullId}/delete-branch`,
+      headers: bearer(kartik)
+    });
+    expect(deleted.statusCode).toBe(200);
+    const kinds = await harness.db.query(
+      `select kind from events where mission_id = $1 and kind like 'pr.%' order by seq`,
+      [lane.missionId]
+    );
+    const list = kinds.rows.map((row) => row.kind as string);
+    expect(list).toContain("pr.branch_updated");
+    expect(list).toContain("pr.comment_sent");
+    expect(list).toContain("pr.thread_resolved");
+    expect(list).toContain("pr.metadata_edited");
+    expect(list).toContain("pr.close_performed");
+    expect(list).toContain("pr.branch_deleted");
   });
 });

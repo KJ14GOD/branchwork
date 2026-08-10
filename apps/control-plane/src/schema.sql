@@ -719,6 +719,13 @@ create unique index if not exists pull_requests_one_open_per_workstream
 alter table workstreams add column if not exists remote_head_sha text
   check (remote_head_sha is null or remote_head_sha ~ '^[0-9a-f]{40}$');
 
+-- Operating the request in-house (D-100): the host's labels, and the
+-- aggregated merge-readiness projection the poll refreshes — checks with
+-- their required flags, the review decision, behind/ahead, and the
+-- repository's own allowed merge methods. Bounded JSON, like the threads.
+alter table pull_requests add column if not exists labels jsonb not null default '[]'::jsonb;
+alter table pull_requests add column if not exists readiness jsonb;
+
 -- ---------------------------------------------------------------------------
 -- Sessions (D-083): parallel conversations inside one workstream. A session
 -- owns its direction thread, its executions, and its own harness continuity —
