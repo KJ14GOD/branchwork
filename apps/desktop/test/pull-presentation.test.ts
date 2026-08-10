@@ -212,3 +212,71 @@ describe("the sentence after publication resolved (D-099)", () => {
     expect(line.detail).toContain("not published yet");
   });
 });
+
+describe("the merge confirm's named blockers (D-100)", () => {
+  // The server recomputes and is the authority; this pins that the confirm
+  // names the same facts a person is about to accept — never a summary color.
+  it("names change requests, open comments, non-required failures, running checks, and a stale branch", async () => {
+    const { namedBlockers } = await import("../src/components/pull-request");
+    const blockers = namedBlockers(
+      pull({
+        state: "ready",
+        reviewThreads: [
+          {
+            threadId: "thr_1",
+            author: "maya",
+            body: "One question.",
+            path: null,
+            line: null,
+            state: "open",
+            url: null,
+            postedAt: NOW
+          }
+        ],
+        readiness: {
+          checks: [
+            { name: "lint", status: "failed", required: false, kind: "check", url: null },
+            { name: "e2e", status: "pending", required: false, kind: "check", url: null },
+            { name: "ci", status: "passed", required: true, kind: "check", url: null }
+          ],
+          reviewDecision: "changes_requested",
+          approvals: 0,
+          changesRequested: 1,
+          behindBy: 2,
+          aheadBy: 1,
+          allowedMergeMethods: ["merge", "squash"],
+          syncedAt: NOW
+        }
+      })
+    );
+    expect(blockers).toContain("1 change request outstanding");
+    expect(blockers).toContain("1 review comment unresolved");
+    expect(blockers).toContain("check lint failing");
+    expect(blockers).toContain("1 check still running");
+    expect(blockers).toContain("the branch is 2 commits behind its base");
+    // The required check that passed is nobody's blocker, and a required
+    // *failure* would never appear here — that is the host's tier.
+    expect(blockers.join(" ")).not.toContain("ci");
+  });
+
+  it("names nothing when the gate is green", async () => {
+    const { namedBlockers } = await import("../src/components/pull-request");
+    expect(
+      namedBlockers(
+        pull({
+          state: "ready",
+          readiness: {
+            checks: [{ name: "ci", status: "passed", required: true, kind: "check", url: null }],
+            reviewDecision: "approved",
+            approvals: 1,
+            changesRequested: 0,
+            behindBy: 0,
+            aheadBy: 1,
+            allowedMergeMethods: ["merge"],
+            syncedAt: NOW
+          }
+        })
+      )
+    ).toEqual([]);
+  });
+});

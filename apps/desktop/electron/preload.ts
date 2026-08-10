@@ -67,7 +67,15 @@ const novus: NovusBridge = {
     push: (input) => ipcRenderer.invoke("novus:pulls:push", input),
     create: (input) => ipcRenderer.invoke("novus:pulls:create", input),
     requestReview: (input) => ipcRenderer.invoke("novus:pulls:request-review", input),
-    markReady: (pullRequestId) => ipcRenderer.invoke("novus:pulls:mark-ready", pullRequestId)
+    markReady: (pullRequestId) => ipcRenderer.invoke("novus:pulls:mark-ready", pullRequestId),
+    merge: (input) => ipcRenderer.invoke("novus:pulls:merge", input),
+    updateBranch: (pullRequestId) => ipcRenderer.invoke("novus:pulls:update-branch", pullRequestId),
+    close: (pullRequestId) => ipcRenderer.invoke("novus:pulls:close", pullRequestId),
+    deleteBranch: (pullRequestId) => ipcRenderer.invoke("novus:pulls:delete-branch", pullRequestId),
+    files: (pullRequestId) => ipcRenderer.invoke("novus:pulls:files", pullRequestId),
+    comment: (input) => ipcRenderer.invoke("novus:pulls:comment", input),
+    resolveThread: (input) => ipcRenderer.invoke("novus:pulls:resolve-thread", input),
+    setMetadata: (input) => ipcRenderer.invoke("novus:pulls:set-metadata", input)
   },
   control: {
     request: (missionId) => ipcRenderer.invoke("novus:control:request", missionId),

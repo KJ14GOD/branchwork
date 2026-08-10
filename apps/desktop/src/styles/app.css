@@ -1419,6 +1419,11 @@ body {
   color: var(--danger);
 }
 
+/* Verified evidence only, per the semantic lock. */
+.tone-ok {
+  color: var(--ok);
+}
+
 /* Control lives in the stream, never in a toast or a modal. */
 .control-event {
   display: flex;
@@ -4225,6 +4230,107 @@ body.resizing {
 
 .pull-review-controls .input {
   max-width: 320px;
+}
+
+/* Operating the request in-house (D-100): section heads with their one
+   toggle, file rows that disclose their diff, the split view's two columns,
+   and the quiet per-line comment affordance. One border level per region;
+   the diff reuses the room's own diff plane. */
+.pull-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+}
+
+.pull-readiness,
+.pull-changes,
+.pull-review,
+.pull-completion {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  width: 100%;
+}
+
+.pull-file {
+  width: 100%;
+}
+
+.pull-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-1) var(--s-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-control);
+  color: var(--text-1);
+  font: var(--type-row);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pull-file-row:hover {
+  background: var(--hover);
+}
+
+.pull-diff-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-1);
+}
+
+.pull-line-comment {
+  flex: none;
+  width: 16px;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  font: var(--type-meta);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.diff-line:hover .pull-line-comment,
+.pull-line-comment:focus-visible {
+  opacity: 1;
+}
+
+.pull-split-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-2);
+}
+
+.pull-comment-input {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+}
+
+.pull-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  width: 100%;
+  max-width: 480px;
+}
+
+.pull-methods {
+  display: flex;
+  gap: var(--s-4);
+}
+
+.pull-method {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  font: var(--type-row);
+  color: var(--text-1);
 }
 
 .field {

@@ -14,6 +14,8 @@ import {
   MissionListResponseSchema,
   OkResponseSchema,
   CreatedPullRequestSchema,
+  MergedResponseSchema,
+  PullFilesResponseSchema,
   RecordedDecisionSchema,
   RedeemInvitationResponseSchema,
   RegisterRunnerResponseSchema,
@@ -30,6 +32,7 @@ import {
   type MeResponse,
   type Mission,
   type MissionDetailResponse,
+  type MergeMethod,
   type MissionRole,
   type ModelId,
   type RegisterRunnerResponse,
@@ -356,6 +359,79 @@ export class ControlPlaneClient {
       "POST",
       `/pull-requests/${encodeURIComponent(pullRequestId)}/ready`,
       OkResponseSchema
+    );
+  }
+
+  async mergePullRequest(
+    pullRequestId: string,
+    input: { method: MergeMethod; acknowledgeBlockers: boolean }
+  ): Promise<{ sha: string | null }> {
+    return this.request(
+      "POST",
+      `/pull-requests/${encodeURIComponent(pullRequestId)}/merge`,
+      MergedResponseSchema,
+      input
+    );
+  }
+
+  async updatePullBranch(pullRequestId: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/pull-requests/${encodeURIComponent(pullRequestId)}/update-branch`,
+      OkResponseSchema
+    );
+  }
+
+  async closePullRequest(pullRequestId: string): Promise<void> {
+    await this.request("POST", `/pull-requests/${encodeURIComponent(pullRequestId)}/close`, OkResponseSchema);
+  }
+
+  async deletePullBranch(pullRequestId: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/pull-requests/${encodeURIComponent(pullRequestId)}/delete-branch`,
+      OkResponseSchema
+    );
+  }
+
+  pullFiles(pullRequestId: string): Promise<z.infer<typeof PullFilesResponseSchema>> {
+    return this.request(
+      "GET",
+      `/pull-requests/${encodeURIComponent(pullRequestId)}/files`,
+      PullFilesResponseSchema
+    );
+  }
+
+  async pullComment(
+    pullRequestId: string,
+    input: { body: string; path?: string; line?: number }
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/pull-requests/${encodeURIComponent(pullRequestId)}/comment`,
+      OkResponseSchema,
+      input
+    );
+  }
+
+  async resolvePullThread(pullRequestId: string, threadId: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/pull-requests/${encodeURIComponent(pullRequestId)}/resolve-thread`,
+      OkResponseSchema,
+      { threadId }
+    );
+  }
+
+  async setPullMetadata(
+    pullRequestId: string,
+    input: { title?: string; body?: string; labels?: string[] }
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/pull-requests/${encodeURIComponent(pullRequestId)}/metadata`,
+      OkResponseSchema,
+      input
     );
   }
 

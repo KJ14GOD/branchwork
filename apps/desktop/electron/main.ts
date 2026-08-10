@@ -12,6 +12,9 @@ import {
   MissionRoleSchema,
   OpenPreviewInputSchema,
   OpenTerminalInputSchema,
+  MergeInputSchema,
+  PullCommentInputSchema,
+  PullMetadataInputSchema,
   PreviewBoundsSchema,
   PrepareLocalFilesInputSchema,
   ReadWorkspaceFileInputSchema,
@@ -559,6 +562,96 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed pull request id." };
     return call(async () => {
       await api.markPullRequestReady(parsed.data);
+      return null;
+    });
+  });
+
+  // Completion and in-house review (D-100). The server enforces the two-tier
+  // merge gate; nothing here decides anything.
+
+  ipcMain.handle("novus:pulls:merge", async (_event, raw: unknown) => {
+    const parsed = MergeInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed merge request." };
+    return call(() =>
+      api.mergePullRequest(parsed.data.pullRequestId, {
+        method: parsed.data.method,
+        acknowledgeBlockers: parsed.data.acknowledgeBlockers
+      })
+    );
+  });
+
+  ipcMain.handle("novus:pulls:update-branch", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("pr_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed pull request id." };
+    return call(async () => {
+      await api.updatePullBranch(parsed.data);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:pulls:close", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("pr_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed pull request id." };
+    return call(async () => {
+      await api.closePullRequest(parsed.data);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:pulls:delete-branch", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("pr_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed pull request id." };
+    return call(async () => {
+      await api.deletePullBranch(parsed.data);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:pulls:files", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("pr_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed pull request id." };
+    return call(() => api.pullFiles(parsed.data));
+  });
+
+  ipcMain.handle("novus:pulls:comment", async (_event, raw: unknown) => {
+    const parsed = PullCommentInputSchema.safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "invalid_input",
+        message: parsed.error.issues[0]?.message ?? "Say something."
+      };
+    }
+    return call(async () => {
+      await api.pullComment(parsed.data.pullRequestId, {
+        body: parsed.data.body,
+        ...(parsed.data.path !== undefined ? { path: parsed.data.path } : {}),
+        ...(parsed.data.line !== undefined ? { line: parsed.data.line } : {})
+      });
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:pulls:resolve-thread", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ pullRequestId: z.string().startsWith("pr_"), threadId: z.string().min(1).max(200) })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed thread id." };
+    return call(async () => {
+      await api.resolvePullThread(parsed.data.pullRequestId, parsed.data.threadId);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:pulls:set-metadata", async (_event, raw: unknown) => {
+    const parsed = PullMetadataInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed metadata." };
+    return call(async () => {
+      await api.setPullMetadata(parsed.data.pullRequestId, {
+        ...(parsed.data.title !== undefined ? { title: parsed.data.title } : {}),
+        ...(parsed.data.body !== undefined ? { body: parsed.data.body } : {}),
+        ...(parsed.data.labels !== undefined ? { labels: parsed.data.labels } : {})
+      });
       return null;
     });
   });
