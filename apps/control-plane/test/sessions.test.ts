@@ -571,7 +571,7 @@ describe("the workspace takes turns", () => {
     const lane = await mission();
     await direct(lane, "Harden the session guard");
     const turnA = await latestExecution(lane.workstreamId);
-    await report(lane.credential, turnA.executionId, live(1));
+    await report(lane.credential, turnA.executionId, [...live(1), harnessSession(3, "cli-steer-A")]);
 
     const steered = await direct(lane, "Also cover the expiry path");
     expect(steered.dispatched).toBe(true);
@@ -584,9 +584,18 @@ describe("the workspace takes turns", () => {
     );
     expect(applies.rowCount).toBe(1);
     expect(applies.rows[0].exe_id).toBe(turnA.executionId);
-    expect((applies.rows[0].payload as { directionId: string }).directionId).toBe(
-      steered.direction.directionId
-    );
+    const applyPayload = applies.rows[0].payload as {
+      directionId: string;
+      sessionId: string;
+      resumeSessionId: string | null;
+    };
+    expect(applyPayload.directionId).toBe(steered.direction.directionId);
+    // The apply names its conversation and that conversation's own resume
+    // point (D-083): if the turn has ended by the time this is delivered, the
+    // fresh process it starts must continue THIS chat — the payload that
+    // named no session fell back to the lane's first chat's transcript.
+    expect(applyPayload.sessionId).toBe(steered.direction.sessionId);
+    expect(applyPayload.resumeSessionId).toBe("cli-steer-A");
     expect(await executionCount(lane.workstreamId)).toBe(1);
   });
 

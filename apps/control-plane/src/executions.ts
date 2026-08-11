@@ -314,7 +314,20 @@ export async function dispatchDirection(
         ...base,
         executionId,
         kind: "apply_direction",
-        payload: { directionId: args.directionId, body, model: args.model, effort: args.effort },
+        payload: {
+          directionId: args.directionId,
+          body,
+          model: args.model,
+          effort: args.effort,
+          // The conversation and its own resume point, stated outright. An
+          // apply that reaches the runner after its turn already ended starts
+          // a fresh process, and a payload that named no session fell back to
+          // the workstream's legacy column — the *first* chat's transcript —
+          // so a follow-up in a second chat resumed a sibling's conversation
+          // (found by the D-109 audit; the D-083 rule, finally applied here).
+          sessionId,
+          resumeSessionId: await sessionResumePoint(client, sessionId)
+        },
         idempotencyKey: `apply:${args.directionId}`
       }),
       deferred: null
