@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type pg from "pg";
+import { ExecutionStateSchema, TERMINAL_EXECUTION_STATES } from "@novus/contracts";
 import { missionAccess, require as requireCapability } from "./authz.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
@@ -24,7 +25,14 @@ import type { RouteDeps } from "./routes.ts";
  * repository, and this is the module that would have to, so it is stated here.
  */
 
-const ACTIVE_STATES = ["requested", "starting", "running", "stopping", "needs_approval", "paused"];
+/** Derived from the contract, exactly as the dispatcher derives it: a
+ *  hand-maintained copy here had already drifted twice — it listed `paused`,
+ *  which no execution can enter, and omitted `needs_direction`, which the
+ *  schema allows — so archive's "is anything still running?" answer could
+ *  disagree with the dispatcher's (found by the D-109 audit). */
+const ACTIVE_STATES: string[] = ExecutionStateSchema.options.filter(
+  (state) => !TERMINAL_EXECUTION_STATES.includes(state)
+);
 
 export function registerArchiveRoutes(app: FastifyInstance, deps: RouteDeps): void {
   app.post("/missions/:missionId/archive", async (request, reply) => {

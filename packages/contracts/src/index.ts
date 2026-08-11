@@ -2157,6 +2157,11 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         classification: z.enum([
           "spawn_failed",
           "authentication",
+          /** The vendor refused for money reasons — a spending or usage
+           *  limit, an empty credit balance. Distinct from `authentication`
+           *  because "sign in again" is the wrong sentence for a paid-up
+           *  machine that ran out of budget (D-109). */
+          "billing",
           "nonzero_exit",
           "checkpoint_failed",
           "harness_error",

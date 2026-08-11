@@ -337,7 +337,11 @@ async function ensureWorktree(
 
 /** Claude Code's own signals that the machine is not signed in. */
 const AUTH_HINTS =
-  /(invalid api key|authentication|unauthori[sz]ed|not logged in|please run\s+\/?login|credit balance|no api key)/i;
+  /(invalid api key|authentication|unauthori[sz]ed|not logged in|please run\s+\/?login|no api key)/i;
+
+/** The vendor refusing for money reasons — a different problem with a
+ *  different fix, so it never wears the "sign in again" sentence (D-109). */
+const BILLING_HINTS = /(credit balance|billing|payment required|usage limit|quota (?:exceeded|reached))/i;
 
 interface ProcessOutcome {
   code: number | null;
@@ -1080,12 +1084,47 @@ export function startTurn(request: TurnRequest): RunningTurn {
     }
     const result = stream.result;
     const diagnostics = `${result?.message ?? ""}\n${outcome.stderr}`;
+    // Money before identity: "credit balance is too low" contains no auth
+    // word by accident, but a billing message that also says "unauthorized"
+    // must still not be answered with "sign in again" (D-109).
+    if ((result?.isError === true || outcome.code !== 0) && BILLING_HINTS.test(diagnostics)) {
+      const detail = (result?.message ?? outcome.stderr).trim().split("\n")[0] ?? "";
+      return {
+        kind: "execution.failed",
+        payload: {
+          classification: "billing",
+          reason: bounded(
+            sanitize(
+              detail
+                ? `Claude Code reports a spending or usage limit: ${detail}`
+                : "Claude Code reports a spending or usage limit on this machine."
+            ),
+            MAX_REASON
+          )
+        }
+      };
+    }
     if ((result?.isError === true || outcome.code !== 0) && AUTH_HINTS.test(diagnostics)) {
       return {
         kind: "execution.failed",
         payload: {
           classification: "authentication",
           reason: "Claude Code isn't signed in on this machine. Sign in to the CLI and direct again."
+        }
+      };
+    }
+    // The harness's own word for "I stopped because I hit my turn budget":
+    // real work happened, nothing failed, and the turn is not finished. It is
+    // interrupted — resumable by directing again — never "Work finished",
+    // which is the lie the discarded subtype used to produce (D-109).
+    if (result?.subtype === "error_max_turns") {
+      return {
+        kind: "execution.interrupted",
+        payload: {
+          reason: bounded(
+            "Claude Code ran out of its turn budget before finishing. Direct it again to continue from where it stopped.",
+            MAX_REASON
+          )
         }
       };
     }
@@ -1116,6 +1155,20 @@ export function startTurn(request: TurnRequest): RunningTurn {
         payload: {
           classification: "checkpoint_failed",
           reason: bounded(sanitize(`The work could not be checkpointed: ${checkpointFailed}`), MAX_REASON)
+        }
+      };
+    }
+    // A clean exit with no result line is not a success — it is a stream that
+    // ended before the harness said how it ended. Calling it completed would
+    // fabricate an outcome the harness never reported (D-109).
+    if (result === null) {
+      return {
+        kind: "execution.interrupted",
+        payload: {
+          reason: bounded(
+            "Claude Code ended without reporting an outcome, so this turn cannot be called finished.",
+            MAX_REASON
+          )
         }
       };
     }
