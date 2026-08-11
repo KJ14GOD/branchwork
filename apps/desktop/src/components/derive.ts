@@ -515,6 +515,22 @@ function suffixFor(detail: MissionDetailResponse): string | null {
     return since ? `no progress reported since ${clockTime(since)}` : "no progress reported for a while";
   }
   if (detail.runner === null) return "no machine has connected to run this yet";
+  // A backlog behind a working turn (D-112). The idle case already states the
+  // queue as the whole line ("Waiting for {holder} — …"); while the harness
+  // is busy the count rode on nothing, so the controller's own queued work
+  // was invisible at line level. Quiet, counts as text (DESIGN.md#status-
+  // semantics), and only while something is actually consuming the queue's
+  // place.
+  if (
+    detail.overlays.includes("direction_queued") &&
+    (detail.state === "agent_running" ||
+      detail.state === "agent_starting" ||
+      detail.state === "agent_stopping" ||
+      detail.state === "needs_approval")
+  ) {
+    const waiting = pendingDirections(detail).length;
+    if (waiting > 0) return `${plural(waiting, "direction")} queued`;
+  }
   return null;
 }
 

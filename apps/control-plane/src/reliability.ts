@@ -2,6 +2,7 @@ import { settlePendingApprovals } from "./approvals.ts";
 import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
+import { ACTIVE_EXECUTION_STATES, dispatchQueuedForController } from "./executions.ts";
 
 /**
  * The two failure paths the canonical documents promise and the product did
@@ -73,6 +74,9 @@ export interface SweepResult {
   interrupted: number;
   expired: number;
   offersExpired: number;
+  /** Stranded queues re-driven (D-112): lanes whose completed-turn dispatch
+   *  was lost, asked again. */
+  queuesDriven: number;
 }
 
 /**
@@ -318,11 +322,54 @@ export async function touchHeldLeases(db: Db, missionId: string, userId: string)
   );
 }
 
+/**
+ * Re-drives a queue whose dispatch was lost (D-112). The completed-turn
+ * dispatch fires after its ingest transaction commits and its errors are
+ * swallowed — a control-plane restart or a crash in that window left a
+ * direction queued forever with the lane idle and nobody at fault. This sweep
+ * is that call's safety net, under the same rule D-083 set: only a lane whose
+ * **last word was `completed`** is re-driven — a stop, failure, or
+ * interruption still never auto-runs what was waiting behind it. The
+ * dispatcher itself re-checks the baton, the capability, and the
+ * never-carried guard, so this only decides *which lanes to ask about*.
+ */
+async function sweepQueues(db: Db): Promise<number> {
+  const stranded = await db.query(
+    `select distinct d.wst_id
+       from directions d
+      where d.state = 'queued'
+        and not exists (select 1 from executions e
+                         where e.starting_direction_id = d.dir_id)
+        and not exists (select 1 from runner_commands c
+                         where c.wst_id = d.wst_id and c.payload->>'directionId' = d.dir_id)
+        and not exists (select 1 from executions live
+                         where live.wst_id = d.wst_id and live.state = any($1::text[]))
+        and 'completed' = (select e2.state from executions e2
+                            where e2.wst_id = d.wst_id
+                            order by e2.created_at desc, e2.exe_id desc limit 1)`,
+    [ACTIVE_EXECUTION_STATES]
+  );
+  let dispatched = 0;
+  for (const row of stranded.rows as { wst_id: string }[]) {
+    try {
+      const result = await dispatchQueuedForController({ db }, row.wst_id);
+      if (result?.executionId) dispatched += 1;
+    } catch (error) {
+      console.error(
+        "queue sweep dispatch failed:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+  return dispatched;
+}
+
 export async function sweepOnce(db: Db, now = new Date()): Promise<SweepResult> {
   return {
     interrupted: await sweepRunners(db, now),
     expired: await sweepLeases(db, now),
-    offersExpired: await sweepOffers(db, now)
+    offersExpired: await sweepOffers(db, now),
+    queuesDriven: await sweepQueues(db)
   };
 }
 

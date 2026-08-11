@@ -284,7 +284,7 @@ Keyed verbatim to [PRODUCT.md](PRODUCT.md#the-mission-state-model). Fields per s
 
 **Verification stale** *(overlay)* — the ledger's rows dim to `--text-3` and read "proved {short SHA}, since changed"; the primary action becomes Re-run verification. A stale row is never counted as passing in the state line.
 
-**Direction queued** *(overlay)* — state line: "Waiting for {controller} — {n} direction queued"; the thread shows queued position and its author; composer confirms "Queued — applies at the next safe point"; author may cancel from the thread.
+**Direction queued** *(overlay)* — while the lane is idle, the state line is the queue's: "Waiting for {controller} — {n} direction queued". While the harness is working, the backlog is a quiet suffix on the working line instead — "· {n} directions queued" — because a controller's own queued work was otherwise invisible at line level (D-112). The thread shows queued position and its author; composer confirms "Queued — applies at the next safe point"; author may cancel from the thread.
 
 **Control requested** *(overlay)* — inline request row (see Component behavior); `--warn` dot on the participant stack; controller's Needs you.
 

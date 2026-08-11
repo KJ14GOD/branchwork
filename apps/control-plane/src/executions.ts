@@ -38,7 +38,7 @@ import type { RouteDeps } from "./routes.ts";
 
 /** Derived from the contract so a new execution state can never be forgotten
  *  here: everything that is not terminal still occupies the workstream. */
-const ACTIVE_EXECUTION_STATES: string[] = ExecutionStateSchema.options.filter(
+export const ACTIVE_EXECUTION_STATES: string[] = ExecutionStateSchema.options.filter(
   (state) => !TERMINAL_EXECUTION_STATES.includes(state)
 );
 

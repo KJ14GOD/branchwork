@@ -292,6 +292,22 @@ describe("queued direction presentation", () => {
     });
     expect(deriveStateLine(running).name).toBe("Running");
   });
+
+  it("states the backlog behind a working turn as a quiet suffix (D-112)", () => {
+    const running = detail({
+      state: "agent_running",
+      directions: [direction(), direction({ directionId: "dir_2", ordinal: 2 })],
+      executions: [execution()],
+      overlays: ["direction_queued"]
+    });
+    const line = deriveStateLine(running);
+    expect(line.name).toBe("Running");
+    expect(line.suffix).toBe("2 directions queued");
+
+    // Nothing queued, nothing said: the suffix never renders a zero.
+    const clear = detail({ state: "agent_running", executions: [execution()] });
+    expect(deriveStateLine(clear).suffix).toBeNull();
+  });
 });
 
 describe("approval presentation", () => {

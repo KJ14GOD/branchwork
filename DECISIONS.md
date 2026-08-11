@@ -1520,3 +1520,15 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** D-073 is narrowed, not reversed: the stall's recovery is still Stop; force interrupt exists one step later, where Stop has demonstrably failed. PRODUCT.md's capability table gains the row its prose promised; its stalled-overlay sentence now describes the real path. If the machine was partitioned rather than dead, its process may finish on that laptop — every later report is recorded but changes nothing, the same honesty the offline-stop path already accepted.
 
 **Revisit when.** Runners report liveness within a turn (D-073's own revisit clause) — a stop that is *being worked on* could then hold the grace open honestly.
+
+## D-112 — A queue neither strands nor hides
+
+**Context.** Two queue truths from this phase's audit. First: the completed-turn dispatch — the one place a queued direction is automatically carried forward (D-083) — fires after its ingest transaction commits, and its errors are swallowed; a control-plane restart or crash in that window left a direction queued forever over an idle lane, recoverable only by a human submitting something else. No sweep re-drove it. Second: the state line stated a queue only in the idle, waiting-on-the-holder case; a controller's own backlog behind a running turn appeared nowhere at line level — invisible exactly while it was longest.
+
+**Decision.** The reliability sweep gains a fourth pass: a lane holding a never-carried queued direction, with nothing live and whose **last word was `completed`**, is re-offered to `dispatchQueuedForController` — the same dispatcher, re-checking the baton, capability, and never-carried guard itself. D-083's rule is preserved to the letter: a stop, failure, or interruption still never auto-runs what waited behind it; the sweep re-drives only the dispatch that *should* have happened and was lost. And the working state line gains a quiet suffix — "· {n} directions queued" — whenever the queue overlay stands behind a running, starting, stopping, or approval-blocked turn; nothing renders at zero, and the idle case keeps its full "Waiting for {holder}" line.
+
+**Alternatives.** Re-driving after every terminal outcome (rejected: D-083 decided that deliberately — work queued behind a failure should not start itself); retrying the inline dispatch with backoff instead of sweeping (rejected: the crash window is precisely the case where there is no process left to retry in); a queue list surface (deferred: the trace already numbers positions and the chat rows already say `queued · {n}` — a dedicated surface earns itself when queues get long).
+
+**Consequences.** `SweepResult` gains `queuesDriven`. Head-of-line blocking on an undispatchable direction remains (the dispatcher takes the oldest and stops), recorded in PROGRESS as a known gap rather than silently reordered.
+
+**Revisit when.** Queues grow long enough that the oldest-first, one-at-a-time dispatch visibly head-of-line-blocks — reordering is a product decision about fairness, not a sweep detail.

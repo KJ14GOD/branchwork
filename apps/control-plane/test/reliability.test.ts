@@ -597,3 +597,96 @@ describe("an execution that has gone quiet", () => {
     expect(workstreamId).toBeTruthy();
   });
 });
+
+describe("the stranded-queue sweep (D-112)", () => {
+  /** Reports events as the enrolled runner, the way the desktop does. */
+  const report = (credential: string, executionId: string, events: unknown[]) =>
+    harness.app.inject({
+      method: "POST",
+      url: "/runner/events",
+      headers: { authorization: `Runner ${credential}` },
+      payload: { executionId, events }
+    });
+
+  it("re-drives a queue whose completed-turn dispatch was lost", async () => {
+    const fixture = await lane();
+    const first = await startExecution(fixture.missionId);
+    // The controller queues a follow-up behind the running turn.
+    const queued = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${fixture.missionId}/direction`,
+      headers: bearer(owner),
+      payload: { body: "And then write the tests", model: "claude-fable-5", effort: "high", newSession: true }
+    });
+    expect(queued.json().dispatched).toBe(false);
+
+    // The turn completes — and the dispatch that should have followed is
+    // simulated lost by clearing the command it would have produced. The
+    // ingest's own dispatch fires here; deleting its command and execution
+    // reproduces the crash-in-the-window case the sweep exists for.
+    await report(fixture.credential, first, [
+      { originSeq: 1, event: { kind: "execution.starting", payload: {} } },
+      {
+        originSeq: 2,
+        event: {
+          kind: "execution.running",
+          payload: { harness: "claude-code", model: "claude-fable-5", effort: "high" }
+        }
+      },
+      { originSeq: 3, event: { kind: "execution.completed", payload: {} } }
+    ]);
+    await harness.db.query(
+      `delete from runner_commands where wst_id = $1 and exe_id is not null and exe_id <> $2`,
+      [fixture.workstreamId, first]
+    );
+    await harness.db.query(
+      `delete from executions where wst_id = $1 and exe_id <> $2`,
+      [fixture.workstreamId, first]
+    );
+
+    const swept = await sweepOnce(harness.db);
+    expect(swept.queuesDriven).toBe(1);
+
+    // The queued direction now has a real execution and a real command.
+    const revived = await harness.db.query(
+      `select count(*)::int as live from executions where wst_id = $1 and state = 'requested'`,
+      [fixture.workstreamId]
+    );
+    expect(revived.rows[0].live).toBe(1);
+
+    // And the sweep is settled: a second pass finds nothing to drive.
+    const again = await sweepOnce(harness.db);
+    expect(again.queuesDriven).toBe(0);
+  });
+
+  it("never re-drives a queue behind a stop, failure, or interruption — D-083's rule stands", async () => {
+    const fixture = await lane();
+    const first = await startExecution(fixture.missionId);
+    const queued = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${fixture.missionId}/direction`,
+      headers: bearer(owner),
+      payload: { body: "And then write the tests", model: "claude-fable-5", effort: "high", newSession: true }
+    });
+    expect(queued.json().dispatched).toBe(false);
+
+    await report(fixture.credential, first, [
+      { originSeq: 1, event: { kind: "execution.starting", payload: {} } },
+      {
+        originSeq: 2,
+        event: {
+          kind: "execution.failed",
+          payload: { classification: "harness_error", reason: "The harness reported an error." }
+        }
+      }
+    ]);
+
+    const swept = await sweepOnce(harness.db);
+    expect(swept.queuesDriven).toBe(0);
+    const still = await harness.db.query(
+      `select state from directions where wst_id = $1 order by ordinal desc limit 1`,
+      [fixture.workstreamId]
+    );
+    expect(still.rows[0].state).toBe("queued");
+  });
+});
