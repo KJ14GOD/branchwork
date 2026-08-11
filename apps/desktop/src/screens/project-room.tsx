@@ -1525,7 +1525,6 @@ export function ProjectRoom({
             <WorkerInspector
               worker={openWorkerView.worker}
               settled={openWorkerView.settled}
-              chatTitle={sessionName}
               onBack={closeWorker}
             />
           </div>

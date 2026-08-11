@@ -1472,3 +1472,15 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** DESIGN.md's "The harness's own workers" paragraph is rewritten: grouped-by-worker inside the disclosure with the rollup and inspector, still never the speech position, still no lane or mark of its own — the *identity* a worker now wears is the purpose text and state the harness itself stated, nothing more. The runner-event union grows one member and one field; older runners' reports still parse (both default). PROGRESS.md's known-gaps entry shrinks to what remains genuinely unknowable: per-worker cost, per-worker usage, a worker's own checks (a worker's shell command still reads as the turn's evidence), approval attribution below the turn, and nesting deeper than one level.
 
 **Revisit when.** The CLI states per-worker usage or per-worker results on the stream — record them the day they exist; or a person asks to *direct* a worker, which is a product question about the harness boundary, not a presentation one.
+
+## D-108 — Workers are the turn's own rows, entered with Enter, left with Esc
+
+**Context.** D-107's first build put the Workers rollup *inside* the technical disclosure, where it sat among catch-all protocol rows ("requested {login}", "reached"), and its inspector carried a sentence of decision citations. On sight the owner called it cluttered and named the reference: terminal harnesses show subagents as clean lines you press Enter to step into — they wanted the best graphical form of that.
+
+**Decision.** Workers leave the disclosure and become **the turn's own rows**, on the milestone anatomy CHECKPOINT already wears: a `workers` label, then one line per worker — purpose, the last thing it did in mono, the state word at the row's end. **Enter steps in, Esc steps out**; the click does the same. The disclosure returns to being the harness's own steps alone, and two catch-all rows that carried nothing the direction row and approval card don't already say — `execution.requested`, `boundary.reached` — are absorbed. The inspector sheds its lecture: title, `done · started · ended` facts line, timeline, files, report or failure — and **no decision identifiers in user-facing copy anywhere**, a rule this entry makes explicit.
+
+**Alternatives.** Keeping the rollup in the disclosure and cleaning around it (rejected: a worker is something the turn *produced*, like a checkpoint — the disclosure is for how the harness worked, not what it made); a Workers section in the evidence panel (rejected: workers are not evidence, and the panel is not a menu, D-066); arrow-key roving selection across worker rows (deferred: buttons in tab order with Enter already give the keyboard path; a roving listbox earns its complexity only when turns hold many workers).
+
+**Consequences.** D-107's protocol layer, boundaries, and honesty rules are untouched — this reverses only the placement and the copy. The e2e drives Enter and Esc by name; screenshots 120–121 re-shot.
+
+**Revisit when.** A turn holds enough workers that a flat row list stops scanning — that is the day the rows earn arrow-key selection, not another surface.

@@ -155,23 +155,22 @@ afterAll(async () => {
 
 describe("the harness's workers in the room (D-107)", () => {
   it(
-    "shows the Workers rollup, opens one worker on the canvas, and comes back to the chat",
+    "shows workers as their own rows, steps in with Enter, and steps out with Esc",
     async () => {
-      // The disclosure is collapsed by default; the workers live inside it.
-      await page.getByTestId("technical-activity").first().click();
-      const rollup = page.getByTestId("worker-rollup");
-      await rollup.waitFor({ timeout: 10_000 });
-      // Counts and states are words in a row: one worker succeeded, one
-      // failed, both ends stated by the Task results themselves.
-      expect(await rollup.textContent()).toContain("Workers");
-      expect(await rollup.textContent()).toContain("1 done");
-      expect(await rollup.textContent()).toContain("1 failed");
+      // Workers sit on the trace itself as quiet rows — not buried in the
+      // disclosure (D-108): purpose, last activity, state as a word.
       const rows = page.getByTestId("worker-row");
+      await rows.first().waitFor({ timeout: 10_000 });
       expect(await rows.count()).toBe(2);
+      const rollup = page.getByTestId("worker-rollup");
+      expect(await rollup.textContent()).toContain("Research the repository");
+      expect(await rollup.textContent()).toContain("done");
+      expect(await rollup.textContent()).toContain("failed");
       await page.screenshot({ path: join(evidenceDir, "120-workers-rollup.png") });
 
-      // A worker opens on the canvas: purpose, activity, its own report.
-      await rows.filter({ hasText: "Research the repository" }).click();
+      // Enter steps in, the CLI way: focus the row, press Enter.
+      await rows.filter({ hasText: "Research the repository" }).focus();
+      await page.keyboard.press("Enter");
       const inspector = page.getByTestId("worker-inspector");
       await inspector.waitFor({ timeout: 10_000 });
       expect(await inspector.textContent()).toContain("Research the repository");
@@ -179,20 +178,18 @@ describe("the harness's workers in the room (D-107)", () => {
         "Three call sites documented."
       );
       expect(await page.getByTestId("worker-step").count()).toBeGreaterThan(0);
-      // No new tab, no rail row: the working row and the tree are untouched.
-      expect(await page.getByTestId("worker-inspector").count()).toBe(1);
       await page.screenshot({ path: join(evidenceDir, "121-worker-inspector.png") });
 
-      // Back to chat: the conversation returns, transcript intact.
-      await page.getByTestId("worker-back").click();
+      // Esc steps out: the conversation returns, transcript intact.
+      await page.keyboard.press("Escape");
       await page.getByTestId("chat").waitFor({ timeout: 10_000 });
       await page
         .getByTestId("trace-outcome")
         .filter({ hasText: "Turn completed" })
         .waitFor({ timeout: 10_000 });
 
-      // The failed worker states its failure in its own view.
-      await page.getByTestId("technical-activity").first().click();
+      // The failed worker states its failure in its own view; the button
+      // works too, and so does Back to chat.
       await page.getByTestId("worker-row").filter({ hasText: "Run API tests" }).click();
       await page.getByTestId("worker-failure").waitFor({ timeout: 10_000 });
       expect(await page.getByTestId("worker-failure").textContent()).toContain(

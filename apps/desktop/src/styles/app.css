@@ -1385,59 +1385,49 @@ body {
   white-space: nowrap;
 }
 
-/* The harness's own workers, grouped inside the technical disclosure
-   (D-107). Words and rows only: state is a word, counts are text, and the
-   one identity a worker wears is the purpose the harness itself stated. */
-.worker-block {
-  padding: var(--s-1) 0 0 calc(14px + var(--s-2));
-}
-
-.worker-head {
-  display: flex;
-  gap: var(--s-2);
-  font: var(--type-meta);
-}
-
-.worker-list {
-  list-style: none;
-  padding: var(--s-1) 0 0 var(--s-3);
+/* The turn's workers as their own quiet rows (D-108): the milestone anatomy,
+   one line per worker — purpose, the last thing it did, its state as a word.
+   Enter or a click steps in; nothing here is a card, a dot, or a tile. */
+.worker-rows {
   display: flex;
   flex-direction: column;
-  gap: var(--s-1);
 }
 
-.worker-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
+.worker-line {
   width: 100%;
   padding: 0;
   border: none;
   background: transparent;
-  font: var(--type-meta);
-  color: var(--text-2);
   text-align: left;
   cursor: pointer;
+  min-height: 28px;
 }
 
-.worker-row:hover .worker-purpose {
+.worker-line:hover .worker-purpose {
   color: var(--text-1);
 }
 
 .worker-purpose {
+  color: var(--text-2);
+  flex: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.worker-facts {
+.worker-last {
   color: var(--text-3);
-  flex: none;
+  font: var(--type-meta);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .worker-state {
   margin-left: auto;
   flex: none;
+  font: var(--type-meta);
   color: var(--text-3);
 }
 

@@ -32,12 +32,17 @@ const SETUP_KINDS = new Set([
   "runner.registered"
 ]);
 
-/** Events that carry no meaning of their own once the trace exists. */
+/** Events that carry no meaning of their own once the trace exists. The last
+ *  two said "requested {login}" and "reached" as catch-all rows in the
+ *  disclosure — protocol bookkeeping the direction row and the approval card
+ *  already say better, removed on the owner's sight of the clutter (D-108). */
 const ABSORBED_KINDS = new Set([
   "direction.submitted",
   "direction.queued",
   "direction.applied",
-  "execution.starting"
+  "execution.starting",
+  "execution.requested",
+  "boundary.reached"
 ]);
 
 /**
@@ -595,86 +600,66 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
 
 /** One disclosure per trace: every tool call and every unnamed event the
  *  direction produced, counted honestly and out of the way. */
-/** The states of a turn's workers, in words: `1 working · 1 done · 1 failed`.
- *  Counts are text in a row, never tiles (DESIGN.md prohibited pattern 16). */
-function workerSummary(workers: WorkerView[], settled: boolean): string {
-  const counts = new Map<string, number>();
-  for (const worker of workers) {
-    const state = workerState(worker, settled);
-    if (state) counts.set(state, (counts.get(state) ?? 0) + 1);
-  }
-  return ["working", "done", "failed"]
-    .filter((state) => counts.has(state))
-    .map((state) => `${counts.get(state)} ${state}`)
-    .join(" · ");
-}
-
-function TechnicalActivity({
-  steps,
+/**
+ * The turn's workers as their own quiet rows on the trace (D-108, reversing
+ * D-107's placement inside the disclosure on the owner's sight of it): the
+ * way a terminal shows subagents — one line each, the purpose, the last
+ * thing it did, its state in a word — and Enter or a click steps in. They
+ * take the milestone anatomy, like CHECKPOINT, because that is what they
+ * are: something the turn produced, worth one glance.
+ */
+function WorkerRows({
   workers,
   settled,
   onOpenWorker
 }: {
-  steps: ToolStep[];
   workers: WorkerView[];
   settled: boolean;
   onOpenWorker?: (workerId: string) => void;
 }) {
-  const activity = steps.length + workers.reduce((sum, worker) => sum + worker.steps.length, 0);
-  const summary = workerSummary(workers, settled);
+  return (
+    <div className="worker-rows" data-testid="worker-rollup">
+      {workers.map((worker, index) => {
+        const state = workerState(worker, settled);
+        const last = worker.steps[worker.steps.length - 1] ?? null;
+        const doing = last
+          ? last.label === "said"
+            ? (last.detail ?? "")
+            : [last.label, last.detail].filter(Boolean).join(" ")
+          : null;
+        return (
+          <button
+            key={worker.id}
+            className="milestone worker-line"
+            data-testid="worker-row"
+            onClick={() => onOpenWorker?.(worker.id)}
+          >
+            <span className="milestone-label">{index === 0 ? "workers" : ""}</span>
+            <span className="worker-purpose">{worker.purpose ?? "Worker"}</span>
+            {doing && <span className="worker-last mono">{doing}</span>}
+            {state && (
+              <span
+                className={state === "failed" ? "worker-state tone-danger" : "worker-state"}
+                data-testid="worker-state"
+              >
+                {state}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function TechnicalActivity({ steps }: { steps: ToolStep[] }) {
   return (
     <details className="disclosure" data-testid="technical-activity">
       <summary>
         <Chevron />
         Technical activity
-        <span className="disclosure-count">{plural(activity, "step")}</span>
+        <span className="disclosure-count">{plural(steps.length, "step")}</span>
       </summary>
-      {/* The harness's own workers, grouped by the ids the stream stated
-          (D-107). Inside the disclosure because they are apparatus, not
-          speech; a row of words, never dots or tiles. */}
-      {workers.length > 0 && (
-        <div className="worker-block" data-testid="worker-rollup">
-          <div className="worker-head">
-            <span className="mono tool-name">Workers</span>
-            <span className="tool-detail">
-              {workers.length}
-              {summary ? ` · ${summary}` : ""}
-            </span>
-          </div>
-          <ul className="worker-list">
-            {workers.map((worker) => {
-              const state = workerState(worker, settled);
-              const files = workerFiles(worker).length;
-              const facts = [
-                plural(worker.steps.length, "step"),
-                files > 0 ? plural(files, "file") : null
-              ]
-                .filter(Boolean)
-                .join(" · ");
-              return (
-                <li key={worker.id}>
-                  <button
-                    className="worker-row"
-                    data-testid="worker-row"
-                    onClick={() => onOpenWorker?.(worker.id)}
-                  >
-                    <span className="worker-purpose">{worker.purpose ?? "Worker"}</span>
-                    <span className="worker-facts">{facts}</span>
-                    {state && (
-                      <span
-                        className={state === "failed" ? "worker-state tone-danger" : "worker-state"}
-                        data-testid="worker-state"
-                      >
-                        {state}
-                      </span>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
       <ul className="tool-list">
         {steps.map((step, index) => (
           <li
@@ -985,14 +970,14 @@ export function TraceView({
         />
       ))}
 
-      {(block.toolSteps.length > 0 || block.workers.length > 0) && (
-        <TechnicalActivity
-          steps={block.toolSteps}
-          workers={block.workers}
-          settled={block.settled}
-          onOpenWorker={onOpenWorker}
-        />
+      {/* Workers on the trace itself, one quiet line each — the CLI's shape,
+          graphically (D-108). The disclosure below stays the harness's own
+          steps. */}
+      {block.workers.length > 0 && (
+        <WorkerRows workers={block.workers} settled={block.settled} onOpenWorker={onOpenWorker} />
       )}
+
+      {block.toolSteps.length > 0 && <TechnicalActivity steps={block.toolSteps} />}
 
       {evidence.map((segment) => (
         <SegmentView
