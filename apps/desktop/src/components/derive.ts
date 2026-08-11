@@ -392,7 +392,7 @@ export interface StateLineAction {
   label: string;
   /** What the action does; the room wires it to a real call or an inspector
    *  section. Never rendered without a real destination. */
-  kind: "stop" | "changes" | "verification" | "setup" | "preview" | "stopRun";
+  kind: "stop" | "forceInterrupt" | "changes" | "verification" | "setup" | "preview" | "stopRun";
 }
 
 export interface StateLineView {
@@ -622,18 +622,41 @@ function primaryStateLine(
         action: { label: "Stop", kind: "stop" },
         working: true
       };
-    case "agent_stopping":
+    case "agent_stopping": {
+      // A stop that goes unanswered stops being "in flight" and becomes a
+      // dead end a person needs a way out of (D-111): once the stop is a
+      // minute old — or the machine has gone quiet — the line offers the
+      // escalation. The server enforces the same grace again; this only
+      // decides when the offer is honest to show.
+      const stopping = detail.executions.find((execution) => execution.state === "stopping");
+      const asked = stopping
+        ? detail.events
+            .filter(
+              (event) =>
+                event.executionId === stopping.executionId &&
+                event.kind === "execution.stop_requested"
+            )
+            .at(-1)
+        : undefined;
+      const unanswered =
+        asked !== undefined && Date.now() - Date.parse(asked.occurredAt) >= 60_000;
+      const runnerGone = detail.runner === null || detail.runner.online === false;
+      const forceable =
+        detail.capabilities.includes("force_interrupt") && (unanswered || runnerGone);
       return {
         tone: "active",
         name: "Stopping",
         detail: workingTitle
           ? `${HARNESS_NAME} was asked to stop in "${workingTitle}"`
           : `${HARNESS_NAME} was asked to stop`,
-        suffix: null,
-        // No action: the one that belongs here has been taken.
-        action: null,
+        suffix: unanswered ? "the stop has gone unanswered" : null,
+        // No action while the stop still has a claim to work: the one that
+        // belongs here has been taken. The escalation appears only when
+        // waiting longer is not a plan.
+        action: forceable ? { label: "Force interrupt", kind: "forceInterrupt" } : null,
         working: true
       };
+    }
     case "needs_direction":
       return {
         ...quiet,

@@ -547,9 +547,19 @@ describe("stopping a coding-agent execution", () => {
     // whatever turn happened to be in the active slot.
     plane.enqueue(stopExecution("exe_someothererun01"));
 
-    await waitFor("the execution to end", () => terminals().length > 0);
-    expect(terminals()).toEqual(["execution.completed"]);
+    await waitFor("the execution to end", () => terminals().includes("execution.completed"));
+    // The running turn was never touched: it completed, and its file exists.
+    expect(terminals()).not.toContain("execution.stopped");
     expect(existsSync(join(userData, "worktrees", WORKSTREAM_ID, "NOVUS_FAKE_TURN.md"))).toBe(true);
+    // And the stale stop is answered honestly rather than swallowed (D-111):
+    // the turn it named is not here, and saying so is what unwedges a
+    // server-side `stopping` that no sweep would ever end. The server's
+    // terminal guard makes the report a no-op when that execution already
+    // ended properly.
+    await waitFor("the stale stop to be answered", () =>
+      terminals().includes("execution.interrupted")
+    );
+    expect(plane.payloadsOf("execution.interrupted")[0]?.reason).toContain("found nothing running");
   }, 40_000);
 
   it("stops the harness and leaves the project's own processes alone", async () => {

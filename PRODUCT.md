@@ -130,6 +130,7 @@ Capabilities are the enforcement unit, and they live in two scopes that never mi
 | `execution.pause`, `execution.resume` | — | — | — | — | ✓ |
 | `workspace.sync` (apply a visible remote update at a safe boundary) | — | — | — | — | ✓ |
 | `execution.stop` | ✓ | ✓ | ✓ | — | ✓ |
+| `force_interrupt` (declare a turn dead after its stop went unanswered; refused while the ordinary stop still has a claim to work) | ✓ | — | — | — | ✓ |
 | `workspace.command` (invoke a command the project declared: setup, run, verification) | ✓ | ✓ | — | — | ✓ |
 | `approval.respond` (approve or deny a harness approval request) | — | — | — | — | ✓ |
 | `control.request` | ✓ | ✓ | ✓ | — | — |
@@ -241,7 +242,7 @@ The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-prese
 | Completed | Result accepted, PR resolved, receipt snapshotted. Terminal. |
 | Cancelled | Deliberately ended without acceptance; receipt records what happened and what was abandoned. Terminal. |
 | Execution interrupted | The runner or harness died mid-execution; last events preserved. Resume-or-restart is a human choice — a new execution in the same workstream continues the work. |
-| Execution stalled *(overlay)* | Watchdog timeout: the harness has made no progress and reached no boundary; force-interrupt is available and logged. |
+| Execution stalled *(overlay)* | Watchdog timeout: the harness has made no progress and reached no boundary. The recovery path is Stop; a stop that then goes unanswered may be force-interrupted — an explicit, logged act (D-111). |
 | Repository sync error *(overlay)* | The workspace cannot sync with GitHub — token expiry or revocation, force-push, or branch conflict with base. Human-visible remediation; never silent retries. |
 | Reconnecting *(overlay)* | This client lost its connection; room is stale until restored. |
 | Runner offline *(overlay)* | The runner's connection dropped; execution state is last-known; events will backfill on reconnect. |

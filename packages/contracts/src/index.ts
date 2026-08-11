@@ -360,6 +360,11 @@ export const CapabilitySchema = z.enum([
   /** Answering a harness approval. Lease-held only — a Mission Admin who is not
    *  the controller cannot answer for them (PRODUCT.md#roles-and-capabilities). */
   "approval.respond",
+  /** Declare a turn dead after a stop went unanswered (D-111). Held by the
+   *  controller and by Mission Admin — the escalation PRODUCT.md#control has
+   *  always named, implemented as exactly that: an explicit, logged act that
+   *  is refused while the ordinary Stop still has a claim to work. */
+  "force_interrupt",
   "control.request",
   "control.offer",
   "control.accept",
@@ -2508,6 +2513,10 @@ export interface NovusBridge {
      *  read-alongside turn at once, and the stop means the conversation on
      *  screen; absent means the lane's write turn. */
     stop(missionId: string, workstreamId?: string, sessionId?: string): Promise<IpcResult<null>>;
+    /** Declares a wedged turn dead after its stop went unanswered (D-111).
+     *  The server enforces the grace and the capability; this is a way to
+     *  ask, never a grant (AGENTS.md rule 13). */
+    forceInterrupt(missionId: string, workstreamId?: string, sessionId?: string): Promise<IpcResult<null>>;
     /**
      * Answers one harness approval (D-056). Asking is all this is: the server
      * checks `approval.respond` against the current lease, and a request that

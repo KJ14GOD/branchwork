@@ -958,6 +958,40 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       const running = active.get(command.executionId);
       if (running) {
         running.turn.stop(STOPPED_BY_PARTICIPANT);
+        return;
+      }
+      // The stop found no live process. If this machine still holds the
+      // execution open — between turns, waiting for its next apply — the stop
+      // ends that quietly as prevention. If it holds nothing at all, saying
+      // nothing left the execution in `stopping` forever on a live runner
+      // (the D-111 audit's dead end); the honest answer is that the turn
+      // already ended here without its outcome being delivered.
+      const openHere = openExecutions.has(command.executionId);
+      if (openHere) {
+        report(workstreamId, command.executionId, {
+          kind: "execution.stopped",
+          payload: { reason: STOPPED_BY_PARTICIPANT, via: "never_started" }
+        });
+        openExecutions.delete(command.executionId);
+        return;
+      }
+      // A stop can also beat its own *queued* start: the start command is
+      // still waiting its turn in the chain, and `stopRequested` will end it
+      // as prevented the moment it runs. Only when no start or apply for this
+      // execution is still pending is "already ended" the true sentence.
+      const stillComing = await hasPendingHarnessCommand(
+        workstreamId,
+        command.executionId,
+        command.commandId
+      );
+      if (!stillComing) {
+        report(workstreamId, command.executionId, {
+          kind: "execution.interrupted",
+          payload: {
+            reason:
+              "The stop found nothing running on this machine for that turn — it had already ended without its outcome being delivered."
+          }
+        });
       }
       return;
     }
@@ -1325,6 +1359,34 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           // A command a dead launch began is not more work waiting: it is
           // about to be settled as interrupted, and counting it would hold the
           // execution open for a turn that is never going to run.
+          !abandoned.has(command.commandId)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /** Is a start or apply for this execution still on its way? Consulted by a
+   *  stop that found nothing running, so "already ended" is only ever said
+   *  about a turn that genuinely ran (D-111). */
+  async function hasPendingHarnessCommand(
+    workstreamId: string,
+    executionId: string,
+    currentCommandId: string
+  ): Promise<boolean> {
+    const enrolment = enrolments.get(workstreamId);
+    if (!enrolment) return false;
+    try {
+      const response = await runnerFetch(enrolment, "/runner/commands", "GET");
+      if (!response.ok) return false;
+      const parsed = RunnerCommandsResponseSchema.safeParse(await response.json().catch(() => null));
+      if (!parsed.success) return false;
+      return parsed.data.commands.some(
+        (command) =>
+          HARNESS_COMMANDS.includes(command.kind) &&
+          command.executionId === executionId &&
+          command.commandId !== currentCommandId &&
+          !isSettled(command.commandId) &&
           !abandoned.has(command.commandId)
       );
     } catch {

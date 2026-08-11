@@ -1280,6 +1280,25 @@ export function ProjectRoom({
                   Stop
                 </GatedAction>
               )}
+              {stateLine.action?.kind === "forceInterrupt" && detail && (
+                <GatedAction
+                  capability="force_interrupt"
+                  capabilities={detail.capabilities}
+                  denialReason="Only the controller or a Mission Admin may declare a turn dead."
+                  onClick={() =>
+                    void runAction(
+                      novus().missions.forceInterrupt(
+                        detail.mission.missionId,
+                        activeLaneId ?? undefined
+                      )
+                    )
+                  }
+                  variant="secondary"
+                  testid="force-interrupt"
+                >
+                  Force interrupt
+                </GatedAction>
+              )}
               {readTurnOnScreen && detail && (
                 <>
                   {/* The chat on screen is answering alongside, read-only

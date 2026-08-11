@@ -55,6 +55,15 @@ const novus: NovusBridge = {
           ...(sessionId ? { sessionId } : {})
         }
       ),
+    forceInterrupt: (missionId, workstreamId, sessionId) =>
+      ipcRenderer.invoke(
+        "novus:missions:force-interrupt",
+        {
+          missionId,
+          ...(workstreamId ? { workstreamId } : {}),
+          ...(sessionId ? { sessionId } : {})
+        }
+      ),
     archive: (missionId) => ipcRenderer.invoke("novus:missions:archive", missionId),
     restore: (missionId) => ipcRenderer.invoke("novus:missions:restore", missionId),
     respondApproval: (input) => ipcRenderer.invoke("novus:missions:respond-approval", input)

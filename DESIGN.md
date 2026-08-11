@@ -274,7 +274,7 @@ Keyed verbatim to [PRODUCT.md](PRODUCT.md#the-mission-state-model). Fields per s
 
 **Agent running** — "Running — {current activity summary}." · Primary: Pause · Secondary: Stop · Canvas: activity feed streaming; direction thread visible · Sidebar: workstreams, files touched count · Composer: controller "Steer {harness}…" / others "Add direction to the queue…" · Evidence: checks appear as they run · Participants: working indicator on the execution row · Color: `--accent` · Recovery: disconnects → Runner offline overlay.
 
-**Agent stopping** — "Stopping — {harness} was asked to stop." · Primary: none · Secondary: **none** — the action that belongs here has been taken, and a Stop still on screen after a Stop invites a second press and says nothing about the first · Canvas: activity feed as it was, no longer growing · Composer: enabled (queues) · Evidence: current · Color: `--accent` · Recovery: none needed — the state always resolves to a terminal outcome, and a runner that dies while stopping is ended by the sweep as *interrupted*.
+**Agent stopping** — "Stopping — {harness} was asked to stop." · Primary: none · Secondary: **none while the stop still has a claim to work** — the action that belongs here has been taken, and a Stop still on screen after a Stop invites a second press and says nothing about the first. Once the stop has gone unanswered for a minute (or the machine has gone quiet), the line appends *the stop has gone unanswered* and offers **Force interrupt** to those who hold `force_interrupt` (D-111) — the escalation, never the first resort; the server refuses it in words while the grace holds · Canvas: activity feed as it was, no longer growing · Composer: enabled (queues) · Evidence: current · Color: `--accent` · Recovery: Force interrupt after the grace; a runner that dies while stopping is ended by the sweep as *interrupted*.
 
 **Needs direction** — "{Harness} is waiting for direction." · Primary: composer submit · Secondary: Stop · Canvas: feed + the harness's question highlighted at bottom · Composer: focused · Evidence: current · Color: `--warn` dot · Recovery: n/a. Missions surface: Needs you.
 
@@ -314,7 +314,7 @@ Keyed verbatim to [PRODUCT.md](PRODUCT.md#the-mission-state-model). Fields per s
 
 **Execution interrupted** — "Interrupted — {reason}." · Primary: Restart execution (a continuation in the same workstream) · Secondary: View last activity · Canvas: feed ending at a marked interruption point · Composer: enabled — direction queues for the next execution · Evidence: current, honestly partial · Color: `--warn` · Recovery: restart consumes the queue; nothing is lost. Missions surface: Needs you.
 
-**Execution stalled** *(overlay)* — state line appends "No progress for {duration}"; Force interrupt available to the lease holder / Mission Admin with consequence stated; `--warn` dot; every use logged to the feed.
+**Execution stalled** *(overlay)* — state line appends "no progress reported since {time}". The recovery is Stop, which the line already offers; a stop that then goes unanswered surfaces Force interrupt on the *Stopping* state (D-111), every use logged to the feed. No dot — status is words (D-047).
 
 **Repository sync error** *(overlay)* — a notice row in Changes and the state line names the cause ("GitHub token expired", "branch conflicts with main"); primary for capability holders: View remediation (inspector with the error verbatim, mono); direction still queues; `--danger` on the sync row only, chrome stays calm.
 

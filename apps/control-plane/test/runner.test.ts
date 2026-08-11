@@ -966,6 +966,102 @@ describe("event ingestion", () => {
     expect(commands.some((command: { kind: string }) => command.kind === "stop_execution")).toBe(false);
   });
 
+  it("refuses to declare a turn dead while the ordinary stop still has a claim (D-111)", async () => {
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+
+    // Not stopping yet: force interrupt is the escalation of a stop, never a
+    // first resort.
+    const early = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/force-interrupt`,
+      headers: bearer(owner),
+      payload: {}
+    });
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error.message).toContain("Stop it first");
+
+    // Stopping, machine connected, stop still fresh: wait.
+    await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/stop`,
+      headers: bearer(owner),
+      payload: {}
+    });
+    const fresh = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/force-interrupt`,
+      headers: bearer(owner),
+      payload: {}
+    });
+    expect(fresh.statusCode).toBe(409);
+    expect(fresh.json().error.message).toContain("give it a minute");
+    const state = await harness.db.query("select state from executions where exe_id = $1", [executionId]);
+    expect(state.rows[0].state).toBe("stopping");
+  });
+
+  it("declares a turn dead once its stop went unanswered — attributed, logged, and the lane freed (D-111)", async () => {
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+    await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/stop`,
+      headers: bearer(owner),
+      payload: {}
+    });
+    // The stop has sat unanswered past its grace; the machine still polls.
+    await harness.db.query(
+      "update events set occurred_at = now() - interval '2 minutes' where execution_id = $1 and kind = 'execution.stop_requested'",
+      [executionId]
+    );
+
+    const forced = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/force-interrupt`,
+      headers: bearer(owner),
+      payload: {}
+    });
+    expect(forced.statusCode).toBe(200);
+
+    const ended = await harness.db.query(
+      "select state, exit_outcome, failure_reason from executions where exe_id = $1",
+      [executionId]
+    );
+    expect(ended.rows[0].state).toBe("interrupted");
+    expect(ended.rows[0].exit_outcome).toBe("interrupted");
+    expect(ended.rows[0].failure_reason).toContain("declared the turn dead");
+
+    // Logged as the person's own act, with their name on it.
+    const events = await eventsOf(lane.missionId);
+    const declared = events.find(
+      (event) => event.kind === "execution.interrupted" && event.actor_kind === "user"
+    );
+    expect(declared).toBeDefined();
+
+    // The point of ending it: the lane is usable again.
+    const next = await direct(lane.missionId, "Try that again");
+    expect(next.json().dispatched).toBe(true);
+  });
+
+  it("refuses force interrupt from a contributor who is not the controller (D-111)", async () => {
+    const lane = await createLane();
+    await startExecution(lane);
+    await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/stop`,
+      headers: bearer(owner),
+      payload: {}
+    });
+    const contributor = await addParticipant(lane.missionId, "force-contrib", "contributor");
+    const refused = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/execution/force-interrupt`,
+      headers: bearer(contributor),
+      payload: {}
+    });
+    expect(refused.statusCode).toBe(403);
+  });
+
   it("lets a stopped execution report nothing further into the room", async () => {
     const lane = await createLane();
     const executionId = await startExecution(lane);

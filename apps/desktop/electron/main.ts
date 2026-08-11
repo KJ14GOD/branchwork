@@ -781,6 +781,21 @@ function registerIpc(): void {
     return result;
   });
 
+  ipcMain.handle("novus:missions:force-interrupt", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        workstreamId: z.string().startsWith("wst_").optional(),
+        sessionId: z.string().startsWith("csn_").optional()
+      })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(async () => {
+      await api.forceInterrupt(parsed.data.missionId, parsed.data.workstreamId, parsed.data.sessionId);
+      return null;
+    });
+  });
+
   // The controller's answer to a harness permission question (D-056). Asking is
   // all this does: the server checks `approval.respond` against the current
   // lease, so a participant who is no longer the controller — including one who

@@ -42,6 +42,12 @@ const ACTIVE_EXECUTION_STATES: string[] = ExecutionStateSchema.options.filter(
   (state) => !TERMINAL_EXECUTION_STATES.includes(state)
 );
 
+/** How long an unanswered stop keeps its claim to work before a person may
+ *  declare the turn dead (D-111). Generous against the transport: a stop is
+ *  delivered within a 2 s poll and answered within a 7 s interrupt-then-kill
+ *  window, so a minute of silence is a machine that is not going to answer. */
+const FORCE_INTERRUPT_AFTER_MS = 60_000;
+
 /**
  * A runner unheard from for this long is treated as gone. It mirrors the
  * threshold the room already renders "runner offline" from
@@ -872,6 +878,102 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
         });
       }
     });
+    return { ok: true };
+  });
+
+  /**
+   * Declaring a turn dead after a stop went unanswered (D-111). Not a second
+   * Stop: it is refused outright while the ordinary stop still has a claim to
+   * work — the execution must already be `stopping`, and either the stop must
+   * have gone unanswered past its grace or the machine must have gone quiet.
+   * What it does then is exactly what the runner-gone path has always done:
+   * an explicit, attributed `interrupted` outcome that frees the lane. If the
+   * machine was partitioned rather than dead, its process may still finish on
+   * that laptop — every later report is recorded but changes nothing, which
+   * is the same honesty the offline-stop path already accepted.
+   */
+  app.post("/missions/:missionId/execution/force-interrupt", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+    const params = MissionParamsSchema.safeParse(request.params);
+    if (!params.success) return deps.sendError(reply, 400, "bad_id", "Malformed mission id.");
+    const body = StopInputSchema.safeParse(request.body ?? {});
+    if (!body.success) return deps.sendError(reply, 400, "bad_request", "Malformed request.");
+    const access = await missionAccess(deps.db, ctx, params.data.missionId, body.data.workstreamId ?? null);
+    if (!access) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
+    requireCapability(access, "force_interrupt");
+    const workstreamId = access.workstreamId;
+    if (!workstreamId) return deps.sendError(reply, 409, "nothing_running", "Nothing is running to interrupt.");
+
+    const refusal = await withTransaction(deps.db, async (client): Promise<string | null> => {
+      const running = await client.query(
+        "select exe_id, state, session_id, access from executions where wst_id = $1 and state = any($2::text[]) for update",
+        [workstreamId, ACTIVE_EXECUTION_STATES]
+      );
+      const rows = running.rows as { exe_id: string; state: string; session_id: string; access: string }[];
+      const row = body.data.sessionId
+        ? rows.find((candidate) => candidate.session_id === body.data.sessionId)
+        : (rows.find((candidate) => candidate.access === "write") ?? (rows.length === 1 ? rows[0] : undefined));
+      if (!row) return "Nothing is running to interrupt.";
+      if (row.state !== "stopping") {
+        return "Stop it first — declaring a turn dead is for a stop that went unanswered.";
+      }
+
+      const runner = await client.query(
+        `select last_seen_at from runners
+          where wst_id = $1 and revoked_at is null and expires_at > now()
+          order by created_at desc limit 1`,
+        [workstreamId]
+      );
+      const lastSeen = (runner.rows[0]?.last_seen_at as Date | null | undefined) ?? null;
+      const online = lastSeen !== null && Date.now() - lastSeen.getTime() < RUNNER_OFFLINE_AFTER_MS;
+
+      const asked = await client.query(
+        `select occurred_at from events
+          where execution_id = $1 and kind = 'execution.stop_requested'
+          order by seq desc limit 1`,
+        [row.exe_id]
+      );
+      const askedAt = (asked.rows[0]?.occurred_at as Date | undefined) ?? null;
+      const unanswered = askedAt !== null && Date.now() - askedAt.getTime() >= FORCE_INTERRUPT_AFTER_MS;
+      if (online && !unanswered) {
+        return "The stop is still being delivered and the machine is connected — give it a minute before declaring the turn dead.";
+      }
+
+      const reason = `${ctx.login} declared the turn dead after the stop went unanswered.`;
+      const moved = await client.query(
+        `update executions
+            set state = 'interrupted', ended_at = now(),
+                exit_outcome = 'interrupted', failure_reason = $2
+          where exe_id = $1 and state = 'stopping'`,
+        [row.exe_id, reason]
+      );
+      if (moved.rowCount === 0) return "The turn already ended.";
+      await recordEvent(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId,
+        executionId: row.exe_id,
+        kind: "execution.interrupted",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: access.leaseId,
+        payload: { reason }
+      });
+      // The stop already settled the turn's questions; a straggler asked in
+      // the window settles now, in the same transaction that ends the turn.
+      await settlePendingApprovals(client, {
+        orgId: access.orgId,
+        missionId: access.missionId,
+        workstreamId,
+        executionId: row.exe_id,
+        outcome: "cancelled",
+        reason: "The turn was declared dead before this was answered."
+      });
+      return null;
+    });
+    if (refusal) return deps.sendError(reply, 409, "not_forceable", refusal);
     return { ok: true };
   });
 

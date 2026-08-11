@@ -23,6 +23,10 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     "direction.submit",
     "execution.start",
     "execution.stop",
+    // Declaring a wedged turn dead after a stop went unanswered (D-111): the
+    // authority PRODUCT.md#control names — "the controller (or Mission Admin)
+    // may force-interrupt". Admin holds it by role; the controller by lease.
+    "force_interrupt",
     // Forking a competing approach makes a *sibling* lane with its own branch,
     // workspace and lease. It does not steer the lane it forks, so it is held
     // by role and never by the baton (D-074) — the same reasoning as archival.
@@ -82,6 +86,10 @@ const LEASE_CAPABILITIES: Capability[] = [
   // and then answer, which is visible and logged, but may not reach around it.
   // That is why this appears here and in no role list.
   "approval.respond",
+  // Escalating their own unanswered stop (D-111): the controller asked the
+  // turn to stop and the machine never answered — declaring it dead is the
+  // same authority, one step later.
+  "force_interrupt",
   "control.offer"
 ];
 

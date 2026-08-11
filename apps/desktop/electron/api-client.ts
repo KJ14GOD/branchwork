@@ -258,6 +258,20 @@ export class ControlPlaneClient {
     );
   }
 
+  /** Declare a wedged turn dead after its stop went unanswered (D-111). The
+   *  server refuses it in words while the ordinary stop still has a claim. */
+  async forceInterrupt(missionId: string, workstreamId?: string, sessionId?: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/execution/force-interrupt`,
+      OkResponseSchema,
+      {
+        ...(workstreamId ? { workstreamId } : {}),
+        ...(sessionId ? { sessionId } : {})
+      }
+    );
+  }
+
   // --- Harness approvals (D-056) --------------------------------------------
   // Asking, never deciding: the server checks `approval.respond` against the
   // current lease and refuses a request that is already settled.
