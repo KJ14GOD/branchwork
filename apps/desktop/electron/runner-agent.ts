@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import {
@@ -336,9 +336,40 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   let stopped = false;
   let reconciled = false;
 
+  /**
+   * A buffer that survived a relaunch used to sit unread until something new
+   * happened on its workstream — a terminal event could wait on disk forever
+   * while the room said Running (D-110). Constructing the outbox restores the
+   * file; the flush delivers it. Only enrolled workstreams: a file for a lane
+   * this machine no longer runs has no credential to deliver with.
+   */
+  function pumpPersistedOutboxes(): void {
+    let names: string[] = [];
+    try {
+      names = readdirSync(join(userData, "runner-outbox"));
+    } catch {
+      return; // no directory yet: nothing buffered, nothing to do
+    }
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const workstreamId = name.slice(0, -".json".length);
+      if (!enrolments.has(workstreamId)) continue;
+      void outboxFor(workstreamId).flush();
+    }
+  }
+
   const discoverTimer = setInterval(() => void discover(), DISCOVER_EVERY_MS);
   const pollTimer = setInterval(() => void poll(), POLL_EVERY_MS);
+  // Parked is no longer forever: every discovery pass re-offers delivery to
+  // any outbox still holding events, so ~32 s of control-plane downtime costs
+  // fifteen more seconds of delay, not silence until the app quits (D-110).
+  const outboxTimer = setInterval(() => {
+    for (const outbox of outboxes.values()) {
+      if (outbox.pending > 0) void outbox.flush();
+    }
+  }, DISCOVER_EVERY_MS);
   void discover();
+  pumpPersistedOutboxes();
 
   return {
     discoverNow: () => void discover(),
@@ -468,11 +499,14 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         const response = await runnerFetch(enrolment, "/runner/events", "POST", { executionId, events: batch });
         if (response.ok) return;
         // A rejection the server will never change its mind about must not
-        // wedge the queue behind it; a transport or auth problem retries.
+        // wedge the queue behind it — and must not vanish either: "refused"
+        // makes the outbox leave a gap marker where the batch stood, so a
+        // dropped terminal event is a stated gap, never a room that says
+        // Running forever (D-110).
         const permanent = response.status >= 400 && response.status < 500 && ![401, 408, 429].includes(response.status);
         if (permanent) {
-          console.warn(`[runner] the control plane refused a report (${response.status}); dropping that batch`);
-          return;
+          console.warn(`[runner] the control plane refused a report (${response.status}); recording the gap`);
+          return "refused";
         }
         throw new Error(`report rejected (${response.status})`);
       },
@@ -1305,6 +1339,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     stopped = true;
     clearInterval(discoverTimer);
     clearInterval(pollTimer);
+    clearInterval(outboxTimer);
 
     for (const [, running] of active) running.turn.stop(reason);
     await Promise.race([

@@ -1496,3 +1496,15 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** The contract's failure classification gains `billing`. Three ending shapes are pinned through the real spawn path (`execution-endings.test.ts`, a stub CLI on PATH per the D-056 pattern). "No false completed" becomes a tested property of the classifier rather than a hope.
 
 **Revisit when.** The CLI grows result subtypes these guards do not name — each lands as the honest state it describes, never as completed by fallthrough.
+
+## D-110 — The outbox never goes silent
+
+**Context.** The runner's event outbox buffered honestly and delivered dishonestly, three ways found by this phase's audit. After ~32 seconds of control-plane unavailability a workstream's outbox **parked** — and the only call that ever un-parked one was the app quitting, so a turn could finish on disk while the room said *Running* until the next relaunch. A buffer restored after a relaunch was **never pumped**: delivery only ran when something new appended, so a lane with no further activity kept its terminal event on disk forever. And a batch the server refused with a permanent 4xx was **dropped with a console warning** — no gap marker, no record, a `execution.completed` that simply ceased to exist.
+
+**Decision.** Three verbs that already existed get callers, and one contract gets a word. Every discovery pass (15 s) re-offers delivery to any outbox still holding events, so parking costs seconds, not the session. Startup pumps every persisted buffer whose workstream this machine is still enrolled for — constructing restores, flushing delivers. And `deliver` may now answer `"refused"`: the outbox replaces the refused batch with a **gap marker in its place**, exactly as overflow always has, so the record states the loss instead of hiding it — with one bounded exception, a refused *marker* is given up out loud rather than replaced with itself forever. A corrupt buffer file, already survivable, now also says what it lost.
+
+**Alternatives.** Un-parking from the 2 s poll (rejected: when the plane is down, each attempt cycle is ~32 s of backoff — a 15 s cadence keeps exactly one polite attempt in flight); retrying permanent 4xxs forever (rejected: it wedges every event behind a batch the server will never take); pumping buffers for un-enrolled workstreams (rejected: no credential to deliver with — the file waits for re-enrolment).
+
+**Consequences.** "Resume after restart" now covers the *report*, not just the work: the worst case for a room reading a stale state is one discovery interval, not an app lifetime. `outbox.test.ts` grows the refused-batch marker and the refused-marker bound.
+
+**Revisit when.** The control plane can push (the poll disappears) — delivery cadence then belongs to the transport, not a timer.

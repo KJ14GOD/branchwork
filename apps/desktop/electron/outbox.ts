@@ -34,7 +34,11 @@ const WORKSTREAM_SEQUENCE = "workstream";
 export interface OutboxOptions {
   /** Where the buffer survives a relaunch. */
   filePath: string;
-  deliver: (executionId: string | null, batch: SequencedRunnerEvent[]) => Promise<void>;
+  /** Resolving with `"refused"` means the server rejected the batch and will
+   *  never change its mind — the outbox records a gap where it stood instead
+   *  of retrying forever or (worse) dropping it silently. Throwing means a
+   *  transport problem, which retries. */
+  deliver: (executionId: string | null, batch: SequencedRunnerEvent[]) => Promise<void | "refused">;
   /** Bound on buffered events before the oldest are dropped with a marker. */
   maxEvents?: number;
   /** Retries per batch before the outbox parks rather than spinning forever. */
@@ -69,7 +73,7 @@ export class EventOutbox {
   private parked = false;
 
   private readonly filePath: string;
-  private readonly deliver: (executionId: string | null, batch: SequencedRunnerEvent[]) => Promise<void>;
+  private readonly deliver: (executionId: string | null, batch: SequencedRunnerEvent[]) => Promise<void | "refused">;
   private readonly maxEvents: number;
   private readonly maxAttempts: number;
   private readonly baseDelayMs: number;
@@ -176,10 +180,15 @@ export class EventOutbox {
       const batch = this.takeBatch();
       if (!batch) return;
       let delivered = false;
-      for (let attempt = 0; attempt < this.maxAttempts && !delivered; attempt += 1) {
+      let refused = false;
+      for (let attempt = 0; attempt < this.maxAttempts && !delivered && !refused; attempt += 1) {
         try {
-          await this.deliver(batch.executionId, batch.items.map(({ originSeq, event }) => ({ originSeq, event })));
-          delivered = true;
+          const answer = await this.deliver(
+            batch.executionId,
+            batch.items.map(({ originSeq, event }) => ({ originSeq, event }))
+          );
+          if (answer === "refused") refused = true;
+          else delivered = true;
         } catch (error) {
           const delay = Math.min(this.maxDelayMs, this.baseDelayMs * 2 ** attempt);
           this.onProblem(
@@ -187,6 +196,31 @@ export class EventOutbox {
           );
           await this.sleep(delay);
         }
+      }
+      if (refused) {
+        // The server said no and will keep saying no. The batch cannot wedge
+        // the queue and must not vanish silently: a gap marker takes its
+        // place, exactly as an overflow leaves one, so the record says events
+        // were lost here instead of quietly missing them. A refused *marker*
+        // is the one thing given up on outright — replacing it with itself
+        // would loop forever.
+        const only = batch.items[0];
+        if (batch.items.length === 1 && only && only.event.kind === "runner.gap") {
+          this.onProblem("The control plane refused a gap marker; giving it up.");
+        } else {
+          const first = batch.items[0]?.originSeq ?? 1;
+          const last = batch.items[batch.items.length - 1]?.originSeq ?? first;
+          this.queue.unshift({
+            executionId: batch.executionId,
+            originSeq: first,
+            event: { kind: "runner.gap", payload: { droppedFrom: first, droppedTo: last } }
+          });
+          this.onProblem(
+            `The control plane refused ${batch.items.length} buffered events; the gap is recorded.`
+          );
+        }
+        this.persist();
+        continue;
       }
       if (!delivered) {
         // Park instead of spinning: the control plane is down, and a hot loop
@@ -228,8 +262,11 @@ export class EventOutbox {
       }
     } catch {
       // A corrupt buffer is not worth crashing the app over; the server's
-      // record is the durable one and this file is only the tail.
+      // record is the durable one and this file is only the tail. But the
+      // loss is said out loud, because a tail that held a terminal event is a
+      // room reading Running for a turn that ended.
       this.queue = [];
+      this.onProblem("The persisted outbox could not be read; its buffered tail is lost.");
     }
   }
 

@@ -141,6 +141,55 @@ describe("retry and parking", () => {
     expect(delivered.map((item) => item.originSeq)).toEqual([1, 2]);
     expect(outbox.pending).toBe(0);
   });
+
+  it("replaces a permanently refused batch with a gap marker, never silence (D-110)", async () => {
+    const problems: string[] = [];
+    const delivered: Delivery[] = [];
+    let refuseData = true;
+    const outbox = new EventOutbox({
+      filePath: join(root, "outbox.json"),
+      autoDeliver: false,
+      maxAttempts: 2,
+      sleep: async () => undefined,
+      onProblem: (message) => problems.push(message),
+      deliver: async (executionId, batch) => {
+        // The server refuses the data batch outright; the marker that
+        // replaces it is accepted, so the record states the loss.
+        if (refuseData && batch.some((item) => item.event.kind !== "runner.gap")) return "refused";
+        delivered.push({ executionId, batch });
+      }
+    });
+
+    outbox.append("exe_a", text("first"));
+    outbox.append("exe_a", text("second"));
+    await outbox.flush();
+    refuseData = false;
+
+    expect(delivered).toHaveLength(1);
+    const marker = delivered[0].batch[0];
+    expect(marker.event.kind).toBe("runner.gap");
+    expect(marker.event.payload).toEqual({ droppedFrom: 1, droppedTo: 2 });
+    expect(outbox.pending).toBe(0);
+    expect(problems.some((message) => message.includes("refused 2 buffered events"))).toBe(true);
+  });
+
+  it("gives up on a refused gap marker instead of looping forever", async () => {
+    const problems: string[] = [];
+    const outbox = new EventOutbox({
+      filePath: join(root, "outbox.json"),
+      autoDeliver: false,
+      maxAttempts: 1,
+      sleep: async () => undefined,
+      onProblem: (message) => problems.push(message),
+      deliver: async () => "refused"
+    });
+    outbox.append("exe_a", text("doomed"));
+    await outbox.flush();
+    // The data batch became a marker; the refused marker was given up. Empty
+    // queue, bounded work, and both losses said out loud.
+    expect(outbox.pending).toBe(0);
+    expect(problems.some((message) => message.includes("refused a gap marker"))).toBe(true);
+  });
 });
 
 describe("overflow", () => {
