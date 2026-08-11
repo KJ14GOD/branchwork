@@ -1532,3 +1532,15 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** `SweepResult` gains `queuesDriven`. Head-of-line blocking on an undispatchable direction remains (the dispatcher takes the oldest and stops), recorded in PROGRESS as a known gap rather than silently reordered.
 
 **Revisit when.** Queues grow long enough that the oldest-first, one-at-a-time dispatch visibly head-of-line-blocks — reordering is a product decision about fairness, not a sweep detail.
+
+## D-113 — What a lane has spent so far is stated where its chats are listed
+
+**Context.** D-071 carried what a *turn* cost onto the trace's machinery line, and the Compare surface summed a lane's usage for the decision moment — but no surface answered "what has this lane spent so far?" while the work was still going. For long-horizon work that figure is the difference between letting a run continue and stopping it, and the only way to get it was adding up machinery lines by eye.
+
+**Decision.** The approach overview's facts line — already the lane's one `·`-joined row of counts — gains the lane's own totals: `{n} turns`, `{time} of harness time`, and the harness's cost figure, summed in the renderer over the executions the room already holds. Every rule that governed the per-turn figure governs the sum: claims carried as claims, a figure no turn reported absent rather than zero, text in a row and never a tile, and nothing that reads as a budget or a ceiling (PRODUCT.md forbids Novus imposing one, D-034).
+
+**Alternatives.** The mission header (rejected: no machinery in the header, prohibited pattern 20's neighbor at DESIGN.md's own line); the state line (rejected: state + next action only); a server-computed field (rejected: the executions are already on the wire and the arithmetic is three additions — the D-094 pattern, no new fetch); mission-wide totals across lanes (deferred: Compare already sets lanes side by side, and a cross-lane total is a comparison surface's fact, not a lane page's).
+
+**Consequences.** `usageSoFar` joins the derive module with the null-stays-null tests. The overview line lengthens by up to three facts; each disappears entirely when there is nothing true to say.
+
+**Revisit when.** An organization budget becomes real — D-071's own revisit clause — at which point "spent so far" stops being only a claim and needs a decision about what it may stop.

@@ -23,6 +23,7 @@ import {
   sessionActivity,
   sessionChangedFiles,
   sessionChecks,
+  usageSoFar,
   sessionView,
   viewerIsController
 } from "../components/derive";
@@ -82,7 +83,7 @@ function SessionGlyph() {
 }
 
 import { RuntimeDock } from "../components/runtime-dock";
-import { clockTime, deriveGoal, shortSha, truncateLabel } from "../format";
+import { clockTime, deriveGoal, elapsed, shortSha, truncateLabel, usd } from "../format";
 import { scopesDisjoint } from "@novus/contracts";
 import type { Project } from "./project-shell";
 
@@ -1805,13 +1806,20 @@ function ApproachOverview({
 }) {
   // The lane's own facts, from the same summary Compare reads — counted, not
   // fetched. Checks appear only once something ran; zero run is the state
-  // line's finding to report, not this page's.
+  // line's finding to report, not this page's. What the lane has spent so
+  // far — turns, harness time, the harness's own cost figure — joins the
+  // line (D-113): text in a row, never a tile, and a figure no turn reported
+  // is absent rather than zero (D-071).
+  const spent = usageSoFar(detail);
   const facts = [
     sessions.length === 1 ? "1 conversation" : `${sessions.length} conversations`,
     `${summary?.filesChanged ?? 0} ${(summary?.filesChanged ?? 0) === 1 ? "file" : "files"} changed`,
     ...(summary && summary.checksRun > 0
       ? [`${summary.checksPassed}/${summary.checksRun} checks passed`]
-      : [])
+      : []),
+    ...(spent.turns > 0 ? [spent.turns === 1 ? "1 turn" : `${spent.turns} turns`] : []),
+    ...(spent.durationMs !== null ? [`${elapsed(spent.durationMs)} of harness time`] : []),
+    ...(spent.costUsd !== null ? [usd(spent.costUsd)] : [])
   ];
   // Files more than one of this approach's chats have changed (D-094): said
   // here, on the page that lists the chats, because the person deciding where

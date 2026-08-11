@@ -16,6 +16,7 @@ import {
   sessionNeedsYou,
   sessionOfCheck,
   sessionView,
+  usageSoFar,
   viewerIsController
 } from "../src/components/derive";
 
@@ -307,6 +308,36 @@ describe("queued direction presentation", () => {
     // Nothing queued, nothing said: the suffix never renders a zero.
     const clear = detail({ state: "agent_running", executions: [execution()] });
     expect(deriveStateLine(clear).suffix).toBeNull();
+  });
+});
+
+describe("what the lane has spent so far (D-113)", () => {
+  it("adds up turns, harness time, and cost — with null never becoming zero", () => {
+    const spent = usageSoFar(
+      detail({
+        executions: [
+          execution({ usage: { costUsd: 0.42, durationMs: 60_000 } }),
+          execution({
+            executionId: "exe_2",
+            usage: { costUsd: 0.08, durationMs: 30_000 }
+          }),
+          // A turn that reported nothing adds nothing — and subtracts nothing.
+          execution({ executionId: "exe_3", usage: {} })
+        ]
+      })
+    );
+    expect(spent.turns).toBe(3);
+    expect(spent.costUsd).toBeCloseTo(0.5);
+    expect(spent.durationMs).toBe(90_000);
+  });
+
+  it("says nothing about a lane that has reported nothing", () => {
+    const silent = usageSoFar(detail({ executions: [execution({ usage: {} })] }));
+    expect(silent.turns).toBe(1);
+    // Not stated is not free: null, never zero (D-071).
+    expect(silent.costUsd).toBeNull();
+    expect(silent.durationMs).toBeNull();
+    expect(usageSoFar(detail({})).turns).toBe(0);
   });
 });
 

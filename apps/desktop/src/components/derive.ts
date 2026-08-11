@@ -545,6 +545,30 @@ function lastProgressAt(detail: MissionDetailResponse): string | null {
   return events[events.length - 1]?.occurredAt ?? live.createdAt;
 }
 
+/**
+ * What this lane has asked of the harness so far, added up (D-113): every
+ * turn, and the time and cost the harness itself reported for them. Claims
+ * carried as claims (D-071): a figure no turn reported stays null — never a
+ * zero standing in for "not stated" — and a lane that has run nothing sums
+ * to nothing. Renderer arithmetic over the executions the room already
+ * holds; no new fetch.
+ */
+export function usageSoFar(detail: MissionDetailResponse): {
+  turns: number;
+  costUsd: number | null;
+  durationMs: number | null;
+} {
+  let costUsd: number | null = null;
+  let durationMs: number | null = null;
+  for (const execution of detail.executions) {
+    const cost = execution.usage.costUsd;
+    if (typeof cost === "number" && Number.isFinite(cost)) costUsd = (costUsd ?? 0) + cost;
+    const spent = execution.usage.durationMs;
+    if (typeof spent === "number" && Number.isFinite(spent)) durationMs = (durationMs ?? 0) + spent;
+  }
+  return { turns: detail.executions.length, costUsd, durationMs };
+}
+
 function handoffSuffix(detail: MissionDetailResponse): string | null {
   const offer = detail.control.liveOffer;
   if (!detail.overlays.includes("handoff_waiting_for_boundary") || !offer) return null;
