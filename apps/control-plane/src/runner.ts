@@ -806,6 +806,7 @@ async function applySideEffects(
     case "harness.text":
     case "harness.tool":
     case "harness.worker.ended":
+    case "execution.heartbeat":
     case "runner.gap":
       // Recorded and nothing else: a gap is stated honestly in the log rather
       // than repaired (ARCHITECTURE.md#failure-handling, case 6).

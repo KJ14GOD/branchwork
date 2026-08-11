@@ -1544,3 +1544,15 @@ The radii rule is amended rather than broken: in the rail, **headings are full-b
 **Consequences.** `usageSoFar` joins the derive module with the null-stays-null tests. The overview line lengthens by up to three facts; each disappears entirely when there is nothing true to say.
 
 **Revisit when.** An organization budget becomes real — D-071's own revisit clause — at which point "spent so far" stops being only a claim and needs a decision about what it may stop.
+
+## D-114 — The turn has a pulse, and a pulse is not progress
+
+**Context.** D-073's revisit clause named this exactly: "Runners can report liveness *within* a turn — a heartbeat while a tool call runs — at which point a stall can be told from a long tool call." Until now the room could not tell them apart: a twenty-minute test suite produces no transcript events, and its legitimate silence looked identical to a dead machine — the stalled overlay said *no progress reported since {time}* about both, and the honest instinct (wait for the suite; stop the corpse) pointed opposite ways with nothing to choose by.
+
+**Decision.** The runner states the turn's pulse: `execution.heartbeat`, every three minutes while the harness process is alive, empty payload, recorded-and-nothing-else at the control plane. **A pulse is liveness, never progress**: the stall watch excludes heartbeats from its clock on both sides of the wire — a turn that reports nothing but its own breathing still stalls at ten minutes, because a wedged process breathes too, and a pulse that reset the clock would let it dodge the watch forever. What the pulse buys is one clause: the stalled suffix reads *no progress reported since {time} — the process is alive* while a beat is fresh (within two beats), and stays the plain sentence when none is — which is when Stop is the right instinct. The trace absorbs the events; nothing new renders in the thread.
+
+**Alternatives.** Dropping the stall threshold now that the signal exists (deferred: the threshold is D-073's, and moving it deserves observation of real pulses first); heartbeating only during long tool calls (rejected: deciding "long" needs the very signal being built); a liveness field on the runner's poll instead of an event (rejected: the poll proves the *runner* lives, not the turn — and the event log is the mission's memory, ARCHITECTURE.md#event-model).
+
+**Consequences.** The runner-event union gains its most boring member. Event volume: one row per three minutes per live turn, absorbed by the trace and excluded from progress. ARCHITECTURE's events list, which has said "heartbeats" since the first draft, is finally true.
+
+**Revisit when.** Real pulses have been observed across long runs — then the stall threshold can drop for turns with no pulse, which is the sharper watch D-073 wanted all along.

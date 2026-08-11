@@ -19,6 +19,7 @@ import {
   usageSoFar,
   viewerIsController
 } from "../src/components/derive";
+import { clockTime } from "../src/format";
 
 /**
  * The multiplayer room's projections: who is in control, what the state line
@@ -308,6 +309,42 @@ describe("queued direction presentation", () => {
     // Nothing queued, nothing said: the suffix never renders a zero.
     const clear = detail({ state: "agent_running", executions: [execution()] });
     expect(deriveStateLine(clear).suffix).toBeNull();
+  });
+});
+
+describe("the stalled suffix and the pulse (D-114)", () => {
+  it("says the process is alive only on a fresh heartbeat, and a pulse never counts as progress", () => {
+    const base = {
+      state: "agent_running",
+      executions: [execution()],
+      overlays: ["execution_stalled"]
+    };
+    // No pulse at all: the plain stalled sentence.
+    const quietDeath = deriveStateLine(detail({ ...base, events: [event({ executionId: "exe_1" })] }));
+    expect(quietDeath.suffix).toContain("no progress reported");
+    expect(quietDeath.suffix).not.toContain("alive");
+
+    // A fresh pulse: alive, still stalled — the heartbeat moved neither the
+    // overlay nor the "since" clock.
+    const breathing = deriveStateLine(
+      detail({
+        ...base,
+        events: [
+          event({ executionId: "exe_1", occurredAt: T(2) }),
+          event({
+            eventId: "evt_pulse",
+            seq: 2,
+            kind: "execution.heartbeat",
+            executionId: "exe_1",
+            occurredAt: new Date().toISOString()
+          })
+        ]
+      })
+    );
+    expect(breathing.suffix).toContain("no progress reported");
+    expect(breathing.suffix).toContain("the process is alive");
+    // The since-time is the transcript's last word, not the pulse's.
+    expect(breathing.suffix).toContain(clockTime(T(2)));
   });
 });
 

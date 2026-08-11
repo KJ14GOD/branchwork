@@ -512,7 +512,14 @@ function suffixFor(detail: MissionDetailResponse): string | null {
   // (PRODUCT.md, *Execution stalled*).
   if (detail.overlays.includes("execution_stalled")) {
     const since = lastProgressAt(detail);
-    return since ? `no progress reported since ${clockTime(since)}` : "no progress reported for a while";
+    const base = since
+      ? `no progress reported since ${clockTime(since)}`
+      : "no progress reported for a while";
+    // The pulse tells a long quiet tool call from a dead machine (D-114): a
+    // fresh heartbeat means the process is there and saying nothing — which a
+    // twenty-minute test run legitimately looks like — while no pulse means
+    // nobody is home and Stop is the right instinct.
+    return heartbeatFresh(detail) ? `${base} — the process is alive` : base;
   }
   if (detail.runner === null) return "no machine has connected to run this yet";
   // A backlog behind a working turn (D-112). The idle case already states the
@@ -535,14 +542,33 @@ function suffixFor(detail: MissionDetailResponse): string | null {
 }
 
 /** The last thing the running execution reported, for the stalled suffix to
- *  name a time rather than a vague duration. */
+ *  name a time rather than a vague duration. Heartbeats are excluded on both
+ *  sides of the wire (D-114): a pulse is liveness, never progress. */
 function lastProgressAt(detail: MissionDetailResponse): string | null {
   const live = [...detail.executions]
     .reverse()
     .find((execution) => execution.state === "running" || execution.state === "starting");
   if (!live) return null;
-  const events = detail.events.filter((event) => event.executionId === live.executionId);
+  const events = detail.events.filter(
+    (event) => event.executionId === live.executionId && event.kind !== "execution.heartbeat"
+  );
   return events[events.length - 1]?.occurredAt ?? live.createdAt;
+}
+
+/** Whether the running turn's process has stated its pulse recently (D-114):
+ *  within two beats, so one dropped report does not read as a death. */
+function heartbeatFresh(detail: MissionDetailResponse): boolean {
+  const live = [...detail.executions]
+    .reverse()
+    .find((execution) => execution.state === "running" || execution.state === "starting");
+  if (!live) return false;
+  const pulse = detail.events
+    .filter(
+      (event) => event.executionId === live.executionId && event.kind === "execution.heartbeat"
+    )
+    .at(-1);
+  if (!pulse) return false;
+  return Date.now() - Date.parse(pulse.occurredAt) < 8 * 60_000;
 }
 
 /**

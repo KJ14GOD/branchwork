@@ -562,6 +562,27 @@ describe("an execution that has gone quiet", () => {
     expect((await stateOf(executionId)).state).toBe("running");
   });
 
+  it("a heartbeat is liveness, never progress — the stall watch does not reset on a pulse (D-114)", async () => {
+    const { missionId, credential } = await lane();
+    const executionId = await startExecution(missionId);
+    await running(credential, executionId);
+    await backdateEvents(executionId, 11 * 60_000);
+    // The process is alive and says so — but has reported no work. A pulse
+    // that reset the clock would let a wedged-but-breathing turn dodge the
+    // stall watch forever.
+    await harness.app.inject({
+      method: "POST",
+      url: "/runner/events",
+      headers: { authorization: `Runner ${credential}` },
+      payload: {
+        executionId,
+        events: [{ originSeq: 9, event: { kind: "execution.heartbeat", payload: {} } }]
+      }
+    });
+
+    expect(await overlaysOf(missionId)).toContain("execution_stalled");
+  });
+
   it("never calls a harness waiting on a person stalled", async () => {
     const { missionId, workstreamId, credential } = await lane();
     const executionId = await startExecution(missionId);

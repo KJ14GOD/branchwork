@@ -1961,6 +1961,17 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
     payload: HarnessUsageSchema
   }),
   z.object({
+    /**
+     * The turn's pulse (D-114, D-073's revisit clause). Emitted by the runner
+     * every few minutes while the harness process is alive, so a long quiet
+     * tool call can be told from a machine that died: fresh heartbeats mean
+     * "alive, saying nothing", none mean nobody is there. Liveness only —
+     * the stall watch never counts it as progress, and it carries nothing.
+     */
+    kind: z.literal("execution.heartbeat"),
+    payload: z.object({}).strict()
+  }),
+  z.object({
     kind: z.literal("direction.applied"),
     payload: z.object({ directionId: z.string().startsWith("dir_") }).strict()
   }),

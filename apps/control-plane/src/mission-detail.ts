@@ -514,6 +514,11 @@ function lastProgressOf(executions: Execution[], events: EventRow[]): Date | nul
   let last: Date | null = null;
   for (const row of events) {
     if (row.execution_id !== latest.executionId) continue;
+    // A heartbeat is liveness, never progress (D-114): it proves the process
+    // exists, and a wedged process exists too. Counting it here would let a
+    // turn that reports nothing but its own pulse dodge the stall watch
+    // forever — the exact dressing-up this overlay exists to prevent.
+    if (row.kind === "execution.heartbeat") continue;
     if (last === null || row.occurred_at > last) last = row.occurred_at;
   }
   // A turn that has produced no event at all is timed from when it was asked

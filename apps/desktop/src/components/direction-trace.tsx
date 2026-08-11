@@ -42,7 +42,10 @@ const ABSORBED_KINDS = new Set([
   "direction.applied",
   "execution.starting",
   "execution.requested",
-  "boundary.reached"
+  "boundary.reached",
+  // The turn's pulse (D-114): liveness for the stall watch, not a moment in
+  // the room.
+  "execution.heartbeat"
 ]);
 
 /**

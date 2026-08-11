@@ -31,7 +31,7 @@ const git = (cwd: string, args: string[]): Promise<string> =>
     );
   });
 
-type StubEnding = "max-turns" | "silent-end" | "credit-balance";
+type StubEnding = "max-turns" | "silent-end" | "credit-balance" | "slow-success";
 
 /** A `claude` that ends the turn one specific way, then exits. */
 function installStub(ending: StubEnding): void {
@@ -49,6 +49,14 @@ process.stdin.on("data", () => {
     process.stderr.write("Your credit balance is too low to run this request.\\n");
     process.exit(1);
   }
+  if (ENDING === "slow-success") {
+    // A long quiet tool call: nothing on stdout for a while, then done.
+    setTimeout(() => {
+      out({ type: "result", subtype: "success", is_error: false, result: "Done." });
+      process.exit(0);
+    }, 400);
+    return;
+  }
   // silent-end: the stream just stops, cleanly, with no result line at all.
   process.exit(0);
 });
@@ -59,9 +67,10 @@ setTimeout(() => process.exit(3), 20000).unref();
   chmodSync(target, 0o755);
 }
 
-async function run(): Promise<{ events: RunnerEvent[]; result: TurnResult }> {
+async function run(heartbeatMs?: number): Promise<{ events: RunnerEvent[]; result: TurnResult }> {
   const events: RunnerEvent[] = [];
   const turn = startTurn({
+    ...(heartbeatMs !== undefined ? { heartbeatMs } : {}),
     executionId: "exe_endings",
     missionId: "msn_endingstest",
     workstreamId: "wst_endings",
@@ -130,6 +139,19 @@ describe("how a turn is allowed to end (D-109)", () => {
     const terminal = terminalOf(events, result);
     expect(terminal.kind).toBe("execution.interrupted");
     expect((terminal.payload as { reason: string }).reason).toContain("without reporting an outcome");
+  }, 30_000);
+
+  it("states its pulse while the process is alive, and stops when the turn ends (D-114)", async () => {
+    installStub("slow-success");
+    const { events, result } = await run(50);
+    expect(terminalOf(events, result).kind).toBe("execution.completed");
+    const pulses = events.filter((event) => event.kind === "execution.heartbeat").length;
+    // A 400ms quiet stretch at a 50ms pulse: several beats, exact count owed
+    // to nobody — the claim is "alive says so", not a metronome.
+    expect(pulses).toBeGreaterThanOrEqual(2);
+    // And the pulse died with the turn: waiting another stretch adds none.
+    await new Promise((settle) => setTimeout(settle, 200));
+    expect(events.filter((event) => event.kind === "execution.heartbeat").length).toBe(pulses);
   }, 30_000);
 
   it("a billing refusal names money, not sign-in", async () => {

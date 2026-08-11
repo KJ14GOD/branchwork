@@ -260,6 +260,10 @@ export interface TurnRequest {
    *  secret supplied mid-turn protects the rest of that turn. */
   secretValues: () => readonly string[];
   emit: (event: RunnerEvent) => void;
+  /** How often the turn states its pulse while the process is alive (D-114).
+   *  Overridden only by tests; the default is minutes, because the pulse
+   *  exists to tell a long tool call from a dead machine, not to be a clock. */
+  heartbeatMs?: number;
 }
 
 export interface TurnResult {
@@ -639,6 +643,18 @@ export function startTurn(request: TurnRequest): RunningTurn {
     const effort: string = chosenEffort.success ? chosenEffort.data : DEFAULT_EFFORT;
     emit({ kind: "execution.running", payload: { harness: "claude-code", model, effort } });
 
+    // The turn's pulse (D-114): while the harness process is alive, say so
+    // every few minutes. A twenty-minute test run produces no transcript
+    // events at all, and from the room that silence was indistinguishable
+    // from a dead machine — the heartbeat is what tells them apart. It is
+    // liveness only; the control plane records it and the stall watch never
+    // counts it as progress.
+    const pulse = setInterval(
+      () => emit({ kind: "execution.heartbeat", payload: {} }),
+      Math.max(1, request.heartbeatMs ?? 180_000)
+    );
+    pulse.unref?.();
+
     let resumeSessionId = request.resumeSessionId;
     let optional = true;
     let stream = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl });
@@ -687,6 +703,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // record it as this chat's evidence — the exact fabrication that keeps
     // writes exclusive. Nothing changed by this turn, because nothing could.
     if (readOnly) {
+      clearInterval(pulse);
       return {
         terminal: classify(outcome, stream, null),
         sessionId: stream.sessionId,
@@ -732,6 +749,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
       });
     }
 
+    clearInterval(pulse);
     return {
       terminal: classify(outcome, stream, checkpointFailed),
       sessionId: stream.sessionId,
