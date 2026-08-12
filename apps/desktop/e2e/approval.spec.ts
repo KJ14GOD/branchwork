@@ -562,6 +562,134 @@ describe("a permission the harness asks for", () => {
     await maya.app.close();
     await kartik.app.close();
   }, 300_000);
+
+  it("answers by the lane's profile, on the record: accept_edits writes with no card, plan refuses, and Don't ask wears its warning (D-115)", async () => {
+    const { kartik, maya, missionId, worktreeOf } = await twoClientsOnOneMission("profiles");
+    await openRoom(kartik, missionId);
+
+    // The lane's answer policy is worn where directing happens, and starts at
+    // the default: every question asked.
+    const chip = kartik.page.getByTestId("policy-chip");
+    await chip.waitFor({ timeout: 30_000 });
+    expect((await chip.textContent()) ?? "").toContain("Ask every time");
+
+    // The slider explains the stop under the pointer in one line, and says in
+    // place why there is no sixth stop.
+    await chip.click();
+    await kartik.page.getByTestId("policy-menu").waitFor({ timeout: 10_000 });
+    const noBypass = (await kartik.page.getByTestId("policy-no-bypass").textContent()) ?? "";
+    expect(noBypass).toContain("no bypass");
+    await kartik.page.getByTestId("policy-accept_edits").hover();
+    await expect
+      .poll(async () => (await kartik.page.getByTestId("policy-current").textContent()) ?? "")
+      .toContain("File edits are approved by policy");
+
+    // A Mission Admin relaxes the lane to Accept edits with one click; the
+    // chip follows the server's word back.
+    await kartik.page.getByTestId("policy-accept_edits").click();
+    await expect
+      .poll(async () => (await chip.textContent()) ?? "", { timeout: 15_000 })
+      .toContain("Accept edits");
+
+    // The same direction that blocked every earlier test now completes with
+    // no card anywhere: the policy answered it, and the record says so.
+    await kartik.page.evaluate(async (id) => {
+      const result = await window.novus.missions.direct({ missionId: id, body: "write the fake turn file" });
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+    }, missionId);
+    const finished = await until(
+      kartik,
+      missionId,
+      (value) => value.executions.some((execution) => execution.state === "completed"),
+      "the accept_edits turn to finish without asking anyone",
+      120_000
+    );
+    expect(finished.approvals).toHaveLength(0);
+    expect(existsSync(join(worktreeOf(), "NOVUS_FAKE_TURN.md"))).toBe(true);
+    expect(
+      finished.events.some(
+        (event) =>
+          event.kind === "approval.policy" &&
+          (event.payload as { decision?: string }).decision === "allowed"
+      )
+    ).toBe(true);
+    expect(finished.executions[0]?.permissionProfile).toBe("accept_edits");
+
+    // A contributor reads the same fact and cannot change it: the chip is
+    // there, disabled, with the capability named — the server refuses anyway.
+    await openRoom(maya, missionId);
+    const mayaChip = maya.page.getByTestId("policy-chip");
+    await mayaChip.waitFor({ timeout: 30_000 });
+    await expect.poll(async () => mayaChip.isDisabled(), { timeout: 15_000 }).toBe(true);
+
+    // Don't ask is behind its warning: the dialog restates what is being
+    // handed over, and what the server keeps whatever the profile says. The
+    // captures happen here, after a real turn, so the evidence shows the
+    // control in a working room rather than over an empty one (D-116).
+    await chip.click();
+    await kartik.page.getByTestId("policy-menu").waitFor({ timeout: 10_000 });
+    await snap(kartik, "122-permission-profiles-menu");
+    await kartik.page.getByTestId("policy-dont_ask").click();
+    await kartik.page.getByTestId("policy-confirm").waitFor({ timeout: 10_000 });
+    await snap(kartik, "123-dont-ask-confirm");
+    await kartik.page.getByTestId("policy-confirm-set").click();
+    await expect
+      .poll(async () => (await chip.textContent()) ?? "", { timeout: 15_000 })
+      .toContain("Don't ask");
+    const acknowledged = await until(
+      kartik,
+      missionId,
+      (value) =>
+        value.events.some(
+          (event) =>
+            event.kind === "policy.changed" &&
+            (event.payload as { to?: string }).to === "dont_ask"
+        ),
+      "the change to land in the record"
+    );
+    const change = acknowledged.events.find(
+      (event) =>
+        event.kind === "policy.changed" && (event.payload as { to?: string }).to === "dont_ask"
+    );
+    expect((change?.payload as { acknowledged?: string | null }).acknowledged).toContain(
+      "shell commands included"
+    );
+
+    // Plan refuses the same act with the reason, and nothing lands: the flag
+    // is the CLI's own plan mode, the router is the guarantee.
+    await chip.click();
+    await kartik.page.getByTestId("policy-plan").click();
+    await expect
+      .poll(async () => (await chip.textContent()) ?? "", { timeout: 15_000 })
+      .toContain("Plan");
+    await kartik.page.evaluate(async (id) => {
+      const result = await window.novus.missions.direct({
+        missionId: id,
+        body: "[fake-write:PLAN_PROBE.md] try to write during planning"
+      });
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+    }, missionId);
+    const planned = await until(
+      kartik,
+      missionId,
+      (value) => value.executions.filter((execution) => execution.state === "completed").length >= 2,
+      "the plan turn to finish, refused by policy",
+      120_000
+    );
+    expect(existsSync(join(worktreeOf(), "PLAN_PROBE.md"))).toBe(false);
+    expect(planned.approvals).toHaveLength(0);
+    expect(
+      planned.events.some(
+        (event) =>
+          event.kind === "approval.policy" &&
+          (event.payload as { decision?: string; profile?: string }).decision === "denied" &&
+          (event.payload as { profile?: string }).profile === "plan"
+      )
+    ).toBe(true);
+
+    await maya.app.close();
+    await kartik.app.close();
+  }, 300_000);
 });
 
 describe("filing a mission away", () => {

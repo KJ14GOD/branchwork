@@ -4,12 +4,50 @@ import {
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
   EFFORTS,
+  PERMISSION_PROFILES,
   type Capability,
   type Effort,
-  type ModelId
+  type ModelId,
+  type PermissionProfile
 } from "@novus/contracts";
 import codexIcon from "../assets/codex-icon.png";
+import { Dialog } from "./dialog";
 import { ClaudeGlyph } from "./identity";
+
+/** One line on what each profile answers, keyed to the vocabulary the server
+ *  enforces (D-115). The wire never changes: the harness always asks, and a
+ *  profile only changes who answers — which is why there is no bypass row. */
+const PROFILE_MEANINGS: Record<PermissionProfile, string> = {
+  plan: "Read and propose. Nothing changes the workspace; the harness presents a plan.",
+  manual: "Every privileged act is a question in the room. The default.",
+  accept_edits: "File edits are approved by policy, on the record. Shell commands still ask.",
+  auto: "Everything but a shell command is approved by policy, on the record.",
+  dont_ask: "Every act is approved by policy, on the record — shell commands included."
+};
+
+/** The sentence a Mission Admin confirms to set Don't ask — sent to the server
+ *  verbatim as the acknowledgement and recorded on `policy.changed`, the
+ *  D-100 accepted-blockers pattern. */
+export const DONT_ASK_WARNING =
+  "Every act Claude asks about will be approved by this policy — shell commands included — until the profile changes.";
+
+export function profileLabel(profile: PermissionProfile): string {
+  return PERMISSION_PROFILES.find((option) => option.id === profile)?.label ?? profile;
+}
+
+/** What the composer needs to say and change about the lane's answer policy
+ *  (D-115). Null while no lane exists — the ask-dialog's composer. */
+export interface PolicyControl {
+  profile: PermissionProfile;
+  /** Whether this viewer holds `policy.set` — rendered, never decisive. */
+  maySet: boolean;
+  /** Whether this viewer's role may set Don't ask (Mission Admin). */
+  maySetUnsupervised: boolean;
+  onSet: (
+    profile: PermissionProfile,
+    acknowledged: string | null
+  ) => Promise<{ ok: boolean; message?: string }>;
+}
 
 export interface SubmitOutcome {
   ok: boolean;
@@ -47,6 +85,7 @@ export function Composer({
   contextNote,
   placeholderOverride,
   alongsideOffer,
+  policy,
   onEmptySubmit,
   onSubmit
 }: {
@@ -67,6 +106,10 @@ export function Composer({
    *  running chat, or run this one alongside, read-only. Null keeps the
    *  ordinary immediate submit. */
   alongsideOffer?: { runningTitle: string | null } | null;
+  /** The lane's permission profile, worn on the foot beside model and effort
+   *  (D-115) — visible to everyone who can read the composer, changeable by
+   *  whoever the server says holds `policy.set`. Null hides the chip. */
+  policy?: PolicyControl | null;
   /** Enter on an empty box. The room does nothing; the ask-dialog closes,
    *  because an empty ask is a dismissal (D-077). */
   onEmptySubmit?: () => void;
@@ -86,10 +129,16 @@ export function Composer({
     const stored = localStorage.getItem("novus-effort");
     return isEffort(stored) ? stored : DEFAULT_EFFORT;
   });
-  const [openMenu, setOpenMenu] = useState<"model" | "effort" | null>(null);
+  const [openMenu, setOpenMenu] = useState<"model" | "effort" | "policy" | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [queuedNote, setQueuedNote] = useState<string | null>(null);
+  /** The Don't ask confirmation, open (D-115). The warning is the dialog. */
+  const [confirmingUnsupervised, setConfirmingUnsupervised] = useState(false);
+  const [settingProfile, setSettingProfile] = useState(false);
+  /** The slider stop under the pointer (D-116): its meaning previews on the
+   *  one explaining line, falling back to the profile that is set. */
+  const [previewProfile, setPreviewProfile] = useState<PermissionProfile | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const footRef = useRef<HTMLDivElement>(null);
 
@@ -143,6 +192,21 @@ export function Composer({
     setQueuedNote(
       outcome.queued ? (outcome.deferred ?? "Queued — applies at the next safe point") : null
     );
+  };
+
+  const chooseProfile = async (profile: PermissionProfile, acknowledged: string | null) => {
+    if (!policy || settingProfile) return;
+    setSettingProfile(true);
+    setError(null);
+    const outcome = await policy.onSet(profile, acknowledged);
+    setSettingProfile(false);
+    if (!outcome.ok) {
+      setError(outcome.message ?? "The profile did not change.");
+      setConfirmingUnsupervised(false);
+      return;
+    }
+    setOpenMenu(null);
+    setConfirmingUnsupervised(false);
   };
 
   const send = async () => {
@@ -302,6 +366,125 @@ export function Composer({
             )}
           </span>
 
+          {policy && (
+            <span className="chip-wrap">
+              {/* The lane's answer policy, worn where directing happens (D-115).
+                  The word is a fact for everyone; changing it is policy.set,
+                  which the server enforces — this chip only asks. */}
+              <button
+                className="chip-button"
+                disabled={!enabled || !policy.maySet}
+                title={
+                  policy.maySet
+                    ? undefined
+                    : "Only a Mission Admin or Operator can change permissions (policy.set)."
+                }
+                aria-haspopup="menu"
+                aria-expanded={openMenu === "policy"}
+                onClick={() => setOpenMenu(openMenu === "policy" ? null : "policy")}
+                data-testid="policy-chip"
+              >
+                Permissions ·{" "}
+                <span className={policy.profile === "dont_ask" ? "tone-warn" : undefined}>
+                  {profileLabel(policy.profile)}
+                </span>
+              </button>
+              {openMenu === "policy" && (
+                <div className="chip-menu policy-slider-menu" data-testid="policy-menu">
+                  {/* One track, five stops, autonomy growing rightward — the
+                      owner's slider (D-116, on sight of the D-115 row menu).
+                      The dangerous end wears the warn tone before it is
+                      chosen, and choosing it still opens the warning. */}
+                  <div className="policy-slider" role="radiogroup" aria-label="Permission profile">
+                    <span className="policy-track" aria-hidden="true" />
+                    <span
+                      className={
+                        policy.profile === "dont_ask"
+                          ? "policy-track-fill policy-track-fill-warn"
+                          : "policy-track-fill"
+                      }
+                      style={{
+                        width: `${
+                          (Math.max(
+                            0,
+                            PERMISSION_PROFILES.findIndex((option) => option.id === policy.profile)
+                          ) /
+                            (PERMISSION_PROFILES.length - 1)) *
+                          100
+                        }%`
+                      }}
+                      aria-hidden="true"
+                    />
+                    {PERMISSION_PROFILES.map((option) => {
+                      const unsupervised = option.id === "dont_ask";
+                      const withheld = unsupervised && !policy.maySetUnsupervised;
+                      const active = option.id === policy.profile;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          className={[
+                            "policy-stop",
+                            active ? "active" : "",
+                            unsupervised ? "stop-warn" : ""
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                          role="radio"
+                          aria-checked={active}
+                          aria-label={option.label}
+                          disabled={withheld || settingProfile}
+                          title={
+                            withheld ? "Only a Mission Admin can set Don't ask." : option.label
+                          }
+                          onMouseEnter={() => setPreviewProfile(option.id)}
+                          onMouseLeave={() => setPreviewProfile(null)}
+                          onFocus={() => setPreviewProfile(option.id)}
+                          onBlur={() => setPreviewProfile(null)}
+                          onClick={() => {
+                            if (active) {
+                              setOpenMenu(null);
+                              return;
+                            }
+                            if (unsupervised) {
+                              setConfirmingUnsupervised(true);
+                              setOpenMenu(null);
+                              return;
+                            }
+                            void chooseProfile(option.id, null);
+                          }}
+                          data-testid={`policy-${option.id}`}
+                        />
+                      );
+                    })}
+                  </div>
+                  {/* One line does the explaining: the stop under the pointer,
+                      or the one that is set. Five stacked paragraphs were the
+                      first build, and the owner was right that a wall of text
+                      is not a control. */}
+                  <p className="policy-current" data-testid="policy-current">
+                    <span
+                      className={
+                        (previewProfile ?? policy.profile) === "dont_ask"
+                          ? "policy-current-name tone-warn"
+                          : "policy-current-name"
+                      }
+                    >
+                      {profileLabel(previewProfile ?? policy.profile)}
+                    </span>{" "}
+                    — {PROFILE_MEANINGS[previewProfile ?? policy.profile]}
+                  </p>
+                  {/* Not a sixth stop, deliberately: a mode that turns the
+                      asking off cannot keep the record (D-115). */}
+                  <p className="chip-menu-foot" data-testid="policy-no-bypass">
+                    There is no bypass: the harness always asks, and a profile only changes who
+                    answers. Applies from the next turn.
+                  </p>
+                </div>
+              )}
+            </span>
+          )}
+
           {contextNote && <span className="composer-note mono">{contextNote}</span>}
           {queuedNote && (
             <span className="composer-note" data-testid="queued-note">
@@ -355,6 +538,55 @@ export function Composer({
           </button>
         </div>
       </div>
+
+      {confirmingUnsupervised && policy && (
+        // The dangerous profile's warning (D-115), on the dialog's own axis
+        // (D-076): the act named with its consequence beneath, the facts as
+        // quiet rows, the danger action on the right. What is confirmed here
+        // is recorded verbatim on the change (the D-100 pattern).
+        <Dialog
+          label="Set Don't ask"
+          onClose={() => setConfirmingUnsupervised(false)}
+          testId="policy-confirm"
+        >
+          <header className="dialog-head">
+            <h2>Don't ask</h2>
+            <p className="dialog-sub">{DONT_ASK_WARNING}</p>
+          </header>
+          <div className="dialog-body">
+            <div className="confirm-field">
+              <span className="field-label tone-warn">Approved without a person, if you proceed</span>
+              <ul className="confirm-facts">
+                <li>File edits, shell commands, and every other act the harness asks about</li>
+              </ul>
+            </div>
+            <div className="confirm-field">
+              <span className="field-label">Still yours, whatever the profile</span>
+              <ul className="confirm-facts">
+                <li>Every grant is recorded as it happens, and Stop always works</li>
+                <li>Who may direct, stop, decide, and change this profile — the server enforces it</li>
+              </ul>
+            </div>
+          </div>
+          <footer className="dialog-actions">
+            <button
+              className="btn btn-text"
+              onClick={() => setConfirmingUnsupervised(false)}
+              data-testid="policy-confirm-cancel"
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn-danger"
+              disabled={settingProfile}
+              onClick={() => void chooseProfile("dont_ask", DONT_ASK_WARNING)}
+              data-testid="policy-confirm-set"
+            >
+              Set Don't ask, accepting this
+            </button>
+          </footer>
+        </Dialog>
+      )}
     </div>
   );
 }

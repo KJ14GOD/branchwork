@@ -170,6 +170,9 @@ export async function listExecutions(db: Db, missionId: string): Promise<Executi
     exitOutcome: (row.exit_outcome as string | null) ?? null,
     failureReason: (row.failure_reason as string | null) ?? null,
     latestCheckpointSha: (row.latest_checkpoint_sha as string | null) ?? null,
+    // Pinned at dispatch (D-115); rows from before the column read manual,
+    // which is what every pre-profile turn genuinely ran under.
+    permissionProfile: (row.permission_profile as Execution["permissionProfile"] | null) ?? "manual",
     usage: {
       inputTokens: numberOrNull(row.input_tokens),
       outputTokens: numberOrNull(row.output_tokens),

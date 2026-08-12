@@ -5,10 +5,12 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import {
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
+  DEFAULT_PERMISSION_PROFILE,
   EffortSchema,
   ModelIdSchema,
   pathInScope,
   type ApprovalDecision,
+  type PermissionProfile,
   type RunnerEvent
 } from "@novus/contracts";
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
@@ -88,18 +90,33 @@ const MAX_REASON = 400;
  *    inherited can choose a different one. It overrides a settings file that
  *    says `acceptEdits`, which was checked on its own.
  *
- * What is deliberately *not* passed: `acceptEdits` (which is what made this a
- * gap), `bypassPermissions`, `--dangerously-skip-permissions`, and
- * `--allowedTools` — an allowlist is a standing grant, and this build issues
- * one approval for one act. The CLI's own read-only classification still
- * applies underneath: `Bash: ls` never reaches the router and a Bash command
- * that writes a file always does. Novus neither widens nor narrows that; it
- * makes it the *only* thing deciding.
+ * What is deliberately *never* passed, whatever the lane's permission profile
+ * (D-115): `acceptEdits` (which is what made this a gap), `auto`, `dontAsk`,
+ * `bypassPermissions`, `--dangerously-skip-permissions`, and `--allowedTools`.
+ * Each of those makes the CLI act **without asking**, and everything Novus
+ * guarantees — the record of every act, the scope enforcement (D-097), the
+ * read-turn containment (D-095) — rides the asking. A profile is Novus's own
+ * answer policy at this router, not a CLI mode: the harness always asks over
+ * this channel, and what the profile changes is who answers. The CLI's own
+ * read-only classification still applies underneath: `Bash: ls` never reaches
+ * the router and a Bash command that writes a file always does. Novus neither
+ * widens nor narrows that; it makes it the *only* thing deciding what asks.
+ *
+ * The one profile that changes the flag is `plan`: `--permission-mode plan`
+ * is passed so the CLI's own plan mode tells the model to propose rather than
+ * thrash against denials. The value is accepted by the installed CLI
+ * (`claude 2.1.228 --help` lists it, probed 2026-08-11); what plan mode does
+ * live is deliberately not load-bearing, because the router below still
+ * denies every privileged act a plan turn asks for — the flag is behaviour,
+ * the router is the guarantee. A CLI too old to know the value fails the
+ * turn with the CLI's own words rather than running it less supervised.
  *
  * Authentication is unaffected — it does not come from settings — and every
  * probe above ran under the machine's existing Claude Code login.
  */
-const PINNED_PERMISSION_ARGS = ["--setting-sources", "", "--permission-mode", "manual"] as const;
+function pinnedPermissionArgs(profile: PermissionProfile): string[] {
+  return ["--setting-sources", "", "--permission-mode", profile === "plan" ? "plan" : "manual"];
+}
 
 /**
  * Flags Novus asks for but can run without.
@@ -110,7 +127,7 @@ const PINNED_PERMISSION_ARGS = ["--setting-sources", "", "--permission-mode", "m
  * silence, which reads as a wedged turn and is the opposite of what a room
  * watching a long run needs.
  *
- * Separated from `PINNED_PERMISSION_ARGS` because the two must fail
+ * Separated from the pinned permission args because the two must fail
  * differently. A CLI that will not route permission to Novus is a CLI Novus
  * refuses to run (D-062). A CLI that has never heard of subagent forwarding is
  * simply older, and losing a nicety must not lose the turn — so an unknown
@@ -181,12 +198,22 @@ const READ_ONLY_DENIED =
 /** What a scoped turn is told when it reaches outside its files (D-097). */
 const SCOPE_DENIED =
   "That path is outside this chat's declared scope. Work only inside the files this chat owns; changes elsewhere belong to another chat or to an unscoped turn.";
+/** What a plan-profile turn is told when it asks to act (D-115): the refusal
+ *  carries the instruction, so the model proposes instead of retrying. */
+const PLAN_DENIED =
+  "This lane is in the Plan profile: Novus approves no changes in it. Present what you would do — the files, the commands, the order — as your reply; a person reads the plan and either switches the profile or directs the work from there.";
 
 /** The tools whose requests name their filesystem targets outright, and can
  *  therefore be decided by scope policy (D-097). Bash is deliberately not
  *  here: a shell command's effects are declared nowhere, so it stays a human
  *  question however scoped the turn is. */
 const PATH_SCOPED_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "MultiEdit"]);
+
+/** The tools that are a shell. The `auto` profile answers everything except
+ *  these (D-115), for D-097's reason: a shell command declares its targets
+ *  nowhere, so it is the one act `auto` still hands to a person — and the
+ *  only line between `auto` and `dont_ask`. */
+const SHELL_TOOLS = new Set(["Bash"]);
 
 /** Serializes checkpoint capture per worktree (D-097): parallel scoped turns
  *  share one git index, and two captures interleaving `add` and `commit`
@@ -244,6 +271,17 @@ export interface TurnRequest {
    *  exactly as before. Its checkpoint commits only scoped paths. Null means
    *  unscoped: the whole workspace, every act asked about, as always. */
   scope?: readonly string[] | null;
+  /** The lane's answer policy, pinned at dispatch (D-115). Decides what this
+   *  turn's permission questions get answered with **at this machine**, on
+   *  the record: `manual` routes every card to the room as always; `plan`
+   *  denies every privileged act with the reason and asks the CLI's own plan
+   *  mode for a proposal; `accept_edits` allows the path-naming edit tools;
+   *  `auto` allows everything but a shell command; `dont_ask` allows
+   *  everything. Ordered under containment and ownership: a read turn is
+   *  denied whatever the profile says (D-095), and a scope's verdict on the
+   *  edit tools stands whatever the profile says (D-097) — a profile is
+   *  trust, a scope is a sibling's territory. Absent means manual. */
+  permissionProfile?: PermissionProfile;
   /** The scopes of parallel sibling turns still running in this worktree,
    *  read at checkpoint time (D-097) — their territory in flight is theirs,
    *  not this turn's drift. */
@@ -372,6 +410,8 @@ export function startTurn(request: TurnRequest): RunningTurn {
   const sanitize = (text: string): string => redact(maskPaths(text), request.secretValues());
   const readOnly = request.access === "read";
   const scope = request.scope ?? null;
+  /** The lane's answer policy, pinned at dispatch (D-115); absent is manual. */
+  const profile = request.permissionProfile ?? DEFAULT_PERMISSION_PROFILE;
   /** Requests the scope policy already answered (D-097): their card must not
    *  reach the room, and the prompt boundary the stream declares for them is
    *  not real — nothing is pending. */
@@ -472,10 +512,55 @@ export function startTurn(request: TurnRequest): RunningTurn {
   };
 
   /**
+   * Answers one request by the lane's pinned profile (D-115): the response on
+   * the harness's own channel, the card and its false prompt boundary
+   * suppressed exactly as a scope verdict's are, and — unlike a scope verdict,
+   * which keeps D-097's recorded silence — the decision **recorded**, as
+   * `approval.policy` with the same bounded, redacted summary a card would
+   * have carried. A person's standing instruction answered this act, and the
+   * receipt gets to say so.
+   */
+  const decideByProfile = (
+    message: HarnessApprovalRequest,
+    decision: "allowed" | "denied",
+    reason?: string
+  ): void => {
+    policyDecided.add(message.requestId);
+    emit({
+      kind: "approval.policy",
+      payload: {
+        requestId: message.requestId,
+        toolName: message.toolName,
+        decision,
+        profile,
+        summary: message.summary
+      }
+    });
+    writeControl({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: message.requestId,
+        response:
+          decision === "allowed"
+            ? { behavior: "allow" }
+            : { behavior: "deny", message: reason ?? DENIED }
+      }
+    });
+  };
+
+  /**
    * Control traffic, which never reaches the transcript. An approval is
    * remembered so it can be answered; anything Novus cannot answer is answered
    * with an error, because the CLI blocks on what it sends and silence would
    * wedge the turn rather than ignore a message.
+   *
+   * The order of the ladder is the order of the claims (D-115): containment
+   * first (a read turn may not act, whatever the lane trusts), then the plan
+   * profile (a refusal of every privileged act, even an in-scope one — the
+   * person asked for a proposal), then ownership (a scope's verdict on the
+   * path-naming tools, a sibling's territory being no one's to trust away),
+   * then trust (the profile's allows), then the room.
    */
   const handleControl = (message: HarnessControlMessage): void => {
     if (message.kind === "approval") {
@@ -492,6 +577,12 @@ export function startTurn(request: TurnRequest): RunningTurn {
             response: { behavior: "deny", message: READ_ONLY_DENIED }
           }
         });
+        return;
+      }
+      // Plan: nothing changes the workspace, and the denial carries the
+      // instruction so the model presents its plan instead of retrying.
+      if (profile === "plan") {
+        decideByProfile(message, "denied", PLAN_DENIED);
         return;
       }
       // A scoped turn's path-naming writes are policy, not questions (D-097):
@@ -513,6 +604,18 @@ export function startTurn(request: TurnRequest): RunningTurn {
                 : { behavior: "deny", message: SCOPE_DENIED }
           }
         });
+        return;
+      }
+      // The profile's standing allows (D-115), each one recorded: dont_ask
+      // answers everything; auto answers everything but a shell command,
+      // which declares its targets nowhere (D-097's reason); accept_edits
+      // answers the path-naming edit tools alone.
+      if (
+        profile === "dont_ask" ||
+        (profile === "auto" && !SHELL_TOOLS.has(message.toolName)) ||
+        (profile === "accept_edits" && PATH_SCOPED_TOOLS.has(message.toolName))
+      ) {
+        decideByProfile(message, "allowed");
         return;
       }
       pending.set(message.requestId, message);
@@ -641,7 +744,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
     const chosenEffort = EffortSchema.safeParse(request.effort);
     const model: string = chosenModel.success ? chosenModel.data : DEFAULT_MODEL;
     const effort: string = chosenEffort.success ? chosenEffort.data : DEFAULT_EFFORT;
-    emit({ kind: "execution.running", payload: { harness: "claude-code", model, effort } });
+    emit({
+      kind: "execution.running",
+      payload: { harness: "claude-code", model, effort, permissionProfile: profile }
+    });
 
     // The turn's pulse (D-114): while the harness process is alive, say so
     // every few minutes. A twenty-minute test run produces no transcript
@@ -787,7 +893,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         "--verbose",
         "--permission-prompt-tool",
         "stdio",
-        ...PINNED_PERMISSION_ARGS,
+        ...pinnedPermissionArgs(profile),
         ...(optional ? OPTIONAL_ARGS : []),
         ...instructions,
         "--model",
@@ -927,19 +1033,27 @@ export function startTurn(request: TurnRequest): RunningTurn {
       }
 
       // The permission question, in the shape the real CLI sends and through
-      // the same parser, so what a test drives is the production path.
+      // the same parser, so what a test drives is the production path. A
+      // direction may name which tool asks — `[fake-ask:Bash]` — so the
+      // profile ladder's one meaningful line (a shell command is not an edit,
+      // D-115) can be driven without a model call; without the token it stays
+      // the Write every existing test knows.
       let allowed = true;
       if (request.fakeApproval) {
+        const askTool = /\[fake-ask:([A-Za-z]+)\]/.exec(request.direction)?.[1] ?? "Write";
         for (const event of stream.push(
           `${JSON.stringify({
             type: "control_request",
             request_id: approvalId,
             request: {
               subtype: "can_use_tool",
-              tool_name: "Write",
-              display_name: "Write",
-              input: { file_path: filePath, content: "# Fake turn\n" },
-              description: "NOVUS_FAKE_TURN.md",
+              tool_name: askTool,
+              display_name: askTool,
+              input:
+                askTool === "Write"
+                  ? { file_path: filePath, content: "# Fake turn\n" }
+                  : { command: "echo fake-shell" },
+              description: askTool === "Write" ? "NOVUS_FAKE_TURN.md" : "echo fake-shell",
               permission_suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }],
               tool_use_id: "toolu_fake_write"
             }

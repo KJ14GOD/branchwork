@@ -115,6 +115,55 @@ export type BranchStatus = z.infer<typeof BranchStatusSchema>;
  *  approach flag is set, and never long enough to be a plan (D-074). */
 export const APPROACH_INTENT_MAX = 240;
 
+/**
+ * The lane's permission profile (D-115): Novus's own standing answer policy
+ * for the harness's permission questions, chosen by a person who holds
+ * `policy.set`, event-recorded, and pinned into each turn at dispatch — a
+ * running turn keeps the profile it started under, and a change speaks from
+ * the next turn.
+ *
+ * The wire never changes with it. Every profile runs under the same pinned
+ * flags (D-062) with the stdio control channel open, so the harness always
+ * asks and every act is still routed, recorded, and refusable; what a profile
+ * changes is **who answers**. `manual` routes every question to the room —
+ * the default, and exactly the pre-profile behaviour. `accept_edits` answers
+ * the harness's file edits itself, on the record; a shell command and
+ * everything else still reach a person. `auto` answers everything except a
+ * shell command, which declares its targets nowhere (D-097) and stays a human
+ * question. `dont_ask` answers everything, shell included, each grant still
+ * recorded. `plan` answers **no** to every privileged act, with the reason on
+ * the harness's own channel, and runs the CLI in its own plan mode so the
+ * model proposes instead of thrashing.
+ *
+ * There is deliberately no `bypass` value: Claude's `bypassPermissions` turns
+ * the asking off at the harness — no routing, no record, no scope enforcement
+ * (D-097), no read-turn containment (D-095) — and every way of running
+ * without the control channel is a way of running unsupervised (D-062).
+ * `dont_ask` is the ceiling, and it keeps the record. No profile touches
+ * server authorization: who may direct, stop, decide, or change the profile
+ * itself is the capability model's, enforced server-side, whatever the lane's
+ * profile says.
+ */
+export const PERMISSION_PROFILES = [
+  { id: "plan", label: "Plan" },
+  { id: "manual", label: "Ask every time" },
+  { id: "accept_edits", label: "Accept edits" },
+  { id: "auto", label: "Auto" },
+  { id: "dont_ask", label: "Don't ask" }
+] as const;
+
+/** Written literally so the type stays a union of exact ids; a contract test
+ *  asserts it never drifts from PERMISSION_PROFILES. */
+export const PermissionProfileSchema = z.enum(["plan", "manual", "accept_edits", "auto", "dont_ask"]);
+export type PermissionProfile = z.infer<typeof PermissionProfileSchema>;
+export const DEFAULT_PERMISSION_PROFILE: PermissionProfile = "manual";
+
+/** The one tier rule, judged here so the route and the renderer cannot
+ *  disagree (the D-097 one-judge pattern): `dont_ask` hands the policy a
+ *  person's whole answer, shell commands included, so setting it is Mission
+ *  Admin's alone. Everything else `policy.set` grants is Operator territory. */
+export const ADMIN_ONLY_PERMISSION_PROFILES: readonly PermissionProfile[] = ["dont_ask"];
+
 export const WorkstreamSchema = z.object({
   workstreamId: z.string().startsWith("wst_"),
   missionId: z.string().startsWith("msn_"),
@@ -137,7 +186,10 @@ export const WorkstreamSchema = z.object({
   /** The revision the repository host is known to serve for this branch —
    *  written only by an observed successful push (D-099). Null means nothing
    *  has ever been pushed, which is the ordinary local-first state. */
-  remoteHeadSha: ShaSchema.nullable().default(null)
+  remoteHeadSha: ShaSchema.nullable().default(null),
+  /** The lane's standing answer policy (D-115). Defaulted so rows from before
+   *  profiles existed read as what they were: every question asked. */
+  permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE)
 });
 export type Workstream = z.infer<typeof WorkstreamSchema>;
 
@@ -360,6 +412,12 @@ export const CapabilitySchema = z.enum([
   /** Answering a harness approval. Lease-held only — a Mission Admin who is not
    *  the controller cannot answer for them (PRODUCT.md#roles-and-capabilities). */
   "approval.respond",
+  /** Set a lane's permission profile (D-115). A policy act, not an operating
+   *  one — it decides what gets asked, where the baton decides who answers —
+   *  so it is held by role (Mission Admin, Operator) and never granted by the
+   *  baton, like `approach.create`. One further tier is judged server-side:
+   *  `dont_ask` is Mission Admin's alone (ADMIN_ONLY_PERMISSION_PROFILES). */
+  "policy.set",
   /** Declare a turn dead after a stop went unanswered (D-111). Held by the
    *  controller and by Mission Admin — the escalation PRODUCT.md#control has
    *  always named, implemented as exactly that: an explicit, logged act that
@@ -509,7 +567,9 @@ export type HarnessUsage = z.infer<typeof HarnessUsageSchema>;
  *  turn — exclusive per lane, checkpointed, its approvals routed to the baton
  *  holder. `read` runs alongside a write turn: it may look and speak but not
  *  change — every permission request is denied by policy, no checkpoint is
- *  captured, and it is never the lane's safe transfer boundary. */
+ *  captured, and it is never the lane's safe transfer boundary. Containment
+ *  outranks trust: a read turn is denied whatever the lane's permission
+ *  profile says (D-115). */
 export const ExecutionAccessSchema = z.enum(["write", "read"]);
 export type ExecutionAccess = z.infer<typeof ExecutionAccessSchema>;
 
@@ -538,6 +598,10 @@ export const ExecutionSchema = z.object({
   exitOutcome: z.string().nullable(),
   failureReason: z.string().nullable(),
   latestCheckpointSha: z.string().nullable(),
+  /** The permission profile this turn ran under, pinned at dispatch (D-115) —
+   *  part of the turn's durable record, so a receipt can say what supervision
+   *  the work had. Defaulted: every pre-profile turn ran asking. */
+  permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE),
   /** Every turn of this execution added up, as the harness reported them. A
    *  claim about what the work cost, never a bill and never a limit. */
   usage: HarnessUsageSchema
@@ -1907,7 +1971,18 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("execution.starting"), payload: z.object({}).strict() }),
   z.object({
     kind: z.literal("execution.running"),
-    payload: z.object({ harness: BOUNDED_LINE, model: BOUNDED_LINE, effort: BOUNDED_LINE }).strict()
+    payload: z
+      .object({
+        harness: BOUNDED_LINE,
+        model: BOUNDED_LINE,
+        effort: BOUNDED_LINE,
+        /** The profile this turn was dispatched under (D-115) — echoed by the
+         *  runner exactly as model and effort are, so the trace's machinery
+         *  line can say what supervision the turn ran with. Defaulted so an
+         *  older runner's report still validates as what it was: manual. */
+        permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE)
+      })
+      .strict()
   }),
   z.object({
     kind: z.literal("harness.session"),
@@ -2145,6 +2220,30 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
      *  settlement paths never travel this way. */
     kind: z.literal("approval.cancelled"),
     payload: z.object({ requestId: BOUNDED_LINE, reason: BOUNDED_LINE }).strict()
+  }),
+  z.object({
+    /**
+     * The lane's permission profile answered a harness question itself
+     * (D-115): allowed under `accept_edits`, `auto`, or `dont_ask`, denied
+     * under `plan`. Recorded-and-nothing-else — no approvals row, no
+     * `needs_approval`, no boundary — because nothing is waiting; it exists
+     * so the receipt can say what the policy granted and refused on a
+     * person's standing instruction, act by act. The summary is the same
+     * bounded, path-masked, value-redacted sentence a card would have
+     * carried (D-052); the raw tool input travels nowhere, exactly as it
+     * never does. D-095's read-turn denials and D-097's scope verdicts keep
+     * their recorded silence — this event belongs to the profile alone.
+     */
+    kind: z.literal("approval.policy"),
+    payload: z
+      .object({
+        requestId: BOUNDED_LINE,
+        toolName: BOUNDED_LINE,
+        decision: z.enum(["allowed", "denied"]),
+        profile: PermissionProfileSchema,
+        summary: z.string().max(MAX_APPROVAL_SUMMARY)
+      })
+      .strict()
   }),
   z.object({ kind: z.literal("execution.completed"), payload: z.object({}).strict() }),
   z.object({
@@ -2515,6 +2614,21 @@ export interface NovusBridge {
       missionId: string;
       sessionId: string;
       scope: SessionScope | null;
+    }): Promise<IpcResult<null>>;
+    /** Sets a lane's permission profile (D-115). `policy.set` — Mission Admin
+     *  or Operator, never the baton — with `dont_ask` refused in words for
+     *  anyone but a Mission Admin; the server judges both, and the
+     *  acknowledged sentence a person confirmed for a dangerous profile is
+     *  recorded on the event. Applies from the next dispatched turn: a
+     *  running turn keeps the profile it started under. */
+    setPermissionProfile(input: {
+      missionId: string;
+      workstreamId: string;
+      profile: PermissionProfile;
+      /** The warning sentence the person confirmed, for profiles that warn —
+       *  recorded verbatim on `policy.changed`, the D-100 acknowledgement
+       *  pattern. Null for profiles that need none. */
+      acknowledged?: string | null;
     }): Promise<IpcResult<null>>;
     cancelDirection(directionId: string): Promise<IpcResult<null>>;
     /** Stops the named lane's running turn. The lane travels on the wire so a

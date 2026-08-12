@@ -232,3 +232,111 @@ describe("the harness's workers, joined from what the stream stated (D-107)", ()
     expect(workerFiles(block.workers[0])).toEqual(["src/auth.ts", "src/session.ts"]);
   });
 });
+
+describe("permission profiles in the room (D-115)", () => {
+  it("puts the profile on the turn's machinery line, and says nothing for manual", () => {
+    const profiled = trace(
+      detail([
+        {
+          kind: "execution.running",
+          payload: {
+            harness: "claude-code",
+            model: "claude-fable-5",
+            effort: "high",
+            permissionProfile: "accept_edits"
+          }
+        }
+      ])
+    );
+    expect(profiled.machinery).toBe("claude-fable-5 · effort high · Accept edits");
+    const manual = trace(
+      detail([
+        {
+          kind: "execution.running",
+          payload: {
+            harness: "claude-code",
+            model: "claude-fable-5",
+            effort: "high",
+            permissionProfile: "manual"
+          }
+        }
+      ])
+    );
+    // Manual is the default and says nothing: the pre-profile line, exactly.
+    expect(manual.machinery).toBe("claude-fable-5 · effort high");
+  });
+
+  it("renders a policy-decided answer as apparatus with the profile named, never as a card", () => {
+    const block = trace(
+      detail([
+        {
+          kind: "approval.policy",
+          actor: { kind: "runner", id: "rnr_1", login: null },
+          payload: {
+            requestId: "req-1",
+            toolName: "Write",
+            decision: "allowed",
+            profile: "accept_edits",
+            summary: "Write NOTES.md"
+          }
+        }
+      ])
+    );
+    expect(block.toolSteps).toHaveLength(1);
+    expect(block.toolSteps[0].label).toBe("allowed by policy · Write");
+    expect(block.toolSteps[0].detail).toBe("Write NOTES.md (Accept edits)");
+  });
+
+  it("says a plan refusal the same way, denied", () => {
+    const block = trace(
+      detail([
+        {
+          kind: "approval.policy",
+          actor: { kind: "runner", id: "rnr_1", login: null },
+          payload: {
+            requestId: "req-1",
+            toolName: "Write",
+            decision: "denied",
+            profile: "plan",
+            summary: "Write NOTES.md"
+          }
+        }
+      ])
+    );
+    expect(block.toolSteps[0].label).toBe("refused by policy · Write");
+    expect(block.toolSteps[0].detail).toBe("Write NOTES.md (Plan)");
+  });
+
+  it("renders a profile change as the room's own sentence, with the dangerous one carrying its meaning", () => {
+    const feed = buildFeed(
+      detail([
+        {
+          kind: "policy.changed",
+          actor: { kind: "user", id: KARTIK, login: "kartik" },
+          cause: { directionId: null, leaseId: null },
+          executionId: null,
+          payload: { workstreamId: "wst_one", from: "manual", to: "plan", acknowledged: null }
+        },
+        {
+          kind: "policy.changed",
+          actor: { kind: "user", id: KARTIK, login: "kartik" },
+          cause: { directionId: null, leaseId: null },
+          executionId: null,
+          payload: {
+            workstreamId: "wst_one",
+            from: "plan",
+            to: "dont_ask",
+            acknowledged: "Every act…"
+          }
+        }
+      ])
+    );
+    const lines = feed.blocks
+      .filter((block) => block.kind === "control")
+      .map((block) => (block.kind === "control" ? block.text : ""));
+    expect(lines[0]).toBe("kartik set permissions to Plan");
+    expect(lines[1]).toBe(
+      "kartik set permissions to Don't ask — every act the harness asks about is approved by policy, on the record"
+    );
+  });
+});

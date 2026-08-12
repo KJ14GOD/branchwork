@@ -73,7 +73,10 @@ export function toWorkstream(row: Record<string, unknown>): Workstream {
     intent: (row.intent as string | null) ?? null,
     forkedFromWorkstreamId: (row.forked_from_wst_id as string | null) ?? null,
     originSha: (row.origin_sha as string | null) ?? null,
-    remoteHeadSha: (row.remote_head_sha as string | null) ?? null
+    remoteHeadSha: (row.remote_head_sha as string | null) ?? null,
+    // The lane's standing answer policy (D-115); the DB CHECK owns validity.
+    permissionProfile:
+      (row.permission_profile as Workstream["permissionProfile"] | null) ?? "manual"
   };
 }
 

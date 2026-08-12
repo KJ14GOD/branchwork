@@ -1,3 +1,4 @@
+import { PERMISSION_PROFILES } from "@novus/contracts";
 import type {
   ApprovalRequest,
   Checkpoint,
@@ -243,6 +244,21 @@ function controlLine(event: MissionEvent): ControlLine | null {
       if (!actor) return null;
       return plain(from ? `${actor} revoked control from ${from}` : `${actor} revoked control`, actor);
     }
+    case "policy.changed": {
+      // The lane's answer policy moved (D-115): a room-level act with a name
+      // on it, exactly like the baton moving. The dangerous word carries its
+      // meaning in the sentence, because "Don't ask" alone undersells it.
+      if (!actor) return null;
+      const word = text(event.payload.to);
+      const label = PERMISSION_PROFILES.find((option) => option.id === word)?.label ?? word;
+      if (!label) return null;
+      return plain(
+        word === "dont_ask"
+          ? `${actor} set permissions to ${label} — every act the harness asks about is approved by policy, on the record`
+          : `${actor} set permissions to ${label}`,
+        actor
+      );
+    }
     case "control.released": {
       const who = from ?? actor;
       return who ? plain(`${who} released control`, who) : null;
@@ -364,7 +380,11 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       continue;
     }
     if (WORKSPACE_RUNTIME_KINDS.has(event.kind)) continue;
-    if (event.kind.startsWith("control.") || event.kind.startsWith("handoff.")) {
+    if (
+      event.kind.startsWith("control.") ||
+      event.kind.startsWith("handoff.") ||
+      event.kind === "policy.changed"
+    ) {
       const line = controlLine(event);
       if (line) {
         blocks.push({
@@ -438,6 +458,23 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         block.toolSteps.push({ label, detail });
         break;
       }
+      case "approval.policy": {
+        // A profile-decided answer (D-115): apparatus, never a question — the
+        // act was answered by a person's standing policy the moment it was
+        // asked, and this row is the receipt's view of that. It never takes
+        // the card position, because nothing waited.
+        const tool = text(event.payload.toolName) ?? "a tool";
+        const summary = text(event.payload.summary);
+        const profileWord =
+          PERMISSION_PROFILES.find((option) => option.id === text(event.payload.profile))?.label ??
+          text(event.payload.profile) ??
+          "policy";
+        block.toolSteps.push({
+          label: `${event.payload.decision === "denied" ? "refused" : "allowed"} by policy · ${tool}`,
+          detail: summary ? `${summary} (${profileWord})` : profileWord
+        });
+        break;
+      }
       case "harness.worker.ended": {
         const own = text(event.payload.toolUseId);
         const worker = own ? block.workers.find((candidate) => candidate.id === own) : undefined;
@@ -479,7 +516,17 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
           event.executionId !== null &&
           detail.executions.find((execution) => execution.executionId === event.executionId)
             ?.access === "read";
-        const base = model ? (effort ? `${model} · effort ${effort}` : model) : null;
+        // And a turn that ran under a standing answer policy says which
+        // (D-115) — on the apparatus line, because what supervision a turn
+        // had is a fact about the turn. Manual is the default and says
+        // nothing, exactly as an ordinary write turn's access says nothing.
+        const profile = text(event.payload.permissionProfile);
+        const profileWord =
+          profile && profile !== "manual"
+            ? (PERMISSION_PROFILES.find((option) => option.id === profile)?.label ?? profile)
+            : null;
+        let base = model ? (effort ? `${model} · effort ${effort}` : model) : null;
+        if (base && profileWord) base = `${base} · ${profileWord}`;
         block.machinery = base ? (readOnly ? `${base} · read-only` : base) : block.machinery;
         break;
       }

@@ -213,6 +213,23 @@ body {
   background: var(--hover);
 }
 
+/* The danger variant DESIGN.md#primitives has always named: the secondary
+   shape wearing --danger within its meaning — destructive or dangerous acts
+   only. Same height, same padding, per the one-size rule (D-076). The PR
+   page's merge/close/delete confirms have referenced this class since D-100;
+   until D-115's warning dialog needed it too, it was never defined, and those
+   buttons silently fell back to the plain text style. */
+.btn-danger {
+  border-color: var(--edge);
+  background: var(--surface-1);
+  color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  border-color: var(--edge-hover);
+  background: var(--hover);
+}
+
 .input {
   width: 100%;
   font: var(--type-body);
@@ -1842,6 +1859,116 @@ body {
 
 .chip-menu-row .chip-menu-note {
   margin-left: auto;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+/* The permission-profile slider (D-115, re-cut by D-116 on the owner's
+   sight of the first build's row menu): one track, five stops, autonomy
+   growing rightward, the dangerous end warn-toned before it is chosen. One
+   line explains the stop under the pointer — a mode nobody can explain is a
+   mode nobody chose, and a wall of text is not a control. */
+.policy-slider-menu {
+  min-width: 320px;
+  max-width: 360px;
+  padding: var(--s-3);
+}
+
+.policy-slider {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+  margin-bottom: var(--s-2);
+}
+
+.policy-track {
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  height: 2px;
+  background: var(--edge);
+}
+
+.policy-track-fill {
+  position: absolute;
+  left: 7px;
+  max-width: calc(100% - 14px);
+  height: 2px;
+  background: var(--accent);
+  transition: width var(--m-press) var(--ease);
+}
+
+.policy-track-fill-warn {
+  background: var(--warn);
+}
+
+.policy-stop {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.policy-stop::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--edge-hover);
+}
+
+.policy-stop:hover:not(:disabled)::before {
+  border-color: var(--text-2);
+}
+
+.policy-stop.active::before {
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.policy-stop.stop-warn::before {
+  border-color: var(--warn);
+}
+
+.policy-stop.stop-warn.active::before {
+  background: var(--warn);
+}
+
+.policy-stop:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.policy-current {
+  margin: 0;
+  font: var(--type-meta);
+  color: var(--text-3);
+  /* Two lines of meaning at this width; reserved so hovering across stops
+     does not bounce the popover's height. */
+  min-height: 36px;
+}
+
+.policy-current-name {
+  color: var(--text-1);
+}
+
+/* Why there is no sixth stop, said where the stops are. */
+.chip-menu-foot {
+  margin: var(--s-1) 0 0;
+  padding: var(--s-1) var(--s-2) 0;
+  border-top: 1px solid var(--edge);
   font: var(--type-meta);
   color: var(--text-3);
 }

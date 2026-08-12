@@ -814,3 +814,25 @@ update workstream_sessions s
   from (select distinct on (session_id) session_id, body
           from directions order by session_id, ordinal) d
  where d.session_id = s.csn_id and s.title is null and length(btrim(d.body)) > 0;
+
+-- ---------------------------------------------------------------------------
+-- Permission profiles (D-115). The lane's standing answer policy for the
+-- harness's permission questions — chosen by a person with `policy.set`,
+-- event-recorded as `policy.changed`, and pinned onto each execution at
+-- dispatch so a turn's record says what supervision it ran under. 'manual'
+-- is the default and is exactly the pre-profile behaviour: every question
+-- asked. There is deliberately no 'bypass' value anywhere in this vocabulary:
+-- the harness always asks over the pinned stdio channel (D-062), and what a
+-- profile changes is who answers. The CHECK is widened here and only here,
+-- per the one-place rule the runner-command vocabulary learned the hard way.
+-- ---------------------------------------------------------------------------
+
+alter table workstreams add column if not exists permission_profile text not null default 'manual';
+alter table workstreams drop constraint if exists workstreams_permission_profile_check;
+alter table workstreams add constraint workstreams_permission_profile_check
+  check (permission_profile in ('plan', 'manual', 'accept_edits', 'auto', 'dont_ask'));
+
+alter table executions add column if not exists permission_profile text not null default 'manual';
+alter table executions drop constraint if exists executions_permission_profile_check;
+alter table executions add constraint executions_permission_profile_check
+  check (permission_profile in ('plan', 'manual', 'accept_edits', 'auto', 'dont_ask'));

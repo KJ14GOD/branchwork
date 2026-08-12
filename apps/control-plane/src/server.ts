@@ -33,6 +33,7 @@ import { registerApproachRoutes } from "./approaches.ts";
 import { registerArchiveRoutes } from "./archive.ts";
 import { registerAuthorityRoutes } from "./authority.ts";
 import { registerExecutionRoutes } from "./executions.ts";
+import { registerPolicyRoutes } from "./policy.ts";
 import { registerPullRequestRoutes, registerWebhookRoutes } from "./pull-requests.ts";
 import { registerRunnerRoutes } from "./runner.ts";
 import { registerSessionRoutes } from "./sessions.ts";
@@ -302,6 +303,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
   registerArchiveRoutes(app, deps);
   registerAuthorityRoutes(app, deps);
   registerExecutionRoutes(app, deps);
+  registerPolicyRoutes(app, deps);
   registerPullRequestRoutes(app, deps);
   registerWebhookRoutes(app, deps);
   registerRunnerRoutes(app, deps);

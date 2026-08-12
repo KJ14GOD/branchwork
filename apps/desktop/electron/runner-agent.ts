@@ -4,9 +4,12 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   ApiErrorSchema,
+  DEFAULT_PERMISSION_PROFILE,
   DeclaredCommandSchema,
+  PermissionProfileSchema,
   RunnerCommandsResponseSchema,
   type MissionDetailResponse,
+  type PermissionProfile,
   type RunnerCommand,
   type RunnerEvent,
   type SequencedRunnerEvent
@@ -235,7 +238,11 @@ const StartPayloadSchema = z.object({
    *  this turn enforces the scope the controller had approved when it was
    *  authorized, not whatever the row says by the time it runs. Null means
    *  unscoped — the whole workspace, exclusively. */
-  scope: z.array(z.string()).nullable().default(null)
+  scope: z.array(z.string()).nullable().default(null),
+  /** The lane's answer policy, pinned at dispatch exactly as the scope is
+   *  (D-115). Defaulted to manual so a command from an older control plane
+   *  runs as every turn always did: asking. */
+  permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE)
 });
 
 /** The push the control plane authorized (D-099): the branch, and the exact
@@ -1088,6 +1095,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           : (payload.data.resumeSessionId ?? workstream.harnessSessionId),
       access: payload.data.access,
       scope: payload.data.scope,
+      permissionProfile: payload.data.permissionProfile,
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });
@@ -1161,6 +1169,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     access: "write" | "read";
     /** The chat's file scope, pinned at dispatch (D-097); null unscoped. */
     scope: string[] | null;
+    /** The lane's answer policy, pinned at dispatch (D-115). */
+    permissionProfile: PermissionProfile;
     announceStart: boolean;
     pendingApplies: () => Promise<boolean>;
   }
@@ -1209,6 +1219,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       resumeSessionId: args.resumeSessionId,
       access: args.access,
       scope: args.scope,
+      permissionProfile: args.permissionProfile,
       siblingScopes: () =>
         [...active.values()]
           .filter(

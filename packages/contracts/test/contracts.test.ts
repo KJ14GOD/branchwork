@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  ADMIN_ONLY_PERMISSION_PROFILES,
   CLAUDE_MODELS,
   CapabilitySchema,
   CreateMissionInputSchema,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
+  DEFAULT_PERMISSION_PROFILE,
+  PERMISSION_PROFILES,
+  PermissionProfileSchema,
+  WorkstreamSchema,
   DirectionInputSchema,
   DirectionSchema,
   EventSchema,
@@ -182,6 +187,104 @@ describe("the model allowlist", () => {
     expect(parsed.data.model).toBe(DEFAULT_MODEL);
     expect(parsed.data.effort).toBe(DEFAULT_EFFORT);
     expect(ModelIdSchema.options).toContain(DEFAULT_MODEL);
+  });
+});
+
+describe("permission profiles (D-115)", () => {
+  it("keeps the labelled list and the validated enum identical and in order", () => {
+    expect(PermissionProfileSchema.options).toEqual(PERMISSION_PROFILES.map((profile) => profile.id));
+  });
+
+  it("has no bypass value, by name or by accident", () => {
+    // Claude's bypassPermissions turns the asking off at the harness — no
+    // routing, no record, no scope enforcement, no read-turn containment.
+    // The vocabulary refusing it is the structural half of "no mode can
+    // bypass server authorization": a value the schema cannot parse cannot
+    // reach a row, a payload, or a flag.
+    expect(PermissionProfileSchema.safeParse("bypass").success).toBe(false);
+    expect(PermissionProfileSchema.safeParse("bypassPermissions").success).toBe(false);
+    expect(PermissionProfileSchema.options.some((profile) => /bypass/i.test(profile))).toBe(false);
+  });
+
+  it("defaults to manual — the pre-profile behaviour — everywhere it lands", () => {
+    expect(DEFAULT_PERMISSION_PROFILE).toBe("manual");
+    const workstream = WorkstreamSchema.safeParse({
+      workstreamId: "wst_1",
+      missionId: "msn_1",
+      name: "Current work",
+      baseRef: "main",
+      baseSha: "a".repeat(40),
+      missionBranch: "novus/m-1",
+      branchStatus: "created",
+      branchError: null
+    });
+    expect(workstream.success).toBe(true);
+    if (workstream.success) expect(workstream.data.permissionProfile).toBe("manual");
+  });
+
+  it("keeps the dangerous tier a subset of the vocabulary", () => {
+    for (const profile of ADMIN_ONLY_PERMISSION_PROFILES) {
+      expect(PermissionProfileSchema.options).toContain(profile);
+    }
+    expect(ADMIN_ONLY_PERMISSION_PROFILES).toContain("dont_ask");
+  });
+
+  it("records a policy-decided answer with its profile, and bounds it", () => {
+    const parsed = RunnerEventSchema.safeParse({
+      kind: "approval.policy",
+      payload: {
+        requestId: "req_1",
+        toolName: "Write",
+        decision: "allowed",
+        profile: "accept_edits",
+        summary: "Write NOTES.md"
+      }
+    });
+    expect(parsed.success).toBe(true);
+    expect(
+      RunnerEventSchema.safeParse({
+        kind: "approval.policy",
+        payload: {
+          requestId: "req_1",
+          toolName: "Write",
+          decision: "allowed",
+          profile: "bypass",
+          summary: "Write NOTES.md"
+        }
+      }).success
+    ).toBe(false);
+    expect(
+      RunnerEventSchema.safeParse({
+        kind: "approval.policy",
+        payload: {
+          requestId: "req_1",
+          toolName: "Write",
+          decision: "allowed",
+          profile: "dont_ask",
+          summary: "x".repeat(MAX_APPROVAL_SUMMARY + 1)
+        }
+      }).success
+    ).toBe(false);
+  });
+
+  it("admits the profile on the running event and defaults an older runner's report", () => {
+    const withProfile = RunnerEventSchema.safeParse({
+      kind: "execution.running",
+      payload: { harness: "claude-code", model: "m", effort: "high", permissionProfile: "plan" }
+    });
+    expect(withProfile.success).toBe(true);
+    const older = RunnerEventSchema.safeParse({
+      kind: "execution.running",
+      payload: { harness: "claude-code", model: "m", effort: "high" }
+    });
+    expect(older.success).toBe(true);
+    if (older.success && older.data.kind === "execution.running") {
+      expect(older.data.payload.permissionProfile).toBe("manual");
+    }
+  });
+
+  it("carries policy.set as a capability the server can grant", () => {
+    expect(CapabilitySchema.safeParse("policy.set").success).toBe(true);
   });
 });
 

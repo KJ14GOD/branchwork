@@ -2,12 +2,15 @@ import type { FastifyInstance } from "fastify";
 import {
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
+  DEFAULT_PERMISSION_PROFILE,
   DirectionInputSchema,
   DirectionResolutionSchema,
   ExecutionStateSchema,
+  PermissionProfileSchema,
   scopesDisjoint,
   TERMINAL_EXECUTION_STATES,
-  type FileDiffResponse
+  type FileDiffResponse,
+  type PermissionProfile
 } from "@novus/contracts";
 import { z } from "zod";
 import type pg from "pg";
@@ -77,6 +80,14 @@ export interface DispatchResult {
   commandId: string | null;
   /** Why nothing was dispatched, when nothing was: no runner, already busy. */
   deferred: string | null;
+}
+
+/** The lane's stored answer policy, validated (D-115). Malformed or
+ *  pre-migration reads as manual — every question asked — never as a wider
+ *  grant, the same failure posture as a malformed scope reading unscoped. */
+function profileOf(value: unknown): PermissionProfile {
+  const parsed = PermissionProfileSchema.safeParse(value);
+  return parsed.success ? parsed.data : DEFAULT_PERMISSION_PROFILE;
 }
 
 export interface EnqueueArgs {
@@ -296,14 +307,19 @@ export async function dispatchDirection(
     }
 
     const direction = await client.query(
-      `select d.body, d.session_id, s.scope from directions d
+      `select d.body, d.session_id, s.scope, w.permission_profile from directions d
          join workstream_sessions s on s.csn_id = d.session_id
+         join workstreams w on w.wst_id = d.wst_id
         where d.dir_id = $1 and d.wst_id = $2`,
       [args.directionId, workstreamId]
     );
     const body = direction.rows[0]?.body as string | undefined;
     const sessionId = direction.rows[0]?.session_id as string | undefined;
     const scope = scopeOf(direction.rows[0]?.scope);
+    // The lane's standing answer policy, read under the same lock and pinned
+    // into this turn (D-115): a profile change mid-turn speaks from the next
+    // dispatch, never into a running one (the D-043 pattern, as with scope).
+    const permissionProfile = profileOf(direction.rows[0]?.permission_profile);
     if (body === undefined || sessionId === undefined) {
       return { executionId: null, commandId: null, deferred: "That direction is no longer available." };
     }
@@ -332,7 +348,11 @@ export async function dispatchDirection(
           // so a follow-up in a second chat resumed a sibling's conversation
           // (found by the D-109 audit; the D-083 rule, finally applied here).
           sessionId,
-          resumeSessionId: await sessionResumePoint(client, sessionId)
+          resumeSessionId: await sessionResumePoint(client, sessionId),
+          // Same reasoning for the profile (D-115): a live turn keeps the one
+          // pinned at its own dispatch, and the fresh process an after-end
+          // apply spawns must state its policy rather than inherit a default.
+          permissionProfile
         },
         idempotencyKey: `apply:${args.directionId}`
       }),
@@ -392,8 +412,8 @@ export async function dispatchDirection(
     try {
       await client.query(
         `insert into executions (exe_id, org_id, mission_id, wst_id, session_id, harness, model, effort,
-                                 runner_id, starting_direction_id, state, started_by)
-         values ($1, $2, $3, $4, $5, 'claude-code', $6, $7, $8, $9, 'requested', $10)`,
+                                 runner_id, starting_direction_id, state, started_by, permission_profile)
+         values ($1, $2, $3, $4, $5, 'claude-code', $6, $7, $8, $9, 'requested', $10, $11)`,
         [
           executionId,
           access.orgId,
@@ -404,7 +424,8 @@ export async function dispatchDirection(
           args.effort,
           runnerId,
           args.directionId,
-          actor.userId
+          actor.userId,
+          permissionProfile
         ]
       );
       await client.query("release savepoint start_execution");
@@ -440,7 +461,11 @@ export async function dispatchDirection(
         resumeSessionId,
         // Pinned at dispatch (D-097, the D-043 pattern): the turn enforces
         // the scope the controller had approved when it was authorized.
-        scope
+        scope,
+        // And the answer policy the lane stood under when this turn was
+        // authorized (D-115) — the runner applies exactly this, so a profile
+        // change never reaches into a turn already running.
+        permissionProfile
       },
       // Keyed on the *execution*, not the direction. A direction that failed
       // and is directed again is a new attempt and needs a new command; keyed

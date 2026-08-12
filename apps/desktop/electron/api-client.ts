@@ -246,6 +246,20 @@ export class ControlPlaneClient {
     );
   }
 
+  async setPermissionProfile(
+    missionId: string,
+    workstreamId: string,
+    profile: string,
+    acknowledged: string | null
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/workstreams/${encodeURIComponent(workstreamId)}/policy`,
+      OkResponseSchema,
+      { profile, acknowledged }
+    );
+  }
+
   async stopExecution(missionId: string, workstreamId?: string, sessionId?: string): Promise<void> {
     await this.request(
       "POST",

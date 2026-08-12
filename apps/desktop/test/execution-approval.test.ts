@@ -281,6 +281,41 @@ describe("the permission policy Novus pins", () => {
     });
   }, 40_000);
 
+  it("a plan-profile turn runs the CLI's own plan mode; every other profile stays manual (D-115)", async () => {
+    // Plan is the one profile that changes the flag: the CLI's plan mode
+    // tells the model to propose. The router still denies the privileged act
+    // the stub asks for — the flag is behaviour, the router is the guarantee —
+    // so the turn completes with nothing written and the denial recorded.
+    installStub("approval");
+    const plan = begin({ permissionProfile: "plan" });
+    const planResult = await plan.finished;
+    const pairOf = (flag: string): string | undefined => {
+      const args = argv();
+      return args[args.indexOf(flag) + 1];
+    };
+    expect(pairOf("--permission-mode")).toBe("plan");
+    expect(pairOf("--setting-sources")).toBe("");
+    expect(pairOf("--permission-prompt-tool")).toBe("stdio");
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "APPROVED.md"))).toBe(false);
+    expect(planResult.terminal.kind).toBe("execution.completed");
+    expect(payloadOf(plan.events, "approval.policy")).toMatchObject({
+      decision: "denied",
+      profile: "plan"
+    });
+
+    // A trusting profile never becomes a CLI mode: the harness still asks on
+    // this channel, and Novus answers. `dont_ask` runs under `manual`.
+    installStub("approval");
+    const trusted = begin({ permissionProfile: "dont_ask" });
+    await trusted.finished;
+    expect(pairOf("--permission-mode")).toBe("manual");
+    const args = argv();
+    expect(args).not.toContain("dontAsk");
+    expect(args).not.toContain("acceptEdits");
+    expect(args).not.toContain("bypassPermissions");
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "APPROVED.md"))).toBe(true);
+  }, 40_000);
+
   it("asks for the harness's own subagents to be forwarded, and runs without them if it must", async () => {
     // Asked for: a `Task` that runs for minutes is otherwise one tool row and
     // then silence, which reads as a wedged turn.

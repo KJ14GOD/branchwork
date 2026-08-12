@@ -40,6 +40,13 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     // review.approve, and never a merge: no capability grants one, because no
     // verb for one exists (D-099).
     "pr.manage",
+    // Setting a lane's permission profile (D-115): a policy act, not an
+    // operating one — it decides what gets asked, where the baton decides who
+    // answers — so it is role-held and never lease-granted, like
+    // approach.create. One profile is further tiered: `dont_ask` is Mission
+    // Admin's alone, judged in the route against the one list the contracts
+    // package exports.
+    "policy.set",
     "workspace.command",
     "control.request",
     "control.accept",
@@ -53,6 +60,7 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     "approach.create",
     "review.approve",
     "pr.manage",
+    "policy.set",
     "workspace.command",
     "control.request",
     "control.accept"

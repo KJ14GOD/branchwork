@@ -55,6 +55,7 @@ interface WorkstreamRow {
   forked_from_wst_id?: string | null;
   origin_sha?: string | null;
   remote_head_sha?: string | null;
+  permission_profile?: string | null;
 }
 
 function toRepository(row: MissionRow): RepositoryRef | null {
@@ -106,7 +107,10 @@ function toWorkstream(row: WorkstreamRow): Workstream {
     intent: row.intent ?? null,
     forkedFromWorkstreamId: row.forked_from_wst_id ?? null,
     originSha: row.origin_sha ?? null,
-    remoteHeadSha: row.remote_head_sha ?? null
+    remoteHeadSha: row.remote_head_sha ?? null,
+    // The lane's standing answer policy (D-115); the DB CHECK owns validity,
+    // and a pre-migration row reads manual — what it always was.
+    permissionProfile: (row.permission_profile as Workstream["permissionProfile"] | null) ?? "manual"
   };
 }
 

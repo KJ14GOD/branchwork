@@ -35,7 +35,11 @@ interface Turn {
 
 async function runFakeTurn(
   overrides: Partial<Parameters<typeof startTurn>[0]> = {},
-  observe?: (event: RunnerEvent, stop: (reason: string) => void) => void
+  observe?: (
+    event: RunnerEvent,
+    stop: (reason: string) => void,
+    respond: (requestId: string, decision: "approve" | "deny") => void
+  ) => void
 ): Promise<Turn> {
   const events: RunnerEvent[] = [];
   const running = startTurn({
@@ -54,7 +58,11 @@ async function runFakeTurn(
     secretValues: () => [],
     emit: (event) => {
       events.push(event);
-      observe?.(event, (reason) => running.stop(reason));
+      observe?.(
+        event,
+        (reason) => running.stop(reason),
+        (requestId, decision) => running.respondApproval(requestId, decision, null)
+      );
     },
     ...overrides
   });
@@ -322,5 +330,154 @@ describe("a scoped turn (D-097)", () => {
     expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "docs/notes.md"))).toBe(false);
     // Being told no is a scoped turn's ordinary life, not a failure.
     expect(result.terminal.kind).toBe("execution.completed");
+  });
+});
+
+describe("a profiled turn (D-115)", () => {
+  it("accept_edits answers a file edit itself, on the record: no card, the file lands, the grant recorded", async () => {
+    const { events, result } = await runFakeTurn({
+      permissionProfile: "accept_edits",
+      fakeApproval: true
+    });
+    // No card, and no false "permission prompt pending" boundary — nothing
+    // pended. The honest turn-complete boundary stays.
+    expect(events.some((event) => event.kind === "approval.requested")).toBe(false);
+    const boundaries = events
+      .filter((event) => event.kind === "boundary.reached")
+      .map((event) => (event.payload as { reason: string }).reason);
+    expect(boundaries).toEqual(["turn complete"]);
+    // The act happened, and the record says the policy answered it.
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "NOVUS_FAKE_TURN.md"))).toBe(true);
+    const decided = payloadOf(events, "approval.policy");
+    expect(decided).toMatchObject({
+      toolName: "Write",
+      decision: "allowed",
+      profile: "accept_edits"
+    });
+    expect(decided?.summary).toContain("NOVUS_FAKE_TURN.md");
+    expect(result.terminal.kind).toBe("execution.completed");
+  });
+
+  it("accept_edits still hands a shell command to a person", async () => {
+    const { events } = await runFakeTurn(
+      {
+        direction: "[fake-ask:Bash] run the script",
+        permissionProfile: "accept_edits",
+        fakeApproval: true
+      },
+      (event, _stop, respond) => {
+        if (event.kind === "approval.requested") {
+          respond((event.payload as { requestId: string }).requestId, "deny");
+        }
+      }
+    );
+    // The card is real: a shell command is not an edit, and the profile's
+    // standing answer does not cover it.
+    expect(events.some((event) => event.kind === "approval.requested")).toBe(true);
+    expect(events.some((event) => event.kind === "approval.policy")).toBe(false);
+  });
+
+  it("auto answers everything but a shell command", async () => {
+    const write = await runFakeTurn({ permissionProfile: "auto", fakeApproval: true });
+    expect(write.events.some((event) => event.kind === "approval.requested")).toBe(false);
+    expect(payloadOf(write.events, "approval.policy")).toMatchObject({
+      decision: "allowed",
+      profile: "auto"
+    });
+
+    const shell = await runFakeTurn(
+      {
+        direction: "[fake-ask:Bash] run the script",
+        permissionProfile: "auto",
+        fakeApproval: true
+      },
+      (event, _stop, respond) => {
+        if (event.kind === "approval.requested") {
+          respond((event.payload as { requestId: string }).requestId, "approve");
+        }
+      }
+    );
+    // The one line between auto and dont_ask: a shell command declares its
+    // targets nowhere, so it is still a human question.
+    expect(shell.events.some((event) => event.kind === "approval.requested")).toBe(true);
+    expect(shell.events.some((event) => event.kind === "approval.policy")).toBe(false);
+  });
+
+  it("dont_ask answers a shell command too — and the grant is still recorded", async () => {
+    const { events, result } = await runFakeTurn({
+      direction: "[fake-ask:Bash] run the script",
+      permissionProfile: "dont_ask",
+      fakeApproval: true
+    });
+    expect(events.some((event) => event.kind === "approval.requested")).toBe(false);
+    expect(payloadOf(events, "approval.policy")).toMatchObject({
+      toolName: "Bash",
+      decision: "allowed",
+      profile: "dont_ask"
+    });
+    expect(result.terminal.kind).toBe("execution.completed");
+  });
+
+  it("plan denies every privileged act with the instruction to propose, and nothing is written", async () => {
+    const { events, result } = await runFakeTurn({
+      permissionProfile: "plan",
+      fakeApproval: true
+    });
+    expect(events.some((event) => event.kind === "approval.requested")).toBe(false);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "NOVUS_FAKE_TURN.md"))).toBe(false);
+    expect(payloadOf(events, "approval.policy")).toMatchObject({
+      toolName: "Write",
+      decision: "denied",
+      profile: "plan"
+    });
+    // The refusal reached the model on the harness's own channel: the fake
+    // echoes the denial message it was given, which carries the instruction.
+    const spoken = events
+      .filter((event) => event.kind === "harness.text")
+      .map((event) => (event.payload as { text: string }).text)
+      .join("\n");
+    expect(spoken).toContain("Plan profile");
+    // A plan turn ends as an ordinary answer with a clean checkpoint: being
+    // told no is its whole life, and nothing changed.
+    expect(result.terminal.kind).toBe("execution.completed");
+    expect(result.checkpoint?.filesChanged).toBe(0);
+  });
+
+  it("containment outranks trust: a read turn under dont_ask is still denied, silently", async () => {
+    const { events } = await runFakeTurn({
+      access: "read",
+      permissionProfile: "dont_ask",
+      fakeApproval: true
+    });
+    // D-095's rules hold whatever the lane trusts: no card, no policy row —
+    // the read turn's denials keep their recorded silence — and no file.
+    expect(events.some((event) => event.kind === "approval.requested")).toBe(false);
+    expect(events.some((event) => event.kind === "approval.policy")).toBe(false);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "NOVUS_FAKE_TURN.md"))).toBe(false);
+  });
+
+  it("ownership outranks trust: an out-of-scope write under dont_ask is still refused", async () => {
+    const { events } = await runFakeTurn({
+      direction: "[fake-write:docs/notes.md] wander off",
+      scope: ["server/**"],
+      permissionProfile: "dont_ask",
+      fakeApproval: true
+    });
+    // The scope is a sibling's territory, not a trust dial (D-097): the
+    // refusal stands, in D-097's own recorded silence, and nothing lands.
+    expect(events.some((event) => event.kind === "approval.requested")).toBe(false);
+    expect(events.some((event) => event.kind === "approval.policy")).toBe(false);
+    expect(existsSync(join(worktreeRoot, WORKSTREAM_ID, "docs/notes.md"))).toBe(false);
+  });
+
+  it("states the profile it ran under on the running event", async () => {
+    const { events } = await runFakeTurn({ permissionProfile: "accept_edits" });
+    expect(payloadOf(events, "execution.running")).toMatchObject({
+      permissionProfile: "accept_edits"
+    });
+    const { events: defaulted } = await runFakeTurn();
+    expect(payloadOf(defaulted, "execution.running")).toMatchObject({
+      permissionProfile: "manual"
+    });
   });
 });

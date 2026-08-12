@@ -18,6 +18,7 @@ import {
   PreviewBoundsSchema,
   PrepareLocalFilesInputSchema,
   ReadWorkspaceFileInputSchema,
+  PermissionProfileSchema,
   RespondApprovalInputSchema,
   SaveWorkspaceSettingsInputSchema,
   SessionScopeSchema,
@@ -749,6 +750,36 @@ function registerIpc(): void {
     });
     runner?.pollNow();
     return result;
+  });
+
+  ipcMain.handle("novus:missions:set-permission-profile", async (_event, raw: unknown) => {
+    // Asking is all this is (AGENTS.md rule 13): the server judges policy.set,
+    // the Mission Admin tier for dont_ask, and the acknowledgement — this
+    // handler only refuses shapes that could never be a request.
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        workstreamId: z.string().startsWith("wst_"),
+        profile: PermissionProfileSchema,
+        acknowledged: z.string().max(500).nullable().default(null)
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "invalid_profile",
+        message: "That is not a permission profile Novus offers."
+      };
+    }
+    return call(async () => {
+      await api.setPermissionProfile(
+        parsed.data.missionId,
+        parsed.data.workstreamId,
+        parsed.data.profile,
+        parsed.data.acknowledged
+      );
+      return null;
+    });
   });
 
   ipcMain.handle("novus:missions:cancel-direction", async (_event, raw: unknown) => {

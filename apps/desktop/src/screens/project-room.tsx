@@ -11,7 +11,12 @@ import type {
   Workstream
 } from "@novus/contracts";
 import { novus } from "../bridge";
-import { Composer, type SubmitOutcome } from "../components/composer";
+import {
+  Composer,
+  profileLabel,
+  type PolicyControl,
+  type SubmitOutcome
+} from "../components/composer";
 import {
   contestedAcrossSessions,
   controller as controllerOf,
@@ -667,6 +672,35 @@ export function ProjectRoom({
           )
         ]
       : [];
+  /**
+   * The lane's answer policy, worn on the composer's foot (D-115). The server
+   * enforces `policy.set` and the Mission Admin tier for Don't ask; what is
+   * computed here only decides what the chip offers to ask for.
+   */
+  const viewerRole = detail?.participants.find(
+    (participant) => participant.userId === detail.viewerUserId
+  )?.role;
+  const policyControl: PolicyControl | null =
+    detail?.workstream !== null && detail?.workstream !== undefined
+      ? {
+          profile: detail.workstream.permissionProfile,
+          maySet: detail.capabilities.includes("policy.set"),
+          maySetUnsupervised: viewerRole === "mission_admin",
+          onSet: async (profile, acknowledged) => {
+            const result = await novus().missions.setPermissionProfile({
+              missionId: detail.mission.missionId,
+              workstreamId: detail.workstream!.workstreamId,
+              profile,
+              acknowledged
+            });
+            // The room's own 2s poll carries the new word back, exactly as a
+            // scope change's does.
+            if (!result.ok) return { ok: false, message: offlineOr(result.code, result.message) };
+            return { ok: true };
+          }
+        }
+      : null;
+
   /**
    * The permission questions this mission is blocked on.
    *
@@ -1759,6 +1793,7 @@ export function ProjectRoom({
         contextNote={composerTarget}
         placeholderOverride={sessionDraft ? "What should this session do?" : undefined}
         alongsideOffer={alongsideOffer}
+        policy={isDraft ? null : policyControl}
         onSubmit={submit}
       />
 
@@ -1813,6 +1848,9 @@ function ApproachOverview({
   const spent = usageSoFar(detail);
   const facts = [
     sessions.length === 1 ? "1 conversation" : `${sessions.length} conversations`,
+    // The lane's answer policy, a fact beside the others (D-115): the word a
+    // Viewer with no composer still gets to read.
+    `${profileLabel(lane?.permissionProfile ?? "manual")} permissions`,
     `${summary?.filesChanged ?? 0} ${(summary?.filesChanged ?? 0) === 1 ? "file" : "files"} changed`,
     ...(summary && summary.checksRun > 0
       ? [`${summary.checksPassed}/${summary.checksRun} checks passed`]
