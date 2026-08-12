@@ -1868,100 +1868,86 @@ body {
    growing rightward, the dangerous end warn-toned before it is chosen. One
    line explains the stop under the pointer — a mode nobody can explain is a
    mode nobody chose, and a wall of text is not a control. */
-.policy-slider-menu {
-  min-width: 320px;
-  max-width: 360px;
-  padding: var(--s-3);
+/* The permission-profile picker (D-115; re-cut by D-116, then D-117 on the
+   owner's sight of Codex's shape): the question, then one row per profile —
+   glyph, name, one line of meaning, the current row checked — and the
+   dangerous row wearing the warn tone whole, so its danger is read before
+   its name is. */
+.policy-menu {
+  min-width: 400px;
+  max-width: 440px;
+  padding: var(--s-2);
 }
 
-.policy-slider {
-  position: relative;
+.policy-head {
+  margin: 0 0 var(--s-1);
+  padding: var(--s-2) var(--s-2) 0;
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.policy-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 24px;
-  margin-bottom: var(--s-2);
-}
-
-.policy-track {
-  position: absolute;
-  left: 7px;
-  right: 7px;
-  height: 2px;
-  background: var(--edge);
-}
-
-.policy-track-fill {
-  position: absolute;
-  left: 7px;
-  max-width: calc(100% - 14px);
-  height: 2px;
-  background: var(--accent);
-  transition: width var(--m-press) var(--ease);
-}
-
-.policy-track-fill-warn {
-  background: var(--warn);
-}
-
-.policy-stop {
-  position: relative;
-  width: 16px;
-  height: 16px;
-  padding: 0;
+  align-items: flex-start;
+  gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-2);
   border: none;
-  border-radius: 50%;
+  border-radius: var(--r-control);
   background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  text-align: left;
   cursor: pointer;
 }
 
-.policy-stop::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--surface-2);
-  border: 1px solid var(--edge-hover);
+.policy-row:hover:not(:disabled) {
+  background: var(--hover);
 }
 
-.policy-stop:hover:not(:disabled)::before {
-  border-color: var(--text-2);
-}
-
-.policy-stop.active::before {
-  width: 12px;
-  height: 12px;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-.policy-stop.stop-warn::before {
-  border-color: var(--warn);
-}
-
-.policy-stop.stop-warn.active::before {
-  background: var(--warn);
-}
-
-.policy-stop:disabled {
+.policy-row:disabled {
   cursor: default;
   opacity: 0.4;
 }
 
-.policy-current {
-  margin: 0;
-  font: var(--type-meta);
+.policy-glyph {
   color: var(--text-3);
-  /* Two lines of meaning at this width; reserved so hovering across stops
-     does not bounce the popover's height. */
-  min-height: 36px;
+  display: flex;
+  padding-top: 2px;
 }
 
-.policy-current-name {
+.policy-words {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.policy-row-name {
+  font: var(--type-row);
+  font-weight: 500;
   color: var(--text-1);
+}
+
+.policy-row-desc {
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+/* The dangerous row is one word in one tone: glyph, name, and meaning. */
+.policy-row-danger .policy-glyph,
+.policy-row-danger .policy-row-name,
+.policy-row-danger .policy-row-desc {
+  color: var(--warn);
+}
+
+.policy-check {
+  color: var(--text-1);
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.policy-row-danger .policy-check {
+  color: var(--warn);
 }
 
 /* Why there is no sixth stop, said where the stops are. */

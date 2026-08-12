@@ -283,21 +283,27 @@ async function twoClientsOnOneMission(label: string): Promise<{
   };
 }
 
-/** Opens the mission in a client's window and waits for the room. */
-async function openRoom(client: Client, missionId: string): Promise<void> {
+/** Opens the mission in a client's window and waits for the room. A label
+ *  narrows both the project disclosed and the mission clicked — the suites
+ *  share one database across tests and runs, so "the first project" and "any
+ *  mission saying Approval" stop meaning this test's the moment a sibling has
+ *  run (found when the profiles test drew an emptied archive-test project). */
+async function openRoom(client: Client, missionId: string, label?: string): Promise<void> {
   await client.page.reload();
   await client.page.waitForLoadState("domcontentloaded");
   await client.page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
-  const row = client.page.getByTestId("mission-row").first();
-  if ((await client.page.getByTestId("mission-row").count()) === 0) {
-    await client.page.getByTestId("project-row").first().click();
-  }
-  await row.waitFor({ timeout: 30_000 });
-  await client.page
+  const mission = client.page
     .getByTestId("mission-row")
-    .filter({ hasText: "Approval" })
-    .first()
-    .click();
+    .filter({ hasText: label ? `Approval ${label}` : "Approval" })
+    .first();
+  if ((await mission.count()) === 0) {
+    const project = label
+      ? client.page.getByTestId("project-row").filter({ hasText: `-${label}-` }).first()
+      : client.page.getByTestId("project-row").first();
+    await project.click();
+  }
+  await mission.waitFor({ timeout: 30_000 });
+  await mission.click();
   await client.page.getByTestId("state-line").waitFor({ timeout: 30_000 });
   void missionId;
 }
@@ -329,7 +335,7 @@ describe("a permission the harness asks for", () => {
     expect(existsSync(join(worktreeOf(), "NOVUS_FAKE_TURN.md"))).toBe(false);
 
     // --- Maya sees the question and is told she cannot answer it -------------
-    await openRoom(maya, missionId);
+    await openRoom(maya, missionId, "approve");
     const mayaCard = maya.page.getByTestId("approval");
     await mayaCard.waitFor({ timeout: 30_000 });
     expect(await maya.page.getByTestId("approval-summary").textContent()).toContain("NOVUS_FAKE_TURN.md");
@@ -442,7 +448,7 @@ describe("a permission the harness asks for", () => {
       "the harness to ask"
     );
 
-    await openRoom(kartik, missionId);
+    await openRoom(kartik, missionId, "deny");
     const deny = kartik.page.getByTestId("approval-deny");
     await deny.waitFor({ timeout: 30_000 });
     await deny.click();
@@ -529,7 +535,7 @@ describe("a permission the harness asks for", () => {
 
     // --- The window: A's question is still the room's, and answering it in
     // the real frame unblocks the write turn exactly as before ---------------
-    await openRoom(kartik, missionId);
+    await openRoom(kartik, missionId, "alongside");
     // Two conversations now, so the room lands on the approach's overview
     // (D-089); the question renders in a conversation's own view. Chat A is
     // the first row — and the overview says what it is doing.
@@ -565,7 +571,7 @@ describe("a permission the harness asks for", () => {
 
   it("answers by the lane's profile, on the record: accept_edits writes with no card, plan refuses, and Don't ask wears its warning (D-115)", async () => {
     const { kartik, maya, missionId, worktreeOf } = await twoClientsOnOneMission("profiles");
-    await openRoom(kartik, missionId);
+    await openRoom(kartik, missionId, "profiles");
 
     // The lane's answer policy is worn where directing happens, and starts at
     // the default: every question asked.
@@ -573,16 +579,15 @@ describe("a permission the harness asks for", () => {
     await chip.waitFor({ timeout: 30_000 });
     expect((await chip.textContent()) ?? "").toContain("Ask every time");
 
-    // The slider explains the stop under the pointer in one line, and says in
-    // place why there is no sixth stop.
+    // Every row carries its name and one line of meaning (D-117), and the
+    // picker says in place why there is no sixth row.
     await chip.click();
     await kartik.page.getByTestId("policy-menu").waitFor({ timeout: 10_000 });
     const noBypass = (await kartik.page.getByTestId("policy-no-bypass").textContent()) ?? "";
     expect(noBypass).toContain("no bypass");
-    await kartik.page.getByTestId("policy-accept_edits").hover();
-    await expect
-      .poll(async () => (await kartik.page.getByTestId("policy-current").textContent()) ?? "")
-      .toContain("File edits are approved by policy");
+    const acceptRow = (await kartik.page.getByTestId("policy-accept_edits").textContent()) ?? "";
+    expect(acceptRow).toContain("Accept edits");
+    expect(acceptRow).toContain("File edits approved by policy");
 
     // A Mission Admin relaxes the lane to Accept edits with one click; the
     // chip follows the server's word back.
@@ -617,7 +622,7 @@ describe("a permission the harness asks for", () => {
 
     // A contributor reads the same fact and cannot change it: the chip is
     // there, disabled, with the capability named — the server refuses anyway.
-    await openRoom(maya, missionId);
+    await openRoom(maya, missionId, "profiles");
     const mayaChip = maya.page.getByTestId("policy-chip");
     await mayaChip.waitFor({ timeout: 30_000 });
     await expect.poll(async () => mayaChip.isDisabled(), { timeout: 15_000 }).toBe(true);
@@ -626,6 +631,13 @@ describe("a permission the harness asks for", () => {
     // handed over, and what the server keeps whatever the profile says. The
     // captures happen here, after a real turn, so the evidence shows the
     // control in a working room rather than over an empty one (D-116).
+    // Maya's window has been frontmost since her check, and a backgrounded
+    // renderer's poll is throttled by Chromium — so first bring Kartik's
+    // window back and let his room catch up to the turn it missed.
+    await kartik.page.bringToFront();
+    await kartik.page
+      .getByText("Working on: write the fake turn file")
+      .waitFor({ timeout: 30_000 });
     await chip.click();
     await kartik.page.getByTestId("policy-menu").waitFor({ timeout: 10_000 });
     await snap(kartik, "122-permission-profiles-menu");
