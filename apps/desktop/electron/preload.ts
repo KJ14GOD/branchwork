@@ -69,6 +69,7 @@ const novus: NovusBridge = {
         }
       ),
     archive: (missionId) => ipcRenderer.invoke("novus:missions:archive", missionId),
+    close: (missionId, input) => ipcRenderer.invoke("novus:missions:close", { missionId, input }),
     restore: (missionId) => ipcRenderer.invoke("novus:missions:restore", missionId),
     respondApproval: (input) => ipcRenderer.invoke("novus:missions:respond-approval", input)
   },

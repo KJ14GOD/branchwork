@@ -20,6 +20,7 @@ import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newDecisionId, newLeaseId, newWorkstreamId } from "./ids.ts";
+import { closedRefusal } from "./close.ts";
 import { insertSession } from "./sessions.ts";
 import type { RouteDeps } from "./routes.ts";
 
@@ -331,6 +332,11 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
     // Resolved against the lane being forked, so a mission with several lanes
     // cannot be forked from one the caller named but does not belong to.
     const access = await missionAccess(deps.db, ctx, params.data.missionId, body.data.fromWorkstreamId);
+    // A terminal state never resumes (D-121): no new lanes in an ended mission.
+    if (access) {
+      const closed = await closedRefusal(deps.db, access.missionId);
+      if (closed) return deps.sendError(reply, 409, "mission_closed", closed);
+    }
     if (!access) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
     requireCapability(access, "approach.create");
 

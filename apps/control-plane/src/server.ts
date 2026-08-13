@@ -31,6 +31,7 @@ import { AuthorizationError } from "./authz.ts";
 import { registerApprovalRoutes } from "./approvals.ts";
 import { registerApproachRoutes } from "./approaches.ts";
 import { registerArchiveRoutes } from "./archive.ts";
+import { registerCloseRoutes } from "./close.ts";
 import { registerAuthorityRoutes } from "./authority.ts";
 import { registerExecutionRoutes } from "./executions.ts";
 import { registerPolicyRoutes } from "./policy.ts";
@@ -302,6 +303,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
   registerApprovalRoutes(app, deps);
   registerApproachRoutes(app, deps);
   registerArchiveRoutes(app, deps);
+  registerCloseRoutes(app, deps);
   registerAuthorityRoutes(app, deps);
   registerExecutionRoutes(app, deps);
   registerPolicyRoutes(app, deps);

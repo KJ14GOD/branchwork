@@ -47,6 +47,22 @@ describe("which column a mission lands in", () => {
     expect(boardColumnOf(mission({ primaryState: "pull_request_open" }))).toBe("decided");
     expect(boardColumnOf(mission({ primaryState: "ready_for_instruction" }))).toBe("waiting");
     expect(boardColumnOf(mission({ primaryState: "work_completed_unverified" }))).toBe("waiting");
+    // Terminal is a person's own fact (D-121), and nothing outranks it.
+    expect(boardColumnOf(mission({ primaryState: "completed" }))).toBe("complete");
+    expect(boardColumnOf(mission({ primaryState: "cancelled" }))).toBe("complete");
+  });
+
+  it("words a finished card quietly, with the person who ended it", () => {
+    expect(
+      boardCardLine(
+        mission({ primaryState: "completed", closedOutcome: "completed", closedByLogin: "kartik" })
+      )
+    ).toEqual({ text: "completed by kartik — receipt saved", tone: "quiet" });
+    expect(
+      boardCardLine(
+        mission({ primaryState: "cancelled", closedOutcome: "cancelled", closedByLogin: "maya" })
+      )?.text
+    ).toBe("cancelled by maya");
   });
 
   it("orders a column by last activity, newest first, with creation as the fallback", () => {
@@ -61,12 +77,13 @@ describe("which column a mission lands in", () => {
       "msn_silent",
       "msn_stale"
     ]);
-    // Column order is fixed: what needs you first, decided last.
+    // Column order is fixed: what needs you first, the finished work last.
     expect(columns.map((column) => column.id)).toEqual([
       "needs_you",
       "running",
       "waiting",
-      "decided"
+      "decided",
+      "complete"
     ]);
   });
 });

@@ -1,4 +1,9 @@
-import { DeclaredCommandSchema, McpServerSchema, ProjectSkillSchema } from "@novus/contracts";
+import {
+  DeclaredCommandSchema,
+  McpServerSchema,
+  ProjectSkillSchema,
+  ReceiptSnapshotSchema
+} from "@novus/contracts";
 import type {
   Checkpoint,
   ControlSnapshot,
@@ -718,11 +723,14 @@ export async function missionDetail(
       )
     : processes;
 
-  const state = pullRequest && (pullRequest.state === "draft" || pullRequest.state === "ready")
+  const state = base.mission.closedOutcome !== null
+    ? // Ended is ended (D-121): the terminal word is the person's own fact,
+      // never a recomputation over lanes whose last look predates the close.
+      (base.mission.closedOutcome as MissionState)
+    : pullRequest && (pullRequest.state === "draft" || pullRequest.state === "ready")
     ? // A tracked request that is still open is what the mission is now about
       // (D-099). A merged or closed one falls through to decision_recorded,
-      // whose sentence names how publication ended — `completed` is a
-      // lifecycle this build has not earned.
+      // whose sentence names how publication ended.
       ("pull_request_open" as MissionState)
     : current
     ? // A recorded decision is what the mission is now about, and the state's
@@ -736,17 +744,30 @@ export async function missionDetail(
         checkpoints: laneCheckpoints,
         checks: laneChecks
       });
-  const overlays = projectOverlays({
-    queuedDirections: laneDirections.filter((direction) => direction.state === "queued").length,
-    control,
-    runner,
-    processes: laneProcesses,
-    checks: laneChecks,
-    lastProgressAt: lastProgressOf(laneExecutions, eventRows.rows as EventRow[])
-  });
+  const overlays = base.mission.closedOutcome !== null
+    ? // A terminal room demands nothing and claims nothing is in flight.
+      []
+    : projectOverlays({
+        queuedDirections: laneDirections.filter((direction) => direction.state === "queued").length,
+        control,
+        runner,
+        processes: laneProcesses,
+        checks: laneChecks,
+        lastProgressAt: lastProgressOf(laneExecutions, eventRows.rows as EventRow[])
+      });
+  // The snapshotted receipt, exactly as it was stored at close (D-121): the
+  // terminal room renders this, not a recomputation.
+  const receiptRow = base.mission.closedOutcome !== null
+    ? await db.query("select snapshot from receipts where mission_id = $1", [access.missionId])
+    : null;
+  const parsedReceipt = receiptRow?.rows[0]
+    ? ReceiptSnapshotSchema.safeParse(receiptRow.rows[0].snapshot)
+    : null;
+  const receipt = parsedReceipt?.success ? parsedReceipt.data : null;
 
   return {
     mission: { ...base.mission, primaryState: state },
+    receipt,
     workstream: base.workstream,
     workstreams,
     sessions,

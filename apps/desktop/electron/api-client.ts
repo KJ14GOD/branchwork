@@ -273,6 +273,13 @@ export class ControlPlaneClient {
     );
   }
 
+  async closeMission(
+    missionId: string,
+    input: { outcome: "completed" | "cancelled"; reason?: string }
+  ): Promise<void> {
+    await this.request("POST", `/missions/${encodeURIComponent(missionId)}/close`, OkResponseSchema, input);
+  }
+
   async setEnabledMcpServers(
     missionId: string,
     workstreamId: string,

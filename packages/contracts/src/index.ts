@@ -44,9 +44,20 @@ export const MissionStateSchema = z.enum([
    *  because `completed` is a lifecycle this build has not earned yet. */
   "pull_request_open",
   "verification_failed",
-  "execution_interrupted"
+  "execution_interrupted",
+  /** Terminal (D-121): a person with `mission.close` ended the mission's
+   *  work — result accepted with the receipt snapshotted, or deliberately
+   *  ended without acceptance. Terminal states never resume: reopening shows
+   *  history and the receipt, and the operating verbs are refused in words. */
+  "completed",
+  "cancelled"
 ]);
 export type MissionState = z.infer<typeof MissionStateSchema>;
+
+/** The two ways a mission's work ends (D-121). Distinct from archival
+ *  (D-063), which files the record away and ends nothing. */
+export const MissionOutcomeSchema = z.enum(["completed", "cancelled"]);
+export type MissionOutcome = z.infer<typeof MissionOutcomeSchema>;
 
 /** Conditions that coexist with a primary state (PRODUCT.md overlays). */
 export const MissionOverlaySchema = z.enum([
@@ -487,9 +498,102 @@ export const MissionSchema = z.object({
       total: z.number().int().nonnegative()
     })
     .nullable()
-    .default(null)
+    .default(null),
+  /** How the mission's work ended, when it has (D-121). A closed mission's
+   *  primary state is its stored outcome — the one place the projection reads
+   *  a stored word, because a terminal state is a fact a person made, not a
+   *  derivation. All three null while the mission is open. */
+  closedOutcome: MissionOutcomeSchema.nullable().default(null),
+  closedAt: z.string().datetime().nullable().default(null),
+  closedByLogin: z.string().nullable().default(null)
 });
 export type Mission = z.infer<typeof MissionSchema>;
+
+/** Ending a mission's work (D-121). */
+export const CloseMissionInputSchema = z.object({
+  outcome: MissionOutcomeSchema,
+  /** For a cancellation: what was abandoned and why, in the person's own
+   *  words — recorded on the event and in the receipt. Optional, bounded. */
+  reason: z.string().trim().max(500).optional()
+});
+export type CloseMissionInput = z.infer<typeof CloseMissionInputSchema>;
+
+/**
+ * The mission's receipt (D-121): a deterministic projection of durable state,
+ * snapshotted when the mission closes with the event range it covers — same
+ * events, same receipt, and always re-derivable (ARCHITECTURE.md#persistence).
+ * Bounded everywhere: a receipt is the record's summary, not the record.
+ */
+export const ReceiptSnapshotSchema = z.object({
+  goal: z.string().max(500),
+  successCriteria: z.string().max(5000),
+  outcome: MissionOutcomeSchema,
+  closedByLogin: z.string().min(1),
+  closedAt: z.string().datetime(),
+  reason: z.string().max(500).nullable(),
+  participants: z
+    .array(
+      z
+        .object({
+          login: z.string().min(1),
+          // Inlined rather than MissionRoleSchema, which is declared later in
+          // this module; a contract test pins the two vocabularies together.
+          role: z.enum(["mission_admin", "operator", "contributor", "viewer"])
+        })
+        .strict()
+    )
+    .max(50),
+  directionsApplied: z.number().int().nonnegative(),
+  /** Every recorded decision, verbatim, newest last — superseded ones kept,
+   *  because the receipt answers how the result was produced. */
+  decisions: z
+    .array(
+      z
+        .object({
+          workstreamName: z.string().min(1),
+          checkpointSha: z.string().nullable(),
+          rationale: z.string().max(4000),
+          acceptedRisks: z.string().max(4000).nullable(),
+          decidedByLogin: z.string().min(1),
+          decidedAt: z.string().datetime(),
+          superseded: z.boolean()
+        })
+        .strict()
+    )
+    .max(20),
+  changes: z
+    .object({
+      filesChanged: z.number().int().nonnegative(),
+      additions: z.number().int().nonnegative(),
+      deletions: z.number().int().nonnegative()
+    })
+    .strict(),
+  /** The ledger's final rows: name, outcome, origin, and the revision each
+   *  proved — current or not at close, stated per row. */
+  checks: z
+    .array(
+      z
+        .object({
+          name: z.string().max(200),
+          outcome: z.string().max(20),
+          origin: z.string().max(20),
+          checkpointSha: z.string().nullable(),
+          currentAtClose: z.boolean()
+        })
+        .strict()
+    )
+    .max(100),
+  /** What remains uncertain, in words — the section a receipt must never
+   *  omit (PRODUCT.md#domain-model, Receipt). */
+  remainingUncertain: z.array(z.string().max(300)).max(50),
+  pullRequest: z
+    .object({ number: z.number().int().positive(), state: z.string().max(20) })
+    .strict()
+    .nullable(),
+  /** The event-log range this projects (ARCHITECTURE.md#event-model). */
+  eventRange: z.object({ fromSeq: z.number().int(), toSeq: z.number().int() }).strict()
+});
+export type ReceiptSnapshot = z.infer<typeof ReceiptSnapshotSchema>;
 
 export const EventSchema = z.object({
   eventId: z.string().startsWith("evt_"),
@@ -580,6 +684,11 @@ export const CapabilitySchema = z.enum([
    *  the unimplemented `mission.close`, which would *end* a mission's work —
    *  a different act on a different lifecycle. */
   "mission.archive",
+  /** End a mission's work (D-121): complete it — result accepted, receipt
+   *  snapshotted — or cancel it. Mission Admin's alone, like archival, and a
+   *  different act from archival: closing ends, filing away hides nothing
+   *  and ends nothing. */
+  "mission.close",
   "direction.submit",
   "direction.apply",
   "execution.start",
@@ -2619,6 +2728,10 @@ export const MissionDetailResponseSchema = z.object({
   decisions: z.array(DecisionSchema),
   /** What would be published, if a decision has been recorded (D-075). */
   preparedPullRequest: PreparedPullRequestSchema.nullable(),
+  /** The snapshotted receipt, present exactly while the mission is closed
+   *  (D-121). Stored at close with its event range and always re-derivable;
+   *  the terminal room renders from this, not from a recomputation. */
+  receipt: ReceiptSnapshotSchema.nullable().default(null),
   /** The tracked pull request, once one was actually opened (D-099). At most
    *  one that is not closed per workstream; the detail carries the selected
    *  lane's. */
@@ -2906,6 +3019,11 @@ export interface NovusBridge {
      *  approval is waiting — an archived mission must not be one still doing
      *  something. Never deletes: no branch, no worktree, no history (D-063). */
     archive(missionId: string): Promise<IpcResult<null>>;
+    /** Ends a mission's work (D-121): complete — result accepted, receipt
+     *  snapshotted — or cancel. The server judges `mission.close`, the
+     *  running/waiting refusals, and completion's own gates (a standing
+     *  decision, no open pull request). */
+    close(missionId: string, input: CloseMissionInput): Promise<IpcResult<null>>;
     /** Takes it back out, into the ordinary list it left. */
     restore(missionId: string): Promise<IpcResult<null>>;
     respondApproval(input: {

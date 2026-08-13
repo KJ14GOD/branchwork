@@ -602,13 +602,14 @@ export function usageSoFar(detail: MissionDetailResponse): {
 // moves columns because reality changed, never because a hand did. Column
 // order is the reason a person opens Home: what needs them first.
 
-export type BoardColumnId = "needs_you" | "running" | "waiting" | "decided";
+export type BoardColumnId = "needs_you" | "running" | "waiting" | "decided" | "complete";
 
 export const BOARD_COLUMNS: readonly { id: BoardColumnId; label: string; empty: string }[] = [
   { id: "needs_you", label: "Needs you", empty: "Nothing needs you right now." },
   { id: "running", label: "Running", empty: "Nothing is running." },
   { id: "waiting", label: "Waiting", empty: "Nothing is waiting." },
-  { id: "decided", label: "Decided", empty: "No decisions yet." }
+  { id: "decided", label: "Decided", empty: "No decisions yet." },
+  { id: "complete", label: "Complete", empty: "Nothing has finished yet." }
 ];
 
 const BOARD_ATTENTION: ReadonlySet<Mission["primaryState"]> = new Set([
@@ -634,6 +635,11 @@ const BOARD_DECIDED: ReadonlySet<Mission["primaryState"]> = new Set([
  *  decided, then waiting — PRODUCT.md#the-mission-state-model); this only
  *  reads the word it produced. */
 export function boardColumnOf(mission: Mission): BoardColumnId {
+  // Terminal is a person's own fact (D-121) and nothing outranks it: a closed
+  // mission is finished whatever its lanes last looked like.
+  if (mission.primaryState === "completed" || mission.primaryState === "cancelled") {
+    return "complete";
+  }
   if (BOARD_ATTENTION.has(mission.primaryState)) return "needs_you";
   if (BOARD_RUNNING.has(mission.primaryState)) return "running";
   if (BOARD_DECIDED.has(mission.primaryState)) return "decided";
@@ -779,6 +785,14 @@ export function nextEnabledMcp(
   ];
 }
 
+/** A terminal sentence's date: the day, short, because "when" at receipt
+ *  scale is a calendar fact, not a clock one. */
+function clockDate(iso: string): string {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) return "";
+  return new Date(time).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 function handoffSuffix(detail: MissionDetailResponse): string | null {
   const offer = detail.control.liveOffer;
   if (!detail.overlays.includes("handoff_waiting_for_boundary") || !offer) return null;
@@ -816,6 +830,25 @@ function primaryStateLine(
 ): StateLineView {
   const quiet = { suffix: null, action: null, working: false };
   switch (detail.state) {
+    // Terminal (D-121): the sentence is the person's own fact, the canvas is
+    // the receipt, and no action is offered because none exists — terminal
+    // states never resume, and the receipt is already on screen.
+    case "completed":
+      return {
+        ...quiet,
+        tone: "neutral",
+        name: `Completed ${detail.mission.closedAt ? clockDate(detail.mission.closedAt) : ""}`.trim(),
+        detail: "receipt saved"
+      };
+    case "cancelled":
+      return {
+        ...quiet,
+        tone: "neutral",
+        name: `Cancelled by ${detail.mission.closedByLogin ?? "someone"}${
+          detail.mission.closedAt ? ` ${clockDate(detail.mission.closedAt)}` : ""
+        }`,
+        detail: "receipt saved"
+      };
     case "new_mission":
       return { ...quiet, tone: "neutral", name: "New mission", detail: "set up the workspace to begin" };
     case "workspace_needs_setup":

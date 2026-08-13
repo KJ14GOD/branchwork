@@ -227,4 +227,58 @@ describe("the Home board (D-120)", () => {
     },
     180_000
   );
+
+  it(
+    "ends a mission from the room, freezes it as the receipt, and files it under Complete (D-121)",
+    async () => {
+      // Into the settled mission, from its own Waiting card.
+      await page
+        .getByTestId("board-column-waiting")
+        .getByTestId("board-card")
+        .filter({ hasText: "ship the health endpoint" })
+        .click();
+      await page.getByTestId("composer-input").waitFor({ timeout: 20_000 });
+
+      // Ending lives with the machinery, behind a confirmation that states
+      // the consequence and takes the person's own words.
+      if ((await page.getByTestId("inspector").count()) === 0) {
+        await page.getByTestId("panel-toggle").click();
+      }
+      await page.getByTestId("inspector").waitFor({ timeout: 20_000 });
+      if ((await page.getByTestId("inspector-overview").count()) === 0) {
+        await page.getByTestId("inspector-tab-overview").click();
+      }
+      await page.getByTestId("close-cancel").click();
+      await page.getByTestId("close-reason").fill("The endpoint shipped by hand instead.");
+      await page.getByTestId("close-cancel-confirm").click();
+
+      // The room becomes the receipt: the terminal sentence, the frozen
+      // document, and no composer — a terminal state never resumes.
+      await page.getByTestId("receipt-view").waitFor({ timeout: 20_000 });
+      const stateLine = page.getByTestId("state-line");
+      expect(await stateLine.textContent()).toContain("Cancelled by spike-user");
+      expect(await page.getByTestId("composer-input").count()).toBe(0);
+      expect(await page.getByTestId("receipt-view").textContent()).toContain(
+        "The endpoint shipped by hand instead."
+      );
+      expect(await page.getByTestId("close-ended").textContent()).toContain("receipt saved");
+      await page.screenshot({ path: join(evidenceDir, "129-cancelled-receipt.png") });
+
+      // The board files it under Complete — the fifth column the terminal
+      // lifecycle finally earns — while the blocked mission stays Needs you.
+      await page.getByTestId("rail-home").click();
+      await page.getByTestId("home-board").waitFor({ timeout: 20_000 });
+      const completeCard = page
+        .getByTestId("board-column-complete")
+        .getByTestId("board-card")
+        .filter({ hasText: "ship the health endpoint" });
+      await completeCard.waitFor({ timeout: 20_000 });
+      expect(await completeCard.textContent()).toContain("cancelled by spike-user");
+      expect(await page.getByTestId("board-column-waiting").textContent()).toContain(
+        "Nothing is waiting."
+      );
+      await page.screenshot({ path: join(evidenceDir, "127-home-board.png") });
+    },
+    180_000
+  );
 });

@@ -54,3 +54,4 @@ export const newPullRequestId = () => `pr_${opaque(20)}`;
 /** Single-use secrets handed out exactly once: invitation tokens and runner
  *  credentials. Only their SHA-256 hash is ever stored. */
 export const newSecretToken = () => randomBytes(32).toString("base64url");
+export const newReceiptId = () => `rcp_${opaque(20)}`;

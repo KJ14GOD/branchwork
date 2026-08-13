@@ -11,6 +11,7 @@ import {
   MAX_RATIONALE,
   MissionRoleSchema,
   OpenPreviewInputSchema,
+  CloseMissionInputSchema,
   EnabledMcpServersSchema,
   EnabledSkillsSchema,
   OpenTerminalInputSchema,
@@ -804,6 +805,21 @@ function registerIpc(): void {
     }
     return call(async () => {
       await api.setEnabledSkills(parsed.data.missionId, parsed.data.workstreamId, parsed.data.skills);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:missions:close", async (_event, raw: unknown) => {
+    // Asking is all this is (AGENTS.md rule 13): the server judges
+    // mission.close, the running/waiting refusals, and completion's gates.
+    const parsed = z
+      .object({ missionId: z.string().startsWith("msn_"), input: CloseMissionInputSchema })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, code: "invalid_close", message: "Say how the mission ends." };
+    }
+    return call(async () => {
+      await api.closeMission(parsed.data.missionId, parsed.data.input);
       return null;
     });
   });

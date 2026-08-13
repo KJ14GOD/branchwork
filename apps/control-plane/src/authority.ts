@@ -473,7 +473,16 @@ export function registerAuthorityRoutes(app: FastifyInstance, deps: RouteDeps): 
 
     const orgId = invitation.org_id as string;
     const missionId = invitation.mission_id as string;
-    const invitedRole = invitation.mission_role as MissionRole;
+    let invitedRole = invitation.mission_role as MissionRole;
+    // An invitation redeemed after the mission reached a terminal state
+    // succeeds as read access (ARCHITECTURE.md failure mode 13, D-121): the
+    // participant joins as Viewer and sees history and receipt — no
+    // operational verbs, whatever role the invitation carried.
+    const terminal = await db.query(
+      "select 1 from missions where mission_id = $1 and closed_at is not null",
+      [missionId]
+    );
+    if ((terminal.rowCount ?? 0) > 0) invitedRole = "viewer";
 
     const role = await withTransaction(db, async (client) => {
       // Single use is enforced by the write, not by the read above: the loser

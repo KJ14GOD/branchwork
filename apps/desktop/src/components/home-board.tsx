@@ -46,6 +46,18 @@ export function boardCardLine(mission: Mission): { text: string; tone: "warn" | 
   if (mission.primaryState === "pull_request_open") {
     return { text: "pull request open", tone: "quiet" };
   }
+  if (mission.primaryState === "completed") {
+    return {
+      text: `completed${mission.closedByLogin ? ` by ${mission.closedByLogin}` : ""} — receipt saved`,
+      tone: "quiet"
+    };
+  }
+  if (mission.primaryState === "cancelled") {
+    return {
+      text: `cancelled${mission.closedByLogin ? ` by ${mission.closedByLogin}` : ""}`,
+      tone: "quiet"
+    };
+  }
   return null;
 }
 

@@ -9,6 +9,7 @@ import type {
   VerificationCheck
 } from "@novus/contracts";
 import { novus } from "../bridge";
+import { Dialog } from "./dialog";
 import { clockTime, plural, shortSha } from "../format";
 import {
   changedFiles,
@@ -479,6 +480,117 @@ function ManifestRows({
         );
       })}
     </>
+  );
+}
+
+/**
+ * Ending the mission's work (D-121), where the machinery lives. Two verbs,
+ * both Mission Admin's (`mission.close`), both judged by the server: Complete
+ * — refused without a standing decision or with an open pull request — and
+ * Cancel, behind a confirmation stating the consequence, with room for the
+ * person's own words about what was abandoned. A closed mission shows one
+ * quiet line instead; ending is not archival, and both live here so the
+ * difference stays legible.
+ */
+function CloseSection({ detail }: { detail: MissionDetailResponse }) {
+  const [confirming, setConfirming] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const maySet = detail.capabilities.includes("mission.close");
+  const closed = detail.mission.closedOutcome !== null;
+
+  const close = async (outcome: "completed" | "cancelled") => {
+    setBusy(true);
+    setError(null);
+    const trimmed = reason.trim();
+    const result = await novus().missions.close(detail.mission.missionId, {
+      outcome,
+      ...(outcome === "cancelled" && trimmed ? { reason: trimmed } : {})
+    });
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    setConfirming(false);
+  };
+
+  if (closed) {
+    return (
+      <p className="close-ended" data-testid="close-ended">
+        {detail.mission.closedOutcome === "completed" ? "Completed" : "Cancelled"}
+        {detail.mission.closedByLogin ? ` by ${detail.mission.closedByLogin}` : ""} · receipt saved
+      </p>
+    );
+  }
+
+  return (
+    <div data-testid="close-section">
+      <h3 className="inspector-heading">End the mission</h3>
+      <div className="close-actions">
+        <button
+          className="btn btn-secondary"
+          disabled={!maySet || busy}
+          onClick={() => void close("completed")}
+          title={
+            maySet
+              ? "Complete the mission: the result was accepted and the receipt is saved. Refused without a recorded decision, or while a pull request is open."
+              : "Only a Mission Admin can end a mission (mission.close)."
+          }
+          data-testid="close-complete"
+        >
+          Complete mission
+        </button>
+        <button
+          className="btn btn-text close-cancel"
+          disabled={!maySet || busy}
+          onClick={() => setConfirming(true)}
+          title={
+            maySet
+              ? "End the mission without accepting a result."
+              : "Only a Mission Admin can end a mission (mission.close)."
+          }
+          data-testid="close-cancel"
+        >
+          Cancel mission
+        </button>
+      </div>
+      {error && (
+        <p className="skill-error tone-danger" role="alert" data-testid="close-error">
+          {error}
+        </p>
+      )}
+      {confirming && (
+        <Dialog label="Cancel this mission" onClose={() => setConfirming(false)}>
+          <p className="dialog-sub">
+            The work ends without a result being accepted. Everything stays in the record — the
+            receipt says what happened and what was abandoned — and nothing here can be resumed.
+          </p>
+          <textarea
+            className="scope-input"
+            rows={3}
+            placeholder="What was abandoned, and why? (optional — goes in the receipt)"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            data-testid="close-reason"
+          />
+          <div className="dialog-actions">
+            <button className="btn btn-secondary" onClick={() => setConfirming(false)} disabled={busy}>
+              Keep working
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={() => void close("cancelled")}
+              disabled={busy}
+              data-testid="close-cancel-confirm"
+            >
+              Cancel the mission
+            </button>
+          </div>
+        </Dialog>
+      )}
+    </div>
   );
 }
 
@@ -1102,6 +1214,7 @@ export function Inspector({
                     {detail.participants.length === 0 && <li className="quiet">No participants recorded.</li>}
                   </ul>
                   <InviteSection detail={detail} />
+                  <CloseSection detail={detail} />
 
                   {detail.control.holderLogin && (
                     <div className="inspector-actions">

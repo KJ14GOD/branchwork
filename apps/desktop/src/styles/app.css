@@ -4773,12 +4773,20 @@ body.resizing {
 }
 
 .board-column {
-  flex: 0 0 300px;
+  /* Five columns share the room: each flexes between a readable floor and a
+     card's comfortable ceiling, and only past the floor does the board
+     scroll sideways in its own container. */
+  flex: 1 1 210px;
+  min-width: 210px;
+  max-width: 300px;
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
+/* The heading sits on the cards' own text axis (owner-directed on sight,
+   D-121's polish): inset by the card's padding + border so "Needs you" and
+   the goal beneath it start on one line. */
 .board-column-head {
   font: var(--type-section);
   color: var(--text-1);
@@ -4786,6 +4794,7 @@ body.resizing {
   align-items: baseline;
   gap: var(--s-2);
   margin-bottom: var(--s-3);
+  padding-left: calc(var(--s-3) + 1px);
 }
 
 .board-column-count {
@@ -4806,6 +4815,7 @@ body.resizing {
 .board-empty {
   font: var(--type-meta);
   color: var(--text-3);
+  padding-left: calc(var(--s-3) + 1px);
 }
 
 .board-card {
@@ -4817,7 +4827,7 @@ body.resizing {
   background: var(--surface-1);
   border: 1px solid var(--edge);
   border-radius: 10px;
-  padding: var(--s-3) var(--s-4);
+  padding: var(--s-3);
   cursor: pointer;
   color: var(--text-2);
 }
@@ -4858,4 +4868,81 @@ body.resizing {
 .board-card-facts {
   font: var(--type-meta);
   color: var(--text-3);
+}
+
+/* ---------- The receipt, and ending a mission (D-121) ---------- */
+/* A receipt is the room, frozen: one document at the receipt measure, words
+   and rows, the most restrained surface in the product. */
+.receipt {
+  max-width: 720px;
+  padding-top: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.receipt-head {
+  font: var(--type-body);
+  color: var(--text-1);
+}
+
+.receipt-reason,
+.receipt-rationale {
+  font: var(--type-body);
+  color: var(--text-1);
+}
+
+.receipt-criteria {
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.receipt-heading {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-top: var(--s-4);
+}
+
+.receipt-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.receipt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-3);
+  font: var(--type-row);
+  color: var(--text-2);
+}
+
+.receipt-quiet {
+  color: var(--text-3);
+  font: var(--type-meta);
+}
+
+.receipt-decision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.close-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.close-cancel {
+  color: var(--danger);
+}
+
+.close-ended {
+  font: var(--type-meta);
+  color: var(--text-3);
+  margin-top: var(--s-3);
 }

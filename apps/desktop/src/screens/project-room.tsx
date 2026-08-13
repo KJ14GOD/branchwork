@@ -48,6 +48,7 @@ import { FileView } from "../components/file-view";
 import { PreviewSurface } from "../components/preview-surface";
 import { PREVIEW_TAB_KEY, PULL_TAB_KEY, type OpenPreviewTab } from "../components/preview";
 import { PullRequestPage, pullStateWord } from "../components/pull-request";
+import { ReceiptView } from "../components/receipt-view";
 
 /** The mark that says a tab is a file rather than the room itself. */
 function FileGlyph() {
@@ -450,10 +451,17 @@ export function ProjectRoom({
   const approaches = detail?.approaches ?? [];
   /** Something to fork from: an approach only means anything beside a result
    *  that already exists, so the control is absent until the lane being read
-   *  has a shared checkpoint a sibling could start at (D-079). */
-  const forkable = approaches.find(
-    (approach) => approach.workstreamId === detail?.workstream?.workstreamId && approach.forkPointSha !== null
-  );
+   *  has a shared checkpoint a sibling could start at (D-079) — and absent
+   *  again once the mission's work has ended (D-121), because a terminal
+   *  room offers nothing the server would refuse. */
+  const forkable =
+    detail?.state === "completed" || detail?.state === "cancelled"
+      ? undefined
+      : approaches.find(
+          (approach) =>
+            approach.workstreamId === detail?.workstream?.workstreamId &&
+            approach.forkPointSha !== null
+        );
   /** Every lane, in creation order; more than one only where somebody forked
    *  an approach (D-074). The first is the lane the mission started with. */
   const lanes = detail?.workstreams ?? [];
@@ -1528,6 +1536,14 @@ export function ProjectRoom({
             <PullRequestPage detail={detail} decision={currentDecision} />
           </div>
         </div>
+      ) : detail && detail.receipt && (detail.state === "completed" || detail.state === "cancelled") ? (
+        /* Terminal (D-121): the canvas is the receipt — the room, frozen —
+           rendered from the snapshot stored at close, never a recomputation. */
+        <div className="feed-scroll">
+          <div className="feed">
+            <ReceiptView detail={detail} receipt={detail.receipt} />
+          </div>
+        </div>
       ) : decisionOpen && detail ? (
         <div className="feed-scroll">
           <DecisionRoom
@@ -1779,6 +1795,9 @@ export function ProjectRoom({
       </div>
       )}
 
+      {/* Terminal states never resume (D-121): the composer is hidden, not
+          disabled — there is nothing to direct and no state it returns in. */}
+      {detail?.state !== "completed" && detail?.state !== "cancelled" && (
       <Composer
         key={selectedMissionId ?? "draft"}
         /* A draft has no mission yet, so no server capabilities exist to read:
@@ -1796,6 +1815,7 @@ export function ProjectRoom({
         policy={isDraft ? null : policyControl}
         onSubmit={submit}
       />
+      )}
 
       {/* The bottom dock. It shares the room's width and shortens the trace
           rather than replacing it; below the single-column threshold it takes

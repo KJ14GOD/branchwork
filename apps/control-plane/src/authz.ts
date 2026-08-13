@@ -20,6 +20,10 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     // it is a decision about the mission's place in the product, not an
     // operating verb on a running workstream (PRODUCT.md#roles-and-capabilities).
     "mission.archive",
+    // Ending a mission's work (D-121): completed or cancelled, with the
+    // receipt snapshotted. Mission Admin's alone, like archival, and never
+    // lease-granted — ending the mission is a decision about the mission.
+    "mission.close",
     "direction.submit",
     "execution.start",
     "execution.stop",

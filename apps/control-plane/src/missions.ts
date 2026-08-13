@@ -42,6 +42,9 @@ interface MissionRow {
   default_branch: string | null;
   workstream_count?: number;
   last_activity_at?: Date | null;
+  closed_at?: Date | null;
+  closed_outcome?: string | null;
+  closed_by_login?: string | null;
   churn_files?: number | null;
   churn_additions?: number | null;
   churn_deletions?: number | null;
@@ -112,7 +115,12 @@ function toMission(row: MissionRow): Mission {
             deletions: Number(row.churn_deletions ?? 0)
           }
         : null,
-    checks: null
+    checks: null,
+    // How the work ended, when it has (D-121): the one stored word the
+    // projection reads, because a terminal state is a person's own fact.
+    closedOutcome: (row.closed_outcome as Mission["closedOutcome"]) ?? null,
+    closedAt: row.closed_at ? row.closed_at.toISOString() : null,
+    closedByLogin: row.closed_by_login ?? null
   };
 }
 
@@ -470,11 +478,13 @@ const MISSION_SELECT = `
   select m.mission_id, m.org_id, m.goal, m.success_criteria, m.primary_state,
          m.created_by, u.login as created_by_login, m.created_at,
          m.archived_at, archiver.login as archived_by_login,
+         m.closed_at, m.closed_outcome, closer.login as closed_by_login,
          m.repo_id, r.provider, r.provider_repo_id, r.name as repo_name, r.default_branch,
          (select count(*)::int from workstreams w where w.mission_id = m.mission_id) as workstream_count
     from missions m
     join users u on u.user_id = m.created_by
     left join users archiver on archiver.user_id = m.archived_by
+    left join users closer on closer.user_id = m.closed_by
     left join repositories r on r.repo_id = m.repo_id`;
 
 /**
@@ -490,6 +500,7 @@ const LIST_SELECT = `
   select m.mission_id, m.org_id, m.goal, m.success_criteria, m.primary_state,
          m.created_by, u.login as created_by_login, m.created_at,
          m.archived_at, archiver.login as archived_by_login,
+         m.closed_at, m.closed_outcome, closer.login as closed_by_login,
          m.repo_id, r.provider, r.provider_repo_id, r.name as repo_name, r.default_branch,
          (select count(*)::int from workstreams w where w.mission_id = m.mission_id) as workstream_count,
          (select ev.occurred_at from events ev where ev.mission_id = m.mission_id
@@ -507,6 +518,7 @@ const LIST_SELECT = `
     from missions m
     join users u on u.user_id = m.created_by
     left join users archiver on archiver.user_id = m.archived_by
+    left join users closer on closer.user_id = m.closed_by
     left join repositories r on r.repo_id = m.repo_id`;
 
 /**
@@ -621,6 +633,11 @@ export async function listMissions(
     lanesOf.set(row.mission_id, list);
   }
   return missions.map((mission) => {
+    // Ended is ended (D-121): a closed mission's state is its stored outcome,
+    // never a recomputation over lanes whose last look predates the close.
+    if (mission.closedOutcome !== null) {
+      return { ...mission, primaryState: mission.closedOutcome, attention: null, working: null };
+    }
     const lanes = lanesOf.get(mission.missionId);
     if (!lanes || lanes.length === 0) return mission;
     const projected = projectMissionListState(lanes, {

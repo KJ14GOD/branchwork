@@ -865,3 +865,30 @@ alter table workstreams add column if not exists enabled_mcp_servers jsonb not n
 create index if not exists checkpoints_by_mission on checkpoints (mission_id);
 create index if not exists checkpoints_by_workstream on checkpoints (wst_id, created_at desc);
 create index if not exists file_changes_by_mission on file_changes (mission_id, path);
+
+-- ---------------------------------------------------------------------------
+-- The terminal lifecycle (D-121). A mission's work ends by a person's own
+-- act — completed (result accepted) or cancelled — and the ending is the one
+-- stored word the state projection reads, because a terminal state is a fact
+-- a person made, not a derivation. The receipt is snapshotted in the same
+-- transaction: a deterministic projection with the event range it covers,
+-- validated at the wire shape before it is stored, always re-derivable.
+-- Closing is not archival (D-063): one ends the work, the other files the
+-- record away, and a mission can be both.
+-- ---------------------------------------------------------------------------
+
+alter table missions add column if not exists closed_at timestamptz;
+alter table missions add column if not exists closed_by text references users(user_id);
+alter table missions add column if not exists closed_outcome text
+  check (closed_outcome in ('completed', 'cancelled'));
+
+create table if not exists receipts (
+  rcp_id       text primary key,
+  org_id       text not null references organizations(org_id),
+  mission_id   text not null references missions(mission_id),
+  snapshot     jsonb not null,
+  from_seq     bigint not null,
+  to_seq       bigint not null,
+  created_at   timestamptz not null default now()
+);
+create unique index if not exists receipts_one_per_mission on receipts (mission_id);

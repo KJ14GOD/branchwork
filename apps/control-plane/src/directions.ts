@@ -4,6 +4,7 @@ import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newDirectionId } from "./ids.ts";
+import { closedRefusal } from "./close.ts";
 import { resolveSessionForDirection, titleSessionFromFirstDirection } from "./sessions.ts";
 import type { MissionAccess } from "./authz.ts";
 import { AuthorizationError } from "./authz.ts";
@@ -95,6 +96,10 @@ export async function submitDirection(
   if (!access.workstreamId) {
     throw new AuthorizationError("no_workstream", "This mission has no workstream yet.", 409);
   }
+  // A terminal state never resumes (D-121): direction into a closed mission
+  // is refused in words, which also closes every dispatch path behind it.
+  const closed = await closedRefusal(db, access.missionId);
+  if (closed) throw new AuthorizationError("mission_closed", closed, 409);
   const workstreamId = access.workstreamId;
   const authorIsController = access.isController;
   const dirId = newDirectionId();
