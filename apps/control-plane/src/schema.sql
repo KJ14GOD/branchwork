@@ -857,3 +857,11 @@ alter table workstreams add column if not exists enabled_skills jsonb not null d
 -- validated at the wire, never parsed here.
 alter table workspaces add column if not exists declared_mcp jsonb not null default '[]'::jsonb;
 alter table workstreams add column if not exists enabled_mcp_servers jsonb not null default '[]'::jsonb;
+
+-- The Home board's aggregates (D-120): the list sums churn and counts
+-- distinct changed paths per mission on every poll, so both tables need a
+-- mission-keyed path. Checkpoints also serve the per-lane current-head
+-- lookup by (wst_id, created_at).
+create index if not exists checkpoints_by_mission on checkpoints (mission_id);
+create index if not exists checkpoints_by_workstream on checkpoints (wst_id, created_at desc);
+create index if not exists file_changes_by_mission on file_changes (mission_id, path);

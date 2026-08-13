@@ -27,6 +27,7 @@ import {
   closeTabs,
   emptyWorkingSet,
   openMission,
+  openMissionAt,
   promoteDraft,
   openSession,
   readWorkingSet,
@@ -39,7 +40,15 @@ import {
   type OpenTab,
   type WorkingSet
 } from "../components/working-set";
-import { laneView, liveRunProcess, sessionActivity, sessionNeedsYou } from "../components/derive";
+import {
+  boardColumnOf,
+  laneView,
+  liveRunProcess,
+  sessionActivity,
+  sessionNeedsYou,
+  type BoardColumnId
+} from "../components/derive";
+import { HomeBoard } from "../components/home-board";
 import { PREVIEW_TAB_KEY, PULL_TAB_KEY, type OpenPreviewTab } from "../components/preview";
 import { deriveGoal, plural, truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
@@ -894,10 +903,18 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
    *  what that room is — tab, lane, or session — quietly ends them. */
   const [decisionOpen, setDecisionOpen] = useState(false);
   const [sessionDraft, setSessionDraft] = useState(false);
+  /** A Decided card's click lands on Compare (D-120): the reset below would
+   *  otherwise clear the canvas the moment the tab changed, so the intent
+   *  rides a ref the reset consumes exactly once. */
+  const pendingCompareMission = useRef<string | null>(null);
   useEffect(() => {
-    setDecisionOpen(false);
+    const wantCompare =
+      pendingCompareMission.current !== null &&
+      active?.missionId === pendingCompareMission.current;
+    pendingCompareMission.current = null;
+    setDecisionOpen(wantCompare);
     setSessionDraft(false);
-  }, [active?.id, active?.workstreamId, active?.sessionId]);
+  }, [active?.id, active?.missionId, active?.workstreamId, active?.sessionId]);
 
   const forgetTabFiles = useCallback((tabId: string) => {
     setFilesByTab((previous) => {
@@ -1085,7 +1102,34 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const openAttention = (mission: Mission) => {
     const repo = mission.repository;
     if (!repo) return;
-    openMissionTab(keyOf(repo.provider, repo.providerRepoId), mission.missionId);
+    openBoardMission(mission, boardColumnOf(mission));
+  };
+
+  /** A board card's one action (D-120): open the mission AT the thing that is
+   *  asking — the attention's lane and chat, the running lane's chat, or (for
+   *  a decided mission with siblings) the Compare surface. Navigation only:
+   *  nothing starts, stops, or changes state from a card. */
+  const openBoardMission = (mission: Mission, column: BoardColumnId) => {
+    const repo = mission.repository;
+    const projectKey = repo
+      ? keyOf(repo.provider, repo.providerRepoId)
+      : (projects.find((project) =>
+          project.missions.some((candidate) => candidate.missionId === mission.missionId)
+        )?.key ?? null);
+    if (!projectKey) return;
+    const place = mission.attention ?? mission.working;
+    setWorkingSet((previous) =>
+      openMissionAt(previous, mission.missionId, projectKey, mintTabId, {
+        workstreamId: place?.workstreamId ?? undefined,
+        sessionId: place?.sessionId ?? undefined
+      })
+    );
+    if (column === "decided" && mission.workstreamCount > 1) {
+      pendingCompareMission.current = mission.missionId;
+    }
+    setRailProject(projectKey);
+    setExpanded((previous) => new Set(previous).add(projectKey));
+    setRailOpen(false);
   };
 
 
@@ -1096,7 +1140,16 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   // A newly created mission joins the list, and the draft the person typed into
   // becomes that mission's tab in place — not a second tab beside it.
   const handleCreated = useCallback((mission: Mission) => {
-    setMissions((prev) => (prev ? [...prev, mission] : [mission]));
+    // Deduplicated by id: the 5-second poll can deliver the new mission before
+    // this append lands, and the two copies then coexist until the next poll
+    // replaces the list wholesale — a flicker in the rail, and two cards for
+    // one mission on the Home board, which is where it was finally seen
+    // (found by e2e/home.spec.ts's first screenshot, D-120).
+    setMissions((prev) => {
+      if (!prev) return [mission];
+      if (prev.some((existing) => existing.missionId === mission.missionId)) return prev;
+      return [...prev, mission];
+    });
     const repo = mission.repository;
     if (!repo) return;
     const key = keyOf(repo.provider, repo.providerRepoId);
@@ -1297,7 +1350,11 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           <div className="sidebar-fixed">
             <button
               className={activeMissionId === null && active === null ? "side-row selected" : "side-row"}
-              onClick={() => setWorkingSet(emptyWorkingSet)}
+              // Home is a glance, not a purge (D-120): the board shows with
+              // every open tab kept in the strip, so checking what needs you
+              // never costs the working set. Before the board this wiped the
+              // tabs, which made Home and "close everything" one control.
+              onClick={() => setWorkingSet((previous) => ({ ...previous, activeId: null }))}
               data-testid="rail-home"
             >
               <HomeGlyph />
@@ -1832,6 +1889,16 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               pullTabOpen={pullTabOpen}
               onOpenPull={openPullTab}
               onClosePull={closePullTab}
+            />
+          ) : (missions?.length ?? 0) > 0 ? (
+            // Home (D-120): every active mission, grouped by what it needs.
+            // Rendered only once a mission exists at all — a board over
+            // nothing is prohibited pattern 11 — and the card's click is its
+            // one action: open at the thing that is asking.
+            <HomeBoard
+              missions={missions ?? []}
+              now={Date.now()}
+              onOpen={openBoardMission}
             />
           ) : currentProject ? (
             // Nothing open in this project. The rail lists what there is; this

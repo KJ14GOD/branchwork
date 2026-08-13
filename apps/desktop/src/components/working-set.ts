@@ -105,6 +105,31 @@ export function openDraft(set: WorkingSet, projectKey: string, mint: () => strin
   return { tabs: [...set.tabs, tab].slice(-MAX_TABS), activeId: tab.id };
 }
 
+/**
+ * Opens a mission AT a named place (D-120): the board's card click, landing on
+ * the lane and conversation that are asking rather than wherever the tab last
+ * was — the instruction the working set never took (the D-093 gap, closed).
+ * Composed from the existing verbs so every rule they hold still holds; an
+ * absent lane or session leaves that part of the tab exactly as openMission
+ * left it (the remembered place).
+ */
+export function openMissionAt(
+  set: WorkingSet,
+  missionId: string,
+  projectKey: string,
+  mint: () => string,
+  at: { workstreamId?: string | null; sessionId?: string | null }
+): WorkingSet {
+  let next = openMission(set, missionId, projectKey, mint);
+  const tab = tabFor(next, missionId);
+  if (!tab) return next;
+  if (at.workstreamId !== undefined) next = selectLane(next, tab.id, at.workstreamId);
+  if (at.sessionId !== undefined && at.sessionId !== null) {
+    next = openSession(next, tab.id, at.sessionId);
+  }
+  return next;
+}
+
 export function selectTab(set: WorkingSet, id: string): WorkingSet {
   if (!set.tabs.some((tab) => tab.id === id)) return set;
   return set.activeId === id ? set : { ...set, activeId: id };

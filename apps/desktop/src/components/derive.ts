@@ -3,6 +3,7 @@ import {
   type EnabledSkill,
   type Execution,
   type FileChange,
+  type Mission,
   type MissionDetailResponse,
   type Participant,
   type Session,
@@ -594,6 +595,65 @@ export function usageSoFar(detail: MissionDetailResponse): {
     if (typeof spent === "number" && Number.isFinite(spent)) durationMs = (durationMs ?? 0) + spent;
   }
   return { turns: detail.executions.length, costUsd, durationMs };
+}
+
+// --- The Home board (D-120) --------------------------------------------------
+// Missions grouped by what they need, computed and only computed: a card
+// moves columns because reality changed, never because a hand did. Column
+// order is the reason a person opens Home: what needs them first.
+
+export type BoardColumnId = "needs_you" | "running" | "waiting" | "decided";
+
+export const BOARD_COLUMNS: readonly { id: BoardColumnId; label: string; empty: string }[] = [
+  { id: "needs_you", label: "Needs you", empty: "Nothing needs you right now." },
+  { id: "running", label: "Running", empty: "Nothing is running." },
+  { id: "waiting", label: "Waiting", empty: "Nothing is waiting." },
+  { id: "decided", label: "Decided", empty: "No decisions yet." }
+];
+
+const BOARD_ATTENTION: ReadonlySet<Mission["primaryState"]> = new Set([
+  "needs_approval",
+  "needs_direction",
+  "workspace_failed",
+  "verification_failed",
+  "execution_interrupted"
+]);
+const BOARD_RUNNING: ReadonlySet<Mission["primaryState"]> = new Set([
+  "provisioning_workspace",
+  "agent_starting",
+  "agent_running",
+  "agent_stopping"
+]);
+const BOARD_DECIDED: ReadonlySet<Mission["primaryState"]> = new Set([
+  "decision_recorded",
+  "pull_request_open"
+]);
+
+/** Which column a mission's own projected state puts it in. The precedence
+ *  lives in the server's list projection (attention, then running, then
+ *  decided, then waiting — PRODUCT.md#the-mission-state-model); this only
+ *  reads the word it produced. */
+export function boardColumnOf(mission: Mission): BoardColumnId {
+  if (BOARD_ATTENTION.has(mission.primaryState)) return "needs_you";
+  if (BOARD_RUNNING.has(mission.primaryState)) return "running";
+  if (BOARD_DECIDED.has(mission.primaryState)) return "decided";
+  return "waiting";
+}
+
+/** The board: every active mission in its computed column, newest activity
+ *  first within a column — a glance order, not a rank; columns never rank
+ *  missions against each other any more than lanes are ranked (D-074). */
+export function boardColumns(
+  missions: readonly Mission[]
+): { id: BoardColumnId; label: string; empty: string; missions: Mission[] }[] {
+  const recency = (mission: Mission): number =>
+    Date.parse(mission.lastActivityAt ?? mission.createdAt) || 0;
+  return BOARD_COLUMNS.map((column) => ({
+    ...column,
+    missions: missions
+      .filter((mission) => boardColumnOf(mission) === column.id)
+      .sort((a, b) => recency(b) - recency(a))
+  }));
 }
 
 /** One row of the lane's skills surface (D-118), derived from the published

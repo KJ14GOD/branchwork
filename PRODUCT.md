@@ -219,7 +219,7 @@ Representation and checkpoint mechanics live in [ARCHITECTURE.md](ARCHITECTURE.m
 
 ## The mission state model
 
-The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-presentation) defines the presentation of each and may not add, rename, or merge states. A mission has one **primary state**; the conditions marked *(overlay)* can coexist with a primary state and demand attention without replacing it. In a mission with several workstreams, the primary state is a projection over workstream and execution states with fixed precedence: attention-demanding states, then running, then waiting — mirroring how "the controller" is derived for the single-workstream case.
+The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-presentation) defines the presentation of each and may not add, rename, or merge states. A mission has one **primary state**; the conditions marked *(overlay)* can coexist with a primary state and demand attention without replacing it. In a mission with several workstreams, the primary state is a projection over workstream and execution states with fixed precedence: attention-demanding states, then running, then decided — a standing decision or an open pull request, which the list projection reaches exactly as the room's own always has (D-120) — then waiting, mirroring how "the controller" is derived for the single-workstream case. Home groups every active mission by that projection's class — needs you, running, waiting, decided — computed and never hand-assigned: a mission changes groups because reality changed, and nothing on that surface starts, stops, or ranks anything (D-120).
 
 | State | Meaning — entered when / leaves when |
 | --- | --- |

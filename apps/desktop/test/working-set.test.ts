@@ -9,6 +9,7 @@ import {
   encodeWorkingSet,
   openDraft,
   openMission,
+  openMissionAt,
   openSession,
   reorderSession,
   promoteDraft,
@@ -383,5 +384,40 @@ describe("sessions in a tab (D-083, presented per D-084)", () => {
     );
     expect(preSessions.tabs[0]!.sessionId).toBeNull();
     expect(preSessions.tabs[0]!.workstreamId).toBe("wst_alt");
+  });
+});
+
+describe("opening a mission AT a place (D-120)", () => {
+  it("lands on the named lane and conversation, and the conversation joins the open row", () => {
+    const mint = minter();
+    const opened = openMissionAt(emptyWorkingSet, "msn_1", "p1", mint, {
+      workstreamId: "wst_alt",
+      sessionId: "csn_blocked"
+    });
+    const tab = activeTab(opened);
+    expect(tab?.missionId).toBe("msn_1");
+    expect(tab?.workstreamId).toBe("wst_alt");
+    expect(tab?.sessionId).toBe("csn_blocked");
+    expect(tab?.openSessionIds).toEqual(["csn_blocked"]);
+  });
+
+  it("re-aims an already-open tab rather than minting a second one", () => {
+    const mint = minter();
+    let set = openMissionAt(emptyWorkingSet, "msn_1", "p1", mint, { sessionId: "csn_a" });
+    set = openMissionAt(set, "msn_1", "p1", mint, { workstreamId: "wst_b", sessionId: "csn_b" });
+    expect(set.tabs).toHaveLength(1);
+    const tab = activeTab(set);
+    expect(tab?.workstreamId).toBe("wst_b");
+    expect(tab?.sessionId).toBe("csn_b");
+    expect(tab?.openSessionIds).toEqual(["csn_a", "csn_b"]);
+  });
+
+  it("with no place named, keeps whatever the tab remembered", () => {
+    const mint = minter();
+    let set = openMissionAt(emptyWorkingSet, "msn_1", "p1", mint, { workstreamId: "wst_alt" });
+    set = { ...set, activeId: null };
+    set = openMissionAt(set, "msn_1", "p1", mint, {});
+    const tab = activeTab(set);
+    expect(tab?.workstreamId).toBe("wst_alt");
   });
 });

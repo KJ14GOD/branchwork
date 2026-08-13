@@ -444,7 +444,50 @@ export const MissionSchema = z.object({
       sessionId: z.string().startsWith("csn_").nullable(),
       sessionTitle: z.string().nullable()
     })
+    .nullable(),
+  /** When the last durable event landed (D-120) — the card's "1h" and the
+   *  board's within-column order. Null for a mission with no events yet, and
+   *  on the detail path, which does not fill the board fields. */
+  lastActivityAt: z.string().datetime().nullable().default(null),
+  /** Where the running work is (D-120): the first running lane in creation
+   *  order and the chat whose turn it is — the running mirror of `attention`,
+   *  so a card can say what is happening without opening the room. Null when
+   *  nothing runs, and on the detail path. */
+  working: z
+    .object({
+      workstreamId: z.string().startsWith("wst_"),
+      workstreamName: z.string().min(1),
+      sessionId: z.string().startsWith("csn_").nullable(),
+      sessionTitle: z.string().nullable()
+    })
     .nullable()
+    .default(null),
+  /** The baton, stated only where it is one fact: the single-lane mission's
+   *  lease holder (PRODUCT.md#control's derived display). A mission holding
+   *  several lanes has several batons, so this stays null rather than lying
+   *  with one name (D-120). */
+  controllerLogin: z.string().nullable().default(null),
+  /** What the mission's work has touched so far (D-120): distinct changed
+   *  paths, and the summed per-turn line arithmetic — churn, stated as churn,
+   *  never presented as a net diff. Null when nothing was ever committed. */
+  churn: z
+    .object({
+      filesChanged: z.number().int().nonnegative(),
+      additions: z.number().int().nonnegative(),
+      deletions: z.number().int().nonnegative()
+    })
+    .nullable()
+    .default(null),
+  /** Verification at the lanes' current heads only (D-120): checks proving a
+   *  revision a lane has moved past are history, not this tally. Null when no
+   *  check has run against any current head. */
+  checks: z
+    .object({
+      passed: z.number().int().nonnegative(),
+      total: z.number().int().nonnegative()
+    })
+    .nullable()
+    .default(null)
 });
 export type Mission = z.infer<typeof MissionSchema>;
 

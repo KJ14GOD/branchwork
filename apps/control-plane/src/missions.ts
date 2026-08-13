@@ -41,6 +41,12 @@ interface MissionRow {
   repo_name: string | null;
   default_branch: string | null;
   workstream_count?: number;
+  last_activity_at?: Date | null;
+  churn_files?: number | null;
+  churn_additions?: number | null;
+  churn_deletions?: number | null;
+  has_decision?: boolean;
+  has_open_pr?: boolean;
 }
 
 interface WorkstreamRow {
@@ -91,7 +97,22 @@ function toMission(row: MissionRow): Mission {
     workstreamCount: Number(row.workstream_count ?? 1),
     // Only the list projection fills this in (D-093); everywhere else the
     // rail tree's own rows already point at the lane and conversation.
-    attention: null
+    attention: null,
+    // The board's facts (D-120), present only where the list query computed
+    // them; the detail path leaves the defaults. Churn that never happened is
+    // null, never a row of zeros.
+    lastActivityAt: row.last_activity_at ? row.last_activity_at.toISOString() : null,
+    working: null,
+    controllerLogin: null,
+    churn:
+      (row.churn_files ?? 0) > 0 || (row.churn_additions ?? 0) > 0 || (row.churn_deletions ?? 0) > 0
+        ? {
+            filesChanged: Number(row.churn_files ?? 0),
+            additions: Number(row.churn_additions ?? 0),
+            deletions: Number(row.churn_deletions ?? 0)
+          }
+        : null,
+    checks: null
   };
 }
 
@@ -457,6 +478,38 @@ const MISSION_SELECT = `
     left join repositories r on r.repo_id = m.repo_id`;
 
 /**
+ * The list's own select (D-120): MISSION_SELECT plus the board's facts, each a
+ * cheap indexed aggregate — when the mission last said anything, what its work
+ * has touched so far (churn: summed per-turn arithmetic and distinct changed
+ * paths, stated as churn, never a net diff), and whether a current decision or
+ * an open pull request stands, which the projection below turns into the
+ * decided states the room has always projected and the list never did. Only
+ * the list pays for these; the detail path keeps MISSION_SELECT.
+ */
+const LIST_SELECT = `
+  select m.mission_id, m.org_id, m.goal, m.success_criteria, m.primary_state,
+         m.created_by, u.login as created_by_login, m.created_at,
+         m.archived_at, archiver.login as archived_by_login,
+         m.repo_id, r.provider, r.provider_repo_id, r.name as repo_name, r.default_branch,
+         (select count(*)::int from workstreams w where w.mission_id = m.mission_id) as workstream_count,
+         (select ev.occurred_at from events ev where ev.mission_id = m.mission_id
+           order by ev.seq desc limit 1) as last_activity_at,
+         (select count(distinct fc.path)::int from file_changes fc
+           where fc.mission_id = m.mission_id) as churn_files,
+         (select coalesce(sum(c.additions), 0)::int from checkpoints c
+           where c.mission_id = m.mission_id) as churn_additions,
+         (select coalesce(sum(c.deletions), 0)::int from checkpoints c
+           where c.mission_id = m.mission_id) as churn_deletions,
+         exists (select 1 from decisions d
+                  where d.mission_id = m.mission_id and d.superseded_at is null) as has_decision,
+         exists (select 1 from pull_requests pr
+                  where pr.mission_id = m.mission_id and pr.state in ('draft', 'ready')) as has_open_pr
+    from missions m
+    join users u on u.user_id = m.created_by
+    left join users archiver on archiver.user_id = m.archived_by
+    left join repositories r on r.repo_id = m.repo_id`;
+
+/**
  * The fragment that decides whether a caller may see a mission at all:
  * membership in the organization that owns it, and a participant row. An
  * organization member who was never invited cannot see it, so a mission id is
@@ -481,13 +534,20 @@ export async function listMissions(
   filter: "active" | "archived" = "active"
 ): Promise<Mission[]> {
   const result = await db.query(
-    `${MISSION_SELECT} ${VISIBLE_TO}
+    `${LIST_SELECT} ${VISIBLE_TO}
       where m.archived_at is ${filter === "archived" ? "not null" : "null"}
       order by m.created_at desc`,
     [ctx.userId]
   );
   const missions = (result.rows as MissionRow[]).map(toMission);
   if (missions.length === 0) return missions;
+  const decidedOf = new Map<string, { hasDecision: boolean; hasOpenPr: boolean }>();
+  for (const row of result.rows as MissionRow[]) {
+    decidedOf.set(row.mission_id, {
+      hasDecision: Boolean(row.has_decision),
+      hasOpenPr: Boolean(row.has_open_pr)
+    });
+  }
 
   // The list must not disagree with the room. Both states come from the same
   // projection over the same durable facts; the stored column is never read.
@@ -511,6 +571,16 @@ export async function listMissions(
             e.session_id as latest_session_id,
             s.title as latest_session_title,
             (select ws.readiness from workspaces ws where ws.wst_id = l.wst_id) as readiness,
+            (select u2.login from control_leases cl
+               join users u2 on u2.user_id = cl.holder_user_id
+              where cl.wst_id = l.wst_id and cl.state in ('held', 'releasing')
+              limit 1) as controller_login,
+            (select count(*)::int from verification_checks v
+              where head.sha is not null and v.checkpoint_sha = head.sha
+                and coalesce(v.wst_id, (select e4.wst_id from executions e4 where e4.exe_id = v.exe_id), l.first_wst_id) = l.wst_id) as current_checks,
+            (select count(*)::int from verification_checks v
+              where head.sha is not null and v.checkpoint_sha = head.sha and v.outcome = 'passed'
+                and coalesce(v.wst_id, (select e4.wst_id from executions e4 where e4.exe_id = v.exe_id), l.first_wst_id) = l.wst_id) as current_passed,
             exists (select 1 from checkpoints c
                       join executions e2 on e2.exe_id = c.exe_id
                      where e2.wst_id = l.wst_id and c.files_changed > 0) as changed,
@@ -533,6 +603,14 @@ export async function listMissions(
           order by e.created_at desc limit 1
        ) e on true
        left join workstream_sessions s on s.csn_id = e.session_id
+       -- The lane's current head (D-120): checks proving an older revision are
+       -- history, not the card's tally — the staleness rule, reduced to the
+       -- one revision a list can afford.
+       left join lateral (
+         select c.sha from checkpoints c
+          where c.wst_id = l.wst_id and c.sha is not null
+          order by c.created_at desc limit 1
+       ) head on true
       order by l.mission_id, l.created_at, l.wst_id`,
     [ids]
   );
@@ -545,8 +623,25 @@ export async function listMissions(
   return missions.map((mission) => {
     const lanes = lanesOf.get(mission.missionId);
     if (!lanes || lanes.length === 0) return mission;
-    const projected = projectMissionListState(lanes);
-    return { ...mission, primaryState: projected.state, attention: projected.attention };
+    const projected = projectMissionListState(lanes, {
+      hasDecision: decidedOf.get(mission.missionId)?.hasDecision ?? false,
+      hasOpenPr: decidedOf.get(mission.missionId)?.hasOpenPr ?? false
+    });
+    // The board's per-lane facts, folded to mission level (D-120): the baton
+    // is stated only where it is one fact (a single-lane mission — a mission
+    // holding several lanes has several batons, and one name would lie), and
+    // the checks tally counts only the lanes' current heads. Absence stays
+    // absent: no check at any current head is null, never 0/0.
+    const currentChecks = lanes.reduce((sum, lane) => sum + Number(lane.current_checks ?? 0), 0);
+    const currentPassed = lanes.reduce((sum, lane) => sum + Number(lane.current_passed ?? 0), 0);
+    return {
+      ...mission,
+      primaryState: projected.state,
+      attention: projected.attention,
+      working: projected.working,
+      controllerLogin: lanes.length === 1 ? (lanes[0]?.controller_login ?? null) : null,
+      checks: currentChecks > 0 ? { passed: currentPassed, total: currentChecks } : null
+    };
   });
 }
 
@@ -562,6 +657,9 @@ interface LaneSummaryRow {
   changed: boolean;
   passed: boolean;
   broken: boolean;
+  controller_login: string | null;
+  current_checks: number | null;
+  current_passed: number | null;
 }
 
 /** The states in which a lane is waiting on a person. Precedence class one:
@@ -603,9 +701,17 @@ const EXECUTION_ATTENTION_STATES: ReadonlySet<Mission["primaryState"]> = new Set
  * execution's — the conversation that execution belongs to, so the lens can
  * name the exact background chat rather than only the mission.
  */
-function projectMissionListState(lanes: LaneSummaryRow[]): {
+function projectMissionListState(
+  lanes: LaneSummaryRow[],
+  /** Whether a current decision or an open pull request stands (D-120): the
+   *  decided class, outranked by attention and by running — a decided mission
+   *  whose revision is underway is honestly Running — and outranking the
+   *  waiting fallback, exactly as the room's own projection has always had it. */
+  decided: { hasDecision: boolean; hasOpenPr: boolean } = { hasDecision: false, hasOpenPr: false }
+): {
   state: Mission["primaryState"];
   attention: Mission["attention"];
+  working: Mission["working"];
 } {
   const states = lanes.map(projectListState);
   for (let index = 0; index < lanes.length; index += 1) {
@@ -620,15 +726,36 @@ function projectMissionListState(lanes: LaneSummaryRow[]): {
         workstreamName: lane.name,
         sessionId: sessionKnown ? lane.latest_session_id : null,
         sessionTitle: sessionKnown ? lane.latest_session_title : null
+      },
+      working: null
+    };
+  }
+  for (let index = 0; index < lanes.length; index += 1) {
+    const lane = lanes[index];
+    const state = states[index];
+    if (!lane || !state || !RUNNING_STATES.has(state)) continue;
+    // The running mirror of attention (D-120): the first running lane in
+    // creation order, and — where the run is an execution's — the chat whose
+    // turn it is. A provisioning lane is named with no chat, like a failed
+    // workspace's attention.
+    const sessionKnown = state === "agent_starting" || state === "agent_running";
+    return {
+      state,
+      attention: null,
+      working: {
+        workstreamId: lane.wst_id,
+        workstreamName: lane.name,
+        sessionId: sessionKnown ? lane.latest_session_id : null,
+        sessionTitle: sessionKnown ? lane.latest_session_title : null
       }
     };
   }
+  if (decided.hasOpenPr) return { state: "pull_request_open", attention: null, working: null };
+  if (decided.hasDecision) return { state: "decision_recorded", attention: null, working: null };
   return {
-    state:
-      states.find((state) => RUNNING_STATES.has(state)) ??
-      states[0] ??
-      "new_mission",
-    attention: null
+    state: states[0] ?? "new_mission",
+    attention: null,
+    working: null
   };
 }
 

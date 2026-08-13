@@ -4755,3 +4755,107 @@ body.resizing {
   min-height: 120px;
   font: var(--type-body);
 }
+
+/* ---------- The Home board (D-120) ---------- */
+/* Every active mission grouped by what it needs: computed columns side by
+   side, cards as the contained-card radius sanctions, no drag, no rank. The
+   board is the canvas's one region; it scrolls sideways in its own container
+   when the columns overflow, and each column owns its vertical scroll — the
+   shell never scrolls (DESIGN.md#overflow). */
+.home-board {
+  display: flex;
+  gap: var(--s-4);
+  padding: var(--s-5) var(--s-5) var(--s-3);
+  height: 100%;
+  min-height: 0;
+  overflow-x: auto;
+  align-items: stretch;
+}
+
+.board-column {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.board-column-head {
+  font: var(--type-section);
+  color: var(--text-1);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+
+.board-column-count {
+  font: var(--type-meta);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-column-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding-bottom: var(--s-4);
+}
+
+.board-empty {
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.board-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-1);
+  text-align: left;
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: var(--s-3) var(--s-4);
+  cursor: pointer;
+  color: var(--text-2);
+}
+
+.board-card:hover {
+  border-color: var(--edge-hover);
+}
+
+.board-card-goal {
+  font: var(--type-row);
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.board-card-meta {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: var(--s-3);
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.board-card-when {
+  font-variant-numeric: tabular-nums;
+}
+
+.board-card-line {
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.board-card-churn {
+  font: var(--type-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-card-facts {
+  font: var(--type-meta);
+  color: var(--text-3);
+}

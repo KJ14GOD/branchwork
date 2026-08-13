@@ -81,3 +81,17 @@ export function duration(fromIso: string, toIso: string): string | null {
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
+
+/** A card's relative time (D-120), the reference's own grammar: "now" within
+ *  the minute, then minutes, hours, days, and past a week the short date —
+ *  a board is glanced at, not audited, and the event log keeps the audit. */
+export function agoLabel(iso: string, now: number): string {
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return "";
+  const elapsed = Math.max(0, now - then);
+  if (elapsed < 60_000) return "now";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h`;
+  if (elapsed < 7 * 86_400_000) return `${Math.floor(elapsed / 86_400_000)}d`;
+  return new Date(then).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
