@@ -262,7 +262,8 @@ describe("scoped chats write in parallel", () => {
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
     await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
-    if ((await page.getByTestId("mission-row").count()) === 0) {
+    const firstTwisty = page.getByTestId("project-twisty").first();
+    if ((await firstTwisty.getAttribute("aria-expanded")) !== "true") {
       await page.getByTestId("project-row").first().click();
     }
     await page.getByTestId("mission-row").first().click();

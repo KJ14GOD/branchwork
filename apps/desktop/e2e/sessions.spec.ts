@@ -238,7 +238,11 @@ beforeAll(async () => {
     has: page.getByTestId("project-row").filter({ hasText: basename(dir) })
   });
   await group.waitFor({ timeout: 30_000 });
-  if ((await group.getByTestId("mission-row").count()) === 0) {
+  // Disclosure is per project and the row's click is a toggle (D-077); the
+  // restore path discloses open-tab projects on its own schedule, so a count
+  // of visible rows never said whether a click opens or closes. The twisty's
+  // aria-expanded is the per-project fact (the D-120/D-121 batch's find).
+  if ((await group.getByTestId("project-twisty").getAttribute("aria-expanded")) !== "true") {
     await group.getByTestId("project-row").click();
   }
   await group.getByTestId("mission-row").first().click();

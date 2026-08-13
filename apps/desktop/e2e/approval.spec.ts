@@ -296,12 +296,20 @@ async function openRoom(client: Client, missionId: string, label?: string): Prom
     .getByTestId("mission-row")
     .filter({ hasText: label ? `Approval ${label}` : "Approval" })
     .first();
-  if ((await mission.count()) === 0) {
-    const project = label
-      ? client.page.getByTestId("project-row").filter({ hasText: `-${label}-` }).first()
-      : client.page.getByTestId("project-row").first();
-    await project.click();
-  }
+  const project = label
+    ? client.page.getByTestId("project-row").filter({ hasText: `-${label}-` }).first()
+    : client.page.getByTestId("project-row").first();
+  await project.waitFor({ timeout: 60_000 });
+  // Disclosure is per project and the row's click is a toggle (D-077); the
+  // restore path discloses open-tab projects on its own schedule, so a count
+  // of visible rows never said whether a click opens or closes. The twisty's
+  // aria-expanded is the per-project fact (the D-120/D-121 batch's find).
+  const twisty = client.page
+    .locator(".side-parent")
+    .filter({ has: project })
+    .getByTestId("project-twisty")
+    .first();
+  if ((await twisty.getAttribute("aria-expanded")) !== "true") await project.click();
   await mission.waitFor({ timeout: 30_000 });
   await mission.click();
   await client.page.getByTestId("state-line").waitFor({ timeout: 30_000 });
