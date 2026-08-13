@@ -1,4 +1,5 @@
 import {
+  EnabledMcpServersSchema,
   EnabledSkillsSchema,
   type CreateMissionInput,
   type Mission,
@@ -58,6 +59,7 @@ interface WorkstreamRow {
   remote_head_sha?: string | null;
   permission_profile?: string | null;
   enabled_skills?: unknown;
+  enabled_mcp_servers?: unknown;
 }
 
 function toRepository(row: MissionRow): RepositoryRef | null {
@@ -115,7 +117,9 @@ function toWorkstream(row: WorkstreamRow): Workstream {
     permissionProfile: (row.permission_profile as Workstream["permissionProfile"] | null) ?? "manual",
     // The skills a person enabled on this lane (D-118); malformed or
     // pre-migration reads as none, never as a wider grant.
-    enabledSkills: EnabledSkillsSchema.catch([]).parse(row.enabled_skills ?? [])
+    enabledSkills: EnabledSkillsSchema.catch([]).parse(row.enabled_skills ?? []),
+    // And the MCP servers (D-119), same posture.
+    enabledMcpServers: EnabledMcpServersSchema.catch([]).parse(row.enabled_mcp_servers ?? [])
   };
 }
 

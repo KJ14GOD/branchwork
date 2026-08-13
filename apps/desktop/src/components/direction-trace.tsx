@@ -561,6 +561,35 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
             tone: "warn"
           });
         }
+        // The MCP servers, same grammar (D-119).
+        const mcpCarried = Array.isArray(event.payload.mcpServers)
+          ? event.payload.mcpServers.filter((name): name is string => typeof name === "string")
+          : [];
+        if (mcpCarried.length > 0) {
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-mcp`,
+            text: `MCP servers carried: ${mcpCarried.join(", ")}`,
+            login: null,
+            tone: "neutral"
+          });
+        }
+        const mcpDropped = Array.isArray(event.payload.mcpServersDropped)
+          ? event.payload.mcpServersDropped
+          : [];
+        for (const drop of mcpDropped) {
+          const name = text((drop as { name?: unknown }).name);
+          if (!name) continue;
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-mcp-drop-${name}`,
+            text: `MCP server not carried — "${name}": ${
+              text((drop as { reason?: unknown }).reason) ?? "the reason was not stated"
+            }`,
+            login: null,
+            tone: "warn"
+          });
+        }
         break;
       }
       case "harness.session": {

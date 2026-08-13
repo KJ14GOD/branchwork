@@ -11,6 +11,7 @@ import {
   MAX_RATIONALE,
   MissionRoleSchema,
   OpenPreviewInputSchema,
+  EnabledMcpServersSchema,
   EnabledSkillsSchema,
   OpenTerminalInputSchema,
   MergeInputSchema,
@@ -803,6 +804,29 @@ function registerIpc(): void {
     }
     return call(async () => {
       await api.setEnabledSkills(parsed.data.missionId, parsed.data.workstreamId, parsed.data.skills);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:missions:set-enabled-mcp", async (_event, raw: unknown) => {
+    // Asking is all this is (AGENTS.md rule 13): the server judges mcp.set —
+    // Mission Admin's alone — and the published-manifest match (D-119).
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        workstreamId: z.string().startsWith("wst_"),
+        servers: EnabledMcpServersSchema
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "invalid_servers",
+        message: "That is not a set of MCP servers Novus can enable."
+      };
+    }
+    return call(async () => {
+      await api.setEnabledMcpServers(parsed.data.missionId, parsed.data.workstreamId, parsed.data.servers);
       return null;
     });
   });

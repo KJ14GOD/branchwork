@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   CreateApproachInputSchema,
+  EnabledMcpServersSchema,
   EnabledSkillsSchema,
   RecordDecisionInputSchema,
   RequestRevisionInputSchema,
@@ -79,7 +80,9 @@ export function toWorkstream(row: Record<string, unknown>): Workstream {
     permissionProfile:
       (row.permission_profile as Workstream["permissionProfile"] | null) ?? "manual",
     // The skills a person enabled on this lane (D-118); malformed reads none.
-    enabledSkills: EnabledSkillsSchema.catch([]).parse(row.enabled_skills ?? [])
+    enabledSkills: EnabledSkillsSchema.catch([]).parse(row.enabled_skills ?? []),
+    // And the MCP servers (D-119), same posture.
+    enabledMcpServers: EnabledMcpServersSchema.catch([]).parse(row.enabled_mcp_servers ?? [])
   };
 }
 

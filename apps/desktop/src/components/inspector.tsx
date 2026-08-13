@@ -14,6 +14,8 @@ import {
   changedFiles,
   checkTallies,
   laneSessions,
+  mcpRows,
+  nextEnabledMcp,
   nextEnabledSkills,
   sessionOfCheck,
   skillRows,
@@ -339,49 +341,17 @@ function SkillsSection({ detail }: { detail: MissionDetailResponse }) {
     if (!result.ok) setError(result.message);
   };
 
-  const stateWord = (row: SkillRow): { text: string; warn: boolean } | null => {
-    if (row.state === "enabled") return { text: "enabled", warn: false };
-    if (row.state === "changed") return { text: "changed since enabled", warn: true };
-    if (row.state === "vanished") return { text: "no longer in the project", warn: true };
-    return null;
-  };
-
   return (
     <div data-testid="inspector-skills">
       <h3 className="inspector-heading">Project skills</h3>
-      {rows.map((row) => {
-        const word = stateWord(row);
-        // One action per row: a currently-enabled skill offers Disable; a
-        // changed one offers Enable — review it as it now is and approve
-        // that, the server's own refusal words — and a vanished grant is
-        // retired with Disable.
-        const action = row.state === "off" || row.state === "changed" ? "Enable" : "Disable";
-        return (
-          <div className="skill-row" data-testid="skill-row" data-skill={row.name} key={row.name}>
-            <span className="skill-row-body">
-              <span className="mono skill-name">{row.name}</span>
-              {word && <span className={word.warn ? "tone-warn" : "skill-state"}> · {word.text}</span>}
-              {row.description && <span className="skill-description">{row.description}</span>}
-            </span>
-            <button
-              className="btn btn-text skill-action"
-              disabled={!maySet || busy}
-              onClick={() => void act(action === "Enable" ? { enable: row.name } : { disable: row.name })}
-              title={
-                maySet
-                  ? action === "Enable"
-                    ? `Enable "${row.name}" for this lane's turns, exactly as published`
-                    : `Stop carrying "${row.name}"`
-                  : "Only a Mission Admin or Operator can change skills (skills.set)."
-              }
-              data-testid="skill-action"
-              data-skill={row.name}
-            >
-              {action}
-            </button>
-          </div>
-        );
-      })}
+      <ManifestRows
+        rows={rows}
+        maySet={maySet}
+        busy={busy}
+        onAct={act}
+        deniedTitle="Only a Mission Admin or Operator can change skills (skills.set)."
+        testid="skill"
+      />
       {error && (
         <p className="skill-error tone-danger" role="alert" data-testid="skill-error">
           {error}
@@ -393,6 +363,122 @@ function SkillsSection({ detail }: { detail: MissionDetailResponse }) {
         someone enables it as it now is.
       </p>
     </div>
+  );
+}
+
+/**
+ * The project's MCP servers, one tier up from its skills (D-119): each row is
+ * a server the project declares — what this machine would run, or where it
+ * would connect — enabled only by a Mission Admin, carried to the harness as
+ * a strict config Novus authors, and every call its tools make still a human
+ * question under every profile short of Don't ask.
+ */
+function McpServersSection({ detail }: { detail: MissionDetailResponse }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const maySet = detail.capabilities.includes("mcp.set");
+  const rows = mcpRows(detail);
+  if (rows.length === 0) return null;
+
+  const act = async (choice: { enable: string } | { disable: string }) => {
+    if (!detail.workstream) return;
+    setBusy(true);
+    setError(null);
+    const result = await novus().missions.setEnabledMcpServers({
+      missionId: detail.mission.missionId,
+      workstreamId: detail.workstream.workstreamId,
+      servers: nextEnabledMcp(detail, choice)
+    });
+    setBusy(false);
+    if (!result.ok) setError(result.message);
+  };
+
+  return (
+    <div data-testid="inspector-mcp">
+      <h3 className="inspector-heading">MCP servers</h3>
+      <ManifestRows
+        rows={rows}
+        maySet={maySet}
+        busy={busy}
+        onAct={act}
+        deniedTitle="Only a Mission Admin can change MCP servers (mcp.set)."
+        testid="mcp"
+      />
+      {error && (
+        <p className="skill-error tone-danger" role="alert" data-testid="mcp-error">
+          {error}
+        </p>
+      )}
+      <p className="skill-foot">
+        An MCP server is new tool surface — a program this machine runs, or a host it connects to.
+        Only what a Mission Admin enabled exists to the harness, and every call its tools make still
+        asks a person, under every permission profile short of Don&rsquo;t ask.
+      </p>
+    </div>
+  );
+}
+
+/** The shared row anatomy of both governed manifests (D-118, D-119): name in
+ *  mono, the lane's standing answer in words, the description beneath, one
+ *  text action at the end — the Permission-denied pattern when the viewer
+ *  lacks the verb. */
+function ManifestRows({
+  rows,
+  maySet,
+  busy,
+  onAct,
+  deniedTitle,
+  testid
+}: {
+  rows: SkillRow[];
+  maySet: boolean;
+  busy: boolean;
+  onAct: (choice: { enable: string } | { disable: string }) => Promise<void>;
+  deniedTitle: string;
+  testid: string;
+}) {
+  const stateWord = (row: SkillRow): { text: string; warn: boolean } | null => {
+    if (row.state === "enabled") return { text: "enabled", warn: false };
+    if (row.state === "changed") return { text: "changed since enabled", warn: true };
+    if (row.state === "vanished") return { text: "no longer in the project", warn: true };
+    return null;
+  };
+  return (
+    <>
+      {rows.map((row) => {
+        const word = stateWord(row);
+        // One action per row: a currently-enabled entry offers Disable; a
+        // changed one offers Enable — review it as it now is and approve
+        // that, the server's own refusal words — and a vanished grant is
+        // retired with Disable.
+        const action = row.state === "off" || row.state === "changed" ? "Enable" : "Disable";
+        return (
+          <div className="skill-row" data-testid={`${testid}-row`} data-skill={row.name} key={row.name}>
+            <span className="skill-row-body">
+              <span className="mono skill-name">{row.name}</span>
+              {word && <span className={word.warn ? "tone-warn" : "skill-state"}> · {word.text}</span>}
+              {row.description && <span className="skill-description">{row.description}</span>}
+            </span>
+            <button
+              className="btn btn-text skill-action"
+              disabled={!maySet || busy}
+              onClick={() => void onAct(action === "Enable" ? { enable: row.name } : { disable: row.name })}
+              title={
+                maySet
+                  ? action === "Enable"
+                    ? `Enable "${row.name}" for this lane's turns, exactly as published`
+                    : `Stop carrying "${row.name}"`
+                  : deniedTitle
+              }
+              data-testid={`${testid}-action`}
+              data-skill={row.name}
+            >
+              {action}
+            </button>
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -987,6 +1073,7 @@ export function Inspector({
                   </div>
 
                   <SkillsSection detail={detail} />
+                  <McpServersSection detail={detail} />
 
                   <h3 className="inspector-heading">Participants</h3>
                   <ul className="participant-list" data-testid="participant-list">

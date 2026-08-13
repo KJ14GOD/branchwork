@@ -850,3 +850,10 @@ alter table executions add constraint executions_permission_profile_check
 
 alter table workspaces add column if not exists declared_skills jsonb not null default '[]'::jsonb;
 alter table workstreams add column if not exists enabled_skills jsonb not null default '[]'::jsonb;
+
+-- Project MCP servers (D-119): the same publish-review-enable shape as the
+-- skills above, one tier up — `mcp.set` is Mission Admin's alone, because a
+-- server is new tool surface rather than instructions. Stored verbatim,
+-- validated at the wire, never parsed here.
+alter table workspaces add column if not exists declared_mcp jsonb not null default '[]'::jsonb;
+alter table workstreams add column if not exists enabled_mcp_servers jsonb not null default '[]'::jsonb;

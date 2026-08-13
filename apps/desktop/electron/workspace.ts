@@ -3,6 +3,7 @@ import { basename, join, resolve as resolvePath, sep } from "node:path";
 import {
   MIN_SECRET_LENGTH,
   type DeclaredCommand,
+  type McpServer,
   type PreparedFile,
   type ProcessLog,
   type ProjectSkill,
@@ -22,6 +23,7 @@ import { ApiError } from "./api-client";
 import { createSanitizer } from "./evidence";
 import { declaredCommands, sameCommands, sameSkills } from "./workspace-commands";
 import { discoverProjectSkills } from "./skills";
+import { discoverProjectMcp } from "./mcp";
 import { loadWorkspaceSettings, WorkspaceConfigError, writeWorkspaceSettings } from "./workspace-config";
 import { prepareLocalFiles as copyLocalFiles } from "./workspace-files";
 import { gitExec, type GitExec } from "./workspace-git";
@@ -808,7 +810,10 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
   const supervisors = new Map<string, WorkspaceProcesses>();
   /** What was last published per workstream, so re-reading unchanged
    *  configuration does not become an event every fifteen seconds. */
-  const published = new Map<string, { commands: DeclaredCommand[]; skills: ProjectSkill[] }>();
+  const published = new Map<
+    string,
+    { commands: DeclaredCommand[]; skills: ProjectSkill[]; mcp: McpServer[] }
+  >();
 
   interface Prepared {
     worktree: string;
@@ -870,22 +875,35 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
     // The worktree's own `.claude/skills`, published in the same breath
     // (D-118): what a person can enable is what this machine last read, and a
     // skill the agent rewrites republishes here so a stale review can never be
-    // re-approved unseen.
+    // re-approved unseen. Its `.mcp.json` rides the same publish (D-119).
     const skills = discoverProjectSkills(worktree);
+    const mcp = discoverProjectMcp(worktree);
     const previous = published.get(workstreamId);
-    if (previous === undefined && commands.length === 0 && skills.length === 0) {
-      published.set(workstreamId, { commands, skills });
+    if (previous === undefined && commands.length === 0 && skills.length === 0 && mcp.length === 0) {
+      published.set(workstreamId, { commands, skills, mcp });
       return;
     }
     if (
       previous !== undefined &&
       sameCommands(previous.commands, commands) &&
-      sameSkills(previous.skills, skills)
+      sameSkills(previous.skills, skills) &&
+      sameMcp(previous.mcp, mcp)
     ) {
       return;
     }
-    published.set(workstreamId, { commands, skills });
-    deps.emit(workstreamId, { kind: "workspace.declared", payload: { commands, skills } });
+    published.set(workstreamId, { commands, skills, mcp });
+    deps.emit(workstreamId, {
+      kind: "workspace.declared",
+      payload: { commands, skills, mcpServers: mcp }
+    });
+  }
+
+  /** The same digest-order equality the skills use (D-118, D-119). */
+  function sameMcp(a: readonly McpServer[], b: readonly McpServer[]): boolean {
+    return (
+      a.length === b.length &&
+      a.every((entry, index) => entry.name === b[index]?.name && entry.digest === b[index]?.digest)
+    );
   }
 
   /**

@@ -267,6 +267,30 @@ describe("project skills in the room (D-118)", () => {
     expect(none.segments.filter((segment) => segment.kind === "note")).toHaveLength(0);
   });
 
+  it("states carried and dropped MCP servers the same way (D-119)", () => {
+    const block = trace(
+      detail([
+        {
+          kind: "execution.running",
+          payload: {
+            harness: "claude-code",
+            model: "claude-fable-5",
+            effort: "high",
+            mcpServers: ["docs"],
+            mcpServersDropped: [{ name: "search", reason: "changed since it was enabled" }]
+          }
+        }
+      ])
+    );
+    const notes = block.segments.filter((segment) => segment.kind === "note");
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toMatchObject({ text: "MCP servers carried: docs", tone: "neutral" });
+    expect(notes[1]).toMatchObject({
+      text: 'MCP server not carried — "search": changed since it was enabled',
+      tone: "warn"
+    });
+  });
+
   it("names a dropped skill with its reason, in the warn tone — a dead grant is news", () => {
     const block = trace(
       detail([

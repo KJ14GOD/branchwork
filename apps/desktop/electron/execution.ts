@@ -10,12 +10,14 @@ import {
   ModelIdSchema,
   pathInScope,
   type ApprovalDecision,
+  type EnabledMcpServer,
   type EnabledSkill,
   type PermissionProfile,
   type RunnerEvent
 } from "@novus/contracts";
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
 import { composeSkillsPlugin, removeComposedSkills, type ComposedSkills } from "./skills";
+import { composeMcpConfig, removeComposedMcp, type ComposedMcp } from "./mcp";
 import { HarnessStream, type HarnessApprovalRequest, type HarnessControlMessage } from "./harness-stream";
 import { harnessEnv } from "./workspace-env";
 import { redact } from "./secret-policy";
@@ -217,6 +219,13 @@ const PATH_SCOPED_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "MultiEdit"]
  *  only line between `auto` and `dont_ask`. */
 const SHELL_TOOLS = new Set(["Bash"]);
 
+/** An MCP server's tools arrive as `mcp__{server}__{tool}` (probed on
+ *  2.1.229). Their effects are declared nowhere Novus can read — exactly the
+ *  shell's problem — so `auto` never answers one either: enabling a server
+ *  (D-119) put its tools in the room, and only `dont_ask` answers them by
+ *  policy. */
+const isMcpTool = (toolName: string): boolean => toolName.startsWith("mcp__");
+
 /** Serializes checkpoint capture per worktree (D-097): parallel scoped turns
  *  share one git index, and two captures interleaving `add` and `commit`
  *  would stage each other's files. The lock is the whole capture, status to
@@ -295,6 +304,10 @@ export interface TurnRequest {
    *  Absent or empty means no `--plugin-dir` at all — exactly the pre-D-118
    *  spawn. */
   skills?: readonly EnabledSkill[] | null;
+  /** The project MCP servers a person enabled, pinned at dispatch (D-119).
+   *  Composed into a strict config Novus authors, or dropped by name under
+   *  the same digest rule. Absent or empty means no `--mcp-config` at all. */
+  mcpServers?: readonly EnabledMcpServer[] | null;
   /** Announce the execution's start; a follow-up turn inside the same
    *  execution does not repeat it. */
   announceStart: boolean;
@@ -480,9 +493,13 @@ export function startTurn(request: TurnRequest): RunningTurn {
   /** The turn's composed skills directory (D-118), built once per turn after
    *  the worktree exists and removed when the turn ends. Null until then. */
   let composedSkills: ComposedSkills | null = null;
+  let composedMcp: ComposedMcp | null = null;
   const cleanupComposedSkills = (): void => {
     if (composedSkills !== null && composedSkills.dir !== null) {
       removeComposedSkills(composedSkills.dir);
+    }
+    if (composedMcp !== null && composedMcp.file !== null) {
+      removeComposedMcp(composedMcp.file);
     }
   };
   let interruptAsked = false;
@@ -629,7 +646,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
       // answers the path-naming edit tools alone.
       if (
         profile === "dont_ask" ||
-        (profile === "auto" && !SHELL_TOOLS.has(message.toolName)) ||
+        // `auto` answers neither a shell nor an MCP tool (D-119): both act
+        // through effects the request does not declare, so they stay human
+        // questions under every profile but `dont_ask`.
+        (profile === "auto" && !SHELL_TOOLS.has(message.toolName) && !isMcpTool(message.toolName)) ||
         (profile === "accept_edits" && PATH_SCOPED_TOOLS.has(message.toolName))
       ) {
         decideByProfile(message, "allowed");
@@ -775,6 +795,14 @@ export function startTurn(request: TurnRequest): RunningTurn {
       request.skills ?? [],
       join(request.worktreeRoot, ".skills-staging", request.executionId)
     );
+    // The enabled MCP servers, under the same rule (D-119): re-derived from
+    // the worktree, digest-checked against the approval, written into a
+    // strict config only Novus authors.
+    composedMcp = composeMcpConfig(
+      worktreePath,
+      request.mcpServers ?? [],
+      join(request.worktreeRoot, ".mcp-staging", `${request.executionId}.json`)
+    );
     emit({
       kind: "execution.running",
       payload: {
@@ -783,7 +811,9 @@ export function startTurn(request: TurnRequest): RunningTurn {
         effort,
         permissionProfile: profile,
         skills: composedSkills.carried,
-        skillsDropped: composedSkills.dropped
+        skillsDropped: composedSkills.dropped,
+        mcpServers: composedMcp.carried,
+        mcpServersDropped: composedMcp.dropped
       }
     });
 
@@ -920,6 +950,9 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // person-approved bytes and nothing else. Absent when nothing was enabled
     // or everything enabled was dropped — then no flag is passed at all.
     const skills = composedSkills?.dir ? ["--plugin-dir", composedSkills.dir] : [];
+    // The strict MCP config (D-119): only the approved servers exist to the
+    // CLI — `--strict-mcp-config` is what keeps every other source out.
+    const mcp = composedMcp?.file ? ["--mcp-config", composedMcp.file, "--strict-mcp-config"] : [];
 
     return new Promise<ProcessOutcome>((resolve) => {
       const args = [
@@ -939,6 +972,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         ...(optional ? OPTIONAL_ARGS : []),
         ...instructions,
         ...skills,
+        ...mcp,
         "--model",
         model,
         "--effort",
@@ -1083,7 +1117,9 @@ export function startTurn(request: TurnRequest): RunningTurn {
       // the Write every existing test knows.
       let allowed = true;
       if (request.fakeApproval) {
-        const askTool = /\[fake-ask:([A-Za-z]+)\]/.exec(request.direction)?.[1] ?? "Write";
+        // Underscores admitted so a scripted turn can ask as an MCP tool —
+        // `[fake-ask:mcp__docs__echo]` — through the same production router.
+        const askTool = /\[fake-ask:([A-Za-z0-9_]+)\]/.exec(request.direction)?.[1] ?? "Write";
         for (const event of stream.push(
           `${JSON.stringify({
             type: "control_request",

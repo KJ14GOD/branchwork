@@ -222,6 +222,84 @@ export type EnabledSkill = z.infer<typeof EnabledSkillSchema>;
 
 export const EnabledSkillsSchema = z.array(EnabledSkillSchema).max(MAX_PROJECT_SKILLS);
 
+// --- Project MCP servers (D-119) ---------------------------------------------
+// The worktree's own `.mcp.json`, governed the same way as its skills: the
+// runner publishes a bounded manifest, a person enables named servers at the
+// exact entry they reviewed, and a turn is handed a config Novus authors —
+// `--mcp-config` with `--strict-mcp-config`, so only the approved servers
+// exist — or nothing. Unlike a skill, a server is genuinely new tool surface,
+// so the tier is higher (`mcp.set` is Mission Admin's alone) and the router
+// treats its tools like a shell command: an MCP tool's effects are declared
+// nowhere, so no profile short of `dont_ask` ever answers one by policy.
+
+/** A manifest of ten servers is a manifest; more is a generator talking. */
+export const MAX_MCP_SERVERS = 10;
+
+/** A remote MCP server's address: https away from this machine, http only on
+ *  loopback, never a credentialed authority, never control characters — the
+ *  preview bridge's rules (D-045), applied to the one place an enablement is
+ *  also an egress decision. */
+export function validMcpUrl(value: string): boolean {
+  if (value.length > 400 || /[\u0000-\u0020\u007f]/.test(value)) return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.username !== "" || url.password !== "") return false;
+  const loopback =
+    url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "[::1]" || url.hostname === "localhost";
+  if (url.protocol === "https:") return true;
+  return url.protocol === "http:" && loopback;
+}
+
+/** One MCP server as the runner read it from `.mcp.json` — what a person
+ *  reviews and enables. Field values are as the project declared them, never
+ *  an expanded secret: the harness environment holds none (D-041). */
+export const McpServerSchema = z
+  .object({
+    name: SkillNameSchema,
+    transport: z.enum(["stdio", "http", "sse"]),
+    /** stdio: the program this machine would run. */
+    command: z.string().max(400).nullable().default(null),
+    args: z.array(z.string().max(400)).max(20).default([]),
+    env: z
+      .array(z.object({ name: z.string().min(1).max(80), value: z.string().max(400) }).strict())
+      .max(10)
+      .default([]),
+    /** http/sse: where this machine would connect. */
+    url: z.string().max(400).nullable().default(null),
+    /** SHA-256 of the canonical entry. The approval pins this, so what loads
+     *  is what was reviewed — field for field — or nothing. */
+    digest: z.string().regex(/^[0-9a-f]{64}$/)
+  })
+  .strict()
+  .superRefine((server, ctx) => {
+    if (server.transport === "stdio") {
+      if (server.command === null || server.url !== null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a stdio server names a command and no url" });
+      }
+      return;
+    }
+    if (server.url === null || server.command !== null || !validMcpUrl(server.url)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "a remote server names an https url (http only on loopback), with no credentials in the authority"
+      });
+    }
+  });
+export type McpServer = z.infer<typeof McpServerSchema>;
+
+export const EnabledMcpServerSchema = z.object({
+  name: SkillNameSchema,
+  digest: z.string().regex(/^[0-9a-f]{64}$/)
+});
+export type EnabledMcpServer = z.infer<typeof EnabledMcpServerSchema>;
+
+export const EnabledMcpServersSchema = z.array(EnabledMcpServerSchema).max(MAX_MCP_SERVERS);
+
 export const WorkstreamSchema = z.object({
   workstreamId: z.string().startsWith("wst_"),
   missionId: z.string().startsWith("msn_"),
@@ -252,7 +330,10 @@ export const WorkstreamSchema = z.object({
    *  the digest they were shown. Defaulted empty: no skill is ever carried
    *  because nobody said anything. A fork starts empty, like the profile —
    *  trust is granted to a lane by a person, never inherited. */
-  enabledSkills: EnabledSkillsSchema.default([])
+  enabledSkills: EnabledSkillsSchema.default([]),
+  /** The project MCP servers a person enabled on this lane (D-119), pinned
+   *  the same way. Defaulted empty, and a fork starts empty. */
+  enabledMcpServers: EnabledMcpServersSchema.default([])
 });
 export type Workstream = z.infer<typeof WorkstreamSchema>;
 
@@ -487,6 +568,13 @@ export const CapabilitySchema = z.enum([
    *  granted by the baton. Enabling pins the exact digest the person was
    *  shown; a skill grants nothing, and every tool call still asks. */
   "skills.set",
+  /** Enable or disable a project's MCP servers on a lane (D-119). A server is
+   *  new tool surface — a program this machine runs, or a host it connects
+   *  to — so the tier is higher than a skill's: Mission Admin's alone, never
+   *  an Operator's, never the baton's. Every call an enabled server's tools
+   *  make still reaches the router, where no profile short of `dont_ask`
+   *  answers one by policy. */
+  "mcp.set",
   /** Declare a turn dead after a stop went unanswered (D-111). Held by the
    *  controller and by Mission Admin — the escalation PRODUCT.md#control has
    *  always named, implemented as exactly that: an explicit, logged act that
@@ -1443,7 +1531,10 @@ export const WorkspaceSchema = z.object({
    *  (D-118) — the manifest a person reviews and enables from, published on
    *  the same event as the declared commands. Never the bodies: a name, what
    *  it says it is, and the digest an approval would pin. */
-  skills: z.array(ProjectSkillSchema).max(MAX_PROJECT_SKILLS).default([])
+  skills: z.array(ProjectSkillSchema).max(MAX_PROJECT_SKILLS).default([]),
+  /** The project's MCP servers, as the runner last read `.mcp.json` (D-119) —
+   *  the same review-then-enable manifest, one tier up. */
+  mcpServers: z.array(McpServerSchema).max(MAX_MCP_SERVERS).default([])
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 
@@ -2066,6 +2157,13 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         skillsDropped: z
           .array(z.object({ name: SkillNameSchema, reason: BOUNDED_LINE }).strict())
           .max(MAX_PROJECT_SKILLS)
+          .default([]),
+        /** The enabled MCP servers this turn actually carried, and the ones
+         *  it could not, under exactly the skills' rules (D-119). */
+        mcpServers: z.array(SkillNameSchema).max(MAX_MCP_SERVERS).default([]),
+        mcpServersDropped: z
+          .array(z.object({ name: SkillNameSchema, reason: BOUNDED_LINE }).strict())
+          .max(MAX_MCP_SERVERS)
           .default([])
       })
       .strict()
@@ -2247,7 +2345,9 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         /** The worktree's own `.claude/skills`, read at the same moment
          *  (D-118). Defaulted so an older runner's report still validates as
          *  what it was: a project with nothing published to enable. */
-        skills: z.array(ProjectSkillSchema).max(MAX_PROJECT_SKILLS).default([])
+        skills: z.array(ProjectSkillSchema).max(MAX_PROJECT_SKILLS).default([]),
+        /** And the worktree's own `.mcp.json` (D-119), same rule. */
+        mcpServers: z.array(McpServerSchema).max(MAX_MCP_SERVERS).default([])
       })
       .strict()
   }),
@@ -2734,6 +2834,13 @@ export interface NovusBridge {
       missionId: string;
       workstreamId: string;
       skills: EnabledSkill[];
+    }): Promise<IpcResult<null>>;
+    /** Sets a lane's enabled MCP servers (D-119) — the whole set, digest-
+     *  pinned like skills. `mcp.set` — Mission Admin alone. */
+    setEnabledMcpServers(input: {
+      missionId: string;
+      workstreamId: string;
+      servers: EnabledMcpServer[];
     }): Promise<IpcResult<null>>;
     cancelDirection(directionId: string): Promise<IpcResult<null>>;
     /** Stops the named lane's running turn. The lane travels on the wire so a

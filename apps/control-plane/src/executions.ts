@@ -5,11 +5,13 @@ import {
   DEFAULT_PERMISSION_PROFILE,
   DirectionInputSchema,
   DirectionResolutionSchema,
+  EnabledMcpServersSchema,
   EnabledSkillsSchema,
   ExecutionStateSchema,
   PermissionProfileSchema,
   scopesDisjoint,
   TERMINAL_EXECUTION_STATES,
+  type EnabledMcpServer,
   type EnabledSkill,
   type FileDiffResponse,
   type PermissionProfile
@@ -97,6 +99,12 @@ function profileOf(value: unknown): PermissionProfile {
  *  failure posture as profileOf. */
 function skillsOf(value: unknown): EnabledSkill[] {
   const parsed = EnabledSkillsSchema.safeParse(value);
+  return parsed.success ? parsed.data : [];
+}
+
+/** The lane's enabled MCP servers, same posture (D-119). */
+function mcpOf(value: unknown): EnabledMcpServer[] {
+  const parsed = EnabledMcpServersSchema.safeParse(value);
   return parsed.success ? parsed.data : [];
 }
 
@@ -317,7 +325,8 @@ export async function dispatchDirection(
     }
 
     const direction = await client.query(
-      `select d.body, d.session_id, s.scope, w.permission_profile, w.enabled_skills from directions d
+      `select d.body, d.session_id, s.scope, w.permission_profile, w.enabled_skills,
+              w.enabled_mcp_servers from directions d
          join workstream_sessions s on s.csn_id = d.session_id
          join workstreams w on w.wst_id = d.wst_id
         where d.dir_id = $1 and d.wst_id = $2`,
@@ -334,6 +343,8 @@ export async function dispatchDirection(
     // carries the set — and the exact digests — that stood when it was
     // authorized, so an enablement mid-turn speaks from the next dispatch.
     const skills = skillsOf(direction.rows[0]?.enabled_skills);
+    // And the MCP servers (D-119), under exactly the same rule.
+    const mcpServers = mcpOf(direction.rows[0]?.enabled_mcp_servers);
     if (body === undefined || sessionId === undefined) {
       return { executionId: null, commandId: null, deferred: "That direction is no longer available." };
     }
@@ -369,7 +380,8 @@ export async function dispatchDirection(
           permissionProfile,
           // And for the skills (D-118): the fresh process an after-end apply
           // spawns composes from this pinned set, never from the rows.
-          skills
+          skills,
+          mcpServers
         },
         idempotencyKey: `apply:${args.directionId}`
       }),
@@ -485,7 +497,10 @@ export async function dispatchDirection(
         permissionProfile,
         // And the skills a person had enabled (D-118), each at its approved
         // digest — the runner composes exactly these or drops them by name.
-        skills
+        skills,
+        // And the MCP servers (D-119), composed into a strict config or
+        // dropped by name under the same digest rule.
+        mcpServers
       },
       // Keyed on the *execution*, not the direction. A direction that failed
       // and is directed again is a new attempt and needs a new command; keyed

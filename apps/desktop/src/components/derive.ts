@@ -662,6 +662,63 @@ export function nextEnabledSkills(
   ];
 }
 
+/**
+ * The lane's MCP servers, as the overview lists them (D-119) — the same row
+ * grammar as skillRows, with the entry's own observable behavior as the
+ * description: what this machine would run, or where it would connect,
+ * because an enablement is also that decision.
+ */
+export function mcpRows(detail: MissionDetailResponse): SkillRow[] {
+  const published = detail.workspace?.mcpServers ?? [];
+  const enabled = detail.workstream?.enabledMcpServers ?? [];
+  const describe = (server: (typeof published)[number]): string =>
+    server.transport === "stdio"
+      ? `runs ${[server.command ?? "", ...server.args].join(" ")}`.trim()
+      : `connects to ${hostOf(server.url)}`;
+  const rows: SkillRow[] = published.map((server) => {
+    const standing = enabled.find((entry) => entry.name === server.name);
+    return {
+      name: server.name,
+      description: describe(server),
+      state: standing === undefined ? "off" : standing.digest === server.digest ? "enabled" : "changed",
+      digest: server.digest
+    };
+  });
+  for (const entry of enabled) {
+    if (published.some((server) => server.name === entry.name)) continue;
+    rows.push({ name: entry.name, description: null, state: "vanished", digest: null });
+  }
+  return rows;
+}
+
+function hostOf(url: string | null): string {
+  if (url === null) return "nowhere";
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+/** The set an MCP act submits — nextEnabledSkills' rule, on the server lists. */
+export function nextEnabledMcp(
+  detail: MissionDetailResponse,
+  act: { enable: string } | { disable: string }
+): EnabledSkill[] {
+  const published = detail.workspace?.mcpServers ?? [];
+  const enabled = detail.workstream?.enabledMcpServers ?? [];
+  const valid = enabled.filter((entry) =>
+    published.some((server) => server.name === entry.name && server.digest === entry.digest)
+  );
+  if ("disable" in act) return valid.filter((entry) => entry.name !== act.disable);
+  const target = published.find((server) => server.name === act.enable);
+  if (!target) return valid;
+  return [
+    ...valid.filter((entry) => entry.name !== act.enable),
+    { name: target.name, digest: target.digest }
+  ];
+}
+
 function handoffSuffix(detail: MissionDetailResponse): string | null {
   const offer = detail.control.liveOffer;
   if (!detail.overlays.includes("handoff_waiting_for_boundary") || !offer) return null;

@@ -22,6 +22,7 @@ import {
   type RunningTurn,
   type TurnResult
 } from "../electron/execution";
+import { mcpEntryDigest } from "../electron/mcp";
 
 /**
  * The approval protocol through the **real spawn path** (D-056).
@@ -458,6 +459,59 @@ describe("the permission policy Novus pins", () => {
       skillsDropped: []
     });
   }, 40_000);
+
+  it("carries an enabled MCP server as a strict config Novus authors, or nothing at all (D-119)", async () => {
+    writeFileSync(
+      join(repo, ".mcp.json"),
+      JSON.stringify({ mcpServers: { docs: { command: "node", args: ["mcp/docs.js"] } } })
+    );
+    await git(repo, ["add", "-A"]);
+    await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "mcp"]);
+    await git(repo, ["branch", "-f", MISSION_BRANCH, "HEAD"]);
+    const digest = mcpEntryDigest({
+      name: "docs",
+      transport: "stdio",
+      command: "node",
+      args: ["mcp/docs.js"],
+      env: [],
+      url: null
+    });
+
+    installStub("approval");
+    const running = begin({ mcpServers: [{ name: "docs", digest }] });
+    await waitFor("the approval to arrive", () => running.turn.pendingApprovals().length > 0);
+    const args = argv();
+    const file = args[args.indexOf("--mcp-config") + 1] as string;
+    expect(file).toContain(".mcp-staging");
+    // Strictness is the guarantee: the composed file is the CLI's whole MCP
+    // world, and it holds exactly the approved entry.
+    expect(args).toContain("--strict-mcp-config");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      mcpServers: { docs: { command: "node", args: ["mcp/docs.js"] } }
+    });
+    running.turn.respondApproval("stub-request-1", "approve", null);
+    await running.finished;
+    expect(existsSync(file)).toBe(false);
+    expect(payloadOf(running.events, "execution.running")).toMatchObject({
+      mcpServers: ["docs"],
+      mcpServersDropped: []
+    });
+
+    // And with a stale digest: no flag, no config, the drop on the record.
+    rmSync(join(worktreeRoot, WORKSTREAM_ID), { recursive: true, force: true });
+    await git(repo, ["worktree", "prune"]);
+    installStub("approval");
+    const stale = begin({ mcpServers: [{ name: "docs", digest: "0".repeat(64) }] });
+    await waitFor("the retry's approval", () => stale.turn.pendingApprovals().length > 0);
+    stale.turn.respondApproval("stub-request-1", "deny", null);
+    await stale.finished;
+    expect(argv()).not.toContain("--mcp-config");
+    expect(argv()).not.toContain("--strict-mcp-config");
+    expect(payloadOf(stale.events, "execution.running")).toMatchObject({
+      mcpServers: [],
+      mcpServersDropped: [{ name: "docs", reason: "changed since it was enabled" }]
+    });
+  }, 60_000);
 
   it("drops a skill whose bytes changed since it was enabled, by name, and passes no directory", async () => {
     const body = "---\nname: zephyr-codes\n---\n\nRewritten since the review.\n";

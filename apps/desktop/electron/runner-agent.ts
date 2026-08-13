@@ -6,9 +6,11 @@ import {
   ApiErrorSchema,
   DEFAULT_PERMISSION_PROFILE,
   DeclaredCommandSchema,
+  EnabledMcpServersSchema,
   EnabledSkillsSchema,
   PermissionProfileSchema,
   RunnerCommandsResponseSchema,
+  type EnabledMcpServer,
   type EnabledSkill,
   type MissionDetailResponse,
   type PermissionProfile,
@@ -248,7 +250,9 @@ const StartPayloadSchema = z.object({
   /** The enabled skills, pinned at dispatch (D-118): each at the digest a
    *  person reviewed. Defaulted empty so a command from an older control
    *  plane carries nothing rather than something. */
-  skills: EnabledSkillsSchema.default([])
+  skills: EnabledSkillsSchema.default([]),
+  /** The enabled MCP servers (D-119), same rule. */
+  mcpServers: EnabledMcpServersSchema.default([])
 });
 
 /** The push the control plane authorized (D-099): the branch, and the exact
@@ -1103,6 +1107,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       scope: payload.data.scope,
       permissionProfile: payload.data.permissionProfile,
       skills: payload.data.skills,
+      mcpServers: payload.data.mcpServers,
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });
@@ -1180,6 +1185,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     permissionProfile: PermissionProfile;
     /** The enabled skills, pinned at dispatch (D-118). */
     skills: EnabledSkill[];
+    /** The enabled MCP servers, pinned at dispatch (D-119). */
+    mcpServers: EnabledMcpServer[];
     announceStart: boolean;
     pendingApplies: () => Promise<boolean>;
   }
@@ -1230,6 +1237,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       scope: args.scope,
       permissionProfile: args.permissionProfile,
       skills: args.skills,
+      mcpServers: args.mcpServers,
       siblingScopes: () =>
         [...active.values()]
           .filter(

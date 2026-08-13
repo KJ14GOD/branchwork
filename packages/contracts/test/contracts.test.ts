@@ -29,6 +29,8 @@ import {
   EnabledSkillsSchema,
   MAX_PROJECT_SKILLS,
   MAX_SKILL_BYTES,
+  McpServerSchema,
+  validMcpUrl,
   pathInScope,
   scopesDisjoint,
   ScopePatternSchema,
@@ -375,6 +377,45 @@ describe("project skills (D-118)", () => {
     if (older.success && older.data.kind === "execution.running") {
       expect(older.data.payload.skills).toEqual([]);
       expect(older.data.payload.skillsDropped).toEqual([]);
+    }
+  });
+
+  it("admits only reviewable MCP servers: coupled transports, guarded urls, one tier up (D-119)", () => {
+    const digest = "d".repeat(64);
+    const stdio = { name: "docs", transport: "stdio", command: "node server.js", digest };
+    expect(McpServerSchema.safeParse(stdio).success).toBe(true);
+    // Transport and address are coupled: a stdio server names a command and
+    // no url, a remote one an https url (http only on loopback) with no
+    // credentials in the authority — an enablement is also an egress decision.
+    expect(McpServerSchema.safeParse({ name: "docs", transport: "stdio", digest }).success).toBe(false);
+    expect(
+      McpServerSchema.safeParse({ name: "docs", transport: "http", url: "https://mcp.example.com", digest })
+        .success
+    ).toBe(true);
+    expect(
+      McpServerSchema.safeParse({ name: "docs", transport: "http", url: "http://mcp.example.com", digest })
+        .success
+    ).toBe(false);
+    expect(
+      McpServerSchema.safeParse({
+        name: "docs",
+        transport: "http",
+        url: "https://user:pw@mcp.example.com",
+        digest
+      }).success
+    ).toBe(false);
+    expect(validMcpUrl("http://127.0.0.1:3000/mcp")).toBe(true);
+    expect(CapabilitySchema.safeParse("mcp.set").success).toBe(true);
+    // The running event records what was carried and dropped, defaulted for
+    // an older runner exactly as the skills fields are.
+    const older = RunnerEventSchema.safeParse({
+      kind: "execution.running",
+      payload: { harness: "claude-code", model: "m", effort: "high" }
+    });
+    expect(older.success).toBe(true);
+    if (older.success && older.data.kind === "execution.running") {
+      expect(older.data.payload.mcpServers).toEqual([]);
+      expect(older.data.payload.mcpServersDropped).toEqual([]);
     }
   });
 

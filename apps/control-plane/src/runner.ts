@@ -181,7 +181,8 @@ function eventPayload(event: RunnerEvent): Record<string, unknown> {
       digests: event.payload.commands.map((command) => command.digest),
       // The skill manifest, by identity: what changed and to which bytes. The
       // bodies never travel at all — the digest is the review's anchor (D-118).
-      skills: event.payload.skills.map((skill) => `${skill.name}@${skill.digest.slice(0, 12)}`)
+      skills: event.payload.skills.map((skill) => `${skill.name}@${skill.digest.slice(0, 12)}`),
+      mcpServers: event.payload.mcpServers.map((server) => `${server.name}@${server.digest.slice(0, 12)}`)
     };
   }
   if (event.kind !== "workspace.checkpoint") return { ...event.payload };
@@ -414,10 +415,15 @@ async function applyWorkspaceSideEffects(
         runnerId: ctx.runnerId
       });
       await client.query(
-        `update workspaces set declared = $2::jsonb, declared_skills = $3::jsonb, declared_at = now(),
-                updated_at = now()
+        `update workspaces set declared = $2::jsonb, declared_skills = $3::jsonb,
+                declared_mcp = $4::jsonb, declared_at = now(), updated_at = now()
           where wsp_id = $1`,
-        [workspaceId, JSON.stringify(event.payload.commands), JSON.stringify(event.payload.skills)]
+        [
+          workspaceId,
+          JSON.stringify(event.payload.commands),
+          JSON.stringify(event.payload.skills),
+          JSON.stringify(event.payload.mcpServers)
+        ]
       );
       return true;
     }

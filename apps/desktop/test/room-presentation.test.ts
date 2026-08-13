@@ -6,6 +6,8 @@ import {
   controller,
   deriveStateLine,
   laneView,
+  mcpRows,
+  nextEnabledMcp,
   nextEnabledSkills,
   offerCountdownLabel,
   pendingDirections,
@@ -908,5 +910,40 @@ describe("the lane's skills surface (D-118)", () => {
     expect(nextEnabledSkills(fixture, { enable: "gone" })).toEqual([
       { name: "zephyr-codes", digest }
     ]);
+  });
+});
+
+describe("the lane's MCP servers surface (D-119)", () => {
+  const digest = "d".repeat(64);
+  it("describes each server by its observable behavior, and the acts submit only what stands", () => {
+    const fixture = detail({
+      workspace: {
+        workspaceId: "wsp_one",
+        workstreamId: "wst_one",
+        location: "local",
+        readiness: "ready",
+        portRangeStart: null,
+        portRangeEnd: null,
+        setupError: null,
+        configuredAt: T(1),
+        declared: [],
+        declaredAt: T(1),
+        mcpServers: [
+          { name: "docs", transport: "stdio", command: "node mcp/docs.js", args: [], env: [], url: null, digest },
+          { name: "search", transport: "http", command: null, args: [], env: [], url: "https://mcp.example.com/v1", digest }
+        ]
+      },
+      workstream: workstream({ enabledMcpServers: [{ name: "docs", digest }] })
+    });
+    expect(mcpRows(fixture)).toEqual([
+      { name: "docs", description: "runs node mcp/docs.js", state: "enabled", digest },
+      { name: "search", description: "connects to mcp.example.com", state: "off", digest }
+    ]);
+    expect(nextEnabledMcp(fixture, { enable: "search" })).toEqual([
+      { name: "docs", digest },
+      { name: "search", digest }
+    ]);
+    expect(nextEnabledMcp(fixture, { disable: "docs" })).toEqual([]);
+    expect(mcpRows(detail())).toEqual([]);
   });
 });

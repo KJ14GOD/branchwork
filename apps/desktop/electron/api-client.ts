@@ -273,6 +273,19 @@ export class ControlPlaneClient {
     );
   }
 
+  async setEnabledMcpServers(
+    missionId: string,
+    workstreamId: string,
+    servers: { name: string; digest: string }[]
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/workstreams/${encodeURIComponent(workstreamId)}/mcp`,
+      OkResponseSchema,
+      { servers }
+    );
+  }
+
   async stopExecution(missionId: string, workstreamId?: string, sessionId?: string): Promise<void> {
     await this.request(
       "POST",

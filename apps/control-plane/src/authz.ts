@@ -52,6 +52,10 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     // so it is role-held and never lease-granted. A skill grants nothing;
     // every tool call still reaches the router.
     "skills.set",
+    // Enabling a project's MCP servers (D-119): new tool surface — a program
+    // this machine runs or a host it connects to — so it is the Mission
+    // Admin's alone, the dont_ask tier's reasoning applied to activation.
+    "mcp.set",
     "workspace.command",
     "control.request",
     "control.accept",

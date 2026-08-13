@@ -106,6 +106,11 @@ beforeAll(async () => {
   writeFileSync(join(localRepoDir, "README.md"), "# skills fixture\n");
   mkdirSync(join(localRepoDir, ".claude", "skills", "zephyr-codes"), { recursive: true });
   writeFileSync(join(localRepoDir, ".claude", "skills", "zephyr-codes", "SKILL.md"), SKILL_BODY);
+  // And one declared MCP server (D-119), governed the same way one tier up.
+  writeFileSync(
+    join(localRepoDir, ".mcp.json"),
+    JSON.stringify({ mcpServers: { docs: { command: "node", args: ["mcp/docs.js"] } } })
+  );
   git(localRepoDir, ["add", "-A"]);
   git(localRepoDir, ["-c", "user.name=T", "-c", "user.email=t@l", "commit", "-m", "fixture"]);
   const headSha = git(localRepoDir, ["rev-parse", "HEAD"]);
@@ -230,6 +235,42 @@ describe("project skills reach the agent only after a person enabled them (D-118
         .filter({ hasText: "Project skills carried: zephyr-codes" })
         .waitFor({ timeout: 90_000 });
       await page.screenshot({ path: join(evidenceDir, "125-skill-carried-on-the-turn.png") });
+    },
+    180_000
+  );
+
+  it(
+    "governs the project's MCP servers the same way, one tier up (D-119)",
+    async () => {
+      // The declared server is published for review beside the skills: what
+      // this machine would run, in words, before anyone enables anything.
+      const row = page.getByTestId("mcp-row").filter({ hasText: "docs" });
+      await row.waitFor({ timeout: 30_000 });
+      expect(await row.textContent()).toContain("runs node mcp/docs.js");
+      expect(await row.textContent()).not.toContain("enabled");
+
+      // Enabling is the Mission Admin's click; the standing answer returns on
+      // the room's own poll, and the event is durable with the reviewed digest.
+      await page.getByTestId("mcp-action").filter({ hasText: "Enable" }).click();
+      await page.getByTestId("mcp-row").filter({ hasText: "· enabled" }).waitFor({ timeout: 20_000 });
+      await page.screenshot({ path: join(evidenceDir, "126-mcp-server-enabled.png") });
+      const pg = await import("pg");
+      const db = new pg.default.Pool({ connectionString: DB_URL });
+      const events = await db.query("select payload from events where kind = 'mcp.changed'");
+      await db.end();
+      expect(events.rowCount).toBe(1);
+      const payload = events.rows[0].payload as { to: { name: string; digest: string }[] };
+      expect(payload.to.map((entry) => entry.name)).toEqual(["docs"]);
+      expect(payload.to[0]?.digest).toMatch(/^[0-9a-f]{64}$/);
+
+      // The next turn composes the strict config from the real worktree and
+      // states what it carried on its own record.
+      await page.getByTestId("composer-input").fill("now look something up");
+      await page.keyboard.press("Enter");
+      await page
+        .getByTestId("trace-note")
+        .filter({ hasText: "MCP servers carried: docs" })
+        .waitFor({ timeout: 90_000 });
     },
     180_000
   );

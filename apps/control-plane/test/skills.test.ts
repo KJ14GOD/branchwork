@@ -332,3 +332,137 @@ describe("pinned at dispatch", () => {
     expect((await detailOf(other)).workstream.enabledSkills).toEqual([]);
   });
 });
+
+describe("project MCP servers (D-119)", () => {
+  const DOCS = {
+    name: "docs",
+    transport: "stdio" as const,
+    command: "node mcp/docs.js",
+    args: [],
+    env: [],
+    url: null,
+    digest: sha256("stdio:node mcp/docs.js")
+  };
+
+  async function publishMcp(lane: Lane, servers: unknown[]) {
+    const response = await harness.app.inject({
+      method: "POST",
+      url: "/runner/events",
+      headers: runnerAuth(lane.credential),
+      payload: {
+        executionId: null,
+        events: [
+          {
+            originSeq: (seq += 1),
+            event: { kind: "workspace.declared", payload: { commands: [], mcpServers: servers } }
+          }
+        ]
+      }
+    });
+    expect(response.statusCode).toBe(200);
+  }
+
+  async function setMcp(lane: Lane, servers: { name: string; digest: string }[], as: SignedIn = kartik) {
+    return harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/workstreams/${lane.workstreamId}/mcp`,
+      headers: bearer(as),
+      payload: { servers }
+    });
+  }
+
+  it("is Mission Admin's alone: an Operator is refused in words, and the wire carries the tier", async () => {
+    const lane = await mission();
+    await publishMcp(lane, [DOCS]);
+    const operator = await joinAs(lane.missionId, "op-mcp", "operator");
+    const entry = [{ name: DOCS.name, digest: DOCS.digest }];
+    // An Operator may set skills (D-118) and may not set servers: new tool
+    // surface is the room's biggest standing grant.
+    expect((await setMcp(lane, entry, operator)).statusCode).toBe(403);
+    const detailOperator = await detailOf(lane, operator);
+    expect(detailOperator.capabilities).toContain("skills.set");
+    expect(detailOperator.capabilities).not.toContain("mcp.set");
+    const enabled = await setMcp(lane, entry);
+    expect(enabled.statusCode).toBe(200);
+    const detail = await detailOf(lane);
+    expect(detail.workspace.mcpServers).toEqual([DOCS]);
+    expect(detail.workstream.enabledMcpServers).toEqual(entry);
+    const changes = await eventsOf(lane, "mcp.changed");
+    expect(changes).toHaveLength(1);
+    expect(changes[0]?.payload).toMatchObject({ from: [], to: entry });
+  });
+
+  it("refuses a stale digest and an unpublished server, in words", async () => {
+    const lane = await mission();
+    await publishMcp(lane, [DOCS]);
+    const stale = await setMcp(lane, [{ name: DOCS.name, digest: "0".repeat(64) }]);
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().error.message).toContain("changed since it was reviewed");
+    const unknown = await setMcp(lane, [{ name: "elsewhere", digest: DOCS.digest }]);
+    expect(unknown.statusCode).toBe(409);
+    expect(unknown.json().error.message).toContain("elsewhere");
+    expect((await detailOf(lane)).workstream.enabledMcpServers).toEqual([]);
+  });
+
+  it("refuses a manifest whose remote server is not https away from loopback", async () => {
+    const lane = await mission();
+    // The wire itself refuses the entry: a runner cannot publish an
+    // uncredentialed-plaintext remote, so nothing unreviewable can ever be
+    // enabled. The report is rejected wholesale (422 at the events route).
+    const response = await harness.app.inject({
+      method: "POST",
+      url: "/runner/events",
+      headers: runnerAuth(lane.credential),
+      payload: {
+        executionId: null,
+        events: [
+          {
+            originSeq: (seq += 1),
+            event: {
+              kind: "workspace.declared",
+              payload: {
+                commands: [],
+                mcpServers: [
+                  {
+                    name: "plain",
+                    transport: "http",
+                    command: null,
+                    args: [],
+                    env: [],
+                    url: "http://mcp.example.com",
+                    digest: sha256("x")
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    });
+    expect(response.statusCode).toBe(422);
+    expect((await detailOf(lane)).workspace?.mcpServers ?? []).toEqual([]);
+  });
+
+  it("pins the enabled set into the turn, and a change speaks from the next turn", async () => {
+    const lane = await mission();
+    await publishMcp(lane, [DOCS]);
+    const entry = [{ name: DOCS.name, digest: DOCS.digest }];
+    expect((await setMcp(lane, entry)).statusCode).toBe(200);
+    const first = await direct(lane, "use the docs server");
+    expect(first.statusCode).toBe(200);
+    const detail = await detailOf(lane);
+    const execution = detail.executions[0];
+    const command = await harness.db.query(
+      "select payload from runner_commands where exe_id = $1 and kind = 'start_execution'",
+      [execution.executionId]
+    );
+    expect((command.rows[0].payload as { mcpServers?: unknown }).mcpServers).toEqual(entry);
+    expect((await setMcp(lane, [])).statusCode).toBe(200);
+    expect((await detailOf(lane)).workstream.enabledMcpServers).toEqual([]);
+    const pinned = await harness.db.query(
+      "select payload from runner_commands where exe_id = $1 and kind = 'start_execution'",
+      [execution.executionId]
+    );
+    expect((pinned.rows[0].payload as { mcpServers?: unknown }).mcpServers).toEqual(entry);
+  });
+});

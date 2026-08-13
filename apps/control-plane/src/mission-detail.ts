@@ -1,4 +1,4 @@
-import { DeclaredCommandSchema, ProjectSkillSchema } from "@novus/contracts";
+import { DeclaredCommandSchema, McpServerSchema, ProjectSkillSchema } from "@novus/contracts";
 import type {
   Checkpoint,
   ControlSnapshot,
@@ -316,7 +316,9 @@ export async function workspaceOf(db: Db, workstreamId: string | null): Promise<
     declaredAt: row.declared_at ? (row.declared_at as Date).toISOString() : null,
     // The project's skill manifest as the runner last read it (D-118) — what
     // the enable control reviews against. Malformed reads as none published.
-    skills: ProjectSkillSchema.array().catch([]).parse(row.declared_skills ?? [])
+    skills: ProjectSkillSchema.array().catch([]).parse(row.declared_skills ?? []),
+    // And the MCP server manifest (D-119), same posture.
+    mcpServers: McpServerSchema.array().catch([]).parse(row.declared_mcp ?? [])
   };
 }
 

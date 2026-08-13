@@ -403,6 +403,38 @@ describe("a profiled turn (D-115)", () => {
     expect(shell.events.some((event) => event.kind === "approval.policy")).toBe(false);
   });
 
+  it("auto never answers an MCP tool: enabling a server put its tools in the room (D-119)", async () => {
+    // An MCP tool's effects are declared nowhere Novus can read — the shell's
+    // problem exactly — so `auto` hands it to a person like Bash, and only
+    // dont_ask answers it by policy, on the record.
+    const asked = await runFakeTurn(
+      {
+        direction: "[fake-ask:mcp__docs__echo] look it up",
+        permissionProfile: "auto",
+        fakeApproval: true
+      },
+      (event, _stop, respond) => {
+        if (event.kind === "approval.requested") {
+          respond((event.payload as { requestId: string }).requestId, "deny");
+        }
+      }
+    );
+    expect(asked.events.some((event) => event.kind === "approval.requested")).toBe(true);
+    expect(asked.events.some((event) => event.kind === "approval.policy")).toBe(false);
+
+    const trusted = await runFakeTurn({
+      direction: "[fake-ask:mcp__docs__echo] look it up",
+      permissionProfile: "dont_ask",
+      fakeApproval: true
+    });
+    expect(trusted.events.some((event) => event.kind === "approval.requested")).toBe(false);
+    expect(payloadOf(trusted.events, "approval.policy")).toMatchObject({
+      toolName: "mcp__docs__echo",
+      decision: "allowed",
+      profile: "dont_ask"
+    });
+  });
+
   it("dont_ask answers a shell command too — and the grant is still recorded", async () => {
     const { events, result } = await runFakeTurn({
       direction: "[fake-ask:Bash] run the script",
