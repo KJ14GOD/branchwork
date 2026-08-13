@@ -46,9 +46,20 @@ let userDataDir: string;
 async function openProject(target: Page, name: string): Promise<void> {
   const row = target.getByTestId("project-row").filter({ hasText: name });
   await row.waitFor({ timeout: 30_000 });
-  const rows = target.getByTestId("mission-row");
-  if ((await rows.count()) === 0) await row.click();
-  await rows.first().waitFor({ timeout: 30_000 });
+  // Disclosure is per project and the row's click is a toggle (D-077).
+  // This helper used to treat "some mission row somewhere" as "this project
+  // is disclosed", which held only while the list outran the restore path's
+  // own disclosure of open-tab projects; D-120's heavier list flipped that
+  // race and the helper skipped the click a collapsed project needed. The
+  // twisty's aria-expanded is the per-project fact, so ask it.
+  const twisty = target
+    .locator(".side-parent")
+    .filter({ has: row })
+    .getByTestId("project-twisty");
+  if ((await twisty.getAttribute("aria-expanded")) !== "true") await row.click();
+  await expect
+    .poll(() => twisty.getAttribute("aria-expanded"), { timeout: 30_000 })
+    .toBe("true");
 }
 
 async function waitForHealth(): Promise<void> {

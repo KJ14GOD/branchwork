@@ -293,7 +293,10 @@ afterAll(async () => {
 describe("the missions a person has open", () => {
   it("opens two from one project and one from another, reuses a tab, and never mirrors the rail", async () => {
     await closeEveryTab(page);
-    await page.getByTestId("no-mission-open").waitFor({ timeout: 20_000 });
+    // With every tab closed and missions existing, the canvas is the Home
+    // board (D-120) — the old no-mission-open empty state survives only for
+    // a project with no missions anywhere.
+    await page.getByTestId("home-board").waitFor({ timeout: 20_000 });
     expect(await page.getByTestId("mission-strip").count()).toBe(0);
 
     // Two missions of one project, open at the same time.
@@ -676,11 +679,17 @@ describe("starting a mission", () => {
 
     // The empty state asks for nothing to be hovered.
     await closeEveryTab(page);
-    const empty = page.getByTestId("no-mission-open");
-    await empty.waitFor({ timeout: 20_000 });
-    expect(await empty.innerText()).toContain("New mission");
+    // Nothing left behind: no draft, no tab, no row — and since D-120 the
+    // canvas with nothing open is the Home board rather than an empty page,
+    // so "nothing open" is asserted as the strip's absence over the board.
+    await page.getByTestId("home-board").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("mission-strip").count()).toBe(0);
     await shot(page, "69-nothing-open.png");
-    await page.getByTestId("empty-new-mission").click();
+    // The way in from here is the rail's own + (D-077, D-120): the board is
+    // missions that exist, and starting one stays the repository row's act.
+    const betaRow = page.getByTestId("project-row").filter({ hasText: betaName });
+    await betaRow.hover();
+    await projectGroup(page, betaName).getByTestId("repo-new-mission").click();
     await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
 
     // Esc closes it and nothing happened anywhere: no draft, no tab, no row,
