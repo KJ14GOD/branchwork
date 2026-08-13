@@ -1,5 +1,6 @@
 import {
   TERMINAL_EXECUTION_STATES,
+  type EnabledSkill,
   type Execution,
   type FileChange,
   type MissionDetailResponse,
@@ -593,6 +594,72 @@ export function usageSoFar(detail: MissionDetailResponse): {
     if (typeof spent === "number" && Number.isFinite(spent)) durationMs = (durationMs ?? 0) + spent;
   }
   return { turns: detail.executions.length, costUsd, durationMs };
+}
+
+/** One row of the lane's skills surface (D-118), derived from the published
+ *  manifest and the lane's enabled set together. */
+export interface SkillRow {
+  name: string;
+  description: string | null;
+  /** `enabled` — on, at the digest that was reviewed. `changed` — enabled,
+   *  but the worktree's bytes moved, so every turn drops it until it is
+   *  re-enabled as it now is. `vanished` — enabled, and the manifest no
+   *  longer lists it at all. `off` — published, not enabled. */
+  state: "enabled" | "changed" | "vanished" | "off";
+  /** The digest an Enable would pin — the manifest's own. Null for a
+   *  vanished skill, which has nothing left to approve. */
+  digest: string | null;
+}
+
+/**
+ * The lane's skills, as the overview lists them (D-118): the published
+ * manifest in its own order, each row wearing the lane's standing answer for
+ * it, then any enabled skill the manifest no longer carries — still shown,
+ * in the warn tone, because a standing grant that no longer names anything
+ * real is exactly what a person needs to see and retire.
+ */
+export function skillRows(detail: MissionDetailResponse): SkillRow[] {
+  const published = detail.workspace?.skills ?? [];
+  const enabled = detail.workstream?.enabledSkills ?? [];
+  const rows: SkillRow[] = published.map((skill) => {
+    const standing = enabled.find((entry) => entry.name === skill.name);
+    return {
+      name: skill.name,
+      description: skill.description,
+      state: standing === undefined ? "off" : standing.digest === skill.digest ? "enabled" : "changed",
+      digest: skill.digest
+    };
+  });
+  for (const entry of enabled) {
+    if (published.some((skill) => skill.name === entry.name)) continue;
+    rows.push({ name: entry.name, description: null, state: "vanished", digest: null });
+  }
+  return rows;
+}
+
+/**
+ * The set to submit after one act on one row (D-118). Set semantics, computed
+ * from what is on screen: only entries that match the published manifest
+ * exactly survive a submit — the route refuses anything else, because what is
+ * approved is what was reviewed — so a stale or vanished entry is retired by
+ * whichever act is taken next, and the recorded event says so plainly.
+ */
+export function nextEnabledSkills(
+  detail: MissionDetailResponse,
+  act: { enable: string } | { disable: string }
+): EnabledSkill[] {
+  const published = detail.workspace?.skills ?? [];
+  const enabled = detail.workstream?.enabledSkills ?? [];
+  const valid = enabled.filter((entry) =>
+    published.some((skill) => skill.name === entry.name && skill.digest === entry.digest)
+  );
+  if ("disable" in act) return valid.filter((entry) => entry.name !== act.disable);
+  const target = published.find((skill) => skill.name === act.enable);
+  if (!target) return valid;
+  return [
+    ...valid.filter((entry) => entry.name !== act.enable),
+    { name: target.name, digest: target.digest }
+  ];
 }
 
 function handoffSuffix(detail: MissionDetailResponse): string | null {

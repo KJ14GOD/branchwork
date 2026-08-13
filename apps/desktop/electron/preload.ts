@@ -47,6 +47,7 @@ const novus: NovusBridge = {
     setSessionScope: (input) => ipcRenderer.invoke("novus:missions:set-session-scope", input),
     setPermissionProfile: (input) =>
       ipcRenderer.invoke("novus:missions:set-permission-profile", input),
+    setEnabledSkills: (input) => ipcRenderer.invoke("novus:missions:set-enabled-skills", input),
     cancelDirection: (directionId) => ipcRenderer.invoke("novus:missions:cancel-direction", directionId),
     stop: (missionId, workstreamId, sessionId) =>
       ipcRenderer.invoke(

@@ -47,6 +47,11 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     // Admin's alone, judged in the route against the one list the contracts
     // package exports.
     "policy.set",
+    // Enabling a project's skills on a lane (D-118): the same kind of act as
+    // policy.set — it decides what the harness is handed, not who answers —
+    // so it is role-held and never lease-granted. A skill grants nothing;
+    // every tool call still reaches the router.
+    "skills.set",
     "workspace.command",
     "control.request",
     "control.accept",
@@ -61,6 +66,7 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     "review.approve",
     "pr.manage",
     "policy.set",
+    "skills.set",
     "workspace.command",
     "control.request",
     "control.accept"

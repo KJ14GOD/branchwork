@@ -10,10 +10,12 @@ import {
   ModelIdSchema,
   pathInScope,
   type ApprovalDecision,
+  type EnabledSkill,
   type PermissionProfile,
   type RunnerEvent
 } from "@novus/contracts";
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
+import { composeSkillsPlugin, removeComposedSkills, type ComposedSkills } from "./skills";
 import { HarnessStream, type HarnessApprovalRequest, type HarnessControlMessage } from "./harness-stream";
 import { harnessEnv } from "./workspace-env";
 import { redact } from "./secret-policy";
@@ -286,6 +288,13 @@ export interface TurnRequest {
    *  read at checkpoint time (D-097) — their territory in flight is theirs,
    *  not this turn's drift. */
   siblingScopes?: () => readonly (readonly string[])[];
+  /** The project skills a person enabled, pinned at dispatch (D-118) — each
+   *  at the exact digest that was reviewed. The turn composes a skills-only
+   *  plugin directory from the worktree and carries a skill only when its
+   *  bytes still match; a mismatch drops it with the reason on the record.
+   *  Absent or empty means no `--plugin-dir` at all — exactly the pre-D-118
+   *  spawn. */
+  skills?: readonly EnabledSkill[] | null;
   /** Announce the execution's start; a follow-up turn inside the same
    *  execution does not repeat it. */
   announceStart: boolean;
@@ -468,6 +477,14 @@ export function startTurn(request: TurnRequest): RunningTurn {
   let stopReason: string | null = null;
   let child: ChildProcess | null = null;
   let escalation: NodeJS.Timeout | null = null;
+  /** The turn's composed skills directory (D-118), built once per turn after
+   *  the worktree exists and removed when the turn ends. Null until then. */
+  let composedSkills: ComposedSkills | null = null;
+  const cleanupComposedSkills = (): void => {
+    if (composedSkills !== null && composedSkills.dir !== null) {
+      removeComposedSkills(composedSkills.dir);
+    }
+  };
   let interruptAsked = false;
   /** Which path actually ended the turn, for the terminal event to name. */
   let stoppedVia: "protocol_interrupt" | "process_signal" = "process_signal";
@@ -704,6 +721,9 @@ export function startTurn(request: TurnRequest): RunningTurn {
       return await run();
     } finally {
       if (escalation) clearTimeout(escalation);
+      // The composed skills directory is the turn's own staging, not state:
+      // the next turn composes afresh from its own pinned list (D-118).
+      cleanupComposedSkills();
       // Whatever ended the turn, nothing is left waiting on an answer that can
       // no longer be delivered.
       cancelPending("The turn ended before this was answered.");
@@ -744,9 +764,27 @@ export function startTurn(request: TurnRequest): RunningTurn {
     const chosenEffort = EffortSchema.safeParse(request.effort);
     const model: string = chosenModel.success ? chosenModel.data : DEFAULT_MODEL;
     const effort: string = chosenEffort.success ? chosenEffort.data : DEFAULT_EFFORT;
+
+    // The enabled skills, composed once per turn from the pinned list (D-118):
+    // each file re-read and digest-checked against the approval, the verified
+    // bytes written into a directory only Novus authors, a mismatch dropped by
+    // name. Composed before the running event so the turn's record states what
+    // it actually carries, and removed when the turn ends.
+    composedSkills = composeSkillsPlugin(
+      worktreePath,
+      request.skills ?? [],
+      join(request.worktreeRoot, ".skills-staging", request.executionId)
+    );
     emit({
       kind: "execution.running",
-      payload: { harness: "claude-code", model, effort, permissionProfile: profile }
+      payload: {
+        harness: "claude-code",
+        model,
+        effort,
+        permissionProfile: profile,
+        skills: composedSkills.carried,
+        skillsDropped: composedSkills.dropped
+      }
     });
 
     // The turn's pulse (D-114): while the harness process is alive, say so
@@ -878,6 +916,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // instructions is describing how the *next* turn should work.
     const instructionsFile = projectInstructionsFile(worktreePath);
     const instructions = instructionsFile ? ["--append-system-prompt-file", instructionsFile] : [];
+    // The composed skills directory (D-118): Novus's own staging, holding the
+    // person-approved bytes and nothing else. Absent when nothing was enabled
+    // or everything enabled was dropped — then no flag is passed at all.
+    const skills = composedSkills?.dir ? ["--plugin-dir", composedSkills.dir] : [];
 
     return new Promise<ProcessOutcome>((resolve) => {
       const args = [
@@ -896,6 +938,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         ...pinnedPermissionArgs(profile),
         ...(optional ? OPTIONAL_ARGS : []),
         ...instructions,
+        ...skills,
         "--model",
         model,
         "--effort",

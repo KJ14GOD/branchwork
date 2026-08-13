@@ -1699,6 +1699,60 @@ body {
   font: var(--type-meta);
 }
 
+/* The project's skills in the inspector's Overview (D-118): quiet rows under
+   the section heading, each the name in mono, the lane's standing answer in
+   words, the description beneath, one text action at the row's end — and one
+   foot sentence stating what a skill is not. No border, no card. */
+.skill-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: var(--s-1) 0;
+}
+
+.skill-row-body {
+  flex: 1;
+  min-width: 0;
+  font: var(--type-row);
+  color: var(--text-2);
+}
+
+.skill-name {
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+.skill-state {
+  color: var(--text-3);
+}
+
+.skill-description {
+  display: block;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.skill-action {
+  flex: none;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.skill-action:hover:not(:disabled) {
+  color: var(--text-1);
+}
+
+.skill-error {
+  margin-top: var(--s-1);
+  font: var(--type-meta);
+}
+
+.skill-foot {
+  margin-top: var(--s-2);
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
 /* ---------- Composer ---------- */
 
 .composer {

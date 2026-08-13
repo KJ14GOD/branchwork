@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import type { DeclaredCommand, Readiness, ResolvedReadiness, WorkspaceSettings } from "@novus/contracts";
+import type {
+  DeclaredCommand,
+  ProjectSkill,
+  Readiness,
+  ResolvedReadiness,
+  WorkspaceSettings
+} from "@novus/contracts";
 
 /**
  * What a project declared, resolved once into immutable snapshots (D-043).
@@ -154,4 +160,13 @@ export function declaredCommands(settings: WorkspaceSettings): DeclaredCommand[]
  *  nothing does not become an event. */
 export function sameCommands(a: readonly DeclaredCommand[], b: readonly DeclaredCommand[]): boolean {
   return a.length === b.length && a.every((entry, index) => entry.digest === b[index]?.digest);
+}
+
+/** The same question for the skill manifest (D-118): name-ordered lists, so
+ *  index-wise digest equality is set equality. */
+export function sameSkills(a: readonly ProjectSkill[], b: readonly ProjectSkill[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((entry, index) => entry.name === b[index]?.name && entry.digest === b[index]?.digest)
+  );
 }

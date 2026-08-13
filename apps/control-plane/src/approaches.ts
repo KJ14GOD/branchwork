@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   CreateApproachInputSchema,
+  EnabledSkillsSchema,
   RecordDecisionInputSchema,
   RequestRevisionInputSchema,
   type ApproachSummary,
@@ -76,7 +77,9 @@ export function toWorkstream(row: Record<string, unknown>): Workstream {
     remoteHeadSha: (row.remote_head_sha as string | null) ?? null,
     // The lane's standing answer policy (D-115); the DB CHECK owns validity.
     permissionProfile:
-      (row.permission_profile as Workstream["permissionProfile"] | null) ?? "manual"
+      (row.permission_profile as Workstream["permissionProfile"] | null) ?? "manual",
+    // The skills a person enabled on this lane (D-118); malformed reads none.
+    enabledSkills: EnabledSkillsSchema.catch([]).parse(row.enabled_skills ?? [])
   };
 }
 

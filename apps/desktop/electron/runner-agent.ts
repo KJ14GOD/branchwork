@@ -6,8 +6,10 @@ import {
   ApiErrorSchema,
   DEFAULT_PERMISSION_PROFILE,
   DeclaredCommandSchema,
+  EnabledSkillsSchema,
   PermissionProfileSchema,
   RunnerCommandsResponseSchema,
+  type EnabledSkill,
   type MissionDetailResponse,
   type PermissionProfile,
   type RunnerCommand,
@@ -242,7 +244,11 @@ const StartPayloadSchema = z.object({
   /** The lane's answer policy, pinned at dispatch exactly as the scope is
    *  (D-115). Defaulted to manual so a command from an older control plane
    *  runs as every turn always did: asking. */
-  permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE)
+  permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE),
+  /** The enabled skills, pinned at dispatch (D-118): each at the digest a
+   *  person reviewed. Defaulted empty so a command from an older control
+   *  plane carries nothing rather than something. */
+  skills: EnabledSkillsSchema.default([])
 });
 
 /** The push the control plane authorized (D-099): the branch, and the exact
@@ -1096,6 +1102,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       access: payload.data.access,
       scope: payload.data.scope,
       permissionProfile: payload.data.permissionProfile,
+      skills: payload.data.skills,
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });
@@ -1171,6 +1178,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     scope: string[] | null;
     /** The lane's answer policy, pinned at dispatch (D-115). */
     permissionProfile: PermissionProfile;
+    /** The enabled skills, pinned at dispatch (D-118). */
+    skills: EnabledSkill[];
     announceStart: boolean;
     pendingApplies: () => Promise<boolean>;
   }
@@ -1220,6 +1229,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       access: args.access,
       scope: args.scope,
       permissionProfile: args.permissionProfile,
+      skills: args.skills,
       siblingScopes: () =>
         [...active.values()]
           .filter(

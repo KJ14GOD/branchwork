@@ -1,4 +1,4 @@
-import { DeclaredCommandSchema } from "@novus/contracts";
+import { DeclaredCommandSchema, ProjectSkillSchema } from "@novus/contracts";
 import type {
   Checkpoint,
   ControlSnapshot,
@@ -313,7 +313,10 @@ export async function workspaceOf(db: Db, workstreamId: string | null): Promise<
     // Validated on the way out as well as on the way in: this list came from a
     // runner, and a runner is semi-trusted by design.
     declared: DeclaredCommandSchema.array().catch([]).parse(row.declared ?? []),
-    declaredAt: row.declared_at ? (row.declared_at as Date).toISOString() : null
+    declaredAt: row.declared_at ? (row.declared_at as Date).toISOString() : null,
+    // The project's skill manifest as the runner last read it (D-118) — what
+    // the enable control reviews against. Malformed reads as none published.
+    skills: ProjectSkillSchema.array().catch([]).parse(row.declared_skills ?? [])
   };
 }
 

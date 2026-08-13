@@ -6,6 +6,7 @@ import {
   controller,
   deriveStateLine,
   laneView,
+  nextEnabledSkills,
   offerCountdownLabel,
   pendingDirections,
   queuedPositionLabel,
@@ -16,6 +17,7 @@ import {
   sessionNeedsYou,
   sessionOfCheck,
   sessionView,
+  skillRows,
   usageSoFar,
   viewerIsController
 } from "../src/components/derive";
@@ -833,5 +835,78 @@ describe("a check is attributed to the chat whose checkpoint it ran at (D-096)",
       checks: [checkOf("chk_orphan", "d".repeat(40))]
     });
     expect(sessionOfCheck(fixture, fixture.checks[0]!)).toBeNull();
+  });
+});
+
+describe("the lane's skills surface (D-118)", () => {
+  const digest = "d".repeat(64);
+  const moved = "e".repeat(64);
+  const workspaceWith = (skills: unknown[]) => ({
+    workspaceId: "wsp_one",
+    workstreamId: "wst_one",
+    location: "local",
+    readiness: "ready",
+    portRangeStart: null,
+    portRangeEnd: null,
+    setupError: null,
+    configuredAt: T(1),
+    declared: [],
+    declaredAt: T(1),
+    skills
+  });
+
+  it("wears the lane's standing answer on every published row, and keeps a vanished grant visible in warn", () => {
+    const fixture = detail({
+      workspace: workspaceWith([
+        { name: "zephyr-codes", description: "Codewords.", digest, bytes: 40 },
+        { name: "rewritten", description: null, digest: moved, bytes: 40 },
+        { name: "untouched", description: null, digest, bytes: 40 }
+      ]),
+      workstream: workstream({
+        enabledSkills: [
+          { name: "zephyr-codes", digest },
+          // Enabled at bytes the manifest no longer carries.
+          { name: "rewritten", digest },
+          // Enabled, and the project deleted it.
+          { name: "gone", digest }
+        ]
+      })
+    });
+    expect(skillRows(fixture)).toEqual([
+      { name: "zephyr-codes", description: "Codewords.", state: "enabled", digest },
+      { name: "rewritten", description: null, state: "changed", digest: moved },
+      { name: "untouched", description: null, state: "off", digest },
+      { name: "gone", description: null, state: "vanished", digest: null }
+    ]);
+    // A project that declares none, with nothing enabled, puts nothing here.
+    expect(skillRows(detail())).toEqual([]);
+  });
+
+  it("computes the set an act submits: only reviewable entries survive, and enabling a changed skill re-pins the new bytes", () => {
+    const fixture = detail({
+      workspace: workspaceWith([
+        { name: "zephyr-codes", description: null, digest, bytes: 40 },
+        { name: "rewritten", description: null, digest: moved, bytes: 40 }
+      ]),
+      workstream: workstream({
+        enabledSkills: [
+          { name: "zephyr-codes", digest },
+          { name: "rewritten", digest },
+          { name: "gone", digest }
+        ]
+      })
+    });
+    // Enabling the changed one pins the manifest's current digest; the stale
+    // and vanished entries do not survive the submit, because the route
+    // refuses what cannot be reviewed (D-118).
+    expect(nextEnabledSkills(fixture, { enable: "rewritten" })).toEqual([
+      { name: "zephyr-codes", digest },
+      { name: "rewritten", digest: moved }
+    ]);
+    expect(nextEnabledSkills(fixture, { disable: "zephyr-codes" })).toEqual([]);
+    // Enabling something unpublished submits only what stands.
+    expect(nextEnabledSkills(fixture, { enable: "gone" })).toEqual([
+      { name: "zephyr-codes", digest }
+    ]);
   });
 });

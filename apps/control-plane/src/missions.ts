@@ -1,9 +1,10 @@
-import type {
-  CreateMissionInput,
-  Mission,
-  MissionDetailResponse,
-  RepositoryRef,
-  Workstream
+import {
+  EnabledSkillsSchema,
+  type CreateMissionInput,
+  type Mission,
+  type MissionDetailResponse,
+  type RepositoryRef,
+  type Workstream
 } from "@novus/contracts";
 import type pg from "pg";
 import type { Db } from "./db.ts";
@@ -56,6 +57,7 @@ interface WorkstreamRow {
   origin_sha?: string | null;
   remote_head_sha?: string | null;
   permission_profile?: string | null;
+  enabled_skills?: unknown;
 }
 
 function toRepository(row: MissionRow): RepositoryRef | null {
@@ -110,7 +112,10 @@ function toWorkstream(row: WorkstreamRow): Workstream {
     remoteHeadSha: row.remote_head_sha ?? null,
     // The lane's standing answer policy (D-115); the DB CHECK owns validity,
     // and a pre-migration row reads manual — what it always was.
-    permissionProfile: (row.permission_profile as Workstream["permissionProfile"] | null) ?? "manual"
+    permissionProfile: (row.permission_profile as Workstream["permissionProfile"] | null) ?? "manual",
+    // The skills a person enabled on this lane (D-118); malformed or
+    // pre-migration reads as none, never as a wider grant.
+    enabledSkills: EnabledSkillsSchema.catch([]).parse(row.enabled_skills ?? [])
   };
 }
 

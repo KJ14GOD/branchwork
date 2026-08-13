@@ -260,6 +260,19 @@ export class ControlPlaneClient {
     );
   }
 
+  async setEnabledSkills(
+    missionId: string,
+    workstreamId: string,
+    skills: { name: string; digest: string }[]
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/workstreams/${encodeURIComponent(workstreamId)}/skills`,
+      OkResponseSchema,
+      { skills }
+    );
+  }
+
   async stopExecution(missionId: string, workstreamId?: string, sessionId?: string): Promise<void> {
     await this.request(
       "POST",

@@ -836,3 +836,17 @@ alter table executions add column if not exists permission_profile text not null
 alter table executions drop constraint if exists executions_permission_profile_check;
 alter table executions add constraint executions_permission_profile_check
   check (permission_profile in ('plan', 'manual', 'accept_edits', 'auto', 'dont_ask'));
+
+-- ---------------------------------------------------------------------------
+-- Project skills (D-118). The worktree's `.claude/skills` manifest, published
+-- by the runner beside the declared commands (D-043's pattern), and the set a
+-- person with `skills.set` enabled on the lane — each entry pinned to the
+-- SHA-256 of the exact SKILL.md the person was shown, so a file the agent
+-- rewrites afterwards is dropped at compose time rather than loaded on a
+-- stale approval. Both are json arrays validated at the wire by the contracts
+-- package; the control plane stores them verbatim and never reads a skill
+-- body, exactly as it never parses a declared command.
+-- ---------------------------------------------------------------------------
+
+alter table workspaces add column if not exists declared_skills jsonb not null default '[]'::jsonb;
+alter table workstreams add column if not exists enabled_skills jsonb not null default '[]'::jsonb;

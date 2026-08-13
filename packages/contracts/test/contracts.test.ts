@@ -22,8 +22,13 @@ import {
   ReportRunnerEventsInputSchema,
   RespondApprovalInputSchema,
   RunnerEventSchema,
-  SessionSchema
-,
+  SessionSchema,
+  SkillNameSchema,
+  ProjectSkillSchema,
+  EnabledSkillSchema,
+  EnabledSkillsSchema,
+  MAX_PROJECT_SKILLS,
+  MAX_SKILL_BYTES,
   pathInScope,
   scopesDisjoint,
   ScopePatternSchema,
@@ -285,6 +290,108 @@ describe("permission profiles (D-115)", () => {
 
   it("carries policy.set as a capability the server can grant", () => {
     expect(CapabilitySchema.safeParse("policy.set").success).toBe(true);
+  });
+});
+
+describe("project skills (D-118)", () => {
+  const digest = "d".repeat(64);
+
+  it("names a skill as one directory segment — never a path, never a traversal", () => {
+    expect(SkillNameSchema.safeParse("zephyr-codes").success).toBe(true);
+    expect(SkillNameSchema.safeParse("release_notes.v2").success).toBe(true);
+    // Every way a name could resolve somewhere else is unparseable, so a
+    // traversal cannot reach the route, the row, or the composed directory.
+    expect(SkillNameSchema.safeParse("../escape").success).toBe(false);
+    expect(SkillNameSchema.safeParse("a/b").success).toBe(false);
+    expect(SkillNameSchema.safeParse("a\\b").success).toBe(false);
+    expect(SkillNameSchema.safeParse(".hidden").success).toBe(false);
+    expect(SkillNameSchema.safeParse("..").success).toBe(false);
+    expect(SkillNameSchema.safeParse("").success).toBe(false);
+    expect(SkillNameSchema.safeParse("x".repeat(81)).success).toBe(false);
+  });
+
+  it("pins an approval to a full content digest, and bounds the manifest", () => {
+    expect(EnabledSkillSchema.safeParse({ name: "a", digest }).success).toBe(true);
+    expect(EnabledSkillSchema.safeParse({ name: "a", digest: "short" }).success).toBe(false);
+    expect(
+      ProjectSkillSchema.safeParse({ name: "a", description: null, digest, bytes: 12 }).success
+    ).toBe(true);
+    expect(
+      ProjectSkillSchema.safeParse({ name: "a", description: null, digest, bytes: MAX_SKILL_BYTES + 1 })
+        .success
+    ).toBe(false);
+    const crowd = Array.from({ length: MAX_PROJECT_SKILLS + 1 }, (_, i) => ({
+      name: `skill-${i}`,
+      digest
+    }));
+    expect(EnabledSkillsSchema.safeParse(crowd).success).toBe(false);
+  });
+
+  it("publishes the manifest beside the declared commands, defaulting an older runner's report", () => {
+    const withSkills = RunnerEventSchema.safeParse({
+      kind: "workspace.declared",
+      payload: {
+        commands: [],
+        skills: [{ name: "zephyr-codes", description: "Codewords.", digest, bytes: 64 }]
+      }
+    });
+    expect(withSkills.success).toBe(true);
+    const older = RunnerEventSchema.safeParse({ kind: "workspace.declared", payload: { commands: [] } });
+    expect(older.success).toBe(true);
+    if (older.success && older.data.kind === "workspace.declared") {
+      expect(older.data.payload.skills).toEqual([]);
+    }
+  });
+
+  it("records what a turn carried and what it dropped, with the reason in words", () => {
+    const parsed = RunnerEventSchema.safeParse({
+      kind: "execution.running",
+      payload: {
+        harness: "claude-code",
+        model: "m",
+        effort: "high",
+        skills: ["zephyr-codes"],
+        skillsDropped: [{ name: "stale-one", reason: "changed since it was enabled" }]
+      }
+    });
+    expect(parsed.success).toBe(true);
+    // A drop is a named fact, not a free-form blob: unknown fields are refused.
+    expect(
+      RunnerEventSchema.safeParse({
+        kind: "execution.running",
+        payload: {
+          harness: "claude-code",
+          model: "m",
+          effort: "high",
+          skillsDropped: [{ name: "stale-one", reason: "r", body: "smuggled" }]
+        }
+      }).success
+    ).toBe(false);
+    const older = RunnerEventSchema.safeParse({
+      kind: "execution.running",
+      payload: { harness: "claude-code", model: "m", effort: "high" }
+    });
+    expect(older.success).toBe(true);
+    if (older.success && older.data.kind === "execution.running") {
+      expect(older.data.payload.skills).toEqual([]);
+      expect(older.data.payload.skillsDropped).toEqual([]);
+    }
+  });
+
+  it("defaults a lane to no skills enabled, and carries skills.set as a grantable capability", () => {
+    const workstream = WorkstreamSchema.safeParse({
+      workstreamId: "wst_1",
+      missionId: "msn_1",
+      name: "Current work",
+      baseRef: "main",
+      baseSha: "a".repeat(40),
+      missionBranch: "novus/m-1",
+      branchStatus: "created",
+      branchError: null
+    });
+    expect(workstream.success).toBe(true);
+    if (workstream.success) expect(workstream.data.enabledSkills).toEqual([]);
+    expect(CapabilitySchema.safeParse("skills.set").success).toBe(true);
   });
 });
 

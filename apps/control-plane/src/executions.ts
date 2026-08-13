@@ -5,10 +5,12 @@ import {
   DEFAULT_PERMISSION_PROFILE,
   DirectionInputSchema,
   DirectionResolutionSchema,
+  EnabledSkillsSchema,
   ExecutionStateSchema,
   PermissionProfileSchema,
   scopesDisjoint,
   TERMINAL_EXECUTION_STATES,
+  type EnabledSkill,
   type FileDiffResponse,
   type PermissionProfile
 } from "@novus/contracts";
@@ -88,6 +90,14 @@ export interface DispatchResult {
 function profileOf(value: unknown): PermissionProfile {
   const parsed = PermissionProfileSchema.safeParse(value);
   return parsed.success ? parsed.data : DEFAULT_PERMISSION_PROFILE;
+}
+
+/** The lane's enabled skills, validated (D-118). Malformed or pre-migration
+ *  reads as none enabled — nothing is ever carried by accident — the same
+ *  failure posture as profileOf. */
+function skillsOf(value: unknown): EnabledSkill[] {
+  const parsed = EnabledSkillsSchema.safeParse(value);
+  return parsed.success ? parsed.data : [];
 }
 
 export interface EnqueueArgs {
@@ -307,7 +317,7 @@ export async function dispatchDirection(
     }
 
     const direction = await client.query(
-      `select d.body, d.session_id, s.scope, w.permission_profile from directions d
+      `select d.body, d.session_id, s.scope, w.permission_profile, w.enabled_skills from directions d
          join workstream_sessions s on s.csn_id = d.session_id
          join workstreams w on w.wst_id = d.wst_id
         where d.dir_id = $1 and d.wst_id = $2`,
@@ -320,6 +330,10 @@ export async function dispatchDirection(
     // into this turn (D-115): a profile change mid-turn speaks from the next
     // dispatch, never into a running one (the D-043 pattern, as with scope).
     const permissionProfile = profileOf(direction.rows[0]?.permission_profile);
+    // And the skills a person enabled, pinned the same way (D-118): the turn
+    // carries the set — and the exact digests — that stood when it was
+    // authorized, so an enablement mid-turn speaks from the next dispatch.
+    const skills = skillsOf(direction.rows[0]?.enabled_skills);
     if (body === undefined || sessionId === undefined) {
       return { executionId: null, commandId: null, deferred: "That direction is no longer available." };
     }
@@ -352,7 +366,10 @@ export async function dispatchDirection(
           // Same reasoning for the profile (D-115): a live turn keeps the one
           // pinned at its own dispatch, and the fresh process an after-end
           // apply spawns must state its policy rather than inherit a default.
-          permissionProfile
+          permissionProfile,
+          // And for the skills (D-118): the fresh process an after-end apply
+          // spawns composes from this pinned set, never from the rows.
+          skills
         },
         idempotencyKey: `apply:${args.directionId}`
       }),
@@ -465,7 +482,10 @@ export async function dispatchDirection(
         // And the answer policy the lane stood under when this turn was
         // authorized (D-115) — the runner applies exactly this, so a profile
         // change never reaches into a turn already running.
-        permissionProfile
+        permissionProfile,
+        // And the skills a person had enabled (D-118), each at its approved
+        // digest — the runner composes exactly these or drops them by name.
+        skills
       },
       // Keyed on the *execution*, not the direction. A direction that failed
       // and is directed again is a new attempt and needs a new command; keyed

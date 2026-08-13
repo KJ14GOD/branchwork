@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -413,6 +415,71 @@ describe("the permission policy Novus pins", () => {
     const args = argv();
     expect(args[args.indexOf("--resume") + 1]).toBe("stub-session-1");
     expect(args).not.toContain("--session-id");
+  }, 40_000);
+
+  it("carries an enabled skill as a composed skills-only directory, and exactly the approved bytes (D-118)", async () => {
+    // The skill is repository content on the mission branch, like CLAUDE.md.
+    const body = "---\nname: zephyr-codes\ndescription: Codewords.\n---\n\nThe codeword is XILOPHONE-72.\n";
+    mkdirSync(join(repo, ".claude", "skills", "zephyr-codes"), { recursive: true });
+    writeFileSync(join(repo, ".claude", "skills", "zephyr-codes", "SKILL.md"), body);
+    await git(repo, ["add", "-A"]);
+    await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "skill"]);
+    await git(repo, ["branch", "-f", MISSION_BRANCH, "HEAD"]);
+    const digest = createHash("sha256").update(body).digest("hex");
+
+    installStub("approval");
+    const running = begin({ skills: [{ name: "zephyr-codes", digest }] });
+    await waitFor("the approval to arrive", () => running.turn.pendingApprovals().length > 0);
+
+    // While the turn is blocked, the composed directory is what the CLI was
+    // handed: Novus's own staging, never the worktree — and it contains the
+    // plugin manifest Novus authored, the approved bytes, and *nothing else* —
+    // no hooks, no .mcp.json, no commands, which is the structural half of
+    // D-072's refusal still standing.
+    const args = argv();
+    const dir = args[args.indexOf("--plugin-dir") + 1] as string;
+    expect(dir).toContain(".skills-staging");
+    expect(dir.startsWith(join(worktreeRoot, WORKSTREAM_ID))).toBe(false);
+    expect(readdirSync(dir).sort()).toEqual([".claude-plugin", "skills"]);
+    expect(readdirSync(join(dir, ".claude-plugin"))).toEqual(["plugin.json"]);
+    expect(readdirSync(join(dir, "skills"))).toEqual(["zephyr-codes"]);
+    expect(readdirSync(join(dir, "skills", "zephyr-codes"))).toEqual(["SKILL.md"]);
+    expect(readFileSync(join(dir, "skills", "zephyr-codes", "SKILL.md"), "utf8")).toBe(body);
+    // The pinned policy is untouched beside it.
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
+
+    running.turn.respondApproval("stub-request-1", "approve", null);
+    await running.finished;
+    // The staging is the turn's own, and it leaves with the turn.
+    expect(existsSync(dir)).toBe(false);
+    // The turn's record states what it carried.
+    expect(payloadOf(running.events, "execution.running")).toMatchObject({
+      skills: ["zephyr-codes"],
+      skillsDropped: []
+    });
+  }, 40_000);
+
+  it("drops a skill whose bytes changed since it was enabled, by name, and passes no directory", async () => {
+    const body = "---\nname: zephyr-codes\n---\n\nRewritten since the review.\n";
+    mkdirSync(join(repo, ".claude", "skills", "zephyr-codes"), { recursive: true });
+    writeFileSync(join(repo, ".claude", "skills", "zephyr-codes", "SKILL.md"), body);
+    await git(repo, ["add", "-A"]);
+    await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "skill"]);
+    await git(repo, ["branch", "-f", MISSION_BRANCH, "HEAD"]);
+
+    installStub("approval");
+    // Enabled at a digest the worktree no longer holds: the approval names
+    // bytes nobody can produce, so nothing is loaded — never the new bytes.
+    const running = begin({ skills: [{ name: "zephyr-codes", digest: "0".repeat(64) }] });
+    await waitFor("the approval to arrive", () => running.turn.pendingApprovals().length > 0);
+    running.turn.respondApproval("stub-request-1", "deny", null);
+    await running.finished;
+
+    expect(argv()).not.toContain("--plugin-dir");
+    expect(payloadOf(running.events, "execution.running")).toMatchObject({
+      skills: [],
+      skillsDropped: [{ name: "zephyr-codes", reason: "changed since it was enabled" }]
+    });
   }, 40_000);
 });
 

@@ -5,6 +5,7 @@ import {
   type DeclaredCommand,
   type PreparedFile,
   type ProcessLog,
+  type ProjectSkill,
   type ProcessLogChunk,
   type RunnerEvent,
   type SecretState,
@@ -19,7 +20,8 @@ import {
 } from "@novus/contracts";
 import { ApiError } from "./api-client";
 import { createSanitizer } from "./evidence";
-import { declaredCommands, sameCommands } from "./workspace-commands";
+import { declaredCommands, sameCommands, sameSkills } from "./workspace-commands";
+import { discoverProjectSkills } from "./skills";
 import { loadWorkspaceSettings, WorkspaceConfigError, writeWorkspaceSettings } from "./workspace-config";
 import { prepareLocalFiles as copyLocalFiles } from "./workspace-files";
 import { gitExec, type GitExec } from "./workspace-git";
@@ -806,7 +808,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
   const supervisors = new Map<string, WorkspaceProcesses>();
   /** What was last published per workstream, so re-reading unchanged
    *  configuration does not become an event every fifteen seconds. */
-  const published = new Map<string, DeclaredCommand[]>();
+  const published = new Map<string, { commands: DeclaredCommand[]; skills: ProjectSkill[] }>();
 
   interface Prepared {
     worktree: string;
@@ -851,7 +853,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
       logForwarders.get(context.workstreamId)?.();
       logForwarders.set(context.workstreamId, supervisor.onLog(emitLog));
     }
-    announce(context.workstreamId, settings);
+    announce(context.workstreamId, settings, worktree);
     return { worktree, repositoryPath, settings, range, supervisor };
   }
 
@@ -863,16 +865,27 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
    * empty list in the event log every time a machine looks at an unconfigured
    * repository is noise. Commands disappearing later is news, and does emit.
    */
-  function announce(workstreamId: string, settings: WorkspaceSettings): void {
+  function announce(workstreamId: string, settings: WorkspaceSettings, worktree: string): void {
     const commands = declaredCommands(settings);
+    // The worktree's own `.claude/skills`, published in the same breath
+    // (D-118): what a person can enable is what this machine last read, and a
+    // skill the agent rewrites republishes here so a stale review can never be
+    // re-approved unseen.
+    const skills = discoverProjectSkills(worktree);
     const previous = published.get(workstreamId);
-    if (previous === undefined && commands.length === 0) {
-      published.set(workstreamId, commands);
+    if (previous === undefined && commands.length === 0 && skills.length === 0) {
+      published.set(workstreamId, { commands, skills });
       return;
     }
-    if (previous !== undefined && sameCommands(previous, commands)) return;
-    published.set(workstreamId, commands);
-    deps.emit(workstreamId, { kind: "workspace.declared", payload: { commands } });
+    if (
+      previous !== undefined &&
+      sameCommands(previous.commands, commands) &&
+      sameSkills(previous.skills, skills)
+    ) {
+      return;
+    }
+    published.set(workstreamId, { commands, skills });
+    deps.emit(workstreamId, { kind: "workspace.declared", payload: { commands, skills } });
   }
 
   /**

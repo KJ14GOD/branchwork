@@ -164,6 +164,64 @@ export const DEFAULT_PERMISSION_PROFILE: PermissionProfile = "manual";
  *  Admin's alone. Everything else `policy.set` grants is Operator territory. */
 export const ADMIN_ONLY_PERMISSION_PROFILES: readonly PermissionProfile[] = ["dont_ask"];
 
+// --- Project skills (D-118) --------------------------------------------------
+// The worktree's own `.claude/skills/<name>/SKILL.md` files, carried to the
+// harness only after a person approved them. D-072 refused the two flags that
+// would load them wholesale because both re-admit hooks and MCP servers; its
+// revisit clause named the version that could work — Novus composing a
+// directory containing only skill files it copied out of the worktree — and
+// this is that version. A skill is instructions, never authority: every tool
+// call a skill-bearing turn makes still reaches the permission router (D-062),
+// so enabling one grants nothing. What the approval pins is the *content*: a
+// person enables a name at an exact digest, and a turn carries exactly those
+// bytes or drops the skill with the reason on the record — the D-043 rule,
+// applied to a file the agent itself can rewrite.
+
+/** How large one SKILL.md may be — the same bound the project's instructions
+ *  file has (D-064): larger than anything a person wrote, small enough that a
+ *  generated one cannot become the whole prompt. */
+export const MAX_SKILL_BYTES = 100_000;
+/** A manifest of forty skills is a manifest; more is a generator talking. */
+export const MAX_PROJECT_SKILLS = 40;
+export const SKILL_DESCRIPTION_MAX = 400;
+
+/** A skill's identity is its directory name under `.claude/skills` — one path
+ *  segment, no separators, no leading dot, so a name can never be a traversal
+ *  and never resolves anywhere but inside the skills directory. */
+export const SkillNameSchema = z
+  .string()
+  .min(1)
+  .max(80)
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
+    "a skill name is its directory name: letters, digits, dot, dash, underscore"
+  );
+
+/** One skill as the runner read it from the worktree — what a person reviews
+ *  and approves. Published beside the declared commands (D-043's pattern). */
+export const ProjectSkillSchema = z.object({
+  name: SkillNameSchema,
+  /** The SKILL.md frontmatter's own description, when it parses; a skill is
+   *  reviewed by what it says it is, and one that says nothing says that. */
+  description: z.string().max(SKILL_DESCRIPTION_MAX).nullable().default(null),
+  /** SHA-256 of the SKILL.md bytes. The approval pins this, so what loads is
+   *  what was reviewed — byte for byte — or nothing. */
+  digest: z.string().regex(/^[0-9a-f]{64}$/),
+  bytes: z.number().int().positive().max(MAX_SKILL_BYTES)
+});
+export type ProjectSkill = z.infer<typeof ProjectSkillSchema>;
+
+/** One enabled skill on a lane: the name, at the exact content a person saw.
+ *  A turn whose worktree holds different bytes under this name does not carry
+ *  the skill — it reports the drop instead. */
+export const EnabledSkillSchema = z.object({
+  name: SkillNameSchema,
+  digest: z.string().regex(/^[0-9a-f]{64}$/)
+});
+export type EnabledSkill = z.infer<typeof EnabledSkillSchema>;
+
+export const EnabledSkillsSchema = z.array(EnabledSkillSchema).max(MAX_PROJECT_SKILLS);
+
 export const WorkstreamSchema = z.object({
   workstreamId: z.string().startsWith("wst_"),
   missionId: z.string().startsWith("msn_"),
@@ -189,7 +247,12 @@ export const WorkstreamSchema = z.object({
   remoteHeadSha: ShaSchema.nullable().default(null),
   /** The lane's standing answer policy (D-115). Defaulted so rows from before
    *  profiles existed read as what they were: every question asked. */
-  permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE)
+  permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE),
+  /** The project skills a person enabled on this lane (D-118), each pinned to
+   *  the digest they were shown. Defaulted empty: no skill is ever carried
+   *  because nobody said anything. A fork starts empty, like the profile —
+   *  trust is granted to a lane by a person, never inherited. */
+  enabledSkills: EnabledSkillsSchema.default([])
 });
 export type Workstream = z.infer<typeof WorkstreamSchema>;
 
@@ -418,6 +481,12 @@ export const CapabilitySchema = z.enum([
    *  baton, like `approach.create`. One further tier is judged server-side:
    *  `dont_ask` is Mission Admin's alone (ADMIN_ONLY_PERMISSION_PROFILES). */
   "policy.set",
+  /** Enable or disable a project's skills on a lane (D-118). The same kind of
+   *  act as `policy.set` — it decides what the harness is handed, not who
+   *  answers — so it is held by role (Mission Admin, Operator) and never
+   *  granted by the baton. Enabling pins the exact digest the person was
+   *  shown; a skill grants nothing, and every tool call still asks. */
+  "skills.set",
   /** Declare a turn dead after a stop went unanswered (D-111). Held by the
    *  controller and by Mission Admin — the escalation PRODUCT.md#control has
    *  always named, implemented as exactly that: an explicit, logged act that
@@ -1369,7 +1438,12 @@ export const WorkspaceSchema = z.object({
    *  what the Run control offers — to every participant, not only the one at
    *  the host machine — and what an authorized command is pinned to. */
   declared: z.array(DeclaredCommandSchema).max(60),
-  declaredAt: z.string().datetime().nullable()
+  declaredAt: z.string().datetime().nullable(),
+  /** The project's skills, as the runner last read them from the worktree
+   *  (D-118) — the manifest a person reviews and enables from, published on
+   *  the same event as the declared commands. Never the bodies: a name, what
+   *  it says it is, and the digest an approval would pin. */
+  skills: z.array(ProjectSkillSchema).max(MAX_PROJECT_SKILLS).default([])
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 
@@ -1980,7 +2054,19 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
          *  runner exactly as model and effort are, so the trace's machinery
          *  line can say what supervision the turn ran with. Defaulted so an
          *  older runner's report still validates as what it was: manual. */
-        permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE)
+        permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE),
+        /** The enabled skills this turn actually carried (D-118), by name —
+         *  the audit of what the harness was handed, stated by the runner
+         *  that composed it. Defaulted empty for older runners. */
+        skills: z.array(SkillNameSchema).max(MAX_PROJECT_SKILLS).default([]),
+        /** Enabled skills this turn could NOT carry, each with the reason in
+         *  words — the worktree's bytes no longer match the approved digest,
+         *  the file is gone, or it stopped being a regular file. A drop is
+         *  news a person acts on, so it is on the record, never silent. */
+        skillsDropped: z
+          .array(z.object({ name: SkillNameSchema, reason: BOUNDED_LINE }).strict())
+          .max(MAX_PROJECT_SKILLS)
+          .default([])
       })
       .strict()
   }),
@@ -2155,7 +2241,15 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("workspace.declared"),
-    payload: z.object({ commands: z.array(DeclaredCommandSchema).max(60) }).strict()
+    payload: z
+      .object({
+        commands: z.array(DeclaredCommandSchema).max(60),
+        /** The worktree's own `.claude/skills`, read at the same moment
+         *  (D-118). Defaulted so an older runner's report still validates as
+         *  what it was: a project with nothing published to enable. */
+        skills: z.array(ProjectSkillSchema).max(MAX_PROJECT_SKILLS).default([])
+      })
+      .strict()
   }),
   z.object({
     kind: z.literal("process.started"),
@@ -2629,6 +2723,17 @@ export interface NovusBridge {
        *  recorded verbatim on `policy.changed`, the D-100 acknowledgement
        *  pattern. Null for profiles that need none. */
       acknowledged?: string | null;
+    }): Promise<IpcResult<null>>;
+    /** Sets a lane's enabled project skills (D-118) — the whole set, each
+     *  entry pinned to the digest the person was shown. `skills.set` —
+     *  Mission Admin or Operator, never the baton. The server refuses an
+     *  entry the published manifest does not carry at that exact digest:
+     *  what is approved is what was reviewed. Applies from the next
+     *  dispatched turn. */
+    setEnabledSkills(input: {
+      missionId: string;
+      workstreamId: string;
+      skills: EnabledSkill[];
     }): Promise<IpcResult<null>>;
     cancelDirection(directionId: string): Promise<IpcResult<null>>;
     /** Stops the named lane's running turn. The lane travels on the wire so a

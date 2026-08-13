@@ -233,6 +233,64 @@ describe("the harness's workers, joined from what the stream stated (D-107)", ()
   });
 });
 
+describe("project skills in the room (D-118)", () => {
+  it("states what the turn carried as apparatus, and says nothing when nothing was", () => {
+    const carried = trace(
+      detail([
+        {
+          kind: "execution.running",
+          payload: {
+            harness: "claude-code",
+            model: "claude-fable-5",
+            effort: "high",
+            skills: ["zephyr-codes", "release-notes"],
+            skillsDropped: []
+          }
+        }
+      ])
+    );
+    const notes = carried.segments.filter((segment) => segment.kind === "note");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({
+      text: "Project skills carried: zephyr-codes, release-notes",
+      tone: "neutral"
+    });
+
+    const none = trace(
+      detail([
+        {
+          kind: "execution.running",
+          payload: { harness: "claude-code", model: "claude-fable-5", effort: "high" }
+        }
+      ])
+    );
+    expect(none.segments.filter((segment) => segment.kind === "note")).toHaveLength(0);
+  });
+
+  it("names a dropped skill with its reason, in the warn tone — a dead grant is news", () => {
+    const block = trace(
+      detail([
+        {
+          kind: "execution.running",
+          payload: {
+            harness: "claude-code",
+            model: "claude-fable-5",
+            effort: "high",
+            skills: [],
+            skillsDropped: [{ name: "zephyr-codes", reason: "changed since it was enabled" }]
+          }
+        }
+      ])
+    );
+    const notes = block.segments.filter((segment) => segment.kind === "note");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({
+      text: 'Project skill not carried — "zephyr-codes": changed since it was enabled',
+      tone: "warn"
+    });
+  });
+});
+
 describe("permission profiles in the room (D-115)", () => {
   it("puts the profile on the turn's machinery line, and says nothing for manual", () => {
     const profiled = trace(

@@ -528,6 +528,39 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         let base = model ? (effort ? `${model} · effort ${effort}` : model) : null;
         if (base && profileWord) base = `${base} · ${profileWord}`;
         block.machinery = base ? (readOnly ? `${base} · read-only` : base) : block.machinery;
+        // What the turn was handed (D-118): the enabled skills it actually
+        // carries, stated as apparatus — and any it could not carry, each with
+        // the reason, in the warn tone, because a standing enablement that no
+        // longer names real bytes is news a person acts on. Nothing carried
+        // and nothing dropped says nothing, like every default.
+        const carried = Array.isArray(event.payload.skills)
+          ? event.payload.skills.filter((name): name is string => typeof name === "string")
+          : [];
+        if (carried.length > 0) {
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-skills`,
+            text: `Project skills carried: ${carried.join(", ")}`,
+            login: null,
+            tone: "neutral"
+          });
+        }
+        const droppedSkills = Array.isArray(event.payload.skillsDropped)
+          ? event.payload.skillsDropped
+          : [];
+        for (const drop of droppedSkills) {
+          const name = text((drop as { name?: unknown }).name);
+          if (!name) continue;
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-skill-drop-${name}`,
+            text: `Project skill not carried — "${name}": ${
+              text((drop as { reason?: unknown }).reason) ?? "the reason was not stated"
+            }`,
+            login: null,
+            tone: "warn"
+          });
+        }
         break;
       }
       case "harness.session": {

@@ -10,7 +10,15 @@ import type {
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { clockTime, plural, shortSha } from "../format";
-import { changedFiles, checkTallies, laneSessions, sessionOfCheck } from "./derive";
+import {
+  changedFiles,
+  checkTallies,
+  laneSessions,
+  nextEnabledSkills,
+  sessionOfCheck,
+  skillRows,
+  type SkillRow
+} from "./derive";
 import { GatedAction } from "./gated";
 import { FileTree } from "./file-tree";
 import { ProcessLogView } from "./process-log";
@@ -299,6 +307,94 @@ function LedgerEntry({
  * mission header (DESIGN.md prohibited pattern 12): a contextual inspector,
  * an overlay and not a permanent column (DESIGN.md#layout).
  */
+
+/**
+ * The project's skills, reviewed and enabled where the machinery lives
+ * (D-118): the manifest the runner published — name, what it says it is, and
+ * the digest an approval pins — each row wearing the lane's standing answer
+ * in words. A skill is instructions, never authority: enabling one changes
+ * what the harness is handed and nothing about what it may do, and the foot
+ * sentence says so once. A project that declares none puts nothing here.
+ * The action renders for everyone and disables with the capability named
+ * (the Permission-denied pattern); the server judges `skills.set` and the
+ * manifest match either way.
+ */
+function SkillsSection({ detail }: { detail: MissionDetailResponse }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const maySet = detail.capabilities.includes("skills.set");
+  const rows = skillRows(detail);
+  if (rows.length === 0) return null;
+
+  const act = async (choice: { enable: string } | { disable: string }) => {
+    if (!detail.workstream) return;
+    setBusy(true);
+    setError(null);
+    const result = await novus().missions.setEnabledSkills({
+      missionId: detail.mission.missionId,
+      workstreamId: detail.workstream.workstreamId,
+      skills: nextEnabledSkills(detail, choice)
+    });
+    setBusy(false);
+    if (!result.ok) setError(result.message);
+  };
+
+  const stateWord = (row: SkillRow): { text: string; warn: boolean } | null => {
+    if (row.state === "enabled") return { text: "enabled", warn: false };
+    if (row.state === "changed") return { text: "changed since enabled", warn: true };
+    if (row.state === "vanished") return { text: "no longer in the project", warn: true };
+    return null;
+  };
+
+  return (
+    <div data-testid="inspector-skills">
+      <h3 className="inspector-heading">Project skills</h3>
+      {rows.map((row) => {
+        const word = stateWord(row);
+        // One action per row: a currently-enabled skill offers Disable; a
+        // changed one offers Enable — review it as it now is and approve
+        // that, the server's own refusal words — and a vanished grant is
+        // retired with Disable.
+        const action = row.state === "off" || row.state === "changed" ? "Enable" : "Disable";
+        return (
+          <div className="skill-row" data-testid="skill-row" data-skill={row.name} key={row.name}>
+            <span className="skill-row-body">
+              <span className="mono skill-name">{row.name}</span>
+              {word && <span className={word.warn ? "tone-warn" : "skill-state"}> · {word.text}</span>}
+              {row.description && <span className="skill-description">{row.description}</span>}
+            </span>
+            <button
+              className="btn btn-text skill-action"
+              disabled={!maySet || busy}
+              onClick={() => void act(action === "Enable" ? { enable: row.name } : { disable: row.name })}
+              title={
+                maySet
+                  ? action === "Enable"
+                    ? `Enable "${row.name}" for this lane's turns, exactly as published`
+                    : `Stop carrying "${row.name}"`
+                  : "Only a Mission Admin or Operator can change skills (skills.set)."
+              }
+              data-testid="skill-action"
+              data-skill={row.name}
+            >
+              {action}
+            </button>
+          </div>
+        );
+      })}
+      {error && (
+        <p className="skill-error tone-danger" role="alert" data-testid="skill-error">
+          {error}
+        </p>
+      )}
+      <p className="skill-foot">
+        A skill teaches the harness this project's own procedures. It grants nothing — every act
+        still asks under the lane's permissions — and one that changes is dropped from turns until
+        someone enables it as it now is.
+      </p>
+    </div>
+  );
+}
 
 /**
  * Inviting someone is the only way a mission gets a second responsible human,
@@ -889,6 +985,8 @@ export function Inspector({
                       )}
                     </span>
                   </div>
+
+                  <SkillsSection detail={detail} />
 
                   <h3 className="inspector-heading">Participants</h3>
                   <ul className="participant-list" data-testid="participant-list">

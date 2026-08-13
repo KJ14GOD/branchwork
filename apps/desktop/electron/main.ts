@@ -11,6 +11,7 @@ import {
   MAX_RATIONALE,
   MissionRoleSchema,
   OpenPreviewInputSchema,
+  EnabledSkillsSchema,
   OpenTerminalInputSchema,
   MergeInputSchema,
   PullCommentInputSchema,
@@ -778,6 +779,30 @@ function registerIpc(): void {
         parsed.data.profile,
         parsed.data.acknowledged
       );
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:missions:set-enabled-skills", async (_event, raw: unknown) => {
+    // Asking is all this is (AGENTS.md rule 13): the server judges skills.set
+    // and the published-manifest match — this handler only refuses shapes
+    // that could never be a request (D-118).
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        workstreamId: z.string().startsWith("wst_"),
+        skills: EnabledSkillsSchema
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "invalid_skills",
+        message: "That is not a set of skills Novus can enable."
+      };
+    }
+    return call(async () => {
+      await api.setEnabledSkills(parsed.data.missionId, parsed.data.workstreamId, parsed.data.skills);
       return null;
     });
   });
