@@ -603,6 +603,9 @@ export const ReceiptSnapshotSchema = z.object({
           sha256: z.string().max(64),
           capturedAt: z.string().datetime(),
           revisionSha: z.string().nullable(),
+          /** Whether a verified thumbnail exists to load — an interrupted
+           *  recording may honestly have none. Defaulted for older snapshots. */
+          hasThumbnail: z.boolean().default(false),
           /** Where it was evidence at close, in words. */
           attachedTo: z.array(z.string().max(200)).max(20)
         })

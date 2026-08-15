@@ -52,11 +52,11 @@ export function laneView(detail: MissionDetailResponse): MissionDetailResponse {
           detail.workstreams[0]?.workstreamId) === lane
     ),
     approvals: detail.approvals.filter((approval) => approval.workstreamId === lane),
-    // Visual evidence is the lane's own (D-122); an artifact without a lane
-    // is mission-level and stays visible everywhere.
-    artifacts: detail.artifacts.filter(
-      (artifact) => artifact.workstreamId === null || artifact.workstreamId === lane
-    ),
+    // Artifacts stay the mission's whole set: the Evidence section narrows to
+    // its own lane itself, while the pull request's page and a decision's
+    // receipt cite exact ids across lanes and must always resolve them
+    // (D-122). A lane filter here made a cited artifact vanish from the page
+    // whenever the room happened to be reading the other lane.
     // A process without a lane predates lane-scoping; it belongs to the
     // default lane rather than to every lane at once.
     processes: detail.processes.filter(

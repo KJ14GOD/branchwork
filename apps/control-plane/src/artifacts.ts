@@ -238,7 +238,8 @@ export async function receiptArtifacts(
 > {
   const refs = await attachmentRefs(client, missionId);
   const rows = await client.query(
-    `select art_id, kind, label, state, sha256, captured_at, revision_sha from artifacts
+    `select art_id, kind, label, state, sha256, captured_at, revision_sha, thumb_object_key
+       from artifacts
       where mission_id = $1 and state in ('available', 'interrupted')
       order by created_at, art_id limit 50`,
     [missionId]
@@ -251,6 +252,7 @@ export async function receiptArtifacts(
     sha256: row.sha256 as string,
     capturedAt: (row.captured_at as Date).toISOString(),
     revisionSha: (row.revision_sha as string | null) ?? null,
+    hasThumbnail: row.thumb_object_key !== null,
     attachedTo: (refs.get(row.art_id as string) ?? []).map((ref) => ref.label.slice(0, 200))
   }));
 }

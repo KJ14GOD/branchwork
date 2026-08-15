@@ -10,7 +10,7 @@ import type {
 } from "@novus/contracts";
 import { PIXELS_WARNING } from "@novus/contracts";
 import { novus } from "../bridge";
-import { artifactIsEvidence, artifactMetaLine, artifactStateWord } from "./artifacts";
+import { ArtifactThumbRow } from "./artifact-row";
 import { Dialog } from "./dialog";
 import { clockTime, plural, shortSha } from "../format";
 import {
@@ -256,7 +256,9 @@ function LedgerEntry({
   capabilities,
   holderLogin,
   busy,
-  onRerun
+  onRerun,
+  attachedArtifacts,
+  onOpenArtifact
 }: {
   check: VerificationCheck;
   /** The conversation whose checkpoint this check ran at, named only while
@@ -266,6 +268,10 @@ function LedgerEntry({
   holderLogin: string | null;
   busy: boolean;
   onRerun: (name: string) => void;
+  /** Visual artifacts attached beside this check (D-122): supporting
+   *  evidence, never a verdict — the outcome column is the runner's alone. */
+  attachedArtifacts: MissionDetailResponse["artifacts"];
+  onOpenArtifact: (artifactId: string) => void;
 }) {
   /* A result that failed, or that proved a revision the worktree has moved
      past, is the one a reader wants to try again — and trying again is the
@@ -310,6 +316,18 @@ function LedgerEntry({
           <summary>Output</summary>
           <pre className="mono check-output">{check.output}</pre>
         </details>
+      )}
+      {attachedArtifacts.length > 0 && (
+        <div className="ledger-evidence" data-testid="ledger-evidence">
+          {attachedArtifacts.map((artifact) => (
+            <ArtifactThumbRow
+              key={artifact.artifactId}
+              artifact={artifact}
+              onOpen={onOpenArtifact}
+              testid="ledger-evidence-row"
+            />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -772,37 +790,13 @@ function EvidenceSection({
         </>
       ) : (
         <div className="evidence-list">
-          {[...artifacts].reverse().map((artifact) => {
-            const state = artifactStateWord(artifact);
-            const openable = artifactIsEvidence(artifact) || artifact.state === "failed";
-            return (
-              <button
-                key={artifact.artifactId}
-                className="evidence-row"
-                onClick={() => (openable ? onOpenArtifact(artifact.artifactId) : undefined)}
-                aria-label={`${artifact.label} — ${artifactMetaLine(artifact)}`}
-                data-testid="evidence-row"
-                data-artifact={artifact.artifactId}
-              >
-                {artifactIsEvidence(artifact) && artifact.hasThumbnail ? (
-                  <img
-                    className="evidence-thumb"
-                    src={`novus-artifact://${artifact.artifactId}/thumb`}
-                    alt=""
-                  />
-                ) : (
-                  <span className="evidence-thumb empty" aria-hidden="true" />
-                )}
-                <span className="evidence-text">
-                  <span className="evidence-label">
-                    {artifact.label}
-                    {state && <span className={`artifact-word ${state.tone}`}> · {state.word}</span>}
-                  </span>
-                  <span className="evidence-meta">{artifactMetaLine(artifact)}</span>
-                </span>
-              </button>
-            );
-          })}
+          {[...artifacts].reverse().map((artifact) => (
+            <ArtifactThumbRow
+              key={artifact.artifactId}
+              artifact={artifact}
+              onOpen={onOpenArtifact}
+            />
+          ))}
         </div>
       )}
     </div>
@@ -1109,6 +1103,10 @@ export function Inspector({
                       holderLogin={detail.control.holderLogin}
                       busy={rerunning === check.name}
                       onRerun={(name) => void rerunCheck(name)}
+                      attachedArtifacts={detail.artifacts.filter((artifact) =>
+                        check.artifactIds.includes(artifact.artifactId)
+                      )}
+                      onOpenArtifact={onOpenArtifact}
                     />
                   ))}
                 </div>

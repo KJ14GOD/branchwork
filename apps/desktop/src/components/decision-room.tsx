@@ -1,12 +1,14 @@
 import { useState } from "react";
 import type {
   ApproachSummary,
+  Artifact,
   ContestedPath,
   Decision,
   MissionDetailResponse,
   PreparedPullRequest
 } from "@novus/contracts";
 import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../format";
+import { ArtifactThumbRow } from "./artifact-row";
 import { Dialog } from "./dialog";
 import { PullRequestPanel } from "./pull-request";
 
@@ -33,7 +35,12 @@ export interface DecisionRoomProps {
   /** Set while a call is in flight, so a decision cannot be double-clicked. */
   busy: boolean;
   error: string | null;
-  onRecord: (input: { workstreamId: string; rationale: string; acceptedRisks: string }) => void;
+  onRecord: (input: {
+    workstreamId: string;
+    rationale: string;
+    acceptedRisks: string;
+    artifactIds: string[];
+  }) => void;
   onRequestRevision: (input: { workstreamId: string; reason: string }) => void;
   onInspectPath: (path: string) => void;
   /** Opens the pull request's own tab (D-100); threaded to the receipt. */
@@ -179,6 +186,11 @@ export function DecisionRoom({
       {choosing && (
         <RecordDecisionDialog
           approach={detail.approaches.find((approach) => approach.workstreamId === choosing)}
+          artifacts={detail.artifacts.filter(
+            (artifact) =>
+              (artifact.workstreamId === choosing || artifact.workstreamId === null) &&
+              (artifact.state === "available" || artifact.state === "interrupted")
+          )}
           busy={busy}
           onCancel={() => setChoosing(null)}
           onRecord={(input) => {
@@ -369,18 +381,29 @@ function ContestedRow({ contested, onInspect }: { contested: ContestedPath; onIn
  */
 function RecordDecisionDialog({
   approach,
+  artifacts,
   busy,
   onCancel,
   onRecord
 }: {
   approach: ApproachSummary | undefined;
+  /** The lane's completed visual evidence (D-122), offered for the decider to
+   *  cite. The chosen ids freeze with the rationale. */
+  artifacts: Artifact[];
   busy: boolean;
   onCancel: () => void;
-  onRecord: (input: { rationale: string; acceptedRisks: string }) => void;
+  onRecord: (input: { rationale: string; acceptedRisks: string; artifactIds: string[] }) => void;
 }) {
   const [rationale, setRationale] = useState("");
   const [risks, setRisks] = useState("");
+  const [cited, setCited] = useState<string[]>([]);
   const ready = rationale.trim().length > 0;
+  const toggleCited = (artifactId: string) =>
+    setCited((previous) =>
+      previous.includes(artifactId)
+        ? previous.filter((id) => id !== artifactId)
+        : [...previous, artifactId]
+    );
   return (
     <Dialog label="Record this decision" onClose={onCancel} testId="record-decision">
         <header className="dialog-head">
@@ -443,6 +466,27 @@ function RecordDecisionDialog({
                   : `${plural(approach.unresolvedChecks, "check")} did not pass against this revision.`}
             </p>
           </section>
+          {/* The visual evidence that mattered (D-122): the decider chooses,
+              and the chosen ids freeze with the rationale into the decision
+              and the terminal receipt. Rendered only when any exists —
+              a picker over nothing is prohibited pattern 11. */}
+          {artifacts.length > 0 && (
+            <section className="decision-artifacts" data-testid="decision-artifacts">
+              <h3 className="field-label">Visual evidence to cite (optional)</h3>
+              {artifacts.map((artifact) => (
+                <label className="decision-artifact-option" key={artifact.artifactId}>
+                  <input
+                    type="checkbox"
+                    checked={cited.includes(artifact.artifactId)}
+                    onChange={() => toggleCited(artifact.artifactId)}
+                    data-testid="decision-artifact-option"
+                    data-artifact={artifact.artifactId}
+                  />
+                  <ArtifactThumbRow artifact={artifact} testid="decision-artifact-row" />
+                </label>
+              ))}
+            </section>
+          )}
         </div>
         <footer className="dialog-actions">
           <button className="btn btn-secondary" onClick={onCancel} disabled={busy}>
@@ -451,7 +495,9 @@ function RecordDecisionDialog({
           <button
             className="btn btn-primary"
             disabled={!ready || busy}
-            onClick={() => onRecord({ rationale: rationale.trim(), acceptedRisks: risks.trim() })}
+            onClick={() =>
+              onRecord({ rationale: rationale.trim(), acceptedRisks: risks.trim(), artifactIds: cited })
+            }
             data-testid="record-decision-confirm"
           >
             Record decision
@@ -556,6 +602,28 @@ function DecisionReceipt({
           <p className="prose" data-testid="receipt-risks">
             {decision.acceptedRisks}
           </p>
+        </>
+      )}
+
+      {/* The visual evidence the decider chose (D-122): the exact ids, frozen
+          with the rationale — shown beside it, never recomputed. */}
+      {decision.artifactIds.length > 0 && (
+        <>
+          <h3 className="field-label">Visual evidence cited</h3>
+          <div className="evidence-list" data-testid="receipt-artifacts">
+            {decision.artifactIds.map((artifactId) => {
+              const artifact = detail.artifacts.find(
+                (candidate) => candidate.artifactId === artifactId
+              );
+              return artifact ? (
+                <ArtifactThumbRow key={artifactId} artifact={artifact} testid="receipt-artifact-row" />
+              ) : (
+                <p className="quiet mono" key={artifactId}>
+                  {artifactId}
+                </p>
+              );
+            })}
+          </div>
         </>
       )}
 

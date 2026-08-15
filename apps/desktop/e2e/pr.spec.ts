@@ -435,6 +435,77 @@ describe("shipping a decision through GitHub (D-099)", () => {
       );
       await shot("109-pull-request-page.png");
 
+      // --- Visual evidence on the request (D-122) ---------------------------
+      // The artifact is seeded over the real API — begin, upload against the
+      // signed grant, complete on the store's verification — because this
+      // mission runs no preview; the capture path itself is proven in
+      // e2e/artifacts.spec.ts. What this proves is the relationship: the
+      // exact id preserved on the tracked record and shown on the page.
+      const seededBytes = Buffer.from(`pr-evidence-${"x".repeat(64)}`);
+      const seedToken = await mintToken();
+      const begun = await fetch(`${CP_URL}/missions/${missionId}/artifacts`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${seedToken}` },
+        body: JSON.stringify({
+          workstreamId: decision.workstreamId,
+          kind: "screenshot",
+          mimeType: "image/png",
+          byteSize: seededBytes.length,
+          sha256: createHash("sha256").update(seededBytes).digest("hex"),
+          capturedAt: new Date().toISOString(),
+          provenance: {
+            processId: "prc_seeded",
+            processName: "app",
+            origin: "http://127.0.0.1:4600",
+            readiness: "ready",
+            revisionSha: decision.checkpointSha,
+            revisionDirty: false
+          }
+        })
+      });
+      expect(begun.status).toBe(201);
+      const begunBody = (await begun.json()) as {
+        artifact: { artifactId: string };
+        upload: { url: string; headers: Record<string, string> };
+      };
+      const uploaded = await fetch(begunBody.upload.url, {
+        method: "PUT",
+        headers: begunBody.upload.headers,
+        body: new Uint8Array(seededBytes)
+      });
+      expect(uploaded.ok).toBe(true);
+      const completed = await fetch(
+        `${CP_URL}/artifacts/${begunBody.artifact.artifactId}/complete`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${seedToken}` },
+          body: JSON.stringify({ outcome: "uploaded" })
+        }
+      );
+      expect(completed.ok).toBe(true);
+      const attachedToPull = await fetch(
+        `${CP_URL}/artifacts/${begunBody.artifact.artifactId}/attach`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${seedToken}` },
+          body: JSON.stringify({ target: { kind: "pull_request", id: pull.pullRequestId } })
+        }
+      );
+      expect(attachedToPull.ok).toBe(true);
+      // The page's Checks segment shows the evidence with the boundary said
+      // in words: inside Novus, no copy to GitHub.
+      await page.getByTestId("pull-tab-checks").click();
+      const pullEvidence = page.getByTestId("pull-artifact-row");
+      await pullEvidence.waitFor({ timeout: 30_000 });
+      expect(await pullEvidence.getAttribute("data-artifact")).toBe(
+        begunBody.artifact.artifactId
+      );
+      expect(await page.getByTestId("pull-visuals").innerText()).toContain(
+        "GitHub receives no copy"
+      );
+      await shot("137-pull-request-evidence.png");
+      await page.getByTestId("pull-tab-comments").click();
+
       // --- Review: asked from here, answered here (D-100) -------------------
       await page.getByTestId("reviewer-input").fill("maya");
       await page.getByTestId("request-review").click();

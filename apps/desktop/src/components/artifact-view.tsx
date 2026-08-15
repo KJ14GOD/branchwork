@@ -1,13 +1,15 @@
-import { useEffect } from "react";
-import type { Artifact } from "@novus/contracts";
+import { useEffect, useState } from "react";
+import type { Artifact, MissionDetailResponse } from "@novus/contracts";
+import { novus } from "../bridge";
 import {
-  artifactAttachmentsLine,
   artifactClaim,
+  artifactIsEvidence,
   artifactMetaLine,
   artifactProvenanceRows,
   artifactProvenanceText,
   artifactStateWord
 } from "./artifacts";
+import { GatedAction } from "./gated";
 
 /**
  * One artifact, looked at closely (D-122): the full image or the recording's
@@ -19,7 +21,16 @@ import {
  * authorizes each request against the mission and spends a fresh temporary
  * grant. No signed URL and no object key ever reaches this component.
  */
-export function ArtifactView({ artifact, onBack }: { artifact: Artifact; onBack: () => void }) {
+export function ArtifactView({
+  artifact,
+  detail,
+  onBack
+}: {
+  artifact: Artifact;
+  /** The lane's own view, for the attachment targets and the capability. */
+  detail: MissionDetailResponse;
+  onBack: () => void;
+}) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -32,9 +43,62 @@ export function ArtifactView({ artifact, onBack }: { artifact: Artifact; onBack:
 
   const state = artifactStateWord(artifact);
   const viewable = artifact.state === "available" || artifact.state === "interrupted";
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState(false);
 
   const copyProvenance = () => {
     void navigator.clipboard?.writeText(artifactProvenanceText(artifact)).catch(() => undefined);
+  };
+
+  // Where this can be attached (D-122): the lane's checks by name, and the
+  // tracked pull request while one is open — only what actually exists, and
+  // only what it is not already attached to. Detach is each live ref's own
+  // action. The refreshed relationship arrives with the room's next poll.
+  const attachedTo = new Set(artifact.attachments.map((ref) => `${ref.kind}:${ref.id}`));
+  const targets: { kind: "check" | "pull_request"; id: string; label: string }[] = [
+    ...detail.checks
+      .filter((check) => !attachedTo.has(`check:${check.checkId}`))
+      .map((check) => ({
+        kind: "check" as const,
+        id: check.checkId,
+        label: `check "${check.name}"`
+      })),
+    ...(detail.pullRequest &&
+    (detail.pullRequest.state === "draft" || detail.pullRequest.state === "ready") &&
+    !attachedTo.has(`pull_request:${detail.pullRequest.pullRequestId}`)
+      ? [
+          {
+            kind: "pull_request" as const,
+            id: detail.pullRequest.pullRequestId,
+            label: `PR #${detail.pullRequest.number}`
+          }
+        ]
+      : [])
+  ];
+  const [target, setTarget] = useState("");
+
+  const attach = async () => {
+    const chosen = targets.find((candidate) => `${candidate.kind}:${candidate.id}` === target);
+    if (!chosen) return;
+    setAttaching(true);
+    setAttachError(null);
+    const result = await novus().artifacts.attach({
+      artifactId: artifact.artifactId,
+      target: { kind: chosen.kind, id: chosen.id }
+    });
+    setAttaching(false);
+    if (!result.ok) setAttachError(result.message);
+    else setTarget("");
+  };
+
+  const detach = async (ref: { kind: string; id: string }) => {
+    if (ref.kind !== "check" && ref.kind !== "pull_request") return;
+    setAttachError(null);
+    const result = await novus().artifacts.detach({
+      artifactId: artifact.artifactId,
+      target: { kind: ref.kind, id: ref.id }
+    });
+    if (!result.ok) setAttachError(result.message);
   };
 
   return (
@@ -96,9 +160,76 @@ export function ArtifactView({ artifact, onBack }: { artifact: Artifact; onBack:
         <div className="artifact-provenance-row">
           <span className="artifact-provenance-label">Used as</span>
           <span className="artifact-provenance-value" data-testid="artifact-attachments">
-            {artifactAttachmentsLine(artifact)}
+            {artifact.attachments.length === 0 ? (
+              "Not attached to anything yet."
+            ) : (
+              <span className="artifact-attachment-list">
+                {artifact.attachments.map((ref) => (
+                  <span className="artifact-attachment" key={`${ref.kind}:${ref.id}`}>
+                    evidence for {ref.label}
+                    {(ref.kind === "check" || ref.kind === "pull_request") && (
+                      <GatedAction
+                        capability="artifact.attach"
+                        capabilities={detail.capabilities}
+                        denialReason="Changing what the record presents as evidence needs the artifact.attach capability."
+                        onClick={() => void detach(ref)}
+                        variant="text"
+                        testid="artifact-detach"
+                      >
+                        Detach
+                      </GatedAction>
+                    )}
+                  </span>
+                ))}
+              </span>
+            )}
           </span>
         </div>
+        {/* Attaching is a relationship change, never a change to the artifact
+            (D-122) — and never a verdict: a screenshot beside a check supports
+            it, it does not pass it. Only completed evidence can be attached. */}
+        {artifactIsEvidence(artifact) && targets.length > 0 && (
+          <div className="artifact-provenance-row">
+            <span className="artifact-provenance-label">Attach to</span>
+            <span className="artifact-provenance-value artifact-attach-controls">
+              <select
+                className="select"
+                value={target}
+                onChange={(event) => setTarget(event.target.value)}
+                aria-label="What to attach this artifact beside"
+                data-testid="artifact-attach-target"
+              >
+                <option value="">Choose…</option>
+                {targets.map((candidate) => (
+                  <option
+                    key={`${candidate.kind}:${candidate.id}`}
+                    value={`${candidate.kind}:${candidate.id}`}
+                  >
+                    {candidate.label}
+                  </option>
+                ))}
+              </select>
+              <GatedAction
+                capability="artifact.attach"
+                capabilities={detail.capabilities}
+                denialReason="Changing what the record presents as evidence needs the artifact.attach capability."
+                onClick={() => void attach()}
+                variant="secondary"
+                busy={attaching}
+                disabled={target === ""}
+                disabledReason="Choose what to attach this beside."
+                testid="artifact-attach"
+              >
+                Attach
+              </GatedAction>
+            </span>
+          </div>
+        )}
+        {attachError && (
+          <p className="inline-error" role="alert" data-testid="artifact-attach-error">
+            {attachError}
+          </p>
+        )}
       </div>
     </section>
   );

@@ -10,6 +10,7 @@ import type {
 import { DEFAULT_EFFORT, DEFAULT_MODEL } from "@novus/contracts";
 import { novus } from "../bridge";
 import { clockTime, plural, shortSha } from "../format";
+import { ArtifactThumbRow } from "./artifact-row";
 import { Dialog } from "./dialog";
 import { GatedAction } from "./gated";
 
@@ -245,10 +246,41 @@ export function PullRequestPage({
       {section === "checks" && (
         <>
           <ReadinessLedger detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} />
-          <p className="quiet" data-testid="pull-visuals">
-            No visual evidence is attached — capturing and storing it is not built yet. The checks
-            and the diff are the evidence this request carries.
-          </p>
+          {/* Visual evidence attached to this request (D-122): the exact
+              artifact ids preserved on the tracked record, shown here inside
+              Novus. Nothing is committed into the repository, nothing is
+              written into the GitHub body, and nothing becomes publicly
+              reachable because a pull request exists — the honesty sentence
+              below is the boundary, stated. */}
+          {pull.artifactIds.length === 0 ? (
+            <p className="quiet" data-testid="pull-visuals">
+              No visual evidence is attached. Capture a screenshot or recording from the running
+              app's preview and attach it to this request from its own view.
+            </p>
+          ) : (
+            <div data-testid="pull-visuals">
+              <h3 className="field-label">Visual evidence</h3>
+              <div className="evidence-list">
+                {pull.artifactIds.map((artifactId) => {
+                  const artifact = detail.artifacts.find(
+                    (candidate) => candidate.artifactId === artifactId
+                  );
+                  return artifact ? (
+                    <ArtifactThumbRow key={artifactId} artifact={artifact} testid="pull-artifact-row" />
+                  ) : (
+                    <p className="quiet mono" key={artifactId}>
+                      {artifactId}
+                    </p>
+                  );
+                })}
+              </div>
+              <p className="quiet">
+                Attached in Novus, viewable by this mission's participants only. GitHub receives
+                no copy and no public link — external presentation would need access this
+                authorization model does not provide.
+              </p>
+            </div>
+          )}
         </>
       )}
       {section === "changes" && <PullChanges pull={pull} detail={detail} busy={busy} onAct={act} />}

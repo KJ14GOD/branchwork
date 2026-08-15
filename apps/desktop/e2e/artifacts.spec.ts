@@ -182,7 +182,15 @@ beforeAll(async () => {
       "",
       "[run.readiness]",
       'kind = "port"',
-      "timeoutSeconds = 60"
+      "timeoutSeconds = 60",
+      "",
+      "[[verify]]",
+      'name = "unit"',
+      'command = "test -f server.mjs"',
+      'category = "test"',
+      "",
+      "[timeouts]",
+      "verifyMinutes = 5"
     ].join("\n")
   );
   git(localRepoDir, ["add", "-A"]);
@@ -409,6 +417,69 @@ describe("durable visual evidence (D-122, D-123)", () => {
   );
 
   it(
+    "an artifact attaches beside a check as supporting evidence, and detaches without touching either",
+    async () => {
+      // A real declared check first, run from the ledger.
+      await page.getByTestId("room-tab").click();
+      if (!(await page.getByTestId("inspector-tab-verification").isVisible())) {
+        await page.getByTestId("panel-toggle").click();
+      }
+      await page.getByTestId("inspector-tab-verification").click();
+      await page.getByTestId("run-verification").click();
+      const entry = page.getByTestId("ledger-entry").first();
+      await entry.waitFor({ timeout: 60_000 });
+      await expect
+        .poll(async () => entry.locator(".ledger-outcome").textContent(), { timeout: 60_000 })
+        .toBe("passed");
+
+      // Attach the person's screenshot from the artifact's own view.
+      await page.getByTestId("inspector-tab-evidence").click();
+      const screenshotRow = page
+        .getByTestId("evidence-row")
+        .filter({ hasText: "Screenshot" })
+        .first();
+      await screenshotRow.click();
+      await page.getByTestId("artifact-view").waitFor({ timeout: 20_000 });
+      await page.getByTestId("artifact-attach-target").selectOption({ label: 'check "unit"' });
+      await page.getByTestId("artifact-attach").click();
+
+      // The relationship arrives with the room's own poll: the artifact says
+      // where it is evidence, and the check row carries it.
+      await expect
+        .poll(async () => page.getByTestId("artifact-attachments").textContent(), {
+          timeout: 20_000
+        })
+        .toContain('check "unit"');
+      await page.getByTestId("artifact-back").click();
+      await page.getByTestId("inspector-tab-verification").click();
+      const attached = page.getByTestId("ledger-evidence-row");
+      await attached.waitFor({ timeout: 20_000 });
+      // Supporting evidence, never a verdict: the outcome is untouched.
+      await expect
+        .poll(async () => entry.locator(".ledger-outcome").textContent(), { timeout: 10_000 })
+        .toBe("passed");
+      await shot(page, "135-evidence-beside-a-check.png");
+
+      // Detach from the artifact's view; the check row lets it go.
+      await page.getByTestId("inspector-tab-evidence").click();
+      await screenshotRow.click();
+      await page.getByTestId("artifact-view").waitFor({ timeout: 20_000 });
+      await page.getByTestId("artifact-detach").click();
+      await expect
+        .poll(async () => page.getByTestId("artifact-attachments").textContent(), {
+          timeout: 20_000
+        })
+        .toContain("Not attached");
+      await page.getByTestId("artifact-back").click();
+      await page.getByTestId("inspector-tab-verification").click();
+      await expect
+        .poll(async () => page.getByTestId("ledger-evidence-row").count(), { timeout: 20_000 })
+        .toBe(0);
+    },
+    240_000
+  );
+
+  it(
     "a person records the preview, the state stays visible across canvases, and the recording plays back",
     async () => {
       await page.getByTestId("preview-tab").locator("button").first().click();
@@ -552,5 +623,112 @@ describe("durable visual evidence (D-122, D-123)", () => {
       ).toBe(true);
     },
     120_000
+  );
+
+  it(
+    "a decision cites the evidence, the mission completes, and a relaunch reconstructs the frozen receipt — while a stranger is told nothing exists",
+    async () => {
+      // The decision cites the person's screenshot and the recording (D-122):
+      // the exact ids freeze with the rationale.
+      const all = await artifactsOnWire();
+      const citedIds = all
+        .filter((artifact) => artifact.state === "available")
+        .slice(0, 2)
+        .map((artifact) => artifact.artifactId);
+      const decided = await page.evaluate(
+        async (args) => {
+          const detail = await window.novus.missions.get(args.missionId);
+          if (!detail.ok) throw new Error(detail.message);
+          return window.novus.approaches.decide({
+            missionId: args.missionId,
+            workstreamId: detail.value.workstream!.workstreamId,
+            rationale: "The captures show the page serving as intended.",
+            artifactIds: args.citedIds
+          });
+        },
+        { missionId, citedIds }
+      );
+      expect(decided.ok).toBe(true);
+
+      // Complete the mission: decision standing, nothing running, no open PR.
+      const closed = await page.evaluate(
+        async (id) => window.novus.missions.close(id, { outcome: "completed" }),
+        missionId
+      );
+      expect(closed.ok).toBe(true);
+
+      // Relaunch the whole application: the receipt must reconstruct the
+      // frozen references, and viewing must mint fresh grants now.
+      await app.close();
+      const relaunched = await electron.launch({
+        args: [desktopRoot],
+        env: {
+          ...process.env,
+          NOVUS_CP_URL: CP_URL,
+          NOVUS_AUTH_AUTOVISIT: "1",
+          NOVUS_FAKE_HARNESS: "1",
+          NOVUS_FAKE_HARNESS_APPROVAL: "1",
+          NOVUS_USER_DATA_DIR: userDataDir
+        }
+      });
+      app = relaunched;
+      page = await relaunched.firstWindow();
+      await page.waitForLoadState("domcontentloaded");
+      await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
+
+      // The mission's room is the receipt now (D-121), and its Visual
+      // evidence section holds the frozen set.
+      const missionRow = page.getByTestId("mission-row").filter({ hasText: "prove the page" });
+      await missionRow.first().click().catch(() => undefined);
+      const receiptRows = page.getByTestId("receipt-artifact");
+      await receiptRows.first().waitFor({ timeout: 60_000 });
+      expect(await receiptRows.count()).toBe(4);
+      // The decision's citation survived into the snapshot.
+      await page.getByTestId("receipt-decision-artifacts").waitFor({ timeout: 10_000 });
+      expect(await page.getByTestId("receipt-decision-artifacts").textContent()).toContain(
+        "2 visual artifacts"
+      );
+      // Viewing is a fresh grant, not a stored URL: the frozen reference's
+      // thumbnail genuinely renders after the relaunch.
+      const thumb = receiptRows.first().locator("img.evidence-thumb");
+      await thumb.waitFor({ timeout: 20_000 });
+      await expect
+        .poll(
+          async () => thumb.evaluate((element) => (element as HTMLImageElement).naturalWidth > 0),
+          { timeout: 20_000 }
+        )
+        .toBe(true);
+      await shot(page, "136-receipt-with-frozen-evidence.png");
+
+      // A second authenticated identity with no mission access is told
+      // nothing exists — for the mission, the artifact, and its bytes alike.
+      const strangerStart = await fetch(`${CP_URL}/auth/github/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ as: "mallory" })
+      });
+      const { state, authorizeUrl } = (await strangerStart.json()) as {
+        state: string;
+        authorizeUrl: string;
+      };
+      await fetch(authorizeUrl, { redirect: "follow" });
+      const strangerClaim = await fetch(`${CP_URL}/auth/github/claim`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ state })
+      });
+      const strangerToken = ((await strangerClaim.json()) as { token: string }).token;
+      const deniedView = await fetch(`${CP_URL}/artifacts/${citedIds[0]}/view`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${strangerToken}` },
+        body: "{}"
+      });
+      expect(deniedView.status).toBe(404);
+      const deniedMission = await fetch(`${CP_URL}/missions/${missionId}`, {
+        headers: { authorization: `Bearer ${strangerToken}` }
+      });
+      expect(deniedMission.status).toBe(404);
+    },
+    300_000
   );
 });

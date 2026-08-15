@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -424,6 +424,60 @@ describe("competing approaches, compared and decided", () => {
       )
       .toEqual([baseline.workstreamId, approach.workstreamId]);
 
+    // --- Visual evidence to cite (D-122): seeded over the real API ----------
+    // The capture path is e2e/artifacts.spec.ts's; what this drives is the
+    // decision dialog's own picker and the frozen citation.
+    const seedToken = await mintToken();
+    const seedBytes = Buffer.from(`decision-evidence-${"x".repeat(48)}`);
+    const seedSha = createHash("sha256").update(seedBytes).digest("hex");
+    const begun = await fetch(`${CP_URL}/missions/${missionId}/artifacts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${seedToken}` },
+      body: JSON.stringify({
+        workstreamId: approach.workstreamId,
+        kind: "screenshot",
+        mimeType: "image/png",
+        byteSize: seedBytes.length,
+        sha256: seedSha,
+        capturedAt: new Date().toISOString(),
+        provenance: {
+          processId: "prc_seeded",
+          processName: "app",
+          origin: "http://127.0.0.1:4600",
+          readiness: "ready",
+          revisionSha: null,
+          revisionDirty: false
+        }
+      })
+    });
+    expect(begun.status).toBe(201);
+    const begunBody = (await begun.json()) as {
+      artifact: { artifactId: string };
+      upload: { url: string; headers: Record<string, string> };
+    };
+    expect(
+      (
+        await fetch(begunBody.upload.url, {
+          method: "PUT",
+          headers: begunBody.upload.headers,
+          body: new Uint8Array(seedBytes)
+        })
+      ).ok
+    ).toBe(true);
+    expect(
+      (
+        await fetch(`${CP_URL}/artifacts/${begunBody.artifact.artifactId}/complete`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${seedToken}` },
+          body: JSON.stringify({ outcome: "uploaded" })
+        })
+      ).ok
+    ).toBe(true);
+    await until(
+      "the seeded artifact to reach the room",
+      (value) => value.artifacts.some((entry) => entry.artifactId === begunBody.artifact.artifactId)
+    );
+
     // --- Choosing asks for a reason, and will not proceed without one -------
     await columns.nth(1).getByTestId("choose-approach").click();
     await page.getByTestId("record-decision").waitFor({ timeout: 30_000 });
@@ -438,6 +492,12 @@ describe("competing approaches, compared and decided", () => {
     expect(evidence).toMatch(/revision [0-9a-f]{8}/);
     await page.getByTestId("decision-rationale").fill("The middleware version keeps the guard in one place.");
     await page.getByTestId("decision-risks").fill("Nothing is verified yet; the suite has not run.");
+    // The recorder chooses which visual evidence mattered (D-122): the lane's
+    // completed artifact is offered, and checking it cites it.
+    await page.getByTestId("decision-artifacts").waitFor({ timeout: 10_000 });
+    await page
+      .locator(`[data-testid="decision-artifact-option"][data-artifact="${begunBody.artifact.artifactId}"]`)
+      .check();
     await shot("85-recording-a-decision.png");
     await page.getByTestId("record-decision-confirm").click();
 
@@ -450,6 +510,8 @@ describe("competing approaches, compared and decided", () => {
     expect(current.workstreamId).toBe(approach.workstreamId);
     expect(current.rationale).toMatch(/one place/);
     expect(current.checkpointSha).toBeTruthy();
+    // The citation froze with the rationale (D-122): the exact id, on the row.
+    expect(current.artifactIds).toEqual([begunBody.artifact.artifactId]);
     // Choosing is not applying, and the room says so rather than saying "done".
     expect(decided.state).toBe("decision_recorded");
 
@@ -457,6 +519,11 @@ describe("competing approaches, compared and decided", () => {
     const receipt = await page.getByTestId("decision-receipt").innerText();
     expect(receipt).toContain("The middleware version keeps the guard in one place.");
     expect(receipt).toMatch(/Not verified when this was decided/i);
+    // The cited evidence is on the receipt, as a row rather than an id.
+    expect(receipt).toMatch(/Visual evidence cited/i);
+    await page
+      .locator(`[data-testid="receipt-artifact-row"][data-artifact="${begunBody.artifact.artifactId}"]`)
+      .waitFor({ timeout: 10_000 });
     // The approach that was not chosen is kept, with its own intent.
     expect(await page.getByTestId("receipt-not-chosen").innerText()).toBeTruthy();
     const prepared = await page.getByTestId("prepared-pr").innerText();

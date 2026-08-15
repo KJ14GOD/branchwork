@@ -790,6 +790,7 @@ export function ProjectRoom({
     workstreamId: string;
     rationale: string;
     acceptedRisks: string;
+    artifactIds: string[];
   }) => {
     if (!detail) return;
     setDecisionBusy(true);
@@ -798,7 +799,8 @@ export function ProjectRoom({
       missionId: detail.mission.missionId,
       workstreamId: input.workstreamId,
       rationale: input.rationale,
-      ...(input.acceptedRisks ? { acceptedRisks: input.acceptedRisks } : {})
+      ...(input.acceptedRisks ? { acceptedRisks: input.acceptedRisks } : {}),
+      ...(input.artifactIds.length > 0 ? { artifactIds: input.artifactIds } : {})
     });
     setDecisionBusy(false);
     if (!result.ok) setDecisionError(result.message);
@@ -1543,13 +1545,13 @@ export function ProjectRoom({
         />
       )}
 
-      {openArtifactView ? (
+      {openArtifactView && detail ? (
         /* One artifact, looked at closely (D-122): a transient look over
            whatever canvas was showing — the worker-view shape, opened from
            the Evidence section only, closed with Esc or Back, never a tab. */
         <div className="feed-scroll">
           <div className="feed">
-            <ArtifactView artifact={openArtifactView} onBack={onCloseArtifact} />
+            <ArtifactView artifact={openArtifactView} detail={detail} onBack={onCloseArtifact} />
           </div>
         </div>
       ) : activeFileEntry !== null && selectedMissionId !== null ? (

@@ -5093,3 +5093,37 @@ body.resizing {
 .recording-tab-word {
   color: var(--warn);
 }
+
+/* The evidence beside a check (D-122): subordinate to the ledger row it
+   supports, indented under the row's own facts. */
+.ledger-evidence {
+  margin-top: 4px;
+  padding-left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.decision-artifact-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.artifact-attachment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.artifact-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.artifact-attach-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}

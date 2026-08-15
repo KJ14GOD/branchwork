@@ -1,4 +1,5 @@
 import type { MissionDetailResponse, ReceiptSnapshot } from "@novus/contracts";
+import { ReceiptArtifactRow } from "./artifact-row";
 import { roleLabel } from "./identity";
 import { shortSha } from "../format";
 
@@ -64,6 +65,11 @@ export function ReceiptView({
               {decision.acceptedRisks && (
                 <p className="receipt-quiet">Accepted risks: {decision.acceptedRisks}</p>
               )}
+              {decision.artifactIds.length > 0 && (
+                <p className="receipt-quiet" data-testid="receipt-decision-artifacts">
+                  Cited {decision.artifactIds.length === 1 ? "1 visual artifact" : `${decision.artifactIds.length} visual artifacts`}, below.
+                </p>
+              )}
             </div>
           ))}
         </>
@@ -102,6 +108,21 @@ export function ReceiptView({
           </li>
         ))}
       </ul>
+
+      {/* The frozen evidence set (D-122): the references stored at close —
+          never a recomputation — with each thumbnail loading through a freshly
+          authorized grant, because references are durable and viewing access
+          never is. */}
+      {receipt.artifacts.length > 0 && (
+        <>
+          <h3 className="receipt-heading">Visual evidence</h3>
+          <div className="evidence-list">
+            {receipt.artifacts.map((reference) => (
+              <ReceiptArtifactRow key={reference.artifactId} reference={reference} />
+            ))}
+          </div>
+        </>
+      )}
 
       <h3 className="receipt-heading">Remains uncertain</h3>
       {receipt.remainingUncertain.length === 0 && (
