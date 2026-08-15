@@ -306,8 +306,20 @@ export interface TurnRequest {
   skills?: readonly EnabledSkill[] | null;
   /** The project MCP servers a person enabled, pinned at dispatch (D-119).
    *  Composed into a strict config Novus authors, or dropped by name under
-   *  the same digest rule. Absent or empty means no `--mcp-config` at all. */
+   *  the same digest rule. Absent or empty means no `--mcp-config` at all —
+   *  unless `novusCapture` is present, which always composes a config. */
   mcpServers?: readonly EnabledMcpServer[] | null;
+  /** Novus's own capture endpoint for this turn (D-123): composed into the
+   *  strict config as the `novus` server so the agent can *ask* for a
+   *  screenshot. Asking is all it grants — the tool call routes through this
+   *  module's ladder like every MCP tool, and the endpoint additionally
+   *  demands the grant the router mints on an allow. Absent in tests that
+   *  predate it and for read-alongside turns. */
+  novusCapture?: { url: string; token: string } | null;
+  /** Router hook (D-123): called with the tool name whenever a permission
+   *  request is *allowed* — by a person's answer or by the lane's profile —
+   *  after the allow is written. The capture grant is minted here. */
+  onToolAllowed?: (toolName: string) => void;
   /** Announce the execution's start; a follow-up turn inside the same
    *  execution does not repeat it. */
   announceStart: boolean;
@@ -581,6 +593,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
             : { behavior: "deny", message: reason ?? DENIED }
       }
     });
+    // The allow is on the record above before anything is minted from it
+    // (D-123): a policy-decided capture is a person's standing instruction
+    // answering, and the grant is that answer's receipt.
+    if (decision === "allowed") request.onToolAllowed?.(message.toolName);
   };
 
   /**
@@ -678,8 +694,11 @@ export function startTurn(request: TurnRequest): RunningTurn {
     decision: ApprovalDecision,
     reason: string | null
   ): boolean => {
-    if (!pending.has(requestId)) return false;
+    const question = pending.get(requestId);
+    if (!question) return false;
     pending.delete(requestId);
+    // A person's allow mints the same receipt a policy allow does (D-123).
+    if (decision === "approve") request.onToolAllowed?.(question.toolName);
     // Approve once, or deny. There is no third answer and nothing is
     // remembered: `permission_suggestions` — the CLI's offer to write an allow
     // rule into local settings, or to switch the session to acceptEdits — is
@@ -797,11 +816,14 @@ export function startTurn(request: TurnRequest): RunningTurn {
     );
     // The enabled MCP servers, under the same rule (D-119): re-derived from
     // the worktree, digest-checked against the approval, written into a
-    // strict config only Novus authors.
+    // strict config only Novus authors — carrying, when the runner provided
+    // one, the `novus` capture endpoint (D-123). A read turn carries no
+    // endpoint: it may look and speak, never capture.
     composedMcp = composeMcpConfig(
       worktreePath,
       request.mcpServers ?? [],
-      join(request.worktreeRoot, ".mcp-staging", `${request.executionId}.json`)
+      join(request.worktreeRoot, ".mcp-staging", `${request.executionId}.json`),
+      readOnly ? null : request.novusCapture ?? null
     );
     emit({
       kind: "execution.running",
@@ -1166,6 +1188,46 @@ export function startTurn(request: TurnRequest): RunningTurn {
           })}\n`
         )) {
           emit(event);
+        }
+        // An allowed capture-tool ask is followed by the tool call itself,
+        // exactly as the real CLI follows an allow (D-123): the scripted turn
+        // POSTs the endpoint's own tools/call, so the production endpoint,
+        // grant, and capture path are what a deterministic test drives.
+        if (allowed && askTool === "mcp__novus__capture_screenshot" && request.novusCapture) {
+          const called = await fetch(request.novusCapture.url, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${request.novusCapture.token}`
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "tools/call",
+              params: { name: "capture_screenshot", arguments: {} }
+            })
+          })
+            .then(
+              (response) =>
+                response.json() as Promise<{
+                  result?: { content?: { text?: string }[]; isError?: boolean };
+                }>
+            )
+            .catch((error: unknown) => ({
+              result: {
+                content: [{ text: `Capture failed: ${messageOf(error)}` }],
+                isError: true
+              }
+            }));
+          const said = called.result?.content?.[0]?.text ?? "The capture endpoint said nothing.";
+          for (const event of stream.push(
+            `${JSON.stringify({
+              type: "assistant",
+              message: { content: [{ type: "text", text: said }] }
+            })}\n`
+          )) {
+            emit(event);
+          }
         }
       }
 

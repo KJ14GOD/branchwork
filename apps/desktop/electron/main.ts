@@ -1,4 +1,4 @@
-import { BrowserWindow, app, ipcMain, shell } from "electron";
+import { BrowserWindow, app, ipcMain, protocol, shell } from "electron";
 import { join } from "node:path";
 import {
   APPROACH_INTENT_MAX,
@@ -31,6 +31,7 @@ import {
   TerminalWriteInputSchema,
   WorkspaceCommandInputSchema,
   WriteWorkspaceFileInputSchema,
+  type ArtifactViewResponse,
   type IpcAuthStatus,
   type IpcResult
 } from "@novus/contracts";
@@ -111,6 +112,15 @@ if (process.env.NOVUS_USER_DATA_DIR && !app.isPackaged) {
 const controlPlaneUrl = process.env.NOVUS_CP_URL ?? "http://127.0.0.1:4460";
 const store = new SessionStore();
 const api = new ControlPlaneClient(controlPlaneUrl, () => store.load());
+
+// The artifact protocol (D-122): how the renderer's <img> and <video> read
+// evidence bytes. Registered before ready, as Electron requires; the handler
+// itself is installed at ready. Every request is authorized here, in this
+// process — the renderer never sees a signed URL, and the isolated preview
+// sessions never get this scheme at all.
+protocol.registerSchemesAsPrivileged([
+  { scheme: "novus-artifact", privileges: { stream: true } }
+]);
 
 let window: BrowserWindow | null = null;
 let authStatus: IpcAuthStatus = { state: "signed_out" };
@@ -502,7 +512,10 @@ function registerIpc(): void {
         missionId: MissionIdSchema,
         workstreamId: z.string().startsWith("wst_"),
         rationale: z.string().trim().min(1).max(MAX_RATIONALE),
-        acceptedRisks: z.string().trim().max(MAX_ACCEPTED_RISKS).optional()
+        acceptedRisks: z.string().trim().max(MAX_ACCEPTED_RISKS).optional(),
+        // The visual evidence the decider chose (D-122); the server refuses
+        // anything that is not this mission's completed evidence.
+        artifactIds: z.array(z.string().startsWith("art_")).max(20).optional()
       })
       .safeParse(raw);
     if (!parsed.success) {
@@ -512,12 +525,56 @@ function registerIpc(): void {
       const decisionId = await api.recordDecision(parsed.data.missionId, {
         workstreamId: parsed.data.workstreamId,
         rationale: parsed.data.rationale,
-        ...(parsed.data.acceptedRisks ? { acceptedRisks: parsed.data.acceptedRisks } : {})
+        ...(parsed.data.acceptedRisks ? { acceptedRisks: parsed.data.acceptedRisks } : {}),
+        ...(parsed.data.artifactIds?.length ? { artifactIds: parsed.data.artifactIds } : {})
       });
       return ok({ decisionId });
     } catch (error) {
       return fail(error);
     }
+  });
+
+  // --- Durable visual evidence (D-122, D-123) --------------------------------
+  // The renderer asks; this process is the capture authority. Everything it
+  // supplies is the lane — never a URL, a window, a path, or a key.
+
+  ipcMain.handle("novus:artifacts:capture", async (_event, raw: unknown) => {
+    const parsed = MissionTargetSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed capture request." };
+    return call(async () => {
+      const target = await targetFor(parsed.data.missionId, parsed.data.workstreamId);
+      const agent = runner;
+      if (!agent) throw new ApiError("capture_refused", "This machine's runner is not running.", 409);
+      return agent.captureScreenshot(parsed.data.missionId, target.workstreamId);
+    });
+  });
+
+  ipcMain.handle("novus:artifacts:attach", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        artifactId: z.string().startsWith("art_"),
+        target: z.object({ kind: z.enum(["check", "pull_request"]), id: z.string().min(1).max(60) })
+      })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed attachment." };
+    return call(async () => {
+      await api.attachArtifact(parsed.data.artifactId, parsed.data.target);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:artifacts:detach", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        artifactId: z.string().startsWith("art_"),
+        target: z.object({ kind: z.enum(["check", "pull_request"]), id: z.string().min(1).max(60) })
+      })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed attachment." };
+    return call(async () => {
+      await api.detachArtifact(parsed.data.artifactId, parsed.data.target);
+      return null;
+    });
   });
 
   ipcMain.handle("novus:approaches:request-revision", async (_event, raw: unknown) => {
@@ -1421,7 +1478,49 @@ function createWindow(): void {
   });
 }
 
+/** Short-lived viewing grants, cached only until they expire — a grant is
+ *  spent on bytes, never stored (D-022). */
+const artifactViewCache = new Map<string, { view: ArtifactViewResponse; expiresAtMs: number }>();
+
+/** Serves `novus-artifact://{artifactId}/{blob|thumb}` for the app's own
+ *  window. Authorization happens here per request: the session asks the
+ *  control plane for a fresh grant, which enforces mission access — a person
+ *  who cannot read the mission gets a 404, not pixels. */
+async function serveArtifactBytes(request: Request): Promise<Response> {
+  try {
+    const url = new URL(request.url);
+    const artifactId = url.hostname;
+    const variant = url.pathname.replace(/^\//, "") || "blob";
+    if (!artifactId.startsWith("art_") || (variant !== "blob" && variant !== "thumb")) {
+      return new Response("Not found", { status: 404 });
+    }
+    const cached = artifactViewCache.get(artifactId);
+    let view = cached && cached.expiresAtMs > Date.now() + 5_000 ? cached.view : null;
+    if (!view) {
+      view = await api.viewArtifact(artifactId);
+      artifactViewCache.set(artifactId, { view, expiresAtMs: Date.parse(view.expiresAt) || 0 });
+    }
+    const target = variant === "thumb" ? view.thumbnailUrl : view.url;
+    if (!target) return new Response("Not found", { status: 404 });
+    const upstream = await fetch(target);
+    if (!upstream.ok || upstream.body === null) {
+      artifactViewCache.delete(artifactId);
+      return new Response("Unavailable", { status: 502 });
+    }
+    return new Response(upstream.body, {
+      headers: {
+        "content-type": variant === "thumb" ? "image/png" : view.mimeType,
+        "cache-control": "private, max-age=300"
+      }
+    });
+  } catch (error) {
+    const status = error instanceof ApiError && error.status === 404 ? 404 : 502;
+    return new Response("Unavailable", { status });
+  }
+}
+
 app.whenReady().then(async () => {
+  protocol.handle("novus-artifact", serveArtifactBytes);
   registerIpc();
   await restoreSession();
   createWindow();

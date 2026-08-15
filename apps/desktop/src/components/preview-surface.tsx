@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MissionDetailResponse, PreviewBounds, PreviewStatus } from "@novus/contracts";
+import {
+  PIXELS_WARNING,
+  type MissionDetailResponse,
+  type PreviewBounds,
+  type PreviewStatus
+} from "@novus/contracts";
 import { novus } from "../bridge";
+import { shortSha } from "../format";
 import { liveRunProcess } from "./derive";
 import { previewPresentation } from "./preview";
 import { GatedAction } from "./gated";
@@ -54,6 +60,8 @@ export function PreviewSurface({
   const [status, setStatus] = useState<PreviewStatus | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  /** The last capture's quiet confirmation; clears itself. */
+  const [captured, setCaptured] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const running = detail ? liveRunProcess(detail) : null;
@@ -170,6 +178,32 @@ export function PreviewSurface({
 
   const reload = () => void novus().workspace.preview.reload();
 
+  // Capturing (D-122): the renderer names the lane and nothing else; the main
+  // process judges the preview, reads the revision, and stores the evidence.
+  const capture = async () => {
+    setCaptured(null);
+    setNote(null);
+    const result = await novus().artifacts.capture({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {})
+    });
+    if (!result.ok) {
+      setNote(result.message);
+      return;
+    }
+    setCaptured(
+      result.value.revisionSha
+        ? `Captured at ${shortSha(result.value.revisionSha)} — in Evidence.`
+        : "Captured — in Evidence."
+    );
+  };
+
+  useEffect(() => {
+    if (captured === null) return;
+    const timer = setTimeout(() => setCaptured(null), 6_000);
+    return () => clearTimeout(timer);
+  }, [captured]);
+
   const reopenTarget = running?.previewUrl ?? null;
 
   return (
@@ -183,6 +217,24 @@ export function PreviewSurface({
           {view.word}
         </span>
         <span className="head-spacer" />
+        {captured && (
+          <span className="file-meta" data-testid="preview-captured">
+            {captured}
+          </span>
+        )}
+        {detail && (
+          <GatedAction
+            capability="artifact.capture"
+            capabilities={detail.capabilities}
+            denialReason="Capturing evidence needs the artifact.capture capability."
+            holderLogin={detail.control.holderLogin}
+            onClick={() => void capture()}
+            variant="text"
+            testid="preview-capture"
+          >
+            Capture screenshot
+          </GatedAction>
+        )}
         <button className="btn btn-text" onClick={reload} data-testid="preview-reload">
           Reload
         </button>
@@ -190,6 +242,13 @@ export function PreviewSurface({
           Open in browser
         </button>
       </header>
+      {/* The standing human warning at the capture point (D-123): the pixels
+          are the application's own, and Novus does not scan them. */}
+      {detail && (
+        <p className="preview-capture-warning" data-testid="preview-capture-warning">
+          {PIXELS_WARNING}
+        </p>
+      )}
       {note && (
         <p className="inline-error preview-note" role="alert">
           {note}

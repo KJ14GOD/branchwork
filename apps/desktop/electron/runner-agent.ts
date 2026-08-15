@@ -4,12 +4,15 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   ApiErrorSchema,
+  ArtifactSchema,
+  BeginArtifactResponseSchema,
   DEFAULT_PERMISSION_PROFILE,
   DeclaredCommandSchema,
   EnabledMcpServersSchema,
   EnabledSkillsSchema,
   PermissionProfileSchema,
   RunnerCommandsResponseSchema,
+  type Artifact,
   type EnabledMcpServer,
   type EnabledSkill,
   type MissionDetailResponse,
@@ -19,7 +22,15 @@ import {
   type SequencedRunnerEvent
 } from "@novus/contracts";
 import { z } from "zod";
-import type { ControlPlaneClient } from "./api-client";
+import { ApiError, type ControlPlaneClient } from "./api-client";
+import {
+  captureScreenshot as capturePreviewScreenshot,
+  type ArtifactUploader
+} from "./artifact-capture";
+import { CAPTURE_TOOL_FULL_NAME, mintCaptureGrant, registerCaptureTurn } from "./artifact-mcp";
+import { SCREENSHOT_CLAIM } from "./artifact-policy";
+import { redact } from "./secret-policy";
+import { processLogsFor } from "./workspace";
 import { startTurn, type RunningTurn, type TurnResult } from "./execution";
 import { EventOutbox } from "./outbox";
 import {
@@ -55,6 +66,14 @@ export interface RunnerAgent {
   republish(missionId: string): void;
   /** Poll for commands immediately, rather than waiting for the next tick. */
   pollNow(): void;
+  /**
+   * Captures a screenshot of the named lane's live preview as durable
+   * evidence, on a person's own click (D-123). The renderer supplied nothing
+   * but the lane; every judgment — which pixels, which process, which
+   * revision — is this machine's. Throws an ApiError whose message is the
+   * refusal in words.
+   */
+  captureScreenshot(missionId: string, workstreamId: string): Promise<Artifact>;
   /**
    * Kills in-flight turns, records the interruption as an explicit outcome,
    * and flushes the outbox before resolving. Safe to call twice.
@@ -335,6 +354,9 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
    *  `mission:workstream`, so the check above costs one `rev-parse` per lane
    *  per run rather than one every fifteen seconds forever. */
   const fetched = new Set<string>();
+  /** What each enrolled lane is, refreshed by every command poll: the facts a
+   *  capture needs (D-123) without asking the control plane again. */
+  const laneInfo = new Map<string, { missionId: string; providerRepoId: string }>();
 
   /**
    * The workspace runtime: setup, run, and verification commands, their
@@ -392,8 +414,70 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     discoverNow: () => void discover(),
     republish: (missionId) => void republishFor(missionId),
     pollNow: () => void poll(),
+    captureScreenshot: capturePersonScreenshot,
     shutdown
   };
+
+  /** The known-secret redaction for a lane's project (D-052), applied to
+   *  every textual capture field before it leaves this machine. */
+  function captureSanitizer(workstreamId: string): (text: string) => string {
+    const providerRepoId = laneInfo.get(workstreamId)?.providerRepoId ?? null;
+    return (text) =>
+      redact(text, providerRepoId === null ? [] : secretValuesFor(host, providerRepoId));
+  }
+
+  /** A refusal from an artifact route, surfaced in the server's own words. */
+  async function artifactRefusal(response: Response): Promise<ApiError> {
+    const parsed = ApiErrorSchema.safeParse(await response.json().catch(() => null));
+    return parsed.success
+      ? new ApiError(parsed.data.error.code, parsed.data.error.message, response.status)
+      : new ApiError("artifact_failed", `The control plane answered ${response.status}.`, response.status);
+  }
+
+  /** A person's capture uploads under their own session (D-122). */
+  function personUploader(missionId: string, workstreamId: string): ArtifactUploader {
+    return {
+      begin: (input) => deps.api.beginArtifact(missionId, { ...input, workstreamId }),
+      complete: (artifactId, outcome, failureReason) =>
+        deps.api.completeArtifact(artifactId, outcome, failureReason)
+    };
+  }
+
+  /** An agent-requested capture uploads under this runner's credential,
+   *  naming the requesting execution (D-123). */
+  function runnerUploader(executionId: string, enrolment: Enrolment): ArtifactUploader {
+    return {
+      begin: async (input) => {
+        const response = await runnerFetch(enrolment, "/runner/artifacts", "POST", {
+          ...input,
+          executionId
+        });
+        if (!response.ok) throw await artifactRefusal(response);
+        return BeginArtifactResponseSchema.parse(await response.json());
+      },
+      complete: async (artifactId, outcome, failureReason) => {
+        const response = await runnerFetch(
+          enrolment,
+          `/runner/artifacts/${artifactId}/complete`,
+          "POST",
+          { outcome, ...(failureReason ? { failureReason } : {}) }
+        );
+        if (!response.ok) throw await artifactRefusal(response);
+        const body = (await response.json()) as { artifact: unknown };
+        return ArtifactSchema.parse(body.artifact);
+      }
+    };
+  }
+
+  async function capturePersonScreenshot(missionId: string, workstreamId: string): Promise<Artifact> {
+    return capturePreviewScreenshot({
+      workstreamId,
+      worktreePath: join(worktreeRoot, workstreamId),
+      logs: processLogsFor(workstreamId),
+      sanitize: captureSanitizer(workstreamId),
+      uploader: personUploader(missionId, workstreamId)
+    });
+  }
 
   async function republishFor(missionId: string): Promise<void> {
     const workstreamId = workstreamByMission.get(missionId);
@@ -811,6 +895,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       console.warn("[runner] the control plane answered commands in an unexpected shape");
       return;
     }
+    laneInfo.set(workstreamId, {
+      missionId: parsed.data.workstream.missionId,
+      providerRepoId: parsed.data.workstream.providerRepoId
+    });
     for (const command of parsed.data.commands) {
       dispatch(command, parsed.data.workstream, enrolment);
     }
@@ -1206,11 +1294,58 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       }
     };
 
+    // The turn's own capture surface (D-123): the `novus` endpoint the strict
+    // MCP config carries, alive exactly as long as the turn is. Asking rides
+    // the router; the grant an allow mints is what the endpoint spends; and
+    // the capture itself faces every check a person's does. Write turns only —
+    // a read-alongside turn may look and speak, never capture. Registered
+    // *before* the stop check below: it awaits, and a stop landing in an
+    // async gap between that check and the spawn would be swallowed — the
+    // exact zombie-turn window the check exists to close.
+    let releaseCapture: (() => void) | null = null;
+    let novusCapture: { url: string; token: string } | null = null;
+    if (args.access === "write") {
+      try {
+        const endpoint = await registerCaptureTurn(args.executionId, async () => {
+          const enrolment = enrolments.get(args.workstreamId);
+          if (!enrolment) {
+            return { text: "Capture failed: this machine is no longer enrolled for the lane.", isError: true };
+          }
+          try {
+            const artifact = await capturePreviewScreenshot({
+              workstreamId: args.workstreamId,
+              worktreePath: join(worktreeRoot, args.workstreamId),
+              logs: processLogsFor(args.workstreamId),
+              sanitize: captureSanitizer(args.workstreamId),
+              uploader: runnerUploader(args.executionId, enrolment)
+            });
+            return {
+              text:
+                `Captured "${artifact.label}" (${artifact.artifactId}) from the live preview` +
+                `${artifact.revisionSha ? ` at revision ${artifact.revisionSha.slice(0, 8)}` : ""}. ` +
+                SCREENSHOT_CLAIM,
+              isError: false
+            };
+          } catch (error) {
+            return { text: `Capture refused: ${messageOf(error)}`, isError: true };
+          }
+        });
+        releaseCapture = endpoint.release;
+        novusCapture = { url: endpoint.url, token: endpoint.token };
+      } catch (error) {
+        // A machine whose loopback endpoint cannot start still runs the turn;
+        // the agent simply has no capture tool this turn.
+        console.warn("[runner] the capture endpoint did not start:", messageOf(error));
+      }
+    }
+
     // The stop may already have arrived — for this execution, before this turn
-    // existed. Reported as the terminal outcome rather than started and then
-    // killed, so a participant who stopped an execution never sees a harness
-    // process run afterwards and never gets a checkpoint from one.
+    // existed, including during the endpoint registration just above. Reported
+    // as the terminal outcome rather than started and then killed, so a
+    // participant who stopped an execution never sees a harness process run
+    // afterwards and never gets a checkpoint from one.
     if (stopRequested.has(args.executionId)) {
+      releaseCapture?.();
       openExecutions.delete(args.executionId);
       report(args.workstreamId, args.executionId, {
         kind: "execution.stopped",
@@ -1238,6 +1373,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       permissionProfile: args.permissionProfile,
       skills: args.skills,
       mcpServers: args.mcpServers,
+      novusCapture,
+      onToolAllowed: (toolName) => {
+        if (toolName === CAPTURE_TOOL_FULL_NAME) mintCaptureGrant(args.executionId);
+      },
       siblingScopes: () =>
         [...active.values()]
           .filter(
@@ -1268,6 +1407,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       result = await turn.finished;
     } finally {
       active.delete(args.executionId);
+      // The endpoint token and any unspent grant die with the turn.
+      releaseCapture?.();
     }
     if (stopped) return; // shutdown owns the terminal event
 

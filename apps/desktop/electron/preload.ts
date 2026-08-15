@@ -78,6 +78,23 @@ const novus: NovusBridge = {
     decide: (input) => ipcRenderer.invoke("novus:approaches:decide", input),
     requestRevision: (input) => ipcRenderer.invoke("novus:approaches:request-revision", input)
   },
+  // Durable visual evidence (D-122, D-123). The renderer names a lane and
+  // nothing else; capture authority stays in the main process, and bytes are
+  // read over the novus-artifact protocol rather than through this surface.
+  artifacts: {
+    capture: (input) => ipcRenderer.invoke("novus:artifacts:capture", input),
+    startRecording: (input) => ipcRenderer.invoke("novus:artifacts:start-recording", input),
+    stopRecording: () => ipcRenderer.invoke("novus:artifacts:stop-recording"),
+    cancelRecording: () => ipcRenderer.invoke("novus:artifacts:cancel-recording"),
+    recordingStatus: () => ipcRenderer.invoke("novus:artifacts:recording-status"),
+    onRecording: (listener) => {
+      const wrapped = (_event: unknown, status: Parameters<typeof listener>[0]) => listener(status);
+      ipcRenderer.on("novus:recording-status", wrapped);
+      return () => ipcRenderer.removeListener("novus:recording-status", wrapped);
+    },
+    attach: (input) => ipcRenderer.invoke("novus:artifacts:attach", input),
+    detach: (input) => ipcRenderer.invoke("novus:artifacts:detach", input)
+  },
   // Publishing a decision as a pull request (D-099). No merge verb exists on
   // this bridge, on the server, or in the runner vocabulary.
   pulls: {

@@ -40,6 +40,7 @@ import {
 } from "../components/direction-trace";
 import { GatedAction } from "../components/gated";
 import { HumanMark } from "../components/identity";
+import { ArtifactView } from "../components/artifact-view";
 import { WorkerInspector } from "../components/worker-inspector";
 import type { InspectorSection } from "../components/inspector";
 import { DecisionRoom } from "../components/decision-room";
@@ -151,7 +152,9 @@ export function ProjectRoom({
   onReopenPreview,
   pullTabOpen,
   onOpenPull,
-  onClosePull
+  onClosePull,
+  openArtifactId,
+  onCloseArtifact
 }: {
   project: Project;
   details: Record<string, MissionDetailResponse>;
@@ -216,6 +219,10 @@ export function ProjectRoom({
   pullTabOpen: boolean;
   onOpenPull: () => void;
   onClosePull: () => void;
+  /** One artifact taking the canvas (D-122) — opened from the Evidence
+   *  section, never a tab, closed with Esc or Back like a worker's view. */
+  openArtifactId: string | null;
+  onCloseArtifact: () => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -552,6 +559,13 @@ export function ProjectRoom({
     const worker = block.workers.find((candidate) => candidate.id === openWorker.workerId);
     return worker ? { worker, settled: block.settled } : null;
   }, [openWorker, feed]);
+
+  /** The opened artifact's row, from the same detail the room already holds;
+   *  a stale id (swept away, other lane) simply shows the conversation. */
+  const openArtifactView = useMemo(() => {
+    if (!openArtifactId || !detail) return null;
+    return detail.artifacts.find((artifact) => artifact.artifactId === openArtifactId) ?? null;
+  }, [openArtifactId, detail]);
 
   const openWorkerOn = (blockKey: string) => (workerId: string) => {
     savedScrollRef.current = scrollRef.current?.scrollTop ?? null;
@@ -1510,7 +1524,16 @@ export function ProjectRoom({
         />
       )}
 
-      {activeFileEntry !== null && selectedMissionId !== null ? (
+      {openArtifactView ? (
+        /* One artifact, looked at closely (D-122): a transient look over
+           whatever canvas was showing — the worker-view shape, opened from
+           the Evidence section only, closed with Esc or Back, never a tab. */
+        <div className="feed-scroll">
+          <div className="feed">
+            <ArtifactView artifact={openArtifactView} onBack={onCloseArtifact} />
+          </div>
+        </div>
+      ) : activeFileEntry !== null && selectedMissionId !== null ? (
         // The pane reads the worktree the tab was opened from — the tab's own
         // lane, never whichever lane the room happens to be reading — so the
         // dot on the tab and the bytes on screen cannot disagree (D-084).

@@ -154,7 +154,12 @@ export function openEmbeddedPreview(
       nodeIntegration: false,
       // Its own in-memory session per workstream: no cookies or storage are
       // shared with the app shell or persisted anywhere.
-      partition: `preview:${workstreamId}`
+      partition: `preview:${workstreamId}`,
+      // The page keeps living while the rectangle is off screen — a person
+      // reading the conversation has not paused their dev server's page, and
+      // a capture of the open preview (D-123) photographs its live render,
+      // never a stale frame.
+      backgroundThrottling: false
     }
   });
 
@@ -254,6 +259,46 @@ export function closeEmbeddedPreview(): void {
   detach(preview);
   preview.view.webContents.close();
   announce();
+}
+
+/**
+ * The capture authority's one window onto pixels (D-123): the embedded
+ * preview's own page, photographed by the main process. The renderer never
+ * names a target — the only thing this can capture is the view this module
+ * already validated and owns. Refused in words when the view is not showing
+ * a page on screen: what nobody can see, Novus does not photograph.
+ */
+export async function capturePreviewImage(
+  workstreamId: string
+): Promise<
+  | { ok: true; image: Electron.NativeImage; status: PreviewStatus }
+  | { ok: false; refusal: string }
+> {
+  if (current === null || current.status.workstreamId !== workstreamId) {
+    return { ok: false, refusal: "No preview is open for this lane." };
+  }
+  if (current.status.phase !== "ready") {
+    return { ok: false, refusal: "The preview has no loaded page to capture." };
+  }
+  // Open is the requirement, not visible: the view is the approved surface
+  // whether or not its rectangle is on the canvas this instant, and its page
+  // keeps rendering (backgroundThrottling is off). A capture races nothing.
+  const image = await current.view.webContents.capturePage();
+  if (image.isEmpty()) {
+    return { ok: false, refusal: "The preview rendered nothing to capture." };
+  }
+  return { ok: true, image, status: { ...current.status } };
+}
+
+/** The live view's contents for the recording pipeline (D-123) — handed only
+ *  to the display-media handler the main process itself installs, never to a
+ *  renderer. Null unless this exact lane's preview is showing a page. */
+export function previewContentsForRecording(
+  workstreamId: string
+): { contents: Electron.WebContents; status: PreviewStatus } | null {
+  if (current === null || current.status.workstreamId !== workstreamId) return null;
+  if (current.status.phase !== "ready") return null;
+  return { contents: current.view.webContents, status: { ...current.status } };
 }
 
 /**

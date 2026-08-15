@@ -8,7 +8,9 @@ import type {
   MissionRole,
   VerificationCheck
 } from "@novus/contracts";
+import { PIXELS_WARNING } from "@novus/contracts";
 import { novus } from "../bridge";
+import { artifactIsEvidence, artifactMetaLine, artifactStateWord } from "./artifacts";
 import { Dialog } from "./dialog";
 import { clockTime, plural, shortSha } from "../format";
 import {
@@ -35,21 +37,29 @@ function CloseGlyph() {
   );
 }
 
-export type InspectorSection = "files" | "overview" | "changes" | "verification" | "output";
+export type InspectorSection =
+  | "files"
+  | "overview"
+  | "changes"
+  | "verification"
+  | "evidence"
+  | "output";
 
 /**
- * Three above, two below (D-066).
+ * Four above, two below (D-066, D-122).
  *
  * Five equally-weighted tabs made the panel a menu: nothing about the row said
  * which of them you were likely to want. The split is what the *work* is —
- * the files, what changed in them, whether it passed — against what the
- * *workspace* is: where it came from and what its processes printed. The first
- * three are read while working; the last two are consulted.
+ * the files, what changed in them, whether it passed, and the visual evidence
+ * captured of it — against what the *workspace* is: where it came from and
+ * what its processes printed. The first four are read while working; the last
+ * two are consulted.
  */
 const SECTIONS: { id: InspectorSection; label: string }[] = [
   { id: "files", label: "All files" },
   { id: "changes", label: "Changes" },
-  { id: "verification", label: "Checks" }
+  { id: "verification", label: "Checks" },
+  { id: "evidence", label: "Evidence" }
 ];
 
 /** The two below the edge. They open a region of their own rather than taking
@@ -734,12 +744,78 @@ function InviteSection({ detail }: { detail: MissionDetailResponse }) {
   );
 }
 
+/**
+ * The mission's visual evidence, as restrained thumbnail rows (D-122): a
+ * small thumb, the label, and one meta line — evidence, not decoration, and
+ * never a gallery. Selecting a row opens the artifact's own view on the
+ * room's canvas. Rows are the lane's own, like everything in this panel.
+ */
+function EvidenceSection({
+  detail,
+  onOpenArtifact
+}: {
+  detail: MissionDetailResponse;
+  onOpenArtifact: (artifactId: string) => void;
+}) {
+  const laneId = detail.workstream?.workstreamId ?? null;
+  const artifacts = detail.artifacts.filter(
+    (artifact) => artifact.workstreamId === laneId || artifact.workstreamId === null
+  );
+  return (
+    <div data-testid="inspector-evidence">
+      {artifacts.length === 0 ? (
+        <>
+          <p className="quiet" data-testid="evidence-empty">
+            No visual evidence yet. Open the running app's preview and capture a screenshot there.
+          </p>
+          <p className="quiet evidence-foot">{PIXELS_WARNING}</p>
+        </>
+      ) : (
+        <div className="evidence-list">
+          {[...artifacts].reverse().map((artifact) => {
+            const state = artifactStateWord(artifact);
+            const openable = artifactIsEvidence(artifact) || artifact.state === "failed";
+            return (
+              <button
+                key={artifact.artifactId}
+                className="evidence-row"
+                onClick={() => (openable ? onOpenArtifact(artifact.artifactId) : undefined)}
+                aria-label={`${artifact.label} — ${artifactMetaLine(artifact)}`}
+                data-testid="evidence-row"
+                data-artifact={artifact.artifactId}
+              >
+                {artifactIsEvidence(artifact) && artifact.hasThumbnail ? (
+                  <img
+                    className="evidence-thumb"
+                    src={`novus-artifact://${artifact.artifactId}/thumb`}
+                    alt=""
+                  />
+                ) : (
+                  <span className="evidence-thumb empty" aria-hidden="true" />
+                )}
+                <span className="evidence-text">
+                  <span className="evidence-label">
+                    {artifact.label}
+                    {state && <span className={`artifact-word ${state.tone}`}> · {state.word}</span>}
+                  </span>
+                  <span className="evidence-meta">{artifactMetaLine(artifact)}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Inspector({
   detail,
   section,
   onSection,
   openPath,
   onOpenFile,
+  onOpenArtifact,
   hostedHere,
   onClose,
   onDetail,
@@ -752,6 +828,8 @@ export function Inspector({
   /** The file currently taking the room's canvas, so the tree can mark it. */
   openPath: string | null;
   onOpenFile: (path: string) => void;
+  /** Opens one artifact's own view on the room's canvas (D-122). */
+  onOpenArtifact: (artifactId: string) => void;
   /** False when this workstream's repository is not checked out here. Output
    *  and files are read from the machine that holds it and nowhere else. */
   hostedHere: boolean;
@@ -1036,6 +1114,10 @@ export function Inspector({
                 </div>
               )}
             </div>
+          )}
+
+          {topSection === "evidence" && (
+            <EvidenceSection detail={detail} onOpenArtifact={onOpenArtifact} />
           )}
         </div>
 

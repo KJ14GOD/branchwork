@@ -1543,6 +1543,21 @@ export const MAX_RECORDING_MS = 5 * 60_000;
 
 export const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, "must be a lowercase hex SHA-256");
 
+/** The one honest claim a screenshot makes, said wherever one is shown
+ *  (D-122). One copy, so the capture surface, the inspector, and the agent's
+ *  own tool result can never drift apart. */
+export const SCREENSHOT_CLAIM =
+  "A screenshot proves what the preview displayed at this revision and time. It does not prove the application is correct.";
+
+/** The recording's version of the same sentence (D-123). */
+export const RECORDING_CLAIM =
+  "A recording proves what the preview displayed and how it responded during this span. It does not prove the application is correct.";
+
+/** The standing warning at the capture controls: pixels are the application's
+ *  own output, and Novus does not scan them (ARCHITECTURE.md#secret-placement). */
+export const PIXELS_WARNING =
+  "Captured pixels are the application's own output and may contain sensitive data. Novus redacts known secrets from text, never from pixels.";
+
 /** Where an artifact is being used as evidence. Decisions carry their chosen
  *  artifact ids on the decision row itself; checks and pull requests carry
  *  attachment rows. Both are served here so one list answers "where is this
@@ -1711,6 +1726,20 @@ export const AttachArtifactInputSchema = z.object({
   })
 });
 export type AttachArtifactInput = z.infer<typeof AttachArtifactInputSchema>;
+
+/** The machine-local state of an in-flight preview recording (D-123): what
+ *  the preview head says while pixels are being captured. Never durable —
+ *  the artifact row exists only once the recording finalizes. */
+export const RecordingStatusSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  workstreamId: z.string().startsWith("wst_"),
+  state: z.enum(["recording", "finalizing"]),
+  startedAt: z.string().datetime(),
+  processName: z.string().max(120),
+  /** The stated bound the recording stops itself at. */
+  maxDurationMs: z.number().int().positive()
+});
+export type RecordingStatus = z.infer<typeof RecordingStatusSchema>;
 
 // --- Project secret values (D-041, D-044) ------------------------------------
 // A secret's *name* is project configuration and travels with the branch. Its
@@ -3325,18 +3354,51 @@ export interface NovusBridge {
       name?: string;
       expectedOriginSha?: string;
     }): Promise<IpcResult<{ workstream: Workstream }>>;
-    /** Records a decision. Writes a record; publishes nothing. */
+    /** Records a decision. Writes a record; publishes nothing. `artifactIds`
+     *  names the visual evidence the decider chose (D-122). */
     decide(input: {
       missionId: string;
       workstreamId: string;
       rationale: string;
       acceptedRisks?: string;
+      artifactIds?: string[];
     }): Promise<IpcResult<{ decisionId: string }>>;
     /** Asks for a revision instead, which withdraws the current decision. */
     requestRevision(input: {
       missionId: string;
       workstreamId: string;
       reason: string;
+    }): Promise<IpcResult<null>>;
+  };
+  /**
+   * Durable visual evidence (D-122, D-123). The renderer asks; the main
+   * process is the capture authority — it captures only the embedded preview
+   * it already validated, and the renderer supplies no URL, window, path,
+   * or key. Viewing bytes rides the `novus-artifact:` protocol, which the
+   * main process serves through freshly minted, expiring grants.
+   */
+  artifacts: {
+    /** Captures a screenshot of the lane's live Preview. Refused in words
+     *  when no valid preview is on screen. */
+    capture(input: { missionId: string; workstreamId?: string }): Promise<IpcResult<Artifact>>;
+    /** Starts recording the lane's live Preview (D-123). One recording at a
+     *  time; it stops itself at the stated bound. */
+    startRecording(input: { missionId: string; workstreamId?: string }): Promise<IpcResult<null>>;
+    /** Stops the recording and preserves it as evidence. */
+    stopRecording(): Promise<IpcResult<Artifact>>;
+    /** Abandons the recording: no artifact, nothing durable, temp removed. */
+    cancelRecording(): Promise<IpcResult<null>>;
+    /** The machine-local recording state, for the preview head's words. */
+    recordingStatus(): Promise<IpcResult<RecordingStatus | null>>;
+    onRecording(listener: (status: RecordingStatus | null) => void): () => void;
+    /** Attaches an artifact beside a check or the tracked pull request. */
+    attach(input: {
+      artifactId: string;
+      target: { kind: "check" | "pull_request"; id: string };
+    }): Promise<IpcResult<null>>;
+    detach(input: {
+      artifactId: string;
+      target: { kind: "check" | "pull_request"; id: string };
     }): Promise<IpcResult<null>>;
   };
   /**

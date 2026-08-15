@@ -1,9 +1,12 @@
 import {
   ApiErrorSchema,
+  ArtifactSchema,
+  ArtifactViewResponseSchema,
   AuthClaimResponseSchema,
   AuthStartResponseSchema,
   AvailableRepositoriesResponseSchema,
   BaseRevisionSchema,
+  BeginArtifactResponseSchema,
   CreateMissionResponseSchema,
   CreatedApproachSchema,
   CreatedInvitationSchema,
@@ -22,8 +25,11 @@ import {
   RetryBranchResponseSchema,
   SubmitDirectionResponseSchema,
   type ApprovalDecision,
+  type Artifact,
+  type ArtifactViewResponse,
   type AuthClaimResponse,
   type AuthStartResponse,
+  type BeginArtifactResponse,
   type AvailableRepository,
   type BaseRevision,
   type CreateMissionInput,
@@ -360,7 +366,7 @@ export class ControlPlaneClient {
 
   async recordDecision(
     missionId: string,
-    input: { workstreamId: string; rationale: string; acceptedRisks?: string }
+    input: { workstreamId: string; rationale: string; acceptedRisks?: string; artifactIds?: string[] }
   ): Promise<string> {
     const body = await this.request(
       "POST",
@@ -369,6 +375,66 @@ export class ControlPlaneClient {
       input
     );
     return body.decisionId;
+  }
+
+  // --- Durable visual evidence (D-122) --------------------------------------
+
+  beginArtifact(missionId: string, input: unknown): Promise<BeginArtifactResponse> {
+    return this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/artifacts`,
+      BeginArtifactResponseSchema,
+      input
+    );
+  }
+
+  async completeArtifact(
+    artifactId: string,
+    outcome: "uploaded" | "failed",
+    failureReason?: string
+  ): Promise<Artifact> {
+    const body = await this.request(
+      "POST",
+      `/artifacts/${encodeURIComponent(artifactId)}/complete`,
+      z.object({ artifact: ArtifactSchema }),
+      { outcome, ...(failureReason ? { failureReason } : {}) }
+    );
+    return body.artifact;
+  }
+
+  /** A fresh temporary viewing grant (D-022). Never cached past its expiry
+   *  and never handed to the renderer — the artifact protocol spends it. */
+  viewArtifact(artifactId: string): Promise<ArtifactViewResponse> {
+    return this.request(
+      "POST",
+      `/artifacts/${encodeURIComponent(artifactId)}/view`,
+      ArtifactViewResponseSchema,
+      {}
+    );
+  }
+
+  async attachArtifact(
+    artifactId: string,
+    target: { kind: "check" | "pull_request"; id: string }
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/artifacts/${encodeURIComponent(artifactId)}/attach`,
+      OkResponseSchema,
+      { target }
+    );
+  }
+
+  async detachArtifact(
+    artifactId: string,
+    target: { kind: "check" | "pull_request"; id: string }
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/artifacts/${encodeURIComponent(artifactId)}/detach`,
+      OkResponseSchema,
+      { target }
+    );
   }
 
   async requestRevision(

@@ -450,6 +450,39 @@ describe("a profiled turn (D-115)", () => {
     expect(result.terminal.kind).toBe("execution.completed");
   });
 
+  it("reports every allow to onToolAllowed — a person's answer and a profile's alike — and never a deny (D-123)", async () => {
+    const personAllows: string[] = [];
+    await runFakeTurn(
+      { fakeApproval: true, onToolAllowed: (tool) => personAllows.push(tool) },
+      (event, _stop, respond) => {
+        if (event.kind === "approval.requested") {
+          respond((event.payload as { requestId: string }).requestId, "approve");
+        }
+      }
+    );
+    expect(personAllows).toEqual(["Write"]);
+
+    const policyAllows: string[] = [];
+    await runFakeTurn({
+      direction: "[fake-ask:mcp__novus__capture_screenshot] show me",
+      permissionProfile: "dont_ask",
+      fakeApproval: true,
+      onToolAllowed: (tool) => policyAllows.push(tool)
+    });
+    expect(policyAllows).toEqual(["mcp__novus__capture_screenshot"]);
+
+    const denies: string[] = [];
+    await runFakeTurn(
+      { fakeApproval: true, onToolAllowed: (tool) => denies.push(tool) },
+      (event, _stop, respond) => {
+        if (event.kind === "approval.requested") {
+          respond((event.payload as { requestId: string }).requestId, "deny");
+        }
+      }
+    );
+    expect(denies).toEqual([]);
+  });
+
   it("plan denies every privileged act with the instruction to propose, and nothing is written", async () => {
     const { events, result } = await runFakeTurn({
       permissionProfile: "plan",

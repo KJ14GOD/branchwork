@@ -4946,3 +4946,138 @@ body.resizing {
   color: var(--text-3);
   margin-top: var(--s-3);
 }
+
+/* --- Durable visual evidence (D-122, D-123) --------------------------------
+   Thumbnails are evidence, not decoration: restrained rows in the panel, and
+   one artifact at reading size on the canvas with its provenance beneath. */
+
+.evidence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.evidence-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+  min-height: 36px;
+}
+
+.evidence-row:hover {
+  background: var(--hover);
+}
+
+.evidence-thumb {
+  width: 48px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--edge);
+  flex: none;
+}
+
+.evidence-thumb.empty {
+  background: var(--surface-2);
+}
+
+.evidence-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.evidence-label {
+  font: var(--type-row);
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.evidence-meta {
+  font: var(--type-meta);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.evidence-foot {
+  margin-top: 16px;
+}
+
+.artifact-word.quiet {
+  color: var(--text-3);
+}
+
+.artifact-word.warn {
+  color: var(--warn);
+}
+
+.artifact-word.danger {
+  color: var(--danger);
+}
+
+.artifact-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.artifact-view-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.artifact-view-title {
+  font: var(--type-section);
+  color: var(--text-1);
+}
+
+.artifact-media {
+  max-width: 100%;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.artifact-claim {
+  margin: 0;
+}
+
+.artifact-provenance {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.artifact-provenance-row {
+  display: flex;
+  gap: 12px;
+  font: var(--type-meta);
+}
+
+.artifact-provenance-label {
+  color: var(--text-3);
+  flex: none;
+  width: 96px;
+}
+
+.artifact-provenance-value {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.preview-capture-warning {
+  font: var(--type-meta);
+  color: var(--text-3);
+  margin: 0;
+  padding: 4px 12px 0;
+}

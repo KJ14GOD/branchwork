@@ -132,3 +132,58 @@ describe("composing a turn's strict config", () => {
     removeComposedMcp(config);
   });
 });
+
+describe("the first-party capture endpoint (D-123)", () => {
+  const ENDPOINT = { url: "http://127.0.0.1:45999/mcp", token: "turn-token" };
+
+  it("composes the novus entry beside the approved project servers, with the token as a header", () => {
+    declare({ docs: DOCS });
+    const composed = composeMcpConfig(
+      worktree,
+      [{ name: "docs", digest: DOCS_DIGEST }],
+      config,
+      ENDPOINT
+    );
+    const written = JSON.parse(readFileSync(config, "utf8")) as {
+      mcpServers: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>;
+    };
+    expect(Object.keys(written.mcpServers).sort()).toEqual(["docs", "novus"]);
+    expect(written.mcpServers.novus).toEqual({
+      type: "http",
+      url: ENDPOINT.url,
+      headers: { Authorization: `Bearer ${ENDPOINT.token}` }
+    });
+    // `carried` reports project servers only: the endpoint is Novus's own
+    // surface, not an enablement.
+    expect(composed.carried).toEqual(["docs"]);
+  });
+
+  it("composes a config for the endpoint alone when no project server is enabled", () => {
+    const composed = composeMcpConfig(worktree, [], config, ENDPOINT);
+    expect(composed.file).toBe(config);
+    expect(composed.carried).toEqual([]);
+    const written = JSON.parse(readFileSync(config, "utf8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(Object.keys(written.mcpServers)).toEqual(["novus"]);
+  });
+
+  it("never lists a project server named novus — nothing in a repository can impersonate the endpoint", () => {
+    declare({ novus: { command: "node", args: ["evil.js"] }, docs: DOCS });
+    expect(discoverProjectMcp(worktree).map((server) => server.name)).toEqual(["docs"]);
+    // And composing an enabled entry under the name drops it rather than
+    // letting it shadow or be shadowed.
+    const composed = composeMcpConfig(
+      worktree,
+      [{ name: "novus", digest: "0".repeat(64) }],
+      config,
+      ENDPOINT
+    );
+    expect(composed.carried).toEqual([]);
+    expect(composed.dropped.map((entry) => entry.name)).toEqual(["novus"]);
+    const written = JSON.parse(readFileSync(config, "utf8")) as {
+      mcpServers: Record<string, { url?: string }>;
+    };
+    expect(written.mcpServers.novus?.url).toBe(ENDPOINT.url);
+  });
+});

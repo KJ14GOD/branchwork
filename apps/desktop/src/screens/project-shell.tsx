@@ -693,6 +693,11 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** The docked evidence panel. Held here because its toggle lives in the top
    *  bar and because the panel outlives the mission selected beside it. */
   const [inspector, setInspector] = useState<InspectorSection | null>(null);
+  /** One artifact taking the active tab's canvas (D-122) — the worker-view
+   *  shape: opened from the Evidence section, closed with Esc or Back. */
+  const [openArtifact, setOpenArtifact] = useState<{ tabId: string; artifactId: string } | null>(
+    null
+  );
   /** The bottom terminal dock, closed by default. Held here for the same
    *  reason: its toggle sits with the other workspace controls. */
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -1889,6 +1894,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               pullTabOpen={pullTabOpen}
               onOpenPull={openPullTab}
               onClosePull={closePullTab}
+              openArtifactId={openArtifact?.tabId === active.id ? openArtifact.artifactId : null}
+              onCloseArtifact={() => setOpenArtifact(null)}
             />
           ) : (missions?.length ?? 0) > 0 ? (
             // Home (D-120): every active mission, grouped by what it needs.
@@ -1986,6 +1993,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             });
             setActiveFileByTab((previous) => ({ ...previous, [active.id]: key }));
           }}
+          onOpenArtifact={(artifactId) => setOpenArtifact({ tabId: active.id, artifactId })}
           onClose={() => setInspector(null)}
           onDetail={handleDetail}
           onRevoke={() => void novus().control.revoke(openDetail.mission.missionId)}

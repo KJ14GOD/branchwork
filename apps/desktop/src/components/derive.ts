@@ -52,6 +52,11 @@ export function laneView(detail: MissionDetailResponse): MissionDetailResponse {
           detail.workstreams[0]?.workstreamId) === lane
     ),
     approvals: detail.approvals.filter((approval) => approval.workstreamId === lane),
+    // Visual evidence is the lane's own (D-122); an artifact without a lane
+    // is mission-level and stays visible everywhere.
+    artifacts: detail.artifacts.filter(
+      (artifact) => artifact.workstreamId === null || artifact.workstreamId === lane
+    ),
     // A process without a lane predates lane-scoping; it belongs to the
     // default lane rather than to every lane at once.
     processes: detail.processes.filter(

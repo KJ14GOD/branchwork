@@ -66,6 +66,10 @@ export function mcpEntryDigest(entry: Omit<McpServer, "digest">): string {
  *  unlistable can ever be enabled (the D-118 rule). */
 function normalizeEntry(name: string, raw: unknown): McpServer | null {
   if (!SkillNameSchema.safeParse(name).success) return null;
+  // `novus` is the first-party capture endpoint's name (D-123). A project
+  // declaration cannot claim it, so it is never listed and never enabled —
+  // nothing in a repository can impersonate Novus's own surface.
+  if (name === "novus") return null;
   if (raw === null || typeof raw !== "object") return null;
   const entry = raw as Record<string, unknown>;
   const stated = typeof entry.type === "string" ? entry.type : entry.command !== undefined ? "stdio" : null;
@@ -150,18 +154,32 @@ function cliEntry(server: McpServer): Record<string, unknown> {
   return { type: server.transport, url: server.url };
 }
 
+/** Novus's own first-party capture endpoint (D-123): a loopback HTTP MCP
+ *  server inside the Electron main process, carried on every turn beside the
+ *  person-enabled project servers. The token is the config's own header. */
+export interface FirstPartyEndpoint {
+  url: string;
+  token: string;
+}
+
 /**
  * One turn's strict MCP config, composed from the pinned enabled list: each
  * entry re-derived from the worktree and admitted only when its canonical
  * digest still equals the approval's. The written file is Novus's, in
- * Novus's staging, containing exactly the approved entries.
+ * Novus's staging, containing exactly the approved entries — plus, when the
+ * runner provides one, the `novus` first-party capture endpoint (D-123),
+ * which is Novus's own surface rather than project code: its one tool is
+ * routed as every MCP tool is, a person's question under every profile short
+ * of `dont_ask`, and its handler additionally demands the routed approval's
+ * own grant. It never appears in `carried`, which reports project servers.
  */
 export function composeMcpConfig(
   worktreePath: string,
   enabled: readonly EnabledMcpServer[],
-  configPath: string
+  configPath: string,
+  firstParty: FirstPartyEndpoint | null = null
 ): ComposedMcp {
-  if (enabled.length === 0) return { file: null, carried: [], dropped: [] };
+  if (enabled.length === 0 && firstParty === null) return { file: null, carried: [], dropped: [] };
   const declared = readDeclarations(worktreePath);
   const carried: McpServer[] = [];
   const dropped: { name: string; reason: string }[] = [];
@@ -186,17 +204,22 @@ export function composeMcpConfig(
     }
     carried.push(server);
   }
-  if (carried.length === 0) return { file: null, carried: [], dropped };
+  if (carried.length === 0 && firstParty === null) return { file: null, carried: [], dropped };
 
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(
-    configPath,
-    JSON.stringify(
-      { mcpServers: Object.fromEntries(carried.map((server) => [server.name, cliEntry(server)])) },
-      null,
-      2
-    )
+  const servers: Record<string, Record<string, unknown>> = Object.fromEntries(
+    carried.map((server) => [server.name, cliEntry(server)])
   );
+  if (firstParty !== null) {
+    // The name is reserved at discovery, so nothing person-enabled can be
+    // standing here under it.
+    servers.novus = {
+      type: "http",
+      url: firstParty.url,
+      headers: { Authorization: `Bearer ${firstParty.token}` }
+    };
+  }
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, JSON.stringify({ mcpServers: servers }, null, 2), { mode: 0o600 });
   return { file: configPath, carried: carried.map((server) => server.name), dropped };
 }
 
