@@ -28,6 +28,7 @@ import {
   type ArtifactUploader
 } from "./artifact-capture";
 import { CAPTURE_TOOL_FULL_NAME, mintCaptureGrant, registerCaptureTurn } from "./artifact-mcp";
+import { startRecording } from "./artifact-recording";
 import { SCREENSHOT_CLAIM } from "./artifact-policy";
 import { redact } from "./secret-policy";
 import { processLogsFor } from "./workspace";
@@ -74,6 +75,9 @@ export interface RunnerAgent {
    * refusal in words.
    */
   captureScreenshot(missionId: string, workstreamId: string): Promise<Artifact>;
+  /** Starts recording the named lane's live preview (D-123). Stop, cancel,
+   *  and status are the recorder module's own, machine-wide verbs. */
+  startRecording(missionId: string, workstreamId: string): Promise<void>;
   /**
    * Kills in-flight turns, records the interruption as an explicit outcome,
    * and flushes the outbox before resolving. Safe to call twice.
@@ -415,6 +419,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     republish: (missionId) => void republishFor(missionId),
     pollNow: () => void poll(),
     captureScreenshot: capturePersonScreenshot,
+    startRecording: startPersonRecording,
     shutdown
   };
 
@@ -474,6 +479,17 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       workstreamId,
       worktreePath: join(worktreeRoot, workstreamId),
       logs: processLogsFor(workstreamId),
+      sanitize: captureSanitizer(workstreamId),
+      uploader: personUploader(missionId, workstreamId)
+    });
+  }
+
+  async function startPersonRecording(missionId: string, workstreamId: string): Promise<void> {
+    await startRecording({
+      missionId,
+      workstreamId,
+      worktreePath: join(worktreeRoot, workstreamId),
+      logs: () => processLogsFor(workstreamId),
       sanitize: captureSanitizer(workstreamId),
       uploader: personUploader(missionId, workstreamId)
     });

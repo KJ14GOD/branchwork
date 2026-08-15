@@ -5081,3 +5081,15 @@ body.resizing {
   margin: 0;
   padding: 4px 12px 0;
 }
+
+.recording-word {
+  font: var(--type-meta);
+  color: var(--warn);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A live recording is the one tab state that must be noticed (D-123). */
+.recording-tab-word {
+  color: var(--warn);
+}

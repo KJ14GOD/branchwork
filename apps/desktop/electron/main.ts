@@ -1,4 +1,5 @@
-import { BrowserWindow, app, ipcMain, protocol, shell } from "electron";
+import { BrowserWindow, app, ipcMain, protocol, session, shell, type WebContents } from "electron";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   APPROACH_INTENT_MAX,
@@ -86,6 +87,13 @@ import {
   reloadEmbeddedPreview,
   setEmbeddedPreviewBounds
 } from "./workspace-preview";
+import {
+  cancelRecording,
+  initializeRecorder,
+  onRecordingStatus,
+  recordingStatus,
+  stopRecording
+} from "./artifact-recording";
 import { SessionStore } from "./session-store";
 
 // The main process logs diagnostics with console.*, and those writes go to
@@ -547,6 +555,33 @@ function registerIpc(): void {
       if (!agent) throw new ApiError("capture_refused", "This machine's runner is not running.", 409);
       return agent.captureScreenshot(parsed.data.missionId, target.workstreamId);
     });
+  });
+
+  ipcMain.handle("novus:artifacts:start-recording", async (_event, raw: unknown) => {
+    const parsed = MissionTargetSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed recording request." };
+    return call(async () => {
+      const target = await targetFor(parsed.data.missionId, parsed.data.workstreamId);
+      const agent = runner;
+      if (!agent) throw new ApiError("recording_refused", "This machine's runner is not running.", 409);
+      await agent.startRecording(parsed.data.missionId, target.workstreamId);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:artifacts:stop-recording", async () => {
+    return call(() => stopRecording());
+  });
+
+  ipcMain.handle("novus:artifacts:cancel-recording", async () => {
+    return call(async () => {
+      await cancelRecording();
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:artifacts:recording-status", async () => {
+    return call(async () => recordingStatus());
   });
 
   ipcMain.handle("novus:artifacts:attach", async (_event, raw: unknown) => {
@@ -1519,8 +1554,83 @@ async function serveArtifactBytes(request: Request): Promise<Response> {
   }
 }
 
+/** The capture session's name: the hidden recorder page lives in it, and its
+ *  display-media ask is answered with the preview contents alone (D-123). */
+const CAPTURE_PARTITION = "capture";
+
 app.whenReady().then(async () => {
   protocol.handle("novus-artifact", serveArtifactBytes);
+  // The recorder (D-123): a hidden Novus-owned page that encodes the preview's
+  // frames. Everything privileged stays here — the page can name no source,
+  // and its messages are accepted only from its own capture session.
+  initializeRecorder({
+    userDataPath: app.getPath("userData"),
+    preloadPath: join(__dirname, "recorder-preload.js"),
+    createRecorderWindow: async (preloadPath, partition) => {
+      const recorder = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          preload: preloadPath,
+          partition,
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          backgroundThrottling: false
+        }
+      });
+      // A file: page, because `about:blank` is not a secure context and
+      // `navigator.mediaDevices` does not exist there. The page is Novus's
+      // own and empty; the preload is its whole behavior.
+      const recorderPage = join(app.getPath("userData"), "recorder.html");
+      writeFileSync(recorderPage, "<!doctype html><title>Novus recorder</title>", { mode: 0o600 });
+      await recorder.loadFile(recorderPage);
+      return {
+        // `executeJavaScript(..., true)` carries the user gesture Chromium
+        // requires for getDisplayMedia; the exposed functions are the
+        // preload's own and take nothing but a frame rate.
+        start: (frameRate) => {
+          if (!recorder.isDestroyed()) {
+            void recorder.webContents
+              .executeJavaScript(`__novusRecorder.start(${Math.floor(frameRate)})`, true)
+              .catch(() => undefined);
+          }
+        },
+        stop: () => {
+          if (!recorder.isDestroyed()) {
+            void recorder.webContents
+              .executeJavaScript("__novusRecorder.stop()", true)
+              .catch(() => undefined);
+          }
+        },
+        destroy: () => {
+          if (!recorder.isDestroyed()) recorder.destroy();
+        }
+      };
+    },
+    setDisplayMediaSource: (partition, contents) => {
+      const captureSession = session.fromPartition(partition);
+      if (contents === null) {
+        captureSession.setDisplayMediaRequestHandler(null);
+        return;
+      }
+      captureSession.setDisplayMediaRequestHandler((_request, callback) => {
+        // The preview view's own frames, and nothing else this page could
+        // ever name: no windows, no screens, no picker.
+        callback({ video: (contents as WebContents).mainFrame });
+      });
+    },
+    onRecorderMessage: (channel, listener) => {
+      const wrapped = (event: Electron.IpcMainEvent, payload: unknown) => {
+        // Only the recorder's own session may speak on these channels — the
+        // app window's renderer forging a chunk must land nowhere.
+        if (event.sender.session !== session.fromPartition(CAPTURE_PARTITION)) return;
+        listener(payload);
+      };
+      ipcMain.on(channel, wrapped);
+      return () => ipcMain.removeListener(channel, wrapped);
+    }
+  });
+  onRecordingStatus((status) => window?.webContents.send("novus:recording-status", status));
   registerIpc();
   await restoreSession();
   createWindow();

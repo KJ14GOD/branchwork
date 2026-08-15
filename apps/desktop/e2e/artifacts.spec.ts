@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { Artifact, NovusBridge } from "@novus/contracts";
@@ -89,6 +89,15 @@ async function signIn(target: Page): Promise<void> {
 
 const shot = (target: Page, name: string) =>
   target.screenshot({ path: join(evidenceDir, name) }).catch(() => undefined);
+
+/** The recorder's temp area on this machine: empty after every outcome. */
+const tempFiles = (): number => {
+  try {
+    return readdirSync(join(userDataDir, "captures")).length;
+  } catch {
+    return 0;
+  }
+};
 
 async function artifactsOnWire(): Promise<Artifact[]> {
   return page.evaluate(async (id) => {
@@ -400,12 +409,122 @@ describe("durable visual evidence (D-122, D-123)", () => {
   );
 
   it(
+    "a person records the preview, the state stays visible across canvases, and the recording plays back",
+    async () => {
+      await page.getByTestId("preview-tab").locator("button").first().click();
+      await page.getByTestId("preview-surface").waitFor({ timeout: 20_000 });
+      await page.getByTestId("recording-start").click();
+      await page.getByTestId("recording-word").waitFor({ timeout: 20_000 });
+      expect(await page.getByTestId("recording-word").textContent()).toContain("Recording ·");
+
+      // The recording state survives leaving the canvas: the preview tab
+      // carries the word while the person reads the conversation.
+      await page.getByTestId("room-tab").click();
+      await page
+        .getByTestId("preview-tab")
+        .filter({ hasText: "recording" })
+        .waitFor({ timeout: 10_000 });
+      await shot(page, "133-recording-word-on-tab.png");
+      await page.getByTestId("preview-tab").locator("button").first().click();
+      await page.getByTestId("preview-surface").waitFor({ timeout: 20_000 });
+
+      // A few seconds of real frames, then Stop preserves it.
+      await new Promise((settle) => setTimeout(settle, 3_000));
+      await page.getByTestId("recording-stop").click();
+      await page.getByTestId("preview-captured").waitFor({ timeout: 60_000 });
+      expect(await page.getByTestId("preview-captured").textContent()).toContain(
+        "Recording saved"
+      );
+      expect(tempFiles()).toBe(0);
+
+      const all = await artifactsOnWire();
+      const video = all.find((artifact) => artifact.kind === "recording");
+      expect(video).toBeDefined();
+      expect(video!.state).toBe("available");
+      expect(video!.mimeType).toBe("video/webm");
+      expect(video!.durationMs).toBeGreaterThan(2_000);
+      expect(video!.hasThumbnail).toBe(true);
+      expect(video!.initiator).toBe("person");
+
+      // Playback inside Novus: the artifact view's own player, its bytes
+      // through the protocol, its poster the captured frame.
+      await page.getByTestId("inspector-tab-evidence").click();
+      const row = page.locator(`[data-artifact="${video!.artifactId}"]`);
+      await row.waitFor({ timeout: 20_000 });
+      await row.click();
+      const player = page.getByTestId("artifact-video");
+      await player.waitFor({ timeout: 20_000 });
+      await expect
+        .poll(
+          async () =>
+            player.evaluate((element) => (element as HTMLVideoElement).videoWidth > 0),
+          { timeout: 30_000 }
+        )
+        .toBe(true);
+      expect(await page.getByTestId("artifact-claim").textContent()).toContain(
+        "does not prove the application is correct"
+      );
+      await shot(page, "134-recording-playback.png");
+      await page.getByTestId("artifact-back").click();
+    },
+    240_000
+  );
+
+  it(
+    "cancelling a recording leaves nothing anywhere",
+    async () => {
+      const before = (await artifactsOnWire()).length;
+      await page.getByTestId("preview-tab").locator("button").first().click();
+      await page.getByTestId("preview-surface").waitFor({ timeout: 20_000 });
+      await page.getByTestId("recording-start").click();
+      await page.getByTestId("recording-word").waitFor({ timeout: 20_000 });
+      await new Promise((settle) => setTimeout(settle, 1_500));
+      await page.getByTestId("recording-cancel").click();
+      await page
+        .getByTestId("recording-word")
+        .waitFor({ state: "detached", timeout: 30_000 });
+      // No artifact, no pending row, no temp file: cancelled means gone.
+      expect((await artifactsOnWire()).length).toBe(before);
+      expect(tempFiles()).toBe(0);
+    },
+    120_000
+  );
+
+  it(
+    "a recording the app dies under ends honestly as interrupted, never as an ordinary success",
+    async () => {
+      await page.getByTestId("recording-start").click();
+      await page.getByTestId("recording-word").waitFor({ timeout: 20_000 });
+      await new Promise((settle) => setTimeout(settle, 2_000));
+      // The app stops mid-recording — from Run, the way a person stops it.
+      await page.getByTestId("stop-run").click();
+      // The recording settles by itself: what was captured is preserved and
+      // marked, not published as an ordinary success.
+      await expect
+        .poll(
+          async () =>
+            (await artifactsOnWire()).filter(
+              (artifact) => artifact.kind === "recording" && artifact.state === "interrupted"
+            ).length,
+          { timeout: 60_000 }
+        )
+        .toBe(1);
+      const interrupted = (await artifactsOnWire()).find(
+        (artifact) => artifact.state === "interrupted"
+      );
+      expect(interrupted!.interruptionReason).toMatch(/stopped while recording|went down/i);
+      expect(tempFiles()).toBe(0);
+    },
+    120_000
+  );
+
+  it(
     "a capture of a stopped app is refused in words — a stale preview is not evidence",
     async () => {
-      // Back on the preview canvas, stop the app from Run — the honest way.
-      await page.getByTestId("preview-tab").click();
+      // The app was stopped under the interrupted recording above; the
+      // preview says so plainly.
+      await page.getByTestId("preview-tab").locator("button").first().click();
       await page.getByTestId("preview-surface").waitFor({ timeout: 20_000 });
-      await page.getByTestId("stop-run").click();
       await expect
         .poll(async () => page.getByTestId("preview-word").textContent(), { timeout: 30_000 })
         .toBe("stopped");
@@ -417,11 +536,20 @@ describe("durable visual evidence (D-122, D-123)", () => {
       if (!refused.ok) {
         expect(refused.message).toMatch(/stale preview is not evidence|has ended|stopped/i);
       }
+      const refusedRecording = await page.evaluate(async (id) => {
+        return window.novus.artifacts.startRecording({ missionId: id });
+      }, missionId);
+      expect(refusedRecording.ok).toBe(false);
 
-      // Nothing pending, nothing failed appeared as evidence: still two.
+      // Nothing pending and nothing failed ever appeared as evidence: every
+      // artifact is completed — available, or honestly interrupted.
       const all = await artifactsOnWire();
-      expect(all).toHaveLength(2);
-      expect(all.every((artifact) => artifact.state === "available")).toBe(true);
+      expect(all).toHaveLength(4);
+      expect(
+        all.every(
+          (artifact) => artifact.state === "available" || artifact.state === "interrupted"
+        )
+      ).toBe(true);
     },
     120_000
   );

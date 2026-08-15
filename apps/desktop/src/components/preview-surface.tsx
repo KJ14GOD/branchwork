@@ -3,7 +3,8 @@ import {
   PIXELS_WARNING,
   type MissionDetailResponse,
   type PreviewBounds,
-  type PreviewStatus
+  type PreviewStatus,
+  type RecordingStatus
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { shortSha } from "../format";
@@ -204,6 +205,56 @@ export function PreviewSurface({
     return () => clearTimeout(timer);
   }, [captured]);
 
+  // Recording (D-123): the machine-local state, subscribed live, with the
+  // elapsed time ticking beside the word while one runs.
+  const [recording, setRecording] = useState<RecordingStatus | null>(null);
+  const [elapsedLabel, setElapsedLabel] = useState("0:00");
+  useEffect(() => {
+    void novus()
+      .artifacts.recordingStatus()
+      .then((result) => {
+        if (result.ok) setRecording(result.value);
+      });
+    return novus().artifacts.onRecording((status) => setRecording(status));
+  }, []);
+  useEffect(() => {
+    if (recording === null) return;
+    const tick = () => {
+      const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(recording.startedAt)) / 1000));
+      setElapsedLabel(`${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`);
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [recording]);
+
+  const startRecording = async () => {
+    setNote(null);
+    const result = await novus().artifacts.startRecording({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {})
+    });
+    if (!result.ok) setNote(result.message);
+  };
+
+  const stopRecording = async () => {
+    const result = await novus().artifacts.stopRecording();
+    if (!result.ok) {
+      setNote(result.message);
+      return;
+    }
+    setCaptured(
+      result.value.state === "interrupted"
+        ? "Recording saved, marked interrupted — in Evidence."
+        : "Recording saved — in Evidence."
+    );
+  };
+
+  const cancelRecording = async () => {
+    const result = await novus().artifacts.cancelRecording();
+    if (!result.ok) setNote(result.message);
+  };
+
   const reopenTarget = running?.previewUrl ?? null;
 
   return (
@@ -222,18 +273,55 @@ export function PreviewSurface({
             {captured}
           </span>
         )}
-        {detail && (
-          <GatedAction
-            capability="artifact.capture"
-            capabilities={detail.capabilities}
-            denialReason="Capturing evidence needs the artifact.capture capability."
-            holderLogin={detail.control.holderLogin}
-            onClick={() => void capture()}
-            variant="text"
-            testid="preview-capture"
-          >
-            Capture screenshot
-          </GatedAction>
+        {recording !== null ? (
+          <>
+            <span className="recording-word" data-testid="recording-word">
+              {recording.state === "finalizing" ? "Saving recording…" : `Recording · ${elapsedLabel}`}
+            </span>
+            <button
+              className="btn btn-secondary"
+              onClick={() => void stopRecording()}
+              disabled={recording.state === "finalizing"}
+              data-testid="recording-stop"
+            >
+              Stop recording
+            </button>
+            <button
+              className="btn btn-text"
+              onClick={() => void cancelRecording()}
+              disabled={recording.state === "finalizing"}
+              data-testid="recording-cancel"
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          detail && (
+            <>
+              <GatedAction
+                capability="artifact.capture"
+                capabilities={detail.capabilities}
+                denialReason="Capturing evidence needs the artifact.capture capability."
+                holderLogin={detail.control.holderLogin}
+                onClick={() => void capture()}
+                variant="text"
+                testid="preview-capture"
+              >
+                Capture screenshot
+              </GatedAction>
+              <GatedAction
+                capability="artifact.capture"
+                capabilities={detail.capabilities}
+                denialReason="Capturing evidence needs the artifact.capture capability."
+                holderLogin={detail.control.holderLogin}
+                onClick={() => void startRecording()}
+                variant="text"
+                testid="recording-start"
+              >
+                Start recording
+              </GatedAction>
+            </>
+          )
         )}
         <button className="btn btn-text" onClick={reload} data-testid="preview-reload">
           Reload

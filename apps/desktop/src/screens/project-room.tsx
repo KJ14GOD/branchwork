@@ -7,6 +7,7 @@ import type {
   Mission,
   MissionDetailResponse,
   ModelId,
+  RecordingStatus,
   Session,
   Workstream
 } from "@novus/contracts";
@@ -559,6 +560,20 @@ export function ProjectRoom({
     const worker = block.workers.find((candidate) => candidate.id === openWorker.workerId);
     return worker ? { worker, settled: block.settled } : null;
   }, [openWorker, feed]);
+
+  /** A live recording's machine-local state, for the preview tab's word
+   *  (D-123): the one tab state that must survive a canvas switch. */
+  const [recordingState, setRecordingState] = useState<RecordingStatus | null>(null);
+  useEffect(() => {
+    void novus()
+      .artifacts.recordingStatus()
+      .then((result) => {
+        if (result.ok) setRecordingState(result.value);
+      });
+    return novus().artifacts.onRecording((status) => setRecordingState(status));
+  }, []);
+  const recordingLive =
+    recordingState !== null && recordingState.missionId === selectedMissionId;
 
   /** The opened artifact's row, from the same detail the room already holds;
    *  a stale id (swept away, other lane) simply shows the conversation. */
@@ -1169,6 +1184,10 @@ export function ProjectRoom({
                 title={`Preview — ${previewTab.url}`}
               >
                 <span className="file-tab-name">Preview</span>
+                {/* A live recording stays visible whatever canvas is up
+                    (D-123): the tab carries the word, the session-tab way,
+                    in the warn tone because it asks to be noticed. */}
+                {recordingLive && <span className="session-state recording-tab-word"> · recording</span>}
               </button>
               <button
                 className="file-tab-close"
