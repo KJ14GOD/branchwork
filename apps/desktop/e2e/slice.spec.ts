@@ -56,9 +56,21 @@ async function openProject(target: Page, name: string): Promise<void> {
     .locator(".side-parent")
     .filter({ has: row })
     .getByTestId("project-twisty");
-  if ((await twisty.getAttribute("aria-expanded")) !== "true") await row.click();
+  // Converge rather than one-shot: the restore path discloses open-tab
+  // projects asynchronously, so a single read-then-click can race it and
+  // toggle *closed* the very disclosure it wanted — the D-120 helper
+  // family's race, from the other side. Clicking until the per-project fact
+  // reads open is idempotent whichever side of the race this lands on.
   await expect
-    .poll(() => twisty.getAttribute("aria-expanded"), { timeout: 30_000 })
+    .poll(
+      async () => {
+        if ((await twisty.getAttribute("aria-expanded")) === "true") return "true";
+        await row.click();
+        await new Promise((settle) => setTimeout(settle, 400));
+        return twisty.getAttribute("aria-expanded");
+      },
+      { timeout: 30_000 }
+    )
     .toBe("true");
 }
 

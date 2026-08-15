@@ -160,7 +160,7 @@ beforeAll(async () => {
     [
       'import { createServer } from "node:http";',
       "const port = Number(process.env.NOVUS_PORT ?? 4600);",
-      "const page = `<!doctype html><html><body style=\"background:#233\">",
+      "const page = `<!doctype html><html><body style=\"background:darkslategray\">",
       '<h1 id="title">Artifact fixture</h1>',
       '<div id="out">steady</div>',
       "</body></html>`;",
@@ -699,6 +699,24 @@ describe("durable visual evidence (D-122, D-123)", () => {
         )
         .toBe(true);
       await shot(page, "136-receipt-with-frozen-evidence.png");
+
+      // The receipt at the two narrower widths (DESIGN.md#responsive): things
+      // reflow, nothing that answers the room's questions vanishes.
+      await app.evaluate(async ({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.setContentSize(1000, 800);
+      });
+      await new Promise((settle) => setTimeout(settle, 600));
+      await receiptRows.first().waitFor({ timeout: 10_000 });
+      await shot(page, "138-receipt-evidence-medium.png");
+      await app.evaluate(async ({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.setContentSize(760, 700);
+      });
+      await new Promise((settle) => setTimeout(settle, 600));
+      await receiptRows.first().waitFor({ timeout: 10_000 });
+      await shot(page, "139-receipt-evidence-narrow.png");
+      await app.evaluate(async ({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.setContentSize(1440, 900);
+      });
 
       // A second authenticated identity with no mission access is told
       // nothing exists — for the mission, the artifact, and its bytes alike.

@@ -4976,6 +4976,7 @@ body.resizing {
 }
 
 .evidence-thumb {
+  display: block;
   width: 48px;
   height: 32px;
   object-fit: cover;

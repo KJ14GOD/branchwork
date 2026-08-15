@@ -503,6 +503,7 @@ describe("shipping a decision through GitHub (D-099)", () => {
       expect(await page.getByTestId("pull-visuals").innerText()).toContain(
         "GitHub receives no copy"
       );
+      await pullEvidence.scrollIntoViewIfNeeded();
       await shot("137-pull-request-evidence.png");
       await page.getByTestId("pull-tab-comments").click();
 
