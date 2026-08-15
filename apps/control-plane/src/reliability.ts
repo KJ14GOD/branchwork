@@ -1,4 +1,5 @@
 import { settlePendingApprovals } from "./approvals.ts";
+import { sweepStalePendingArtifacts } from "./artifacts.ts";
 import type { Db } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
@@ -77,6 +78,8 @@ export interface SweepResult {
   /** Stranded queues re-driven (D-112): lanes whose completed-turn dispatch
    *  was lost, asked again. */
   queuesDriven: number;
+  /** Pending artifacts whose upload never completed, failed by name (D-122). */
+  artifactsFailed: number;
 }
 
 /**
@@ -369,7 +372,11 @@ export async function sweepOnce(db: Db, now = new Date()): Promise<SweepResult> 
     interrupted: await sweepRunners(db, now),
     expired: await sweepLeases(db, now),
     offersExpired: await sweepOffers(db, now),
-    queuesDriven: await sweepQueues(db)
+    queuesDriven: await sweepQueues(db),
+    // A pending artifact whose upload never completed is failed with the
+    // reason stated (D-122): almost-evidence must not linger forever, and
+    // must never quietly become evidence later.
+    artifactsFailed: await sweepStalePendingArtifacts(db)
   };
 }
 

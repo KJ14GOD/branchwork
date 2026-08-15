@@ -556,7 +556,11 @@ export const ReceiptSnapshotSchema = z.object({
           acceptedRisks: z.string().max(4000).nullable(),
           decidedByLogin: z.string().min(1),
           decidedAt: z.string().datetime(),
-          superseded: z.boolean()
+          superseded: z.boolean(),
+          /** The visual evidence the decider chose (D-122), by exact id, so
+           *  reopening the receipt reconstructs the same set. Defaulted for
+           *  snapshots stored before artifacts existed. */
+          artifactIds: z.array(z.string()).max(20).default([])
         })
         .strict()
     )
@@ -583,6 +587,29 @@ export const ReceiptSnapshotSchema = z.object({
         .strict()
     )
     .max(100),
+  /** The mission's visual evidence at close (D-122): the frozen references —
+   *  ids, digests, provenance — never the blobs and never a signed URL.
+   *  Reopening the receipt reconstructs this exact set, and viewing any of it
+   *  mints a fresh temporary grant then. Defaulted for snapshots from before
+   *  artifacts existed. */
+  artifacts: z
+    .array(
+      z
+        .object({
+          artifactId: z.string().min(1),
+          kind: z.string().max(20),
+          label: z.string().max(120),
+          state: z.string().max(20),
+          sha256: z.string().max(64),
+          capturedAt: z.string().datetime(),
+          revisionSha: z.string().nullable(),
+          /** Where it was evidence at close, in words. */
+          attachedTo: z.array(z.string().max(200)).max(20)
+        })
+        .strict()
+    )
+    .max(50)
+    .default([]),
   /** What remains uncertain, in words — the section a receipt must never
    *  omit (PRODUCT.md#domain-model, Receipt). */
   remainingUncertain: z.array(z.string().max(300)).max(50),
@@ -732,6 +759,17 @@ export const CapabilitySchema = z.enum([
    *  always named, implemented as exactly that: an explicit, logged act that
    *  is refused while the ordinary Stop still has a claim to work. */
   "force_interrupt",
+  /** Capture visual evidence — a screenshot or recording — from the lane's
+   *  live Preview (D-122). An act on the lane's workspace, tiered exactly as
+   *  `workspace.command` is: Mission Admin, Operator, and the lease holder.
+   *  An agent-requested capture additionally rides the approval machinery —
+   *  it is never a hidden capability (D-123). */
+  "artifact.capture",
+  /** Attach or detach an artifact as evidence beside a check or the tracked
+   *  pull request (D-122). Changing what the record presents as evidence is
+   *  the `review.approve` kind of act: Mission Admin and Operator, never the
+   *  baton. The artifact itself stays immutable either way. */
+  "artifact.attach",
   "control.request",
   "control.offer",
   "control.accept",
@@ -1008,6 +1046,10 @@ export const DecisionSchema = z.object({
    *  than recomputed later. */
   unresolvedCheckIds: z.array(z.string()).max(200),
   unresolvedSummary: z.array(z.string().max(200)).max(200),
+  /** The visual artifacts the decider chose as the evidence that mattered
+   *  (D-122), frozen with the rationale — preserved in the decision and the
+   *  terminal receipt snapshot, never editable afterwards. */
+  artifactIds: z.array(z.string().startsWith("art_")).max(20).default([]),
   decidedAt: z.string().datetime(),
   /** When a later decision replaced this one. Reversals stay in the record. */
   supersededAt: z.string().datetime().nullable()
@@ -1017,7 +1059,11 @@ export type Decision = z.infer<typeof DecisionSchema>;
 export const RecordDecisionInputSchema = z.object({
   workstreamId: z.string().startsWith("wst_"),
   rationale: z.string().trim().min(1, "Say why you chose this.").max(MAX_RATIONALE),
-  acceptedRisks: z.string().trim().max(MAX_ACCEPTED_RISKS).optional()
+  acceptedRisks: z.string().trim().max(MAX_ACCEPTED_RISKS).optional(),
+  /** The visual evidence this decides on, chosen by the recorder (D-122).
+   *  Only artifacts that are actually evidence — available or interrupted —
+   *  of this mission may be named; anything else is refused in words. */
+  artifactIds: z.array(z.string().startsWith("art_")).max(20).default([])
 });
 export type RecordDecisionInput = z.infer<typeof RecordDecisionInputSchema>;
 
@@ -1219,6 +1265,10 @@ export const PullRequestSchema = z.object({
   /** The aggregated gate (D-100), refreshed by the same poll that carries
    *  everything else the host says. Null until the first refresh. */
   readiness: MergeReadinessSchema.nullable().default(null),
+  /** Visual artifacts attached to this request (D-122). Shown on the Novus
+   *  PR page; the exact ids are preserved on the tracked record, and nothing
+   *  becomes publicly reachable because a pull request exists. */
+  artifactIds: z.array(z.string().startsWith("art_")).max(20).default([]),
   createdBy: z.string().startsWith("usr_"),
   createdByLogin: z.string().min(1),
   /** Who merged it on the host, as the host reports them. */
@@ -1387,6 +1437,9 @@ export const VerificationCheckSchema = z.object({
   /** True once the workstream moved past `checkpointSha`: still history, no
    *  longer evidence for what is there now. Derived server-side, never stored. */
   stale: z.boolean(),
+  /** Visual artifacts attached beside this check as supporting evidence
+   *  (D-122). Supporting only: an attachment never changes the outcome. */
+  artifactIds: z.array(z.string().startsWith("art_")).max(20).default([]),
   observedAt: z.string().datetime()
 });
 export type VerificationCheck = z.infer<typeof VerificationCheckSchema>;
@@ -1440,6 +1493,224 @@ export const WorkspaceProcessSchema = z.object({
   endedAt: z.string().datetime().nullable()
 });
 export type WorkspaceProcess = z.infer<typeof WorkspaceProcessSchema>;
+
+// --- Artifacts: durable visual evidence (D-022, D-122) -----------------------
+// A screenshot or recording captured from the approved Preview surface,
+// preserved with its provenance. The durable database stores metadata and
+// relationships; the bytes live in the artifact store behind D-022's
+// S3-compatible interface, referenced by object keys that never cross this
+// wire — a client is handed a short-lived viewing URL on request and nothing
+// durable. An artifact is immutable once available: attaching it to a check,
+// decision, receipt, or pull request changes the relationship, not the blob.
+
+export const ArtifactKindSchema = z.enum(["screenshot", "recording"]);
+export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
+
+/**
+ * The artifact's lifecycle. `pending` and `uploading` are never evidence;
+ * `failed` never pretends otherwise; `interrupted` is a recording whose bytes
+ * are real but whose ending was not its own Stop — playable, and marked.
+ */
+export const ArtifactStateSchema = z.enum([
+  "pending",
+  "uploading",
+  "available",
+  "interrupted",
+  "failed"
+]);
+export type ArtifactState = z.infer<typeof ArtifactStateSchema>;
+
+/** Who caused the capture: a person's own click, or a coding agent's request
+ *  routed through the approval machinery (D-123). Never ambiguous. */
+export const ArtifactInitiatorSchema = z.enum(["person", "agent"]);
+export type ArtifactInitiator = z.infer<typeof ArtifactInitiatorSchema>;
+
+/** The only capture surface this build has: the validated loopback Preview of
+ *  the lane's own running application (D-098). An enum so a future source is
+ *  a deliberate widening, never a free string. */
+export const ArtifactCaptureSourceSchema = z.enum(["preview"]);
+
+/** The allowed blob types, closed. PNG is what `capturePage` produces; WebM
+ *  is what Chromium's own recorder produces and replays (D-123). */
+export const ARTIFACT_MIME_TYPES = ["image/png", "video/webm"] as const;
+export const ArtifactMimeSchema = z.enum(ARTIFACT_MIME_TYPES);
+
+export const MAX_SCREENSHOT_BYTES = 20_000_000;
+export const MAX_RECORDING_BYTES = 200_000_000;
+export const MAX_THUMBNAIL_BYTES = 1_000_000;
+/** A recording stops itself at this bound, stated in the interface (D-123). */
+export const MAX_RECORDING_MS = 5 * 60_000;
+
+export const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, "must be a lowercase hex SHA-256");
+
+/** Where an artifact is being used as evidence. Decisions carry their chosen
+ *  artifact ids on the decision row itself; checks and pull requests carry
+ *  attachment rows. Both are served here so one list answers "where is this
+ *  evidence used?". */
+export const ArtifactAttachmentRefSchema = z.object({
+  kind: z.enum(["check", "decision", "pull_request"]),
+  id: z.string().min(1),
+  /** The target said in words — a check's name, a PR's number — resolved
+   *  server-side for display. */
+  label: z.string().max(200)
+});
+export type ArtifactAttachmentRef = z.infer<typeof ArtifactAttachmentRefSchema>;
+
+export const ArtifactSchema = z.object({
+  artifactId: z.string().startsWith("art_"),
+  missionId: z.string().startsWith("msn_"),
+  /** The lane whose preview was captured. Null only if a future kind has no
+   *  lane; every preview capture has one. */
+  workstreamId: z.string().startsWith("wst_").nullable(),
+  /** The conversation this capture is honestly attributable to. A person's
+   *  own click belongs to no chat and stays null — never assigned to the most
+   *  recent one. */
+  sessionId: z.string().startsWith("csn_").nullable(),
+  /** The execution that requested it, for an agent-requested capture. Null
+   *  for a person's own capture. */
+  executionId: z.string().nullable(),
+  kind: ArtifactKindSchema,
+  mimeType: ArtifactMimeSchema,
+  byteSize: z.number().int().positive(),
+  /** The blob's content digest, promised at begin and verified by the store
+   *  before the artifact may read as evidence. The blob is immutable; this is
+   *  how a reader knows it has not changed since capture. */
+  sha256: Sha256Schema,
+  state: ArtifactStateSchema,
+  failureReason: z.string().max(300).nullable(),
+  /** Why a recording is marked interrupted, when it is — the process exited,
+   *  the preview went down, the app quit. */
+  interruptionReason: z.string().max(300).nullable(),
+  /** A concise generated name — "Screenshot · web" — never a filename. */
+  label: z.string().min(1).max(120),
+  capturedAt: z.string().datetime(),
+  createdAt: z.string().datetime(),
+  /** The person who captured it, for `initiator: person`. Null for an
+   *  agent-requested capture, whose actor is the execution. */
+  createdByLogin: z.string().nullable(),
+  initiator: ArtifactInitiatorSchema,
+  captureSource: ArtifactCaptureSourceSchema,
+  /** The live run process whose page was captured, and its declared name. */
+  processId: z.string().startsWith("prc_").nullable(),
+  processName: z.string().max(120).nullable(),
+  /** The validated loopback origin the preview was showing. Never carries
+   *  credentials — the preview bridge refuses them before a view exists. */
+  origin: z.string().max(300).nullable(),
+  /** The process's declared readiness at capture (D-045): `ready` is the
+   *  declared signal's answer, everything else is stated as itself. */
+  readiness: ProcessReadinessSchema.nullable(),
+  /** The worktree's HEAD at the moment of capture — a fact read from git on
+   *  the machine that held both the pixels and the tree. Null when the tree
+   *  could not be read. */
+  revisionSha: z.string().nullable(),
+  /** True when uncommitted changes were present at capture: the revision
+   *  alone would then overstate what the running app was built from. */
+  revisionDirty: z.boolean(),
+  /** The recorded checkpoint matching `revisionSha`, when one exists. */
+  checkpointId: z.string().startsWith("ckp_").nullable(),
+  /** Environment attribution, composed server-side from the enrolled runner —
+   *  the same claim discipline as a check's (D-037). */
+  environment: z.string().min(1),
+  /** Playback length for recordings; null for screenshots and for a
+   *  recording whose duration was never learned. */
+  durationMs: z.number().int().nonnegative().nullable(),
+  hasThumbnail: z.boolean(),
+  /** What the redaction set could and could not do here: textual metadata
+   *  passed the known-secret redaction; the pixels themselves were never
+   *  scanned, and nothing claims they were (ARCHITECTURE.md#secret-placement). */
+  redaction: z.literal("metadata_only"),
+  /** Everywhere this artifact is currently evidence, resolved server-side. */
+  attachments: z.array(ArtifactAttachmentRefSchema).max(50).default([])
+});
+export type Artifact = z.infer<typeof ArtifactSchema>;
+
+/** The provenance a capture binds at the moment it happens. Claims from the
+ *  machine that performed the capture, validated and bounded server-side. */
+export const ArtifactProvenanceSchema = z.object({
+  sessionId: z.string().startsWith("csn_").optional(),
+  processId: z.string().startsWith("prc_"),
+  processName: z.string().min(1).max(120),
+  origin: z.string().min(1).max(300),
+  readiness: ProcessReadinessSchema,
+  revisionSha: z.string().regex(/^[0-9a-f]{7,64}$/).nullable(),
+  revisionDirty: z.boolean(),
+  durationMs: z.number().int().nonnegative().max(24 * 60 * 60_000).optional()
+});
+export type ArtifactProvenance = z.infer<typeof ArtifactProvenanceSchema>;
+
+export const BeginArtifactInputSchema = z.object({
+  workstreamId: z.string().startsWith("wst_").optional(),
+  kind: ArtifactKindSchema,
+  mimeType: ArtifactMimeSchema,
+  byteSize: z.number().int().positive(),
+  sha256: Sha256Schema,
+  /** The thumbnail or poster frame, uploaded beside the blob and verified the
+   *  same way. Absent when none could be produced. */
+  thumbnail: z
+    .object({ byteSize: z.number().int().positive().max(MAX_THUMBNAIL_BYTES), sha256: Sha256Schema })
+    .optional(),
+  capturedAt: z.string().datetime(),
+  /** For a recording that ended without its own Stop: created already marked. */
+  interrupted: z.boolean().default(false),
+  interruptionReason: z.string().max(300).optional(),
+  provenance: ArtifactProvenanceSchema
+});
+export type BeginArtifactInput = z.infer<typeof BeginArtifactInputSchema>;
+
+/** The runner's begin (agent-requested capture): the same claim plus the
+ *  execution that asked, whose approval routing authorized the act (D-123). */
+export const BeginRunnerArtifactInputSchema = BeginArtifactInputSchema.extend({
+  executionId: z.string().startsWith("exe_"),
+  /** The routed approval that authorized this capture, when one was issued as
+   *  a card; a profile-decided answer has no card and sends none. */
+  approvalId: z.string().startsWith("apr_").optional()
+}).omit({ workstreamId: true });
+export type BeginRunnerArtifactInput = z.infer<typeof BeginRunnerArtifactInputSchema>;
+
+/** One short-lived signed upload. Never stored, never logged, never an event
+ *  (D-022): it exists to carry these bytes and then expire. */
+export const ArtifactUploadGrantSchema = z.object({
+  url: z.string().min(1),
+  method: z.literal("PUT"),
+  headers: z.record(z.string()),
+  expiresAt: z.string().datetime()
+});
+export type ArtifactUploadGrant = z.infer<typeof ArtifactUploadGrantSchema>;
+
+export const BeginArtifactResponseSchema = z.object({
+  artifact: ArtifactSchema,
+  upload: ArtifactUploadGrantSchema,
+  thumbnailUpload: ArtifactUploadGrantSchema.nullable()
+});
+export type BeginArtifactResponse = z.infer<typeof BeginArtifactResponseSchema>;
+
+export const CompleteArtifactInputSchema = z.object({
+  outcome: z.enum(["uploaded", "failed"]),
+  failureReason: z.string().max(300).optional()
+});
+export type CompleteArtifactInput = z.infer<typeof CompleteArtifactInputSchema>;
+
+/** Temporary viewing access, generated only when an authorized participant
+ *  asks and never persisted (D-022). The URL outlives nothing. */
+export const ArtifactViewResponseSchema = z.object({
+  url: z.string().min(1),
+  mimeType: ArtifactMimeSchema,
+  expiresAt: z.string().datetime(),
+  thumbnailUrl: z.string().nullable()
+});
+export type ArtifactViewResponse = z.infer<typeof ArtifactViewResponseSchema>;
+
+/** Attach or detach an immutable artifact as evidence beside a check or a
+ *  tracked pull request. Decisions choose their artifacts at record time
+ *  instead (RecordDecisionInput), so the chosen set is frozen with the
+ *  rationale rather than editable after the fact. */
+export const AttachArtifactInputSchema = z.object({
+  target: z.object({
+    kind: z.enum(["check", "pull_request"]),
+    id: z.string().min(1).max(60)
+  })
+});
+export type AttachArtifactInput = z.infer<typeof AttachArtifactInputSchema>;
 
 // --- Project secret values (D-041, D-044) ------------------------------------
 // A secret's *name* is project configuration and travels with the branch. Its
@@ -2746,6 +3017,9 @@ export const MissionDetailResponseSchema = z.object({
   control: ControlSnapshotSchema,
   checkpoints: z.array(CheckpointSchema),
   checks: z.array(VerificationCheckSchema),
+  /** Every artifact this mission holds, newest last — metadata only, bounded;
+   *  bytes are fetched through a temporary viewing grant on request (D-122). */
+  artifacts: z.array(ArtifactSchema).default([]),
   /** Harness permission questions, newest last. Pending ones are what the
    *  *Needs approval* state is about; settled ones stay so the record can
    *  answer who allowed what. */

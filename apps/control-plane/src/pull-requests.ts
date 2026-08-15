@@ -108,6 +108,9 @@ export function toPullRequest(row: PullRequestRow): PullRequest {
     reviewThreads: threads(row.review_threads),
     labels: Array.isArray(row.labels) ? (row.labels as string[]).slice(0, 20).map(String) : [],
     readiness: readinessOf(row.readiness),
+    // Filled from the live attachment rows where the caller serves a mission
+    // detail (D-122); the tracked row itself never stores the relationship.
+    artifactIds: [],
     createdBy: row.created_by,
     createdByLogin: row.created_by_login ?? "unknown",
     mergedBy: row.merged_by,

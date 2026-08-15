@@ -250,6 +250,7 @@ export async function listDecisions(db: Db, missionId: string): Promise<Decision
     acceptedRisks: (row.accepted_risks as string | null) ?? null,
     unresolvedCheckIds: (row.unresolved_check_ids as string[]) ?? [],
     unresolvedSummary: (row.unresolved_summary as string[]) ?? [],
+    artifactIds: (row.artifact_ids as string[]) ?? [],
     decidedAt: (row.decided_at as Date).toISOString(),
     supersededAt: row.superseded_at ? (row.superseded_at as Date).toISOString() : null
   }));
@@ -511,6 +512,26 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
       const checkpointSha = (checkpoint.rows[0]?.sha as string | undefined) ?? null;
       const unresolved = await unresolvedChecksFor(client, body.data.workstreamId, checkpointSha);
 
+      // The visual evidence the decider chose (D-122): every named artifact
+      // must be this mission's and must actually be evidence — available or
+      // interrupted — because a decision must not cite a pending upload or a
+      // failed one. Refused in words, not silently filtered.
+      const artifactIds = [...new Set(body.data.artifactIds)];
+      if (artifactIds.length > 0) {
+        const found = await client.query(
+          "select art_id, state from artifacts where mission_id = $1 and art_id = any($2::text[])",
+          [access.missionId, artifactIds]
+        );
+        const byId = new Map(found.rows.map((row) => [row.art_id as string, row.state as string]));
+        for (const artifactId of artifactIds) {
+          const state = byId.get(artifactId);
+          if (state === undefined) return { refused: "This mission holds no such artifact." } as const;
+          if (state !== "available" && state !== "interrupted") {
+            return { refused: `That artifact is ${state}, and only completed evidence can be cited.` } as const;
+          }
+        }
+      }
+
       // A later decision supersedes an earlier one and neither is rewritten:
       // reversals are part of the record (D-075).
       await client.query(
@@ -520,8 +541,8 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
       const decisionId = newDecisionId();
       await client.query(
         `insert into decisions (dec_id, org_id, mission_id, wst_id, checkpoint_sha, decided_by,
-                                rationale, accepted_risks, unresolved_check_ids, unresolved_summary)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb)`,
+                                rationale, accepted_risks, unresolved_check_ids, unresolved_summary, artifact_ids)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb)`,
         [
           decisionId,
           access.orgId,
@@ -532,7 +553,8 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
           body.data.rationale,
           body.data.acceptedRisks ?? null,
           JSON.stringify(unresolved.ids),
-          JSON.stringify(unresolved.summary)
+          JSON.stringify(unresolved.summary),
+          JSON.stringify(artifactIds)
         ]
       );
       await recordEvent(client, {
@@ -548,12 +570,16 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
           checkpointSha,
           rationale: body.data.rationale.slice(0, 400),
           acceptedRisks: body.data.acceptedRisks?.slice(0, 400) ?? null,
-          unresolved: unresolved.summary.length
+          unresolved: unresolved.summary.length,
+          artifactIds
         }
       });
       return decisionId;
     });
 
+    if (typeof decided === "object" && "refused" in decided) {
+      return deps.sendError(reply, 422, "invalid_artifacts", decided.refused);
+    }
     reply.code(201);
     return { decisionId: decided };
   });

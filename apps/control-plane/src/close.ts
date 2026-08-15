@@ -7,6 +7,7 @@ import {
   TERMINAL_EXECUTION_STATES,
   type ReceiptSnapshot
 } from "@novus/contracts";
+import { receiptArtifacts } from "./artifacts.ts";
 import { missionAccess, require as requireCapability, type MissionAccess } from "./authz.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
@@ -76,7 +77,7 @@ export async function projectReceipt(
   );
   const decisions = await client.query(
     `select w.name, d.checkpoint_sha, d.rationale, d.accepted_risks, u.login, d.decided_at,
-            d.superseded_at is not null as superseded
+            d.superseded_at is not null as superseded, d.artifact_ids
        from decisions d
        join workstreams w on w.wst_id = d.wst_id
        join users u on u.user_id = d.decided_by
@@ -159,7 +160,8 @@ export async function projectReceipt(
       acceptedRisks: ((row.accepted_risks as string | null) ?? null)?.slice(0, 4000) ?? null,
       decidedByLogin: row.login as string,
       decidedAt: (row.decided_at as Date).toISOString(),
-      superseded: Boolean(row.superseded)
+      superseded: Boolean(row.superseded),
+      artifactIds: ((row.artifact_ids as string[]) ?? []).slice(0, 20)
     })),
     changes: {
       filesChanged: Number(churn.rows[0]?.files ?? 0),
@@ -173,6 +175,10 @@ export async function projectReceipt(
       checkpointSha: (row.checkpoint_sha as string | null) ?? null,
       currentAtClose: Boolean(row.current_at_close)
     })),
+    // The mission's visual evidence, frozen (D-122): references and
+    // provenance only, never a blob and never a signed URL — reopening the
+    // receipt reconstructs this exact set, and viewing mints a fresh grant.
+    artifacts: await receiptArtifacts(client, missionId),
     remainingUncertain: uncertain.slice(0, 50),
     pullRequest: pull.rows[0]
       ? { number: Number(pull.rows[0].provider_number), state: pull.rows[0].state as string }

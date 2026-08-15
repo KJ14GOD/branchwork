@@ -61,6 +61,12 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     // Admin's alone, the dont_ask tier's reasoning applied to activation.
     "mcp.set",
     "workspace.command",
+    // Capturing visual evidence from the lane's live preview (D-122): an act
+    // on the workspace, tiered exactly as workspace.command is. Attaching is
+    // the review.approve kind of act — it changes what the record presents as
+    // evidence — so it is role-held and never lease-granted.
+    "artifact.capture",
+    "artifact.attach",
     "control.request",
     "control.accept",
     "control.revoke"
@@ -76,6 +82,8 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     "policy.set",
     "skills.set",
     "workspace.command",
+    "artifact.capture",
+    "artifact.attach",
     "control.request",
     "control.accept"
   ],
@@ -102,6 +110,10 @@ const LEASE_CAPABILITIES: Capability[] = [
   // The controller runs the commands the project declared — and only those.
   // An interactive shell is not here, and is not anywhere (D-042).
   "workspace.command",
+  // And may capture the lane's preview (D-122): the same reasoning — the
+  // baton operates the lane's workspace, and evidence of what it showed is
+  // part of operating it. Attaching stays role-held.
+  "artifact.capture",
   // Answering the harness is the controller's, and **only** the controller's.
   // PRODUCT.md#roles-and-capabilities gives `approval.respond` to the lease
   // column alone: a Mission Admin who is not holding the baton may revoke it

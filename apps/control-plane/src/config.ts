@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 export interface Config {
   port: number;
   publicBaseUrl: string;
@@ -17,6 +19,24 @@ export interface Config {
    *  the endpoint answers 404 — a local-first control plane has nothing a
    *  webhook could reach, and the poll is its transport. */
   githubWebhookSecret: string;
+  /**
+   * The artifact store (D-022, D-122). `local` is the default for the
+   * local-first deployment: blobs on this control plane's own disk behind
+   * HMAC-signed expiring URLs. `s3` is the AWS adapter, opt-in via the
+   * NOVUS_ARTIFACT_S3_* variables; misconfigured or empty resolves to *no*
+   * store, and every artifact route then answers with a named error rather
+   * than pretending storage exists.
+   */
+  artifactStoreKind: "local" | "s3" | "";
+  artifactLocalDir: string;
+  /** Signs the local store's expiring URLs. Random per boot when unset —
+   *  grants are short-lived, so surviving a restart buys nothing. */
+  artifactLocalSecret: string;
+  s3Bucket: string;
+  s3Region: string;
+  s3AccessKeyId: string;
+  s3SecretAccessKey: string;
+  s3Endpoint: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -37,6 +57,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubWebhookSecret: env.NOVUS_GITHUB_WEBHOOK_SECRET ?? "",
     githubAppPem: env.NOVUS_GHAPP_PEM_B64
       ? Buffer.from(env.NOVUS_GHAPP_PEM_B64, "base64").toString("utf8")
-      : ""
+      : "",
+    artifactStoreKind: (env.NOVUS_ARTIFACT_STORE ?? "local") as "local" | "s3" | "",
+    artifactLocalDir: env.NOVUS_ARTIFACT_DIR ?? ".novus-artifacts",
+    artifactLocalSecret: env.NOVUS_ARTIFACT_SECRET ?? randomBytes(32).toString("hex"),
+    s3Bucket: env.NOVUS_ARTIFACT_S3_BUCKET ?? "",
+    s3Region: env.NOVUS_ARTIFACT_S3_REGION ?? "",
+    s3AccessKeyId: env.NOVUS_ARTIFACT_S3_KEY_ID ?? "",
+    s3SecretAccessKey: env.NOVUS_ARTIFACT_S3_SECRET ?? "",
+    s3Endpoint: env.NOVUS_ARTIFACT_S3_ENDPOINT ?? ""
   };
 }

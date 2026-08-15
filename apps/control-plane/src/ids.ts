@@ -55,3 +55,7 @@ export const newPullRequestId = () => `pr_${opaque(20)}`;
  *  credentials. Only their SHA-256 hash is ever stored. */
 export const newSecretToken = () => randomBytes(32).toString("base64url");
 export const newReceiptId = () => `rcp_${opaque(20)}`;
+
+// Durable visual evidence (D-022, D-122).
+export const newArtifactId = () => `art_${opaque(20)}`;
+export const newAttachmentId = () => `att_${opaque(20)}`;

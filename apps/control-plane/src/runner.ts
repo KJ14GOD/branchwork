@@ -71,7 +71,7 @@ const CommandParamsSchema = z.object({ commandId: z.string().startsWith("cmd_") 
 
 /** Everything a runner request resolves to. Loaded from the credential alone:
  *  a runner never names its own workstream, so it cannot reach another one. */
-interface RunnerContext {
+export interface RunnerContext {
   runnerId: string;
   label: string;
   orgId: string;
@@ -90,7 +90,7 @@ interface RunnerContext {
  * report, and never contains a filesystem path (D-032: paths stay on the
  * machine).
  */
-const environmentOf = (ctx: RunnerContext) => `local runner (${ctx.label})`;
+export const environmentOf = (ctx: RunnerContext) => `local runner (${ctx.label})`;
 
 async function loadRunner(db: Db, credential: string): Promise<RunnerContext | null> {
   const result = await db.query(
@@ -131,7 +131,7 @@ async function loadRunner(db: Db, credential: string): Promise<RunnerContext | n
  * revoked, and expired credentials are all the same answer: a rejected
  * credential must not tell its holder which of the three it was.
  */
-function runnerAuthenticator(deps: RouteDeps) {
+export function runnerAuthenticator(deps: RouteDeps) {
   return async (request: FastifyRequest, reply: FastifyReply): Promise<RunnerContext | null> => {
     const header = request.headers.authorization ?? "";
     const credential = header.startsWith(RUNNER_SCHEME) ? header.slice(RUNNER_SCHEME.length) : "";

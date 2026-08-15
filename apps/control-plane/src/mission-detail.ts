@@ -19,6 +19,7 @@ import type {
   WorkspaceProcess
 } from "@novus/contracts";
 import { listApprovals } from "./approvals.ts";
+import { artifactIdsByTarget, listArtifacts } from "./artifacts.ts";
 import {
   contestedPaths,
   listDecisions,
@@ -296,6 +297,8 @@ export async function listChecks(
       stale: laneHead === null || checkpointSha === null
         ? checkpointSha !== null
         : checkpointSha !== laneHead,
+      // Filled by missionDetail from the live attachment rows (D-122).
+      artifactIds: [],
       observedAt: (row.observed_at as Date).toISOString()
     };
   });
@@ -681,6 +684,16 @@ export async function missionDetail(
   const decisions = await listDecisions(db, access.missionId);
   const current = decisions.find((decision) => decision.supersededAt === null) ?? null;
 
+  // The mission's visual evidence (D-122): metadata only, with each artifact
+  // carrying where it is currently used — and the checks and pull request
+  // carrying the reverse reference, so evidence renders beside the thing it
+  // supports without a second query from the room.
+  const artifacts = await listArtifacts(db, access.missionId);
+  const attachedByTarget = await artifactIdsByTarget(db, access.missionId);
+  for (const check of checks) {
+    check.artifactIds = attachedByTarget.get(`check:${check.checkId}`) ?? [];
+  }
+
   // The publication story (D-099): the tracked pull request and the branch's
   // remote standing — for the **decision's** lane once a decision stands,
   // because publishing is what a decision becomes, whichever lane the reader
@@ -690,6 +703,10 @@ export async function missionDetail(
     ? (workstreams.find((lane) => lane.workstreamId === current.workstreamId) ?? base.workstream)
     : base.workstream;
   const pullRequest = publishLane ? await pullRequestForLane(db, publishLane.workstreamId) : null;
+  if (pullRequest) {
+    pullRequest.artifactIds =
+      attachedByTarget.get(`pull_request:${pullRequest.pullRequestId}`) ?? [];
+  }
   const branchPush = publishLane
     ? await branchPushFor(db, publishLane.workstreamId, publishLane.remoteHeadSha)
     : null;
@@ -790,6 +807,7 @@ export async function missionDetail(
     control,
     checkpoints,
     checks,
+    artifacts,
     approvals,
     runner,
     workspace,

@@ -892,3 +892,91 @@ create table if not exists receipts (
   created_at   timestamptz not null default now()
 );
 create unique index if not exists receipts_one_per_mission on receipts (mission_id);
+
+-- ---------------------------------------------------------------------------
+-- Artifacts (D-022, D-122): durable visual evidence. This table holds
+-- metadata, provenance, and relationships; the bytes live in the artifact
+-- store behind the S3-compatible interface, addressed by an object key Novus
+-- generated and scoped. No signed URL is ever stored — viewing access is
+-- minted per request and expires. A row reads as evidence only in the
+-- 'available' and 'interrupted' states; pending, uploading, and failed never
+-- do, and a failed upload says why. Metadata is immutable once available:
+-- attach/detach changes relationship rows, never this one.
+-- ---------------------------------------------------------------------------
+
+create table if not exists artifacts (
+  art_id       text primary key,
+  org_id       text not null references organizations(org_id),
+  mission_id   text not null references missions(mission_id),
+  wst_id       text references workstreams(wst_id),
+  -- The chat honestly attributable, or null: a person's capture belongs to no
+  -- conversation and is never assigned to the most recent one.
+  csn_id       text references workstream_sessions(csn_id),
+  -- The execution that requested it (agent-requested capture), or null.
+  exe_id       text references executions(exe_id),
+  kind         text not null check (kind in ('screenshot', 'recording')),
+  mime_type    text not null check (mime_type in ('image/png', 'video/webm')),
+  byte_size    bigint not null check (byte_size > 0),
+  sha256       text not null check (sha256 ~ '^[0-9a-f]{64}$'),
+  -- The store object key: server-generated, mission-scoped, never served to
+  -- any client and never in an event or a receipt.
+  object_key   text not null,
+  thumb_object_key text,
+  thumb_byte_size  bigint check (thumb_byte_size is null or thumb_byte_size > 0),
+  thumb_sha256     text check (thumb_sha256 is null or thumb_sha256 ~ '^[0-9a-f]{64}$'),
+  state        text not null check (state in ('pending', 'uploading', 'available', 'interrupted', 'failed')),
+  failure_reason      text,
+  interruption_reason text,
+  label        text not null,
+  initiator    text not null check (initiator in ('person', 'agent')),
+  capture_source text not null default 'preview' check (capture_source in ('preview')),
+  created_by   text references users(user_id),
+  -- The approval that authorized an agent-requested capture, when one was a
+  -- routed card; a profile-decided answer has no card.
+  approval_id  text references approval_requests(apr_id),
+  runner_id    text references runners(runner_id),
+  environment  text not null,
+  -- Capture provenance, each a bounded claim from the machine that performed
+  -- the capture (D-037's discipline): the live process, its validated origin,
+  -- its declared readiness, and the worktree revision read from git at the
+  -- moment of capture — with dirty stated rather than hidden.
+  process_id   text,
+  process_name text,
+  origin       text,
+  readiness    text check (readiness is null or readiness in ('not_required', 'pending', 'ready', 'unreachable')),
+  revision_sha text,
+  revision_dirty boolean not null default false,
+  ckp_id       text references checkpoints(ckp_id),
+  duration_ms  bigint check (duration_ms is null or duration_ms >= 0),
+  captured_at  timestamptz not null,
+  created_at   timestamptz not null default now(),
+  completed_at timestamptz
+);
+create index if not exists artifacts_by_mission on artifacts (mission_id, created_at);
+create index if not exists artifacts_by_state on artifacts (state, created_at);
+
+-- Where an artifact is evidence (D-122): beside a check or a tracked pull
+-- request. Append-only — detaching sets detached_at, so the record can answer
+-- "was this ever presented as evidence?" — and at most one live attachment
+-- per (artifact, target). Decisions carry their chosen artifact ids on the
+-- decision row itself, frozen with the rationale.
+create table if not exists artifact_attachments (
+  att_id       text primary key,
+  org_id       text not null references organizations(org_id),
+  mission_id   text not null references missions(mission_id),
+  art_id       text not null references artifacts(art_id),
+  target_kind  text not null check (target_kind in ('check', 'pull_request')),
+  target_id    text not null,
+  attached_by  text not null references users(user_id),
+  attached_at  timestamptz not null default now(),
+  detached_by  text references users(user_id),
+  detached_at  timestamptz
+);
+create index if not exists artifact_attachments_by_artifact on artifact_attachments (art_id, attached_at);
+create index if not exists artifact_attachments_by_target on artifact_attachments (target_kind, target_id);
+create unique index if not exists artifact_attachments_one_live
+  on artifact_attachments (art_id, target_kind, target_id) where detached_at is null;
+
+-- The decision's chosen visual evidence (D-122): exact artifact ids, frozen
+-- at record time with the rationale, preserved into the receipt snapshot.
+alter table decisions add column if not exists artifact_ids jsonb not null default '[]'::jsonb;

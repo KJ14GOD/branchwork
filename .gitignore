@@ -6,3 +6,4 @@ dist-electron/
 dist-renderer/
 *.tsbuildinfo
 tmp/
+.novus-artifacts/
