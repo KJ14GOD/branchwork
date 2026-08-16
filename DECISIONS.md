@@ -1789,3 +1789,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** DESIGN.md's rail paragraph names the open folder and the branch's weight. Nothing moves; no testid, geometry, or behavior changes. D-128's "book" stands in the record as drawn and replaced on sight.
 
 **Revisit when.** A second glyph joins the rail and the set needs a documented inventory, or branch names grow long enough that weight alone cannot keep the truncation readable.
+
+## D-131 — The branch leaves the rail, and the spine becomes a token that can be seen
+
+**Context.** Owner-directed, on sight of D-130's built result on their own screen. Two verdicts. The mission branch — placed in the rail by D-126 at the owner's ask, folded into the approach chip by D-129, weighted by D-130 — was still judged wrong on sight: a mono machinery string the owner does not want in the rail at all. And the spine, twice strengthened (`--edge` → `--edge-hover`), was still not visible enough on the owner's screen: "I want the actual elbow line bolded — it's not still."
+
+**Decision.** **The branch is removed from the rail**, reversing D-126's placement after two attempts to make it sit right: the approach row is the lane's name and nothing else, and the mission branch's home is the evidence panel's Overview, where every other piece of workspace machinery already lives. Three same-day decisions on one element and then its removal is the record working as intended — D-085/D-086 honesty. **The spine gets its own token**: `--edge-strong` (white 30% dark, black 32% light) at 1.5px, added to the token table with its use named — structural lines that must be seen at a glance — reversing D-129's alternative that rejected a dedicated token: the border scale's two steps are for edges you find when you look, and the spine failed twice because it needs to be found without looking.
+
+**Alternatives.** Using `--text-3` for the line (rejected: its documented restriction is timestamps and disabled labels; borrowing it for borders erodes the token's meaning). Thickness without brightness or brightness without thickness (rejected: each alone was tried in spirit by D-129's step and still read faint on the owner's screen; both together is the decisive move, and one revisit beats two).
+
+**Consequences.** The `rail-branch` testid is gone; the sessions spec's assertion flips from count 1 to count 0, deliberately. The approach chip is single-line again and the two-line elbow geometry is deleted. DESIGN.md's token table gains `--edge-strong` with light overrides; the rail paragraph and Workstreams bullet say the branch lives in Overview.
+
+**Revisit when.** A second surface needs `--edge-strong` (its "nothing else yet" is a fence, not an invitation), or the owner wants any branch fact surfaced closer than Overview — a hover title on the approach row would be the smallest next step.

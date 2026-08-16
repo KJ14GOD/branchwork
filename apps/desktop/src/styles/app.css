@@ -3984,26 +3984,10 @@ body {
   padding-left: calc(var(--s-4) + var(--s-4));
 }
 
-/* Name line above, branch fact beneath (D-129): the chip is a column so the
-   branch is inside the row it describes, never a sibling on the spine. */
-.side-tree .side-approach .side-open-mission {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0;
-  min-width: 0;
-}
-
-.side-approach-line {
-  display: flex;
+.side-approach .side-open-mission {
+  display: inline-flex;
   align-items: center;
   gap: var(--s-2);
-  min-width: 0;
-}
-
-.side-approach-branching {
-  padding-top: var(--s-1);
-  padding-bottom: var(--s-1);
 }
 
 .side-session {
@@ -4015,26 +3999,11 @@ body {
   padding-left: calc(var(--s-4) + var(--s-4));
 }
 
-/* The branch inside its approach's chip (D-126, D-129): mono, a second
-   line of the row — not a row. Weighted and a text step up (D-130): it is
-   the chip's one fact the owner actually reads, and quiet buried it. */
-.side-branch {
-  display: block;
-  font: var(--type-meta);
-  font-family: var(--font-mono);
-  font-weight: 500;
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-}
-
 /* The tree draws its own structure (D-128): a hairline spine dropping from
    the mission through its rows, an elbow saying "child of" where a dot used
    to say only "different". All offsets are the spacing scale; the color is
-   --edge-hover (D-129: --edge vanished against the rail), still behind
-   the words, never competing. */
+   --edge-strong at 1.5px (D-129 tried --edge-hover; D-131 — the owner
+   still could not see it): visible structure, still behind the words. */
 .side-tree > *,
 .side-children,
 .side-children > * {
@@ -4048,20 +4017,10 @@ body {
   top: 0;
   height: 50%;
   width: var(--s-2);
-  border-left: 1px solid var(--edge-hover);
-  border-bottom: 1px solid var(--edge-hover);
+  border-left: 1.5px solid var(--edge-strong);
+  border-bottom: 1.5px solid var(--edge-strong);
   border-bottom-left-radius: var(--r-control);
   pointer-events: none;
-}
-
-/* A branching chip is two lines tall; its elbow still meets the name line —
-   half the single-line row — not the chip's own middle (D-129). */
-.side-tree > .side-row.side-approach-branching::before {
-  height: 14px;
-}
-
-.side-tree > .side-row.side-approach-branching:not(:last-child)::after {
-  top: 14px;
 }
 
 .side-tree > .side-row::before {
@@ -4080,7 +4039,7 @@ body {
   top: 50%;
   bottom: 0;
   width: 0;
-  border-left: 1px solid var(--edge-hover);
+  border-left: 1.5px solid var(--edge-strong);
   pointer-events: none;
 }
 
@@ -4101,7 +4060,7 @@ body {
   bottom: 0;
   left: calc(var(--s-2) + var(--s-4));
   width: 0;
-  border-left: 1px solid var(--edge-hover);
+  border-left: 1.5px solid var(--edge-strong);
   pointer-events: none;
 }
 
