@@ -836,6 +836,10 @@ body {
   gap: 0;
 }
 
+.side-group + .side-group {
+  margin-top: var(--s-1);
+}
+
 .side-parent .side-name {
   font-weight: 600;
   color: var(--text-1);
@@ -1165,12 +1169,17 @@ body {
   background: var(--lane-alt);
 }
 
-/* Which lane the room is, under the title: one quiet line, absent entirely
-   for a mission that never forked. */
+/* Which lane the room is: the context row's first fact, absent entirely for
+   a mission that never forked (D-124 moved it beside the baton). */
 .lane-context {
   font: var(--type-meta);
   color: var(--text-3);
-  margin: 0;
+}
+
+.participant-count {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
 }
 
 /* The header answers, in order: what work, what is happening, who controls it. */
@@ -1178,8 +1187,8 @@ body {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: var(--s-2);
-  padding: var(--s-5) var(--s-6) var(--s-4);
+  gap: var(--s-1);
+  padding: var(--s-4) var(--s-6) var(--s-3);
 }
 
 .mission-title {
@@ -1296,13 +1305,74 @@ body {
   margin-left: var(--s-2);
 }
 
-/* No rule down the side. A line drawn beside every turn says "these things are
-   together", which the spacing already says, and it competed with the only mark
-   on the surface that means anything — the speaker's (D-065). */
+/* The turn spine (D-124, superseding D-065's bare column): one hairline per
+   turn with a labelled node per stage — Direction, Execution, Checkpoint,
+   Review — so a turn's lifecycle is scannable at the gutter without reading
+   a word of it. The line is the trace's own and breaks between turns. */
 .trace {
   display: flex;
   flex-direction: column;
-  gap: var(--s-3);
+  position: relative;
+}
+
+.trace::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 12px;
+  bottom: 12px;
+  width: 1px;
+  background: var(--edge);
+}
+
+.spine-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  column-gap: var(--s-4);
+  padding: var(--s-2) 0 var(--s-3);
+}
+
+.spine-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding-top: 3px;
+}
+
+/* Filled when the stage happened, awake while it is the live one, hollow
+   while nobody has looked — the working indicator's own restraint, no motion. */
+.spine-node {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin-top: 2px;
+  border-radius: 50%; /* full — identity-mark tier, the circle a node is */
+  background: var(--bg);
+  border: 1px solid var(--edge-hover);
+}
+
+.spine-node-done {
+  background: var(--text-3);
+  border-color: var(--text-3);
+}
+
+.spine-node-active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.spine-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+}
+
+.spine-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
 }
 
 /* Lifecycle is weight and wording, never a badge and no longer a line. */
@@ -1780,7 +1850,18 @@ body {
 
 .composer {
   flex: none;
-  padding: 0 var(--s-6) var(--s-5);
+  padding: 0 var(--s-6) var(--s-4);
+}
+
+/* The dock's eyebrow (D-124): which lane and conversation the words go to,
+   said before they are typed. Micro step, never louder than the input. */
+.composer-target {
+  display: block;
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+  padding-bottom: var(--s-1);
+  user-select: none;
 }
 
 .composer-error {
@@ -2892,6 +2973,21 @@ body {
   .room-error {
     padding-left: var(--s-5);
     padding-right: var(--s-5);
+  }
+
+  /* The spine folds its gutter into a heading above the content: narrow
+     rooms keep the stage words and lose the second column, not the story. */
+  .spine-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--s-1);
+  }
+
+  .trace::before {
+    display: none;
+  }
+
+  .spine-cell {
+    padding-top: 0;
   }
 
   .tabbar {

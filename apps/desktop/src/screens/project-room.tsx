@@ -1318,21 +1318,6 @@ export function ProjectRoom({
           {title}
         </h1>
 
-        {/* Which lane this room is, said once and quietly (D-080). Absent for
-            the mission that never forked, because there is nothing to tell
-            apart. */}
-        {multiLane && activeLane && (
-          <p className="lane-context" data-testid="lane-context">
-            {activeLane.name}
-            {activeLane.approach ? " · isolated workspace" : ""}
-            {activeLane.approach && activeLane.originSha ? (
-              <>
-                {" "}· forked at <span className="mono">{shortSha(activeLane.originSha)}</span>
-              </>
-            ) : null}
-          </p>
-        )}
-
         <div className="state-line" role="status" aria-live="polite" data-testid="state-line">
           {stateLine ? (
             <>
@@ -1448,6 +1433,53 @@ export function ProjectRoom({
         <div className="authority-row">
           {detail ? (
             <>
+              {/* Which lane this room is, said once and quietly (D-080) —
+                  first in the context row, beside who controls it. Absent for
+                  the mission that never forked. */}
+              {multiLane && activeLane && (
+                <span className="lane-context" data-testid="lane-context">
+                  {activeLane.name}
+                  {activeLane.approach ? " · isolated workspace" : ""}
+                  {activeLane.approach && activeLane.originSha ? (
+                    <>
+                      {" "}· forked at <span className="mono">{shortSha(activeLane.originSha)}</span>
+                    </>
+                  ) : null}
+                </span>
+              )}
+              {/* Sessions, other approaches, Compare, and the decision have no
+                  controls here (D-084): the rail's tree is the one map of the
+                  mission's structure, and this row is about authority. */}
+              <span className="controller-slot" data-testid="controller">
+                {controller ? (
+                  <>
+                    <HumanMark login={controller.login} name={controller.name} />
+                    <span className="controller-name">
+                      {isController ? "You have the baton" : `${controller.name ?? controller.login} has the baton`}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="controller-name">No one holds the baton</span>
+                  </>
+                )}
+              </span>
+              {detail.participants.length > 1 && (
+                <span className="participant-count">{detail.participants.length} participants</span>
+              )}
+              {!isController && (
+                <GatedAction
+                  capability="control.request"
+                  capabilities={detail.capabilities}
+                  denialReason="Only participants who can operate this mission may request control."
+                  holderLogin={detail.control.holderLogin}
+                  onClick={() => void runAction(novus().control.request(detail.mission.missionId))}
+                  variant="text"
+                  testid="request-control"
+                >
+                  Request control
+                </GatedAction>
+              )}
               {/* Deliberately reached, never pushed: absent until this lane has
                   produced something to fork from, and absent for anyone whose
                   role does not carry it (D-074). */}
@@ -1471,36 +1503,6 @@ export function ProjectRoom({
                       </span>
                     )}
                 </>
-              )}
-              {/* Sessions, other approaches, Compare, and the decision have no
-                  controls here (D-084): the rail's tree is the one map of the
-                  mission's structure, and this row is about authority. */}
-              <span className="controller-slot" data-testid="controller">
-                {controller ? (
-                  <>
-                    <HumanMark login={controller.login} name={controller.name} />
-                    <span className="controller-name">
-                      {isController ? "You have the baton" : `${controller.name ?? controller.login} has the baton`}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span className="controller-name">No one holds the baton</span>
-                  </>
-                )}
-              </span>
-              {!isController && (
-                <GatedAction
-                  capability="control.request"
-                  capabilities={detail.capabilities}
-                  denialReason="Only participants who can operate this mission may request control."
-                  holderLogin={detail.control.holderLogin}
-                  onClick={() => void runAction(novus().control.request(detail.mission.missionId))}
-                  variant="text"
-                  testid="request-control"
-                >
-                  Request control
-                </GatedAction>
               )}
               <span className="head-spacer" />
             </>

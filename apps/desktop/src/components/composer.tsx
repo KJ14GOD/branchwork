@@ -299,6 +299,14 @@ export function Composer({
         }
         data-testid={known && !mayDirect ? "composer-no-capability" : undefined}
       >
+        {/* The dock names its whole target before a word is typed (D-124): the
+            lane and conversation as one quiet eyebrow on the box's own edge,
+            where the foot's mono note used to hide it. */}
+        {contextNote && (
+          <span className="composer-target" data-testid="composer-target">
+            {contextNote}
+          </span>
+        )}
         <textarea
           ref={inputRef}
           className="composer-input"
@@ -495,7 +503,6 @@ export function Composer({
             </span>
           )}
 
-          {contextNote && <span className="composer-note mono">{contextNote}</span>}
           {queuedNote && (
             <span className="composer-note" data-testid="queued-note">
               {queuedNote}

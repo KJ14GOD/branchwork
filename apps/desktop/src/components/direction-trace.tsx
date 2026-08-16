@@ -112,7 +112,8 @@ function CheckpointRow({ segment, onOpenChanges }: { segment: Segment & { kind: 
   const checkpoint = segment.checkpoint;
   return (
     <div className="milestone" data-testid="checkpoint-line">
-      <span className="milestone-label">Checkpoint</span>
+      {/* No label of its own: the spine's gutter already says Checkpoint
+          (D-124), and a word said twice on one row is chrome. */}
       <span className="milestone-body">
         {checkpoint ? (
           <>
@@ -295,124 +296,180 @@ export function TraceView({
     direction?.state === "superseded" ||
     direction?.state === "cancelled";
   // Reading order inside a trace: what the harness said, then how it did it,
-  // then what it produced, then how it ended.
+  // then what it produced, then how it ended — now said out loud as the turn
+  // spine (D-124): Direction → Execution → Checkpoint → Review, each a
+  // labelled node on one hairline, so a turn's lifecycle is scannable at the
+  // gutter without reading a word of it.
   const speech = block.segments.filter(
     (segment) => segment.kind === "harness" || segment.kind === "note"
   );
-  const evidence = block.segments.filter(
-    (segment) => segment.kind === "checkpoint" || segment.kind === "checks"
-  );
+  const checkpoints = block.segments.filter((segment) => segment.kind === "checkpoint");
+  const checkRuns = block.segments.filter((segment) => segment.kind === "checks");
   const outcomes = block.segments.filter((segment) => segment.kind === "outcome");
+  const hasTurn =
+    block.machinery !== null ||
+    block.usage !== null ||
+    speech.length > 0 ||
+    block.toolSteps.length > 0 ||
+    block.workers.length > 0 ||
+    outcomes.length > 0;
+  const hasApprovals = approvals !== undefined && approvals !== null && approvals !== false;
+  // The Review node fills once checks ran, wakes while a question waits, and
+  // stays hollow — the honest "nobody has looked yet" — for a settled turn.
+  const reviewState = checkRuns.length > 0 ? "done" : hasApprovals ? "active" : "pending";
+  const showReview = checkRuns.length > 0 || hasApprovals || (hasTurn && block.settled);
 
   return (
     <article className={traceStateClass(direction)} data-testid="direction-trace" data-direction-state={direction?.state ?? "none"}>
       {block.body !== null && (
-        <header className="trace-head">
-          {block.authorLogin && <HumanMark login={block.authorLogin} />}
-          <span className="trace-author">{block.authorLogin ?? "Unattributed"}</span>
-          {block.authorUserId && block.authorUserId === controllerUserId && (
-            <span className="trace-controller">holds the baton</span>
-          )}
-          {block.at && <span className="trace-time">{clockTime(block.at)}</span>}
-        </header>
-      )}
+        <div className="spine-row">
+          <SpineCell label="Direction" state={waiting || settled ? "pending" : "done"} />
+          <div className="spine-content">
+            <header className="trace-head">
+              {block.authorLogin && <HumanMark login={block.authorLogin} />}
+              <span className="trace-author">{block.authorLogin ?? "Unattributed"}</span>
+              {block.authorUserId && block.authorUserId === controllerUserId && (
+                <span className="trace-controller">holds the baton</span>
+              )}
+              {block.at && <span className="trace-time">{clockTime(block.at)}</span>}
+            </header>
 
-      {block.body !== null && (
-        <p className="trace-body prose" data-testid="msg-user">
-          {block.body}
-        </p>
-      )}
+            <p className="trace-body prose" data-testid="msg-user">
+              {block.body}
+            </p>
 
-      {/* The controller's own direction applies at the next receptive point
-          without further action (PRODUCT.md#direction), so it is never
-          presented to them as something to approve. */}
-      {waiting && ownedByController && (
-        <div className="trace-waiting-row" data-testid="direction-queued">
-          <span>Queued — applies at the next safe point</span>
-          {queuePosition && (
-            <span className="queue-position" data-testid="queue-position">
-              {queuePosition} in the queue
-            </span>
-          )}
-          {actions}
-        </div>
-      )}
-      {waiting && !ownedByController && (
-        <div className="trace-waiting-row" data-testid="direction-waiting">
-          <span>
-            {viewerIsController
-              ? "Waiting for you — apply or reject it here"
-              : controllerLogin
-                ? `Waiting for ${controllerLogin} to apply this direction`
-                : "Waiting — no one holds the baton"}
-          </span>
-          {queuePosition && (
-            <span className="queue-position" data-testid="queue-position">
-              {queuePosition} in the queue
-            </span>
-          )}
-          {actions}
-        </div>
-      )}
-      {settled && direction && (
-        <div className="trace-waiting-row" data-testid="direction-settled">
-          <span>
-            {direction.state === "rejected" &&
-              (block.resolvedBy ? `Rejected by ${block.resolvedBy}` : "Rejected")}
-            {direction.state === "superseded" && "Superseded by a later direction"}
-            {direction.state === "cancelled" &&
-              (block.resolvedBy ? `Cancelled by ${block.resolvedBy}` : "Cancelled by its author")}
-            {direction.resolutionReason ? ` — ${direction.resolutionReason}` : ""}
-          </span>
-        </div>
-      )}
-
-      {(block.machinery || block.usage) && (
-        <div className="trace-machinery" data-testid="trace-machinery">
-          {[block.machinery, usageLine(block.usage)].filter(Boolean).join(" · ")}
+            {/* The controller's own direction applies at the next receptive point
+                without further action (PRODUCT.md#direction), so it is never
+                presented to them as something to approve. */}
+            {waiting && ownedByController && (
+              <div className="trace-waiting-row" data-testid="direction-queued">
+                <span>Queued — applies at the next safe point</span>
+                {queuePosition && (
+                  <span className="queue-position" data-testid="queue-position">
+                    {queuePosition} in the queue
+                  </span>
+                )}
+                {actions}
+              </div>
+            )}
+            {waiting && !ownedByController && (
+              <div className="trace-waiting-row" data-testid="direction-waiting">
+                <span>
+                  {viewerIsController
+                    ? "Waiting for you — apply or reject it here"
+                    : controllerLogin
+                      ? `Waiting for ${controllerLogin} to apply this direction`
+                      : "Waiting — no one holds the baton"}
+                </span>
+                {queuePosition && (
+                  <span className="queue-position" data-testid="queue-position">
+                    {queuePosition} in the queue
+                  </span>
+                )}
+                {actions}
+              </div>
+            )}
+            {settled && direction && (
+              <div className="trace-waiting-row" data-testid="direction-settled">
+                <span>
+                  {direction.state === "rejected" &&
+                    (block.resolvedBy ? `Rejected by ${block.resolvedBy}` : "Rejected")}
+                  {direction.state === "superseded" && "Superseded by a later direction"}
+                  {direction.state === "cancelled" &&
+                    (block.resolvedBy ? `Cancelled by ${block.resolvedBy}` : "Cancelled by its author")}
+                  {direction.resolutionReason ? ` — ${direction.resolutionReason}` : ""}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {speech.map((segment) => (
-        <SegmentView
-          key={segment.key}
-          segment={segment}
-          onOpenChanges={onOpenChanges}
-          onOpenVerification={onOpenVerification}
-        />
+      {hasTurn && (
+        <div className="spine-row">
+          <SpineCell label="Execution" state={block.settled ? "done" : "active"} />
+          <div className="spine-content">
+            {(block.machinery || block.usage) && (
+              <div className="trace-machinery" data-testid="trace-machinery">
+                {[block.machinery, usageLine(block.usage)].filter(Boolean).join(" · ")}
+              </div>
+            )}
+
+            {speech.map((segment) => (
+              <SegmentView
+                key={segment.key}
+                segment={segment}
+                onOpenChanges={onOpenChanges}
+                onOpenVerification={onOpenVerification}
+              />
+            ))}
+
+            {/* Workers on the trace itself, one quiet line each — the CLI's shape,
+                graphically (D-108). The disclosure below stays the harness's own
+                steps. */}
+            {block.workers.length > 0 && (
+              <WorkerRows workers={block.workers} settled={block.settled} onOpenWorker={onOpenWorker} />
+            )}
+
+            {block.toolSteps.length > 0 && <TechnicalActivity steps={block.toolSteps} />}
+
+            {outcomes.map((segment) => (
+              <SegmentView
+                key={segment.key}
+                segment={segment}
+                onOpenChanges={onOpenChanges}
+                onOpenVerification={onOpenVerification}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {checkpoints.map((segment) => (
+        <div className="spine-row" key={segment.key}>
+          <SpineCell label="Checkpoint" state="done" />
+          <div className="spine-content">
+            <SegmentView
+              segment={segment}
+              onOpenChanges={onOpenChanges}
+              onOpenVerification={onOpenVerification}
+            />
+          </div>
+        </div>
       ))}
 
-      {/* Workers on the trace itself, one quiet line each — the CLI's shape,
-          graphically (D-108). The disclosure below stays the harness's own
-          steps. */}
-      {block.workers.length > 0 && (
-        <WorkerRows workers={block.workers} settled={block.settled} onOpenWorker={onOpenWorker} />
+      {showReview && (
+        <div className="spine-row">
+          <SpineCell label="Review" state={reviewState} />
+          <div className="spine-content">
+            {checkRuns.map((segment) => (
+              <SegmentView
+                key={segment.key}
+                segment={segment}
+                onOpenChanges={onOpenChanges}
+                onOpenVerification={onOpenVerification}
+              />
+            ))}
+            {/* Last, because it is where the harness stopped: everything above is
+                what it did, and this is what it is waiting on (D-062). */}
+            {approvals}
+          </div>
+        </div>
       )}
-
-      {block.toolSteps.length > 0 && <TechnicalActivity steps={block.toolSteps} />}
-
-      {evidence.map((segment) => (
-        <SegmentView
-          key={segment.key}
-          segment={segment}
-          onOpenChanges={onOpenChanges}
-          onOpenVerification={onOpenVerification}
-        />
-      ))}
-
-      {outcomes.map((segment) => (
-        <SegmentView
-          key={segment.key}
-          segment={segment}
-          onOpenChanges={onOpenChanges}
-          onOpenVerification={onOpenVerification}
-        />
-      ))}
-
-      {/* Last, because it is where the harness stopped: everything above is
-          what it did, and this is what it is waiting on (D-062). */}
-      {approvals}
     </article>
+  );
+}
+
+/** One node on the turn spine (D-124): the stage's name at the micro step
+ *  beside a small circle — filled when the stage happened, awake while it is
+ *  the live one, hollow while nothing has. The connecting hairline is the
+ *  trace's own, so between turns the spine breaks with the block. */
+function SpineCell({ label, state }: { label: string; state: "done" | "active" | "pending" }) {
+  return (
+    <div className="spine-cell">
+      <span className={`spine-node spine-node-${state}`} aria-hidden="true" />
+      <span className="spine-label">{label}</span>
+    </div>
   );
 }
 
