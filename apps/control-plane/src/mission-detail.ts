@@ -30,7 +30,7 @@ import { listSessions } from "./sessions.ts";
 import { listWorkstreams } from "./workstreams.ts";
 import { registeredRunner, runnerOnline } from "./runners.ts";
 import { branchPushFor, pullRequestForLane } from "./publication.ts";
-import { withSnapshot, type Db, type Queryable } from "./db.ts";
+import type { Db, Queryable } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
 import { listDirections } from "./directions.ts";
 import {
@@ -555,17 +555,20 @@ async function holdersByLane(db: Queryable, missionId: string): Promise<Map<stri
 }
 
 /**
- * Assembles the whole room payload for one authorized viewer, inside one
- * repeatable-read snapshot: everything the room shows describes the same
- * instant, and this function is structurally unable to write.
+ * Assembles the whole room payload for one authorized viewer. Reads only —
+ * the poll's write half is `observeMission`, called by the route. The reads
+ * deliberately run in parallel across the pool rather than inside one
+ * snapshot transaction: a single connection serializes its queries, and this
+ * is the room's polling endpoint, where that latency was measured as a real
+ * regression. Cross-query consistency here is best-effort until the
+ * projection becomes one composite query.
  */
 export async function missionDetail(
-  pool: Db,
+  db: Db,
   access: MissionAccess,
   viewerUserId: string,
   base: { mission: MissionDetailResponse["mission"]; workstream: MissionDetailResponse["workstream"] }
 ): Promise<MissionDetailResponse> {
-  return withSnapshot(pool, async (db) => {
   const checkpointsForSha = await listCheckpoints(db, access.missionId);
   // The revision a check has to match to still count as current evidence —
   // per lane, because a mission may hold competing approaches and each one's
@@ -818,5 +821,4 @@ export async function missionDetail(
     state,
     overlays
   };
-  });
 }

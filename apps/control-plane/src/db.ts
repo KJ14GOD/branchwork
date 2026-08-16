@@ -25,31 +25,6 @@ export async function migrate(pool: Db): Promise<void> {
 }
 
 /**
- * A read-only, repeatable-read transaction: every query inside observes one
- * consistent instant of the database. The room's projection reads through
- * this so a poll cannot see, say, a lane list from before a fork beside a
- * control snapshot from after it. Read-only is enforced by Postgres itself —
- * a write slipped into a projection fails loudly instead of hiding in a GET.
- */
-export async function withSnapshot<T>(
-  pool: Db,
-  fn: (client: pg.PoolClient) => Promise<T>
-): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("begin isolation level repeatable read read only");
-    const result = await fn(client);
-    await client.query("commit");
-    return result;
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-/**
  * The per-mission ordering point (ARCHITECTURE.md#authorization). Any command
  * that reads mission state and then writes it takes this first, so two accepts
  * — or an accept racing a revoke, or a runner reporting while a person
