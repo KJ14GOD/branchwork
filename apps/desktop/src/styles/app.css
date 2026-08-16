@@ -949,7 +949,12 @@ body {
   align-items: center;
   justify-content: center;
   width: 24px;
-  min-height: 32px;
+  /* Never taller than the row's own line: this control mounts only on the
+     ACTIVE row, so any height of its own becomes a selected-vs-hover size
+     difference — the selected chip grew to 40px while hover stayed 28px. The
+     row's min-height rules alone decide the chip's height. */
+  min-height: 20px;
+  align-self: stretch;
   flex: none;
   padding: 0;
   border: none;
@@ -989,6 +994,24 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* In a mission chip the name lives inside the open button, not on the row
+   itself, so the row-level ellipsis rules cannot reach it: the button must be
+   the thing that clips, or a long goal prints straight across the hover
+   controls beside it. A column, because the "2 approaches" count is the
+   chip's second line (D-080). */
+.side-child .side-open-mission {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.side-child .side-open-mission .side-name {
+  flex: none;
+  width: 100%;
 }
 
 .side-count {
