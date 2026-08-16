@@ -3753,10 +3753,14 @@ body {
 .code {
   display: flex;
   align-items: flex-start;
-  gap: var(--s-3);
   font: var(--type-row);
   font-family: var(--font-mono);
-  min-width: 0;
+  /* As wide as the longest line, never narrower than the pane: wide code
+     scrolls sideways inside .file-scroll rather than wrapping. A wrapped
+     line would occupy two visual rows against one gutter number, and the
+     numbers drifted off their lines whenever the panel narrowed the canvas. */
+  width: max-content;
+  min-width: 100%;
 }
 
 .code-gutter {
@@ -3767,14 +3771,20 @@ body {
   color: var(--text-3);
   user-select: none;
   min-width: 4ch;
+  /* The numbers hold their place while the code scrolls under them. The
+     spacing to the code is the gutter's own padding, so its background
+     covers the seam. */
+  position: sticky;
+  left: 0;
+  background: var(--bg);
+  padding-right: var(--s-3);
 }
 
 .code-body {
   margin: 0;
-  min-width: 0;
   flex: 1;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  /* One logical line is one visual row — the gutter's whole contract. */
+  white-space: pre;
   color: var(--text-1);
 }
 
