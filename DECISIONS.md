@@ -1765,3 +1765,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** The tree's indents deepen one step (approach text one spacing step further in, sessions two) to make room for the elbows; the branch row joins the chip coordinate space. DESIGN.md's token table, rail paragraph, and Workstreams bullet say the dot's home is the room. No testid, capability, or reading order changes; the deterministic tree evidence regenerates with the spine in place.
 
 **Revisit when.** The tree gains a depth the spine's two levels cannot say, or a provider distinction earns its own mark in the rail.
+
+## D-129 — The spine made legible: a heavier line, and the branch folded into the row it describes
+
+**Context.** Owner-directed, on sight of D-128's built result. Two faults: the spine was drawn in `--edge` (white at 11%), which vanishes against the rail — structure that cannot be seen says nothing; and the mission branch, rendered as the first child row on the selected approach's spine, hung at the same depth and rhythm as the conversations — so a mono machinery string read as one more clickable row, and its shorter height broke the tree's pitch besides.
+
+**Decision.** The spine's every segment moves to `--edge-hover` — the border scale's own stronger step, no new value. The branch leaves the spine entirely: it renders inside the approach's chip as the row's quiet second line, mono and `--text-3` under the name, exactly the anatomy the mission chip already uses for its "2 approaches" count — a fact of the row, not a sibling of the rows. The two-line chip's elbow still meets the name line, half the single-line row's height, not the taller chip's middle. Only navigable things hang on the spine; the tree's pitch is uniform again.
+
+**Alternatives.** A dedicated spine token (rejected: the border scale already has exactly two steps and the stronger one is right — a third would be a local design value with a token's name). Removing the branch from the rail (rejected: the owner placed it there in D-126 and the fact earns its place — it was the *presentation as a row* that misled). Keeping the branch row but stripping its elbow (rejected: it would still occupy a slot in the tree's rhythm and still sit where rows sit).
+
+**Consequences.** The branch is inside the approach's click target, which selects the approach — the row's one action, unchanged. `rail-branch` keeps its testid and its assertions. The spine selectors lose their branch cases; the approach chip gains a `side-approach-branching` state with its own elbow geometry. DESIGN.md's rail paragraph and Workstreams bullet say the branch is the row's second line and the spine is `--edge-hover`.
+
+**Revisit when.** A theme lands where `--edge-hover` is too loud for a persistent structural line, or the approach chip accumulates a third line.

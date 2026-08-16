@@ -571,7 +571,7 @@ function MissionTree({
           return (
             <Fragment key={lane.workstreamId}>
               <div
-                className={`side-row side-approach${selected && washApproach ? " selected" : ""}`}
+                className={`side-row side-approach${selected ? " side-approach-branching" : ""}${selected && washApproach ? " selected" : ""}`}
                 data-testid="rail-approach-row"
                 data-workstream={lane.workstreamId}
               >
@@ -589,11 +589,22 @@ function MissionTree({
                       name, and the spine already says it is a child. The dot
                       keeps its work on the room's tabs, where two lanes'
                       conversations sit side by side. */}
-                  <span className="side-name" data-testid={selected ? "lane-context" : undefined}>
-                    {lane.name}
-                    {lane.approach ? " · isolated workspace" : ""}
+                  <span className="side-approach-line">
+                    <span className="side-name" data-testid={selected ? "lane-context" : undefined}>
+                      {lane.name}
+                      {lane.approach ? " · isolated workspace" : ""}
+                    </span>
+                    {needs && <span className="tone-warn side-needs"> · needs you</span>}
                   </span>
-                  {needs && <span className="tone-warn side-needs"> · needs you</span>}
+                  {/* The branch this approach's work lands on (D-126): a fact
+                      of the row, said inside it — never a row of its own on
+                      the spine, where it read as one more clickable child
+                      (D-129). */}
+                  {selected && (
+                    <span className="side-branch" data-testid="rail-branch" title={lane.missionBranch}>
+                      {lane.missionBranch}
+                    </span>
+                  )}
                 </button>
                 {/* A parent's + creates its child, exactly as the project row's
                     does for missions (D-077, D-084). Only on the approach being
@@ -614,14 +625,11 @@ function MissionTree({
                 )}
               </div>
               {/* Its children, under it and nowhere else — one block, so the
-                  approach-level spine has a single element to pass through
-                  (D-128). The branch (D-126) is the first child: machinery,
-                  quiet and mono. */}
-              {selected && (
+                  mission-level spine has a single element to pass through
+                  (D-128). Rendered only with something in it: an empty block
+                  would still occupy a spine slot. */}
+              {selected && (showSessions || sessionDraft) && (
                 <div className="side-children">
-                  <div className="side-branch" data-testid="rail-branch" title={lane.missionBranch}>
-                    {lane.missionBranch}
-                  </div>
                   {sessionRows}
                   {draftRow}
                 </div>
