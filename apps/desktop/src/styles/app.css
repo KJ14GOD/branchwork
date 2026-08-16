@@ -1305,74 +1305,19 @@ body {
   margin-left: var(--s-2);
 }
 
-/* The turn spine (D-124, superseding D-065's bare column): one hairline per
-   turn with a labelled node per stage — Direction, Execution, Checkpoint,
-   Review — so a turn's lifecycle is scannable at the gutter without reading
-   a word of it. The line is the trace's own and breaks between turns. */
+/* Grouped speech, no rule down the side (D-125, reversing D-124's spine:
+   agent work loops between direction, execution, checks, and revision, and a
+   fixed four-step timeline read as workflow theater). Grouping is rhythm:
+   tight inside a speaker's group, a breath before the harness answers, and
+   the milestone rows carrying their own hairline. */
 .trace {
   display: flex;
   flex-direction: column;
-  position: relative;
-}
-
-.trace::before {
-  content: "";
-  position: absolute;
-  left: 5px;
-  top: 12px;
-  bottom: 12px;
-  width: 1px;
-  background: var(--edge);
-}
-
-.spine-row {
-  position: relative;
-  display: grid;
-  grid-template-columns: 104px minmax(0, 1fr);
-  column-gap: var(--s-4);
-  padding: var(--s-2) 0 var(--s-3);
-}
-
-.spine-cell {
-  display: flex;
-  align-items: flex-start;
   gap: var(--s-2);
-  padding-top: 3px;
 }
 
-/* Filled when the stage happened, awake while it is the live one, hollow
-   while nobody has looked — the working indicator's own restraint, no motion. */
-.spine-node {
-  flex: none;
-  width: 11px;
-  height: 11px;
-  margin-top: 2px;
-  border-radius: 50%; /* full — identity-mark tier, the circle a node is */
-  background: var(--bg);
-  border: 1px solid var(--edge-hover);
-}
-
-.spine-node-done {
-  background: var(--text-3);
-  border-color: var(--text-3);
-}
-
-.spine-node-active {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-.spine-label {
-  font: var(--type-micro);
-  letter-spacing: 0.02em;
-  color: var(--text-2);
-}
-
-.spine-content {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-  min-width: 0;
+.trace .harness-turn {
+  margin-top: var(--s-2);
 }
 
 /* Lifecycle is weight and wording, never a badge and no longer a line. */
@@ -1592,11 +1537,17 @@ body {
 }
 
 /* Evidence milestones: dense rows, tabular numbers, no cards. */
+/* Checkpoints and verification as compact inline sections (D-125): a
+   hairline above, the micro label, the facts inline, the action at the end —
+   a divider that states its fact rather than a stage in a timeline. */
 .milestone {
   display: flex;
   align-items: center;
   gap: var(--s-3);
   min-height: 32px;
+  margin-top: var(--s-2);
+  padding-top: var(--s-2);
+  border-top: 1px solid var(--edge);
   font: var(--type-row);
   color: var(--text-1);
 }
@@ -2973,21 +2924,6 @@ body {
   .room-error {
     padding-left: var(--s-5);
     padding-right: var(--s-5);
-  }
-
-  /* The spine folds its gutter into a heading above the content: narrow
-     rooms keep the stage words and lose the second column, not the story. */
-  .spine-row {
-    grid-template-columns: minmax(0, 1fr);
-    row-gap: var(--s-1);
-  }
-
-  .trace::before {
-    display: none;
-  }
-
-  .spine-cell {
-    padding-top: 0;
   }
 
   .tabbar {

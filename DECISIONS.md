@@ -1717,3 +1717,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 
 **Revisit when.** A second stage vocabulary appears (plan-mode turns, cloud provisioning) and the four labels stop covering what a turn is; or the Review node gains a real reviewing surface to open.
 
+## D-125 — The spine reversed: a turn is grouped speech and milestone rows, not a four-step timeline
+
+**Context.** Owner-directed, on sight of D-124's built result. The turn spine — Direction, Execution, Checkpoint, Review as labelled nodes on a hairline — was judged too opinionated for what a turn actually is: real agent work loops between direction, execution, checks, and revision, and forcing every turn into a clean four-stage timeline read as workflow theater. The owner's line: Novus's signature should come from Compare, multiplayer control, evidence, and decisions — not from making ordinary chat unusually complicated.
+
+**Decision.** The spine is removed the same day it landed; the header hierarchy, the composer's target eyebrow, and the rail rhythm from D-124 all stay. The trace returns to grouped speech in the shape of a modern coding harness: the author's mark and words; the harness's mark once for a run of consecutive speech, the reply still the only `--text-1` in the turn; tool activity as one quiet disclosure beneath it; **checkpoints and verification as compact milestone rows** — a hairline above, the micro label, the facts inline, the action at the row's end — a divider that states its fact rather than a stage in a timeline; the outcome in words, last. Grouping is rhythm, not machinery: tight inside a speaker's group, a breath before the harness answers, nothing drawn down the side. Signature element 2 is rewritten accordingly.
+
+**Alternatives.** Keeping the spine for multi-stage turns only (rejected: two trace anatomies in one feed is worse than either); a horizontal stage strip above each turn (rejected: the same theater, rotated); keeping the hairline without the nodes (rejected: D-065 already found an unlabelled line beside everything says nothing).
+
+**Consequences.** The checkpoint milestone regains its own label, which the spine's gutter had absorbed. Every testid and reading order is unchanged for the second time in a day, so the deterministic and end-to-end suites hold as written. D-124's spine paragraphs stand in the record as a decision made and reversed on sight — the same honesty D-085/D-086 established.
+
+**Revisit when.** A reviewing surface exists that would give a "review" stage a real destination, or turn shapes emerge (plan-mode, cloud provisioning) that grouped speech genuinely cannot carry.
+
