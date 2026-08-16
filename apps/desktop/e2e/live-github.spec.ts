@@ -59,6 +59,7 @@ let userDataDir: string;
 let app: ElectronApplication;
 let page: Page;
 let missionId = "";
+let workstreamId = "";
 
 const git = (cwd: string, args: string[]): string =>
   execFileSync("git", args, { cwd }).toString().trim();
@@ -145,6 +146,14 @@ beforeAll(async () => {
   );
   await waitForHealth();
 
+  // A run starts with no missions but keeps identity: the signed-in profile's
+  // session lives in this database, and scrubbing users or sessions would
+  // demand a fresh human sign-in every run. Everything mission-shaped from
+  // earlier runs goes, or this run's runner enrolls the debris too.
+  const scrub = new pg.default.Pool({ connectionString: DB_URL });
+  await scrub.query("truncate table missions, repositories, runners cascade").catch(() => undefined);
+  await scrub.end();
+
   const launched = await launch(userDataDir);
   app = launched.app;
   page = launched.page;
@@ -162,17 +171,18 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
     await page.getByTestId("add-project").click();
     await page.getByTestId("add-project-dialog").waitFor({ timeout: 30_000 });
     await page.getByTestId("repo-search").fill(REPO.split("/")[1] ?? REPO);
-    const row = page.getByTestId("repo-row").filter({ hasText: REPO });
+    // The dialog renders the bare name with the owner on its own secondary
+    // line, so the visible row never contains the contiguous "owner/name".
+    const row = page.getByTestId("repo-row").filter({ hasText: REPO.split("/")[1] ?? REPO });
     await row.first().waitFor({ timeout: 60_000 });
     await row.first().click();
 
-    await page.getByTestId("draft-base").waitFor({ timeout: 60_000 });
-    // The base is an exact commit resolved through the real GitHub App, not a
-    // branch name Novus hopes still means the same thing later.
-    const base = (await page.getByTestId("draft-base").textContent()) ?? "";
-    expect(base).toContain(REPO.split("/")[1] ?? REPO);
-
-    await page.getByTestId("composer-input").fill("read the README and say what this project is");
+    // Picking a repository asks a question, not a place (D-077, D-078): the
+    // small ask dialog with the real composer, here wired through the real
+    // GitHub App behind the control plane.
+    const ask = page.getByTestId("new-mission-dialog");
+    await ask.waitFor({ timeout: 60_000 });
+    await ask.getByTestId("composer-input").fill("read the README and say what this project is");
     await page.keyboard.press("Enter");
     expect(await page.getByTestId("send-error").count()).toBe(0);
 
@@ -182,7 +192,12 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
           page.evaluate(async (wanted) => {
             const result = await window.novus.missions.list();
             if (!result.ok) return "";
-            return result.value.find((mission) => mission.repository?.name === wanted)?.missionId ?? "";
+            // Newest first: this database persists across runs, and every run's
+            // mission names the same repository with the same goal.
+            const mine = result.value
+              .filter((mission) => mission.repository?.name === wanted)
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+            return mine[0]?.missionId ?? "";
           }, REPO),
         { timeout: 90_000 }
       )
@@ -191,9 +206,23 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
         page.evaluate(async (wanted) => {
           const result = await window.novus.missions.list();
           if (!result.ok) throw new Error(result.message);
-          return result.value.find((mission) => mission.repository?.name === wanted)?.missionId ?? "";
+          // Newest first: this database persists across runs, and every run's
+            // mission names the same repository with the same goal.
+            const mine = result.value
+              .filter((mission) => mission.repository?.name === wanted)
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+            return mine[0]?.missionId ?? "";
         }, REPO)
       );
+
+    // The base is an exact commit resolved through the real GitHub App, not a
+    // branch name Novus hopes still means the same thing later.
+    const baseSha = await page.evaluate(async (mission) => {
+      const result = await window.novus.missions.get(mission);
+      if (!result.ok) throw new Error(result.message);
+      return result.value.workstream?.baseSha ?? "";
+    }, missionId);
+    expect(baseSha).toMatch(/^[0-9a-f]{40}$/);
 
     // The runner fetches it into Novus's own area, records where it landed, and
     // from there behaves exactly as it does for a folder somebody added.
@@ -217,13 +246,16 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
       return {
         branch: result.value.workstream?.missionBranch ?? "",
         baseSha: result.value.workstream?.baseSha ?? "",
-        status: result.value.workstream?.branchStatus ?? ""
+        status: result.value.workstream?.branchStatus ?? "",
+        workstreamId: result.value.workstream?.workstreamId ?? ""
       };
     }, missionId);
     expect(detail.status).toBe("created");
     expect(detail.branch).toMatch(/^novus\/m-/);
+    workstreamId = detail.workstreamId;
 
-    const worktree = join(userDataDir, "worktrees", missionId);
+    // Worktrees are keyed by the lane, not the mission, since D-074.
+    const worktree = join(userDataDir, "worktrees", workstreamId);
     await expect.poll(() => existsSync(worktree), { timeout: 180_000 }).toBe(true);
     expect(git(worktree, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(detail.branch);
     // The worktree starts at the commit the control plane pinned, not at
@@ -233,21 +265,63 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
   }, 300_000);
 
   it("runs a harmless declared command and a verification check on it", async () => {
-    // Declared here rather than committed to somebody's repository: this proves
-    // the runtime, and it should not require a pull request to run.
-    const worktree = join(userDataDir, "worktrees", missionId);
-    mkdirSync(join(worktree, ".novus"), { recursive: true });
-    require("node:fs").writeFileSync(
-      join(worktree, ".novus", "settings.local.toml"),
-      [
-        "[setup]",
-        'command = "echo prepared > .novus-live-witness"',
-        "",
-        "[[verify]]",
-        'name = "witness"',
-        'command = "test -f .novus-live-witness"'
-      ].join("\n")
+    // Declared through the product's own verb rather than a file written
+    // behind the runner's back: discovery announces a lane once, so a
+    // settings file appearing later on disk is deliberately not rediscovered —
+    // saving through the app is what republishes (D-043).
+    const worktree = join(userDataDir, "worktrees", workstreamId);
+    const saved = await page.evaluate(
+      async (args) => window.novus.workspace.save(args),
+      {
+        missionId,
+        workstreamId,
+        scope: "local" as const,
+        settings: {
+          setup: { command: "echo prepared > .novus-live-witness" },
+          run: [],
+          concurrentRuns: false,
+          verify: [{ name: "witness", command: "test -f .novus-live-witness", category: "test" }],
+          autoVerify: true,
+          timeouts: {},
+          env: {},
+          secretNames: [],
+          localFiles: []
+        }
+      }
     );
+    expect((saved as { ok: boolean }).ok).toBe(true);
+
+    // The Run control is the room's, and since D-120 the window may be
+    // sitting on Home: open the mission from the rail first. The disclosure
+    // converges (a lone read-then-click races the restore path).
+    const projRow = page.getByTestId("project-row").filter({ hasText: REPO.split("/")[1] ?? REPO });
+    await projRow.waitFor({ timeout: 30_000 });
+    const twisty = page.locator(".side-parent").filter({ has: projRow }).getByTestId("project-twisty");
+    await expect
+      .poll(
+        async () => {
+          if ((await twisty.getAttribute("aria-expanded")) !== "true") await projRow.click();
+          return twisty.getAttribute("aria-expanded");
+        },
+        { timeout: 30_000, interval: 500 }
+      )
+      .toBe("true");
+    await page.getByTestId("mission-row").first().click();
+    await page.getByTestId("run-control").waitFor({ timeout: 60_000 });
+
+    // The declared list travels file → discovery pass (≤15s) → control plane →
+    // the room's poll; open the menu only once the server holds it, or the
+    // open menu shows the pre-write emptiness.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(async (mission) => {
+            const result = await window.novus.missions.get(mission);
+            return result.ok ? (result.value.workspace?.declared.length ?? 0) : 0;
+          }, missionId),
+        { timeout: 90_000 }
+      )
+      .toBeGreaterThan(0);
 
     await page.getByTestId("run-control").click();
     await page.getByTestId("run-menu").waitFor({ timeout: 30_000 });
@@ -258,7 +332,14 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
 
     await page.getByTestId("run-control").click();
     await page.getByTestId("run-menu").waitFor({ timeout: 30_000 });
-    await page.getByTestId("run-item").filter({ hasText: "witness" }).first().click();
+    // By label, exactly: the setup item's command line also contains the
+    // word "witness" (it writes the witness file), so a loose hasText clicks
+    // Setup a second time.
+    await page
+      .getByTestId("run-item")
+      .filter({ has: page.locator(".run-item-label", { hasText: /^witness$/ }) })
+      .first()
+      .click();
     await expect
       .poll(
         async () =>
@@ -275,7 +356,7 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
 
   it("left the clone credential nowhere: not in git, not in the record, not on disk", async () => {
     const checkout = join(userDataDir, "repositories");
-    const worktree = join(userDataDir, "worktrees", missionId);
+    const worktree = join(userDataDir, "worktrees", workstreamId);
 
     // The remote URL is plain. A credential in it would have been written into
     // .git/config the moment the clone succeeded and would still be there.

@@ -69,7 +69,10 @@ describe.skipIf(!LIVE)("the live GitHub adapter publishes a decision (D-099)", (
         // A mission-shaped branch with one real commit: the decided revision.
         const branch = `novus/m-live${Date.now().toString(36)}`;
         git(checkout, ["checkout", "-b", branch]);
-        writeFileSync(join(checkout, "live-proof.txt"), `pushed by the live D-099 proof\n`);
+        // Unique per run: an earlier run's merged PR leaves this file in the
+        // default branch, and re-writing identical content stages nothing —
+        // the commit then fails with "nothing to commit" and no stderr.
+        writeFileSync(join(checkout, "live-proof.txt"), `pushed by the live D-099 proof (${branch})\n`);
         git(checkout, ["add", "-A"]);
         git(checkout, [
           "-c",
