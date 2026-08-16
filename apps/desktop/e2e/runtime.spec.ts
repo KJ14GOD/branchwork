@@ -109,9 +109,19 @@ async function openProject(target: Page, name: string): Promise<void> {
   // of visible rows never said whether a click opens or closes. The twisty's
   // aria-expanded is the per-project fact (the D-120/D-121 batch's find).
   const twisty = target.locator(".side-parent").filter({ has: row }).getByTestId("project-twisty");
-  if ((await twisty.getAttribute("aria-expanded")) !== "true") await row.click();
+  // A single read-then-click races the restore path, which discloses open-tab
+  // projects on its own schedule: restore landing between the read and the
+  // click turns the click into a *close*, and no later actor reopens it. So
+  // converge instead of firing once — click only while collapsed, re-read, and
+  // let the poll repeat until the disclosure sticks.
   await expect
-    .poll(() => twisty.getAttribute("aria-expanded"), { timeout: 30_000 })
+    .poll(
+      async () => {
+        if ((await twisty.getAttribute("aria-expanded")) !== "true") await row.click();
+        return twisty.getAttribute("aria-expanded");
+      },
+      { timeout: 30_000, interval: 500 }
+    )
     .toBe("true");
 }
 
