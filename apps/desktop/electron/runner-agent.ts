@@ -351,6 +351,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   /** Repositories this machine could not fetch: when to try again, and what was
    *  last said about why, so one unreachable repository is one event. */
   const checkoutRetry = new Map<string, { after: number; attempts: number; reason: string }>();
+  /** One checkout mutation at a time per repository: discovery's pass and a
+   *  first turn waiting on the fetch must never clone or fetch into the same
+   *  path at once (the same shape of fault D-058 found in worktrees). */
+  const checkoutQueue = new Map<string, Promise<void>>();
   /** The last configuration problem said out loud per workstream, so a broken
    *  settings file is one warning rather than one every discovery pass. */
   const announcedProblem = new Map<string, string>();
@@ -802,7 +806,20 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
    * setup, run, verification, checkpoints, the harness — then works with no
    * idea the repository came from GitHub.
    */
-  async function ensureCheckout(
+  function ensureCheckout(
+    workstreamId: string,
+    providerRepoId: string,
+    missionBranch: string
+  ): Promise<void> {
+    const previous = checkoutQueue.get(providerRepoId) ?? Promise.resolve();
+    const next = previous.then(() => ensureCheckoutNow(workstreamId, providerRepoId, missionBranch));
+    // ensureCheckoutNow never rejects, but the chain must survive even if that
+    // ever changes: a poisoned queue would silently end fetching forever.
+    checkoutQueue.set(providerRepoId, next.catch(() => undefined));
+    return next;
+  }
+
+  async function ensureCheckoutNow(
     workstreamId: string,
     providerRepoId: string,
     missionBranch: string
@@ -1182,7 +1199,30 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
 
     const executionId = command.executionId;
     if (!executionId) throw new Error("the command named no execution");
-    const repositoryPath = host.repositoryPath(workstream.providerRepoId);
+    let repositoryPath = host.repositoryPath(workstream.providerRepoId);
+    if (
+      workstream.provider === "github" &&
+      (repositoryPath === null || !(await hasMissionBranch(repositoryPath, workstream.missionBranch)))
+    ) {
+      // The mission's first turn is dispatched the moment this machine takes
+      // the lane, and taking the lane necessarily precedes the fetch: the
+      // clone credential is minted over the runner credential, so enrolment
+      // cannot wait for the checkout. The turn therefore waits for the fetch
+      // here instead of failing on the race — the dispatch-path sibling of
+      // discovery's D-060 guard, which covered announce and left this path to
+      // fail a real first turn with `invalid reference` or a misdiagnosed
+      // "lives on another machine". A person just asked for this turn, so a
+      // standing retry backoff is reset rather than waited out: one fresh
+      // attempt per human act, never a five-minute wait for a click.
+      checkoutRetry.delete(workstreamId);
+      await ensureCheckout(workstreamId, workstream.providerRepoId, workstream.missionBranch);
+      repositoryPath = host.repositoryPath(workstream.providerRepoId);
+      if (repositoryPath === null || !(await hasMissionBranch(repositoryPath, workstream.missionBranch))) {
+        throw new Error(
+          checkoutRetry.get(workstreamId)?.reason ?? "this machine could not fetch the repository"
+        );
+      }
+    }
     if (!repositoryPath) throw new Error("this local repository lives on another machine");
     const payload = StartPayloadSchema.safeParse(command.payload);
     if (!payload.success) throw new Error("the command payload was malformed");

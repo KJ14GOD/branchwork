@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunnerCommand, SequencedRunnerEvent } from "@novus/contracts";
 import type { ControlPlaneClient } from "../electron/api-client";
-import { startRunnerAgent, type RunnerAgent, type RunnerHost } from "../electron/runner-agent";
+import { startRunnerAgent, type RunnerAgent, type RunnerAgentDeps, type RunnerHost } from "../electron/runner-agent";
 
 /**
  * The agent itself, driven end to end against a stubbed control plane and the
@@ -55,6 +56,15 @@ class FakeControlPlane {
   /** Which lane's credential is which, so a runner cannot poll another's. */
   readonly credentials = new Map<string, string>([[CREDENTIAL, WORKSTREAM_ID]]);
   turnsStarted = 0;
+  /** The mission's repository, as the commands response states it. */
+  provider: "local" | "github" = "local";
+  providerRepoId = "local-1";
+  /** Where a minted clone credential points; null refuses the route. */
+  remoteUrl: string | null = null;
+  /** How many clone-credential mints refuse before succeeding — the seed for
+   *  the first-turn race, where the fetch is not done when the turn arrives. */
+  credentialFailures = 0;
+  credentialMints = 0;
 
   enqueue(command: Omit<QueuedCommand, "state">): void {
     this.commands.push({ ...command, state: "pending" });
@@ -94,8 +104,8 @@ class FakeControlPlane {
           missionId: MISSION_ID,
           missionBranch: branch,
           baseSha: BASE_SHA,
-          provider: "local",
-          providerRepoId: "local-1",
+          provider: this.provider,
+          providerRepoId: this.providerRepoId,
           harnessSessionId: null
         }
       });
@@ -107,6 +117,21 @@ class FakeControlPlane {
       const command = this.commands.find((candidate) => candidate.commandId === commandId);
       if (command && command.state !== "completed" && command.state !== "failed") command.state = body.state;
       return json({ ok: true });
+    }
+
+    if (url.pathname === "/runner/clone-credential") {
+      this.credentialMints += 1;
+      if (this.credentialFailures > 0) {
+        this.credentialFailures -= 1;
+        return json({ error: { code: "minting_refused", message: "the seeded mint refusal" } }, 503);
+      }
+      if (!this.remoteUrl) return json({ error: { code: "no_remote", message: "no remote here" } }, 404);
+      return json({
+        remoteUrl: this.remoteUrl,
+        username: "x-access-token",
+        token: "seeded-clone-token",
+        expiresAt: new Date(Date.now() + 300_000).toISOString()
+      });
     }
 
     if (url.pathname === "/runner/events") {
@@ -166,14 +191,15 @@ function host(): RunnerHost {
   };
 }
 
-function start(): RunnerAgent {
+function start(overrides: Partial<RunnerAgentDeps> = {}): RunnerAgent {
   agent = startRunnerAgent({
     api: fakeApi(plane),
     controlPlaneUrl: "http://control-plane.test",
     getToken: () => "a-session",
     host: host(),
     fetch: plane.fetch,
-    fakeHarness: true
+    fakeHarness: true,
+    ...overrides
   });
   return agent;
 }
@@ -422,5 +448,147 @@ describe("two approaches on one machine", () => {
     expect(approach).toBe(APPROACH_BRANCH);
     expect(existsSync(join(worktrees, WORKSTREAM_ID, "NOVUS_FAKE_TURN.md"))).toBe(true);
     expect(existsSync(join(worktrees, APPROACH_ID, "NOVUS_FAKE_TURN.md"))).toBe(true);
+  }, 60_000);
+});
+
+/**
+ * The first-turn race the live GitHub proof observed (2026-08-16): the
+ * mission's first direction is dispatched the moment this machine takes the
+ * lane, and taking the lane necessarily precedes the fetch — the clone
+ * credential is minted over the runner credential. Before the guard, the turn
+ * settled failed with `invalid reference` (checkout present, branch absent) or
+ * the misdiagnosed "lives on another machine" (no checkout at all). Both
+ * shapes are seeded here: the first credential mint refuses, so discovery's
+ * own fetch deterministically has not happened when the command arrives.
+ */
+describe("a GitHub lane's turn waits for the fetch it raced", () => {
+  const GH_REPO = "gh-race-1";
+  let seed: string;
+  let bare: string;
+  let server: Server | null = null;
+  let remoteUrl = "";
+  let paths: Map<string, string>;
+
+  /** A dumb-HTTP git remote on loopback: enough for clone and fetch, no auth
+   *  — credential hygiene is workspace-clone.test.ts's subject, not this one's. */
+  async function serveBare(): Promise<void> {
+    await git(bare, ["update-server-info"]);
+    server = createServer((request, response) => {
+      const path = decodeURIComponent(new URL(request.url ?? "/", "http://remote").pathname).replace(
+        /^\/repo\.git/,
+        ""
+      );
+      const file = join(bare, path);
+      if (!existsSync(file) || statSync(file).isDirectory()) {
+        response.statusCode = 404;
+        return response.end();
+      }
+      response.end(readFileSync(file));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const port = (server!.address() as { port: number }).port;
+    remoteUrl = `http://127.0.0.1:${port}/repo.git`;
+  }
+
+  function githubApi(): ControlPlaneClient {
+    return {
+      listMissions: async () => [
+        { missionId: MISSION_ID, repository: { provider: "github", providerRepoId: GH_REPO } }
+      ],
+      getMission: async () => ({
+        workstream: { workstreamId: WORKSTREAM_ID, missionBranch: MISSION_BRANCH, branchStatus: "created" },
+        workstreams: plane.lanes,
+        runner: null
+      }),
+      registerRunner: async (workstreamId: string) => {
+        plane.registrations.push(workstreamId);
+        plane.credentials.set(CREDENTIAL, workstreamId);
+        // The race itself: the control plane dispatches the controller's
+        // queued first direction the moment the runner enrols, while the
+        // fetch this enrolment makes possible has not begun.
+        plane.enqueue(command());
+        return {
+          runnerId: `rnr_${workstreamId}`,
+          credential: CREDENTIAL,
+          expiresAt: new Date(Date.now() + 86_400_000).toISOString()
+        };
+      }
+    } as unknown as ControlPlaneClient;
+  }
+
+  function githubHost(): RunnerHost {
+    return {
+      userDataPath: userData,
+      isPackaged: false,
+      label: "test-machine",
+      repositoryPath: (providerRepoId) => paths.get(providerRepoId) ?? null,
+      recordRepositoryPath: (providerRepoId, repoPath) => paths.set(providerRepoId, repoPath)
+    };
+  }
+
+  beforeEach(async () => {
+    paths = new Map();
+    plane.provider = "github";
+    plane.providerRepoId = GH_REPO;
+    // Discovery's own mint eats this refusal inside the enrolment pass, so the
+    // checkout deterministically does not exist when the command is delivered.
+    plane.credentialFailures = 1;
+    seed = mkdtempSync(join(tmpdir(), "novus-gh-seed-"));
+    bare = mkdtempSync(join(tmpdir(), "novus-gh-bare-"));
+    await git(seed, ["init", "-b", "main"]);
+    await git(seed, ["config", "user.name", "Test"]);
+    await git(seed, ["config", "user.email", "test@local"]);
+    writeFileSync(join(seed, "README.md"), "# origin fixture\n");
+    await git(seed, ["add", "-A"]);
+    await git(seed, ["commit", "-m", "init"]);
+    await git(seed, ["branch", MISSION_BRANCH]);
+    rmSync(bare, { recursive: true, force: true });
+    await git(seed, ["clone", "--bare", seed, bare]);
+    await serveBare();
+    plane.remoteUrl = remoteUrl;
+  });
+
+  afterEach(async () => {
+    if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+    server = null;
+    rmSync(seed, { recursive: true, force: true });
+    rmSync(bare, { recursive: true, force: true });
+  });
+
+  it("with no checkout at all: fetches, then runs, instead of failing as another machine's", async () => {
+    start({ api: githubApi(), host: githubHost() });
+
+    await waitFor(
+      "the raced first turn to complete",
+      () => plane.stateOf("cmd_first00000000000000") === "completed",
+      30_000
+    );
+    expect(plane.kinds()).toContain("execution.completed");
+    expect(plane.kinds()).not.toContain("execution.failed");
+    // Two mints: the seeded refusal discovery ate, then the turn's own.
+    expect(plane.credentialMints).toBeGreaterThanOrEqual(2);
+    // The turn ran in a real worktree of the fetched checkout, on the branch.
+    const worktree = join(userData, "worktrees", WORKSTREAM_ID);
+    expect((await git(worktree, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()).toBe(MISSION_BRANCH);
+  }, 60_000);
+
+  it("with the checkout present but the branch unfetched: fetches the branch instead of `invalid reference`", async () => {
+    // A previous mission's checkout: the repository is here, this mission's
+    // branch is not — the exact shape behind `fatal: invalid reference`.
+    const checkout = join(userData, "repositories", GH_REPO);
+    await git(userData, ["clone", "--single-branch", "--branch", "main", bare, checkout]);
+    paths.set(GH_REPO, checkout);
+
+    start({ api: githubApi(), host: githubHost() });
+
+    await waitFor(
+      "the branch-fetching turn to complete",
+      () => plane.stateOf("cmd_first00000000000000") === "completed",
+      30_000
+    );
+    expect(plane.kinds()).toContain("execution.completed");
+    expect(plane.kinds()).not.toContain("execution.failed");
+    const worktree = join(userData, "worktrees", WORKSTREAM_ID);
+    expect((await git(worktree, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()).toBe(MISSION_BRANCH);
   }, 60_000);
 });
