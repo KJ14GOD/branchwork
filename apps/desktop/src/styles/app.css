@@ -845,6 +845,13 @@ body {
   color: var(--text-1);
 }
 
+/* The repository glyph a project row leads with (D-128): quieter than the
+   name beside it, from the one approved stroke set (DESIGN.md#icons). */
+.side-repo-glyph {
+  flex: none;
+  color: var(--text-2);
+}
+
 .side-parent:hover {
   background: transparent;
 }
@@ -3962,7 +3969,8 @@ body {
 /* The active mission's structure, nested where its project is (D-084):
    approach rows one step in from the mission chip, session rows one step
    further, Compare at the mission level. Rows are the same 6px inset chips
-   mission rows are (D-078); depth is indentation and type, never a border. */
+   mission rows are (D-078); depth is indentation, type, and the hairline
+   spine (D-128) — never a border on the row itself. */
 .side-tree .side-row {
   min-height: 28px;
   /* The same inset chips mission rows are (D-078): the tree's rows share the
@@ -3973,7 +3981,7 @@ body {
 }
 
 .side-approach {
-  padding-left: calc(var(--s-4) + var(--s-3));
+  padding-left: calc(var(--s-4) + var(--s-4));
 }
 
 .side-approach .side-open-mission {
@@ -3983,23 +3991,94 @@ body {
 }
 
 .side-session {
-  padding-left: calc(var(--s-6) + var(--s-2));
+  padding-left: calc(var(--s-6) + var(--s-4));
 }
 
-.side-compare {
-  padding-left: calc(var(--s-4) + var(--s-3));
+.side-compare,
+.side-fork {
+  padding-left: calc(var(--s-4) + var(--s-4));
 }
 
-/* The branch beneath its approach (D-126): machinery, quiet and mono. */
+/* The branch beneath its approach (D-126): machinery, quiet and mono — in
+   the same chip coordinates as the rows around it, so the spine's offsets
+   hold (D-128). */
 .side-branch {
   font: var(--type-meta);
   font-family: var(--font-mono);
   color: var(--text-3);
-  padding-left: calc(var(--s-4) + var(--s-3) + 15px);
+  width: calc(100% - var(--s-4));
+  margin: 0 var(--s-2);
+  padding-left: calc(var(--s-6) + var(--s-4));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-height: 18px;
+}
+
+/* The tree draws its own structure (D-128): a hairline spine dropping from
+   the mission through its rows, an elbow saying "child of" where a dot used
+   to say only "different". All offsets are the spacing scale; the color is
+   --edge, so the structure sits behind the words, never competing. */
+.side-tree > *,
+.side-children,
+.side-children > * {
+  position: relative;
+}
+
+.side-tree > .side-row::before,
+.side-children > .side-row::before,
+.side-children > .side-branch::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  height: 50%;
+  width: var(--s-2);
+  border-left: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
+  border-bottom-left-radius: var(--r-control);
+  pointer-events: none;
+}
+
+.side-tree > .side-row::before {
+  left: var(--s-4);
+}
+
+.side-children > .side-row::before,
+.side-children > .side-branch::before {
+  left: calc(var(--s-4) + var(--s-4));
+}
+
+/* The spine continues past a row while anything follows it. */
+.side-tree > .side-row:not(:last-child)::after,
+.side-children > *:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid var(--edge);
+  pointer-events: none;
+}
+
+.side-tree > .side-row:not(:last-child)::after {
+  left: var(--s-4);
+}
+
+.side-children > *:not(:last-child)::after {
+  left: calc(var(--s-4) + var(--s-4));
+}
+
+/* The children block is full-bleed (its rows carry their own chip margins),
+   so the mission-level spine passes through it at the chip offset. */
+.side-children:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--s-2) + var(--s-4));
+  width: 0;
+  border-left: 1px solid var(--edge);
+  pointer-events: none;
 }
 
 .side-fork .side-fork-name {

@@ -314,6 +314,19 @@ function SearchDialog({
   );
 }
 
+/** The repository, as a book (D-128): the one glyph a project row leads
+ *  with — same approved stroke set as Home and Search, always beside its
+ *  name (DESIGN.md#icons). */
+function RepoGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+      strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true" className="side-repo-glyph">
+      <rect x="3" y="2.5" width="10" height="11" rx="1.5" />
+      <path d="M5.75 2.5v11" />
+    </svg>
+  );
+}
+
 function HomeGlyph() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
@@ -548,7 +561,7 @@ function MissionTree({
 
   return (
     <div className="side-tree" data-testid="mission-tree">
-      {lanes.map((lane, index) => {
+      {lanes.map((lane) => {
           const selected = lane.workstreamId === selectedLaneId;
           const needs =
             !selected &&
@@ -572,10 +585,10 @@ function MissionTree({
                       : `${lane.name} — the work this mission started with`
                   }
                 >
-                  <span
-                    className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
-                    aria-hidden="true"
-                  />
+                  {/* No identity dot here (D-128): the row carries the lane's
+                      name, and the spine already says it is a child. The dot
+                      keeps its work on the room's tabs, where two lanes'
+                      conversations sit side by side. */}
                   <span className="side-name" data-testid={selected ? "lane-context" : undefined}>
                     {lane.name}
                     {lane.approach ? " · isolated workspace" : ""}
@@ -600,16 +613,19 @@ function MissionTree({
                   </button>
                 )}
               </div>
-              {/* The branch this approach's work lands on (D-126): machinery,
-                  quiet and mono, beneath the approach it belongs to. */}
+              {/* Its children, under it and nowhere else — one block, so the
+                  approach-level spine has a single element to pass through
+                  (D-128). The branch (D-126) is the first child: machinery,
+                  quiet and mono. */}
               {selected && (
-                <div className="side-branch" data-testid="rail-branch" title={lane.missionBranch}>
-                  {lane.missionBranch}
+                <div className="side-children">
+                  <div className="side-branch" data-testid="rail-branch" title={lane.missionBranch}>
+                    {lane.missionBranch}
+                  </div>
+                  {sessionRows}
+                  {draftRow}
                 </div>
               )}
-              {/* Its children, under it and nowhere else. */}
-              {selected && sessionRows}
-              {selected && draftRow}
             </Fragment>
           );
         })}
@@ -1467,6 +1483,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                       aria-current={selected}
                       data-testid="project-row"
                     >
+                      <RepoGlyph />
                       <span className="side-name">{project.name}</span>
                       {project.missions.length > 0 && (
                         <span className="side-count">{project.missions.length}</span>
