@@ -1777,3 +1777,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** The branch is inside the approach's click target, which selects the approach — the row's one action, unchanged. `rail-branch` keeps its testid and its assertions. The spine selectors lose their branch cases; the approach chip gains a `side-approach-branching` state with its own elbow geometry. DESIGN.md's rail paragraph and Workstreams bullet say the branch is the row's second line and the spine is `--edge-hover`.
 
 **Revisit when.** A theme lands where `--edge-hover` is too loud for a persistent structural line, or the approach chip accumulates a third line.
+
+## D-130 — The folder open, the branch legible: two refinements on sight of D-128/D-129
+
+**Context.** Owner-directed, on sight. The repository glyph D-128 drew as a closed book read as a document; the owner asked for the open-folder shape the coding harnesses (Codex among them) made familiar — a place being worked in, not a thing being read. And the mission branch, folded into the approach chip by D-129 at the meta step in `--text-3`, was now positioned right but still whispered: it is the one fact of the chip the owner actually reads, and quiet buried it.
+
+**Decision.** The repository glyph becomes an **open folder** — same approved stroke set, 1.5px, 16 viewBox, beside the name as before. The branch line takes **weight 500 and `--text-2`** — still mono, still the meta step, still the row's second line; emphasis by weight and one text step, never by color, exactly the house rule for a state name.
+
+**Alternatives.** A closed folder (rejected: closed says storage; open says the work is here). Bumping the branch to the row step or `--text-1` (rejected: it would compete with the lane's name above it — the name is what the row *is*, the branch is its strongest fact).
+
+**Consequences.** DESIGN.md's rail paragraph names the open folder and the branch's weight. Nothing moves; no testid, geometry, or behavior changes. D-128's "book" stands in the record as drawn and replaced on sight.
+
+**Revisit when.** A second glyph joins the rail and the set needs a documented inventory, or branch names grow long enough that weight alone cannot keep the truncation readable.

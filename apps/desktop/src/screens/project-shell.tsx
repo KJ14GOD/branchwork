@@ -314,15 +314,17 @@ function SearchDialog({
   );
 }
 
-/** The repository, as a book (D-128): the one glyph a project row leads
- *  with — same approved stroke set as Home and Search, always beside its
- *  name (DESIGN.md#icons). */
+/** The repository, as an open folder (D-130 — a place being worked in,
+ *  the shape coding harnesses made familiar): the one glyph a project row
+ *  leads with — same approved stroke set as Home and Search, always beside
+ *  its name (DESIGN.md#icons). */
 function RepoGlyph() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
-      strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true" className="side-repo-glyph">
-      <rect x="3" y="2.5" width="10" height="11" rx="1.5" />
-      <path d="M5.75 2.5v11" />
+      strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" aria-hidden="true"
+      className="side-repo-glyph">
+      <path d="M1.75 12.25V3.9a1.15 1.15 0 0 1 1.15-1.15h2.84a1.15 1.15 0 0 1 .92.46l.62.83a1.15 1.15 0 0 0 .92.46h3.9a1.15 1.15 0 0 1 1.15 1.15v1.1" />
+      <path d="M1.75 12.25 3.3 8.06a1.15 1.15 0 0 1 1.08-.75h9.02a.7.7 0 0 1 .66.94l-1.2 3.26a1.15 1.15 0 0 1-1.08.74H1.75z" />
     </svg>
   );
 }

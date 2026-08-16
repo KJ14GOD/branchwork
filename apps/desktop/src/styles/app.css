@@ -4015,13 +4015,15 @@ body {
   padding-left: calc(var(--s-4) + var(--s-4));
 }
 
-/* The branch inside its approach's chip (D-126, D-129): machinery, quiet
-   and mono, a second line of the row — not a row. */
+/* The branch inside its approach's chip (D-126, D-129): mono, a second
+   line of the row — not a row. Weighted and a text step up (D-130): it is
+   the chip's one fact the owner actually reads, and quiet buried it. */
 .side-branch {
   display: block;
   font: var(--type-meta);
   font-family: var(--font-mono);
-  color: var(--text-3);
+  font-weight: 500;
+  color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
