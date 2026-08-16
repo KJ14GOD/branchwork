@@ -23,13 +23,14 @@ import { artifactIdsByTarget, listArtifacts } from "./artifacts.ts";
 import {
   contestedPaths,
   listDecisions,
-  listWorkstreams,
   preparePullRequest,
   summarizeApproaches
 } from "./approaches.ts";
 import { listSessions } from "./sessions.ts";
-import { branchPushFor, pullRequestForLane } from "./pull-requests.ts";
-import type { Db } from "./db.ts";
+import { listWorkstreams } from "./workstreams.ts";
+import { registeredRunner, runnerOnline } from "./runners.ts";
+import { branchPushFor, pullRequestForLane } from "./publication.ts";
+import { withSnapshot, type Db, type Queryable } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
 import { listDirections } from "./directions.ts";
 import {
@@ -49,11 +50,8 @@ import type { MissionAccess } from "./authz.ts";
  * stored field that could drift.
  */
 
-/** A runner that has not been heard from for this long reads as offline. */
-const RUNNER_OFFLINE_AFTER_MS = 30_000;
-
 export async function listParticipants(
-  db: Db,
+  db: Queryable,
   missionId: string,
   controllerUserId: string | null
 ): Promise<Participant[]> {
@@ -78,7 +76,7 @@ export async function listParticipants(
   }));
 }
 
-export async function controlSnapshot(db: Db, workstreamId: string | null): Promise<ControlSnapshot> {
+export async function controlSnapshot(db: Queryable, workstreamId: string | null): Promise<ControlSnapshot> {
   const empty: ControlSnapshot = {
     leaseId: null,
     holderUserId: null,
@@ -148,7 +146,7 @@ export async function controlSnapshot(db: Db, workstreamId: string | null): Prom
   };
 }
 
-export async function listExecutions(db: Db, missionId: string): Promise<Execution[]> {
+export async function listExecutions(db: Queryable, missionId: string): Promise<Execution[]> {
   const result = await db.query(
     `select e.*, u.login as started_by_login from executions e
        join users u on u.user_id = e.started_by
@@ -199,7 +197,7 @@ function numberOrNull(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export async function listCheckpoints(db: Db, missionId: string): Promise<Checkpoint[]> {
+export async function listCheckpoints(db: Queryable, missionId: string): Promise<Checkpoint[]> {
   const checkpoints = await db.query(
     "select * from checkpoints where mission_id = $1 order by created_at",
     [missionId]
@@ -255,7 +253,7 @@ export async function listCheckpoints(db: Db, missionId: string): Promise<Checkp
  * is derived here against the current head rather than stored and left to rot.
  */
 export async function listChecks(
-  db: Db,
+  db: Queryable,
   missionId: string,
   /** The head of the lane a check belongs to. A mission with competing
    *  approaches has one head per lane, and a check that proves its own lane's
@@ -304,7 +302,7 @@ export async function listChecks(
   });
 }
 
-export async function workspaceOf(db: Db, workstreamId: string | null): Promise<Workspace | null> {
+export async function workspaceOf(db: Queryable, workstreamId: string | null): Promise<Workspace | null> {
   if (!workstreamId) return null;
   const result = await db.query("select * from workspaces where wst_id = $1", [workstreamId]);
   const row = result.rows[0];
@@ -330,7 +328,7 @@ export async function workspaceOf(db: Db, workstreamId: string | null): Promise<
   };
 }
 
-export async function listProcesses(db: Db, missionId: string): Promise<WorkspaceProcess[]> {
+export async function listProcesses(db: Queryable, missionId: string): Promise<WorkspaceProcess[]> {
   const result = await db.query(
     `select p.*, u.login as started_by_login
        from workspace_processes p
@@ -357,37 +355,17 @@ export async function listProcesses(db: Db, missionId: string): Promise<Workspac
   }));
 }
 
-/** Who holds one lane's baton. Control is per lane (D-074), so a mission with
- *  two approaches has two answers to "who is in control?" and the room says
- *  both rather than picking one. */
-async function holderOf(db: Db, workstreamId: string): Promise<string | null> {
-  const result = await db.query(
-    `select u.login from control_leases l join users u on u.user_id = l.holder_user_id
-      where l.wst_id = $1 and l.state in ('held', 'releasing') limit 1`,
-    [workstreamId]
-  );
-  return (result.rows[0]?.login as string | undefined) ?? null;
-}
-
-export async function runnerStatus(db: Db, workstreamId: string | null): Promise<RunnerStatus | null> {
+export async function runnerStatus(db: Queryable, workstreamId: string | null): Promise<RunnerStatus | null> {
   if (!workstreamId) return null;
-  const result = await db.query(
-    `select r.runner_id, r.kind, r.label, r.last_seen_at, u.login
-       from runners r join users u on u.user_id = r.owner_user_id
-      where r.wst_id = $1 and r.revoked_at is null
-      order by r.created_at desc limit 1`,
-    [workstreamId]
-  );
-  const row = result.rows[0];
-  if (!row) return null;
-  const lastSeen = (row.last_seen_at as Date | null) ?? null;
+  const runner = await registeredRunner(db, workstreamId);
+  if (!runner) return null;
   return {
-    runnerId: row.runner_id as string,
+    runnerId: runner.runnerId,
     kind: "local",
-    label: row.label as string,
-    ownerLogin: row.login as string,
-    online: lastSeen !== null && Date.now() - lastSeen.getTime() < RUNNER_OFFLINE_AFTER_MS,
-    lastSeenAt: lastSeen ? lastSeen.toISOString() : null
+    label: runner.label,
+    ownerLogin: runner.ownerLogin,
+    online: runnerOnline(runner.lastSeenAt),
+    lastSeenAt: runner.lastSeenAt ? runner.lastSeenAt.toISOString() : null
   };
 }
 
@@ -542,32 +520,52 @@ function lastProgressOf(executions: Execution[], events: EventRow[]): Date | nul
   return last ?? new Date(latest.createdAt);
 }
 
-/** Assembles the whole room payload for one authorized viewer. */
+/**
+ * The room's poll, observed — the write half a read must not hide. Called by
+ * the detail route deliberately, before the projection, so the projection
+ * itself can be genuinely read-only.
+ *
+ * The lease's heartbeat is the holder's own client being alive, and this is
+ * where that is observed: the room polls the detail endpoint while it is open,
+ * so a controller who is sitting there watching keeps their lease, and one
+ * whose machine is closed stops keeping it (ARCHITECTURE.md — the TTL is the
+ * grace period after the last heartbeat). Without this the sweep expired every
+ * lease thirty minutes after it was created, whoever was watching (D-051). It
+ * covers every lease the viewer holds in this mission, whichever lane their
+ * room is showing — reading one approach must not lapse the sibling's baton
+ * (D-074). The same read is presence's signal (D-091): their own row reads
+ * connected while they poll; everyone else's reads what that person's own
+ * polling has earned.
+ */
+export async function observeMission(db: Db, missionId: string, viewerUserId: string): Promise<void> {
+  await touchHeldLeases(db, missionId, viewerUserId);
+  await touchPresence(db, missionId, viewerUserId);
+}
+
+/** Every lane's baton holder, in one read. Control is per lane (D-074), so a
+ *  mission with two approaches has two answers to "who is in control?" and the
+ *  room says both rather than picking one. */
+async function holdersByLane(db: Queryable, missionId: string): Promise<Map<string, string>> {
+  const result = await db.query(
+    `select l.wst_id, u.login from control_leases l join users u on u.user_id = l.holder_user_id
+      where l.mission_id = $1 and l.state in ('held', 'releasing')`,
+    [missionId]
+  );
+  return new Map(result.rows.map((row) => [row.wst_id as string, row.login as string]));
+}
+
+/**
+ * Assembles the whole room payload for one authorized viewer, inside one
+ * repeatable-read snapshot: everything the room shows describes the same
+ * instant, and this function is structurally unable to write.
+ */
 export async function missionDetail(
-  db: Db,
+  pool: Db,
   access: MissionAccess,
   viewerUserId: string,
   base: { mission: MissionDetailResponse["mission"]; workstream: MissionDetailResponse["workstream"] }
 ): Promise<MissionDetailResponse> {
-  // The lease's heartbeat is the holder's own client being alive, and this is
-  // where that is observed: the room polls this endpoint while it is open, so a
-  // controller who is sitting there watching keeps their lease, and one whose
-  // machine is closed stops keeping it (ARCHITECTURE.md — the TTL is the grace
-  // period after the last heartbeat).
-  //
-  // Without this the sweep expired every lease thirty minutes after it was
-  // created, whoever was watching, and every direction after that queued behind
-  // a controller who no longer existed. The verb was written when the sweep was
-  // and never called (D-051). It covers every lease the viewer holds in this
-  // mission, whichever lane their room is showing — reading one approach must
-  // not lapse the sibling's baton (D-074).
-  await touchHeldLeases(db, access.missionId, viewerUserId);
-  // The same read is presence's signal (D-091): this viewer's client is alive
-  // in this mission, whatever they hold. Their own row reads connected while
-  // they poll; everyone else's row reads whatever that person's own polling
-  // has earned.
-  await touchPresence(db, access.missionId, viewerUserId);
-
+  return withSnapshot(pool, async (db) => {
   const checkpointsForSha = await listCheckpoints(db, access.missionId);
   // The revision a check has to match to still count as current evidence —
   // per lane, because a mission may hold competing approaches and each one's
@@ -642,11 +640,14 @@ export async function missionDetail(
       )
     });
 
+  const holders = await holdersByLane(db, access.missionId);
   const controllers = new Map<string, string | null>();
   for (const lane of workstreams) {
     controllers.set(
       lane.workstreamId,
-      lane.workstreamId === access.workstreamId ? control.holderLogin : await holderOf(db, lane.workstreamId)
+      lane.workstreamId === access.workstreamId
+        ? control.holderLogin
+        : holders.get(lane.workstreamId) ?? null
     );
   }
 
@@ -817,4 +818,5 @@ export async function missionDetail(
     state,
     overlays
   };
+  });
 }

@@ -1,9 +1,10 @@
 import { settlePendingApprovals } from "./approvals.ts";
 import { sweepStalePendingArtifacts } from "./artifacts.ts";
 import type { Db } from "./db.ts";
-import { withTransaction } from "./db.ts";
+import { withMission } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { ACTIVE_EXECUTION_STATES, dispatchQueuedForController } from "./executions.ts";
+import { RUNNER_OFFLINE_AFTER_MS } from "./runners.ts";
 
 /**
  * The two failure paths the canonical documents promise and the product did
@@ -16,14 +17,6 @@ import { ACTIVE_EXECUTION_STATES, dispatchQueuedForController } from "./executio
  * runner that just came back, resolve deterministically: one wins and the
  * other changes nothing.
  */
-
-/**
- * A runner unheard from for longer than this reads as offline in the room.
- * The same number `mission-detail.ts` renders from, so what a participant sees
- * and what the sweep believes cannot disagree.
- */
-const RUNNER_OFFLINE_AFTER_MS = 30_000;
-// Referenced by RELIABILITY_THRESHOLDS so the room and the sweep quote one number.
 
 /**
  * How long an execution's runner must be silent before Novus ends the
@@ -102,8 +95,7 @@ export async function sweepRunners(db: Db, now = new Date()): Promise<number> {
 
   let interrupted = 0;
   for (const row of stale.rows) {
-    const ended = await withTransaction(db, async (client) => {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [row.mission_id]);
+    const ended = await withMission(db, row.mission_id, async (client) => {
       // The guard is the whole safety property: a runner that reported a
       // terminal outcome a moment ago, or a second sweep, finds nothing to do.
       const moved = await client.query(
@@ -168,8 +160,7 @@ export async function sweepLeases(db: Db, now = new Date()): Promise<number> {
 
   let expired = 0;
   for (const row of stale.rows) {
-    const moved = await withTransaction(db, async (client) => {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [row.mission_id]);
+    const moved = await withMission(db, row.mission_id, async (client) => {
       const released = await client.query(
         `update control_leases set state = 'expired', ended_at = now()
           where lease_id = $1 and state in ('held', 'releasing') returning lease_id`,
@@ -241,8 +232,7 @@ export async function sweepOffers(db: Db, now = new Date()): Promise<number> {
 
   let expired = 0;
   for (const row of stale.rows) {
-    const moved = await withTransaction(db, async (client) => {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [row.mission_id]);
+    const moved = await withMission(db, row.mission_id, async (client) => {
       const lapsed = await client.query(
         `update handoff_offers set state = 'expired', ended_at = now()
           where offer_id = $1 and state = 'open' returning offer_id`,

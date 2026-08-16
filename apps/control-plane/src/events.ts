@@ -1,5 +1,6 @@
 import type { MissionEvent } from "@novus/contracts";
 import type pg from "pg";
+import { lockMission } from "./db.ts";
 import { newEventId } from "./ids.ts";
 
 /**
@@ -31,7 +32,7 @@ export interface RecordEventArgs {
  * event.
  */
 export async function nextSeq(client: pg.PoolClient, missionId: string): Promise<number> {
-  await client.query("select pg_advisory_xact_lock(hashtext($1))", [missionId]);
+  await lockMission(client, missionId);
   const result = await client.query(
     "select coalesce(max(seq), 0)::int + 1 as next from events where mission_id = $1",
     [missionId]
@@ -125,6 +126,23 @@ export function toMissionEvent(row: EventRow): MissionEvent {
     schemaVersion: row.schema_version,
     occurredAt: row.occurred_at.toISOString()
   };
+}
+
+/**
+ * When an event of one kind last occurred for an execution, by the log's own
+ * ordering. The log's reads belong to this module the way its one insert
+ * does; a targeted question is asked here rather than re-writing the query.
+ */
+export async function lastEventAt(
+  q: { query(text: string, values?: unknown[]): Promise<pg.QueryResult> },
+  executionId: string,
+  kind: string
+): Promise<Date | null> {
+  const result = await q.query(
+    "select occurred_at from events where execution_id = $1 and kind = $2 order by seq desc limit 1",
+    [executionId, kind]
+  );
+  return (result.rows[0]?.occurred_at as Date | undefined) ?? null;
 }
 
 export const EVENT_SELECT = `

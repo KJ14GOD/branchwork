@@ -1,6 +1,4 @@
 import {
-  EnabledMcpServersSchema,
-  EnabledSkillsSchema,
   type CreateMissionInput,
   type Mission,
   type MissionDetailResponse,
@@ -15,7 +13,8 @@ import { newLeaseId, newMissionId, newRepoId, newWorkstreamId } from "./ids.ts";
 import { insertSession } from "./sessions.ts";
 import type { AuthedContext } from "./auth.ts";
 import { missionAccess } from "./authz.ts";
-import { missionDetail } from "./mission-detail.ts";
+import { missionDetail, observeMission } from "./mission-detail.ts";
+import { toWorkstream } from "./workstreams.ts";
 import {
   BranchConflictError,
   ProviderTransientError,
@@ -52,24 +51,6 @@ interface MissionRow {
   has_open_pr?: boolean;
 }
 
-interface WorkstreamRow {
-  wst_id: string;
-  mission_id: string;
-  name: string;
-  base_ref: string;
-  base_sha: string;
-  mission_branch: string;
-  branch_status: string;
-  branch_error: string | null;
-  approach_flag?: boolean;
-  intent?: string | null;
-  forked_from_wst_id?: string | null;
-  origin_sha?: string | null;
-  remote_head_sha?: string | null;
-  permission_profile?: string | null;
-  enabled_skills?: unknown;
-  enabled_mcp_servers?: unknown;
-}
 
 function toRepository(row: MissionRow): RepositoryRef | null {
   if (!row.repo_id) return null;
@@ -124,33 +105,6 @@ function toMission(row: MissionRow): Mission {
   };
 }
 
-function toWorkstream(row: WorkstreamRow): Workstream {
-  return {
-    workstreamId: row.wst_id,
-    missionId: row.mission_id,
-    name: row.name,
-    baseRef: row.base_ref,
-    baseSha: row.base_sha,
-    missionBranch: row.mission_branch,
-    branchStatus: row.branch_status as Workstream["branchStatus"],
-    branchError: row.branch_error,
-    // What makes this lane an approach rather than the one the mission started
-    // with (D-074). Absent on every mission that never forked.
-    approach: Boolean(row.approach_flag),
-    intent: row.intent ?? null,
-    forkedFromWorkstreamId: row.forked_from_wst_id ?? null,
-    originSha: row.origin_sha ?? null,
-    remoteHeadSha: row.remote_head_sha ?? null,
-    // The lane's standing answer policy (D-115); the DB CHECK owns validity,
-    // and a pre-migration row reads manual — what it always was.
-    permissionProfile: (row.permission_profile as Workstream["permissionProfile"] | null) ?? "manual",
-    // The skills a person enabled on this lane (D-118); malformed or
-    // pre-migration reads as none, never as a wider grant.
-    enabledSkills: EnabledSkillsSchema.catch([]).parse(row.enabled_skills ?? []),
-    // And the MCP servers (D-119), same posture.
-    enabledMcpServers: EnabledMcpServersSchema.catch([]).parse(row.enabled_mcp_servers ?? [])
-  };
-}
 
 /**
  * Records the repository for this org if it isn't recorded yet. Repository
@@ -840,8 +794,8 @@ export async function getMissionBase(
     "select * from workstreams where mission_id = $1 order by created_at, wst_id",
     [missionId]
   );
-  const rows = workstreamRows.rows as WorkstreamRow[];
-  const selected = workstreamId ? rows.find((lane) => lane.wst_id === workstreamId) : rows[0];
+  const rows = workstreamRows.rows as Record<string, unknown>[];
+  const selected = workstreamId ? rows.find((lane) => (lane.wst_id as string) === workstreamId) : rows[0];
   if (workstreamId && !selected) return null;
   const workstream = selected ? toWorkstream(selected) : null;
   return { mission: toMission(row), workstream };
@@ -860,6 +814,9 @@ export async function getMission(
   if (!base) return null;
   const access = await missionAccess(db, ctx, missionId, workstreamId ?? null);
   if (!access) return null;
+  // The poll's write half, taken deliberately before the read-only projection:
+  // a GET that keeps a lease and presence alive says so here, not in secret.
+  await observeMission(db, access.missionId, ctx.userId);
   return missionDetail(db, access, ctx.userId, base);
 }
 

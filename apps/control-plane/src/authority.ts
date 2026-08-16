@@ -12,7 +12,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { RouteDeps } from "./routes.ts";
 import type { AuthedContext } from "./auth.ts";
-import { withTransaction } from "./db.ts";
+import { lockMission, withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import {
   AuthorizationError,
@@ -21,7 +21,7 @@ import {
   require as requireCapability,
   type MissionAccess
 } from "./authz.ts";
-import { enqueueCommand } from "./executions.ts";
+import { activeRunner, enqueueCommand } from "./runners.ts";
 import { RELIABILITY_THRESHOLDS } from "./reliability.ts";
 import {
   newControlRequestId,
@@ -113,17 +113,6 @@ function toInvitation(row: InvitationRow): Invitation {
 
 // --- Shared mechanics -------------------------------------------------------
 
-/**
- * The per-mission ordering point (ARCHITECTURE.md#authorization). Any command
- * that reads control state and then writes it takes this first, so two accepts
- * — or an accept racing a revoke — serialize rather than interleave. It is the
- * same lock `recordEvent` takes, and advisory transaction locks are re-entrant
- * within one transaction.
- */
-async function lockMission(client: pg.PoolClient, missionId: string): Promise<void> {
-  await client.query("select pg_advisory_xact_lock(hashtext($1))", [missionId]);
-}
-
 interface CurrentLease {
   leaseId: string;
   holderUserId: string;
@@ -200,13 +189,8 @@ async function requestBoundary(
   client: pg.PoolClient,
   args: { orgId: string; missionId: string; workstreamId: string; offerId: string }
 ): Promise<void> {
-  const runner = await client.query(
-    `select runner_id from runners
-      where wst_id = $1 and revoked_at is null and expires_at > now()
-      order by created_at desc limit 1`,
-    [args.workstreamId]
-  );
-  const runnerId = runner.rows[0]?.runner_id as string | undefined;
+  const runner = await activeRunner(client, args.workstreamId);
+  const runnerId = runner?.runnerId;
   if (!runnerId) return;
   const running = await client.query(
     "select exe_id from executions where wst_id = $1 and state = any($2::text[]) limit 1",

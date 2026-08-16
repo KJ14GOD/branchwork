@@ -22,10 +22,11 @@ import { settlePendingApprovals } from "./approvals.ts";
 import { missionAccess, require as requireCapability } from "./authz.ts";
 import type { MissionAccess } from "./authz.ts";
 import type { Db } from "./db.ts";
-import { withTransaction } from "./db.ts";
+import { withMission, withTransaction } from "./db.ts";
 import { cancelDirection, resolveDirection, submitDirection } from "./directions.ts";
-import { recordEvent } from "./events.ts";
-import { newCommandId, newExecutionId } from "./ids.ts";
+import { lastEventAt, recordEvent } from "./events.ts";
+import { newExecutionId } from "./ids.ts";
+import { activeRunner, enqueueCommand, runnerOnline } from "./runners.ts";
 import { scopeOf, sessionResumePoint } from "./sessions.ts";
 import type { RouteDeps } from "./routes.ts";
 
@@ -54,14 +55,6 @@ export const ACTIVE_EXECUTION_STATES: string[] = ExecutionStateSchema.options.fi
  *  delivered within a 2 s poll and answered within a 7 s interrupt-then-kill
  *  window, so a minute of silence is a machine that is not going to answer. */
 const FORCE_INTERRUPT_AFTER_MS = 60_000;
-
-/**
- * A runner unheard from for this long is treated as gone. It mirrors the
- * threshold the room already renders "runner offline" from
- * (mission-detail.ts), so what a participant sees and what stopping does
- * cannot disagree.
- */
-const RUNNER_OFFLINE_AFTER_MS = 30_000;
 
 /** Said in the log when the machine that was working never answered again. */
 const RUNNER_GONE =
@@ -106,56 +99,6 @@ function skillsOf(value: unknown): EnabledSkill[] {
 function mcpOf(value: unknown): EnabledMcpServer[] {
   const parsed = EnabledMcpServersSchema.safeParse(value);
   return parsed.success ? parsed.data : [];
-}
-
-export interface EnqueueArgs {
-  orgId: string;
-  missionId: string;
-  workstreamId: string;
-  executionId: string | null;
-  runnerId: string;
-  kind:
-    | "start_execution"
-    | "apply_direction"
-    | "stop_execution"
-    | "boundary_request"
-    | "respond_approval";
-  payload: Record<string, unknown>;
-  idempotencyKey: string;
-}
-
-/**
- * Durable transport, control plane → runner. The idempotency key is what makes
- * a retried dispatch after a partition apply once: the second insert loses to
- * the unique index and the caller gets the command that already exists.
- */
-export async function enqueueCommand(client: pg.PoolClient, args: EnqueueArgs): Promise<string> {
-  const commandId = newCommandId();
-  const inserted = await client.query(
-    `insert into runner_commands (cmd_id, org_id, mission_id, wst_id, exe_id, runner_id, kind,
-                                  payload, idempotency_key, state)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
-     on conflict (wst_id, idempotency_key) do nothing
-     returning cmd_id`,
-    [
-      commandId,
-      args.orgId,
-      args.missionId,
-      args.workstreamId,
-      args.executionId,
-      args.runnerId,
-      args.kind,
-      JSON.stringify(args.payload),
-      args.idempotencyKey
-    ]
-  );
-  const fresh = inserted.rows[0]?.cmd_id as string | undefined;
-  if (fresh) return fresh;
-  const existing = await client.query(
-    "select cmd_id from runner_commands where wst_id = $1 and idempotency_key = $2",
-    [args.workstreamId, args.idempotencyKey]
-  );
-  return existing.rows[0].cmd_id as string;
 }
 
 interface ActiveExecution {
@@ -300,22 +243,16 @@ export async function dispatchDirection(
     return { executionId: null, commandId: null, deferred: "This mission has no workstream yet." };
   }
 
-  return withTransaction(deps.db, async (client) => {
+  return withMission(deps.db, access.missionId, async (client) => {
     // The dispatch decision reads scopes across two tables, which no unique
     // index can guard (D-097): the mission's advisory lock serializes every
     // dispatch for the mission instead, so two racing directions cannot both
     // conclude the coast is clear.
-    await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
 
     // No runner means no execution. Inventing one would put the room in
     // "Agent starting" with nothing behind it.
-    const runner = await client.query(
-      `select runner_id from runners
-        where wst_id = $1 and revoked_at is null and expires_at > now()
-        order by created_at desc limit 1`,
-      [workstreamId]
-    );
-    const runnerId = runner.rows[0]?.runner_id as string | undefined;
+    const runner = await activeRunner(client, workstreamId);
+    const runnerId = runner?.runnerId;
     if (!runnerId) {
       return {
         executionId: null,
@@ -549,13 +486,8 @@ export async function dispatchAlongside(
   }
 
   return withTransaction(deps.db, async (client) => {
-    const runner = await client.query(
-      `select runner_id from runners
-        where wst_id = $1 and revoked_at is null and expires_at > now()
-        order by created_at desc limit 1`,
-      [workstreamId]
-    );
-    const runnerId = runner.rows[0]?.runner_id as string | undefined;
+    const runner = await activeRunner(client, workstreamId);
+    const runnerId = runner?.runnerId;
     if (!runnerId) {
       return {
         executionId: null,
@@ -862,15 +794,9 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
       if (!row) return;
       const executionId = row.exe_id;
 
-      const runner = await client.query(
-        `select runner_id, last_seen_at from runners
-          where wst_id = $1 and revoked_at is null and expires_at > now()
-          order by created_at desc limit 1`,
-        [workstreamId]
-      );
-      const lastSeen = (runner.rows[0]?.last_seen_at as Date | null | undefined) ?? null;
-      const online = lastSeen !== null && Date.now() - lastSeen.getTime() < RUNNER_OFFLINE_AFTER_MS;
-      const runnerId = (runner.rows[0]?.runner_id as string | undefined) ?? (row.runner_id as string | null);
+      const runner = await activeRunner(client, workstreamId);
+      const online = runnerOnline(runner?.lastSeenAt ?? null);
+      const runnerId = runner?.runnerId ?? (row.runner_id as string | null);
 
       await recordEvent(client, {
         orgId: access.orgId,
@@ -979,22 +905,10 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
         return "Stop it first — declaring a turn dead is for a stop that went unanswered.";
       }
 
-      const runner = await client.query(
-        `select last_seen_at from runners
-          where wst_id = $1 and revoked_at is null and expires_at > now()
-          order by created_at desc limit 1`,
-        [workstreamId]
-      );
-      const lastSeen = (runner.rows[0]?.last_seen_at as Date | null | undefined) ?? null;
-      const online = lastSeen !== null && Date.now() - lastSeen.getTime() < RUNNER_OFFLINE_AFTER_MS;
+      const runner = await activeRunner(client, workstreamId);
+      const online = runnerOnline(runner?.lastSeenAt ?? null);
 
-      const asked = await client.query(
-        `select occurred_at from events
-          where execution_id = $1 and kind = 'execution.stop_requested'
-          order by seq desc limit 1`,
-        [row.exe_id]
-      );
-      const askedAt = (asked.rows[0]?.occurred_at as Date | undefined) ?? null;
+      const askedAt = await lastEventAt(client, row.exe_id, "execution.stop_requested");
       const unanswered = askedAt !== null && Date.now() - askedAt.getTime() >= FORCE_INTERRUPT_AFTER_MS;
       if (online && !unanswered) {
         return "The stop is still being delivered and the machine is connected — give it a minute before declaring the turn dead.";

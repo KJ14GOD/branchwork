@@ -2,7 +2,7 @@ import type { Session } from "@novus/contracts";
 import { SESSION_TITLE_MAX, SessionScopeSchema } from "@novus/contracts";
 import type pg from "pg";
 import { z } from "zod";
-import type { Db } from "./db.ts";
+import type { Queryable } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newWorkstreamSessionId } from "./ids.ts";
@@ -56,7 +56,7 @@ function toSession(row: SessionRow): Session {
 }
 
 /** Every session of every lane, creation order — the room filters to its lane. */
-export async function listSessions(db: Db, missionId: string): Promise<Session[]> {
+export async function listSessions(db: Queryable, missionId: string): Promise<Session[]> {
   const result = await db.query(
     `${SESSION_SELECT} where s.mission_id = $1 order by s.created_at, s.csn_id`,
     [missionId]

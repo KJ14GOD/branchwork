@@ -1,8 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
   CreateApproachInputSchema,
-  EnabledMcpServersSchema,
-  EnabledSkillsSchema,
   RecordDecisionInputSchema,
   RequestRevisionInputSchema,
   type ApproachSummary,
@@ -16,8 +14,9 @@ import {
 import { z } from "zod";
 import type pg from "pg";
 import { missionAccess, require as requireCapability } from "./authz.ts";
-import type { Db } from "./db.ts";
-import { withTransaction } from "./db.ts";
+import type { Queryable } from "./db.ts";
+import { toWorkstream } from "./workstreams.ts";
+import { withMission } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newDecisionId, newLeaseId, newWorkstreamId } from "./ids.ts";
 import { closedRefusal } from "./close.ts";
@@ -53,39 +52,6 @@ const MissionParams = z.object({ missionId: z.string().startsWith("msn_") });
 const MAX_LANES = 8;
 
 // --- Reading -----------------------------------------------------------------
-
-export async function listWorkstreams(db: Db, missionId: string): Promise<Workstream[]> {
-  const result = await db.query(
-    `select * from workstreams where mission_id = $1 order by created_at, wst_id`,
-    [missionId]
-  );
-  return result.rows.map(toWorkstream);
-}
-
-export function toWorkstream(row: Record<string, unknown>): Workstream {
-  return {
-    workstreamId: row.wst_id as string,
-    missionId: row.mission_id as string,
-    name: row.name as string,
-    baseRef: row.base_ref as string,
-    baseSha: row.base_sha as string,
-    missionBranch: row.mission_branch as string,
-    branchStatus: row.branch_status as Workstream["branchStatus"],
-    branchError: (row.branch_error as string | null) ?? null,
-    approach: Boolean(row.approach_flag),
-    intent: (row.intent as string | null) ?? null,
-    forkedFromWorkstreamId: (row.forked_from_wst_id as string | null) ?? null,
-    originSha: (row.origin_sha as string | null) ?? null,
-    remoteHeadSha: (row.remote_head_sha as string | null) ?? null,
-    // The lane's standing answer policy (D-115); the DB CHECK owns validity.
-    permissionProfile:
-      (row.permission_profile as Workstream["permissionProfile"] | null) ?? "manual",
-    // The skills a person enabled on this lane (D-118); malformed reads none.
-    enabledSkills: EnabledSkillsSchema.catch([]).parse(row.enabled_skills ?? []),
-    // And the MCP servers (D-119), same posture.
-    enabledMcpServers: EnabledMcpServersSchema.catch([]).parse(row.enabled_mcp_servers ?? [])
-  };
-}
 
 /**
  * Everything the comparison reads, already attributed to a lane by the caller.
@@ -233,7 +199,34 @@ export function contestedPaths(approaches: ApproachSummary[]): ContestedPath[] {
     .sort((left, right) => left.path.localeCompare(right.path));
 }
 
-export async function listDecisions(db: Db, missionId: string): Promise<Decision[]> {
+/**
+ * The mission's standing decision — the one nothing has superseded — or the
+ * named lane's, when a lane is given. The unique meaning of "standing" lives
+ * here once: choosing is not applying (PRODUCT.md), so a gate that needs a
+ * decision asks this and never re-derives it.
+ */
+export async function standingDecision(
+  q: Queryable,
+  missionId: string,
+  workstreamId?: string
+): Promise<{ decisionId: string; workstreamId: string; checkpointSha: string | null } | null> {
+  const result = await q.query(
+    `select dec_id, wst_id, checkpoint_sha from decisions
+      where mission_id = $1 and superseded_at is null
+        and ($2::text is null or wst_id = $2)
+      limit 1`,
+    [missionId, workstreamId ?? null]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    decisionId: row.dec_id as string,
+    workstreamId: row.wst_id as string,
+    checkpointSha: (row.checkpoint_sha as string | null) ?? null
+  };
+}
+
+export async function listDecisions(db: Queryable, missionId: string): Promise<Decision[]> {
   const result = await db.query(
     `select d.*, u.login from decisions d join users u on u.user_id = d.decided_by
       where d.mission_id = $1 order by d.decided_at, d.dec_id`,
@@ -341,8 +334,7 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
     if (!access) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
     requireCapability(access, "approach.create");
 
-    const outcome = await withTransaction(deps.db, async (client) => {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
+    const outcome = await withMission(deps.db, access.missionId, async (client) => {
       const lanes = await client.query(
         `select wst_id, repo_id, base_ref, base_sha, branch_status, approach_flag, origin_sha
            from workstreams where mission_id = $1 order by created_at`,
@@ -500,8 +492,7 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
     if (!access) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
     requireCapability(access, "review.approve");
 
-    const decided = await withTransaction(deps.db, async (client) => {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
+    const decided = await withMission(deps.db, access.missionId, async (client) => {
       const checkpoint = await client.query(
         `select c.sha from checkpoints c
            join executions e on e.exe_id = c.exe_id
@@ -599,8 +590,7 @@ export function registerApproachRoutes(app: FastifyInstance, deps: RouteDeps): v
     if (!access) return deps.sendError(reply, 404, "not_found", "No such mission in your organization.");
     requireCapability(access, "review.approve");
 
-    await withTransaction(deps.db, async (client) => {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
+    await withMission(deps.db, access.missionId, async (client) => {
       // Asking for a revision withdraws the current decision rather than
       // sitting beside it: a mission cannot be both decided and awaiting
       // changes, and the record keeps the superseded row.

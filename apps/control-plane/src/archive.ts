@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { ExecutionStateSchema, TERMINAL_EXECUTION_STATES } from "@novus/contracts";
 import { missionAccess, require as requireCapability } from "./authz.ts";
-import { withTransaction } from "./db.ts";
+import { withMission } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import type { RouteDeps } from "./routes.ts";
 
@@ -45,8 +45,7 @@ export function registerArchiveRoutes(app: FastifyInstance, deps: RouteDeps): vo
     if (!access) return deps.sendError(reply, 404, "not_found", "No such mission.");
     requireCapability(access, "mission.archive");
 
-    const outcome = await withTransaction(deps.db, async (client: pg.PoolClient) => {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [missionId]);
+    const outcome = await withMission(deps.db, missionId, async (client: pg.PoolClient) => {
 
       const already = await client.query(
         "select archived_at from missions where mission_id = $1",
@@ -150,8 +149,7 @@ export function registerArchiveRoutes(app: FastifyInstance, deps: RouteDeps): vo
     if (!access) return deps.sendError(reply, 404, "not_found", "No such mission.");
     requireCapability(access, "mission.archive");
 
-    await withTransaction(deps.db, async (client: pg.PoolClient) => {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [missionId]);
+    await withMission(deps.db, missionId, async (client: pg.PoolClient) => {
       const restored = await client.query(
         `update missions set archived_at = null, archived_by = null
           where mission_id = $1 and archived_at is not null returning mission_id`,

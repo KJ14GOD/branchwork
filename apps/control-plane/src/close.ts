@@ -9,8 +9,9 @@ import {
 } from "@novus/contracts";
 import { receiptArtifacts } from "./artifacts.ts";
 import { missionAccess, require as requireCapability, type MissionAccess } from "./authz.ts";
-import { withTransaction } from "./db.ts";
+import { withMission } from "./db.ts";
 import { recordEvent } from "./events.ts";
+import { standingDecision } from "./approaches.ts";
 import { newReceiptId } from "./ids.ts";
 import type { RouteDeps } from "./routes.ts";
 
@@ -203,8 +204,7 @@ export function registerCloseRoutes(app: FastifyInstance, deps: RouteDeps): void
     if (!access) return deps.sendError(reply, 404, "not_found", "No such mission.");
     requireCapability(access, "mission.close");
 
-    const outcome = await withTransaction(deps.db, async (client: pg.PoolClient) => {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [missionId]);
+    const outcome = await withMission(deps.db, missionId, async (client: pg.PoolClient) => {
 
       const already = await client.query("select closed_at from missions where mission_id = $1", [
         missionId
@@ -256,11 +256,8 @@ export function registerCloseRoutes(app: FastifyInstance, deps: RouteDeps): void
       // Completion's own gates: accepted means somebody accepted, resolved
       // means resolved.
       if (body.data.outcome === "completed") {
-        const decision = await client.query(
-          "select 1 from decisions where mission_id = $1 and superseded_at is null limit 1",
-          [missionId]
-        );
-        if ((decision.rowCount ?? 0) === 0) return "undecided" as const;
+        const decision = await standingDecision(client, missionId);
+        if (!decision) return "undecided" as const;
         const openPull = await client.query(
           "select 1 from pull_requests where mission_id = $1 and state in ('draft', 'ready') limit 1",
           [missionId]

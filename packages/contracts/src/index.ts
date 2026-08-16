@@ -1,8 +1,14 @@
 import { z } from "zod";
+export * from "./policy.js";
+export * from "./scope.js";
+import { DEFAULT_PERMISSION_PROFILE, PermissionProfileSchema, ModelIdSchema, EffortSchema, DEFAULT_MODEL, DEFAULT_EFFORT, type ModelId, type Effort, type PermissionProfile } from "./policy.js";
 
 // Runtime-validated contracts shared by the control plane, the desktop main
 // process, and the renderer IPC boundary. Domain meanings live in PRODUCT.md;
-// representation rules live in ARCHITECTURE.md. This package carries shapes only.
+// representation rules live in ARCHITECTURE.md. This file carries shapes only:
+// product policy (profiles, models, evidence claims) lives in policy.ts, and
+// the D-097 scope algebra in scope.ts — both re-exported above, so importers
+// see one package.
 
 export const UserSchema = z.object({
   userId: z.string().startsWith("usr_"),
@@ -126,54 +132,6 @@ export type BranchStatus = z.infer<typeof BranchStatusSchema>;
  *  approach flag is set, and never long enough to be a plan (D-074). */
 export const APPROACH_INTENT_MAX = 240;
 
-/**
- * The lane's permission profile (D-115): Novus's own standing answer policy
- * for the harness's permission questions, chosen by a person who holds
- * `policy.set`, event-recorded, and pinned into each turn at dispatch — a
- * running turn keeps the profile it started under, and a change speaks from
- * the next turn.
- *
- * The wire never changes with it. Every profile runs under the same pinned
- * flags (D-062) with the stdio control channel open, so the harness always
- * asks and every act is still routed, recorded, and refusable; what a profile
- * changes is **who answers**. `manual` routes every question to the room —
- * the default, and exactly the pre-profile behaviour. `accept_edits` answers
- * the harness's file edits itself, on the record; a shell command and
- * everything else still reach a person. `auto` answers everything except a
- * shell command, which declares its targets nowhere (D-097) and stays a human
- * question. `dont_ask` answers everything, shell included, each grant still
- * recorded. `plan` answers **no** to every privileged act, with the reason on
- * the harness's own channel, and runs the CLI in its own plan mode so the
- * model proposes instead of thrashing.
- *
- * There is deliberately no `bypass` value: Claude's `bypassPermissions` turns
- * the asking off at the harness — no routing, no record, no scope enforcement
- * (D-097), no read-turn containment (D-095) — and every way of running
- * without the control channel is a way of running unsupervised (D-062).
- * `dont_ask` is the ceiling, and it keeps the record. No profile touches
- * server authorization: who may direct, stop, decide, or change the profile
- * itself is the capability model's, enforced server-side, whatever the lane's
- * profile says.
- */
-export const PERMISSION_PROFILES = [
-  { id: "plan", label: "Plan" },
-  { id: "manual", label: "Ask every time" },
-  { id: "accept_edits", label: "Accept edits" },
-  { id: "auto", label: "Auto" },
-  { id: "dont_ask", label: "Don't ask" }
-] as const;
-
-/** Written literally so the type stays a union of exact ids; a contract test
- *  asserts it never drifts from PERMISSION_PROFILES. */
-export const PermissionProfileSchema = z.enum(["plan", "manual", "accept_edits", "auto", "dont_ask"]);
-export type PermissionProfile = z.infer<typeof PermissionProfileSchema>;
-export const DEFAULT_PERMISSION_PROFILE: PermissionProfile = "manual";
-
-/** The one tier rule, judged here so the route and the renderer cannot
- *  disagree (the D-097 one-judge pattern): `dont_ask` hands the policy a
- *  person's whole answer, shell commands included, so setting it is Mission
- *  Admin's alone. Everything else `policy.set` grants is Operator territory. */
-export const ADMIN_ONLY_PERMISSION_PROFILES: readonly PermissionProfile[] = ["dont_ask"];
 
 // --- Project skills (D-118) --------------------------------------------------
 // The worktree's own `.claude/skills/<name>/SKILL.md` files, carried to the
@@ -665,39 +623,6 @@ export const CreateMissionInputSchema = z.object({
 });
 export type CreateMissionInput = z.infer<typeof CreateMissionInputSchema>;
 
-// --- Harness selection ------------------------------------------------------
-// The single allowlist for models. Each id is a real `--model` value verified
-// live against the Claude Code CLI (PROGRESS.md, 2026-08-02). The renderer,
-// the IPC boundary, and the execution adapter all read this one list; adding a
-// value here without live verification is how a fictional model ships.
-
-export const CLAUDE_MODELS = [
-  { id: "claude-fable-5", label: "Fable 5" },
-  { id: "claude-opus-5", label: "Opus 5" },
-  { id: "claude-opus-4-8", label: "Opus 4.8" },
-  { id: "claude-opus-4-7", label: "Opus 4.7" },
-  { id: "claude-sonnet-5", label: "Sonnet 5" },
-  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" }
-] as const;
-
-/** Written literally so the type stays a union of exact ids; a contract test
- *  asserts it never drifts from CLAUDE_MODELS. */
-export const ModelIdSchema = z.enum([
-  "claude-fable-5",
-  "claude-opus-5",
-  "claude-opus-4-8",
-  "claude-opus-4-7",
-  "claude-sonnet-5",
-  "claude-haiku-4-5-20251001"
-]);
-export type ModelId = z.infer<typeof ModelIdSchema>;
-
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-export const EffortSchema = z.enum(EFFORTS);
-export type Effort = (typeof EFFORTS)[number];
-
-export const DEFAULT_MODEL: ModelId = "claude-fable-5";
-export const DEFAULT_EFFORT: Effort = "high";
 
 // --- Roles, capabilities, participants (PRODUCT.md#roles-and-capabilities) --
 
@@ -1546,20 +1471,6 @@ export const MAX_RECORDING_MS = 5 * 60_000;
 
 export const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, "must be a lowercase hex SHA-256");
 
-/** The one honest claim a screenshot makes, said wherever one is shown
- *  (D-122). One copy, so the capture surface, the inspector, and the agent's
- *  own tool result can never drift apart. */
-export const SCREENSHOT_CLAIM =
-  "A screenshot proves what the preview displayed at this revision and time. It does not prove the application is correct.";
-
-/** The recording's version of the same sentence (D-123). */
-export const RECORDING_CLAIM =
-  "A recording proves what the preview displayed and how it responded during this span. It does not prove the application is correct.";
-
-/** The standing warning at the capture controls: pixels are the application's
- *  own output, and Novus does not scan them (ARCHITECTURE.md#secret-placement). */
-export const PIXELS_WARNING =
-  "Captured pixels are the application's own output and may contain sensitive data. Novus redacts known secrets from text, never from pixels.";
 
 /** Where an artifact is being used as evidence. Decisions carry their chosen
  *  artifact ids on the decision row itself; checks and pull requests carry
@@ -2420,69 +2331,6 @@ export const RedeemInvitationInputSchema = z.object({
   token: z.string().min(32).max(200)
 });
 
-// --- Chat file scopes (D-097) -----------------------------------------------
-// One implementation for every judge of a scope: the runner enforcing a
-// write, the server deciding whether two chats may run in parallel, and the
-// renderer predicting what the server will decide. Two copies would drift,
-// and a drifted matcher is a security judgment made twice.
-
-/** Compiles one scope pattern to a regular expression over a repository-
- *  relative path. `**` crosses directory boundaries, `*` stays within one;
- *  a pattern naming a directory (`server/**`) matches everything under it. */
-function scopePatternRegex(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*/g, " ")
-    .replace(/\*/g, "[^/]*")
-    .replace(/ /g, ".*");
-  return new RegExp(`^${escaped}$`);
-}
-
-/** Whether a repository-relative path is inside a chat's scope (D-097). */
-export function pathInScope(path: string, scope: readonly string[]): boolean {
-  const normalized = path.replace(/^\.\//, "");
-  return scope.some((pattern) => scopePatternRegex(pattern).test(normalized));
-}
-
-/** The literal directory-path prefix of a pattern — the segments before the
- *  first segment containing a wildcard. `server/api/**` → `server/api`;
- *  `*.ts` → ``. */
-function literalPrefix(pattern: string): string {
-  const segments = pattern.split("/");
-  const literal: string[] = [];
-  for (const segment of segments) {
-    if (segment.includes("*")) break;
-    literal.push(segment);
-  }
-  return literal.join("/");
-}
-
-/**
- * Whether two scopes are **provably disjoint** (D-097) — the test that
- * decides if two chats' write turns may share the worktree at once. It is
- * deliberately conservative: scopes count as disjoint only when every
- * pattern pair's literal prefixes diverge — neither a path-prefix of the
- * other — so `server/**` and `apps/desktop/**` are disjoint while
- * `server/**` and `server/api/*.ts` are not, and any pattern with no
- * literal prefix at all (`*.ts`, `**`) overlaps everything. When this
- * cannot prove disjointness it says overlap, and the turns take turns:
- * a wrong "overlap" costs a queue wait, a wrong "disjoint" costs the
- * evidence.
- */
-export function scopesDisjoint(a: readonly string[], b: readonly string[]): boolean {
-  for (const left of a) {
-    const leftPrefix = literalPrefix(left);
-    if (leftPrefix === "") return false;
-    for (const right of b) {
-      const rightPrefix = literalPrefix(right);
-      if (rightPrefix === "") return false;
-      const shorter = leftPrefix.length <= rightPrefix.length ? leftPrefix : rightPrefix;
-      const longer = leftPrefix.length <= rightPrefix.length ? rightPrefix : leftPrefix;
-      if (longer === shorter || longer.startsWith(`${shorter}/`)) return false;
-    }
-  }
-  return true;
-}
 
 // --- Runner plane (D-035) ---------------------------------------------------
 
@@ -2527,6 +2375,7 @@ export const RunnerCommandKindSchema = z.enum([
    *  branch on a host and can never combine one with another. */
   "push_branch"
 ]);
+export type RunnerCommandKind = z.infer<typeof RunnerCommandKindSchema>;
 
 export const RunnerCommandSchema = z.object({
   commandId: z.string().startsWith("cmd_"),

@@ -4,9 +4,10 @@ import { z } from "zod";
 import type pg from "pg";
 import { missionAccess, require as requireCapability } from "./authz.ts";
 import type { MissionAccess } from "./authz.ts";
-import { withTransaction } from "./db.ts";
+import { withMission } from "./db.ts";
 import { recordEvent } from "./events.ts";
-import { newCommandId, newWorkspaceId } from "./ids.ts";
+import { newWorkspaceId } from "./ids.ts";
+import { activeRunner, enqueueRepeatable } from "./runners.ts";
 import type { RouteDeps } from "./routes.ts";
 
 /**
@@ -76,23 +77,6 @@ const StopInputSchema = z.object({
 type Enqueued = "enqueued" | "already_queued" | "no_runner" | "not_declared";
 
 /**
- * The machine this workstream's work happens on. The rule matches the one
- * dispatch uses (executions.ts): registered, unrevoked, unexpired. Liveness of
- * the *connection* is a separate question the room answers with the
- * `runner_offline` overlay; refusing a command because a heartbeat is a few
- * seconds stale would make a freshly launched desktop look broken.
- */
-async function liveRunner(client: pg.PoolClient, workstreamId: string): Promise<string | null> {
-  const result = await client.query(
-    `select runner_id from runners
-      where wst_id = $1 and revoked_at is null and expires_at > now()
-      order by created_at desc limit 1`,
-    [workstreamId]
-  );
-  return (result.rows[0]?.runner_id as string | undefined) ?? null;
-}
-
-/**
  * The workstream's workspace row, created `unconfigured` on first touch. A
  * workspace exists as soon as anything addresses it: the room then says
  * *Workspace needs setup* honestly instead of showing nothing at all
@@ -123,18 +107,10 @@ export async function ensureWorkspace(
 }
 
 /**
- * Enqueues one declared command toward the host runner.
- *
- * The idempotency key is deliberately **not** the direction-style stable key.
- * `apply:${directionId}` is stable because a direction is applied exactly once
- * for all time; a declared command is the opposite — the whole point of a
- * saved verification command is running it again after the next change. A
- * stable key would let a check run once per workstream and then silently
- * collapse into the row that already exists. So the key carries a fresh
- * command id, and the *double-click* case — which a stable key would otherwise
- * have handled — is answered by state instead: an unsettled command of the
- * same kind and name is reused rather than duplicated. Once it completes or
- * fails, the next request is a genuinely new command with a new key.
+ * Enqueues one declared command toward the host runner, in the transport's
+ * *repeatable* idempotency mode: the whole point of a saved verification
+ * command is running it again after the next change, so the double-click case
+ * is answered by state rather than a stable key (see `enqueueRepeatable`).
  */
 async function enqueueWorkspaceCommand(
   client: pg.PoolClient,
@@ -151,37 +127,21 @@ async function enqueueWorkspaceCommand(
     requestedBy: string;
   }
 ): Promise<Enqueued> {
-  const pending = await client.query(
-    `select cmd_id from runner_commands
-      where wst_id = $1 and kind = $2 and payload->>'name' is not distinct from $3
-        and state in ('pending', 'delivered', 'acknowledged')
-      limit 1`,
-    [args.workstreamId, args.kind, args.name]
-  );
-  if (pending.rows[0] !== undefined) return "already_queued";
-
-  const commandId = newCommandId();
-  await client.query(
-    `insert into runner_commands (cmd_id, org_id, mission_id, wst_id, exe_id, runner_id, kind,
-                                  payload, idempotency_key, state)
-     values ($1, $2, $3, $4, null, $5, $6, $7, $8, 'pending')`,
-    [
-      commandId,
-      args.orgId,
-      args.missionId,
-      args.workstreamId,
-      args.runnerId,
-      args.kind,
-      // The requester travels with the command because a check has to record
-      // who asked for it: a participant-run check is attributed evidence, not
-      // an anonymous green row (D-037). `exe_id` is null above — a run command
-      // is not an execution. The snapshot travels with it because the runner
-      // must execute what was authorized, not what the file says later (D-043).
-      JSON.stringify({ name: args.name, command: args.command, requestedBy: args.requestedBy }),
-      `${args.kind}:${args.name ?? "*"}:${commandId}`
-    ]
-  );
-  return "enqueued";
+  const outcome = await enqueueRepeatable(client, {
+    orgId: args.orgId,
+    missionId: args.missionId,
+    workstreamId: args.workstreamId,
+    runnerId: args.runnerId,
+    kind: args.kind,
+    name: args.name,
+    // The requester travels with the command because a check has to record
+    // who asked for it: a participant-run check is attributed evidence, not
+    // an anonymous green row (D-037). The snapshot travels with it because the
+    // runner must execute what was authorized, not what the file says later
+    // (D-043).
+    payload: { name: args.name, command: args.command, requestedBy: args.requestedBy }
+  });
+  return outcome.kind;
 }
 
 /** Resolves the caller's standing, or replies and returns null. A
@@ -231,16 +191,15 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: RouteDeps): 
       return deps.sendError(reply, 409, "no_workstream", "This mission has no workstream yet.");
     }
 
-    const outcome = await withTransaction(deps.db, async (client) => {
+    const outcome = await withMission(deps.db, access.missionId, async (client) => {
       // The same per-mission ordering point the event log uses, so two clicks
       // racing cannot both pass the unsettled-command check
       // (ARCHITECTURE.md#authorization: concurrent commands resolve
       // deterministically).
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
 
       // No machine, no command. Enqueueing into the void would leave the room
       // claiming work was requested that nothing can ever pick up.
-      const runnerId = await liveRunner(client, workstreamId);
+      const runnerId = (await activeRunner(client, workstreamId))?.runnerId;
       if (!runnerId) return "no_runner" as const;
 
       await ensureWorkspace(client, {
@@ -322,9 +281,8 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: RouteDeps): 
       return deps.sendError(reply, 409, "no_workstream", "This mission has no workstream yet.");
     }
 
-    const outcome = await withTransaction(deps.db, async (client) => {
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
-      const runnerId = await liveRunner(client, workstreamId);
+    const outcome = await withMission(deps.db, access.missionId, async (client) => {
+      const runnerId = (await activeRunner(client, workstreamId))?.runnerId;
       if (!runnerId) return "no_runner" as const;
       const enqueued = await enqueueWorkspaceCommand(client, {
         orgId: access.orgId,

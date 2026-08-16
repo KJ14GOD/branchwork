@@ -8,10 +8,10 @@ import {
 import { z } from "zod";
 import type pg from "pg";
 import { missionAccess, require as requireCapability } from "./authz.ts";
-import type { Db } from "./db.ts";
-import { withTransaction } from "./db.ts";
+import type { Queryable } from "./db.ts";
+import { withMission } from "./db.ts";
 import { recordEvent } from "./events.ts";
-import { enqueueCommand } from "./executions.ts";
+import { activeRunner, enqueueCommand } from "./runners.ts";
 import { newApprovalId } from "./ids.ts";
 import type { RouteDeps } from "./routes.ts";
 
@@ -212,7 +212,7 @@ async function resumeIfNothingPending(client: pg.PoolClient, executionId: string
 
 /** Every question this mission has been asked, oldest first. Settled ones stay:
  *  the record has to be able to answer who allowed what. */
-export async function listApprovals(db: Db, missionId: string): Promise<ApprovalRequest[]> {
+export async function listApprovals(db: Queryable, missionId: string): Promise<ApprovalRequest[]> {
   const result = await db.query(
     `select a.*, u.login as responded_by_login
        from approval_requests a
@@ -277,11 +277,10 @@ export function registerApprovalRoutes(app: FastifyInstance, deps: RouteDeps): v
     const approved = body.data.decision === "approve";
     const reason = body.data.reason?.trim() || null;
 
-    const outcome = await withTransaction(deps.db, async (client) => {
+    const outcome = await withMission(deps.db, access.missionId, async (client) => {
       // The same per-mission ordering point every other command takes, so two
       // clients answering at once resolve deterministically rather than both
       // passing the state check.
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [access.missionId]);
 
       // Compare-and-swap on `pending`. Zero rows is the whole story: already
       // answered, cancelled with its turn, or expired with its runner. The
@@ -331,13 +330,8 @@ export function registerApprovalRoutes(app: FastifyInstance, deps: RouteDeps): v
       );
       if (live.rowCount === 0) return "late" as const;
 
-      const runner = await client.query(
-        `select runner_id from runners
-          where wst_id = $1 and revoked_at is null and expires_at > now()
-          order by created_at desc limit 1`,
-        [workstreamId]
-      );
-      const runnerId = runner.rows[0]?.runner_id as string | undefined;
+      const runner = await activeRunner(client, workstreamId);
+      const runnerId = runner?.runnerId;
       if (runnerId) {
         await enqueueCommand(client, {
           orgId: access.orgId,

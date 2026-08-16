@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Db } from "./db.ts";
+import { laneRepository } from "./workstreams.ts";
 import { ProviderTransientError, UnknownRepositoryError } from "./repo-provider.ts";
 
 /**
@@ -78,18 +79,13 @@ export async function issuePushCredential(
   provider: unknown,
   args: { orgId: string; workstreamId: string }
 ): Promise<CloneCredential> {
-  const found = await db.query(
-    `select repo.provider, repo.provider_repo_id
-       from workstreams w
-       join repositories repo on repo.repo_id = w.repo_id
-      where w.wst_id = $1 and repo.org_id = $2`,
-    [args.workstreamId, args.orgId]
-  );
-  const row = found.rows[0];
-  if (!row) {
+  const lane = await laneRepository(db, args.workstreamId);
+  // Another organization's lane is indistinguishable from a missing one:
+  // repository scope follows from runner scope, never from a request body.
+  if (!lane || lane.repoOrgId !== args.orgId) {
     throw new CloneCredentialError(404, "not_found", "No such workstream for this runner.");
   }
-  if (row.provider !== "github") {
+  if (lane.provider !== "github") {
     throw new CloneCredentialError(
       409,
       "push_not_needed",
@@ -104,7 +100,7 @@ export async function issuePushCredential(
     );
   }
   try {
-    return await provider.mintPushCredential(row.provider_repo_id as string);
+    return await provider.mintPushCredential(lane.providerRepoId);
   } catch (error) {
     if (error instanceof UnknownRepositoryError) {
       throw new CloneCredentialError(404, "unknown_repository", error.message);
@@ -140,18 +136,13 @@ export async function issueCloneCredential(
   provider: unknown,
   args: { orgId: string; workstreamId: string }
 ): Promise<CloneCredential> {
-  const found = await db.query(
-    `select repo.provider, repo.provider_repo_id
-       from workstreams w
-       join repositories repo on repo.repo_id = w.repo_id
-      where w.wst_id = $1 and repo.org_id = $2`,
-    [args.workstreamId, args.orgId]
-  );
-  const row = found.rows[0];
-  if (!row) {
+  const lane = await laneRepository(db, args.workstreamId);
+  // Another organization's lane is indistinguishable from a missing one:
+  // repository scope follows from runner scope, never from a request body.
+  if (!lane || lane.repoOrgId !== args.orgId) {
     throw new CloneCredentialError(404, "not_found", "No such workstream for this runner.");
   }
-  if (row.provider !== "github") {
+  if (lane.provider !== "github") {
     // A local repository is already on the machine that registered it; there is
     // nothing to fetch and no credential that would mean anything.
     throw new CloneCredentialError(
@@ -169,7 +160,7 @@ export async function issueCloneCredential(
   }
 
   try {
-    return await provider.mintCloneCredential(row.provider_repo_id as string);
+    return await provider.mintCloneCredential(lane.providerRepoId);
   } catch (error) {
     if (error instanceof UnknownRepositoryError) {
       throw new CloneCredentialError(404, "unknown_repository", error.message);

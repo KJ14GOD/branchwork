@@ -2,7 +2,7 @@ import { loadConfig } from "./config.ts";
 import { createPool, migrate } from "./db.ts";
 import { buildServer } from "./server.ts";
 import { startReliabilitySweep } from "./reliability.ts";
-import { startPullRequestSweep } from "./pull-requests.ts";
+import { startPullRequestSweep } from "./publication.ts";
 import { selectRepositoryProvider } from "./repo-provider.ts";
 
 const config = loadConfig();

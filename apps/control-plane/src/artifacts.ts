@@ -16,11 +16,12 @@ import {
   type BeginRunnerArtifactInput
 } from "@novus/contracts";
 import { missionAccess, require as requireCapability } from "./authz.ts";
-import { withTransaction, type Db } from "./db.ts";
+import { withTransaction, type Db, type Queryable } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newArtifactId, newAttachmentId } from "./ids.ts";
 import type { RouteDeps } from "./routes.ts";
 import { closedRefusal } from "./close.ts";
+import { activeRunner } from "./runners.ts";
 import { environmentOf, runnerAuthenticator } from "./runner.ts";
 import { LocalArtifactStore, resolveArtifactStore, type ArtifactStore } from "./artifact-store.ts";
 
@@ -139,7 +140,7 @@ const ARTIFACT_SELECT = `
  * number — never internal keys.
  */
 async function attachmentRefs(
-  db: Db | pg.PoolClient,
+  db: Queryable,
   missionId: string
 ): Promise<Map<string, ArtifactAttachmentRef[]>> {
   const refs = new Map<string, ArtifactAttachmentRef[]>();
@@ -185,7 +186,7 @@ async function attachmentRefs(
   return refs;
 }
 
-export async function listArtifacts(db: Db, missionId: string): Promise<Artifact[]> {
+export async function listArtifacts(db: Queryable, missionId: string): Promise<Artifact[]> {
   const [result, refs] = await Promise.all([
     db.query(`${ARTIFACT_SELECT} where a.mission_id = $1 order by a.created_at, a.art_id`, [
       missionId
@@ -200,7 +201,7 @@ export async function listArtifacts(db: Db, missionId: string): Promise<Artifact
 /** Live attachment ids per target, for the checks and pull request the detail
  *  serves — so the room can show evidence beside the thing it supports. */
 export async function artifactIdsByTarget(
-  db: Db,
+  db: Queryable,
   missionId: string
 ): Promise<Map<string, string[]>> {
   const result = await db.query(
@@ -518,13 +519,8 @@ export function registerArtifactRoutes(app: FastifyInstance, deps: RouteDeps): v
     // The producing machine: the lane's enrolled runner. A preview only exists
     // on the machine that holds the workspace, so a capture without one has no
     // honest producer to attribute.
-    const runner = await deps.db.query(
-      `select runner_id, label from runners
-        where wst_id = $1 and revoked_at is null and expires_at > now()
-        order by created_at desc limit 1`,
-      [access.workstreamId]
-    );
-    if ((runner.rowCount ?? 0) === 0) {
+    const runner = await activeRunner(deps.db, access.workstreamId);
+    if (runner === null) {
       return deps.sendError(
         reply,
         409,
@@ -542,8 +538,8 @@ export function registerArtifactRoutes(app: FastifyInstance, deps: RouteDeps): v
       initiator: "person",
       createdBy: ctx.userId,
       approvalId: null,
-      runnerId: runner.rows[0]!.runner_id as string,
-      environment: `local runner (${runner.rows[0]!.label as string})`
+      runnerId: runner.runnerId,
+      environment: `local runner (${runner.label})`
     });
     if (!begun.ok) return deps.sendError(reply, begun.status, begun.code, begun.message);
 

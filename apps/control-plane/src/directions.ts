@@ -1,6 +1,6 @@
 import type { Direction, DirectionState } from "@novus/contracts";
 import type pg from "pg";
-import type { Db } from "./db.ts";
+import type { Db, Queryable } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newDirectionId } from "./ids.ts";
@@ -65,7 +65,7 @@ export function toDirection(row: DirectionRow): Direction {
   };
 }
 
-export async function listDirections(db: Db, missionId: string): Promise<Direction[]> {
+export async function listDirections(db: Queryable, missionId: string): Promise<Direction[]> {
   const result = await db.query(`${DIRECTION_SELECT} where d.mission_id = $1 order by d.ordinal`, [
     missionId
   ]);
