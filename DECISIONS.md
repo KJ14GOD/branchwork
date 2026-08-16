@@ -1741,3 +1741,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** DESIGN.md's type scale retires the mission step; signature elements 1, 4, and 5 and the IA's rail paragraph say the new shape. Two e2e specs that asserted the no-tree rule now assert the always-tree rule — a deliberate behavioral-assertion update, not an accommodation. The room's `lane-context` sentence moves into the rail's approach row; `try-another-approach` moves into the tree; `room-goal`, `controller`, and `request-control` live on the state strip. The header's height drops from three rows to one.
 
 **Revisit when.** The Approach row accumulates enough actions that a menu beats a row; or missions with many participants make a four-mark cluster misleading rather than orienting.
+
+## D-127 — The strip sheds the goal too: the room never restates what the tab, the rail, and the direction already say
+
+**Context.** Owner-directed, on sight of D-126's built result beside Conductor. D-126 shrank the heading to a compact truncated goal on the state strip — and on screen that copy still sat directly above the first turn, which opens with the person's own words, which for the first turn *are* the goal. The same text three times in one glance (strip, feed, rail — four with the tab), where Conductor states it nowhere inside the transcript. The owner's line: we have the "read the README…" thing again; frankly not sure we need it.
+
+**Decision.** The state strip carries no goal at all. It opens with the state sentence and its action, and ends with the baton sentence and Request control, exactly as D-126 placed them. The mission's name lives where it already lived: the working-set tab (full goal in its title attribute past the tab's own truncation), the rail's mission row, and the direction that started the work. Ten end-to-end assertions that used the room's goal as "the canvas is showing mission X" are deliberately re-anchored, not weakened: room-presence waits move to the state line, which is the room's actual announcement of itself, and canvas-follows-rail polls move to the active tab's full title — the strip is where the window names what the canvas shows.
+
+**Alternatives.** Keeping the goal only while the room's tab is out of view (rejected: the tab strip scrolls the active tab into view by design — the case doesn't exist). Naming the goal in the composer's eyebrow (rejected: the eyebrow names the *target* lane and conversation, a different fact). Dropping the assertions instead of re-anchoring them (rejected: "the canvas follows the rail" is a real behavior and keeps its proof).
+
+**Consequences.** The `room-goal` testid is gone; navigation and runtime specs anchor on `state-line` and the active tab's title. The strip's first element is now the state name, which was already the only weighted element on it. DESIGN.md's element 5 says the room never restates the goal.
+
+**Revisit when.** A surface appears where none of tab, rail, or feed is on screen with the room — a detached or full-screen room — and the goal genuinely has no other home.

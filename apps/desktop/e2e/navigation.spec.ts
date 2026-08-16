@@ -324,7 +324,9 @@ describe("the missions a person has open", () => {
       })
       .toContain("Alpha one");
     expect((await tabLabels(page)).length).toBe(2);
-    expect((await page.getByTestId("room-goal").innerText())).toContain("Alpha one");
+    // The room does not restate the goal (D-127): the active tab above is the
+    // canvas's naming, and the room's own presence is its state line.
+    await page.getByTestId("state-line").waitFor({ timeout: 20_000 });
 
     // The rail is not this list and this list is not the rail: every mission is
     // in the rail exactly once, open or not.
@@ -479,7 +481,7 @@ describe("the missions a person has open", () => {
         timeout: 20_000
       })
       .toContain("Alpha two");
-    expect(await page.getByTestId("room-goal").innerText()).toContain("Alpha two");
+    await page.getByTestId("state-line").waitFor({ timeout: 20_000 });
     await shot(page, "65-restored-working-set.png");
 
     // Now the two ways a restored mission can be unopenable. One never existed;
@@ -550,11 +552,10 @@ describe("the missions a person has open", () => {
     await expect.poll(async () => (await tabLabels(page)).length, { timeout: 30_000 }).toBe(1);
     expect((await tabLabels(page))[0]).toContain("Alpha one");
     // Polled, not read instantly: the tab restores before the room's first
-    // detail fetch lands, and the room saying "Loading mission" for a poll
-    // tick is loading, not failure. The end state required is unchanged.
-    await expect
-      .poll(() => page.getByTestId("room-goal").innerText(), { timeout: 30_000 })
-      .toContain("Alpha one");
+    // detail fetch lands, and a room still loading for a poll tick is
+    // loading, not failure. The room announces itself by its state line
+    // (D-127: the goal is the tab's and the rail's to name).
+    await page.getByTestId("state-line").waitFor({ timeout: 30_000 });
     await shot(page, "66-restored-minus-the-refused.png");
   }, 300_000);
 });
@@ -713,7 +714,7 @@ describe("mission tabs and file tabs, told apart", () => {
     await closeEveryTab(page);
     await openProject(page, alphaName);
     await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 14) }).click();
-    await page.getByTestId("room-goal").waitFor({ timeout: 20_000 });
+    await page.getByTestId("state-line").waitFor({ timeout: 20_000 });
 
     // A file opens over this mission's canvas, and adds no mission tab: opening
     // a file is not opening a room.
@@ -733,7 +734,7 @@ describe("mission tabs and file tabs, told apart", () => {
 
     // Another mission is another room, and it has no files open.
     await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha one" }).click();
-    await page.getByTestId("room-goal").waitFor({ timeout: 20_000 });
+    await page.getByTestId("state-line").waitFor({ timeout: 20_000 });
     await expect.poll(async () => page.getByTestId("file-tab").count(), { timeout: 20_000 }).toBe(0);
     expect(await page.locator(".tabbar").count()).toBe(0);
 
@@ -752,7 +753,7 @@ describe("mission tabs and file tabs, told apart", () => {
       .getByTestId("mission-tab-close")
       .click();
     await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 14) }).click();
-    await page.getByTestId("room-goal").waitFor({ timeout: 20_000 });
+    await page.getByTestId("state-line").waitFor({ timeout: 20_000 });
     expect(await page.getByTestId("file-tab").count()).toBe(0);
     expect(await page.locator(".tabbar").count()).toBe(0);
     await page.getByTestId("chat").waitFor({ timeout: 20_000 });

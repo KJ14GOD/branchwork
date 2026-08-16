@@ -1209,22 +1209,9 @@ body {
   padding: var(--s-3) var(--s-6) var(--s-2);
 }
 
-/* The goal as a compact identity (D-126): the giant title repeated the tab
-   and the rail, so the room keeps one truncated, selectable naming of it —
-   enough for the eye to confirm where it is, never a heading again. */
-.room-goal-min {
-  font: var(--type-row);
-  font-weight: 500;
-  color: var(--text-2);
-  max-width: 32ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  user-select: text;
-  flex: none;
-}
-
-/* The state line: one line, emphasis by weight, never by colour. */
+/* The state line: one line, emphasis by weight, never by colour. The room
+   does not restate the goal (D-127) — the tab, the rail, and the direction
+   itself name it. */
 .state-line {
   display: flex;
   align-items: center;

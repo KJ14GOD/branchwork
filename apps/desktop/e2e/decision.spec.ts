@@ -549,7 +549,12 @@ describe("competing approaches, compared and decided", () => {
     await expect
       .poll(() => page.getByTestId("lane-context").innerText(), { timeout: 30_000 })
       .toContain("Alternative");
-    expect(await page.getByTestId("composer").innerText()).toContain("Directing Alternative");
+    // Polled: the rail names the lane from the shell's own selection, while
+    // the composer's eyebrow follows the room's lane view a detail-poll tick
+    // later (D-126 moved lane-context to the rail). Same end state required.
+    await expect
+      .poll(() => page.getByTestId("composer").innerText(), { timeout: 20_000 })
+      .toContain("Directing Alternative");
     const lineAfter = await page.getByTestId("state-line").innerText();
     expect(lineAfter).toContain("Decision recorded");
 
@@ -560,7 +565,9 @@ describe("competing approaches, compared and decided", () => {
     await expect
       .poll(async () => page.getByTestId("lane-context").innerText(), { timeout: 30_000 })
       .toContain("Current work");
-    expect(await page.getByTestId("composer").innerText()).toContain("Directing Current work");
+    await expect
+      .poll(() => page.getByTestId("composer").innerText(), { timeout: 20_000 })
+      .toContain("Directing Current work");
 
     // --- The tree at the other widths (DESIGN.md#responsive) ----------------
     // Below 1200 the rail is an overlay, so the structure is one toggle away

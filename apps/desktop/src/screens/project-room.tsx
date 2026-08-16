@@ -1321,13 +1321,11 @@ export function ProjectRoom({
 
       {activeFile === null && (
       <header className="room-header">
-        {/* One slim row (D-126): the goal as a compact identity — the giant
-            title repeated the tab and the rail — then the state and its
-            action, then who controls it at the row's end. */}
+        {/* One slim row (D-127): the state and its action, then who controls
+            it at the row's end. The goal is not restated here — the tab, the
+            rail, and the direction itself already name it (D-126 kept a
+            compact copy; on sight it was still a repetition). */}
         <div className="state-line" role="status" aria-live="polite" data-testid="state-line">
-          <span className="room-goal-min" data-testid="room-goal" title={title}>
-            {title}
-          </span>
           {stateLine ? (
             <>
               <span className="state-name">{stateLine.name}</span>

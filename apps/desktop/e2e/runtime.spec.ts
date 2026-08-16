@@ -902,7 +902,6 @@ describe("setup and verification, through the interface", () => {
     await page.getByTestId("tree-row").filter({ hasText: "README.md" }).first().click();
     await page.getByTestId("file-view").waitFor({ timeout: 20_000 });
     expect(await page.getByTestId("chat").count()).toBe(0);
-    expect(await page.getByTestId("room-goal").count()).toBe(0);
     expect(await page.getByTestId("state-line").count()).toBe(0);
     expect(
       await page.getByTestId("file-tab").last().getAttribute("data-path")
@@ -957,7 +956,7 @@ describe("setup and verification, through the interface", () => {
     await page.getByTestId("file-tab").first().getByTestId("file-tab-close").click();
     await expect.poll(() => page.getByTestId("file-tab").count(), { timeout: 20_000 }).toBe(0);
     await page.getByTestId("chat").waitFor({ timeout: 20_000 });
-    await page.getByTestId("room-goal").waitFor({ timeout: 20_000 });
+    await page.getByTestId("state-line").waitFor({ timeout: 20_000 });
   }, 180_000);
 
   it("refuses a path that would leave the workspace", async () => {
@@ -1133,12 +1132,15 @@ describe("missions and workstreams, told apart", () => {
     expect(opened).toBeLessThan(railed);
 
     // Each mission is independently selectable, and the room follows.
-    const goal = page.getByTestId("room-goal");
+    // The room does not restate the goal (D-127): the strip's active tab is
+    // where the canvas names what it is showing, its title carrying the full
+    // goal past the tab's own truncation.
+    const activeTab = page.locator('[data-testid="mission-tab"][data-active="true"] [data-testid="mission-tab-open"]');
     await rows.filter({ hasText: secondGoal }).click();
-    await expect.poll(async () => (await goal.textContent()) ?? "", { timeout: 20_000 }).toContain(secondGoal);
+    await expect.poll(async () => (await activeTab.getAttribute("title")) ?? "", { timeout: 20_000 }).toContain(secondGoal);
     await rows.filter({ hasText: "prepare this workspace" }).click();
     await expect
-      .poll(async () => (await goal.textContent()) ?? "", { timeout: 20_000 })
+      .poll(async () => (await activeTab.getAttribute("title")) ?? "", { timeout: 20_000 })
       .toContain("prepare this workspace");
 
     // Creating one is a question, not a place (D-077): the + on the project
@@ -1153,7 +1155,7 @@ describe("missions and workstreams, told apart", () => {
 
     // The keyboard asks the same question.
     await page.getByTestId("mission-row").first().click();
-    await page.getByTestId("room-goal").waitFor();
+    await page.getByTestId("state-line").waitFor();
     await page.keyboard.press("Meta+t");
     await page.getByTestId("new-mission-dialog").waitFor({ timeout: 20_000 });
     await page.keyboard.press("Escape");
