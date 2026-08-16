@@ -267,7 +267,8 @@ describe("competing approaches, compared and decided", () => {
     expect(await page.getByTestId("rail-compare").count()).toBe(0);
     // And no structure chrome at all: a one-approach mission grows no tree in
     // the rail (D-084) and no count on its row.
-    expect(await page.getByTestId("rail-approach-row").count()).toBe(0);
+    // One lane still shows its one approach row (D-126); forking adds beside it.
+    await expect.poll(() => page.getByTestId("rail-approach-row").count(), { timeout: 20_000 }).toBe(1);
     expect(await page.getByTestId("mission-approaches-count").count()).toBe(0);
 
     // --- Try another approach, which requires saying how it differs ---------

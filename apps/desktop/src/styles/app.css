@@ -973,7 +973,6 @@ body {
 .side-parent:hover .side-new-mission,
 .side-child:hover .side-new-mission,
 .side-approach:hover .side-new-mission,
-.side-new-mission:focus,
 .side-new-mission:focus-visible {
   opacity: 1;
 }
@@ -1176,10 +1175,30 @@ body {
   color: var(--text-3);
 }
 
-.participant-count {
-  font: var(--type-meta);
-  color: var(--text-3);
-  white-space: nowrap;
+/* Who is in the mission, on its rail row (D-126): the marks alone, tight,
+   the controller's wearing a quiet ring — presence where the mission is
+   named; the aggregate list stays Overview's (D-066). */
+.presence-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.presence-mark {
+  display: inline-flex;
+  border-radius: 50%;
+}
+
+.presence-mark .mark {
+  width: 16px;
+  height: 16px;
+  font-size: 8px;
+}
+
+.presence-controller {
+  border: 1px solid var(--accent);
+  padding: 1px;
 }
 
 /* The header answers, in order: what work, what is happening, who controls it. */
@@ -1187,18 +1206,22 @@ body {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: var(--s-1);
-  padding: var(--s-4) var(--s-6) var(--s-3);
+  padding: var(--s-3) var(--s-6) var(--s-2);
 }
 
-.mission-title {
-  font: var(--type-mission);
-  color: var(--text-1);
-  user-select: text;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+/* The goal as a compact identity (D-126): the giant title repeated the tab
+   and the rail, so the room keeps one truncated, selectable naming of it —
+   enough for the eye to confirm where it is, never a heading again. */
+.room-goal-min {
+  font: var(--type-row);
+  font-weight: 500;
+  color: var(--text-2);
+  max-width: 32ch;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+  flex: none;
 }
 
 /* The state line: one line, emphasis by weight, never by colour. */
@@ -1226,13 +1249,14 @@ body {
   margin-left: var(--s-2);
 }
 
-.authority-row {
-  display: flex;
+.state-authority {
+  margin-left: auto;
+  display: inline-flex;
   align-items: center;
   gap: var(--s-3);
-  min-height: 28px;
   font: var(--type-meta);
-  color: var(--text-2);
+  color: var(--text-3);
+  white-space: nowrap;
 }
 
 .controller-slot {
@@ -3954,6 +3978,11 @@ body {
    mission rows are (D-078); depth is indentation and type, never a border. */
 .side-tree .side-row {
   min-height: 28px;
+  /* The same inset chips mission rows are (D-078): the tree's rows share the
+     rail's one selection geometry, indented by padding, never full-bleed. */
+  width: calc(100% - var(--s-4));
+  margin: 0 var(--s-2);
+  border-radius: var(--r-control);
 }
 
 .side-approach {
@@ -3972,6 +4001,26 @@ body {
 
 .side-compare {
   padding-left: calc(var(--s-4) + var(--s-3));
+}
+
+/* The branch beneath its approach (D-126): machinery, quiet and mono. */
+.side-branch {
+  font: var(--type-meta);
+  font-family: var(--font-mono);
+  color: var(--text-3);
+  padding-left: calc(var(--s-4) + var(--s-3) + 15px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-height: 18px;
+}
+
+.side-fork .side-fork-name {
+  color: var(--text-3);
+}
+
+.side-fork:hover .side-fork-name {
+  color: var(--text-1);
 }
 
 .side-compare .side-name {
@@ -4031,7 +4080,7 @@ body {
 }
 
 .side-row:hover .side-row-archive,
-.side-row:focus-within .side-row-archive {
+.side-row-archive:focus-visible {
   opacity: 1;
 }
 

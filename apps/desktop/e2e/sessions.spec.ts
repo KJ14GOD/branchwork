@@ -256,9 +256,12 @@ afterAll(async () => {
 
 describe("shared sessions inside one approach", () => {
   it("creates, routes, takes turns, survives a closed tab and a reload, and shares one worktree", async () => {
-    // --- One conversation, no structure chrome at all ------------------------
-    expect(await page.getByTestId("mission-tree").count()).toBe(0);
-    expect(await page.getByTestId("rail-session-row").count()).toBe(0);
+    // --- One conversation: the structure is still shown (D-126 reversing
+    // D-084's no-tree rule) — Mission → Approach → Chat, one row each, with
+    // the branch beneath the approach.
+    await expect.poll(() => page.getByTestId("mission-tree").count(), { timeout: 20_000 }).toBe(1);
+    expect(await page.getByTestId("rail-approach-row").count()).toBe(1);
+    expect(await page.getByTestId("rail-branch").count()).toBe(1);
 
     // --- The first turn, in the session every mission is born with ----------
     await compose("write the guard file");

@@ -125,6 +125,7 @@ function offlineOr(code: string, message: string): string {
 export function ProjectRoom({
   project,
   details,
+  forkAsk = 0,
   selectedMissionId,
   onInspector,
   onSetup,
@@ -157,6 +158,9 @@ export function ProjectRoom({
   openArtifactId,
   onCloseArtifact
 }: {
+  /** Incremented by the rail's Try-another-approach row (D-126); each tick
+   *  opens the fork dialog, even after a cancel. */
+  forkAsk?: number;
   project: Project;
   details: Record<string, MissionDetailResponse>;
   selectedMissionId: string | null;
@@ -456,6 +460,9 @@ export function ProjectRoom({
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [forking, setForking] = useState(false);
+  useEffect(() => {
+    if (forkAsk > 0) setForking(true);
+  }, [forkAsk]);
   const approaches = detail?.approaches ?? [];
   /** Something to fork from: an approach only means anything beside a result
    *  that already exists, so the control is absent until the lane being read
@@ -1314,11 +1321,13 @@ export function ProjectRoom({
 
       {activeFile === null && (
       <header className="room-header">
-        <h1 className="mission-title" data-testid="room-goal" title={title}>
-          {title}
-        </h1>
-
+        {/* One slim row (D-126): the goal as a compact identity — the giant
+            title repeated the tab and the rail — then the state and its
+            action, then who controls it at the row's end. */}
         <div className="state-line" role="status" aria-live="polite" data-testid="state-line">
+          <span className="room-goal-min" data-testid="room-goal" title={title}>
+            {title}
+          </span>
           {stateLine ? (
             <>
               <span className="state-name">{stateLine.name}</span>
@@ -1428,89 +1437,32 @@ export function ProjectRoom({
               )}
             </>
           )}
-        </div>
-
-        <div className="authority-row">
-          {detail ? (
-            <>
-              {/* Which lane this room is, said once and quietly (D-080) —
-                  first in the context row, beside who controls it. Absent for
-                  the mission that never forked. */}
-              {multiLane && activeLane && (
-                <span className="lane-context" data-testid="lane-context">
-                  {activeLane.name}
-                  {activeLane.approach ? " · isolated workspace" : ""}
-                  {activeLane.approach && activeLane.originSha ? (
-                    <>
-                      {" "}· forked at <span className="mono">{shortSha(activeLane.originSha)}</span>
-                    </>
-                  ) : null}
-                </span>
-              )}
-              {/* Sessions, other approaches, Compare, and the decision have no
-                  controls here (D-084): the rail's tree is the one map of the
-                  mission's structure, and this row is about authority. */}
-              <span className="controller-slot" data-testid="controller">
-                {controller ? (
-                  <>
-                    <HumanMark login={controller.login} name={controller.name} />
-                    <span className="controller-name">
-                      {isController ? "You have the baton" : `${controller.name ?? controller.login} has the baton`}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span className="controller-name">No one holds the baton</span>
-                  </>
-                )}
-              </span>
-              {detail.participants.length > 1 && (
-                <span className="participant-count">{detail.participants.length} participants</span>
-              )}
-              {!isController && (
-                <GatedAction
-                  capability="control.request"
-                  capabilities={detail.capabilities}
-                  denialReason="Only participants who can operate this mission may request control."
-                  holderLogin={detail.control.holderLogin}
-                  onClick={() => void runAction(novus().control.request(detail.mission.missionId))}
-                  variant="text"
-                  testid="request-control"
-                >
-                  Request control
-                </GatedAction>
-              )}
-              {/* Deliberately reached, never pushed: absent until this lane has
-                  produced something to fork from, and absent for anyone whose
-                  role does not carry it (D-074). */}
-              {forkable && detail.capabilities.includes("approach.create") && (
-                <>
-                  <button
-                    className="btn btn-text"
-                    onClick={() => setForking(true)}
-                    data-testid="try-another-approach"
-                  >
-                    Try another approach
-                  </button>
-                  {/* One quiet sentence, only while the mission has a single
-                      lane and a reviewable result — the moment the control is
-                      for. Once approaches exist the rail's tree says the rest. */}
-                  {approaches.length === 1 &&
-                    (detail.state === "work_completed_unverified" ||
-                      detail.state === "ready_for_review") && (
-                      <span className="quiet approach-helper" data-testid="approach-helper">
-                        Start from this shared checkpoint and compare another solution.
-                      </span>
-                    )}
-                </>
-              )}
-              <span className="head-spacer" />
-            </>
-          ) : (
-            <span className="controller-name quiet">
-              {isDraft ? "Nobody has joined this mission yet" : "Loading participants…"}
+          <span className="state-authority">
+          <span className="controller-slot" data-testid="controller">
+            <span className="controller-name">
+              {detail
+                ? controller
+                  ? isController
+                    ? "You have the baton"
+                    : `${controller.name ?? controller.login} has the baton`
+                  : "No one holds the baton"
+                : ""}
             </span>
+          </span>
+          {detail && !isController && (
+            <GatedAction
+              capability="control.request"
+              capabilities={detail.capabilities}
+              denialReason="Only participants who can operate this mission may request control."
+              holderLogin={detail.control.holderLogin}
+              onClick={() => void runAction(novus().control.request(detail.mission.missionId))}
+              variant="text"
+              testid="request-control"
+            >
+              Request control
+            </GatedAction>
           )}
+          </span>
         </div>
       </header>
       )}

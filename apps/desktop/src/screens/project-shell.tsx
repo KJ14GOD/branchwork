@@ -448,7 +448,9 @@ function MissionTree({
   onCompare,
   onNewSession,
   pullSelected,
-  onOpenPull
+  onOpenPull,
+  forkable,
+  onFork
 }: {
   detail: MissionDetailResponse;
   storedLaneId: string | null;
@@ -464,6 +466,11 @@ function MissionTree({
    *  its tab on the working row. */
   pullSelected: boolean;
   onOpenPull: () => void;
+  /** Whether this lane can fork (a shared checkpoint exists, the role carries
+   *  approach.create, and the mission is not terminal) — computed by the
+   *  shell from the same detail the room reads (D-126). */
+  forkable: boolean;
+  onFork: () => void;
 }) {
   const lanes: Workstream[] = detail.workstreams;
   const firstLaneId = lanes[0]?.workstreamId ?? null;
@@ -474,14 +481,19 @@ function MissionTree({
   // No conversation selected no longer means "reading the first" (D-089): it
   // means the approach's own page, so no session row washes and the approach
   // row does instead.
-  const selectedSessionId =
+  const storedSelection =
     storedSessionId !== null && laneSessions.some((session) => session.sessionId === storedSessionId)
       ? storedSessionId
       : null;
-  const showSessions = laneSessions.length > 1 || sessionDraft;
-  if (lanes.length <= 1 && !showSessions) return null;
+  // The canvas lands straight in a lane's only conversation (D-089), so the
+  // wash follows it there; with several, null means the approach's own page.
+  const selectedSessionId =
+    storedSelection ?? (laneSessions.length === 1 ? (laneSessions[0]?.sessionId ?? null) : null);
+  const showSessions = laneSessions.length > 0 || sessionDraft;
 
-  // One wash in the rail: the deepest thing the canvas is showing.
+  // One wash in the rail: the deepest thing the canvas is showing. The tree
+  // always renders for the active mission (D-126): Mission → Approach → Chat
+  // is the structure, and hiding it for the ordinary mission hid the product.
   const washSession = !decisionOpen && !sessionDraft && showSessions;
   const washApproach =
     !decisionOpen && !sessionDraft && (!showSessions || selectedSessionId === null);
@@ -536,8 +548,7 @@ function MissionTree({
 
   return (
     <div className="side-tree" data-testid="mission-tree">
-      {lanes.length > 1 ? (
-        lanes.map((lane, index) => {
+      {lanes.map((lane, index) => {
           const selected = lane.workstreamId === selectedLaneId;
           const needs =
             !selected &&
@@ -565,7 +576,10 @@ function MissionTree({
                     className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
                     aria-hidden="true"
                   />
-                  <span className="side-name">{lane.name}</span>
+                  <span className="side-name" data-testid={selected ? "lane-context" : undefined}>
+                    {lane.name}
+                    {lane.approach ? " · isolated workspace" : ""}
+                  </span>
                   {needs && <span className="tone-warn side-needs"> · needs you</span>}
                 </button>
                 {/* A parent's + creates its child, exactly as the project row's
@@ -586,17 +600,30 @@ function MissionTree({
                   </button>
                 )}
               </div>
+              {/* The branch this approach's work lands on (D-126): machinery,
+                  quiet and mono, beneath the approach it belongs to. */}
+              {selected && (
+                <div className="side-branch" data-testid="rail-branch" title={lane.missionBranch}>
+                  {lane.missionBranch}
+                </div>
+              )}
               {/* Its children, under it and nowhere else. */}
               {selected && sessionRows}
               {selected && draftRow}
             </Fragment>
           );
-        })
-      ) : (
-        <>
-          {sessionRows}
-          {draftRow}
-        </>
+        })}
+      {forkable && (
+        <div className="side-row side-fork">
+          <button
+            className="side-open-mission"
+            onClick={onFork}
+            data-testid="try-another-approach"
+            title="Start from the shared checkpoint and compare another solution"
+          >
+            <span className="side-name side-fork-name">Try another approach</span>
+          </button>
+        </div>
       )}
       {lanes.length > 1 && (
         <div
@@ -624,13 +651,6 @@ function MissionTree({
       )}
     </div>
   );
-}
-
-/** The approach whose room is on screen, resolved the way the tree resolves
- *  it: the stored lane, or the mission's first. */
-function selectedLaneOf(detail: MissionDetailResponse | undefined, stored: string | null): string | null {
-  if (!detail) return stored;
-  return stored ?? detail.workstreams[0]?.workstreamId ?? null;
 }
 
 /** One open file tab: a path in one lane's worktree. The lane is stored as
@@ -690,6 +710,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** The setup dialog is held here because two surfaces open the same one: the
    *  state line's action inside the room, and the Run control beside it. */
   const [setupOpen, setSetupOpen] = useState(false);
+  /** The rail's Try-another-approach row asks; the room owns the dialog
+   *  (D-126). A counter, so every ask opens it even after a cancel. */
+  const [forkAsk, setForkAsk] = useState(0);
   /** The docked evidence panel. Held here because its toggle lives in the top
    *  bar and because the panel outlives the mission selected beside it. */
   const [inspector, setInspector] = useState<InspectorSection | null>(null);
@@ -826,9 +849,14 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   // here, not only in its own room. Any lane's failed branch counts too, from
   // the detail where one has been read; a detail is no longer required for the
   // state part, so the lens works from the list alone after a reconnect.
+  const readingMissionId = activeTabOf(workingSet)?.missionId ?? null;
   const attention = useMemo(
     () =>
       (missions ?? []).filter((mission) => {
+        // The mission being read never queues in the lens beside its own rail
+        // row (D-126): its state is on screen, and a lens exists for what is
+        // NOT being looked at.
+        if (mission.missionId === readingMissionId) return false;
         if (
           mission.primaryState === "needs_direction" ||
           mission.primaryState === "needs_approval" ||
@@ -843,7 +871,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           (lane) => lane?.branchStatus === "failed"
         );
       }),
-    [missions, details]
+    [missions, details, readingMissionId]
   );
 
   const storageKey = `novus-open-missions:${user.userId}`;
@@ -1172,23 +1200,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   }, []);
 
   const openDetail = activeMissionId ? details[activeMissionId] : undefined;
-  /** Whether the active mission's tree is on the rail — which is also where
-   *  the selection wash lives when it is (D-084). */
-  const activeTreeLaneId = selectedLaneOf(openDetail, active?.workstreamId ?? null);
-  const activeTreeSessions = openDetail
-    ? openDetail.sessions.filter((session) => session.workstreamId === activeTreeLaneId)
-    : [];
-  const activeTreeShown =
-    (openDetail?.workstreams.length ?? 0) > 1 || activeTreeSessions.length > 1 || sessionDraft;
+  // The tree always renders for the active mission (D-126): Mission →
+  // Approach → Chat is the structure, and hiding it for the ordinary mission
+  // hid the product.
+  const activeTreeShown = openDetail !== undefined;
   /** The tree is shown but the canvas is the mission's own landing (D-089) —
    *  no conversation selected, nothing else covering it. In a one-lane
    *  mission no approach row exists to carry the wash, so the mission's own
    *  row keeps it; with several lanes the approach row takes it instead. */
-  const activeLandingWashed =
-    (openDetail?.workstreams.length ?? 0) <= 1 &&
-    !decisionOpen &&
-    !sessionDraft &&
-    !activeTreeSessions.some((session) => session.sessionId === (active?.sessionId ?? ""));
+  // The approach row exists for every active mission now, so it carries the
+  // landing wash; the mission row washes only before its detail arrives.
+  const activeLandingWashed = false;
 
   /** What the server said this viewer may do in that mission. Absent until its
    *  detail has been read, which is the honest answer to "may I" — so the
@@ -1504,29 +1526,31 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                                 </span>
                               )}
                             </button>
-                            {/* The + hangs on the new session's deepest visible
-                                parent (D-084): with one lane there are no
-                                approach rows, so the mission's own row is it. */}
-                            {isActive &&
-                              missionDetail &&
-                              missionDetail.workstreams.length <= 1 &&
-                              missionDetail.capabilities.includes("direction.submit") &&
-                              active && (
-                                <button
-                                  className="side-new-mission"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
-                                    setDecisionOpen(false);
-                                    setSessionDraft(true);
-                                  }}
-                                  aria-label={`New session in ${missionDetail.workstream?.name ?? "this mission"}`}
-                                  title={`New session in ${missionDetail.workstream?.name ?? "this mission"}`}
-                                  data-testid="rail-new-session"
-                                >
-                                  +
-                                </button>
-                              )}
+                            {/* Who is in this mission, on its own row (D-126):
+                                the participants' marks, the controller ringed —
+                                presence where the mission is named, the aggregate
+                                list still Overview's (D-066). */}
+                            {isActive && missionDetail && missionDetail.participants.length > 0 && (
+                              <span className="presence-cluster" data-testid="rail-presence">
+                                {missionDetail.participants.slice(0, 4).map((participant) => (
+                                  <span
+                                    key={participant.userId}
+                                    className={
+                                      participant.login === missionDetail.control.holderLogin
+                                        ? "presence-mark presence-controller"
+                                        : "presence-mark"
+                                    }
+                                    title={
+                                      participant.login === missionDetail.control.holderLogin
+                                        ? `${participant.login} has the baton`
+                                        : participant.login
+                                    }
+                                  >
+                                    <HumanMark login={participant.login} name={participant.name} />
+                                  </span>
+                                ))}
+                              </span>
+                            )}
                             {/* One quiet control, revealed on hover or focus. A
                                 permanent icon on every row would put a destructive-
                                 looking mark beside work nobody is filing away, and
@@ -1550,6 +1574,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                           {isActive && missionDetail && active && (
                             <MissionTree
                               detail={missionDetail}
+                              forkable={
+                                missionDetail.state !== "completed" &&
+                                missionDetail.state !== "cancelled" &&
+                                missionDetail.capabilities.includes("approach.create") &&
+                                missionDetail.approaches.some(
+                                  (approach) =>
+                                    approach.workstreamId === missionDetail.workstream?.workstreamId &&
+                                    approach.forkPointSha !== null
+                                )
+                              }
+                              onFork={() => setForkAsk((previous) => previous + 1)}
                               storedLaneId={active.workstreamId}
                               storedSessionId={active.sessionId}
                               decisionOpen={decisionOpen}
@@ -1834,6 +1869,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           {active && currentProject ? (
             <ProjectRoom
               key={active.id}
+              forkAsk={forkAsk}
               project={currentProject}
               details={details}
               selectedMissionId={active.missionId}
