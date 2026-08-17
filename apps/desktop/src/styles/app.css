@@ -4537,27 +4537,6 @@ body.resizing {
   margin: 0;
 }
 
-/* Three or more lanes compare as a chosen pair (DESIGN.md#component-behavior):
-   one chip per lane, the two being compared marked, everything else one click
-   away. Identity dots, never a quality mark. */
-.decision-pair {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--s-2);
-}
-
-.pair-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-}
-
-.pair-chip.active {
-  background: var(--selected);
-  color: var(--text-1);
-}
-
 /* The comparison (D-136; re-dressed by D-137): one quiet sheet. A single
    surface-1 slab — separation from the canvas by tone, not another border —
    holding one shared row axis: a gutter of labels and a column per
@@ -4566,7 +4545,9 @@ body.resizing {
    head, eight facts, foot. */
 .approach-columns {
   display: grid;
-  grid-template-columns: 132px repeat(2, minmax(280px, 1fr));
+  /* One track per approach (D-138): every lane is a column, and the sheet
+     scrolls sideways past what fits — the gutter stays put. */
+  grid-template-columns: 132px repeat(var(--compare-count, 2), minmax(260px, 1fr));
   grid-template-rows: repeat(10, auto);
   column-gap: var(--s-6);
   overflow-x: auto;
@@ -4579,6 +4560,10 @@ body.resizing {
   display: grid;
   grid-template-rows: subgrid;
   grid-row: 1 / span 10;
+  position: sticky;
+  left: var(--s-5);
+  background: var(--surface-1);
+  z-index: 1;
 }
 
 /* Sentence case at the meta step (D-137): tracked caps read as chrome. */

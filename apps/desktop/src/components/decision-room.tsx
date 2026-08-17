@@ -71,31 +71,11 @@ export function DecisionRoom({
   ];
   const sharedOrigin = origins.length === 1 && origins[0] !== null ? origins[0] : null;
 
-  /**
-   * Three or more lanes compare as a chosen pair, not a wall of columns: a
-   * selectable list decides which two render (DESIGN.md#component-behavior).
-   * Two lanes need no selection and get no selector.
-   */
-  const [pair, setPair] = useState<string[]>([]);
+  /** Every approach is a column (D-138, reversing the pair rule): the sheet
+   *  scrolls sideways past what fits, and a picker over columns the sheet
+   *  can reach was a gate, not a tool. Creation order, as everywhere. */
   const all = detail.approaches;
-  const chosen = pair.filter((id) => all.some((entry) => entry.workstreamId === id));
-  const compared =
-    all.length <= 2
-      ? all
-      : all.filter((entry) =>
-          (chosen.length === 2 ? chosen : all.slice(0, 2).map((lane) => lane.workstreamId)).includes(
-            entry.workstreamId
-          )
-        );
-  const comparedIds = compared.map((entry) => entry.workstreamId);
-  const togglePair = (workstreamId: string) => {
-    if (comparedIds.includes(workstreamId)) return;
-    // The newest pick evicts the *least recently* picked — selection order,
-    // not column order — so one click swaps one column and any pair is
-    // reachable in at most two clicks.
-    const ordered = chosen.length === 2 ? chosen : comparedIds;
-    setPair([ordered[1] ?? ordered[0] ?? workstreamId, workstreamId].filter(Boolean) as string[]);
-  };
+  const compared = all;
 
   return (
     <section className="decision-room" data-testid="decision-room">
@@ -119,25 +99,6 @@ export function DecisionRoom({
         </button>
       </header>
 
-      {all.length > 2 && (
-        <div className="decision-pair" role="group" aria-label="Approaches to compare" data-testid="decision-pair">
-          {all.map((entry) => (
-            <button
-              key={entry.workstreamId}
-              className={
-                comparedIds.includes(entry.workstreamId) ? "chip-button pair-chip active" : "chip-button pair-chip"
-              }
-              aria-pressed={comparedIds.includes(entry.workstreamId)}
-              onClick={() => togglePair(entry.workstreamId)}
-              data-testid="pair-chip"
-            >
-              {entry.name}
-            </button>
-          ))}
-          <span className="quiet">Comparing two at a time — pick which two.</span>
-        </div>
-      )}
-
       {decision ? (
         <DecisionReceipt
           onOpenPull={onOpenPull}
@@ -152,7 +113,11 @@ export function DecisionRoom({
       {/* No fork diagram (D-137, removing D-136's the same day): the header
           already states the shared checkpoint in words, and a drawing that
           retells the sentence is ornament. */}
-      <div className="approach-columns" data-testid="approach-columns">
+      <div
+        className="approach-columns"
+        data-testid="approach-columns"
+        style={{ "--compare-count": compared.length } as React.CSSProperties}
+      >
         {/* One shared row axis (D-136): the labels live in a gutter and every
             column's cells align to the same tracks, so a row reads across.
             The columns still carry their own labels for readers without the

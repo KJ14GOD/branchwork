@@ -1889,3 +1889,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** `--lane-current` and `--lane-alt` are fully unreferenced; both token rows say retired-for-the-record. DESIGN.md's Decision Room bullet is rewritten a second time today — D-136 and D-137 stand together in the record as a decision built and re-dressed on sight, the D-085/D-086 honesty. The decision spec passed unmodified again; evidence regenerated.
 
 **Revisit when.** A surface genuinely cannot tell two lanes apart by name — same-named lanes are user-authorable — which would need its own decision, and probably words, not hues.
+
+## D-138 — Every approach is a column: the pair rule reversed
+
+**Context.** Owner-directed, on sight of the re-dressed room with three approaches: "there are 3 approaches but we only check 2." The pair rule — three or more lanes compare as a chosen pair, swapped through chips — was written when columns were heavy bordered cards; on D-137's quiet sheet, hiding a lane behind a picker reads as the room withholding evidence.
+
+**Decision.** Every approach renders as a column, in creation order, always. The sheet scrolls sideways past what fits, with the label gutter held sticky at the left so rows stay readable mid-scroll; the column track count follows the approach count. The pair chips, their selection state, and their eviction logic are deleted.
+
+**Alternatives.** Keeping the picker past some larger count (rejected: the count that justifies it has not occurred; when it does, sideways scroll is still the honest default and a picker would need its own decision). Wrapping columns to a second row (rejected: the shared row axis is the surface's one idea — a wrapped grid breaks the straight read-across).
+
+**Consequences.** The decision spec's pair-picking passage became a three-column assertion — count, order, and no chips — and its evidence renamed to `90-three-approaches-compared.png`. DESIGN.md's Decision Room bullet drops the pair sentence. `decision-pair` and `pair-chip` testids are gone.
+
+**Revisit when.** Missions with many approaches (five and up) make sideways scroll genuinely slow to compare — the answer then is probably column pinning, not hiding.

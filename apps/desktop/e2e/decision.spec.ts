@@ -392,7 +392,9 @@ describe("competing approaches, compared and decided", () => {
     expect(await page.getByTestId("decision-room").innerText()).not.toMatch(/recommend|winner|score/i);
     await shot("84-comparing-two-approaches.png");
 
-    // --- A third approach turns the columns into a chosen pair --------------
+    // --- A third approach is a third column (D-138, reversing the pair
+    // rule): every lane compares at once, in creation order, and the sheet
+    // scrolls sideways past what fits. No picker, no chips.
     const third = await page.evaluate(
       async (args) => {
         const result = await window.novus.approaches.create({
@@ -405,30 +407,15 @@ describe("competing approaches, compared and decided", () => {
       { missionId, from: baseline.workstreamId }
     );
     expect(third.startsWith("wst_")).toBe(true);
-    await expect.poll(() => page.getByTestId("pair-chip").count(), { timeout: 30_000 }).toBe(3);
-    // Still two columns — the first two by default — and one click swaps one.
-    expect(await columns.count()).toBe(2);
-    await page.getByTestId("pair-chip").nth(2).click();
-    await expect
-      .poll(async () => {
-        const rendered = await columns.evaluateAll((nodes) =>
-          nodes.map((node) => node.getAttribute("data-workstream"))
-        );
-        return rendered.includes(third);
-      }, { timeout: 30_000 })
-      .toBe(true);
-    expect(await columns.count()).toBe(2);
-    await shot("90-three-approaches-pick-a-pair.png");
-    // Back to the original pair, so the choice below is between the two that
-    // actually did work.
-    await page.getByTestId("pair-chip").nth(0).click();
-    await page.getByTestId("pair-chip").nth(1).click();
+    await expect.poll(() => columns.count(), { timeout: 30_000 }).toBe(3);
+    expect(await page.getByTestId("pair-chip").count()).toBe(0);
     await expect
       .poll(async () =>
         columns.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-workstream"))),
         { timeout: 30_000 }
       )
-      .toEqual([baseline.workstreamId, approach.workstreamId]);
+      .toEqual([baseline.workstreamId, approach.workstreamId, third]);
+    await shot("90-three-approaches-compared.png");
 
     // --- Visual evidence to cite (D-122): seeded over the real API ----------
     // The capture path is e2e/artifacts.spec.ts's; what this drives is the
