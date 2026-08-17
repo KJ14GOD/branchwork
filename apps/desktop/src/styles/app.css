@@ -4525,6 +4525,20 @@ body.resizing {
   min-width: 0;
 }
 
+.decision-eyebrow {
+  font: var(--type-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin: 0;
+}
+
+.decision-title {
+  font: var(--type-title);
+  color: var(--text-1);
+  margin: 0;
+}
+
 .decision-shared {
   font: var(--type-meta);
   color: var(--text-3);
@@ -4552,20 +4566,44 @@ body.resizing {
   color: var(--text-1);
 }
 
+/* The comparison (D-136): one shared row axis. The parent grid owns the
+   tracks — a gutter of labels and a column per approach — and each column is
+   a subgrid over the same rows, so "Verification" is one line across the
+   room no matter how either side wraps. Ten tracks: head, eight facts, foot. */
 .approach-columns {
   display: grid;
-  grid-auto-columns: minmax(280px, 1fr);
-  grid-auto-flow: column;
-  gap: var(--s-4);
+  grid-template-columns: 128px repeat(2, minmax(280px, 1fr));
+  grid-template-rows: repeat(10, auto);
+  column-gap: var(--s-4);
   overflow-x: auto;
   padding-bottom: var(--s-2);
 }
 
+.compare-gutter {
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: 1 / span 10;
+}
+
+.gutter-cell {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--edge);
+}
+
+.gutter-cell.gutter-head,
+.gutter-cell.gutter-foot {
+  border-top: none;
+}
+
 .approach-column {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-  padding: var(--s-4);
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: 1 / span 10;
+  padding: 0 var(--s-4);
   background: var(--surface-1);
   border: 1px solid var(--edge);
   border-radius: var(--r-button);
@@ -4579,38 +4617,233 @@ body.resizing {
   border-left: 1px solid var(--lane-alt);
 }
 
+.approach-head {
+  padding: var(--s-4) 0 var(--s-3);
+}
+
+.approach-head-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+/* The lane's identity color on its name (D-136 re-scoping D-133's
+   retirement): two columns side by side are the one surface the identity
+   hues were minted for. Which lane, never which is better (D-080). */
 .approach-name {
   font: var(--type-section);
-  color: var(--text-1);
+  color: var(--lane-current);
+}
+
+.approach-column.is-approach .approach-name {
+  color: var(--lane-alt);
+}
+
+/* Standing in words, colored within its meaning — never a pill. */
+.verify-badge {
+  font: var(--type-meta);
+  white-space: nowrap;
 }
 
 .approach-intent {
   font: var(--type-meta);
   color: var(--text-2);
+  margin-top: var(--s-1);
 }
 
-.approach-facts {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-}
-
-.approach-fact {
+.approach-cell {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--edge);
+  min-width: 0;
 }
 
-.approach-fact dt {
+/* The gutter is the visible label; the in-cell copy serves narrow widths
+   and readers without the geometry. */
+.cell-label {
+  display: none;
   font: var(--type-micro);
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--text-3);
 }
 
-.approach-fact dd {
+.cell-value {
   font: var(--type-row);
   color: var(--text-1);
+  min-width: 0;
+}
+
+.cell-sub {
+  display: block;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+/* One column of stacked cards when the shared axis has no room: the gutter
+   goes, the in-cell labels return. */
+@media (max-width: 980px) {
+  .approach-columns {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+  }
+
+  .compare-gutter {
+    display: none;
+  }
+
+  .approach-column {
+    display: flex;
+    flex-direction: column;
+    padding: var(--s-4);
+  }
+
+  .approach-cell {
+    border-top: none;
+    padding: var(--s-1) 0;
+  }
+
+  .approach-head {
+    padding: 0 0 var(--s-2);
+  }
+
+  .cell-label {
+    display: block;
+  }
+}
+
+/* The fork, drawn (D-136): checkpoint, two lanes, a person. Hairlines in
+   the spine's own stroke; the dots are lane identity, exactly as in the
+   columns beneath. */
+.fork-map {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.fork-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  background: var(--surface-1);
+  flex: none;
+}
+
+.fork-chip-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.fork-chip-value {
+  font: var(--type-meta);
+  color: var(--text-1);
+}
+
+.fork-branches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  flex: none;
+}
+
+.fork-branch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font: var(--type-row);
+  color: var(--text-1);
+  padding: 0 var(--s-6);
+}
+
+/* The split: each branch owns its half of the fork — a line out of the
+   checkpoint that curves into its own row. */
+.fork-branch::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: var(--s-5);
+  height: var(--s-3);
+  border-color: var(--edge-strong);
+  border-style: solid;
+  border-width: 0;
+  pointer-events: none;
+}
+
+.fork-branch-top::before {
+  top: 50%;
+  border-left: 1.5px solid var(--edge-strong);
+  border-top: 1.5px solid var(--edge-strong);
+  border-top-left-radius: var(--r-control);
+  transform: translateY(-100%);
+  border-left-color: transparent;
+  border-top-color: var(--edge-strong);
+}
+
+.fork-branch-bottom::before {
+  bottom: 50%;
+  border-left: 1.5px solid var(--edge-strong);
+  border-bottom: 1.5px solid var(--edge-strong);
+  border-bottom-left-radius: var(--r-control);
+  transform: translateY(100%);
+  border-left-color: transparent;
+  border-bottom-color: var(--edge-strong);
+}
+
+/* And the merge, mirrored on the right. */
+.fork-branch::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  width: var(--s-5);
+  height: var(--s-3);
+  border-style: solid;
+  border-width: 0;
+  pointer-events: none;
+}
+
+.fork-branch-top::after {
+  top: 50%;
+  border-top: 1.5px solid var(--edge-strong);
+  border-top-right-radius: var(--r-control);
+  transform: translateY(-100%);
+}
+
+.fork-branch-bottom::after {
+  bottom: 50%;
+  border-bottom: 1.5px solid var(--edge-strong);
+  border-bottom-right-radius: var(--r-control);
+  transform: translateY(100%);
+}
+
+.fork-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.fork-dot-current {
+  background: var(--lane-current);
+}
+
+.fork-dot-alt {
+  background: var(--lane-alt);
+}
+
+.fork-branch-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .approach-actions {

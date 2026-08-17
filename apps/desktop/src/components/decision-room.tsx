@@ -101,10 +101,14 @@ export function DecisionRoom({
     <section className="decision-room" data-testid="decision-room">
       <header className="decision-head">
         <div className="decision-head-titles">
-          <h2 className="section-title">{decision ? "The decision" : "Compare approaches"}</h2>
+          {/* The surface names itself once, quietly; the goal is the title
+              (D-136 — "Compare approaches" said the verb, not the subject). */}
+          <p className="decision-eyebrow">Decision room</p>
+          <h2 className="decision-title">{decision ? "The decision" : detail.mission.goal}</h2>
           {sharedOrigin && (
             <p className="decision-shared" data-testid="decision-shared">
-              Shared checkpoint · <span className="mono">{shortSha(sharedOrigin)}</span>
+              {plural(all.length, "approach", "approaches")} · Shared checkpoint ·{" "}
+              <span className="mono">{shortSha(sharedOrigin)}</span>
             </p>
           )}
         </div>
@@ -145,7 +149,49 @@ export function DecisionRoom({
         />
       ) : null}
 
+      {/* The fork, drawn (D-136): one checkpoint, two lanes, and a person at
+          the end — the room's whole story in one glance. Decorative retelling
+          of facts the columns state, so assistive tech skips it. */}
+      {!decision && sharedOrigin && compared.length === 2 && (
+        <div className="fork-map" aria-hidden="true">
+          <div className="fork-chip">
+            <span className="fork-chip-label">Checkpoint</span>
+            <span className="mono fork-chip-value">{shortSha(sharedOrigin)}</span>
+          </div>
+          <div className="fork-branches">
+            {compared.map((lane, index) => (
+              <div
+                key={lane.workstreamId}
+                className={index === 0 ? "fork-branch fork-branch-top" : "fork-branch fork-branch-bottom"}
+              >
+                <span
+                  className={lane.approach ? "fork-dot fork-dot-alt" : "fork-dot fork-dot-current"}
+                />
+                <span className="fork-branch-name">{lane.name}</span>
+              </div>
+            ))}
+          </div>
+          <div className="fork-chip fork-chip-decision">
+            <span className="fork-chip-label">Human</span>
+            <span className="fork-chip-value">decision</span>
+          </div>
+        </div>
+      )}
+
       <div className="approach-columns" data-testid="approach-columns">
+        {/* One shared row axis (D-136): the labels live in a gutter and every
+            column's cells align to the same tracks, so a row reads across.
+            The columns still carry their own labels for readers without the
+            geometry. */}
+        <div className="compare-gutter" aria-hidden="true">
+          <span className="gutter-cell gutter-head" />
+          {GUTTER_ROWS.map((label) => (
+            <span className="gutter-cell" key={label}>
+              {label}
+            </span>
+          ))}
+          <span className="gutter-cell gutter-foot" />
+        </div>
         {compared.map((approach) => (
           <ApproachColumn
             key={approach.workstreamId}
@@ -211,6 +257,19 @@ export function DecisionRoom({
   );
 }
 
+/** The shared row axis, in fixed order — the gutter prints these, and every
+ *  column renders exactly one cell per row (D-136). */
+const GUTTER_ROWS = [
+  "State",
+  "Changes",
+  "Verification",
+  "Not verified",
+  "People",
+  "Cost",
+  "Revision",
+  "Files"
+] as const;
+
 /** One approach, in the same shape as every other approach. */
 function ApproachColumn({
   approach,
@@ -231,14 +290,23 @@ function ApproachColumn({
     approach.checksRun === 0
       ? "Nothing ran"
       : `${approach.checksPassed} passed · ${approach.checksFailed} failed · ${approach.unresolvedChecks} unresolved`;
+  /* Standing, not judgment: whether every check that ran against the current
+     revision passed. Absence reads as its own state, never as green. */
+  const standing =
+    approach.checksRun > 0 && approach.checksFailed === 0 && approach.unresolvedChecks === 0;
   return (
     <article
       className={approach.approach ? "approach-column is-approach" : "approach-column"}
       data-testid="approach-column"
       data-workstream={approach.workstreamId}
     >
-      <header>
-        <h3 className="approach-name">{approach.name}</h3>
+      <header className="approach-head">
+        <div className="approach-head-line">
+          <h3 className="approach-name">{approach.name}</h3>
+          <span className={standing ? "verify-badge tone-ok" : "verify-badge tone-warn"}>
+            {standing ? "Verified" : "Not verified"}
+          </span>
+        </div>
         <p className="approach-intent" data-testid="approach-intent">
           {/* The baseline has no intent to state, and says so rather than
               leaving a gap somebody reads as an omission. */}
@@ -246,77 +314,73 @@ function ApproachColumn({
         </p>
       </header>
 
-      <dl className="approach-facts">
-        <Fact label="State" value={approach.state.replace(/_/g, " ")} />
-        <Fact label="Baton" value={approach.controllerLogin ?? "nobody holds it"} />
-        <Fact
-          label="Changes"
-          value={
-            approach.filesChanged === 0 ? (
-              "Nothing changed"
-            ) : (
-              <>
-                {plural(approach.filesChanged, "file")}{" "}
-                <span className="change-counts mono">
-                  <span className="count-add">+{approach.additions}</span>
-                  <span className="count-del">−{approach.deletions}</span>
-                </span>
-              </>
-            )
-          }
-        />
-        <Fact label="Verification" value={verification} />
-        <Fact
-          label="Not verified"
-          value={
-            approach.checksRun === 0
-              ? "Everything — no check has run against this"
-              : approach.unresolvedChecks === 0
-                ? "Nothing outstanding"
-                : `${plural(approach.unresolvedChecks, "check")} unresolved or proving an earlier revision`
-          }
-        />
-        <Fact
-          label="People"
-          value={`${plural(approach.directions, "direction")} · ${plural(approach.approvalsAnswered, "approval")} answered · ${plural(approach.stops, "stop")}`}
-        />
-        <Fact
-          label="Cost"
-          value={
-            approach.usage.costUsd === null && approach.usage.outputTokens === null
-              ? "Not reported"
-              : [
-                  approach.usage.inputTokens !== null && approach.usage.outputTokens !== null
-                    ? `${compactCount(approach.usage.inputTokens)} in · ${compactCount(approach.usage.outputTokens)} out`
-                    : null,
-                  approach.usage.costUsd !== null ? usd(approach.usage.costUsd) : null,
-                  approach.usage.durationMs !== null ? elapsed(approach.usage.durationMs) : null
-                ]
-                  .filter(Boolean)
-                  .join(" · ")
-          }
-        />
-        <Fact
-          label="Revision"
-          value={approach.checkpointSha ? <span className="mono">{shortSha(approach.checkpointSha)}</span> : "No checkpoint yet"}
-        />
-      </dl>
-
-      {approach.paths.length > 0 && (
-        <details className="disclosure">
-          <summary>
-            Files
-            <span className="disclosure-count">{plural(approach.paths.length, "path")}</span>
-          </summary>
-          <ul className="tool-list">
-            {approach.paths.map((path) => (
-              <li key={path}>
-                <span className="mono tool-name">{path}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      <Cell label="State">
+        {approach.state.replace(/_/g, " ")}
+        <span className="cell-sub">{approach.controllerLogin ?? "nobody holds the baton"}</span>
+      </Cell>
+      <Cell label="Changes">
+        {approach.filesChanged === 0 ? (
+          "Nothing changed"
+        ) : (
+          <>
+            {plural(approach.filesChanged, "file")}{" "}
+            <span className="change-counts mono">
+              <span className="count-add">+{approach.additions}</span>
+              <span className="count-del">−{approach.deletions}</span>
+            </span>
+          </>
+        )}
+      </Cell>
+      <Cell label="Verification">{verification}</Cell>
+      <Cell label="Not verified">
+        {approach.checksRun === 0
+          ? "Not verified at all — no check has run against this"
+          : approach.unresolvedChecks === 0
+            ? "Nothing outstanding"
+            : `${plural(approach.unresolvedChecks, "check")} unresolved or proving an earlier revision`}
+      </Cell>
+      <Cell label="People">
+        {`${plural(approach.directions, "direction")} · ${plural(approach.approvalsAnswered, "approval")} answered · ${plural(approach.stops, "stop")}`}
+      </Cell>
+      <Cell label="Cost">
+        {approach.usage.costUsd === null && approach.usage.outputTokens === null
+          ? "Not reported"
+          : [
+              approach.usage.inputTokens !== null && approach.usage.outputTokens !== null
+                ? `${compactCount(approach.usage.inputTokens)} in · ${compactCount(approach.usage.outputTokens)} out`
+                : null,
+              approach.usage.costUsd !== null ? usd(approach.usage.costUsd) : null,
+              approach.usage.durationMs !== null ? elapsed(approach.usage.durationMs) : null
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+      </Cell>
+      <Cell label="Revision">
+        {approach.checkpointSha ? (
+          <span className="mono">{shortSha(approach.checkpointSha)}</span>
+        ) : (
+          "No checkpoint yet"
+        )}
+      </Cell>
+      <Cell label="Files">
+        {approach.paths.length === 0 ? (
+          "None yet"
+        ) : (
+          <details className="disclosure">
+            <summary>
+              Files
+              <span className="disclosure-count">{plural(approach.paths.length, "path")}</span>
+            </summary>
+            <ul className="tool-list">
+              {approach.paths.map((path) => (
+                <li key={path}>
+                  <span className="mono tool-name">{path}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </Cell>
 
       <footer className="approach-actions">
         {chosen ? (
@@ -349,11 +413,14 @@ function ApproachColumn({
   );
 }
 
-function Fact({ label, value }: { label: string; value: React.ReactNode }) {
+/** One cell on the shared axis. The label renders inside the cell too — shown
+ *  only when the gutter is gone (narrow widths) and for readers without the
+ *  geometry. */
+function Cell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="approach-fact">
-      <dt>{label}</dt>
-      <dd>{value}</dd>
+    <div className="approach-cell">
+      <span className="cell-label">{label}</span>
+      <span className="cell-value">{children}</span>
     </div>
   );
 }
