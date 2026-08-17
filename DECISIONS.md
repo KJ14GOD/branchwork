@@ -1877,3 +1877,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** DESIGN.md's Decision Room bullet and both lane-token rows say the new shape. The room's columns are subgrid (Chromium has shipped it since 117; the fixture and the spec's own screenshots confirm alignment). No behavior, capability, or route changed; the receipt and both dialogs are untouched.
 
 **Revisit when.** A third compared column returns (the pair rule bounds it today); or the owner wants the inline decision bar, which would need its own decision against the dialog's contract.
+
+## D-137 — The Decision Room re-dressed the same day: one quiet sheet, and the lane hues retire for good
+
+**Context.** Owner-directed, on sight of D-136's built result, with a sharper critique than any single element: the room "feels rendered out of the 2010s" — clean but dated. And two specifics the owner had now named three times across the session: the colored identity line on the approach column, and dots — both of which D-136 had reintroduced because the owner's reference mockup happened to contain them. The standing taste should have outranked the mockup's incidental details.
+
+**Decision.** The anatomy D-136 built — goal as title, shared row axis, subgrid alignment, standing badge — stays; its dress changes. **One quiet sheet**: the comparison becomes a single `--surface-1` slab at the dialog radius, separated from the canvas by tone, not a border; columns are regions of the sheet, not boxes on it — no column borders, no backgrounds of their own. **The fork diagram is removed** the day it landed: the header already states the shared checkpoint in words, and a drawing that retells the sentence is ornament. **The lane hues retire for good**: no colored names, no dots, and the comparison column's 1px `--lane-alt` edge — pre-dating this session — is gone too; the name at the section step in `--text-1` is the identity. **Tracked caps go**: the eyebrow is deleted (the surface names itself in the meta line, lowercase), and the gutter drops uppercase/letter-spacing for sentence case at the meta step. **Choose demotes to secondary**: two identical primary buttons violated the one-primary rule all along; this surface's primary is the record dialog's own.
+
+**Alternatives.** Keeping a refined fork diagram (rejected: D-124→D-125 already established that drawings of process read as theater here). Keeping the hues at lower alpha (rejected: three explicit owner complaints is a verdict, not a calibration problem).
+
+**Consequences.** `--lane-current` and `--lane-alt` are fully unreferenced; both token rows say retired-for-the-record. DESIGN.md's Decision Room bullet is rewritten a second time today — D-136 and D-137 stand together in the record as a decision built and re-dressed on sight, the D-085/D-086 honesty. The decision spec passed unmodified again; evidence regenerated.
+
+**Revisit when.** A surface genuinely cannot tell two lanes apart by name — same-named lanes are user-authorable — which would need its own decision, and probably words, not hues.

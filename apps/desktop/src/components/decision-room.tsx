@@ -101,13 +101,13 @@ export function DecisionRoom({
     <section className="decision-room" data-testid="decision-room">
       <header className="decision-head">
         <div className="decision-head-titles">
-          {/* The surface names itself once, quietly; the goal is the title
-              (D-136 — "Compare approaches" said the verb, not the subject). */}
-          <p className="decision-eyebrow">Decision room</p>
+          {/* The goal is the title (D-136); the surface names itself in the
+              meta line, lowercase and quiet (D-137 — the tracked-caps eyebrow
+              read as 2010s chrome). */}
           <h2 className="decision-title">{decision ? "The decision" : detail.mission.goal}</h2>
           {sharedOrigin && (
             <p className="decision-shared" data-testid="decision-shared">
-              {plural(all.length, "approach", "approaches")} · Shared checkpoint ·{" "}
+              Decision room · {plural(all.length, "approach", "approaches")} · Shared checkpoint ·{" "}
               <span className="mono">{shortSha(sharedOrigin)}</span>
             </p>
           )}
@@ -149,35 +149,9 @@ export function DecisionRoom({
         />
       ) : null}
 
-      {/* The fork, drawn (D-136): one checkpoint, two lanes, and a person at
-          the end — the room's whole story in one glance. Decorative retelling
-          of facts the columns state, so assistive tech skips it. */}
-      {!decision && sharedOrigin && compared.length === 2 && (
-        <div className="fork-map" aria-hidden="true">
-          <div className="fork-chip">
-            <span className="fork-chip-label">Checkpoint</span>
-            <span className="mono fork-chip-value">{shortSha(sharedOrigin)}</span>
-          </div>
-          <div className="fork-branches">
-            {compared.map((lane, index) => (
-              <div
-                key={lane.workstreamId}
-                className={index === 0 ? "fork-branch fork-branch-top" : "fork-branch fork-branch-bottom"}
-              >
-                <span
-                  className={lane.approach ? "fork-dot fork-dot-alt" : "fork-dot fork-dot-current"}
-                />
-                <span className="fork-branch-name">{lane.name}</span>
-              </div>
-            ))}
-          </div>
-          <div className="fork-chip fork-chip-decision">
-            <span className="fork-chip-label">Human</span>
-            <span className="fork-chip-value">decision</span>
-          </div>
-        </div>
-      )}
-
+      {/* No fork diagram (D-137, removing D-136's the same day): the header
+          already states the shared checkpoint in words, and a drawing that
+          retells the sentence is ornament. */}
       <div className="approach-columns" data-testid="approach-columns">
         {/* One shared row axis (D-136): the labels live in a gutter and every
             column's cells align to the same tracks, so a row reads across.
@@ -390,7 +364,7 @@ function ApproachColumn({
         ) : (
           <>
             <button
-              className="btn btn-primary"
+              className="btn btn-secondary"
               disabled={!mayDecide || busy}
               onClick={onChoose}
               data-testid="choose-approach"
