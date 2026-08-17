@@ -12,7 +12,7 @@
   --surface-2: #1d1d21;
   --edge: rgba(255, 255, 255, 0.11);
   --edge-strong: rgba(255, 255, 255, 0.3);
-  --edge-selected: rgba(255, 255, 255, 0.55);
+  --edge-selected: rgba(255, 255, 255, 0.85);
   --edge-hover: rgba(255, 255, 255, 0.2);
   --text-1: #f7f5f2;
   --text-2: #b6b1a8;
@@ -115,7 +115,7 @@
   --surface-2: #ffffff;
   --edge: rgba(0, 0, 0, 0.1);
   --edge-strong: rgba(0, 0, 0, 0.32);
-  --edge-selected: rgba(0, 0, 0, 0.55);
+  --edge-selected: rgba(0, 0, 0, 0.7);
   --edge-hover: rgba(0, 0, 0, 0.16);
   --text-1: #26241f;
   --text-2: #5d594f;

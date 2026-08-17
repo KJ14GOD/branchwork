@@ -1824,4 +1824,6 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 
 **Consequences.** DESIGN.md's token table adds `--edge-selected`, retires `--lane-current`, and narrows `--lane-alt` to the comparison edge; element 3's dotted-tab wording is rewritten; the rail paragraph says the new aim. The `.lane-dot` classes are deleted. No testid moves; the deterministic suites hold as written.
 
+**Amended same day.** `--edge-selected` lifted 55% → 85% (light 55% → 70%): beside the 30% spine the first value read as the same line on the owner's screen. Calibration verified by build and a fresh tree screenshot at the owner's direction; the deterministic suites were not rerun for the value change.
+
 **Revisit when.** Same-named lanes make word-identity ambiguous (lane names are user-authored), or a third emphasis state appears and the edge family needs an inventory.
