@@ -1827,3 +1827,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Amended same day.** `--edge-selected` lifted 55% → 85% (light 55% → 70%): beside the 30% spine the first value read as the same line on the owner's screen. Calibration verified by build and a fresh tree screenshot at the owner's direction; the deterministic suites were not rerun for the value change.
 
 **Revisit when.** Same-named lanes make word-identity ambiguous (lane names are user-authored), or a third emphasis state appears and the edge family needs an inventory.
+
+## D-134 — The tree folds from the mission's own row
+
+**Context.** Owner-directed. D-126 made the active mission's tree permanent, and permanence had no escape: with one mission's structure disclosed, a second mission's row sat beneath a tree the owner could not put away — "I can't toggle it off."
+
+**Decision.** The active mission's row carries a quiet disclosure — the project row's own twisty convention, hover-revealed like every quiet control, absolute in the chip's left inset so sibling names stay aligned. Folding hides the tree; the mission row takes the selection wash while its structure is away, keeping D-084's one-selection rule on the deepest visible row; the room on canvas never changes. The fold is this window's own choice for this session — not persisted, not shared: the structure remains the default, and a fresh window starts with it shown.
+
+**Alternatives.** Clicking the active mission row to toggle (rejected: rows are navigation, D-084 — a click that sometimes navigates and sometimes folds is two controls in one skin). Persisting the fold (rejected for now: a folded tree that stays folded across relaunches becomes a preference nobody remembers setting; revisit if the session-local choice proves annoying). A twisty on every mission row (rejected: only the active mission has a tree — a disclosure on rows with nothing to disclose is furniture).
+
+**Consequences.** The sessions spec proves fold and unfold with the tree's count and captures the folded rail as evidence `153-mission-tree-folded.png`. `activeTreeShown` now accounts for the fold, which is what moves the wash. One new testid, `mission-twisty`.
+
+**Revisit when.** The fold wants remembering across relaunches, or a second surface (Home cards, Compare) needs the same gesture.

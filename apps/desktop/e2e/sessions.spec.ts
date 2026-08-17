@@ -264,6 +264,17 @@ describe("shared sessions inside one approach", () => {
     expect(await page.getByTestId("rail-approach-row").count()).toBe(1);
     expect(await page.getByTestId("rail-branch").count()).toBe(0);
 
+    // --- The tree folds from the mission row's own disclosure (D-134):
+    // hover-revealed, this window's choice, and the wash falls back to the
+    // mission row while its structure is away.
+    await page.getByTestId("mission-row").first().hover();
+    await page.getByTestId("mission-twisty").click();
+    await expect.poll(() => page.getByTestId("mission-tree").count(), { timeout: 20_000 }).toBe(0);
+    await page.screenshot({ path: join(evidenceDir, "153-mission-tree-folded.png") });
+    await page.getByTestId("mission-row").first().hover();
+    await page.getByTestId("mission-twisty").click();
+    await expect.poll(() => page.getByTestId("mission-tree").count(), { timeout: 20_000 }).toBe(1);
+
     // --- The first turn, in the session every mission is born with ----------
     await compose("write the guard file");
     await approvePending();

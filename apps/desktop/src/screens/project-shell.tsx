@@ -789,6 +789,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** Which projects are showing their missions. Disclosure is the reader's
    *  choice and survives selection moving elsewhere. */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  /** Missions whose tree is folded away (D-134): this window's own choice,
+   *  for this session — the structure is the default, not a cage. */
+  const [foldedTrees, setFoldedTrees] = useState<Set<string>>(new Set());
   const addTriggerRef = useRef<HTMLButtonElement>(null);
 
   const refresh = useCallback(async () => {
@@ -1236,7 +1239,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   // The tree always renders for the active mission (D-126): Mission →
   // Approach → Chat is the structure, and hiding it for the ordinary mission
   // hid the product.
-  const activeTreeShown = openDetail !== undefined;
+  const activeTreeShown =
+    openDetail !== undefined && !(activeMissionId !== null && foldedTrees.has(activeMissionId));
   /** The tree is shown but the canvas is the mission's own landing (D-089) —
    *  no conversation selected, nothing else covering it. In a one-lane
    *  mission no approach row exists to carry the wash, so the mission's own
@@ -1546,6 +1550,31 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                             }${isActive ? " active-mission" : ""}`}
                             data-testid="mission-row"
                           >
+                            {/* The tree folds from the mission's own quiet
+                                disclosure (D-134) — hover-revealed like every
+                                quiet control, absolute in the chip's inset so
+                                sibling names stay aligned. */}
+                            {isActive && missionDetail && (
+                              <button
+                                className="side-twisty side-mission-twisty"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setFoldedTrees((previous) => {
+                                    const next = new Set(previous);
+                                    if (next.has(mission.missionId)) next.delete(mission.missionId);
+                                    else next.add(mission.missionId);
+                                    return next;
+                                  });
+                                }}
+                                aria-expanded={!foldedTrees.has(mission.missionId)}
+                                aria-label={`${
+                                  foldedTrees.has(mission.missionId) ? "Show" : "Hide"
+                                } the structure of ${mission.goal}`}
+                                data-testid="mission-twisty"
+                              >
+                                <Chevron open={!foldedTrees.has(mission.missionId)} />
+                              </button>
+                            )}
                             <button
                               className="side-open-mission"
                               onClick={() => openMissionTab(project.key, mission.missionId)}
@@ -1605,7 +1634,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                               project is (D-084). Only the active one: a rail
                               showing every mission's tree is the tab soup
                               relocated. */}
-                          {isActive && missionDetail && active && (
+                          {isActive && missionDetail && active && !foldedTrees.has(mission.missionId) && (
                             <MissionTree
                               detail={missionDetail}
                               forkable={
