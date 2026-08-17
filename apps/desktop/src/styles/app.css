@@ -4014,15 +4014,11 @@ body {
   pointer-events: none;
 }
 
-/* A middle branch is a plain tick abutting the through-line (D-133
-   smoothing): drawing its own curve over the line doubled the stroke at
-   the junction and a nub shot out. Only the last branch, where the line
-   ends, keeps the curled elbow. */
+/* A middle branch curls off the through-line without redrawing it
+   (D-133 smoothing): the curl is the bottom border bending up at its
+   left end — no border-left, so the line is never double-struck. */
 .side-tree > .side-approach-more::before {
   border-left: 0;
-  border-bottom-left-radius: 0;
-  left: calc(-1 * var(--s-3) + 1.5px);
-  width: calc(var(--s-2) - 1.5px);
 }
 
 /* The vertical continues while a later approach hangs below — through an
@@ -4057,6 +4053,25 @@ body {
    vertical of everything above it. */
 .side-tree > .side-approach-open::before {
   border-color: var(--edge-selected);
+}
+
+/* An open middle approach's own vertical is bright down to its branch
+   and quiet below it: the ::after halves to the branch point, and the
+   .side-spine-below element carries the quiet remainder. */
+.side-tree > .side-approach-open.side-approach-more::after {
+  bottom: auto;
+  height: 50%;
+  border-left-color: var(--edge-selected);
+}
+
+.side-spine-below {
+  position: absolute;
+  top: 50%;
+  bottom: 0;
+  width: 0;
+  left: calc(-1 * var(--s-3));
+  border-left: 1.5px solid var(--edge-strong);
+  pointer-events: none;
 }
 
 .side-tree > .side-approach-before-open::before {

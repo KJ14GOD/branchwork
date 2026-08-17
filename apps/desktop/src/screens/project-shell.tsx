@@ -608,6 +608,11 @@ function MissionTree({
                   </span>
                   {needs && <span className="tone-warn side-needs"> · needs you</span>}
                 </button>
+                {/* An open middle approach splits its vertical at the branch:
+                    bright above (the ::after), quiet below — this element —
+                    because one border cannot be two colors and gradients are
+                    prohibited (D-133 smoothing). */}
+                {selected && more && <span className="side-spine-below" aria-hidden="true" />}
                 {/* A parent's + creates its child, exactly as the project row's
                     does for missions (D-077, D-084). Only on the approach being
                     read: a session starts where you are. */}
