@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CAPTURE_TOOL_FULL_NAME,
-  mintCaptureGrant,
+  CAPTURE_TOOL_NAME,
+  PUSH_TOOL_FULL_NAME,
+  PUSH_TOOL_NAME,
+  mintToolGrant,
   registerCaptureTurn,
   resetCaptureEndpoint
 } from "../electron/artifact-mcp";
@@ -37,17 +40,20 @@ async function rpc(
 }
 
 describe("the capture endpoint (D-123)", () => {
-  it("answers the MCP handshake and lists exactly one tool, honestly described", async () => {
-    const turn = await registerCaptureTurn("exe_alpha", async () => ({ text: "ok", isError: false }));
+  it("answers the MCP handshake and lists both tools, honestly described", async () => {
+    const turn = await registerCaptureTurn("exe_alpha", async () => ({ text: "ok", isError: false }), async () => ({ text: "pushed", isError: false }));
     const init = await rpc(turn.url, turn.token, "initialize", { protocolVersion: "2025-06-18" });
     expect(init.status).toBe(200);
     const listed = await rpc(turn.url, turn.token, "tools/list");
-    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual(["capture_screenshot"]);
+    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
+      "capture_screenshot",
+      "push_branch"
+    ]);
     turn.release();
   });
 
   it("refuses a missing or wrong token, and a released turn's token", async () => {
-    const turn = await registerCaptureTurn("exe_alpha", async () => ({ text: "ok", isError: false }));
+    const turn = await registerCaptureTurn("exe_alpha", async () => ({ text: "ok", isError: false }), async () => ({ text: "pushed", isError: false }));
     expect((await rpc(turn.url, null, "tools/list")).status).toBe(401);
     expect((await rpc(turn.url, "not-the-token", "tools/list")).status).toBe(401);
     turn.release();
@@ -56,10 +62,14 @@ describe("the capture endpoint (D-123)", () => {
 
   it("refuses a tool call without a standing grant — the token alone captures nothing", async () => {
     let captures = 0;
-    const turn = await registerCaptureTurn("exe_alpha", async () => {
-      captures += 1;
-      return { text: "captured", isError: false };
-    });
+    const turn = await registerCaptureTurn(
+      "exe_alpha",
+      async () => {
+        captures += 1;
+        return { text: "captured", isError: false };
+      },
+      async () => ({ text: "pushed", isError: false })
+    );
     const called = await rpc(turn.url, turn.token, "tools/call", {
       name: "capture_screenshot",
       arguments: {}
@@ -72,11 +82,15 @@ describe("the capture endpoint (D-123)", () => {
 
   it("spends a grant exactly once: the allow captures, the replay is refused", async () => {
     let captures = 0;
-    const turn = await registerCaptureTurn("exe_alpha", async () => {
-      captures += 1;
-      return { text: "captured as art_x", isError: false };
-    });
-    mintCaptureGrant("exe_alpha");
+    const turn = await registerCaptureTurn(
+      "exe_alpha",
+      async () => {
+        captures += 1;
+        return { text: "captured as art_x", isError: false };
+      },
+      async () => ({ text: "pushed", isError: false })
+    );
+    mintToolGrant("exe_alpha", CAPTURE_TOOL_NAME);
     const first = await rpc(turn.url, turn.token, "tools/call", {
       name: "capture_screenshot",
       arguments: {}
@@ -94,12 +108,16 @@ describe("the capture endpoint (D-123)", () => {
 
   it("never lets one turn's grant serve another turn's token", async () => {
     let alphaCaptures = 0;
-    const alpha = await registerCaptureTurn("exe_alpha", async () => {
-      alphaCaptures += 1;
-      return { text: "alpha", isError: false };
-    });
-    const beta = await registerCaptureTurn("exe_beta", async () => ({ text: "beta", isError: false }));
-    mintCaptureGrant("exe_alpha");
+    const alpha = await registerCaptureTurn(
+      "exe_alpha",
+      async () => {
+        alphaCaptures += 1;
+        return { text: "alpha", isError: false };
+      },
+      async () => ({ text: "pushed", isError: false })
+    );
+    const beta = await registerCaptureTurn("exe_beta", async () => ({ text: "beta", isError: false }), async () => ({ text: "pushed", isError: false }));
+    mintToolGrant("exe_alpha", CAPTURE_TOOL_NAME);
     // Beta's token finds beta's turn, which has no grant.
     const crossed = await rpc(beta.url, beta.token, "tools/call", {
       name: "capture_screenshot",
@@ -112,11 +130,12 @@ describe("the capture endpoint (D-123)", () => {
   });
 
   it("reports a capture failure as the tool's own error, in the handler's words", async () => {
-    const turn = await registerCaptureTurn("exe_alpha", async () => ({
-      text: "Capture refused: No preview is open.",
-      isError: true
-    }));
-    mintCaptureGrant("exe_alpha");
+    const turn = await registerCaptureTurn(
+      "exe_alpha",
+      async () => ({ text: "Capture refused: No preview is open.", isError: true }),
+      async () => ({ text: "pushed", isError: false })
+    );
+    mintToolGrant("exe_alpha", CAPTURE_TOOL_NAME);
     const called = await rpc(turn.url, turn.token, "tools/call", {
       name: "capture_screenshot",
       arguments: {}
@@ -126,7 +145,49 @@ describe("the capture endpoint (D-123)", () => {
     turn.release();
   });
 
-  it("exports the router's own name for the tool, so the grant hook and the config cannot drift", () => {
+  it("exports the router's own names for the tools, so the grant hook and the config cannot drift", () => {
     expect(CAPTURE_TOOL_FULL_NAME).toBe("mcp__novus__capture_screenshot");
+    expect(PUSH_TOOL_FULL_NAME).toBe("mcp__novus__push_branch");
+  });
+
+  it("keeps the two tools' grants apart: a capture allow pushes nothing (D-140)", async () => {
+    let pushes = 0;
+    const turn = await registerCaptureTurn(
+      "exe_alpha",
+      async () => ({ text: "captured", isError: false }),
+      async () => {
+        pushes += 1;
+        return { text: "pushed", isError: false };
+      }
+    );
+    mintToolGrant("exe_alpha", CAPTURE_TOOL_NAME);
+    const crossed = await rpc(turn.url, turn.token, "tools/call", {
+      name: "push_branch",
+      arguments: {}
+    });
+    expect(crossed.body.result?.isError).toBe(true);
+    expect(crossed.body.result?.content?.[0]?.text).toContain("no approval stands");
+    expect(pushes).toBe(0);
+    turn.release();
+  });
+
+  it("spends a push grant exactly once through the same two-key lock (D-140)", async () => {
+    let pushes = 0;
+    const turn = await registerCaptureTurn(
+      "exe_alpha",
+      async () => ({ text: "captured", isError: false }),
+      async () => {
+        pushes += 1;
+        return { text: "Pushed novus/m-x at abcd1234.", isError: false };
+      }
+    );
+    mintToolGrant("exe_alpha", PUSH_TOOL_NAME);
+    const first = await rpc(turn.url, turn.token, "tools/call", { name: "push_branch", arguments: {} });
+    expect(first.body.result?.isError).toBe(false);
+    expect(first.body.result?.content?.[0]?.text).toContain("Pushed");
+    const replay = await rpc(turn.url, turn.token, "tools/call", { name: "push_branch", arguments: {} });
+    expect(replay.body.result?.isError).toBe(true);
+    expect(pushes).toBe(1);
+    turn.release();
   });
 });

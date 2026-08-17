@@ -24,6 +24,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 export const CAPTURE_TOOL_NAME = "capture_screenshot";
 export const CAPTURE_TOOL_FULL_NAME = `mcp__novus__${CAPTURE_TOOL_NAME}`;
+export const PUSH_TOOL_NAME = "push_branch";
+export const PUSH_TOOL_FULL_NAME = `mcp__novus__${PUSH_TOOL_NAME}`;
 
 /** How long an allow stands before the tool call must have arrived. The CLI
  *  invokes the tool immediately after the permission answer; minutes covers a
@@ -35,29 +37,37 @@ interface RegisteredTurn {
   /** Performs the capture under every person-equivalent check and returns
    *  what the agent should be told. */
   capture: () => Promise<{ text: string; isError: boolean }>;
+  /** Pushes the lane's latest checkpoint through the same hardened path a
+   *  person's publish uses (D-140). Same grant discipline as capture. */
+  push: () => Promise<{ text: string; isError: boolean }>;
 }
 
-interface CaptureGrant {
-  executionId: string;
+interface ToolGrant {
   expiresAt: number;
 }
 
 const turns = new Map<string, RegisteredTurn>();
-const grants = new Map<string, CaptureGrant>();
+/** One grant per (execution, tool): an allow for capture spends nothing of
+ *  push, and each is one-shot. */
+const grants = new Map<string, ToolGrant>();
 let server: Server | null = null;
 let port: number | null = null;
 
-/** Router hook (D-123): an *allow* for the capture tool mints one grant for
- *  that execution — person-approved or policy-answered, either way recorded
- *  by the router itself before this is called. */
-export function mintCaptureGrant(executionId: string): void {
-  grants.set(executionId, { executionId, expiresAt: Date.now() + GRANT_TTL_MS });
+const grantKey = (executionId: string, tool: string) => `${executionId}\u0000${tool}`;
+
+/** Router hook (D-123, D-140): an *allow* for one of this endpoint's tools
+ *  mints one grant for that execution and that tool — person-approved or
+ *  policy-answered, either way recorded by the router itself before this is
+ *  called. */
+export function mintToolGrant(executionId: string, tool: string): void {
+  grants.set(grantKey(executionId, tool), { expiresAt: Date.now() + GRANT_TTL_MS });
 }
 
-function consumeCaptureGrant(executionId: string): boolean {
-  const grant = grants.get(executionId);
+function consumeToolGrant(executionId: string, tool: string): boolean {
+  const key = grantKey(executionId, tool);
+  const grant = grants.get(key);
   if (!grant) return false;
-  grants.delete(executionId);
+  grants.delete(key);
   return grant.expiresAt >= Date.now();
 }
 
@@ -104,6 +114,13 @@ const TOOL_DESCRIPTION =
   "Requires the preview to be open and showing a page, and every call is approved by a person " +
   "under the lane's permission profile. The screenshot proves what the preview displayed at " +
   "that revision and time; it does not prove the application is correct.";
+
+const PUSH_DESCRIPTION =
+  "Push this mission's latest checkpoint to its own branch on GitHub, through Novus's governed " +
+  "push: only the mission branch, never --force, credential injected for this one operation. " +
+  "Every call is approved by a person under the lane's permission profile. Work from the current " +
+  "turn checkpoints when the turn completes, so ask in a follow-up turn to push it. This shares " +
+  "the branch; opening a pull request stays a person's own act in Novus.";
 
 async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
   if (request.method !== "POST") {
@@ -158,6 +175,11 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
             name: CAPTURE_TOOL_NAME,
             description: TOOL_DESCRIPTION,
             inputSchema: { type: "object", properties: {}, additionalProperties: false }
+          },
+          {
+            name: PUSH_TOOL_NAME,
+            description: PUSH_DESCRIPTION,
+            inputSchema: { type: "object", properties: {}, additionalProperties: false }
           }
         ]
       })
@@ -166,13 +188,19 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   }
   if (message.method === "tools/call") {
     const params = (message.params ?? {}) as { name?: string };
-    if (params.name !== CAPTURE_TOOL_NAME) {
+    const tool =
+      params.name === CAPTURE_TOOL_NAME
+        ? { name: CAPTURE_TOOL_NAME, run: turn.capture, verb: "Capture" }
+        : params.name === PUSH_TOOL_NAME
+          ? { name: PUSH_TOOL_NAME, run: turn.push, verb: "Push" }
+          : null;
+    if (!tool) {
       json(response, 200, rpcError(id, -32602, `No such tool: ${params.name ?? "(none)"}`));
       return;
     }
-    // The grant is the routed approval's receipt: no allow, no capture —
+    // The grant is the routed approval's receipt: no allow, no act —
     // whoever is asking, however they found the socket.
-    if (!consumeCaptureGrant(turn.executionId)) {
+    if (!consumeToolGrant(turn.executionId, tool.name)) {
       json(
         response,
         200,
@@ -180,7 +208,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
           content: [
             {
               type: "text",
-              text: "Capture refused: no approval stands for this request. Each capture is approved once, at the moment it is asked."
+              text: `${tool.verb} refused: no approval stands for this request. Each ${tool.verb.toLowerCase()} is approved once, at the moment it is asked.`
             }
           ],
           isError: true
@@ -188,8 +216,8 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       );
       return;
     }
-    const outcome = await turn.capture().catch((error: unknown) => ({
-      text: `Capture failed: ${error instanceof Error ? error.message : "unknown error"}`,
+    const outcome = await tool.run().catch((error: unknown) => ({
+      text: `${tool.verb} failed: ${error instanceof Error ? error.message : "unknown error"}`,
       isError: true
     }));
     json(
@@ -230,17 +258,19 @@ async function ensureServer(): Promise<number> {
  */
 export async function registerCaptureTurn(
   executionId: string,
-  capture: RegisteredTurn["capture"]
+  capture: RegisteredTurn["capture"],
+  push: RegisteredTurn["push"]
 ): Promise<{ url: string; token: string; release: () => void }> {
   const listeningPort = await ensureServer();
   const token = randomBytes(24).toString("base64url");
-  turns.set(token, { executionId, capture });
+  turns.set(token, { executionId, capture, push });
   return {
     url: `http://127.0.0.1:${listeningPort}/mcp`,
     token,
     release: () => {
       turns.delete(token);
-      grants.delete(executionId);
+      grants.delete(grantKey(executionId, CAPTURE_TOOL_NAME));
+      grants.delete(grantKey(executionId, PUSH_TOOL_NAME));
     }
   };
 }

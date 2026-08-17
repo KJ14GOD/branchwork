@@ -716,6 +716,22 @@ function MissionTree({
           </button>
         </div>
       )}
+      {/* A one-lane mission publishes without a comparison (D-140): the same
+          surface, one column — record the decision, then Publish. The row
+          appears once there is a checkpoint to decide on. */}
+      {lanes.length === 1 && detail.approaches[0]?.checkpointSha && (
+        <div
+          className={`side-row side-compare${decisionOpen ? " selected" : ""}`}
+          data-testid="rail-publish"
+        >
+          <button className="side-open-mission" onClick={onCompare} aria-current={decisionOpen}>
+            <span className="side-name">Publish</span>
+            {detail.decisions.some((decision) => decision.supersededAt === null) && (
+              <span className="side-decision-note"> · decision recorded</span>
+            )}
+          </button>
+        </div>
+      )}
       {lanes.length > 1 && (
         <div
           className={`side-row side-compare${decisionOpen ? " selected" : ""}`}

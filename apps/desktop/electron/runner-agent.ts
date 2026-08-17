@@ -27,7 +27,7 @@ import {
   captureScreenshot as capturePreviewScreenshot,
   type ArtifactUploader
 } from "./artifact-capture";
-import { CAPTURE_TOOL_FULL_NAME, mintCaptureGrant, registerCaptureTurn } from "./artifact-mcp";
+import { CAPTURE_TOOL_FULL_NAME, CAPTURE_TOOL_NAME, PUSH_TOOL_FULL_NAME, PUSH_TOOL_NAME, mintToolGrant, registerCaptureTurn } from "./artifact-mcp";
 import { startRecording } from "./artifact-recording";
 import { SCREENSHOT_CLAIM } from "./artifact-policy";
 import { redact } from "./secret-policy";
@@ -1385,6 +1385,50 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           } catch (error) {
             return { text: `Capture refused: ${messageOf(error)}`, isError: true };
           }
+        }, async () => {
+          // The push tool (D-140): the lane's latest checkpoint, through the
+          // exact hardened path a person's publish rides — mission branch
+          // only, no --force, a write-scoped credential minted for this one
+          // operation and forgotten. The approval that let this run is the
+          // router's record; what the worktree holds uncommitted stays here.
+          const enrolment = enrolments.get(args.workstreamId);
+          if (!enrolment) {
+            return { text: "Push refused: this machine is no longer enrolled for the lane.", isError: true };
+          }
+          try {
+            // The lane's latest checkpoint is the worktree's HEAD: turns
+            // checkpoint by committing there. A local-folder lane is refused
+            // by the credential mint itself, in the server's own words.
+            const sha = await new Promise<string>((resolveHead, rejectHead) =>
+              execFile(
+                "git",
+                ["-C", join(worktreeRoot, args.workstreamId), "rev-parse", "HEAD"],
+                (error: Error | null, stdout: string) =>
+                  error
+                    ? rejectHead(new Error("the worktree has no readable HEAD to push"))
+                    : resolveHead(stdout.trim())
+              )
+            );
+            const credential = await pushCredential(enrolment, args.workstreamId);
+            const pushed = await pushMissionBranch({
+              repositoryPath: args.repositoryPath,
+              branch: args.missionBranch,
+              sha,
+              credential
+            });
+            outboxFor(args.workstreamId).append(null, {
+              kind: "workspace.pushed",
+              payload: { branch: args.missionBranch, sha: pushed.sha }
+            });
+            return {
+              text:
+                `Pushed ${args.missionBranch} at ${pushed.sha.slice(0, 8)} to GitHub. ` +
+                "This shares the branch; opening a pull request stays a person's act in Novus.",
+              isError: false
+            };
+          } catch (error) {
+            return { text: `Push refused: ${messageOf(error)}`, isError: true };
+          }
         });
         releaseCapture = endpoint.release;
         novusCapture = { url: endpoint.url, token: endpoint.token };
@@ -1431,7 +1475,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       mcpServers: args.mcpServers,
       novusCapture,
       onToolAllowed: (toolName) => {
-        if (toolName === CAPTURE_TOOL_FULL_NAME) mintCaptureGrant(args.executionId);
+        if (toolName === CAPTURE_TOOL_FULL_NAME) mintToolGrant(args.executionId, CAPTURE_TOOL_NAME);
+        if (toolName === PUSH_TOOL_FULL_NAME) mintToolGrant(args.executionId, PUSH_TOOL_NAME);
       },
       siblingScopes: () =>
         [...active.values()]

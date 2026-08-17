@@ -289,6 +289,19 @@ describe("shared sessions inside one approach", () => {
         value.executions.some((execution) => execution.state === "completed") &&
         value.checkpoints.some((checkpoint) => checkpoint.sha !== null)
     );
+
+
+    // --- One lane still publishes (D-140): once a checkpoint exists the rail
+    // offers Publish — the decision surface with a single column — and
+    // leaving it decides nothing.
+    await expect.poll(() => page.getByTestId("rail-publish").count(), { timeout: 60_000 }).toBe(1);
+    await page.getByTestId("rail-publish").click();
+    await page.getByTestId("decision-room").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("approach-column").count()).toBe(1);
+    await page.screenshot({ path: join(evidenceDir, "158-single-approach-publish.png") });
+    await page.getByTestId("decision-close").click();
+    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
+
     expect(first.sessions.length).toBe(1);
     const sessionA = first.sessions[0]!;
     // Its first words are its name — nobody typed a title anywhere.
