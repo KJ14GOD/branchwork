@@ -4081,6 +4081,18 @@ body {
   border-left-color: var(--edge-selected);
 }
 
+/* The bright path is one continuous physical line, so a before-open row's
+   OWN resumption and its OWN children block must brighten too — leaving
+   them quiet made the line fade out mid-approach instead of reaching the
+   open row's elbow (D-135 fix, found on the owner's screen). */
+.side-approach-before-open > .side-spine-below {
+  border-left-color: var(--edge-selected);
+}
+
+.side-children-before-open::before {
+  border-left-color: var(--edge-selected);
+}
+
 /* The conversations' chips keep their margin-borne depth (D-132): indent
    is their notation (D-133 — no connectors at this level). */
 .side-children > .side-row {

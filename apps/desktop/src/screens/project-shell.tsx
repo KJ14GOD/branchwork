@@ -635,7 +635,19 @@ function MissionTree({
                   (D-128). Rendered only with something in it: an empty block
                   would still occupy a spine slot. */}
               {showChildren && (
-                <div className={more ? "side-children side-children-more" : "side-children"}>
+                <div
+                  className={[
+                    "side-children",
+                    more && "side-children-more",
+                    // The bright path to an open approach further down runs
+                    // through this block too — one continuous line, so its
+                    // own segment brightens along with the row above it
+                    // (D-135 fix).
+                    beforeOpen && "side-children-before-open"
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                >
                   {laneSessions.map((session) => {
                     const washed =
                       selected && session.sessionId === selectedSessionId && !sessionDraft;
