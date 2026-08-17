@@ -2007,6 +2007,11 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             <ProjectRoom
               key={active.id}
               forkAsk={forkAsk}
+              onOpenDecision={() => {
+                setSessionDraft(false);
+                setDecisionOpen(true);
+                setRailOpen(false);
+              }}
               project={currentProject}
               details={details}
               selectedMissionId={active.missionId}

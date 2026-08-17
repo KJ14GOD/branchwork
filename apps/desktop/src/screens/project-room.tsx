@@ -147,6 +147,7 @@ export function ProjectRoom({
   onReorderSession,
   onReorderFile,
   decisionOpen,
+  onOpenDecision,
   onDecisionOpen,
   sessionDraft,
   onSessionDraft,
@@ -210,6 +211,10 @@ export function ProjectRoom({
    *  new-session draft. The shell owns both, because the rows that open them
    *  live in the rail. */
   decisionOpen: boolean;
+  /** Opens the decision surface — the state line's Publish action needs a
+   *  way there (D-141); the surface itself stays the shell's one canvas
+   *  switch, exactly as the rail row uses it. */
+  onOpenDecision: () => void;
   onDecisionOpen: (open: boolean) => void;
   sessionDraft: boolean;
   onSessionDraft: (open: boolean) => void;
@@ -1421,6 +1426,15 @@ export function ProjectRoom({
                     onInspector(stateLine.action?.kind === "verification" ? "verification" : "changes")
                   }
                   data-testid="state-action"
+                >
+                  {stateLine.action.label}
+                </button>
+              )}
+              {stateLine.action?.kind === "publish" && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={onOpenDecision}
+                  data-testid="state-publish"
                 >
                   {stateLine.action.label}
                 </button>

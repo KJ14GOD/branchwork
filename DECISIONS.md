@@ -1927,3 +1927,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** `registerCaptureTurn` takes the push handler beside capture; grants are keyed per (execution, tool); the endpoint's unit suite grows from seven to nine cases including the cross-tool refusal. The rail gains `rail-publish` (one-lane, checkpoint-holding missions), proven in the sessions spec with evidence `158-single-approach-publish.png`. No control-plane change of any kind. DESIGN.md's rail and Decision Room bullets, PRODUCT.md's capture paragraph, and ARCHITECTURE.md's endpoint paragraph all say the new shape.
 
 **Revisit when.** The person-click on Publish/PR proves to be ceremony (the agent-PR line moves deliberately, not by drift); or a second machine's runner needs agent-push while not holding the worktree.
+
+## D-141 — The flow carries you to Publish: an action on the sentence, and a receipt that scrolls into view
+
+**Context.** Owner-experienced, live: they recorded their first single-lane decision (D-140's new path), the surface rebuilt with the receipt — and the publish controls — above their scroll position, and nothing moved or pointed there. The state line announced "not published yet" while offering no way to change that; the earlier design had recorded "no button — the sentence is the state" deliberately, and the owner's confusion is the evidence that choice was wrong once publishing became the ordinary next step.
+
+**Decision.** Two small moves. **Publish on the sentence**: while a decision stands unpublished, the state line carries a `Publish` action beside "not published yet" — it navigates to the decision surface (the receipt), where the governed verbs (push branch, create draft PR) live; it performs nothing itself, so the verb surface stays single. Once a request exists the action goes. **The receipt scrolls into view**: when a decision records while the surface is open, the room scrolls to its own top — once per decision, never on mount with an old receipt — so confirming the dialog lands the person on the receipt instead of above a sheet they already read.
+
+**Alternatives.** A state-line button that performs push-and-PR directly (rejected: it would collapse two governed, individually-refusable verbs into one hidden sequence, and the draft can only open once the host serves the decided revision — orchestration that belongs on the surface that shows its progress). Leaving discovery to the rail's `Publish · decision recorded` row (rejected: that is where the owner already was; the row names the surface, not the next step).
+
+**Consequences.** `StateLineAction` gains a `publish` kind; the room gains `onOpenDecision` from the shell; the decision spec asserts the action's presence at the decided-unpublished moment. DESIGN.md's Decision-recorded state entry is rewritten, superseding its own "no button" clause with the reversal named.
+
+**Revisit when.** Publication becomes a single idempotent server verb — then the sentence's action could honestly perform rather than navigate.

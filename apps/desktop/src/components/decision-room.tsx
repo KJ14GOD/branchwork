@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   ApproachSummary,
   Artifact,
@@ -59,6 +59,23 @@ export function DecisionRoom({
   onClose
 }: DecisionRoomProps) {
   const decision = detail.decisions.find((entry) => entry.supersededAt === null) ?? null;
+  /** The receipt appears above where the person just was, so the surface
+   *  carries them to it (D-141): when a decision lands while this room is
+   *  open, scroll to its own top — once per decision, never on mount with
+   *  an old receipt. */
+  const sectionRef = useRef<HTMLElement>(null);
+  const seenDecision = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const current = decision?.decisionId ?? null;
+    if (seenDecision.current === undefined) {
+      seenDecision.current = current;
+      return;
+    }
+    if (current !== null && seenDecision.current === null) {
+      sectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+    seenDecision.current = current;
+  }, [decision?.decisionId]);
   const [choosing, setChoosing] = useState<string | null>(null);
   const [revising, setRevising] = useState<string | null>(null);
   const mayDecide = detail.capabilities.includes("review.approve");
@@ -78,7 +95,7 @@ export function DecisionRoom({
   const compared = all;
 
   return (
-    <section className="decision-room" data-testid="decision-room">
+    <section className="decision-room" data-testid="decision-room" ref={sectionRef}>
       <header className="decision-head">
         <div className="decision-head-titles">
           {/* The goal is the title (D-136); the surface names itself in the

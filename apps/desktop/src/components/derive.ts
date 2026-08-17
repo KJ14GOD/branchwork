@@ -399,7 +399,7 @@ export interface StateLineAction {
   label: string;
   /** What the action does; the room wires it to a real call or an inspector
    *  section. Never rendered without a real destination. */
-  kind: "stop" | "forceInterrupt" | "changes" | "verification" | "setup" | "preview" | "stopRun";
+  kind: "stop" | "forceInterrupt" | "changes" | "verification" | "setup" | "preview" | "stopRun" | "publish";
 }
 
 export interface StateLineView {
@@ -1022,9 +1022,13 @@ function primaryStateLine(
           ? resolved.state === "merged"
             ? `${who} — published as PR #${resolved.number}, merged${resolved.mergedBy ? ` by ${resolved.mergedBy}` : ""} on GitHub`
             : `${who} — PR #${resolved.number} was closed on GitHub without merging`
-          : `${who} — not published yet`
-        // No button: the sentence is the state, and the decision is read on
-        // Compare, one rail row away (D-084).
+          : `${who} — not published yet`,
+        // The sentence says "not published yet", so the action that changes
+        // that sits beside it (D-141, reversing the earlier no-button choice
+        // — the owner recorded a decision and could not find the publish
+        // controls). It navigates to the receipt; the verbs live there.
+        action:
+          !resolved && !detail.pullRequest ? { label: "Publish", kind: "publish" as const } : null
       };
     }
     case "pull_request_open": {

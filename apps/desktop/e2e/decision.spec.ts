@@ -541,6 +541,9 @@ describe("competing approaches, compared and decided", () => {
     const line = await page.getByTestId("state-line").innerText();
     expect(line).toContain("Decision recorded");
     expect(line).toMatch(/not published yet/i);
+    // The sentence says "not published yet", so its action sits beside it
+    // (D-141) and leads to the receipt where the publish verbs live.
+    expect(await page.getByTestId("state-publish").count()).toBe(1);
 
     // --- A reload keeps the lane, the composer's target, and the decision --
     await page.reload();
