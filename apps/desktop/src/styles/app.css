@@ -4014,6 +4014,10 @@ body {
   border-left: 1.5px solid var(--edge-strong);
   border-bottom: 1.5px solid var(--edge-strong);
   border-bottom-left-radius: var(--r-control);
+  /* Above the resumption element: a real child paints over pseudo-element
+     siblings by default, and the quiet line was biting a chunk out of the
+     bend's first pixels (D-133 smoothing). */
+  z-index: 1;
   pointer-events: none;
 }
 
@@ -4058,6 +4062,7 @@ body {
 
 .side-spine-below {
   position: absolute;
+  z-index: 0;
   top: calc(50% - var(--r-control));
   bottom: 0;
   width: 0;
