@@ -115,13 +115,14 @@ type DiffLoad =
   | { kind: "loaded"; diff: FileDiffResponse }
   | { kind: "failed"; message: string };
 
-/** A unified diff, tinted at 12% of --ok / --danger — the only place those
- *  tokens appear as backgrounds (DESIGN.md#component-behavior). The diff owns
- *  its own horizontal scroll; nothing else in the room scrolls sideways. */
+/** A unified diff, washed with --diff-add / --diff-del (DESIGN.md#component-behavior).
+ *  The diff owns its own horizontal scroll; the body carries max-content width so
+ *  every wash reaches the widest line, not just the pane. */
 function UnifiedDiff({ diff }: { diff: string }) {
   const lines = diff.replace(/\n+$/, "").split("\n");
   return (
     <div className="diff" data-testid="diff">
+      <div className="diff-body">
       {lines.map((line, index) => {
         const tone = line.startsWith("+++") || line.startsWith("---")
           ? "meta"
@@ -138,6 +139,7 @@ function UnifiedDiff({ diff }: { diff: string }) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
