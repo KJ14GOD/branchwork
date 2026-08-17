@@ -11,8 +11,11 @@
   --surface-1: #131316;
   --surface-2: #1d1d21;
   --edge: rgba(255, 255, 255, 0.11);
-  --edge-strong: rgba(255, 255, 255, 0.3);
-  --edge-selected: rgba(255, 255, 255, 0.85);
+  /* Opaque equivalents of white 30% / 85% over --bg (D-133 smoothing):
+     the spine's strokes overlap where a curve rides the line, and
+     translucent strokes stack into lumps where opaque ones merge. */
+  --edge-strong: #525254;
+  --edge-selected: #dadada;
   --edge-hover: rgba(255, 255, 255, 0.2);
   --text-1: #f7f5f2;
   --text-2: #b6b1a8;
@@ -114,8 +117,8 @@
   --surface-1: #faf9f6;
   --surface-2: #ffffff;
   --edge: rgba(0, 0, 0, 0.1);
-  --edge-strong: rgba(0, 0, 0, 0.32);
-  --edge-selected: rgba(0, 0, 0, 0.7);
+  --edge-strong: #a5a3a0;
+  --edge-selected: #494847;
   --edge-hover: rgba(0, 0, 0, 0.16);
   --text-1: #26241f;
   --text-2: #5d594f;

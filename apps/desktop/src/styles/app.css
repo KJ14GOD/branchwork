@@ -4001,6 +4001,9 @@ body {
   position: relative;
 }
 
+/* Every branch is the same curled elbow — the smooth shape — and it may
+   overlap the through-line freely because the spine tokens are opaque:
+   overlapping strokes merge instead of stacking (D-133 smoothing). */
 .side-tree > .side-approach::before {
   content: "";
   position: absolute;
@@ -4012,13 +4015,6 @@ body {
   border-bottom: 1.5px solid var(--edge-strong);
   border-bottom-left-radius: var(--r-control);
   pointer-events: none;
-}
-
-/* A middle branch curls off the through-line without redrawing it
-   (D-133 smoothing): the curl is the bottom border bending up at its
-   left end — no border-left, so the line is never double-struck. */
-.side-tree > .side-approach-more::before {
-  border-left: 0;
 }
 
 /* The vertical continues while a later approach hangs below — through an

@@ -46,8 +46,8 @@ Dark, restrained system. No decorative gradients, no neon, no glow, no glassmorp
 | `--surface-1` | `#131316` | Primary surfaces |
 | `--surface-2` | `#1D1D21` | Elevated surfaces: overlays, menus, dialogs |
 | `--edge` | `#FFFFFF` at 11% | Default border; 20% hover |
-| `--edge-strong` | `#FFFFFF` at 30% | Structural lines that must be seen at a glance: the rail tree's spine (D-131), and nothing else yet |
-| `--edge-selected` | `#FFFFFF` at 85% | The spine's bright path (D-133, lifted from 55% the same day — it did not pop beside 30%): the open approach's elbow and the vertical from the mission down to it — where the canvas is standing, and nothing else |
+| `--edge-strong` | `#525254` (white 30% over `--bg`, precomposed opaque — D-133: the spine's overlapping strokes must merge, not stack) | Structural lines that must be seen at a glance: the rail tree's spine (D-131), and nothing else yet |
+| `--edge-selected` | `#DADADA` (white 85% over `--bg`, precomposed opaque) | The spine's bright path (D-133, lifted from 55% the same day): the open approach's elbow and the vertical from the mission down to it — where the canvas is standing, and nothing else |
 | `--text-1` | `#F7F5F2` | Primary text (warm off-white) |
 | `--text-2` | `#B6B1A8` | Secondary text (warm gray): metadata and labels only |
 | `--text-3` | `#8B867D` | Faint: timestamps, disabled — never the sole carrier of information |
@@ -60,7 +60,7 @@ Dark, restrained system. No decorative gradients, no neon, no glow, no glassmorp
 
 Semantic lock: a token may not be used outside its meaning. Sage for "online" fails review exactly like a raw hex does. Anything not covered by a semantic token renders in neutrals.
 
-Light theme overrides (provisional): `--bg #F2F0EC` · `--surface-1 #FAF9F6` · `--surface-2 #FFFFFF` · `--edge` black 10% (16% hover) · `--edge-strong` black 32% · `--edge-selected` black 70% · `--text-1 #26241F` · `--text-2 #5D594F` · `--text-3 #77726A` · `--accent #26241F` (authority inverts to warm ink; pressed `#3A3833`) · `--ok #4F7A4A` · `--warn #A15F28` · `--danger #A8443A` · `--lane-current #3F5F85` · `--lane-alt #8A5F1E` · hover/selected/pressed: black 4/6/6%. Same contrast obligations as dark.
+Light theme overrides (provisional): `--bg #F2F0EC` · `--surface-1 #FAF9F6` · `--surface-2 #FFFFFF` · `--edge` black 10% (16% hover) · `--edge-strong` `#A5A3A0` · `--edge-selected` `#494847` (precomposed opaque over the light `--bg`) · `--text-1 #26241F` · `--text-2 #5D594F` · `--text-3 #77726A` · `--accent #26241F` (authority inverts to warm ink; pressed `#3A3833`) · `--ok #4F7A4A` · `--warn #A15F28` · `--danger #A8443A` · `--lane-current #3F5F85` · `--lane-alt #8A5F1E` · hover/selected/pressed: black 4/6/6%. Same contrast obligations as dark.
 
 Interaction states: row/list hover `#FFFFFF` at 6%; selected `#FFFFFF` at 9% (a background highlight only — no accent bar, no outline); pressed `#FFFFFF` at 9%. Disabled controls: label and icon at 40% opacity, no hover response, default cursor.
 
