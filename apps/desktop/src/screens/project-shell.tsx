@@ -792,6 +792,21 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** Missions whose tree is folded away (D-134): this window's own choice,
    *  for this session — the structure is the default, not a cage. */
   const [foldedTrees, setFoldedTrees] = useState<Set<string>>(new Set());
+  /** A mission row's one action (D-134, amended — no twisty): the active
+   *  mission's row has no navigation left to do, its room is the canvas,
+   *  so its click folds and unfolds the tree; any other mission's opens it. */
+  const activateMission = (missionId: string, projectKey: string) => {
+    if (activeMissionId === missionId) {
+      setFoldedTrees((previous) => {
+        const next = new Set(previous);
+        if (next.has(missionId)) next.delete(missionId);
+        else next.add(missionId);
+        return next;
+      });
+    } else {
+      openMissionTab(projectKey, missionId);
+    }
+  };
   const addTriggerRef = useRef<HTMLButtonElement>(null);
 
   const refresh = useCallback(async () => {
@@ -1549,35 +1564,20 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                                 : ""
                             }${isActive ? " active-mission" : ""}`}
                             data-testid="mission-row"
+                            onClick={(event) => {
+                              // The whole row is the touch target: a short
+                              // goal leaves most of the chip outside the name
+                              // button, and a tap there must not be dead
+                              // (D-134, amended). Inner buttons handle their
+                              // own clicks.
+                              if ((event.target as HTMLElement).closest("button")) return;
+                              activateMission(mission.missionId, project.key);
+                            }}
                           >
-                            {/* The tree folds from the mission's own quiet
-                                disclosure (D-134) — hover-revealed like every
-                                quiet control, absolute in the chip's inset so
-                                sibling names stay aligned. */}
-                            {isActive && missionDetail && (
-                              <button
-                                className="side-twisty side-mission-twisty"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setFoldedTrees((previous) => {
-                                    const next = new Set(previous);
-                                    if (next.has(mission.missionId)) next.delete(mission.missionId);
-                                    else next.add(mission.missionId);
-                                    return next;
-                                  });
-                                }}
-                                aria-expanded={!foldedTrees.has(mission.missionId)}
-                                aria-label={`${
-                                  foldedTrees.has(mission.missionId) ? "Show" : "Hide"
-                                } the structure of ${mission.goal}`}
-                                data-testid="mission-twisty"
-                              >
-                                <Chevron open={!foldedTrees.has(mission.missionId)} />
-                              </button>
-                            )}
                             <button
                               className="side-open-mission"
-                              onClick={() => openMissionTab(project.key, mission.missionId)}
+                              onClick={() => activateMission(mission.missionId, project.key)}
+                              aria-expanded={isActive ? !foldedTrees.has(mission.missionId) : undefined}
                               title={mission.goal}
                             >
                               <span className="side-name">{truncateLabel(mission.goal, 26)}</span>

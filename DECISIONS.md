@@ -1838,4 +1838,6 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 
 **Consequences.** The sessions spec proves fold and unfold with the tree's count and captures the folded rail as evidence `153-mission-tree-folded.png`. `activeTreeShown` now accounts for the fold, which is what moves the wash. One new testid, `mission-twisty`.
 
+**Amended same day.** The twisty is gone — one control too many: the owner's ask is touch-the-row. The active mission's row toggles its tree on click anywhere along its length (the whole chip is the target, because a short goal leaves most of the row outside the name button and a tap there must not be dead); a non-active mission's row still opens it — the click's navigation meaning is vacant only on the row whose room is already the canvas, which is what D-084's rows-are-navigation rule actually protects. Every spec's "make sure the mission is open" click gained an active-aware guard, since a blind click on an auto-opened mission now folds; the full suite reran green after the change. The `mission-twisty` testid lived one commit.
+
 **Revisit when.** The fold wants remembering across relaunches, or a second surface (Home cards, Compare) needs the same gesture.

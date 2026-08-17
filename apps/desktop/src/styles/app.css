@@ -985,22 +985,6 @@ body {
   opacity: 1;
 }
 
-/* The active mission's fold control (D-134): in the chip's left inset,
-   revealed on the row's hover or its own focus. */
-.side-mission-twisty {
-  position: absolute;
-  left: 0;
-  top: var(--s-1);
-  width: var(--s-4);
-  height: 20px;
-  opacity: 0;
-  transition: opacity var(--m-press) var(--ease);
-}
-
-.side-child:hover .side-mission-twisty,
-.side-mission-twisty:focus-visible {
-  opacity: 1;
-}
 
 .side-new-mission:hover {
   color: var(--text-1);

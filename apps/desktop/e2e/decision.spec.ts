@@ -243,7 +243,12 @@ beforeAll(async () => {
   if ((await group.getByTestId("project-twisty").getAttribute("aria-expanded")) !== "true") {
     await group.getByTestId("project-row").click();
   }
-  await group.getByTestId("mission-row").first().click();
+  // The active mission's row toggles its tree since D-134 (amended), so
+  // "make sure it is open" must not blind-click an already-active row.
+  const missionRow = group.getByTestId("mission-row").first();
+  if (!(((await missionRow.getAttribute("class")) ?? "").includes("active-mission"))) {
+    await missionRow.click();
+  }
   await page.getByTestId("state-line").waitFor({ timeout: 30_000 });
 
   // A first turn, so there is a result to fork from. An approach only means

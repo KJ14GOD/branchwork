@@ -166,7 +166,12 @@ async function openRoom(client: Client): Promise<void> {
     await client.page.getByTestId("project-row").first().click().catch(() => undefined);
   }
   if ((await client.page.getByTestId("mission-row").count()) > 0) {
-    await client.page.getByTestId("mission-row").first().click();
+    // The active mission's row toggles its tree since D-134 (amended), so
+    // "make sure it is open" must not blind-click an already-active row.
+    const missionRow = client.page.getByTestId("mission-row").first();
+    if (!(((await missionRow.getAttribute("class")) ?? "").includes("active-mission"))) {
+      await missionRow.click();
+    }
   }
 }
 

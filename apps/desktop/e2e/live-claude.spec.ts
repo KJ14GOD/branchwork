@@ -259,7 +259,12 @@ describe.skipIf(!LIVE)("a real Claude Code turn, end to end", () => {
     if ((await page.getByTestId("mission-row").count()) === 0) {
       await page.getByTestId("project-row").first().click();
     }
-    await page.getByTestId("mission-row").first().click();
+    // The active mission's row toggles its tree since D-134 (amended), so
+    // "make sure it is open" must not blind-click an already-active row.
+    const missionRow = page.getByTestId("mission-row").first();
+    if (!(((await missionRow.getAttribute("class")) ?? "").includes("active-mission"))) {
+      await missionRow.click();
+    }
 
     const card = page.getByTestId("approval");
     await card.waitFor({ timeout: 60_000 });

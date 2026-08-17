@@ -662,7 +662,12 @@ describe("the workspace runtime", () => {
     await page.waitForLoadState("domcontentloaded");
     await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
     await openProject(page, runtimeRepoName);
-    await page.getByTestId("mission-row").filter({ hasText: freshGoal }).click();
+    // The active mission's row toggles its tree since D-134 (amended), so
+    // "make sure it is open" must not blind-click an already-active row.
+    const missionRow = page.getByTestId("mission-row").filter({ hasText: freshGoal });
+    if (!(((await missionRow.getAttribute("class")) ?? "").includes("active-mission"))) {
+      await missionRow.click();
+    }
 
     // --- The state names what is missing, and offers one action -------------
     const stateLine = page.getByTestId("state-line");

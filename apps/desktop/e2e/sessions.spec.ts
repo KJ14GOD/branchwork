@@ -245,7 +245,12 @@ beforeAll(async () => {
   if ((await group.getByTestId("project-twisty").getAttribute("aria-expanded")) !== "true") {
     await group.getByTestId("project-row").click();
   }
-  await group.getByTestId("mission-row").first().click();
+  // The active mission's row toggles its tree since D-134 (amended), so
+  // "make sure it is open" must not blind-click an already-active row.
+  const missionRow = group.getByTestId("mission-row").first();
+  if (!(((await missionRow.getAttribute("class")) ?? "").includes("active-mission"))) {
+    await missionRow.click();
+  }
   await page.getByTestId("state-line").waitFor({ timeout: 30_000 });
 }, 300_000);
 
@@ -264,15 +269,15 @@ describe("shared sessions inside one approach", () => {
     expect(await page.getByTestId("rail-approach-row").count()).toBe(1);
     expect(await page.getByTestId("rail-branch").count()).toBe(0);
 
-    // --- The tree folds from the mission row's own disclosure (D-134):
-    // hover-revealed, this window's choice, and the wash falls back to the
-    // mission row while its structure is away.
-    await page.getByTestId("mission-row").first().hover();
-    await page.getByTestId("mission-twisty").click();
+    // --- The active mission's row toggles its tree (D-134, amended: no
+    // twisty — the active row's navigation meaning is vacant, so its click
+    // folds). The wash falls back to the mission row while the structure
+    // is away, and the room never moves.
+    await page.getByTestId("mission-row").first().click();
     await expect.poll(() => page.getByTestId("mission-tree").count(), { timeout: 20_000 }).toBe(0);
+    await page.getByTestId("state-line").waitFor({ timeout: 20_000 });
     await page.screenshot({ path: join(evidenceDir, "153-mission-tree-folded.png") });
-    await page.getByTestId("mission-row").first().hover();
-    await page.getByTestId("mission-twisty").click();
+    await page.getByTestId("mission-row").first().click();
     await expect.poll(() => page.getByTestId("mission-tree").count(), { timeout: 20_000 }).toBe(1);
 
     // --- The first turn, in the session every mission is born with ----------

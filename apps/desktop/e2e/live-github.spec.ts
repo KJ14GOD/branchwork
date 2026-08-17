@@ -306,7 +306,12 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
         { timeout: 30_000, interval: 500 }
       )
       .toBe("true");
-    await page.getByTestId("mission-row").first().click();
+    // The active mission's row toggles its tree since D-134 (amended), so
+    // "make sure it is open" must not blind-click an already-active row.
+    const missionRow = page.getByTestId("mission-row").first();
+    if (!(((await missionRow.getAttribute("class")) ?? "").includes("active-mission"))) {
+      await missionRow.click();
+    }
     await page.getByTestId("run-control").waitFor({ timeout: 60_000 });
 
     // The declared list travels file → discovery pass (≤15s) → control plane →

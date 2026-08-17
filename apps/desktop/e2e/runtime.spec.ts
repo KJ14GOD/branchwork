@@ -1154,7 +1154,12 @@ describe("missions and workstreams, told apart", () => {
     await expect.poll(() => page.getByTestId("new-mission-dialog").count(), { timeout: 20_000 }).toBe(0);
 
     // The keyboard asks the same question.
-    await page.getByTestId("mission-row").first().click();
+    // The active mission's row toggles its tree since D-134 (amended), so
+    // "make sure it is open" must not blind-click an already-active row.
+    const missionRow = page.getByTestId("mission-row").first();
+    if (!(((await missionRow.getAttribute("class")) ?? "").includes("active-mission"))) {
+      await missionRow.click();
+    }
     await page.getByTestId("state-line").waitFor();
     await page.keyboard.press("Meta+t");
     await page.getByTestId("new-mission-dialog").waitFor({ timeout: 20_000 });
