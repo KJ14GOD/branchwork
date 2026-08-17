@@ -563,8 +563,17 @@ function MissionTree({
 
   return (
     <div className="side-tree" data-testid="mission-tree">
-      {lanes.map((lane) => {
+      {lanes.map((lane, laneIndex) => {
           const selected = lane.workstreamId === selectedLaneId;
+          // The spine's states, computed here rather than with :has() —
+          // whether a later approach hangs below (the vertical continues),
+          // and whether this row sits above the open one (its vertical is
+          // part of the bright path, D-133).
+          const selectedIndex = lanes.findIndex(
+            (candidate) => candidate.workstreamId === selectedLaneId
+          );
+          const more = laneIndex < lanes.length - 1;
+          const beforeOpen = laneIndex < selectedIndex;
           const needs =
             !selected &&
             detail.sessions
@@ -573,7 +582,7 @@ function MissionTree({
           return (
             <Fragment key={lane.workstreamId}>
               <div
-                className={`side-row side-approach${selected && washApproach ? " selected" : ""}`}
+                className={`side-row side-approach${selected ? " side-approach-open" : ""}${more ? " side-approach-more" : ""}${beforeOpen ? " side-approach-before-open" : ""}${selected && washApproach ? " selected" : ""}`}
                 data-testid="rail-approach-row"
                 data-workstream={lane.workstreamId}
               >
@@ -622,7 +631,7 @@ function MissionTree({
                   (D-128). Rendered only with something in it: an empty block
                   would still occupy a spine slot. */}
               {selected && (showSessions || sessionDraft) && (
-                <div className="side-children">
+                <div className={more ? "side-children side-children-more" : "side-children"}>
                   {sessionRows}
                   {draftRow}
                 </div>

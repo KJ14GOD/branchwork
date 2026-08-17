@@ -117,7 +117,7 @@ export function DecisionRoom({
 
       {all.length > 2 && (
         <div className="decision-pair" role="group" aria-label="Approaches to compare" data-testid="decision-pair">
-          {all.map((entry, index) => (
+          {all.map((entry) => (
             <button
               key={entry.workstreamId}
               className={
@@ -127,10 +127,6 @@ export function DecisionRoom({
               onClick={() => togglePair(entry.workstreamId)}
               data-testid="pair-chip"
             >
-              <span
-                className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
-                aria-hidden="true"
-              />
               {entry.name}
             </button>
           ))}

@@ -1160,21 +1160,6 @@ body {
   gap: var(--s-2);
 }
 
-.lane-dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-
-.lane-dot-current {
-  background: var(--lane-current);
-}
-
-.lane-dot-alt {
-  background: var(--lane-alt);
-}
-
 /* Which lane the room is: the context row's first fact, absent entirely for
    a mission that never forked (D-124 moved it beside the baton). */
 .lane-context {
@@ -3980,8 +3965,12 @@ body {
   border-radius: var(--r-control);
 }
 
-.side-approach {
-  padding-left: calc(var(--s-4) + var(--s-4));
+/* Scoped to outrank the tree's base chip geometry: the approach chip's
+   depth is margin-borne so its wash starts after its elbow (D-132). */
+.side-tree .side-row.side-approach {
+  width: calc(100% - var(--s-5) - var(--s-2) - var(--s-2));
+  margin-left: calc(var(--s-2) + var(--s-5));
+  padding-left: var(--s-2);
 }
 
 .side-approach .side-open-mission {
@@ -3999,26 +3988,20 @@ body {
   padding-left: calc(var(--s-4) + var(--s-4));
 }
 
-/* The spine draws only nesting (D-128; D-132 pared it back): an
-   --edge-strong elbow into each of the selected approach's conversations,
-   and nothing at the mission level — the full run from the mission through
-   approaches, fork, and Compare was two parallel verticals and six elbows
-   of structure the indent already said. The connectors live in the margin
-   left of the chip, so a selection wash never crosses a line. */
-.side-children,
-.side-children > * {
+/* The spine says which approaches are the mission's (D-128; D-132 pared
+   it; D-133 re-aimed it): an --edge-strong elbow from the mission into
+   each approach row — and nothing else. Conversations denote by indent
+   alone, and fork/Compare rows are actions, not children. Connectors live
+   in the margin left of the chip, so a selection wash never crosses a
+   line (D-132). The open approach's whole path — the vertical from the
+   mission down, and its own elbow — renders in --edge-selected, so where
+   the canvas is standing stands out (D-133). */
+.side-tree > *,
+.side-children {
   position: relative;
 }
 
-/* The conversations' chips start after their elbow: margin, not padding,
-   carries the depth (D-132 — the wash reaching left past the line read as
-   a glitch). */
-.side-children > .side-row {
-  width: calc(100% - var(--s-6) - var(--s-2) - var(--s-2));
-  margin-left: calc(var(--s-2) + var(--s-6));
-}
-
-.side-children > .side-row::before {
+.side-tree > .side-approach::before {
   content: "";
   position: absolute;
   top: 0;
@@ -4031,8 +4014,10 @@ body {
   pointer-events: none;
 }
 
-/* The spine continues past a row while a sibling follows it. */
-.side-children > *:not(:last-child)::after {
+/* The vertical continues while a later approach hangs below — through an
+   approach's own bottom half, and through the open approach's children
+   block sitting between siblings. */
+.side-tree > .side-approach-more::after {
   content: "";
   position: absolute;
   top: 50%;
@@ -4041,6 +4026,38 @@ body {
   left: calc(-1 * var(--s-3));
   border-left: 1.5px solid var(--edge-strong);
   pointer-events: none;
+}
+
+.side-children-more::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  left: calc(var(--s-2) + var(--s-5) - var(--s-3));
+  border-left: 1.5px solid var(--edge-strong);
+  pointer-events: none;
+}
+
+/* The open approach's path, bright: its elbow whole, and only the
+   vertical of everything above it. */
+.side-tree > .side-approach-open::before {
+  border-color: var(--edge-selected);
+}
+
+.side-tree > .side-approach-before-open::before {
+  border-left-color: var(--edge-selected);
+}
+
+.side-tree > .side-approach-before-open::after {
+  border-left-color: var(--edge-selected);
+}
+
+/* The conversations' chips keep their margin-borne depth (D-132): indent
+   is their notation (D-133 — no connectors at this level). */
+.side-children > .side-row {
+  width: calc(100% - var(--s-6) - var(--s-2) - var(--s-2));
+  margin-left: calc(var(--s-2) + var(--s-6));
 }
 
 .side-fork .side-fork-name {

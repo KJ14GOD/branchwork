@@ -927,7 +927,7 @@ export function ProjectRoom({
           }}
         >
           {multiLane ? (
-            lanes.map((lane, index) => {
+            lanes.map((lane) => {
               // The approach tab is a page of its own (D-089): selected only
               // while its landing — the overview, or its one conversation —
               // is the canvas, not while one of its session tabs is.
@@ -963,10 +963,7 @@ export function ProjectRoom({
                   data-testid="lane-tab"
                   data-workstream={lane.workstreamId}
                 >
-                  <span
-                    className={index === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
-                    aria-hidden="true"
-                  />
+                  {/* No identity dot (D-133): the name is the identity. */}
                   {lane.name}
                 </button>
               );
@@ -1079,17 +1076,9 @@ export function ProjectRoom({
                         : (session.title ?? "New session")
                     }
                   >
-                    {/* Whose conversation this is (D-088): the approach's own
-                        identity dot, because tabs from several approaches sit
-                        side by side here. */}
-                    {multiLane && laneIndex >= 0 && (
-                      <span
-                        className={
-                          laneIndex === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"
-                        }
-                        aria-hidden="true"
-                      />
-                    )}
+                    {/* Whose conversation this is (D-088, amended D-133):
+                        the lane is in the tab's title, and choosing the tab
+                        moves the room there — words and behavior, no dot. */}
                     <SessionGlyph />
                     <span
                       className={
@@ -1295,12 +1284,6 @@ export function ProjectRoom({
                   }}
                   title={multiLane && laneName ? `${file.path} — in ${laneName}` : file.path}
                 >
-                  {multiLane && laneIndex >= 0 && (
-                    <span
-                      className={laneIndex === 0 ? "lane-dot lane-dot-current" : "lane-dot lane-dot-alt"}
-                      aria-hidden="true"
-                    />
-                  )}
                   <FileGlyph />
                   <span className="file-tab-name">{file.path.split("/").pop() ?? file.path}</span>
                 </button>
