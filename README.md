@@ -2,13 +2,13 @@ Purpose: Entry point to the Novus repository. Says what Novus is, who it is for,
 Authoritative for: the one-sentence definition, the intended user, the wedge, the Golden V0 workflow narrative, the repository map.
 Not authoritative for: product scope and domain model (PRODUCT.md), visual system (DESIGN.md), system design (ARCHITECTURE.md), status (PROGRESS.md), recorded decisions (DECISIONS.md), agent working rules (AGENTS.md).
 Update when: the definition, wedge, or Golden V0 workflow changes, or a file is added to or removed from the repository root.
-Last reviewed: 2026-08-01
+Last reviewed: 2026-08-17
 
 # Novus
 
-Novus is the multiplayer control plane where teams launch, direct, review, and ship work produced by cloud coding agents.
+Novus is the multiplayer control plane where teams launch, direct, review, and ship work produced by coding agents.
 
-A software team gets one shared mission room in which people operate Claude Code, Codex, and other coding harnesses together: they see what is happening, contribute context, submit direction, request and transfer control, inspect changes, understand verification, and keep a durable record of how the result was produced.
+A software team gets one shared mission room in which people operate a coding harness together: they see what is happening, contribute context, submit direction, request and transfer control, inspect changes, understand verification, and keep a durable record of how the result was produced. Claude Code is the harness operable today; Codex and other harnesses follow the same runner protocol but are not yet built — see [PROGRESS.md](PROGRESS.md) for what actually works right now, not just what this file describes as the destination.
 
 Novus does not compete with the coding intelligence of the harnesses it operates. The harness owns its reasoning, context, models, tools, and implementation loop. Novus owns the room around it: identity, missions, participants, control, direction, evidence, review, and history. The full boundary is defined in [PRODUCT.md](PRODUCT.md#the-harness-boundary).
 
@@ -70,6 +70,14 @@ What exists versus what is planned is recorded only in [PROGRESS.md](PROGRESS.md
 | `apps/desktop/` | The Novus desktop application (Electron shell, isolated renderer, and the host runner that operates local harnesses) |
 | `spikes/` | Disposable feasibility experiments; never product code |
 
-Development: `pnpm install`, then `pnpm dev` (starts PostgreSQL in Docker, the control plane, and the desktop app). Real sign-in needs GitHub OAuth credentials in `.env` (see `.env.example`).
+## Run it locally
+
+Prerequisites: [pnpm](https://pnpm.io), [Docker](https://www.docker.com) (runs the local PostgreSQL container `pnpm dev` starts and migrates automatically), and the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) installed and signed in — without it the harness has nothing real to operate.
+
+1. `pnpm install`
+2. Create a GitHub OAuth App at [github.com/settings/developers](https://github.com/settings/developers) with callback URL `http://127.0.0.1:4460/auth/github/callback`, then copy `.env.example` to `.env` and fill in `NOVUS_GITHUB_CLIENT_ID` / `NOVUS_GITHUB_CLIENT_SECRET`.
+3. `pnpm dev` — starts PostgreSQL in Docker, the control plane, and the desktop app.
+
+This runs one participant on one machine against a local Postgres instance. Trying the multiplayer flow (a second person joining a mission, requesting and receiving control) needs a second machine signed in with the same GitHub OAuth App pointed at the same control plane. Cloud-hosted execution is not built yet — see [PROGRESS.md](PROGRESS.md) for current status.
 
 Do not add root Markdown files without a recorded decision; see [AGENTS.md](AGENTS.md#rules).

@@ -5001,10 +5001,20 @@ body.resizing {
   opacity: 1;
 }
 
+/* The split view's columns each size to their own longest line and stay
+   aligned across rows by subgrid; the body carries max-content width so the
+   diff's one horizontal scroll reaches the widest cell — a 1fr cell capped
+   the tint while the pre text escaped it (D-142 batch). */
+.pull-split-body {
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) minmax(max-content, 1fr);
+  column-gap: var(--s-2);
+}
+
 .pull-split-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--s-2);
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
 }
 
 .pull-comment-input {

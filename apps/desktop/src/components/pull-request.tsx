@@ -713,6 +713,7 @@ function PullChanges({
                   </div>
                 ) : (
                   <div className="diff pull-split" data-testid="pull-diff-split">
+                    <div className="diff-body pull-split-body">
                     {splitRows(parsePatch(file.patch)).map((row, index) => (
                       <div key={index} className="pull-split-row">
                         <div
@@ -727,6 +728,7 @@ function PullChanges({
                         </div>
                       </div>
                     ))}
+                    </div>
                   </div>
                 ))}
             </div>
