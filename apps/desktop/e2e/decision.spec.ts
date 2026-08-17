@@ -568,6 +568,10 @@ describe("competing approaches, compared and decided", () => {
     await expect
       .poll(() => page.getByTestId("composer").innerText(), { timeout: 20_000 })
       .toContain("Directing Current work");
+    // Both bright-path cases on the record (D-133): 89- holds the second
+    // lane open; this one holds the first, captured after the canvas has
+    // followed the rail.
+    await shot("152-the-rail-tree-first-lane.png");
 
     // --- The tree at the other widths (DESIGN.md#responsive) ----------------
     // Below 1200 the rail is an overlay, so the structure is one toggle away
