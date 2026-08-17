@@ -136,6 +136,7 @@ export function DecisionRoom({
             key={approach.workstreamId}
             approach={approach}
             chosen={decision?.workstreamId === approach.workstreamId}
+            sole={compared.length === 1}
             mayDecide={mayDecide}
             busy={busy}
             onChoose={() => setChoosing(approach.workstreamId)}
@@ -166,6 +167,7 @@ export function DecisionRoom({
 
       {choosing && (
         <RecordDecisionDialog
+          sole={all.length === 1}
           approach={detail.approaches.find((approach) => approach.workstreamId === choosing)}
           artifacts={detail.artifacts.filter(
             (artifact) =>
@@ -213,6 +215,7 @@ const GUTTER_ROWS = [
 function ApproachColumn({
   approach,
   chosen,
+  sole,
   mayDecide,
   busy,
   onChoose,
@@ -220,6 +223,9 @@ function ApproachColumn({
 }: {
   approach: ApproachSummary;
   chosen: boolean;
+  /** The only lane there is (D-140): "choose" would be absurd with nothing
+   *  to choose against, so the action says what it does — accept. */
+  sole: boolean;
   mayDecide: boolean;
   busy: boolean;
   onChoose: () => void;
@@ -335,7 +341,7 @@ function ApproachColumn({
               data-testid="choose-approach"
               title={mayDecide ? undefined : "Only participants who can resolve this mission may choose."}
             >
-              Choose this approach
+              {sole ? "Accept this work" : "Choose this approach"}
             </button>
             <button
               className="btn btn-text"
@@ -382,12 +388,14 @@ function ContestedRow({ contested, onInspect }: { contested: ContestedPath; onIn
  * unresolved while the person can still change their mind (D-075).
  */
 function RecordDecisionDialog({
+  sole,
   approach,
   artifacts,
   busy,
   onCancel,
   onRecord
 }: {
+  sole: boolean;
   approach: ApproachSummary | undefined;
   /** The lane's completed visual evidence (D-122), offered for the decider to
    *  cite. The chosen ids freeze with the rationale. */
@@ -409,9 +417,11 @@ function RecordDecisionDialog({
   return (
     <Dialog label="Record this decision" onClose={onCancel} testId="record-decision">
         <header className="dialog-head">
-          <h2>Choose {approach?.name ?? "this approach"}</h2>
+          <h2>{sole ? "Accept this work" : `Choose ${approach?.name ?? "this approach"}`}</h2>
           <p className="dialog-sub">
-            This records what you decided and why. It does not publish anything.
+            {sole
+              ? "This records your acceptance and why. Publishing — push and pull request — is the next step, on the receipt this opens."
+              : "This records what you decided and why. It does not publish anything."}
           </p>
         </header>
         <div className="dialog-body">
