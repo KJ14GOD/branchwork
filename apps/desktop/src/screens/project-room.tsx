@@ -127,6 +127,7 @@ export function ProjectRoom({
   project,
   details,
   forkAsk = 0,
+  onForkConsumed,
   selectedMissionId,
   onInspector,
   onSetup,
@@ -163,6 +164,9 @@ export function ProjectRoom({
   /** Incremented by the rail's Try-another-approach row (D-126); each tick
    *  opens the fork dialog, even after a cancel. */
   forkAsk?: number;
+  /** Resets the ask once the dialog opened — the counter is a message, not
+   *  state to keep (D-142 batch). */
+  onForkConsumed: () => void;
   project: Project;
   details: Record<string, MissionDetailResponse>;
   selectedMissionId: string | null;
@@ -497,9 +501,17 @@ export function ProjectRoom({
     };
   }, [repoProvider, repoId, pinnedBaseRef, pinnedBaseSha]);
   const baseStatus = detail?.baseStatus ?? localBase;
+  // The rail's Try-another-approach asks by raising a counter; the room
+  // opens the dialog and *consumes* the ask, so a stale count never replays
+  // on later remounts (the ghost dialog that followed every navigation,
+  // D-142 batch) — while an ask raised from a background tree still lands
+  // after its tab switch, because consumption, not mounting, is the gate.
   useEffect(() => {
-    if (forkAsk > 0) setForking(true);
-  }, [forkAsk]);
+    if (forkAsk > 0) {
+      setForking(true);
+      onForkConsumed();
+    }
+  }, [forkAsk, onForkConsumed]);
   const approaches = detail?.approaches ?? [];
   /** Something to fork from: an approach only means anything beside a result
    *  that already exists, so the control is absent until the lane being read

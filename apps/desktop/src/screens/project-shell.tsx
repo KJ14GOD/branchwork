@@ -463,6 +463,7 @@ function MissionTree({
   onSelectSession,
   onCompare,
   onNewSession,
+  focused,
   pullSelected,
   onOpenPull,
   forkable,
@@ -487,6 +488,10 @@ function MissionTree({
    *  shell from the same detail the room reads (D-126). */
   forkable: boolean;
   onFork: () => void;
+  /** Whether this tree's mission is the active tab (D-142): only the focused
+   *  tree washes its selection and carries the singular testids — background
+   *  trees are structure and navigation, never a second selection. */
+  focused: boolean;
 }) {
   const lanes: Workstream[] = detail.workstreams;
   const firstLaneId = lanes[0]?.workstreamId ?? null;
@@ -517,9 +522,9 @@ function MissionTree({
   // One wash in the rail: the deepest thing the canvas is showing. The tree
   // always renders for the active mission (D-126): Mission → Approach → Chat
   // is the structure, and hiding it for the ordinary mission hid the product.
-  const washSession = !decisionOpen && !sessionDraft && showSessions;
+  const washSession = focused && !decisionOpen && !sessionDraft && showSessions;
   const washApproach =
-    !decisionOpen && !sessionDraft && (!showSessions || selectedSessionId === null);
+    focused && !decisionOpen && !sessionDraft && (!showSessions || selectedSessionId === null);
 
   /* The conversation being asked for: nothing exists yet, and leaving creates
      nothing — the row only mirrors the canvas (D-077, D-083). */
@@ -586,7 +591,7 @@ function MissionTree({
                 <button
                   className="side-open-mission"
                   onClick={activate}
-                  aria-current={selected}
+                  aria-current={focused && selected}
                   aria-expanded={selected ? !folded : undefined}
                   title={
                     lane.approach
@@ -600,7 +605,7 @@ function MissionTree({
                       conversations sit side by side. No branch either (D-131,
                       reversing D-126's placement): the mission branch is
                       machinery, and its home is Overview. */}
-                  <span className="side-name" data-testid={selected ? "lane-context" : undefined}>
+                  <span className="side-name" data-testid={focused && selected ? "lane-context" : undefined}>
                     {lane.name}
                     {lane.approach ? " · isolated workspace" : ""}
                   </span>
@@ -616,7 +621,7 @@ function MissionTree({
                 {/* A parent's + creates its child, exactly as the project row's
                     does for missions (D-077, D-084). Only on the approach being
                     read: a session starts where you are. */}
-                {selected && mayDirect && (
+                {focused && selected && mayDirect && (
                   <button
                     className="side-new-mission"
                     onClick={(event) => {
@@ -678,7 +683,7 @@ function MissionTree({
                             }
                             onSelectSession(session.sessionId);
                           }}
-                          aria-current={washed}
+                          aria-current={focused && washed}
                           title={session.title ?? "New session"}
                         >
                           <span
@@ -709,7 +714,7 @@ function MissionTree({
           <button
             className="side-open-mission"
             onClick={onFork}
-            data-testid="try-another-approach"
+            data-testid={focused ? "try-another-approach" : undefined}
             title="Start from the shared checkpoint and compare another solution"
           >
             <span className="side-name side-fork-name">Try another approach</span>
@@ -722,7 +727,7 @@ function MissionTree({
       {lanes.length === 1 && detail.approaches[0]?.checkpointSha && (
         <div
           className={`side-row side-compare${decisionOpen ? " selected" : ""}`}
-          data-testid="rail-publish"
+          data-testid={focused ? "rail-publish" : undefined}
         >
           <button className="side-open-mission" onClick={onCompare} aria-current={decisionOpen}>
             <span className="side-name">Publish</span>
@@ -735,7 +740,7 @@ function MissionTree({
       {lanes.length > 1 && (
         <div
           className={`side-row side-compare${decisionOpen ? " selected" : ""}`}
-          data-testid="rail-compare"
+          data-testid={focused ? "rail-compare" : undefined}
         >
           <button className="side-open-mission" onClick={onCompare} aria-current={decisionOpen}>
             <span className="side-name">Compare</span>
@@ -748,7 +753,7 @@ function MissionTree({
       {detail.pullRequest && (
         <div
           className={`side-row side-compare${pullSelected ? " selected" : ""}`}
-          data-testid="rail-pull"
+          data-testid={focused ? "rail-pull" : undefined}
         >
           <button className="side-open-mission" onClick={onOpenPull} aria-current={pullSelected}>
             <span className="side-name">PR #{detail.pullRequest.number}</span>
@@ -1401,10 +1406,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** Switches which approach the active mission's tab is reading, in place
    *  (D-080, restored by D-086): the top strip holds missions, and the lane is
    *  the tab's own state — the approach tabs live in the room's strip. */
-  const openLaneView = useCallback((workstreamId: string | null) => {
-    const current = activeTabOf(workingSetRef.current);
-    if (!current) return;
-    setWorkingSet((previous) => selectLane(previous, current.id, workstreamId));
+  const openLaneView = useCallback((workstreamId: string | null, tabId?: string) => {
+    const target = tabId ?? activeTabOf(workingSetRef.current)?.id;
+    if (!target) return;
+    setWorkingSet((previous) => selectLane(previous, target, workstreamId));
   }, []);
 
   /**
@@ -1452,11 +1457,11 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   }, []);
 
   /** Opens the pull request's own tab and selects it (D-100). */
-  const openPullTab = useCallback(() => {
-    const current = activeTabOf(workingSetRef.current);
-    if (!current) return;
-    setPullOpenByTab((previous) => ({ ...previous, [current.id]: true }));
-    setActiveFileByTab((previous) => ({ ...previous, [current.id]: PULL_TAB_KEY }));
+  const openPullTab = useCallback((tabId?: string) => {
+    const target = tabId ?? activeTabOf(workingSetRef.current)?.id;
+    if (!target) return;
+    setPullOpenByTab((previous) => ({ ...previous, [target]: true }));
+    setActiveFileByTab((previous) => ({ ...previous, [target]: PULL_TAB_KEY }));
     setDecisionOpen(false);
     setSessionDraft(false);
   }, []);
@@ -1624,7 +1629,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                   {open &&
                     project.missions.map((mission) => {
                       const isActive = activeMissionId === mission.missionId;
-                      const missionDetail = isActive ? details[mission.missionId] : undefined;
+                      const missionDetail = details[mission.missionId];
                       return (
                         <Fragment key={mission.missionId}>
                           <div
@@ -1708,69 +1713,94 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                               project is (D-084). Only the active one: a rail
                               showing every mission's tree is the tab soup
                               relocated. */}
-                          {isActive && missionDetail && active && !foldedTrees.has(mission.missionId) && (
-                            <MissionTree
-                              detail={missionDetail}
-                              forkable={
-                                missionDetail.state !== "completed" &&
-                                missionDetail.state !== "cancelled" &&
-                                missionDetail.capabilities.includes("approach.create") &&
-                                missionDetail.approaches.some(
-                                  (approach) =>
-                                    approach.workstreamId === missionDetail.workstream?.workstreamId &&
-                                    approach.forkPointSha !== null
-                                )
-                              }
-                              onFork={() => setForkAsk((previous) => previous + 1)}
-                              storedLaneId={active.workstreamId}
-                              storedSessionId={active.sessionId}
-                              decisionOpen={decisionOpen}
-                              sessionDraft={sessionDraft}
-                              mayDirect={missionDetail.capabilities.includes("direction.submit")}
-                              onSelectApproach={(workstreamId) => {
-                                // The approach row lands on the approach's
-                                // own page (D-089) — never in a conversation,
-                                // and never touching the open session tabs.
-                                openLaneView(workstreamId);
-                                setWorkingSet((previous) =>
-                                  selectSession(previous, active.id, null)
-                                );
-                                setDecisionOpen(false);
-                                setSessionDraft(false);
-                                setRailOpen(false);
-                              }}
-                              onSelectSession={(sessionId) => {
-                                // A row opens its session as a tab on the
-                                // working row (D-087, D-089): every row, the
-                                // lane's first included — opening is always
-                                // this person's own act.
-                                setWorkingSet((previous) =>
-                                  openSession(previous, active.id, sessionId)
-                                );
-                                setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
-                                setDecisionOpen(false);
-                                setSessionDraft(false);
-                                setRailOpen(false);
-                              }}
-                              onCompare={() => {
-                                setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
-                                setSessionDraft(false);
-                                setDecisionOpen(true);
-                                setRailOpen(false);
-                              }}
-                              onNewSession={() => {
-                                setActiveFileByTab((previous) => ({ ...previous, [active.id]: null }));
-                                setDecisionOpen(false);
-                                setSessionDraft(true);
-                                setRailOpen(false);
-                              }}
-                              pullSelected={activeFile === PULL_TAB_KEY}
-                              onOpenPull={() => {
-                                openPullTab();
-                                setRailOpen(false);
-                              }}
-                            />
-                          )}
+                          {(() => {
+                            // Every open mission grows its tree (D-142,
+                            // reversing the active-only rule): the working
+                            // set is what you have open, and hiding an open
+                            // mission's structure made the rail lie about
+                            // it. Rows in a background tree are navigation —
+                            // acting on one focuses its tab first.
+                            const treeTab = isActive
+                              ? active
+                              : (workingSet.tabs.find(
+                                  (tab) => tab.missionId === mission.missionId
+                                ) ?? null);
+                            if (!treeTab || !missionDetail || foldedTrees.has(mission.missionId)) {
+                              return null;
+                            }
+                            const tabId = treeTab.id;
+                            const focusTab = () => {
+                              if (!isActive) setWorkingSet((previous) => selectTab(previous, tabId));
+                            };
+                            return (
+                              <MissionTree
+                                detail={missionDetail}
+                                focused={isActive}
+                                forkable={
+                                  missionDetail.state !== "completed" &&
+                                  missionDetail.state !== "cancelled" &&
+                                  missionDetail.capabilities.includes("approach.create") &&
+                                  missionDetail.approaches.some(
+                                    (approach) =>
+                                      approach.workstreamId === missionDetail.workstream?.workstreamId &&
+                                      approach.forkPointSha !== null
+                                  )
+                                }
+                                onFork={() => {
+                                  focusTab();
+                                  setForkAsk((previous) => previous + 1);
+                                }}
+                                storedLaneId={treeTab.workstreamId}
+                                storedSessionId={treeTab.sessionId}
+                                decisionOpen={isActive && decisionOpen}
+                                sessionDraft={isActive && sessionDraft}
+                                mayDirect={missionDetail.capabilities.includes("direction.submit")}
+                                onSelectApproach={(workstreamId) => {
+                                  // The approach row lands on the approach's
+                                  // own page (D-089) — never in a conversation,
+                                  // and never touching the open session tabs.
+                                  focusTab();
+                                  openLaneView(workstreamId, tabId);
+                                  setWorkingSet((previous) => selectSession(previous, tabId, null));
+                                  setDecisionOpen(false);
+                                  setSessionDraft(false);
+                                  setRailOpen(false);
+                                }}
+                                onSelectSession={(sessionId) => {
+                                  // A row opens its session as a tab on the
+                                  // working row (D-087, D-089): every row, the
+                                  // lane's first included — opening is always
+                                  // this person's own act.
+                                  focusTab();
+                                  setWorkingSet((previous) => openSession(previous, tabId, sessionId));
+                                  setActiveFileByTab((previous) => ({ ...previous, [tabId]: null }));
+                                  setDecisionOpen(false);
+                                  setSessionDraft(false);
+                                  setRailOpen(false);
+                                }}
+                                onCompare={() => {
+                                  focusTab();
+                                  setActiveFileByTab((previous) => ({ ...previous, [tabId]: null }));
+                                  setSessionDraft(false);
+                                  setDecisionOpen(true);
+                                  setRailOpen(false);
+                                }}
+                                onNewSession={() => {
+                                  focusTab();
+                                  setActiveFileByTab((previous) => ({ ...previous, [tabId]: null }));
+                                  setDecisionOpen(false);
+                                  setSessionDraft(true);
+                                  setRailOpen(false);
+                                }}
+                                pullSelected={isActive && activeFile === PULL_TAB_KEY}
+                                onOpenPull={() => {
+                                  focusTab();
+                                  openPullTab(tabId);
+                                  setRailOpen(false);
+                                }}
+                              />
+                            );
+                          })()}
                         </Fragment>
                       );
                     })}
@@ -2007,6 +2037,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             <ProjectRoom
               key={active.id}
               forkAsk={forkAsk}
+              onForkConsumed={() => setForkAsk(0)}
               onOpenDecision={() => {
                 setSessionDraft(false);
                 setDecisionOpen(true);
@@ -2070,7 +2101,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               onClosePreview={closePreviewTab}
               onReopenPreview={reopenPreview}
               pullTabOpen={pullTabOpen}
-              onOpenPull={openPullTab}
+              onOpenPull={() => openPullTab()}
               onClosePull={closePullTab}
               openArtifactId={openArtifact?.tabId === active.id ? openArtifact.artifactId : null}
               onCloseArtifact={() => setOpenArtifact(null)}

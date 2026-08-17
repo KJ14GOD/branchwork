@@ -30,6 +30,12 @@
      amber for a deliberately forked alternative. */
   --lane-current: #7f9cc0;
   --lane-alt: #cfa368;
+  /* Diff identification (D-142): what was added and what was removed, in
+     the hues every code tool taught — distinctly green, distinctly red —
+     because the muted --ok/--warn family reads brown at wash opacity.
+     Identification of change, never judgment of it. */
+  --diff-add: #3fb950;
+  --diff-del: #f85149;
 
   /* Interaction states */
   --hover: rgba(255, 255, 255, 0.06);
@@ -130,6 +136,8 @@
   --danger: #a8443a;
   --lane-current: #3f5f85;
   --lane-alt: #8a5f1e;
+  --diff-add: #1a7f37;
+  --diff-del: #cf222e;
   --hover: rgba(0, 0, 0, 0.04);
   --selected: rgba(0, 0, 0, 0.06);
   --pressed: rgba(0, 0, 0, 0.06);

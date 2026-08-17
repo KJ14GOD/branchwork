@@ -2467,17 +2467,18 @@ body {
   box-sizing: border-box;
 }
 
-/* The only place --ok and --danger appear as backgrounds — 22% with a 2px
-   inset edge in the same token (was 12%, which vanished on the owner's
-   screen; D-141 batch). Identification of what changed, never judgment. */
+/* The diff's own hues (D-142): unmistakable green and red at wash opacity
+   with a 2px inset edge — the muted --ok/--danger family read brown here
+   and is back to being checks' and counts' alone. Identification of what
+   changed, never judgment of it. */
 .diff-add {
-  background: color-mix(in srgb, var(--ok) 22%, transparent);
-  box-shadow: inset 2px 0 0 var(--ok);
+  background: color-mix(in srgb, var(--diff-add) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--diff-add);
 }
 
 .diff-del {
-  background: color-mix(in srgb, var(--danger) 22%, transparent);
-  box-shadow: inset 2px 0 0 var(--danger);
+  background: color-mix(in srgb, var(--diff-del) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--diff-del);
 }
 
 .diff-hunk,
