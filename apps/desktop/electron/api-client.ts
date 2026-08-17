@@ -1,4 +1,5 @@
 import {
+  BranchInfoSchema,
   ApiErrorSchema,
   ArtifactSchema,
   ArtifactViewResponseSchema,
@@ -145,6 +146,14 @@ export class ControlPlaneClient {
       "GET",
       `/repositories/available/${encodeURIComponent(providerRepoId)}/base${query}`,
       BaseRevisionSchema
+    );
+  }
+
+  listBranches(providerRepoId: string): Promise<{ branches: import("@novus/contracts").BranchInfo[] }> {
+    return this.request(
+      "GET",
+      `/repositories/available/${encodeURIComponent(providerRepoId)}/branches`,
+      z.object({ branches: z.array(BranchInfoSchema) })
     );
   }
 

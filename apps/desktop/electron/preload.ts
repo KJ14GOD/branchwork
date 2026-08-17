@@ -30,7 +30,10 @@ const novus: NovusBridge = {
     base: (providerRepoId, ref) => ipcRenderer.invoke("novus:repos:base", { providerRepoId, ref }),
     addLocal: () => ipcRenderer.invoke("novus:repos:add-local"),
     localList: () => ipcRenderer.invoke("novus:repos:local-list"),
-    baseLocal: (localId) => ipcRenderer.invoke("novus:repos:base-local", localId),
+    baseLocal: (localId, ref) =>
+      ipcRenderer.invoke("novus:repos:base-local", ref === undefined ? localId : { localId, ref }),
+    branches: (input) => ipcRenderer.invoke("novus:repos:branches", input),
+    baseStatusLocal: (input) => ipcRenderer.invoke("novus:repos:base-status-local", input),
     checkedOutHere: () => ipcRenderer.invoke("novus:repos:checked-out-here")
   },
   missions: {

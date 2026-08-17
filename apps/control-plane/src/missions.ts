@@ -1,4 +1,5 @@
 import {
+  type BaseStatus,
   type CreateMissionInput,
   type Mission,
   type MissionDetailResponse,
@@ -804,11 +805,46 @@ export async function getMissionBase(
 /** The complete room payload for one authorized viewer, computed for the lane
  *  they are reading: control, capabilities, runner, workspace and state are
  *  that lane's own (D-080). */
+/** Where each lane's pinned base stands (D-139), refreshed in the background
+ *  so the room's poll never waits on a host: a stale or absent answer serves
+ *  what it has — null before the first check lands — and kicks a refresh. */
+const baseStatusCache = new Map<string, { value: BaseStatus; expires: number }>();
+const baseStatusInFlight = new Set<string>();
+const BASE_STATUS_TTL_MS = 60_000;
+
+function cachedBaseStatus(
+  provider: RepositoryProvider,
+  providerRepoId: string,
+  ref: string,
+  pinnedSha: string
+): BaseStatus | null {
+  const key = `${providerRepoId}:${ref}:${pinnedSha}`;
+  const hit = baseStatusCache.get(key);
+  const now = Date.now();
+  if ((!hit || hit.expires < now) && !baseStatusInFlight.has(key)) {
+    baseStatusInFlight.add(key);
+    void provider
+      .baseStatus(providerRepoId, ref, pinnedSha)
+      .then((value) => baseStatusCache.set(key, { value, expires: Date.now() + BASE_STATUS_TTL_MS }))
+      .catch(() =>
+        // The provider could not answer; "unknown" is the recorded fact, and
+        // the next expiry retries. Never treated as "fine" (D-139).
+        baseStatusCache.set(key, {
+          value: { state: "unknown", aheadBy: null, checkedAt: new Date().toISOString() },
+          expires: Date.now() + BASE_STATUS_TTL_MS
+        })
+      )
+      .finally(() => baseStatusInFlight.delete(key));
+  }
+  return hit?.value ?? null;
+}
+
 export async function getMission(
   db: Db,
   ctx: AuthedContext,
   missionId: string,
-  workstreamId?: string
+  workstreamId?: string,
+  provider?: RepositoryProvider
 ): Promise<MissionDetailResponse | null> {
   const base = await getMissionBase(db, ctx, missionId, workstreamId);
   if (!base) return null;
@@ -817,7 +853,19 @@ export async function getMission(
   // The poll's write half, taken deliberately before the read-only projection:
   // a GET that keeps a lease and presence alive says so here, not in secret.
   await observeMission(db, access.missionId, ctx.userId);
-  return missionDetail(db, access, ctx.userId, base);
+  const detail = await missionDetail(db, access, ctx.userId, base);
+  // GitHub lanes only: the control plane can ask the host. A local checkout
+  // is this machine's own truth, answered over the bridge instead (D-139).
+  const repository = detail.mission.repository;
+  if (provider && repository?.provider === "github" && detail.workstream) {
+    detail.baseStatus = cachedBaseStatus(
+      provider,
+      repository.providerRepoId,
+      detail.workstream.baseRef,
+      detail.workstream.baseSha
+    );
+  }
+  return detail;
 }
 
 /** Records (or refreshes) a local repository the desktop registered (D-032). */

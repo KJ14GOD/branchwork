@@ -1219,6 +1219,20 @@ export function Inspector({
                         <span className="kv-label">Base</span>
                         <span className="kv-value mono" data-testid="ws-base" title={workstream.baseSha}>
                           {workstream.baseRef} · {shortSha(workstream.baseSha)}
+                          {detail.baseStatus && detail.baseStatus.state !== "current" && (
+                            <span className="tone-warn kv-note" data-testid="ws-base-status">
+                              {" "}
+                              {detail.baseStatus.state === "moved"
+                                ? detail.baseStatus.aheadBy === null
+                                  ? "· has moved since this began"
+                                  : `· moved — ${detail.baseStatus.aheadBy} ahead`
+                                : detail.baseStatus.state === "rewritten"
+                                  ? "· rewritten since this began"
+                                  : detail.baseStatus.state === "missing"
+                                    ? "· branch is gone"
+                                    : "· could not be checked"}
+                            </span>
+                          )}
                         </span>
 
                         <span className="kv-label">Branch</span>

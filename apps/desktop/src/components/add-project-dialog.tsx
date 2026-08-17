@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { siGithub } from "simple-icons";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AvailableRepository, Organization, User } from "@novus/contracts";
+import { agoLabel } from "../format";
 import { novus } from "../bridge";
 
 export interface PickedRepository {
@@ -15,8 +15,12 @@ interface Row {
   provider: "github" | "local";
   /** The repository's own name — the primary line. */
   primary: string;
-  /** Owner and default branch — the secondary line. */
-  secondary: string;
+  /** The default branch, quietly beside the name (D-139). */
+  branch: string;
+  /** The group heading a github row files under; local rows have none. */
+  owner: string | null;
+  /** When the host last saw a push — freshest first (D-139). */
+  pushedAt: string | null;
   name: string;
   available: boolean;
 }
@@ -27,32 +31,6 @@ type Load<T> =
   | { kind: "error"; code: string; message: string };
 
 type Source = "github" | "local";
-
-function GithubGlyph() {
-  return (
-    <svg className="row-glyph" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="GitHub">
-      <path d={siGithub.path} />
-    </svg>
-  );
-}
-
-function FolderGlyph() {
-  return (
-    <svg
-      className="row-glyph"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      role="img"
-      aria-label="On this Mac"
-    >
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    </svg>
-  );
-}
 
 /** Who these repositories are being listed for. A personal organization is
  *  named after its owner, so it is never printed twice. */
@@ -71,7 +49,9 @@ function githubRow(repo: AvailableRepository): Row {
     id: repo.providerRepoId,
     provider: "github",
     primary: bare,
-    secondary: owner ? `${owner} · ${repo.defaultBranch}` : repo.defaultBranch,
+    branch: repo.defaultBranch,
+    owner,
+    pushedAt: repo.pushedAt,
     name: repo.name,
     available: true
   };
@@ -131,9 +111,9 @@ export function AddProjectDialog({
               id: repo.providerRepoId,
               provider: "local" as const,
               primary: repo.name,
-              secondary: repo.onThisMachine
-                ? `On this Mac · ${repo.defaultBranch}`
-                : "On another machine",
+              branch: repo.onThisMachine ? repo.defaultBranch : "on another machine",
+              owner: null,
+              pushedAt: null,
               name: repo.name,
               available: repo.onThisMachine
             }))
@@ -190,9 +170,27 @@ export function AddProjectDialog({
         : local.kind === "loaded"
           ? local.value
           : [];
+    // Freshest first, grouped by owner (D-139): owners ordered by their most
+    // recently pushed repository, repositories within an owner the same way.
+    const at = (row: Row) => (row.pushedAt ? Date.parse(row.pushedAt) : 0);
+    const freshestOfOwner = new Map<string, number>();
+    for (const row of all) {
+      const key = row.owner ?? "";
+      freshestOfOwner.set(key, Math.max(freshestOfOwner.get(key) ?? 0, at(row)));
+    }
+    const sorted = [...all].sort((a, b) => {
+      const ownerA = a.owner ?? "";
+      const ownerB = b.owner ?? "";
+      if (ownerA !== ownerB) {
+        const byFresh = (freshestOfOwner.get(ownerB) ?? 0) - (freshestOfOwner.get(ownerA) ?? 0);
+        return byFresh !== 0 ? byFresh : ownerA.localeCompare(ownerB);
+      }
+      const byTime = at(b) - at(a);
+      return byTime !== 0 ? byTime : a.primary.localeCompare(b.primary);
+    });
     const needle = query.trim().toLowerCase();
-    if (!needle) return all;
-    return all.filter((row) => row.name.toLowerCase().includes(needle));
+    if (!needle) return sorted;
+    return sorted.filter((row) => row.name.toLowerCase().includes(needle));
   }, [source, github, local, query]);
 
   useEffect(() => {
@@ -362,31 +360,43 @@ export function AddProjectDialog({
           )}
           {load.kind === "loaded" &&
             rows.map((row, index) => (
-              <div
-                key={`${row.provider}:${row.id}`}
-                id={`repo-${row.id}`}
-                data-row-id={row.id}
-                role="option"
-                aria-selected={index === active}
-                aria-disabled={!row.available}
-                className={`repo-row${index === active ? " active" : ""}${row.available ? "" : " away"}`}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  setActive(index);
-                }}
-                onClick={() => open(row)}
-                data-testid="repo-row"
-              >
-                {row.provider === "github" ? <GithubGlyph /> : <FolderGlyph />}
-                <span className="repo-row-text">
+              <Fragment key={`${row.provider}:${row.id}`}>
+                {row.owner !== null && (index === 0 || rows[index - 1]?.owner !== row.owner) && (
+                  <div className="repo-owner" aria-hidden="true">
+                    {row.owner}
+                  </div>
+                )}
+                <div
+                  id={`repo-${row.id}`}
+                  data-row-id={row.id}
+                  role="option"
+                  aria-selected={index === active}
+                  aria-disabled={!row.available}
+                  className={`repo-row${index === active ? " active" : ""}${row.available ? "" : " away"}`}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    setActive(index);
+                  }}
+                  onClick={() => open(row)}
+                  data-testid="repo-row"
+                >
                   <span className="repo-row-primary">{row.primary}</span>
-                  <span className="repo-row-secondary">{row.secondary}</span>
-                </span>
-              </div>
+                  <span className="repo-row-branch">{row.branch}</span>
+                  {index === active ? (
+                    <span className="repo-row-open">Open ↵</span>
+                  ) : (
+                    row.pushedAt && <span className="repo-row-time">{agoLabel(row.pushedAt, Date.now())}</span>
+                  )}
+                </div>
+              </Fragment>
             ))}
         </div>
 
         <div className="dialog-actions">
+          <span className="dialog-keys" aria-hidden="true">
+            <span className="dialog-key">↑↓</span> navigate <span className="dialog-key">↵</span> open{" "}
+            <span className="dialog-key">esc</span> close
+          </span>
           {source === "local" && (
             <button
               className="btn btn-secondary"

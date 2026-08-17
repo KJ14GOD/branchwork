@@ -1,5 +1,5 @@
 import { createSign } from "node:crypto";
-import type {
+import type { BranchInfo, BaseStatus,
   AvailableRepository,
   BaseRevision,
   HostCheck,
@@ -181,13 +181,19 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
       const response = await this.rest(`/installation/repositories?per_page=100&page=${page}`);
       if (!response.ok) throw new ProviderTransientError(`repository listing failed (${response.status})`);
       const body = (await response.json()) as {
-        repositories: { id: number; full_name: string; default_branch: string }[];
+        repositories: { id: number; full_name: string; default_branch: string; pushed_at?: string | null }[];
         total_count: number;
       };
       for (const repo of body.repositories) {
         const cached = { providerRepoId: String(repo.id), fullName: repo.full_name, defaultBranch: repo.default_branch };
         this.repoCache.set(cached.providerRepoId, cached);
-        repos.push({ providerRepoId: cached.providerRepoId, name: cached.fullName, defaultBranch: cached.defaultBranch });
+        repos.push({
+          providerRepoId: cached.providerRepoId,
+          name: cached.fullName,
+          defaultBranch: cached.defaultBranch,
+          // Freshest-first listing (D-139); the host's own timestamp or nothing.
+          pushedAt: repo.pushed_at ?? null
+        });
       }
       if (repos.length >= body.total_count) break;
     }
@@ -204,6 +210,49 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     if (!response.ok) throw new ProviderTransientError(`base resolution failed (${response.status})`);
     const branch = (await response.json()) as { commit: { sha: string } };
     return { ref: target, sha: branch.commit.sha };
+  }
+
+  async listBranches(providerRepoId: string): Promise<BranchInfo[]> {
+    const repo = await this.cachedRepo(providerRepoId);
+    // One page of 100 is the cap, stated rather than silently paged: a
+    // repository with more branches shows its first hundred by name and the
+    // default is always present because the host sorts it in.
+    const response = await this.rest(`/repos/${repo.fullName}/branches?per_page=100`);
+    if (response.status === 404) throw new UnknownRepositoryError();
+    if (!response.ok) throw new ProviderTransientError(`branch listing failed (${response.status})`);
+    const body = (await response.json()) as { name: string; commit: { sha: string } }[];
+    const rows = body.map((branch) => ({
+      name: branch.name,
+      sha: branch.commit.sha,
+      isDefault: branch.name === repo.defaultBranch
+    }));
+    rows.sort((a, b) => (a.isDefault !== b.isDefault ? (a.isDefault ? -1 : 1) : a.name.localeCompare(b.name)));
+    if (!rows.some((row) => row.isDefault)) {
+      const base = await this.resolveBase(providerRepoId);
+      rows.unshift({ name: base.ref, sha: base.sha, isDefault: true });
+    }
+    return rows;
+  }
+
+  async baseStatus(providerRepoId: string, ref: string, pinnedSha: string): Promise<BaseStatus> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const checkedAt = new Date().toISOString();
+    const head = await this.rest(`/repos/${repo.fullName}/branches/${encodeURIComponent(ref)}`);
+    if (head.status === 404) return { state: "missing", aheadBy: null, checkedAt };
+    if (!head.ok) throw new ProviderTransientError(`base check failed (${head.status})`);
+    const tip = ((await head.json()) as { commit: { sha: string } }).commit.sha;
+    if (tip === pinnedSha) return { state: "current", aheadBy: null, checkedAt };
+    // The host's own ancestry answer: comparing pin...tip says "ahead" when
+    // the pin is an ancestor (the branch moved forward over it), anything
+    // else means the pinned commit is no longer in the branch's history.
+    const compare = await this.rest(
+      `/repos/${repo.fullName}/compare/${encodeURIComponent(pinnedSha)}...${encodeURIComponent(tip)}`
+    );
+    if (compare.status === 404) return { state: "rewritten", aheadBy: null, checkedAt };
+    if (!compare.ok) throw new ProviderTransientError(`base comparison failed (${compare.status})`);
+    const result = (await compare.json()) as { status: string; ahead_by: number };
+    if (result.status === "ahead") return { state: "moved", aheadBy: result.ahead_by, checkedAt };
+    return { state: "rewritten", aheadBy: null, checkedAt };
   }
 
   async ensureBranch(providerRepoId: string, branch: string, fromSha: string): Promise<{ alreadyExisted: boolean }> {

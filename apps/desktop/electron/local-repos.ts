@@ -100,15 +100,80 @@ export async function pickLocalRepository(): Promise<PickedLocalRepo | { cancell
   }
 }
 
-export async function resolveLocalBase(localId: string): Promise<{ ref: string; sha: string } | { error: string }> {
+export async function resolveLocalBase(
+  localId: string,
+  ref?: string
+): Promise<{ ref: string; sha: string } | { error: string }> {
   const repoPath = pathForLocalRepo(localId);
   if (!repoPath) return { error: "This local repository lives on another machine." };
   try {
+    if (ref !== undefined) {
+      // A chosen base (D-139): resolve exactly the named branch, and refuse
+      // in words when it does not exist rather than falling back silently.
+      const sha = await git(repoPath, ["rev-parse", "--verify", `refs/heads/${ref}`]).catch(() => null);
+      if (sha === null) return { error: `No branch named ${ref} in this repository.` };
+      return { ref, sha };
+    }
     const sha = await git(repoPath, ["rev-parse", "HEAD"]);
-    const ref = await git(repoPath, ["symbolic-ref", "--short", "HEAD"]).catch(() => "HEAD");
-    return { ref, sha };
+    const head = await git(repoPath, ["symbolic-ref", "--short", "HEAD"]).catch(() => "HEAD");
+    return { ref: head, sha };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Could not read the repository head." };
+  }
+}
+
+/** The repository's branches for the base picker (D-139): default first,
+ *  then by name, straight from this machine's own git. */
+export async function listLocalBranches(
+  localId: string
+): Promise<{ name: string; sha: string; isDefault: boolean }[] | { error: string }> {
+  const repoPath = pathForLocalRepo(localId);
+  if (!repoPath) return { error: "This local repository lives on another machine." };
+  try {
+    const head = await git(repoPath, ["symbolic-ref", "--short", "HEAD"]).catch(() => null);
+    const raw = await git(repoPath, [
+      "for-each-ref",
+      "refs/heads",
+      "--format=%(refname:short) %(objectname)"
+    ]);
+    const rows = raw
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const space = line.lastIndexOf(" ");
+        return { name: line.slice(0, space), sha: line.slice(space + 1), isDefault: line.slice(0, space) === head };
+      });
+    rows.sort((a, b) => (a.isDefault !== b.isDefault ? (a.isDefault ? -1 : 1) : a.name.localeCompare(b.name)));
+    return rows;
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Could not list branches." };
+  }
+}
+
+/** Where a local mission's pinned base stands (D-139), by this machine's own
+ *  git: current, moved (with the commit count), rewritten, or missing. */
+export async function localBaseStatus(
+  localId: string,
+  ref: string,
+  pinnedSha: string
+): Promise<
+  { state: "current" | "moved" | "rewritten" | "missing"; aheadBy: number | null; checkedAt: string } | { error: string }
+> {
+  const repoPath = pathForLocalRepo(localId);
+  if (!repoPath) return { error: "This local repository lives on another machine." };
+  const checkedAt = new Date().toISOString();
+  try {
+    const tip = await git(repoPath, ["rev-parse", "--verify", `refs/heads/${ref}`]).catch(() => null);
+    if (tip === null) return { state: "missing", aheadBy: null, checkedAt };
+    if (tip === pinnedSha) return { state: "current", aheadBy: null, checkedAt };
+    const ancestor = await git(repoPath, ["merge-base", "--is-ancestor", pinnedSha, tip])
+      .then(() => true)
+      .catch(() => false);
+    if (!ancestor) return { state: "rewritten", aheadBy: null, checkedAt };
+    const count = await git(repoPath, ["rev-list", "--count", `${pinnedSha}..${tip}`]).catch(() => null);
+    return { state: "moved", aheadBy: count === null ? null : Number(count), checkedAt };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Could not check the base." };
   }
 }
 

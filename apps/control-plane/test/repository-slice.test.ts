@@ -342,7 +342,7 @@ describe("branch conflict", () => {
   // D-099) ride along; only the three answers this suite is about differ.
   class ConflictProvider extends FakeRepositoryProvider {
     override async listRepositories(): Promise<AvailableRepository[]> {
-      return [{ providerRepoId: "7001", name: "novus/occupied", defaultBranch: "main" }];
+      return [{ providerRepoId: "7001", name: "novus/occupied", defaultBranch: "main", pushedAt: null }];
     }
     override async resolveBase(): Promise<BaseRevision> {
       return { ref: "main", sha: "a".repeat(40) };

@@ -273,7 +273,11 @@ describe("the Mission Room", () => {
     await page.keyboard.press("ArrowDown");
     const active = page.locator('[data-testid="repo-row"][aria-selected="true"]');
     expect(await active.count()).toBe(1);
-    expect(await active.textContent()).toContain("payments");
+    // Two steps from the top lands on the third row, whatever the freshest-
+    // first grouping put there (D-139): the assertion is about the keyboard
+    // moving the selection, never about fixture order.
+    const thirdRowText = await page.getByTestId("repo-row").nth(2).textContent();
+    expect(await active.textContent()).toBe(thirdRowText);
     await page.keyboard.press("End");
     expect(await page.locator('[data-testid="repo-row"][aria-selected="true"]').count()).toBe(1);
     await page.keyboard.press("Home");

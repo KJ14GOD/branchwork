@@ -802,6 +802,7 @@ export async function missionDetail(
       workstreams.find((lane) => lane.workstreamId === current?.workstreamId),
       base.mission.repository?.provider ?? null
     ),
+    baseStatus: null,
     pullRequest,
     branchPush,
     events: (eventRows.rows as EventRow[]).map(toMissionEvent),

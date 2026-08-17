@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  type BranchInfo,
   type Effort,
   type Mission,
   type ModelId,
@@ -2182,6 +2183,33 @@ function NewMissionDialog({
 }) {
   const [target, setTarget] = useState(project);
   const [picking, setPicking] = useState(false);
+  /** The branch this mission starts from (D-139): null is the default branch,
+   *  exactly as before the chip existed. Reset when the project changes —
+   *  a branch belongs to one repository. */
+  const [baseRef, setBaseRef] = useState<string | null>(null);
+  const [basePicking, setBasePicking] = useState(false);
+  const [baseFilter, setBaseFilter] = useState("");
+  const [branches, setBranches] = useState<
+    { kind: "idle" | "loading" } | { kind: "loaded"; value: BranchInfo[] } | { kind: "error"; message: string }
+  >({ kind: "idle" });
+  useEffect(() => {
+    setBaseRef(null);
+    setBasePicking(false);
+    setBranches({ kind: "idle" });
+  }, [target.key]);
+  const openBasePicker = async () => {
+    setBasePicking((open) => !open);
+    setBaseFilter("");
+    if (branches.kind === "loaded") return;
+    setBranches({ kind: "loading" });
+    const result = await novus().repos.branches({
+      provider: target.provider,
+      providerRepoId: target.providerRepoId
+    });
+    setBranches(
+      result.ok ? { kind: "loaded", value: result.value } : { kind: "error", message: result.message }
+    );
+  };
   const create = async ({
     body,
     model,
@@ -2191,10 +2219,12 @@ function NewMissionDialog({
     model: ModelId;
     effort: Effort;
   }): Promise<{ ok: boolean; message?: string }> => {
+    // The chosen ref is resolved again at this moment (D-139): the pin is the
+    // branch's tip when Enter was pressed, not when the menu was opened.
     const base =
       target.provider === "local"
-        ? await novus().repos.baseLocal(target.providerRepoId)
-        : await novus().repos.base(target.providerRepoId);
+        ? await novus().repos.baseLocal(target.providerRepoId, baseRef ?? undefined)
+        : await novus().repos.base(target.providerRepoId, baseRef ?? undefined);
     if (!base.ok) return { ok: false, message: base.message };
     const created = await novus().missions.create({
       goal: deriveGoal(body),
@@ -2255,6 +2285,63 @@ function NewMissionDialog({
                   </button>
                 );
               })}
+            </div>
+          )}
+        </span>
+        {/* Where the mission starts from (D-139): the default branch unless a
+            person says otherwise, chosen here because base is a birth decision
+            of the mission — the room never changes what code it is about. */}
+        <span className="chip-wrap ask-base-wrap">
+          <button
+            className="chip-button ask-base"
+            onClick={() => void openBasePicker()}
+            aria-haspopup="menu"
+            aria-expanded={basePicking}
+            data-testid="ask-base"
+          >
+            Base · <span className="mono">{baseRef ?? "default"}</span>
+            <Chevron open={basePicking} />
+          </button>
+          {basePicking && (
+            <div className="chip-menu ask-base-menu" role="menu" data-testid="ask-base-menu">
+              <input
+                className="input base-filter"
+                placeholder="Filter branches"
+                value={baseFilter}
+                onChange={(event) => setBaseFilter(event.target.value)}
+                aria-label="Filter branches"
+                data-testid="base-filter"
+                autoFocus
+              />
+              {branches.kind === "loading" && <p className="chip-menu-note">Reading branches…</p>}
+              {branches.kind === "error" && <p className="chip-menu-note">{branches.message}</p>}
+              {branches.kind === "loaded" &&
+                branches.value
+                  .filter((branch) => branch.name.toLowerCase().includes(baseFilter.trim().toLowerCase()))
+                  .slice(0, 40)
+                  .map((branch) => (
+                    <button
+                      key={branch.name}
+                      className="chip-menu-row base-row-choice"
+                      role="menuitem"
+                      title={branch.sha}
+                      onClick={() => {
+                        setBaseRef(branch.isDefault ? null : branch.name);
+                        setBasePicking(false);
+                      }}
+                      data-testid="base-branch-row"
+                    >
+                      <span className="mono base-branch-name">{branch.name}</span>
+                      {branch.isDefault && <span className="base-branch-default">default</span>}
+                    </button>
+                  ))}
+              {branches.kind === "loaded" &&
+                branches.value.filter((branch) =>
+                  branch.name.toLowerCase().includes(baseFilter.trim().toLowerCase())
+                ).length === 0 && <p className="chip-menu-note">No branch matches.</p>}
+              <p className="chip-menu-note base-note">
+                The mission pins this branch at its current commit. Its pull request will target it.
+              </p>
             </div>
           )}
         </span>

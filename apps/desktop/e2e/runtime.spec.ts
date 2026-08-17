@@ -1150,6 +1150,13 @@ describe("missions and workstreams, told apart", () => {
     await page.getByTestId("repo-new-mission").click();
     await page.getByTestId("new-mission-dialog").waitFor({ timeout: 20_000 });
     await page.screenshot({ path: join(evidenceDir, "61-missions-in-the-rail.png") });
+    // The base chip (D-139): default until chosen, its menu listing this
+    // repository's branches from the machine's own git.
+    expect(await page.getByTestId("ask-base").innerText()).toContain("default");
+    await page.getByTestId("ask-base").click();
+    await expect.poll(() => page.getByTestId("base-branch-row").count(), { timeout: 20_000 }).toBeGreaterThan(0);
+    expect(await page.getByTestId("ask-base-menu").innerText()).toContain("pins this branch");
+    await page.screenshot({ path: join(evidenceDir, "156-base-branch-picker.png") });
     await page.keyboard.press("Escape");
     await expect.poll(() => page.getByTestId("new-mission-dialog").count(), { timeout: 20_000 }).toBe(0);
 

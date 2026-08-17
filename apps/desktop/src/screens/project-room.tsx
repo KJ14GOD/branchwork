@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  BaseStatus,
   ApproachSummary,
   BaseRevision,
   Direction,
@@ -460,6 +461,37 @@ export function ProjectRoom({
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [forking, setForking] = useState(false);
+  /** Where this lane's pinned base stands (D-139). GitHub lanes arrive with
+   *  the answer on the detail; a local checkout is this machine's own truth,
+   *  asked over the bridge on a slow cadence. */
+  const [localBase, setLocalBase] = useState<BaseStatus | null>(null);
+  const repoProvider = detail?.mission.repository?.provider ?? null;
+  const repoId = detail?.mission.repository?.providerRepoId ?? null;
+  const pinnedBaseRef = detail?.workstream?.baseRef ?? null;
+  const pinnedBaseSha = detail?.workstream?.baseSha ?? null;
+  useEffect(() => {
+    if (repoProvider !== "local" || repoId === null || pinnedBaseRef === null || pinnedBaseSha === null) {
+      setLocalBase(null);
+      return;
+    }
+    let stopped = false;
+    const check = async () => {
+      const result = await novus().repos.baseStatusLocal({ localId: repoId, ref: pinnedBaseRef, sha: pinnedBaseSha });
+      if (stopped) return;
+      setLocalBase(
+        result.ok
+          ? result.value
+          : { state: "unknown", aheadBy: null, checkedAt: new Date().toISOString() }
+      );
+    };
+    void check();
+    const timer = setInterval(() => void check(), 60_000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [repoProvider, repoId, pinnedBaseRef, pinnedBaseSha]);
+  const baseStatus = detail?.baseStatus ?? localBase;
   useEffect(() => {
     if (forkAsk > 0) setForking(true);
   }, [forkAsk]);
@@ -1591,6 +1623,15 @@ export function ProjectRoom({
                   data-testid="setup-row"
                 >
                   <span>{feed.setup.label}</span>
+                  {/* The base's standing, in words, where the base is named
+                      (D-139): silent while current, and silent while the
+                      answer is merely unknown — absence of a check is not an
+                      alarm, it is Overview's to state. */}
+                  {baseDriftWords(baseStatus) && (
+                    <span className="tone-warn workspace-drift" data-testid="base-drift">
+                      · {baseDriftWords(baseStatus)}
+                    </span>
+                  )}
                   <button
                     className="btn btn-text workspace-row-action"
                     onClick={() => onInspector("overview")}
@@ -2148,4 +2189,21 @@ function TryAnotherApproach({
         </footer>
     </Dialog>
   );
+}
+
+/** Drift said plainly (D-139): only states that demand attention speak. */
+function baseDriftWords(status: BaseStatus | null): string | null {
+  if (!status) return null;
+  switch (status.state) {
+    case "moved":
+      return status.aheadBy === null
+        ? "base has moved since this began"
+        : `base moved — ${status.aheadBy} ${status.aheadBy === 1 ? "commit" : "commits"} ahead`;
+    case "rewritten":
+      return "base rewritten since this began";
+    case "missing":
+      return "base branch is gone";
+    default:
+      return null;
+  }
 }

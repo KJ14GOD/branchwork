@@ -42,6 +42,8 @@ import { avatarFor } from "./avatars";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
 import {
+  listLocalBranches,
+  localBaseStatus,
   ensureLocalBranch,
   pathForLocalRepo,
   pickLocalRepository,
@@ -404,11 +406,37 @@ function registerIpc(): void {
   ipcMain.handle("novus:repos:checked-out-here", () => ok(repositoriesOnThisMachine()));
 
   ipcMain.handle("novus:repos:base-local", async (_event, raw: unknown) => {
-    const parsed = z.string().uuid().safeParse(raw);
+    const parsed = z
+      .union([z.string().uuid(), z.object({ localId: z.string().uuid(), ref: z.string().min(1).optional() })])
+      .safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed repository id." };
-    const base = await resolveLocalBase(parsed.data);
+    const input = typeof parsed.data === "string" ? { localId: parsed.data, ref: undefined } : parsed.data;
+    const base = await resolveLocalBase(input.localId, input.ref);
     if ("error" in base) return { ok: false, code: "local_git", message: base.error };
     return ok(base);
+  });
+
+  ipcMain.handle("novus:repos:branches", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ provider: z.enum(["github", "local"]), providerRepoId: z.string().min(1) })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed repository reference." };
+    if (parsed.data.provider === "local") {
+      const branches = await listLocalBranches(parsed.data.providerRepoId);
+      if ("error" in branches) return { ok: false, code: "local_git", message: branches.error };
+      return ok(branches);
+    }
+    return call(async () => (await api.listBranches(parsed.data.providerRepoId)).branches);
+  });
+
+  ipcMain.handle("novus:repos:base-status-local", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ localId: z.string().uuid(), ref: z.string().min(1), sha: z.string().min(1) })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed base reference." };
+    const status = await localBaseStatus(parsed.data.localId, parsed.data.ref, parsed.data.sha);
+    if ("error" in status) return { ok: false, code: "local_git", message: status.error };
+    return ok(status);
   });
 
   ipcMain.handle("novus:missions:create", async (_event, raw: unknown) => {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type {
+import type { BranchInfo, BaseStatus,
   AvailableRepository,
   BaseRevision,
   HostCheck,
@@ -99,6 +99,13 @@ export interface RepositoryProvider {
   listRepositories(orgId: string): Promise<AvailableRepository[]>;
   /** Resolves a ref (default branch when omitted) to its exact current SHA. */
   resolveBase(providerRepoId: string, ref?: string): Promise<BaseRevision>;
+  /** The repository's branches for the base picker (D-139): name, current
+   *  tip, default flag. Default first, then by name; capped, never paged. */
+  listBranches(providerRepoId: string): Promise<BranchInfo[]>;
+  /** Where a pinned base stands against its branch right now (D-139):
+   *  current, moved (with a count when the host gives one), rewritten, or
+   *  missing. Providers answer from the host; they never guess. */
+  baseStatus(providerRepoId: string, ref: string, pinnedSha: string): Promise<BaseStatus>;
   /** Idempotent: succeeds if the branch already exists at `fromSha`;
    *  BranchConflictError if it exists at a different commit. */
   ensureBranch(providerRepoId: string, branch: string, fromSha: string): Promise<{ alreadyExisted: boolean }>;
@@ -172,6 +179,12 @@ export class UnconfiguredRepositoryProvider implements RepositoryProvider {
     throw new ProviderUnconfiguredError();
   }
   async resolveBase(): Promise<BaseRevision> {
+    throw new ProviderUnconfiguredError();
+  }
+  async listBranches(): Promise<BranchInfo[]> {
+    throw new ProviderUnconfiguredError();
+  }
+  async baseStatus(): Promise<BaseStatus> {
     throw new ProviderUnconfiguredError();
   }
   async ensureBranch(): Promise<{ alreadyExisted: boolean }> {
@@ -278,14 +291,43 @@ export class FakeRepositoryProvider implements RepositoryProvider {
   }
 
   async listRepositories(): Promise<AvailableRepository[]> {
-    return this.repos.map(({ providerRepoId, name, defaultBranch }) => ({ providerRepoId, name, defaultBranch }));
+    return this.repos.map(({ providerRepoId, name, defaultBranch }, index) => ({
+      providerRepoId,
+      name,
+      defaultBranch,
+      // Deterministic recency for a deterministic host (D-139): each fixture
+      // repository "pushed" a fixed number of days ago, newest first.
+      pushedAt: new Date(Date.UTC(2026, 0, 1) - index * 86_400_000).toISOString()
+    }));
   }
 
   async resolveBase(providerRepoId: string, ref?: string): Promise<BaseRevision> {
     const repo = this.repo(providerRepoId);
     const target = ref ?? repo.defaultBranch;
-    if (target !== repo.defaultBranch) throw new UnknownRepositoryError();
-    return { ref: target, sha: repo.headSha };
+    if (target === repo.defaultBranch) return { ref: target, sha: repo.headSha };
+    const cut = this.branches.get(providerRepoId)?.get(target);
+    if (cut === undefined) throw new UnknownRepositoryError();
+    return { ref: target, sha: cut };
+  }
+
+  async listBranches(providerRepoId: string): Promise<BranchInfo[]> {
+    const repo = this.repo(providerRepoId);
+    const cut = [...(this.branches.get(providerRepoId) ?? new Map<string, string>()).entries()]
+      .filter(([name]) => name !== repo.defaultBranch)
+      .map(([name, sha]) => ({ name, sha, isDefault: false }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return [{ name: repo.defaultBranch, sha: repo.headSha, isDefault: true }, ...cut];
+  }
+
+  async baseStatus(providerRepoId: string, ref: string, pinnedSha: string): Promise<BaseStatus> {
+    const repo = this.repo(providerRepoId);
+    const tip = ref === repo.defaultBranch ? repo.headSha : this.branches.get(providerRepoId)?.get(ref);
+    const checkedAt = new Date().toISOString();
+    if (tip === undefined) return { state: "missing", aheadBy: null, checkedAt };
+    if (tip === pinnedSha) return { state: "current", aheadBy: null, checkedAt };
+    // The fake host keeps only tips, not history: a different tip is a move
+    // with an uncounted distance, which is exactly what "aheadBy: null" means.
+    return { state: "moved", aheadBy: null, checkedAt };
   }
 
   async ensureBranch(providerRepoId: string, branch: string, fromSha: string): Promise<{ alreadyExisted: boolean }> {

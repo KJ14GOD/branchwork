@@ -90,9 +90,41 @@ export const ShaSchema = z.string().regex(/^[0-9a-f]{40}$/, "must be a full 40-h
 export const AvailableRepositorySchema = z.object({
   providerRepoId: z.string().min(1), // stable provider identifier, never the name
   name: z.string().min(1), // owner/name, display only
-  defaultBranch: z.string().min(1)
+  defaultBranch: z.string().min(1),
+  /** When the host last saw a push, for freshest-first listing (D-139).
+   *  Null when the provider does not say. */
+  pushedAt: z.string().datetime().nullable().default(null)
 });
 export type AvailableRepository = z.infer<typeof AvailableRepositorySchema>;
+
+/** One branch of a repository, as the base picker lists them (D-139): the
+ *  name, the commit it points at right now, and whether it is the default.
+ *  The sha is a snapshot for display — a mission pins the ref at creation by
+ *  resolving it again at that moment. */
+export const BranchInfoSchema = z.object({
+  name: z.string().min(1),
+  sha: z.string().min(1),
+  isDefault: z.boolean()
+});
+export type BranchInfo = z.infer<typeof BranchInfoSchema>;
+
+/** Where a mission's pinned base stands against the branch it came from
+ *  (D-139). Computed, never stored: the pin itself is immutable.
+ *  - `current`: the branch still points at the pinned commit.
+ *  - `moved`: the branch moved forward and the pin is an ancestor — new
+ *    commits landed on top of what this mission started from.
+ *  - `rewritten`: the branch no longer contains the pinned commit — it was
+ *    force-pushed, rebased, or squash-merged past it.
+ *  - `missing`: the branch is gone.
+ *  - `unknown`: the provider could not answer just now. Absence of an answer,
+ *    never treated as "fine". */
+export const BaseStatusSchema = z.object({
+  state: z.enum(["current", "moved", "rewritten", "missing", "unknown"]),
+  /** Commits ahead of the pin, when the provider counts them. */
+  aheadBy: z.number().int().nonnegative().nullable(),
+  checkedAt: z.string().datetime()
+});
+export type BaseStatus = z.infer<typeof BaseStatusSchema>;
 
 /** A repository Novus has recorded for an organization. `local` repositories
  *  live on a user's machine: the control plane records identity and receives
@@ -2884,6 +2916,10 @@ export const MissionDetailResponseSchema = z.object({
    *  (D-121). Stored at close with its event range and always re-derivable;
    *  the terminal room renders from this, not from a recomputation. */
   receipt: ReceiptSnapshotSchema.nullable().default(null),
+  /** Where the lane's pinned base stands against its branch (D-139): computed
+   *  by the control plane for GitHub repositories, null for local ones — the
+   *  machine holding the checkout answers those over the bridge. */
+  baseStatus: BaseStatusSchema.nullable().default(null),
   /** The tracked pull request, once one was actually opened (D-099). At most
    *  one that is not closed per workstream; the detail carries the selected
    *  lane's. */
@@ -3060,7 +3096,21 @@ export interface NovusBridge {
     localList(): Promise<
       IpcResult<{ providerRepoId: string; name: string; defaultBranch: string; onThisMachine: boolean }[]>
     >;
-    baseLocal(localId: string): Promise<IpcResult<BaseRevision>>;
+    baseLocal(localId: string, ref?: string): Promise<IpcResult<BaseRevision>>;
+    /** The repository's branches for the base picker (D-139): GitHub answers
+     *  through the control plane, a local repository through this machine's
+     *  own git. Default first, then by name. */
+    branches(input: {
+      provider: "github" | "local";
+      providerRepoId: string;
+    }): Promise<IpcResult<BranchInfo[]>>;
+    /** Where a local mission's pinned base stands (D-139): this machine reads
+     *  its own checkout; the control plane cannot see it. */
+    baseStatusLocal(input: {
+      localId: string;
+      ref: string;
+      sha: string;
+    }): Promise<IpcResult<BaseStatus>>;
     /**
      * The provider repository ids this machine actually holds a checkout for.
      *

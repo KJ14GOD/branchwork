@@ -207,6 +207,24 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     }
   });
 
+  app.get("/repositories/available/:providerRepoId/branches", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    const params = z.object({ providerRepoId: z.string().min(1) }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, "bad_request", "Malformed request.");
+    try {
+      return { branches: await provider.listBranches(params.data.providerRepoId) };
+    } catch (error) {
+      if (error instanceof ProviderUnconfiguredError) {
+        return sendError(reply, 503, "repo_unconfigured", error.message);
+      }
+      if (error instanceof UnknownRepositoryError) {
+        return sendError(reply, 404, "unknown_repository", error.message);
+      }
+      throw error;
+    }
+  });
+
   app.post("/repositories/local", async (request, reply) => {
     const ctx = await requireAuth(request, reply);
     if (!ctx) return;
@@ -233,7 +251,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     // approaches those are different lanes, and the caller is owed the one it
     // named (D-080 — found when a created approach came back wearing the
     // baseline's identity).
-    const detail = await getMission(db, ctx, missionId, params.data.workstreamId);
+    const detail = await getMission(db, ctx, missionId, params.data.workstreamId, provider);
     if (!detail?.workstream) return sendError(reply, 500, "workstream_missing", "Workstream disappeared.");
     return { workstream: detail.workstream };
   });
@@ -277,7 +295,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
     const missionId = await getWorkstreamMission(db, ctx, params.data.workstreamId);
     if (!missionId) return sendError(reply, 404, "not_found", "No such workstream in your organization.");
     await attemptBranchCreation(db, provider, ctx, missionId, params.data.workstreamId);
-    const detail = await getMission(db, ctx, missionId, params.data.workstreamId);
+    const detail = await getMission(db, ctx, missionId, params.data.workstreamId, provider);
     if (!detail?.workstream) return sendError(reply, 500, "workstream_missing", "Workstream disappeared.");
     return { workstream: detail.workstream };
   });
@@ -294,7 +312,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
       .object({ workstream: z.string().startsWith("wst_").optional() })
       .safeParse(request.query);
     if (!query.success) return sendError(reply, 400, "bad_id", "Malformed workstream id.");
-    const found = await getMission(db, ctx, params.data.missionId, query.data.workstream);
+    const found = await getMission(db, ctx, params.data.missionId, query.data.workstream, provider);
     if (!found) return sendError(reply, 404, "not_found", "No such mission in your organization.");
     return found;
   });

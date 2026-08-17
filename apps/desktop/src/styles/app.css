@@ -1203,6 +1203,136 @@ body {
   padding: var(--s-3) var(--s-6) var(--s-2);
 }
 
+/* Add project, re-dressed (D-139): repositories as words — name, default
+   branch, recency — grouped under their owners, freshest first. The logo
+   wall went with the 2010s. */
+.repo-owner {
+  font: var(--type-meta);
+  color: var(--text-3);
+  padding: var(--s-3) var(--s-3) var(--s-1);
+}
+
+.repo-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-control);
+  cursor: pointer;
+  min-height: 32px;
+  box-sizing: border-box;
+}
+
+.repo-row.active {
+  background: var(--selected);
+}
+
+.repo-row.away {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.repo-row-primary {
+  font: var(--type-row);
+  font-weight: 500;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.repo-row-branch {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.repo-row-time,
+.repo-row-open {
+  margin-left: auto;
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.repo-row-open {
+  color: var(--text-2);
+}
+
+.dialog-keys {
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.dialog-key {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+/* The base chip and its branches (D-139): the ask-head's second picker,
+   in the one chip-menu style the product has. */
+.ask-base-wrap {
+  margin-left: auto;
+}
+
+.ask-base .mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.ask-base-menu {
+  min-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.base-filter {
+  width: calc(100% - var(--s-2) * 2);
+  margin: var(--s-1) var(--s-2) var(--s-2);
+}
+
+.base-row-choice {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.base-branch-name {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.base-branch-default {
+  margin-left: auto;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.chip-menu-note {
+  font: var(--type-meta);
+  color: var(--text-3);
+  padding: var(--s-1) var(--s-3);
+}
+
+.base-note {
+  border-top: 1px solid var(--edge);
+  margin-top: var(--s-1);
+  padding-top: var(--s-2);
+}
+
+/* The base's standing on the workspace row (D-139): words, warn tone,
+   present only when the state demands attention. */
+.workspace-drift {
+  font: var(--type-meta);
+  white-space: nowrap;
+}
+
+.kv-note {
+  font: var(--type-meta);
+}
+
 /* The state line: one line, emphasis by weight, never by colour. The room
    does not restate the goal (D-127) — the tab, the rail, and the direction
    itself name it. */
