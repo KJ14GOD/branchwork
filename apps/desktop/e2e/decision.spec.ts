@@ -390,6 +390,14 @@ describe("competing approaches, compared and decided", () => {
     const contested = await page.getByTestId("contested").innerText();
     expect(contested).toContain("NOVUS_FAKE_TURN.md");
     expect(await page.getByTestId("decision-room").innerText()).not.toMatch(/recommend|winner|score/i);
+    // The whole page on the record (D-138 batch): its head, then its foot.
+    await page.getByTestId("decision-room").scrollIntoViewIfNeeded();
+    await page.evaluate(() => {
+      document.querySelector('[data-testid="decision-room"]')?.scrollIntoView({ block: "start" });
+    });
+    await shot("154-decision-room-head.png");
+    await page.getByTestId("contested").scrollIntoViewIfNeeded();
+    await shot("155-decision-room-foot.png");
     await shot("84-comparing-two-approaches.png");
 
     // --- A third approach is a third column (D-138, reversing the pair
