@@ -692,22 +692,24 @@ function PullChanges({
                   <p className="quiet">The host sent no text diff for this file.</p>
                 ) : view === "unified" ? (
                   <div className="diff" data-testid="pull-diff-unified">
-                    {parsePatch(file.patch).map((line, index) => (
-                      <div key={index} className={`diff-line diff-${line.tone} pull-diff-line`}>
-                        {line.newLine !== null && (
-                          <button
-                            className="pull-line-comment"
-                            title={`Comment on line ${line.newLine}`}
-                            aria-label={`Comment on ${file.path} line ${line.newLine}`}
-                            onClick={() => setCommenting({ path: file.path, line: line.newLine! })}
-                            data-testid="line-comment"
-                          >
-                            +
-                          </button>
-                        )}
-                        <span>{line.text === "" ? " " : line.text}</span>
-                      </div>
-                    ))}
+                    <div className="diff-body">
+                      {parsePatch(file.patch).map((line, index) => (
+                        <div key={index} className={`diff-line diff-${line.tone} pull-diff-line`}>
+                          {line.newLine !== null && (
+                            <button
+                              className="pull-line-comment"
+                              title={`Comment on line ${line.newLine}`}
+                              aria-label={`Comment on ${file.path} line ${line.newLine}`}
+                              onClick={() => setCommenting({ path: file.path, line: line.newLine! })}
+                              data-testid="line-comment"
+                            >
+                              +
+                            </button>
+                          )}
+                          <span>{line.text === "" ? " " : line.text}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <div className="diff pull-split" data-testid="pull-diff-split">

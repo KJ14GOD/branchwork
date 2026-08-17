@@ -2442,12 +2442,20 @@ body {
   padding: var(--s-2) 0 var(--s-3);
 }
 
-/* The diff owns its own horizontal scroll (DESIGN.md#overflow). */
+/* The diff owns its own horizontal scroll (DESIGN.md#overflow). Inside it,
+   one body sized to the widest line; every line fills the body, so the
+   tints form one straight column edge and never stop short of the text on
+   a horizontal scroll (D-141 batch). */
 .diff {
   overflow-x: auto;
   background: var(--surface-1);
   border-radius: var(--r-control);
   padding: var(--s-2) 0;
+}
+
+.diff-body {
+  width: max-content;
+  min-width: 100%;
 }
 
 .diff-line {
@@ -2456,15 +2464,20 @@ body {
   padding: 0 var(--s-3);
   color: var(--text-1);
   user-select: text;
+  box-sizing: border-box;
 }
 
-/* The only place --ok and --danger appear as backgrounds, at 12% opacity. */
+/* The only place --ok and --danger appear as backgrounds — 22% with a 2px
+   inset edge in the same token (was 12%, which vanished on the owner's
+   screen; D-141 batch). Identification of what changed, never judgment. */
 .diff-add {
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  background: color-mix(in srgb, var(--ok) 22%, transparent);
+  box-shadow: inset 2px 0 0 var(--ok);
 }
 
 .diff-del {
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  box-shadow: inset 2px 0 0 var(--danger);
 }
 
 .diff-hunk,
