@@ -1801,3 +1801,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** The `rail-branch` testid is gone; the sessions spec's assertion flips from count 1 to count 0, deliberately. The approach chip is single-line again and the two-line elbow geometry is deleted. DESIGN.md's token table gains `--edge-strong` with light overrides; the rail paragraph and Workstreams bullet say the branch lives in Overview.
 
 **Revisit when.** A second surface needs `--edge-strong` (its "nothing else yet" is a fence, not an invitation), or the owner wants any branch fact surfaced closer than Overview — a hover title on the approach row would be the smallest next step.
+
+## D-132 — The spine pared to nesting, and the wash never crosses a line
+
+**Context.** Owner-directed, on sight beside the reference mockup. Two faults in D-128's spine as built. The full mission-level run — one vertical from the mission through approaches, Try another approach, and Compare, plus a second vertical through the selected approach's children — put two parallel lines and six elbows in a five-row tree: more structure drawn than structure said, where the reference draws connectors only under each mission. And the selection wash reached left past the connector — the chip's padding carried the depth, so its background began before its own elbow and the line cut through the highlight, reading as a glitch.
+
+**Decision.** **Connectors draw nesting only**: the selected approach's conversations hang on one `--edge-strong` spine with rounded elbows; mission-level rows indent with no lines — the indent already says they are the mission's. **Depth moves from padding to margin** for the conversation chips: the chip's left edge starts after its elbow, the connectors live in the margin beside it, and a wash can never cross a line again.
+
+**Alternatives.** Keeping mission-level connectors but only when the tree is deep (rejected: two connector regimes in one rail is worse than either). Clipping the wash at the line with an inset (rejected: the chip would still sit under the line's coordinate space — margin is the honest geometry).
+
+**Consequences.** The spine selectors at the tree's top level are deleted; `.side-children` keeps the elbow/continuation pair, repositioned into the margin. The sessions' indent is margin-borne; their text lands where it did. No testid or behavior changes; the deterministic tree evidence regenerates.
+
+**Revisit when.** A third nesting level appears (sessions growing children), or the mission-level rows multiply enough that indent alone stops saying whose they are.

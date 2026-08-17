@@ -3991,7 +3991,7 @@ body {
 }
 
 .side-session {
-  padding-left: calc(var(--s-6) + var(--s-4));
+  padding-left: var(--s-2);
 }
 
 .side-compare,
@@ -3999,67 +3999,46 @@ body {
   padding-left: calc(var(--s-4) + var(--s-4));
 }
 
-/* The tree draws its own structure (D-128): a hairline spine dropping from
-   the mission through its rows, an elbow saying "child of" where a dot used
-   to say only "different". All offsets are the spacing scale; the color is
-   --edge-strong at 1.5px (D-129 tried --edge-hover; D-131 — the owner
-   still could not see it): visible structure, still behind the words. */
-.side-tree > *,
+/* The spine draws only nesting (D-128; D-132 pared it back): an
+   --edge-strong elbow into each of the selected approach's conversations,
+   and nothing at the mission level — the full run from the mission through
+   approaches, fork, and Compare was two parallel verticals and six elbows
+   of structure the indent already said. The connectors live in the margin
+   left of the chip, so a selection wash never crosses a line. */
 .side-children,
 .side-children > * {
   position: relative;
 }
 
-.side-tree > .side-row::before,
+/* The conversations' chips start after their elbow: margin, not padding,
+   carries the depth (D-132 — the wash reaching left past the line read as
+   a glitch). */
+.side-children > .side-row {
+  width: calc(100% - var(--s-6) - var(--s-2) - var(--s-2));
+  margin-left: calc(var(--s-2) + var(--s-6));
+}
+
 .side-children > .side-row::before {
   content: "";
   position: absolute;
   top: 0;
   height: 50%;
   width: var(--s-2);
+  left: calc(-1 * var(--s-3));
   border-left: 1.5px solid var(--edge-strong);
   border-bottom: 1.5px solid var(--edge-strong);
   border-bottom-left-radius: var(--r-control);
   pointer-events: none;
 }
 
-.side-tree > .side-row::before {
-  left: var(--s-4);
-}
-
-.side-children > .side-row::before {
-  left: calc(var(--s-4) + var(--s-4));
-}
-
-/* The spine continues past a row while anything follows it. */
-.side-tree > .side-row:not(:last-child)::after,
+/* The spine continues past a row while a sibling follows it. */
 .side-children > *:not(:last-child)::after {
   content: "";
   position: absolute;
   top: 50%;
   bottom: 0;
   width: 0;
-  border-left: 1.5px solid var(--edge-strong);
-  pointer-events: none;
-}
-
-.side-tree > .side-row:not(:last-child)::after {
-  left: var(--s-4);
-}
-
-.side-children > *:not(:last-child)::after {
-  left: calc(var(--s-4) + var(--s-4));
-}
-
-/* The children block is full-bleed (its rows carry their own chip margins),
-   so the mission-level spine passes through it at the chip offset. */
-.side-children:not(:last-child)::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: calc(var(--s-2) + var(--s-4));
-  width: 0;
+  left: calc(-1 * var(--s-3));
   border-left: 1.5px solid var(--edge-strong);
   pointer-events: none;
 }
