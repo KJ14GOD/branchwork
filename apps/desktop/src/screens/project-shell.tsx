@@ -490,21 +490,28 @@ function MissionTree({
   const lanes: Workstream[] = detail.workstreams;
   const firstLaneId = lanes[0]?.workstreamId ?? null;
   const selectedLaneId = storedLaneId ?? firstLaneId;
-  const laneSessions: Session[] = detail.sessions.filter(
+  /** Approaches whose conversations are folded away (D-134, amended for
+   *  approaches too): this window's own choice, for this session. Nothing
+   *  folds because the selection moved — swapping approaches leaves every
+   *  other approach's conversations exactly as they were. */
+  const [foldedLanes, setFoldedLanes] = useState<Set<string>>(new Set());
+  const selectedLaneSessions: Session[] = detail.sessions.filter(
     (session) => session.workstreamId === selectedLaneId
   );
   // No conversation selected no longer means "reading the first" (D-089): it
   // means the approach's own page, so no session row washes and the approach
   // row does instead.
   const storedSelection =
-    storedSessionId !== null && laneSessions.some((session) => session.sessionId === storedSessionId)
+    storedSessionId !== null &&
+    selectedLaneSessions.some((session) => session.sessionId === storedSessionId)
       ? storedSessionId
       : null;
   // The canvas lands straight in a lane's only conversation (D-089), so the
   // wash follows it there; with several, null means the approach's own page.
   const selectedSessionId =
-    storedSelection ?? (laneSessions.length === 1 ? (laneSessions[0]?.sessionId ?? null) : null);
-  const showSessions = laneSessions.length > 0 || sessionDraft;
+    storedSelection ??
+    (selectedLaneSessions.length === 1 ? (selectedLaneSessions[0]?.sessionId ?? null) : null);
+  const showSessions = selectedLaneSessions.length > 0 || sessionDraft;
 
   // One wash in the rail: the deepest thing the canvas is showing. The tree
   // always renders for the active mission (D-126): Mission → Approach → Chat
@@ -513,44 +520,6 @@ function MissionTree({
   const washApproach =
     !decisionOpen && !sessionDraft && (!showSessions || selectedSessionId === null);
 
-  // The selected approach's conversations — rendered directly beneath its own
-  // row, never after the last approach, or the first lane's sessions read as
-  // the last lane's children (found by eye in live use, 2026-08-08).
-  const sessionRows = showSessions
-    ? laneSessions.map((session) => {
-        const selected = session.sessionId === selectedSessionId && !sessionDraft;
-        // Every chat's own word on its row (D-094): needs you in the warn
-        // tone, working and queued quietly, idle as nothing at all. The
-        // selected row says nothing — its state is the room's state line.
-        const activity = selected ? null : sessionActivity(detail, session.sessionId);
-        const needs = activity?.state === "needs_you";
-        return (
-          <div
-            key={session.sessionId}
-            className={`side-row side-session${selected && washSession ? " selected" : ""}`}
-            data-testid="rail-session-row"
-            data-session={session.sessionId}
-          >
-            <button
-              className="side-open-mission"
-              onClick={() => onSelectSession(session.sessionId)}
-              aria-current={selected}
-              title={session.title ?? "New session"}
-            >
-              <span className={session.title === null ? "side-name side-untitled" : "side-name"}>
-                {truncateLabel(session.title ?? "New session", 24)}
-              </span>
-              {activity?.label && (
-                <span className={needs ? "tone-warn side-needs" : "side-needs side-state"}>
-                  {" "}
-                  · {activity.label}
-                </span>
-              )}
-            </button>
-          </div>
-        );
-      })
-    : null;
   /* The conversation being asked for: nothing exists yet, and leaving creates
      nothing — the row only mirrors the canvas (D-077, D-083). */
   const draftRow = sessionDraft ? (
@@ -574,22 +543,50 @@ function MissionTree({
           );
           const more = laneIndex < lanes.length - 1;
           const beforeOpen = laneIndex < selectedIndex;
+          // Every approach shows its own conversations (D-134, amended):
+          // selection moves the room, never somebody's disclosure.
+          const laneSessions = detail.sessions.filter(
+            (session) => session.workstreamId === lane.workstreamId
+          );
+          const folded = foldedLanes.has(lane.workstreamId);
+          const showChildren = !folded && (laneSessions.length > 0 || (selected && sessionDraft));
           const needs =
             !selected &&
-            detail.sessions
-              .filter((session) => session.workstreamId === lane.workstreamId)
-              .some((session) => sessionNeedsYou(detail, session.sessionId));
+            laneSessions.some((session) => sessionNeedsYou(detail, session.sessionId));
+          // The selected approach's row has no selection left to make, so its
+          // click folds and unfolds its conversations; any other approach's
+          // click selects it, leaving every fold as it was (D-134, amended).
+          const activate = () => {
+            if (selected) {
+              setFoldedLanes((previous) => {
+                const next = new Set(previous);
+                if (next.has(lane.workstreamId)) next.delete(lane.workstreamId);
+                else next.add(lane.workstreamId);
+                return next;
+              });
+            } else {
+              onSelectApproach(lane.workstreamId === firstLaneId ? null : lane.workstreamId);
+            }
+          };
           return (
             <Fragment key={lane.workstreamId}>
               <div
                 className={`side-row side-approach${selected ? " side-approach-open" : ""}${more ? " side-approach-more" : ""}${beforeOpen ? " side-approach-before-open" : ""}${selected && washApproach ? " selected" : ""}`}
                 data-testid="rail-approach-row"
                 data-workstream={lane.workstreamId}
+                onClick={(event) => {
+                  // The whole chip is the touch target (D-134, amended): a
+                  // short lane name leaves most of the row outside the name
+                  // button, and a tap there must not be dead.
+                  if ((event.target as HTMLElement).closest("button")) return;
+                  activate();
+                }}
               >
                 <button
                   className="side-open-mission"
-                  onClick={() => onSelectApproach(lane.workstreamId === firstLaneId ? null : lane.workstreamId)}
+                  onClick={activate}
                   aria-current={selected}
+                  aria-expanded={selected ? !folded : undefined}
                   title={
                     lane.approach
                       ? `${lane.name} — isolated workspace`
@@ -637,10 +634,58 @@ function MissionTree({
                   mission-level spine has a single element to pass through
                   (D-128). Rendered only with something in it: an empty block
                   would still occupy a spine slot. */}
-              {selected && (showSessions || sessionDraft) && (
+              {showChildren && (
                 <div className={more ? "side-children side-children-more" : "side-children"}>
-                  {sessionRows}
-                  {draftRow}
+                  {laneSessions.map((session) => {
+                    const washed =
+                      selected && session.sessionId === selectedSessionId && !sessionDraft;
+                    // Every chat's own word on its row (D-094): needs you in
+                    // the warn tone, working and queued quietly, idle as
+                    // nothing at all. The washed row says nothing — its state
+                    // is the room's state line.
+                    const activity = washed ? null : sessionActivity(detail, session.sessionId);
+                    const rowNeeds = activity?.state === "needs_you";
+                    return (
+                      <div
+                        key={session.sessionId}
+                        className={`side-row side-session${washed && washSession ? " selected" : ""}`}
+                        data-testid="rail-session-row"
+                        data-session={session.sessionId}
+                      >
+                        <button
+                          className="side-open-mission"
+                          onClick={() => {
+                            // A row opens its conversation; from another
+                            // approach it moves the room there first —
+                            // D-088's guarantee, the rail's version.
+                            if (!selected) {
+                              onSelectApproach(
+                                lane.workstreamId === firstLaneId ? null : lane.workstreamId
+                              );
+                            }
+                            onSelectSession(session.sessionId);
+                          }}
+                          aria-current={washed}
+                          title={session.title ?? "New session"}
+                        >
+                          <span
+                            className={
+                              session.title === null ? "side-name side-untitled" : "side-name"
+                            }
+                          >
+                            {truncateLabel(session.title ?? "New session", 24)}
+                          </span>
+                          {activity?.label && (
+                            <span className={rowNeeds ? "tone-warn side-needs" : "side-needs side-state"}>
+                              {" "}
+                              · {activity.label}
+                            </span>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {selected && draftRow}
                 </div>
               )}
             </Fragment>

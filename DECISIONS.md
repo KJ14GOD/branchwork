@@ -1841,3 +1841,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Amended same day.** The twisty is gone — one control too many: the owner's ask is touch-the-row. The active mission's row toggles its tree on click anywhere along its length (the whole chip is the target, because a short goal leaves most of the row outside the name button and a tap there must not be dead); a non-active mission's row still opens it — the click's navigation meaning is vacant only on the row whose room is already the canvas, which is what D-084's rows-are-navigation rule actually protects. Every spec's "make sure the mission is open" click gained an active-aware guard, since a blind click on an auto-opened mission now folds; the full suite reran green after the change. The `mission-twisty` testid lived one commit.
 
 **Revisit when.** The fold wants remembering across relaunches, or a second surface (Home cards, Compare) needs the same gesture.
+
+## D-135 — Every approach shows its conversations: selection is not disclosure
+
+**Context.** Owner-directed, on sight. The tree rendered conversations only under the *selected* approach, so choosing Alternative made Current work's chats vanish — "when I swap to the other one don't close what was open, that doesn't make sense." Selection and disclosure had been fused: moving the room was silently rewriting what the rail showed.
+
+**Decision.** Every approach renders its own conversations beneath its row, always. Selection changes the wash and the canvas — nothing else. The selected approach's row toggles its own conversations on click, the same no-twisty gesture D-134 gave the mission row (a non-selected approach's click still selects it, leaving every fold as it was); the whole chip is the touch target, as everywhere. A session clicked under another approach moves the room to that approach and opens that conversation — D-088's dot-equals-bytes guarantee, the rail's version. Folds are per-approach, this window's own, for this session.
+
+**Alternatives.** Remembering which approach was disclosed and restoring on swap-back (rejected: state that pretends to be the owner's choice but is actually the selection's history). Auto-folding background approaches past some count (rejected: the count that justifies it does not exist yet — revisit if trees grow tall).
+
+**Consequences.** Background approaches' session rows carry their D-094 state words exactly as before; the wash stays singular on the selected path. No testid changes; the sessions and decision specs rerun green focused, the full suite deliberately not run for this round at the owner's direction. DESIGN.md's rail paragraph says every approach shows its sessions.
+
+**Revisit when.** Tall trees (many approaches × many chats) make always-visible children noisy — a default fold policy would need its own decision.
