@@ -4023,11 +4023,11 @@ body {
 .side-tree > .side-approach-more::after {
   content: "";
   position: absolute;
-  /* Full height, not the bottom half: the through-line is one unbroken
-     stroke and the elbows branch off it — half-segments met the elbow's
-     curve at mid-row and read as gaps (D-133 smoothing). */
+  /* The straight stroke shows only until the curve takes over — the arc
+     alone carries the bend — and .side-spine-below resumes the line
+     behind the curve's sweep (D-133 smoothing). */
   top: 0;
-  bottom: 0;
+  height: calc(50% - var(--r-control));
   width: 0;
   left: calc(-1 * var(--s-3));
   border-left: 1.5px solid var(--edge-strong);
@@ -4051,18 +4051,14 @@ body {
   border-color: var(--edge-selected);
 }
 
-/* An open middle approach's own vertical is bright down to its branch
-   and quiet below it: the ::after halves to the branch point, and the
-   .side-spine-below element carries the quiet remainder. */
+/* The open row's top run is bright; the resumption below stays quiet. */
 .side-tree > .side-approach-open.side-approach-more::after {
-  bottom: auto;
-  height: 50%;
   border-left-color: var(--edge-selected);
 }
 
 .side-spine-below {
   position: absolute;
-  top: 50%;
+  top: calc(50% - var(--r-control));
   bottom: 0;
   width: 0;
   left: calc(-1 * var(--s-3));
