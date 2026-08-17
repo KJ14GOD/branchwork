@@ -4020,7 +4020,10 @@ body {
 .side-tree > .side-approach-more::after {
   content: "";
   position: absolute;
-  top: 50%;
+  /* Full height, not the bottom half: the through-line is one unbroken
+     stroke and the elbows branch off it — half-segments met the elbow's
+     curve at mid-row and read as gaps (D-133 smoothing). */
+  top: 0;
   bottom: 0;
   width: 0;
   left: calc(-1 * var(--s-3));
