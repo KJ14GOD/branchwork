@@ -130,7 +130,7 @@ export function SetupSurface({
             {THEME_CHOICES.map((option) => (
               <button
                 key={option.value}
-                className="btn btn-secondary"
+                className={theme === option.value ? "segment-tab active" : "segment-tab"}
                 aria-pressed={theme === option.value}
                 onClick={() => pickTheme(option.value)}
               >

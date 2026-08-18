@@ -695,17 +695,19 @@ function InviteSection({ detail }: { detail: MissionDetailResponse }) {
       <div className="invite-row">
         <label className="invite-role">
           <span className="kv-label">Role</span>
-          <select
-            className="invite-select"
-            value={role}
-            onChange={(event) => setRole(event.target.value as MissionRole)}
-            data-testid="invite-role"
-          >
-            <option value="contributor">Contributor</option>
-            <option value="operator">Operator</option>
-            <option value="viewer">Viewer</option>
-            <option value="mission_admin">Mission Admin</option>
-          </select>
+          <span className="select-wrap">
+            <select
+              className="select"
+              value={role}
+              onChange={(event) => setRole(event.target.value as MissionRole)}
+              data-testid="invite-role"
+            >
+              <option value="contributor">Contributor</option>
+              <option value="operator">Operator</option>
+              <option value="viewer">Viewer</option>
+              <option value="mission_admin">Mission Admin</option>
+            </select>
+          </span>
         </label>
         <button
           className="btn btn-primary"

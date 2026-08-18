@@ -10,6 +10,7 @@ import type {
 import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../format";
 import { ArtifactThumbRow } from "./artifact-row";
 import { Dialog } from "./dialog";
+import { Markdown } from "./markdown";
 import { PullRequestPanel } from "./pull-request";
 
 /**
@@ -258,7 +259,7 @@ function ApproachColumn({
     approach.checksRun > 0 && approach.checksFailed === 0 && approach.unresolvedChecks === 0;
   return (
     <article
-      className={approach.approach ? "approach-column is-approach" : "approach-column"}
+      className="approach-column"
       data-testid="approach-column"
       data-workstream={approach.workstreamId}
     >
@@ -620,17 +621,19 @@ function DecisionReceipt({
         )}
       </p>
 
+      {/* Rationale and risks are often agent-drafted markdown; they render
+          through the same element-only renderer as speech (D-145). */}
       <h3 className="field-label">Why</h3>
-      <p className="prose" data-testid="receipt-rationale">
-        {decision.rationale}
-      </p>
+      <div className="prose" data-testid="receipt-rationale">
+        <Markdown source={decision.rationale} />
+      </div>
 
       {decision.acceptedRisks && (
         <>
           <h3 className="field-label">Risk accepted</h3>
-          <p className="prose" data-testid="receipt-risks">
-            {decision.acceptedRisks}
-          </p>
+          <div className="prose" data-testid="receipt-risks">
+            <Markdown source={decision.acceptedRisks} />
+          </div>
         </>
       )}
 

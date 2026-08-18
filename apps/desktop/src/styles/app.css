@@ -441,14 +441,11 @@ body {
   margin-top: var(--s-1);
 }
 
+/* One segmented control in the product: the quiet segment-tab (D-146).
+   The bordered-chip variant this container once styled is gone. */
 .segment {
   display: flex;
-  gap: var(--s-2);
-}
-
-.segment .btn-secondary[aria-pressed="true"] {
-  border-color: var(--accent);
-  color: var(--text-1);
+  gap: var(--s-1);
 }
 
 .setup-finish {
@@ -1662,6 +1659,10 @@ body {
   margin-top: var(--s-1);
 }
 
+.worker-inspector-section {
+  margin-top: var(--s-4);
+}
+
 .worker-inspector-label {
   font: var(--type-micro);
   letter-spacing: 0.02em;
@@ -2844,6 +2845,12 @@ body {
   user-select: text;
 }
 
+/* The state beside a secret's name is commentary, not the name. */
+.file-note {
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
 .file-facts {
   flex: 1;
   min-width: 0;
@@ -3135,13 +3142,42 @@ body {
   gap: var(--s-1);
 }
 
-.invite-select {
+/* The one select idiom (D-146). A native select draws OS chrome the theme
+   cannot repaint from outside, so the element is restyled here — and the
+   chevron is a border-drawn wrapper glyph, because a select's own ::after is
+   not rendered and gradients are prohibited (rule 15). Every dropdown in the
+   product wears this pair. */
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.select-wrap::after {
+  content: "";
+  position: absolute;
+  right: var(--s-2);
+  top: 50%;
+  width: var(--s-1);
+  height: var(--s-1);
+  border-right: 1px solid var(--text-3);
+  border-bottom: 1px solid var(--text-3);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+.select {
+  appearance: none;
   font: var(--type-row);
   color: var(--text-1);
   background: var(--bg);
   border: 1px solid var(--edge);
   border-radius: var(--r-control);
-  padding: var(--s-2) var(--s-2);
+  padding: var(--s-1) var(--s-5) var(--s-1) var(--s-2);
+  cursor: pointer;
+}
+
+.select:hover {
+  border-color: var(--edge-hover);
 }
 
 .invite-issued {
@@ -3452,6 +3488,14 @@ body {
 
 .dock-run-state {
   color: var(--text-3);
+}
+
+/* A run tab is a tab: the name yields, the state stays readable. */
+.dock-run-name {
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dock-summary {
@@ -4899,6 +4943,10 @@ body.resizing {
   color: var(--text-2);
 }
 
+.contested {
+  margin-top: var(--s-6);
+}
+
 .contested-list {
   list-style: none;
   display: flex;
@@ -5113,6 +5161,15 @@ body.resizing {
   display: flex;
   flex-direction: column;
   gap: var(--s-1);
+}
+
+/* The decide dialog's evidence and citation sections keep the form's rhythm. */
+.decision-evidence,
+.decision-artifacts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-top: var(--s-4);
 }
 
 .field-label {
@@ -5335,6 +5392,13 @@ body.resizing {
 
 .board-card-when {
   font-variant-numeric: tabular-nums;
+}
+
+.board-card-repo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .board-card-line {
@@ -5590,7 +5654,40 @@ body.resizing {
 .decision-artifact-option {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
+  cursor: pointer;
+}
+
+/* The citing checkbox wears the markdown task glyph's look (D-145), because
+   one product draws one checkbox — but this one is live, so checked fills
+   with the accent and the glyph is the ::after the native control lacks
+   space for. */
+.decision-artifact-option input[type="checkbox"] {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--s-3);
+  height: var(--s-3);
+  margin: 0;
+  border: 1px solid var(--edge-hover);
+  border-radius: calc(var(--r-control) / 2);
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.decision-artifact-option input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.decision-artifact-option input[type="checkbox"]:checked::after {
+  content: "";
+  width: var(--s-1);
+  height: var(--s-2);
+  border-right: 2px solid var(--bg);
+  border-bottom: 2px solid var(--bg);
+  transform: translateY(-1px) rotate(45deg);
 }
 
 .artifact-attachment-list {

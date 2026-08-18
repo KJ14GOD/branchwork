@@ -1999,3 +1999,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** `WorkspaceFile.image` in the contracts; `IMAGE_TYPES`/`MAX_IMAGE_BYTES` in `workspace-tree.ts`; the pane's `file-image` rendering; three reader tests (data URI and mime, uppercase extension, the image cap refusing as too-large rather than mojibake). Evidence 176.
 
 **Revisit when.** A pane wants zoom or pixel dimensions; or PDFs ask for the same courtesy.
+
+## D-146 — One control, one idiom: the consistency sweep
+
+**Context.** Owner-directed, from the repo-wide UI scan that followed D-145. The scan swept every `className` in the renderer against the stylesheet and found the same disease the Preview/Edit buttons had, several times over: the artifact view's attach dropdown wore a class no stylesheet defines and drew the native OS select; the decision room cited evidence with native checkboxes; setup's theme control was the last user of a bordered-chip segmented control the rest of the product had abandoned for `segment-tab`; worker reports and the receipt's rationale and risks still rendered Claude-written markdown raw; and nine classes had no rule at all, so their elements dressed on inherited luck.
+
+**Decision.** One control, one idiom. **Selects**: a single `.select` class (with a `.select-wrap` border-drawn chevron, because a select renders no ::after and gradients are prohibited) replaces both the native-drawn attach dropdown and the bespoke `.invite-select`. **Checkboxes**: the decision room's citation checkbox takes the markdown task glyph's geometry (D-145), checked filling with the accent — one product draws one checkbox. **Segments**: setup's theme control converges on `segment-tab`; the `.segment .btn-secondary` chip rule is deleted. **Markdown**: worker reports and receipt rationale/risks render through the D-145 renderer. **The unstyled hooks** get their rules where intent was legible — `file-note` as quiet meta, `board-card-repo` and `dock-run-name` truncating, the decide dialog's evidence sections and `contested` and `worker-inspector-section` keeping their surfaces' rhythm — and the `is-approach` modifier, whose intent was not legible anywhere, is removed rather than invented.
+
+**Alternatives.** Styling `is-approach` with a guessed distinction (rejected: improvising product meaning is the thing the canon forbids; if approaches need a visual mark, that is a decision to make on sight, not a hole to fill). Leaving the native controls (rejected on sight — the owner named the antique look the problem).
+
+**Consequences.** CSS gains `.select`/`.select-wrap`, the checkbox rules, and six hook rules; loses `.invite-select` and the segment-chip rule. Five components and one screen touched. Before/after pairs `177`–`188` in the evidence library, rendered through the real component and stylesheet.
+
+**Revisit when.** A third select or checkbox variant appears (the idiom should absorb it), or approaches want a real visual identity in the compare grid.

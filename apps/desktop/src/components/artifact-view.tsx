@@ -192,23 +192,25 @@ export function ArtifactView({
           <div className="artifact-provenance-row">
             <span className="artifact-provenance-label">Attach to</span>
             <span className="artifact-provenance-value artifact-attach-controls">
-              <select
-                className="select"
-                value={target}
-                onChange={(event) => setTarget(event.target.value)}
-                aria-label="What to attach this artifact beside"
-                data-testid="artifact-attach-target"
-              >
-                <option value="">Choose…</option>
-                {targets.map((candidate) => (
-                  <option
-                    key={`${candidate.kind}:${candidate.id}`}
-                    value={`${candidate.kind}:${candidate.id}`}
-                  >
-                    {candidate.label}
-                  </option>
-                ))}
-              </select>
+              <span className="select-wrap">
+                <select
+                  className="select"
+                  value={target}
+                  onChange={(event) => setTarget(event.target.value)}
+                  aria-label="What to attach this artifact beside"
+                  data-testid="artifact-attach-target"
+                >
+                  <option value="">Choose…</option>
+                  {targets.map((candidate) => (
+                    <option
+                      key={`${candidate.kind}:${candidate.id}`}
+                      value={`${candidate.kind}:${candidate.id}`}
+                    >
+                      {candidate.label}
+                    </option>
+                  ))}
+                </select>
+              </span>
               <GatedAction
                 capability="artifact.attach"
                 capabilities={detail.capabilities}

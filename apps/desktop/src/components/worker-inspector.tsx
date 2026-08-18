@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { clockTime } from "../format";
+import { Markdown } from "./markdown";
 import { workerFiles, workerState, type WorkerView } from "./direction-trace";
 
 /**
@@ -92,9 +93,10 @@ export function WorkerInspector({
       {worker.ended && !worker.ended.failed && worker.ended.report && (
         <section className="worker-inspector-section">
           <h3 className="worker-inspector-label">Report</h3>
-          <p className="worker-report prose" data-testid="worker-report">
-            {worker.ended.report}
-          </p>
+          <div className="worker-report prose" data-testid="worker-report">
+            {/* A worker's report is Claude-written markdown (D-145). */}
+            <Markdown source={worker.ended.report} />
+          </div>
         </section>
       )}
     </div>
