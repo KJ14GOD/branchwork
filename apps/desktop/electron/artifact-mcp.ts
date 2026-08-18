@@ -4,8 +4,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 /**
  * The `novus` capture endpoint (D-123): a loopback HTTP MCP server inside the
  * Electron main process, composed into every turn's strict MCP config beside
- * the person-enabled project servers. One tool, `capture_screenshot`, and a
- * two-key lock on it:
+ * the person-enabled project servers. Three first-party tools —
+ * `capture_screenshot` (D-123), `push_branch` (D-140), `declare_run_command`
+ * (D-156) — with a two-key lock on each:
  *
  *  1. the **token** — per turn, random, carried in the config's own
  *     Authorization header — names which live turn is asking, and nothing
@@ -26,6 +27,8 @@ export const CAPTURE_TOOL_NAME = "capture_screenshot";
 export const CAPTURE_TOOL_FULL_NAME = `mcp__novus__${CAPTURE_TOOL_NAME}`;
 export const PUSH_TOOL_NAME = "push_branch";
 export const PUSH_TOOL_FULL_NAME = `mcp__novus__${PUSH_TOOL_NAME}`;
+export const DECLARE_RUN_TOOL_NAME = "declare_run_command";
+export const DECLARE_RUN_TOOL_FULL_NAME = `mcp__novus__${DECLARE_RUN_TOOL_NAME}`;
 
 /** How long an allow stands before the tool call must have arrived. The CLI
  *  invokes the tool immediately after the permission answer; minutes covers a
@@ -40,6 +43,11 @@ interface RegisteredTurn {
   /** Pushes the lane's latest checkpoint through the same hardened path a
    *  person's publish uses (D-140). Same grant discipline as capture. */
   push: () => Promise<{ text: string; isError: boolean }>;
+  /** Declares a run command by writing `.novus/settings.toml` through the
+   *  same serializer a person's confirm uses (D-156) — valid by construction,
+   *  because the schema is Novus's own and an agent cannot be expected to
+   *  guess an undocumented format. Same grant discipline as capture. */
+  declareRun: (input: unknown) => Promise<{ text: string; isError: boolean }>;
 }
 
 interface ToolGrant {
@@ -122,6 +130,13 @@ const PUSH_DESCRIPTION =
   "turn checkpoints when the turn completes, so ask in a follow-up turn to push it. This shares " +
   "the branch; opening a pull request stays a person's own act in Novus.";
 
+const DECLARE_RUN_DESCRIPTION =
+  "Declare a run command for this project in .novus/settings.toml — Novus writes its own " +
+  "configuration format, so never hand-edit that file. Use this after building something " +
+  "runnable (a server, an app) so the person's Run control can start it. The command must be " +
+  "long-running and serve on 127.0.0.1 for the preview to attach. Every call is approved by a " +
+  "person under the lane's permission profile; declaring never runs anything — a person runs it.";
+
 async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
   if (request.method !== "POST") {
     response.writeHead(405, { allow: "POST" }).end();
@@ -180,6 +195,33 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
             name: PUSH_TOOL_NAME,
             description: PUSH_DESCRIPTION,
             inputSchema: { type: "object", properties: {}, additionalProperties: false }
+          },
+          {
+            name: DECLARE_RUN_TOOL_NAME,
+            description: DECLARE_RUN_DESCRIPTION,
+            inputSchema: {
+              type: "object",
+              properties: {
+                name: {
+                  type: "string",
+                  description: "Short name for the Run menu, e.g. \"serve\" or \"web\"."
+                },
+                command: {
+                  type: "string",
+                  description: "The shell command, e.g. \"python3 -m http.server 8123 --bind 127.0.0.1\"."
+                },
+                port: {
+                  type: "integer",
+                  description: "The port the command serves on, if it serves one — lets the preview attach."
+                },
+                cwd: {
+                  type: "string",
+                  description: "Directory to run in, relative to the repository root. Omit for the root."
+                }
+              },
+              required: ["name", "command"],
+              additionalProperties: false
+            }
           }
         ]
       })
@@ -187,13 +229,19 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     return;
   }
   if (message.method === "tools/call") {
-    const params = (message.params ?? {}) as { name?: string };
+    const params = (message.params ?? {}) as { name?: string; arguments?: unknown };
     const tool =
       params.name === CAPTURE_TOOL_NAME
         ? { name: CAPTURE_TOOL_NAME, run: turn.capture, verb: "Capture" }
         : params.name === PUSH_TOOL_NAME
           ? { name: PUSH_TOOL_NAME, run: turn.push, verb: "Push" }
-          : null;
+          : params.name === DECLARE_RUN_TOOL_NAME
+            ? {
+                name: DECLARE_RUN_TOOL_NAME,
+                run: () => turn.declareRun(params.arguments ?? {}),
+                verb: "Declare"
+              }
+            : null;
     if (!tool) {
       json(response, 200, rpcError(id, -32602, `No such tool: ${params.name ?? "(none)"}`));
       return;
@@ -259,11 +307,12 @@ async function ensureServer(): Promise<number> {
 export async function registerCaptureTurn(
   executionId: string,
   capture: RegisteredTurn["capture"],
-  push: RegisteredTurn["push"]
+  push: RegisteredTurn["push"],
+  declareRun: RegisteredTurn["declareRun"]
 ): Promise<{ url: string; token: string; release: () => void }> {
   const listeningPort = await ensureServer();
   const token = randomBytes(24).toString("base64url");
-  turns.set(token, { executionId, capture, push });
+  turns.set(token, { executionId, capture, push, declareRun });
   return {
     url: `http://127.0.0.1:${listeningPort}/mcp`,
     token,
@@ -271,6 +320,7 @@ export async function registerCaptureTurn(
       turns.delete(token);
       grants.delete(grantKey(executionId, CAPTURE_TOOL_NAME));
       grants.delete(grantKey(executionId, PUSH_TOOL_NAME));
+      grants.delete(grantKey(executionId, DECLARE_RUN_TOOL_NAME));
     }
   };
 }

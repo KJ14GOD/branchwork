@@ -189,6 +189,21 @@ describe("configuration that cannot be trusted", () => {
     writeSettings(SHARED_SETTINGS_PATH, `not-a-key\n`);
     expect(() => loadWorkspaceSettings(worktree)).toThrow(WorkspaceConfigError);
   });
+
+  it("teaches the expected shape when run is written as a plain table (D-156)", () => {
+    // The exact mistake an agent made in the wild: [run] instead of [[run]].
+    writeSettings(SHARED_SETTINGS_PATH, `[run]\ncommand = "python3 -m http.server 8123"\n`);
+    let thrown: unknown;
+    try {
+      loadWorkspaceSettings(worktree);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(WorkspaceConfigError);
+    const error = thrown as WorkspaceConfigError;
+    expect(error.problem).toContain("[[run]]");
+    expect(error.problem).toContain('name = "…"');
+  });
 });
 
 describe("writing configuration", () => {

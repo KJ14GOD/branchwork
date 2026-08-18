@@ -21,7 +21,9 @@ import {
   type RunnerCommand,
   type RunnerEvent,
   type SequencedRunnerEvent,
-  attachmentForm
+  attachmentForm,
+  RunCommandSchema,
+  WorkspaceSettingsSchema
 } from "@novus/contracts";
 import { z } from "zod";
 import { ApiError, type ControlPlaneClient } from "./api-client";
@@ -29,7 +31,23 @@ import {
   captureScreenshot as capturePreviewScreenshot,
   type ArtifactUploader
 } from "./artifact-capture";
-import { CAPTURE_TOOL_FULL_NAME, CAPTURE_TOOL_NAME, PUSH_TOOL_FULL_NAME, PUSH_TOOL_NAME, mintToolGrant, registerCaptureTurn } from "./artifact-mcp";
+import {
+  CAPTURE_TOOL_FULL_NAME,
+  CAPTURE_TOOL_NAME,
+  DECLARE_RUN_TOOL_FULL_NAME,
+  DECLARE_RUN_TOOL_NAME,
+  PUSH_TOOL_FULL_NAME,
+  PUSH_TOOL_NAME,
+  mintToolGrant,
+  registerCaptureTurn
+} from "./artifact-mcp";
+import {
+  loadWorkspaceSettings,
+  writeWorkspaceSettings,
+  serializeWorkspaceSettings,
+  SHARED_SETTINGS_PATH,
+  WorkspaceConfigError
+} from "./workspace-config";
 import { startRecording } from "./artifact-recording";
 import { SCREENSHOT_CLAIM } from "./artifact-policy";
 import { ATTACHMENT_DIR, redact } from "./secret-policy";
@@ -1905,6 +1923,63 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           } catch (error) {
             return { text: `Push refused: ${messageOf(error)}`, isError: true };
           }
+        }, async (input: unknown) => {
+          // The declare tool (D-156): the agent asks for a run command and
+          // Novus writes its own configuration format — the schema is
+          // Novus's, so the file is valid by construction and no one, human
+          // or agent, has to guess an undocumented layout. Declaring never
+          // runs anything: the person's Run control does, later, by hand.
+          const worktree = join(worktreeRoot, args.workstreamId);
+          const parsedInput = RunCommandSchema.safeParse(input);
+          if (!parsedInput.success) {
+            const issue = parsedInput.error.issues[0];
+            const where = issue && issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+            return {
+              text: `Declare refused: ${where}${issue?.message ?? "the arguments are not a valid run command"}.`,
+              isError: true
+            };
+          }
+          const entry = parsedInput.data;
+          let shared;
+          try {
+            shared = loadWorkspaceSettings(worktree).shared ?? WorkspaceSettingsSchema.parse({});
+          } catch (error) {
+            // The existing file is unreadable. Never silently discard what a
+            // person may have written — name the problem and the shape.
+            const problem = error instanceof WorkspaceConfigError ? error.message : messageOf(error);
+            return {
+              text:
+                `Declare refused: the existing configuration could not be read (${problem}). ` +
+                `Fix or remove it first. Novus expects run as an array of tables: ` +
+                `[[run]] with name = "…" and command = "…".`,
+              isError: true
+            };
+          }
+          const existing = shared.run.findIndex((candidate) => candidate.name === entry.name);
+          const run = [...shared.run];
+          if (existing >= 0) run[existing] = entry;
+          else run.push(entry);
+          const next = WorkspaceSettingsSchema.safeParse({ ...shared, run });
+          if (!next.success) {
+            const issue = next.error.issues[0];
+            return {
+              text: `Declare refused: ${issue?.message ?? "the resulting configuration is not valid"}.`,
+              isError: true
+            };
+          }
+          try {
+            await writeWorkspaceSettings(gitExec, worktree, "shared", next.data);
+          } catch (error) {
+            return { text: `Declare refused: ${messageOf(error)}`, isError: true };
+          }
+          return {
+            text:
+              `Declared run command "${entry.name}" (${existing >= 0 ? "replacing the existing entry" : "new"}) ` +
+              `in ${SHARED_SETTINGS_PATH}. The file now reads:\n\n` +
+              serializeWorkspaceSettings("shared", next.data) +
+              "\nDeclaring runs nothing — a person starts it from the Run control.",
+            isError: false
+          };
         });
         releaseCapture = endpoint.release;
         novusCapture = { url: endpoint.url, token: endpoint.token };
@@ -1954,6 +2029,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       onToolAllowed: (toolName) => {
         if (toolName === CAPTURE_TOOL_FULL_NAME) mintToolGrant(args.executionId, CAPTURE_TOOL_NAME);
         if (toolName === PUSH_TOOL_FULL_NAME) mintToolGrant(args.executionId, PUSH_TOOL_NAME);
+        if (toolName === DECLARE_RUN_TOOL_FULL_NAME) mintToolGrant(args.executionId, DECLARE_RUN_TOOL_NAME);
       },
       siblingScopes: () =>
         [...active.values()]

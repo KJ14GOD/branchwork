@@ -118,7 +118,19 @@ function readScoped(worktree: string, scope: SettingsScope): ScopedSettings | nu
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const where = issue && issue.path.length > 0 ? `${issue.path.join(".")} ` : "";
-    throw new WorkspaceConfigError(relative, `${where}${issue?.message ?? "is not valid workspace configuration"}`);
+    // Name the expected shape for the keys people actually get wrong: an
+    // error that says only "expected array" teaches nothing at the moment
+    // somebody is looking at the file (D-156).
+    const shape =
+      issue?.path[0] === "run"
+        ? ' — run is a list: each command is its own [[run]] table with name = "…" and command = "…"'
+        : issue?.path[0] === "verify"
+          ? ' — verify is a list: each check is its own [[verify]] table with name = "…" and command = "…"'
+          : "";
+    throw new WorkspaceConfigError(
+      relative,
+      `${where}${issue?.message ?? "is not valid workspace configuration"}${shape}`
+    );
   }
 
   const written = document as Record<string, unknown>;
