@@ -875,6 +875,19 @@ export function ProjectRoom({
     if (!result.ok) setDecisionError(result.message);
   };
 
+  // Following a moved base (D-144): a person's explicit act, on the words
+  // that reported the drift. The machine merges every lane — all or none —
+  // and the next poll clears the warning when the pin has moved.
+  const [syncingBase, setSyncingBase] = useState(false);
+  const syncBase = async () => {
+    if (!detail) return;
+    setSyncingBase(true);
+    const result = await novus().missions.syncBase(detail.mission.missionId);
+    setSyncingBase(false);
+    if (!result.ok) setActionError(result.message ?? "The sync did not go through.");
+    else setActionError(null);
+  };
+
   const runAction = async (call: Promise<{ ok: boolean; message?: string }>) => {
     const result = await call;
     if (!result.ok) setActionError(result.message ?? "That did not go through.");
@@ -1657,6 +1670,18 @@ export function ProjectRoom({
                     <span className="tone-warn workspace-drift" data-testid="base-drift">
                       · {baseDriftWords(baseStatus)}
                     </span>
+                  )}
+                  {/* Syncing is offered only for a base that moved forward: a
+                      rewritten or vanished base is a rethink, not a merge. */}
+                  {baseStatus?.state === "moved" && (
+                    <button
+                      className="btn btn-text workspace-row-action"
+                      onClick={() => void syncBase()}
+                      disabled={syncingBase}
+                      data-testid="base-sync"
+                    >
+                      {syncingBase ? "Syncing…" : "Sync"}
+                    </button>
                   )}
                   <button
                     className="btn btn-text workspace-row-action"

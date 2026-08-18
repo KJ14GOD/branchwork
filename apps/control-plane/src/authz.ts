@@ -44,6 +44,10 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     // review.approve, and never a merge: no capability grants one, because no
     // verb for one exists (D-099).
     "pr.manage",
+    // Following a moved base (D-144): a decision about what the mission is
+    // based on, across every lane at once — the `approach.create` reasoning —
+    // so role-held and never lease-granted.
+    "base.sync",
     // Setting a lane's permission profile (D-115): a policy act, not an
     // operating one — it decides what gets asked, where the baton decides who
     // answers — so it is role-held and never lease-granted, like
@@ -79,6 +83,7 @@ const ROLE_CAPABILITIES: Record<MissionRole, Capability[]> = {
     "approach.create",
     "review.approve",
     "pr.manage",
+    "base.sync",
     "policy.set",
     "skills.set",
     "workspace.command",

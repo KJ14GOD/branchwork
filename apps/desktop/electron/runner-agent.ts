@@ -36,12 +36,16 @@ import { startTurn, type RunningTurn, type TurnResult } from "./execution";
 import { EventOutbox } from "./outbox";
 import {
   createWorkspaceRuntime,
+  ensureWorkspaceWorktree,
   secretValuesFor,
   type PinnedCommand,
   type WorkspaceCommandContext
 } from "./workspace";
+import { gitExec } from "./workspace-git";
+import { mergeBaseIntoLanes, resetLanes, type SyncLane } from "./workspace-sync";
 import {
   clonedRepositoryRoot,
+  cloneGitExec,
   ensureRepositoryClone,
   hasMissionBranch,
   type CloneCredential
@@ -75,6 +79,16 @@ export interface RunnerAgent {
    * refusal in words.
    */
   captureScreenshot(missionId: string, workstreamId: string): Promise<Artifact>;
+  /**
+   * Follows a moved base (D-144): merges the base branch's new tip into every
+   * lane's worktree — a merge, never a rebase, all lanes or none — then has
+   * the control plane move the pin. Refuses in words while any lane's turn
+   * runs, on a dirty worktree, and on conflict with the paths named; a
+   * refusal after the merges walks every lane back to where it stood.
+   */
+  syncMovedBase(
+    missionId: string
+  ): Promise<{ baseSha: string; lanes: { workstreamId: string; headSha: string }[] }>;
   /** Starts recording the named lane's live preview (D-123). Stop, cancel,
    *  and status are the recorder module's own, machine-wide verbs. */
   startRecording(missionId: string, workstreamId: string): Promise<void>;
@@ -143,6 +157,10 @@ function electronHost(): RunnerHost {
     recordRepositoryPath
   };
 }
+
+/** Base refs were validated at mission creation; this is the local guard
+ *  against ever embedding anything else in a refspec (D-144). */
+const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 const DISCOVER_EVERY_MS = 15_000;
 const POLL_EVERY_MS = 2_000;
@@ -423,6 +441,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     republish: (missionId) => void republishFor(missionId),
     pollNow: () => void poll(),
     captureScreenshot: capturePersonScreenshot,
+    syncMovedBase,
     startRecording: startPersonRecording,
     shutdown
   };
@@ -485,6 +504,170 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       logs: processLogsFor(workstreamId),
       sanitize: captureSanitizer(workstreamId),
       uploader: personUploader(missionId, workstreamId)
+    });
+  }
+
+  /**
+   * Holds every named lane's work queue at once: each lane's chain enters a
+   * shared gate, the work runs only after all lanes are in, and the gate
+   * releases whatever happens. While held, no turn, command, or configuration
+   * read can touch any of these worktrees — the same serialization one lane's
+   * chain() gives one worktree, across all of them.
+   */
+  function holdLanes<T>(workstreamIds: string[], work: () => Promise<T>): Promise<T> {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const entered = workstreamIds.map(
+      (id) =>
+        new Promise<void>((resolve) =>
+          chain(id, () => {
+            resolve();
+            return gate;
+          })
+        )
+    );
+    return Promise.all(entered)
+      .then(work)
+      .finally(() => release());
+  }
+
+  function refuseSync(message: string): never {
+    throw new ApiError("sync_refused", message, 409);
+  }
+
+  async function syncMovedBase(
+    missionId: string
+  ): Promise<{ baseSha: string; lanes: { workstreamId: string; headSha: string }[] }> {
+    // A failure here is a person's click not going through; whatever went
+    // wrong is said in its own words rather than as a generic shrug.
+    try {
+      return await syncMovedBaseNow(missionId);
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError("sync_failed", `The sync did not go through: ${messageOf(error).slice(0, 300)}`, 500);
+    }
+  }
+
+  async function syncMovedBaseNow(
+    missionId: string
+  ): Promise<{ baseSha: string; lanes: { workstreamId: string; headSha: string }[] }> {
+    const detail = await deps.api.getMission(missionId);
+    const workstream = detail.workstream;
+    if (!workstream) refuseSync("This mission has no workstream yet.");
+    const repository = detail.mission.repository;
+    if (!repository) refuseSync("This mission records no repository to sync from.");
+    const lanes =
+      detail.approaches.length > 0
+        ? detail.approaches.map((lane) => ({
+            workstreamId: lane.workstreamId,
+            missionBranch: lane.missionBranch,
+            name: lane.name
+          }))
+        : [
+            {
+              workstreamId: workstream.workstreamId,
+              missionBranch: workstream.missionBranch,
+              name: workstream.name
+            }
+          ];
+    const laneIds = new Set(lanes.map((lane) => lane.workstreamId));
+    const turnRunning = () => [...active.values()].some((turn) => laneIds.has(turn.workstreamId));
+    if (turnRunning()) {
+      refuseSync("A turn is running in this mission. Syncing waits until every lane is quiet.");
+    }
+    const repositoryPath = host.repositoryPath(repository.providerRepoId);
+    if (!repositoryPath) refuseSync("This repository's checkout lives on another machine.");
+    const baseRef = workstream.baseRef;
+    if (!SAFE_REF.test(baseRef) || baseRef.includes("..")) {
+      refuseSync("The recorded base ref is not a name this machine will hand to git.");
+    }
+
+    // The base branch's tip: a local repository answers from its own git; a
+    // GitHub repository is fetched first, over a credential minted for this
+    // one operation and forgotten.
+    let tip: string;
+    if (repository.provider === "github") {
+      const enrolled = lanes.find((lane) => enrolments.get(lane.workstreamId));
+      const enrolment = enrolled && enrolments.get(enrolled.workstreamId);
+      if (!enrolled || !enrolment) refuseSync("This machine is not enrolled for this mission's lanes.");
+      const credential = await cloneCredential(enrolment, enrolled.workstreamId);
+      const fetched = await cloneGitExec(
+        repositoryPath,
+        ["fetch", "--no-tags", "origin", `+refs/heads/${baseRef}:refs/remotes/origin/${baseRef}`],
+        credential
+      );
+      if (fetched.code !== 0) {
+        refuseSync(`The base branch could not be fetched: ${fetched.stderr.slice(0, 200)}`);
+      }
+      const resolved = await gitExec(repositoryPath, [
+        "rev-parse",
+        "--verify",
+        `refs/remotes/origin/${baseRef}^{commit}`
+      ]);
+      if (resolved.code !== 0) refuseSync("The base branch is gone from the host.");
+      tip = resolved.stdout.trim();
+    } else {
+      const resolved = await gitExec(repositoryPath, [
+        "rev-parse",
+        "--verify",
+        `refs/heads/${baseRef}^{commit}`
+      ]);
+      if (resolved.code !== 0) refuseSync("The base branch is gone from this repository.");
+      tip = resolved.stdout.trim();
+    }
+    if (tip === workstream.baseSha) {
+      refuseSync("The base is already current — there is nothing to sync.");
+    }
+
+    const syncLanes: SyncLane[] = [];
+    for (const lane of lanes) {
+      const worktreePath = await ensureWorkspaceWorktree(
+        gitExec,
+        repositoryPath,
+        userData,
+        lane.workstreamId,
+        lane.missionBranch
+      );
+      syncLanes.push({ workstreamId: lane.workstreamId, worktreePath });
+    }
+
+    return holdLanes([...laneIds], async () => {
+      // Checked again under the hold: a turn dispatched between the first
+      // check and here queued behind this gate rather than running, but one
+      // already mid-flight then would have been missed.
+      if (turnRunning()) {
+        refuseSync("A turn is running in this mission. Syncing waits until every lane is quiet.");
+      }
+      const nameOf = (workstreamId: string) =>
+        lanes.find((lane) => lane.workstreamId === workstreamId)?.name ?? workstreamId;
+      const outcome = await mergeBaseIntoLanes(gitExec, tip, baseRef, syncLanes);
+      if (outcome.kind === "dirty") {
+        refuseSync(
+          `${nameOf(outcome.workstreamId)} has uncommitted changes (${outcome.paths.join(", ")}). ` +
+            "Syncing folds nothing into work mid-flight — let the lane checkpoint first."
+        );
+      }
+      if (outcome.kind === "conflict") {
+        refuseSync(
+          `Merging ${baseRef} into ${nameOf(outcome.workstreamId)} conflicts in ${outcome.paths.join(", ")}. ` +
+            "Nothing moved. Direct the lane's agent to bring the base in and resolve the conflict as its own work."
+        );
+      }
+      if (outcome.kind === "failed") refuseSync(outcome.message);
+      const merged = outcome.lanes.map(({ workstreamId, headSha }) => ({ workstreamId, headSha }));
+      try {
+        await deps.api.syncBase(missionId, {
+          expectedBaseSha: workstream.baseSha,
+          newBaseSha: tip,
+          lanes: merged
+        });
+      } catch (error) {
+        // The record refused; the machine walks back to exactly where it
+        // stood, so the pin and the worktrees never disagree.
+        await resetLanes(gitExec, syncLanes, outcome.lanes);
+        throw error;
+      }
+      return { baseSha: tip, lanes: merged };
     });
   }
 

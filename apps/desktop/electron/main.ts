@@ -344,6 +344,16 @@ function registerIpc(): void {
     return call(() => api.baseRevision(parsed.data.providerRepoId, parsed.data.ref));
   });
 
+  ipcMain.handle("novus:missions:sync-base", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("msn_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    return call(async () => {
+      const agent = runner;
+      if (!agent) throw new ApiError("sync_refused", "This machine's runner is not running.", 409);
+      return agent.syncMovedBase(parsed.data);
+    });
+  });
+
   ipcMain.handle("novus:missions:retry-branch", async (_event, raw: unknown) => {
     const parsed = z.string().startsWith("wst_").safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed workstream id." };

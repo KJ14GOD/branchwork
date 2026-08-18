@@ -43,6 +43,9 @@ import {
   type MissionRole,
   type ModelId,
   type RegisterRunnerResponse,
+  SyncBaseResponseSchema,
+  type SyncBaseRequest,
+  type SyncBaseResponse,
   type Workstream
 } from "@novus/contracts";
 import { z } from "zod";
@@ -459,6 +462,17 @@ export class ControlPlaneClient {
   }
 
   // --- Publishing a decision (D-099) ----------------------------------------
+
+  /** Records a completed base sync (D-144): the merges already happened in
+   *  the worktrees; this moves every lane's pin, or refuses in words. */
+  async syncBase(missionId: string, body: SyncBaseRequest): Promise<SyncBaseResponse> {
+    return this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/base-sync`,
+      SyncBaseResponseSchema,
+      body
+    );
+  }
 
   async pushBranch(missionId: string, workstreamId?: string): Promise<void> {
     await this.request(

@@ -126,6 +126,35 @@ export const BaseStatusSchema = z.object({
 });
 export type BaseStatus = z.infer<typeof BaseStatusSchema>;
 
+/** A person's explicit act of following a moved base (D-144): every lane's
+ *  worktree merges the new base commit — a merge, never a rebase, so every
+ *  recorded checkpoint SHA stays true — and the pin moves to it. All lanes
+ *  move together or none do; the control plane refuses the record while any
+ *  lane holds a live execution, and refuses a pin that is not where the asker
+ *  last saw it, so a stale room cannot move the base. */
+export const SyncBaseRequestSchema = z.object({
+  /** The pin the asker reviewed — the guard against a stale client. */
+  expectedBaseSha: ShaSchema,
+  /** The base branch's tip the lanes just merged. */
+  newBaseSha: ShaSchema,
+  lanes: z
+    .array(
+      z.object({
+        workstreamId: z.string().startsWith("wst_"),
+        /** The lane's branch head after the merge — the attributed merge
+         *  commit, or the unchanged head when the lane already held the base. */
+        headSha: ShaSchema
+      })
+    )
+    .min(1)
+});
+export type SyncBaseRequest = z.infer<typeof SyncBaseRequestSchema>;
+
+export const SyncBaseResponseSchema = z.object({
+  baseSha: ShaSchema
+});
+export type SyncBaseResponse = z.infer<typeof SyncBaseResponseSchema>;
+
 /** A repository Novus has recorded for an organization. `local` repositories
  *  live on a user's machine: the control plane records identity and receives
  *  reported outcomes; it never touches the folder, and paths never leave the
@@ -691,6 +720,13 @@ export const CapabilitySchema = z.enum([
    *  the draft, request reviewers, mark it ready. Never merge — no capability
    *  grants that, because no verb for it exists anywhere (D-099). */
   "pr.manage",
+  /** Follow a moved base (D-144): merge the base branch's new tip into every
+   *  lane and move the pin. A decision about what the mission is based on,
+   *  not an operating verb on any one lane, so it is held by role (Mission
+   *  Admin, Operator) and never granted by the baton — the `approach.create`
+   *  reasoning. Distinct from `workspace.sync`, PRODUCT.md's per-lane act of
+   *  applying a remote mission-branch update. */
+  "base.sync",
   "workspace.command",
   /** Answering a harness approval. Lease-held only — a Mission Admin who is not
    *  the controller cannot answer for them (PRODUCT.md#roles-and-capabilities). */
@@ -3131,6 +3167,13 @@ export interface NovusBridge {
      *  (D-080). Absent means the lane the mission started with. */
     get(missionId: string, workstreamId?: string): Promise<IpcResult<MissionDetailResponse>>;
     retryBranch(workstreamId: string): Promise<IpcResult<Workstream>>;
+    /** Follows a moved base (D-144): this machine merges the base branch's
+     *  tip into every lane's worktree — all lanes or none — and the control
+     *  plane moves the pin. Refused in words while any lane's turn runs, and
+     *  on conflict, with the conflicting lane and paths named. */
+    syncBase(missionId: string): Promise<
+      IpcResult<{ baseSha: string; lanes: { workstreamId: string; headSha: string }[] }>
+    >;
     /** Submits attributed direction. Whether it runs now or queues for the
      *  controller is the server's decision, reflected in the returned state. */
     direct(input: {

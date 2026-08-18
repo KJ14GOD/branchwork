@@ -38,6 +38,7 @@ import { registerExecutionRoutes } from "./executions.ts";
 import { registerPolicyRoutes } from "./policy.ts";
 import { registerSkillsRoutes } from "./skills.ts";
 import { registerPullRequestRoutes, registerWebhookRoutes } from "./pull-requests.ts";
+import { registerBaseSyncRoutes } from "./base-sync.ts";
 import { registerRunnerRoutes } from "./runner.ts";
 import { registerSessionRoutes } from "./sessions.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
@@ -329,6 +330,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
   registerPolicyRoutes(app, deps);
   registerSkillsRoutes(app, deps);
   registerPullRequestRoutes(app, deps);
+  registerBaseSyncRoutes(app, deps);
   registerWebhookRoutes(app, deps);
   registerRunnerRoutes(app, deps);
   registerSessionRoutes(app, deps);

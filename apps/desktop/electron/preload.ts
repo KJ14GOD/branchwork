@@ -45,6 +45,7 @@ const novus: NovusBridge = {
         workstreamId ? { missionId, workstreamId } : missionId
       ),
     retryBranch: (workstreamId) => ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
+    syncBase: (missionId) => ipcRenderer.invoke("novus:missions:sync-base", missionId),
     direct: (input) => ipcRenderer.invoke("novus:missions:direct", input),
     resolveDirection: (input) => ipcRenderer.invoke("novus:missions:resolve-direction", input),
     setSessionScope: (input) => ipcRenderer.invoke("novus:missions:set-session-scope", input),
