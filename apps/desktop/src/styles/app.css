@@ -418,6 +418,56 @@ body {
   flex: 3;
 }
 
+/* The room wakes up once (D-148): title, sentence, cards, apparatus, door —
+   each rising a beat after the last. `backwards` keeps the later elements
+   unpainted until their turn; the global reduced-motion rule shows the page
+   settled. This is choreography, not progress — nothing here loops. */
+.setup h1,
+.setup .setup-sub,
+.setup-cards,
+.setup-row,
+.setup-finish {
+  animation: setup-rise var(--motion-enter) var(--ease) backwards;
+}
+
+.setup .setup-sub {
+  animation-delay: var(--motion-stagger);
+}
+
+.setup-cards {
+  animation-delay: calc(var(--motion-stagger) * 2);
+}
+
+.setup-row {
+  animation-delay: calc(var(--motion-stagger) * 3);
+}
+
+.setup-finish {
+  animation-delay: calc(var(--motion-stagger) * 4);
+}
+
+@keyframes setup-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* An observed fact writes itself in: per-character reveal, paced by
+   --motion-char, starting after the page has risen. Paint only — the whole
+   string is in the accessibility tree from the first frame. */
+.typed > span {
+  opacity: 0;
+  animation: setup-char 1ms linear forwards;
+  animation-delay: calc(var(--motion-enter) + var(--motion-stagger) * 2 + var(--char) * var(--motion-char));
+}
+
+@keyframes setup-char {
+  to {
+    opacity: 1;
+  }
+}
+
 .setup h1 {
   font: var(--type-display);
   margin-bottom: var(--s-3);
@@ -485,6 +535,12 @@ body {
 
 .card-status .connected {
   color: var(--text-1);
+}
+
+/* The probe's finding reads in the terminal's voice. */
+.card-status .typed {
+  font: var(--type-row);
+  font-family: var(--font-mono);
 }
 
 .card {

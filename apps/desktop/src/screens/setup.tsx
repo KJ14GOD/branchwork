@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { siClaudecode, siGithub } from "simple-icons";
 import codexIcon from "../assets/codex-icon.png";
 import type { HarnessProbe, IpcAuthStatus, SetupProbeResponse } from "@novus/contracts";
@@ -10,6 +10,21 @@ function Glyph({ path, title }: { path: string; title: string }) {
     <svg className="card-glyph" viewBox="0 0 24 24" role="img" aria-label={title} fill="currentColor">
       <path d={path} />
     </svg>
+  );
+}
+
+/** An observed fact arrives like a probe writing its finding: character by
+ *  character, in the mono voice. The text is in the accessibility tree whole
+ *  — only the paint is staggered — and reduced-motion shows it at once. */
+function TypedFact({ text, testid }: { text: string; testid?: string }) {
+  return (
+    <span className="connected typed" aria-label={text} data-testid={testid} key={text}>
+      {Array.from(text).map((character, at) => (
+        <span key={at} aria-hidden="true" style={{ "--char": at } as CSSProperties}>
+          {character}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -58,10 +73,12 @@ export function SetupSurface({
       <section className="setup" data-testid="setup">
         <h1>Set up Novus</h1>
         {/* Cloud execution stays future-tense until it exists (D-028); what
-            runs today is a harness on this Mac. */}
+            runs today is a harness on this Mac. Once connected, the sentence
+            turns to the person — the room is ready and says so (D-148). */}
         <p className="setup-sub">
-          Novus signs in with GitHub and operates your coding agents on this Mac. Cloud workspaces
-          arrive later.
+          {connected
+            ? `Ready when you are, ${auth.user.login}. Cloud workspaces arrive later.`
+            : "Your coding agents, under command — GitHub for identity, running on this Mac. Cloud workspaces arrive later."}
         </p>
 
         <div className="setup-cards">
@@ -82,11 +99,7 @@ export function SetupSurface({
                   Finish in your browser — this screen continues on its own.
                 </span>
               )}
-              {connected && (
-                <span className="connected" data-testid="github-connected">
-                  ✓ Connected as {auth.user.login}
-                </span>
-              )}
+              {connected && <TypedFact text={`✓ Connected as ${auth.user.login}`} testid="github-connected" />}
               {auth.state === "failed" && (
                 <span className="card-error" role="alert" data-testid="sign-in-error">
                   {auth.message}&nbsp;
@@ -105,7 +118,7 @@ export function SetupSurface({
             </div>
             <div className="card-desc">Anthropic&apos;s coding agent. Cloud runs arrive with missions.</div>
             <div className={claude.muted ? "card-status muted" : "card-status"}>
-              <span className={claude.muted ? undefined : "connected"}>{claude.text}</span>
+              {claude.muted ? <span>{claude.text}</span> : <TypedFact text={claude.text} />}
             </div>
           </div>
 
@@ -116,7 +129,7 @@ export function SetupSurface({
             </div>
             <div className="card-desc">OpenAI&apos;s coding agent. Cloud runs arrive with missions.</div>
             <div className={codex.muted ? "card-status muted" : "card-status"}>
-              <span className={codex.muted ? undefined : "connected"}>{codex.text}</span>
+              {codex.muted ? <span>{codex.text}</span> : <TypedFact text={codex.text} />}
             </div>
           </div>
         </div>
@@ -140,13 +153,19 @@ export function SetupSurface({
           </div>
         </div>
 
-        {connected && (
-          <div className="setup-finish">
-            <button className="btn btn-primary" onClick={onFinished} data-testid="finish-setup">
-              Finish setup
-            </button>
-          </div>
-        )}
+        {/* The door is always on the page (D-148): a person should see where
+            this ends from the moment it starts. It unlocks when GitHub is
+            connected; it never appears out of nowhere. */}
+        <div className="setup-finish">
+          <button
+            className="btn btn-primary"
+            onClick={onFinished}
+            disabled={!connected}
+            data-testid="finish-setup"
+          >
+            Finish setup
+          </button>
+        </div>
       </section>
     </main>
   );

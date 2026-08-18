@@ -109,6 +109,9 @@
   --m-overlay: 240ms;
   --ease: cubic-bezier(0.3, 0.7, 0.3, 1);
   --motion-breath: 1500ms;
+  --motion-enter: 400ms;
+  --motion-stagger: 80ms;
+  --motion-char: 14ms;
 
   /* Shell */
   --topbar-h: 48px;
