@@ -80,9 +80,12 @@ export type CloneGitExec = (
  */
 const CREDENTIAL_HELPER = "!f() { cat <&3; }; f";
 
-/** A clone of a real repository is allowed to take a while; everything else
- *  here is a local or single-ref operation. */
-const CLONE_TIMEOUT_MS = 10 * 60_000;
+/** A clone or fetch of a real repository is allowed to take a while — both
+ *  move history over the network, and a base that has grown a hundred commits
+ *  of screenshots is a legitimate fetch, not a hang (D-144's field find: the
+ *  60s cap killed it mid-transfer). Everything else here is a local or
+ *  single-ref operation. */
+const NETWORK_TIMEOUT_MS = 10 * 60_000;
 const GIT_TIMEOUT_MS = 60_000;
 
 export const cloneGitExec: CloneGitExec = (cwd, args, credential) =>
@@ -120,7 +123,7 @@ export const cloneGitExec: CloneGitExec = (cwd, args, credential) =>
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       finish({ code: 128, stdout, stderr: stderr.trim() || "git took too long and was stopped." });
-    }, args[0] === "clone" ? CLONE_TIMEOUT_MS : GIT_TIMEOUT_MS);
+    }, args[0] === "clone" || args[0] === "fetch" ? NETWORK_TIMEOUT_MS : GIT_TIMEOUT_MS);
 
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
