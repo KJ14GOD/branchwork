@@ -1987,3 +1987,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** `markdown.tsx` grows list trees, tables, and the inline additions; `direction-trace.tsx` maps harness texts through `Markdown`; app.css rescales `.md-h*`, tokenizes `.md-code`/`.md-pre`, adds `.md-table`/`.md-task`/nested-list rules and the `.harness-body .md` speech-scale context. DESIGN.md's file-over-canvas and turn sections both carry the change. Before/after evidence: `160`–`166` against `170`–`175`.
 
 **Revisit when.** A README needs images or footnotes (the next honest-raw boundary), or replies want the file preview's full measure rather than speech's.
+
+## D-146 — A bitmap in the file pane shows as the picture
+
+**Context.** Owner-directed. Selecting a png in All files opened a pane saying "This file is not text … nothing here that could honestly show it" — honest for an arbitrary binary, wrong for an image, which a pane *can* honestly show. The evidence library alone makes this a daily surface.
+
+**Decision.** The workspace file reader recognizes bitmap types by extension (png, jpg/jpeg, gif, webp, bmp, ico, avif) and hands the pane a `data:` URI beside the existing fields — `binary` stays true, so nothing that edits changes its answer. Images get their own 10 MB cap where text keeps 1 MB, because a retina screenshot is a few MB a pane can honestly show, where a few MB of text cannot be read. SVG stays text: it edits like text and renders as markup elsewhere. The pane centers the picture on its own ground, never wider than the pane, path chip and size above as for text. The renderer's CSP already ends at `img-src 'self' data:`; nothing widens.
+
+**Alternatives.** A file:// or custom-protocol source (rejected: widens CSP and leaks worktree paths into the DOM for no gain at these sizes). Sniffing magic bytes instead of extensions (rejected for now: the extension is what the tree already badges, and a mislabeled file degrades to the honest not-text words).
+
+**Consequences.** `WorkspaceFile.image` in the contracts; `IMAGE_TYPES`/`MAX_IMAGE_BYTES` in `workspace-tree.ts`; the pane's `file-image` rendering; three reader tests (data URI and mime, uppercase extension, the image cap refusing as too-large rather than mojibake). Evidence 176.
+
+**Revisit when.** A pane wants zoom or pixel dimensions; or PDFs ask for the same courtesy.

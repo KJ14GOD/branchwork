@@ -167,7 +167,9 @@ export function FileView({
         <span className="file-chip mono" title={path}>
           {path}
         </span>
-        {readable && <span className="file-meta">{humanBytes(file.bytes)}</span>}
+        {(readable || file?.image !== null && file?.image !== undefined) && file && (
+          <span className="file-meta">{humanBytes(file.bytes)}</span>
+        )}
         <span className="head-spacer" />
 
         {isMarkdown(path) && readable && (
@@ -229,7 +231,12 @@ export function FileView({
             {load.message}
           </p>
         )}
-        {file?.binary === true && (
+        {file?.image !== null && file?.image !== undefined && (
+          <div className="file-scroll file-image-pane">
+            <img className="file-image" src={file.image} alt={path} data-testid="file-image" />
+          </div>
+        )}
+        {file?.binary === true && file.image === null && (
           <p className="quiet" data-testid="file-binary">
             This file is not text — {humanBytes(file.bytes)} of it — so there is nothing here that could
             honestly show it.

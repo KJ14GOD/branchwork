@@ -96,10 +96,30 @@ describe("reading a file", () => {
   });
 
   it("says a file is not text rather than showing mojibake", () => {
-    writeFileSync(join(worktree, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]));
+    writeFileSync(join(worktree, "blob.bin"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]));
+    const file = readWorkspaceFile(worktree, "blob.bin");
+    expect(file.binary).toBe(true);
+    expect(file.text).toBeNull();
+    expect(file.image).toBeNull();
+  });
+
+  it("hands a bitmap back as a picture the pane can show (D-146)", () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+    writeFileSync(join(worktree, "logo.png"), bytes);
     const file = readWorkspaceFile(worktree, "logo.png");
     expect(file.binary).toBe(true);
     expect(file.text).toBeNull();
+    expect(file.image).toBe(`data:image/png;base64,${bytes.toString("base64")}`);
+
+    writeFileSync(join(worktree, "photo.JPG"), bytes);
+    expect(readWorkspaceFile(worktree, "photo.JPG").image).toMatch(/^data:image\/jpeg;base64,/);
+  });
+
+  it("keeps the picture cap honest: an image beyond it is too large, not mojibake", () => {
+    writeFileSync(join(worktree, "poster.png"), Buffer.alloc(10_000_001));
+    const file = readWorkspaceFile(worktree, "poster.png");
+    expect(file.truncated).toBe(true);
+    expect(file.image).toBeNull();
   });
 
   it("says a file is too large rather than reading it into a pane", () => {

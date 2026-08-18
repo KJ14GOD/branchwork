@@ -129,6 +129,30 @@ export function listWorkspaceTree(worktree: string, relativePath = ""): Workspac
   });
 }
 
+/** Bitmap types the pane shows as pictures (D-146), by extension — the same
+ *  judgment a browser makes, and the mime is what the data: URI carries.
+ *  SVG stays text: it edits like text and renders as markup elsewhere. */
+const IMAGE_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  avif: "image/avif"
+};
+
+/** Images get a roomier cap than text: a retina screenshot is a few MB and a
+ *  pane can honestly show it, where a few MB of text cannot be read. */
+const MAX_IMAGE_BYTES = 10_000_000;
+
+function imageMime(relativePath: string): string | null {
+  const dot = relativePath.lastIndexOf(".");
+  if (dot === -1) return null;
+  return IMAGE_TYPES[relativePath.slice(dot + 1).toLowerCase()] ?? null;
+}
+
 /** True when the head of a file has a NUL in it, which no text file does and
  *  every compiled artefact, image, and archive does. */
 function looksBinary(body: Buffer): boolean {
@@ -152,8 +176,9 @@ export function readWorkspaceFile(worktree: string, relativePath: string): Works
   }
 
   const path = relative(realOrSelf(worktree), absolute).split(sep).join("/");
-  if (stats.size > MAX_FILE_BYTES) {
-    return { path, text: null, binary: false, truncated: true, bytes: stats.size };
+  const mime = imageMime(path);
+  if (stats.size > (mime === null ? MAX_FILE_BYTES : MAX_IMAGE_BYTES)) {
+    return { path, text: null, binary: false, truncated: true, bytes: stats.size, image: null };
   }
 
   let body: Buffer;
@@ -162,10 +187,21 @@ export function readWorkspaceFile(worktree: string, relativePath: string): Works
   } catch (error) {
     throw new WorkspaceCommandError(`That file could not be read: ${messageOf(error)}`);
   }
-  if (looksBinary(body)) {
-    return { path, text: null, binary: true, truncated: false, bytes: stats.size };
+  if (mime !== null) {
+    // A picture, shown as one (D-146). Still binary — nothing here edits.
+    return {
+      path,
+      text: null,
+      binary: true,
+      truncated: false,
+      bytes: stats.size,
+      image: `data:${mime};base64,${body.toString("base64")}`
+    };
   }
-  return { path, text: body.toString("utf8"), binary: false, truncated: false, bytes: stats.size };
+  if (looksBinary(body)) {
+    return { path, text: null, binary: true, truncated: false, bytes: stats.size, image: null };
+  }
+  return { path, text: body.toString("utf8"), binary: false, truncated: false, bytes: stats.size, image: null };
 }
 
 /**

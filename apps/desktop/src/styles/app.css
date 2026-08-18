@@ -3864,6 +3864,21 @@ body {
   padding: var(--s-4) 0 var(--s-6);
 }
 
+/* A picture, shown as one (D-146): centered on the pane's own ground,
+   never wider than it, scrolling only when taller. */
+.file-image-pane {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: var(--s-4);
+}
+
+.file-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--r-control);
+}
+
 .file-editor {
   flex: 1;
   min-height: 0;

@@ -2231,7 +2231,11 @@ export const WorkspaceFileSchema = z.object({
   text: z.string().nullable(),
   binary: z.boolean(),
   truncated: z.boolean(),
-  bytes: z.number().int().nonnegative()
+  bytes: z.number().int().nonnegative(),
+  /** A data: URI when the file is a bitmap the pane can show — png, jpeg,
+   *  gif, webp and kin (D-146). Null for everything else; text stays the
+   *  text's own field. */
+  image: z.string().nullable().default(null)
 });
 export type WorkspaceFile = z.infer<typeof WorkspaceFileSchema>;
 
