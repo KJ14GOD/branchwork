@@ -69,6 +69,48 @@ describe("the dirty set", () => {
   });
 });
 
+/**
+ * A person's own attached file must never reach a commit (D-153).
+ *
+ * Written against a real git repository with no `.git/info/exclude` entry at
+ * all, which is the whole point: this proves the checkpoint refuses the path
+ * on its own, so a missing or hand-edited exclude file cannot put somebody's
+ * screenshot into a mission branch and from there into a pull request.
+ */
+describe("a staged attachment at checkpoint time", () => {
+  it("is never committed, even when git would happily see it", async () => {
+    write(".novus/attachments/art_abc-private.png", "pretend bytes\n");
+    write("src/real-work.ts", "export const work = 1;\n");
+
+    // Git sees both — nothing is ignoring the directory here.
+    const seen = (await dirtyEntries(git, repo)).map((entry) => entry.path);
+    expect(seen).toContain(".novus/attachments/art_abc-private.png");
+
+    const checkpoint = await captureCheckpoint(git, repo, {
+      branch: "novus/m-abc123",
+      summary: "a turn that also had an attachment lying about"
+    });
+
+    expect(checkpoint.files.map((file) => file.path)).toEqual(["src/real-work.ts"]);
+    const committed = await git(repo, ["show", "--name-only", "--format=", "HEAD"]);
+    expect(committed).toContain("src/real-work.ts");
+    expect(committed).not.toContain(".novus");
+    // Still on disk, because the agent may still need to open it.
+    const after = (await dirtyEntries(git, repo)).map((entry) => entry.path);
+    expect(after).toContain(".novus/attachments/art_abc-private.png");
+  });
+
+  it("does not turn a turn that only staged a file into a commit", async () => {
+    write(".novus/attachments/art_abc-only.png", "pretend bytes\n");
+    const checkpoint = await captureCheckpoint(git, repo, {
+      branch: "novus/m-abc123",
+      summary: "nothing of the mission's changed"
+    });
+    expect(checkpoint.sha).toBeNull();
+    expect(checkpoint.files).toEqual([]);
+  });
+});
+
 describe("captureCheckpoint", () => {
   it("records a clean turn as evidence rather than as silence", async () => {
     const checkpoint = await captureCheckpoint(git, repo, { branch: "novus/m-abc123", summary: "nothing to do" });

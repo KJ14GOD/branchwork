@@ -1,6 +1,6 @@
 import type { FileChangeState, RunnerEvent, RunnerFileChange } from "@novus/contracts";
 import { pathInScope } from "@novus/contracts";
-import { isSecretPath } from "./secret-policy";
+import { isAttachmentPath, isSecretPath } from "./secret-policy";
 
 /**
  * Evidence derived from git and nothing else (ARCHITECTURE.md#harness-protocol:
@@ -257,7 +257,13 @@ export async function captureCheckpoint(
   }
 
   const withheld = entries.filter((entry) => isSecretPath(entry.path));
-  const clean = entries.filter((entry) => !isSecretPath(entry.path));
+  // A staged attachment is never the mission's work (D-153). Git already
+  // ignores the directory, so this should find nothing; it exists so that a
+  // missing exclude file cannot put a person's own file into a mission branch
+  // and from there into a pull request.
+  const clean = entries.filter(
+    (entry) => !isSecretPath(entry.path) && !isAttachmentPath(entry.path)
+  );
   // A scoped turn commits only its own paths (D-097). Everything else dirty
   // at its boundary is drift: observed, named, and left alone — some of it
   // is a parallel sibling's work mid-flight, some this turn's own shell

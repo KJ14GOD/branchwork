@@ -1,3 +1,4 @@
+import { attachmentForm } from "@novus/contracts";
 import type { ApprovalRequest, Direction, MissionDetailResponse } from "@novus/contracts";
 import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../format";
 import { DocumentGlyph, HarnessMark, HumanMark } from "./identity";
@@ -343,9 +344,10 @@ export function TraceView({
               <span className="trace-attachment-missing" key={image.artifactId}>
                 {image.label} — not uploaded, so the turn never saw it
               </span>
-            ) : image.mimeType === "application/pdf" ? (
-              // A document has nothing to show, so it is named — the one case
-              // where the filename is the only thing a reader has (D-151).
+            ) : attachmentForm(image.mimeType) !== "image" ? (
+              // A document or a staged file has nothing to show, so it is
+              // named — the one case where the filename is all a reader has
+              // (D-151, D-153).
               <span className="trace-attachment-doc" key={image.artifactId}>
                 <DocumentGlyph className="trace-attachment-doc-glyph" />
                 {image.label}

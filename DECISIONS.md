@@ -2126,3 +2126,33 @@ All three end in **one upload path** in the main process. Picker, paste and drop
 **Consequences.** `attachClipboardImage` and `pathForDroppedFile` join the bridge; `prepareClipboardImage` joins the desktop's attachment module; the composer gains a drop state, a paste handler, and a sequential queue; the room owns the lightbox because it covers the room. `attachment-upload.ts` stops importing `electron` at module scope — a rule this suite already had — so the sniffing and the accumulation rule are both exercised in plain Node.
 
 **Revisit when.** Something other than an image wants to be opened this way — a PDF preview is the obvious next ask, and it is a different surface, not a bigger lightbox; or attachments arrive from somewhere that is neither a path nor the clipboard, such as a drop from a browser, which carries a URL rather than a file.
+
+## D-153 — A second road for what the model cannot read: staged in the workspace, opened by the agent
+
+**Context.** D-150 through D-152 built one road: the bytes go into the turn's own message as content blocks, and nothing is ever written to disk. That was deliberate and the reasons still hold — a file written into the worktree dirties `git status` in somebody's real project, can be swept into a checkpoint and from there into a pull request, is never cleaned up because worktrees never are, and gives the semi-trusted runner plane durable data it does not need. The live suite's `git status` assertion is a guard on exactly that.
+
+It also has a hard ceiling: **inlining only works for what the model can natively read.** Five formats. An MP3 has no block to be; so does a video, a CSV, an archive. Under that design they are not poorly supported, they are impossible.
+
+The owner showed Codex answering questions about an MP3 and a phone video and asked how. It is not multimodality. Reading their source: Codex ships a `view_image` tool — *"View a local image file from the filesystem… already available on disk"* — and the file was on disk. For the audio it ran `mdls`/`afinfo` and read the tags; for the video it generated frames with macOS's own preview generator and called `view_image` on each ("Viewed 6 images"). **The capability is a shell plus a file path, not a model that hears.** Claude Code has both halves already.
+
+**Decision.** Two roads, chosen by whether the harness can read the bytes.
+
+**Inlined** — images and PDF, unchanged. The model reads them directly; nothing touches disk.
+
+**Staged** — everything else. The runner writes the file into the lane's worktree at `.novus/attachments/`, and the turn's message names the path in its own text block, separate from the person's words, which stay verbatim. The agent then opens it with the tools it already has. This is what makes an MP3 answerable at all, and it is deliberately the design rejected for images: for a file the model cannot parse, the agent's toolbox is the only thing that can.
+
+Three things carry the risk, and each is chosen rather than inherited:
+
+- **`.git/info/exclude`, never the project's `.gitignore`.** That file is per clone and is never committed, so a repository Novus is operating on is not edited in order to make Novus work.
+- **The checkpoint refuses the path outright.** `isAttachmentPath` is a second, independent guard: git ignoring the directory is the first, and if the exclude file were missing or hand-edited, this still keeps a person's own file out of a mission branch. The consequence of one guard failing is somebody's private file in a public pull request, which is worth two. Proven against a real repository with **no exclude entry at all**.
+- **Written `0600`, never executable.** It lands in a directory an agent runs shell commands in. A bit that would let it be run is a bit worth not setting.
+
+MIME becomes **open for attachments and closed for captures**. A person may hand over any file and enumerating the world is not possible, so the shape is checked and the vocabulary is not; the strictness stays where it can be enforced — the capture routes, which still take a closed enum. The database constraint splits the same way, by kind.
+
+A staged file's ceiling is 50MB against an image's 5 and a document's 10, and for the opposite reason: **these bytes never enter the harness's context.** They sit on disk until the agent chooses to open them, so what bounds them is the store and the wire rather than tokens — and a phone video is the thing people will actually attach.
+
+**Alternatives.** Refusing everything that cannot be inlined (rejected: it is the current behaviour, and it makes the feature stop exactly where a person's real files begin). Editing the project's `.gitignore` (rejected: Novus does not modify a repository to make itself work). Converting audio and video to something inlinable — transcribing, rasterising frames ourselves (rejected: it is guessing what the person wanted from the file, and the agent asking `afinfo` a question is better than us answering one it did not ask). Deleting the staged file when the turn ends (rejected: a resumed conversation refers back to it, and the file is ignored and mode-restricted; the honest gap is that worktree cleanup does not exist for anything yet). Staging outside the worktree entirely (considered, and the reason against is scope: a scoped turn's tools are pointed at the worktree, and a path outside it is a second thing to authorize).
+
+**Consequences.** `AttachmentForm` gains `file`; `MimeTypeSchema` replaces the closed enum on the artifact row, the direction attachment, and the begin input; `ATTACHMENT_DIR` and `isAttachmentPath` join the secret policy, which is where "paths the product refuses to treat as work" already lived. The runner gains `stageAttachment`; the turn's message gains a staged-files block placed before the person's words and never mixed into them. The composer says **in workspace** on a staged file, because the agent having to open it is a different promise from the model having read it. The picker offers all files.
+
+**Revisit when.** Worktree cleanup exists and staged attachments should join it; a cloud runner needs a staging location that is not a local worktree; or a harness arrives that reads audio or video natively, at which point that format moves from the second road to the first and the only change is which list it is on.

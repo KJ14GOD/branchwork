@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSecretPath } from "../electron/secret-policy";
+import { isAttachmentPath, isSecretPath } from "../electron/secret-policy";
 
 /**
  * The one credential-path policy (D-052).
@@ -115,5 +115,33 @@ describe("what this policy cannot see", () => {
   it("cannot tell that a template was filled in with real values", () => {
     // Named `.env.example`, exempted by name, contents never consulted.
     expect(isSecretPath(".env.example")).toBe(false);
+  });
+});
+
+/**
+ * A staged attachment is never the mission's work (D-153).
+ *
+ * This is the second of two guards, and the one that does not depend on a file
+ * existing. The first is `.git/info/exclude`, which makes git ignore the
+ * directory; if that were missing or hand-edited, this is what still keeps a
+ * person's own file out of a checkpoint — and therefore out of a mission
+ * branch, and therefore out of a pull request. The consequence of being wrong
+ * is somebody's private file published, which is why there are two.
+ */
+describe("what the checkpoint refuses to commit", () => {
+  it("recognizes a staged attachment wherever the path came from", () => {
+    expect(isAttachmentPath(".novus/attachments/art_abc-shot.png")).toBe(true);
+    expect(isAttachmentPath("./.novus/attachments/art_abc-shot.png")).toBe(true);
+    // Windows separators, since a status line is text and not a promise.
+    expect(isAttachmentPath(".novus\\attachments\\art_abc-shot.png")).toBe(true);
+    expect(isAttachmentPath(".novus/attachments")).toBe(true);
+  });
+
+  it("does not claim the project's own files", () => {
+    // The prefix must be the directory, not a name that merely starts with it.
+    expect(isAttachmentPath(".novus/attachments-of-mine.txt")).toBe(false);
+    expect(isAttachmentPath("src/.novus/attachments/x.png")).toBe(false);
+    expect(isAttachmentPath("novus/attachments/x.png")).toBe(false);
+    expect(isAttachmentPath("README.md")).toBe(false);
   });
 });

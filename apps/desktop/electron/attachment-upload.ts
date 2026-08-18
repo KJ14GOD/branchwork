@@ -7,6 +7,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_EDGE,
   MAX_DOCUMENT_BYTES,
+  MAX_FILE_BYTES,
   attachmentForm,
   type AttachmentMime
 } from "@novus/contracts";
@@ -85,9 +86,59 @@ export function sniffImageMime(bytes: Buffer): AttachmentMime | null {
   return sniffed.kind === "carry" && sniffed.mime !== "application/pdf" ? sniffed.mime : null;
 }
 
+/**
+ * A MIME type for a file we are staging rather than reading (D-153).
+ *
+ * The extension is the only signal here, and that is fine: nothing downstream
+ * *parses* on this. It labels the row and tells the agent what it is looking
+ * at; the agent then opens the file and finds out for itself. Anything
+ * unrecognized is `application/octet-stream`, which is the honest answer for
+ * "bytes, of a kind Novus does not claim to know".
+ */
+const MIME_BY_EXTENSION: Record<string, string> = {
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  wav: "audio/wav",
+  aac: "audio/aac",
+  flac: "audio/flac",
+  ogg: "audio/ogg",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  m4v: "video/x-m4v",
+  webm: "video/webm",
+  avi: "video/x-msvideo",
+  mkv: "video/x-matroska",
+  csv: "text/csv",
+  tsv: "text/tab-separated-values",
+  txt: "text/plain",
+  md: "text/markdown",
+  json: "application/json",
+  xml: "application/xml",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  html: "text/html",
+  log: "text/plain",
+  zip: "application/zip",
+  gz: "application/gzip",
+  tar: "application/x-tar",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+};
+
+export function mimeForName(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  const extension = dot === -1 ? "" : filename.slice(dot + 1).toLowerCase();
+  return MIME_BY_EXTENSION[extension] ?? "application/octet-stream";
+}
+
 export interface PreparedFile {
   bytes: Buffer;
-  mimeType: AttachmentMime;
+  /** Open for a staged file (D-153): whatever this actually is. */
+  mimeType: string;
   filename: string;
   /** True when the image was scaled down to fit the bound. */
   resized: boolean;
@@ -192,10 +243,24 @@ export async function prepareAttachment(path: string): Promise<PreparedFile> {
   const filename = basename(path).slice(0, 120) || "attachment";
   const sniffed = sniffAttachment(raw);
 
+  // Anything the harness cannot be handed directly is **staged** rather than
+  // refused (D-153): it goes to disk beside the worktree and the agent opens
+  // it with its own tools, which is how an mp3 or a video becomes answerable
+  // at all. Nothing is inlined that the model cannot read, and nothing is
+  // refused merely for not being an image.
   if (sniffed.kind === "refuse") {
-    throw new AttachmentRefused(
-      "Novus can attach images (PNG, JPEG, GIF, WebP, HEIC, TIFF, BMP) and PDFs. That file is none of them."
-    );
+    if (raw.byteLength > MAX_FILE_BYTES) {
+      throw new AttachmentRefused(
+        `That file is ${megabytes(raw.byteLength)} MB, and an attached file may be at most ${MAX_FILE_BYTES / 1_000_000} MB.`
+      );
+    }
+    return {
+      bytes: raw,
+      mimeType: mimeForName(filename),
+      filename,
+      resized: false,
+      convertedFrom: null
+    };
   }
 
   // A document is carried whole or not at all: there is no smaller version of

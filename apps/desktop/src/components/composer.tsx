@@ -477,10 +477,10 @@ export function Composer({
           <div className="composer-attachments" data-testid="composer-attachments">
             {attachments.map((image) => (
               <span className="composer-attachment" key={image.artifactId}>
-                {image.mimeType === "application/pdf" ? (
-                  <DocumentGlyph className="composer-attachment-glyph" />
-                ) : (
+                {image.form === "image" ? (
                   <ImageGlyph className="composer-attachment-glyph" />
+                ) : (
+                  <DocumentGlyph className="composer-attachment-glyph" />
                 )}
                 <span className="composer-attachment-name">{image.label}</span>
                 {/* Both are stated rather than hidden (D-151): a person should
@@ -496,6 +496,17 @@ export function Composer({
                 {image.resized && (
                   <span className="composer-attachment-note" title="Scaled down before sending">
                     resized
+                  </span>
+                )}
+                {/* A staged file is a different promise from an inlined one:
+                    the agent has to open it, so the interface says so rather
+                    than implying it was read (D-153). */}
+                {image.form === "file" && (
+                  <span
+                    className="composer-attachment-note"
+                    title="Placed in the workspace — the agent opens it with its own tools"
+                  >
+                    in workspace
                   </span>
                 )}
                 <button

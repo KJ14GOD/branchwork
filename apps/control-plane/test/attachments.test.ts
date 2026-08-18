@@ -266,7 +266,45 @@ describe("attaching an image to a direction", () => {
     expect(begun.statusCode).toBe(422);
   }, 30_000);
 
-  it("refuses a MIME type nothing downstream can read", async () => {
+  it("takes a file the model cannot read, to be staged for the agent instead", async () => {
+    // Deliberately changed from refusing this (D-153): a zip has no content
+    // block to be inlined into, so it goes to the workspace and the agent
+    // opens it. The old assertion described the old road, not a rule.
+    const room = await mission();
+    const zip = Buffer.from("504b03041400000008", "hex");
+    const attached = await attach(room, kartik, zip, {
+      mimeType: "application/zip",
+      filename: "logs.zip"
+    });
+    expect(attached.status).toBe(201);
+    const submitted = await direct(room, kartik, "Look inside this", [
+      attached.artifactId as string
+    ]);
+    expect(submitted.statusCode).toBe(200);
+  }, 30_000);
+
+  it("refuses something that is not a MIME type at all", async () => {
+    // The vocabulary is open; the shape is not. A header the store would have
+    // to echo back is checked for being a header.
+    const room = await mission();
+    for (const mimeType of ["not-a-mime", "text/plain; drop table artifacts", "a/".repeat(80)]) {
+      const begun = await harness.app.inject({
+        method: "POST",
+        url: `/missions/${room.missionId}/attachments`,
+        headers: bearer(kartik),
+        payload: {
+          workstreamId: room.workstreamId,
+          mimeType,
+          byteSize: 10,
+          sha256: sha("x"),
+          filename: "odd.bin"
+        }
+      });
+      expect(begun.statusCode, mimeType).toBe(422);
+    }
+  }, 30_000);
+
+  it("refuses a staged file past its own ceiling", async () => {
     const room = await mission();
     const begun = await harness.app.inject({
       method: "POST",
@@ -274,10 +312,10 @@ describe("attaching an image to a direction", () => {
       headers: bearer(kartik),
       payload: {
         workstreamId: room.workstreamId,
-        mimeType: "application/zip",
-        byteSize: 10,
-        sha256: sha("x"),
-        filename: "payload.zip"
+        mimeType: "video/mp4",
+        byteSize: 60_000_000,
+        sha256: sha("huge"),
+        filename: "holiday.mp4"
       }
     });
     expect(begun.statusCode).toBe(422);

@@ -273,7 +273,14 @@ export interface TurnRequest {
    *  same stream-json user message the words do — the harness reads image
    *  content blocks directly, so nothing is written into the worktree and no
    *  checkpoint can sweep an attachment in. Empty for a turn with none. */
-  attachments?: readonly { mimeType: string; base64: string; label: string }[];
+  attachments?: readonly {
+    mimeType: string;
+    base64: string;
+    label: string;
+    /** Where the file was staged in the worktree, for anything the harness
+     *  cannot be handed directly (D-153). Null for an inlined image or PDF. */
+    path: string | null;
+  }[];
   /** What this turn may do to the worktree (D-095). `read` runs alongside the
    *  lane's write turn: every permission request is denied on the spot with
    *  the reason, no approval ever reaches the room, no checkpoint is captured,
@@ -1043,19 +1050,40 @@ export function startTurn(request: TurnRequest): RunningTurn {
       // The direction, and anything the person attached to it. The images come
       // first: a picture followed by the words about it is the order a person
       // writes in, and the order the harness reads best.
+      // Two roads for what a person attached (D-153). An image is *seen* and a
+      // PDF is *read* — different content blocks, each verified against the
+      // real CLI, because sending one as the other is not an error the CLI
+      // reports, it is an answer about nothing. Everything else has no block
+      // to be: it was staged on disk, and the turn is told where, so the
+      // agent's own tools can open it.
+      const attached = request.attachments ?? [];
+      const inlined = attached.filter((file) => file.path === null);
+      const staged = attached.filter((file) => file.path !== null);
+      const stagedNote =
+        staged.length === 0
+          ? []
+          : [
+              {
+                type: "text",
+                text:
+                  `The person attached ${staged.length === 1 ? "this file" : "these files"} ` +
+                  `to this message. ${staged.length === 1 ? "It is" : "They are"} in the ` +
+                  `working directory:\n` +
+                  staged.map((file) => `- ${file.path} (${file.label}, ${file.mimeType})`).join("\n") +
+                  `\nOpen ${staged.length === 1 ? "it" : "them"} with your own tools if the ` +
+                  `request needs it.`
+              }
+            ];
       writeControl({
         type: "user",
         message: {
           role: "user",
           content: [
-            // An image is *seen* and a PDF is *read*, and the harness takes
-            // them as different blocks (D-151, each verified against the real
-            // CLI). Sending one as the other is not an error the CLI reports —
-            // it is an answer about nothing.
-            ...(request.attachments ?? []).map((file) => ({
+            ...inlined.map((file) => ({
               type: file.mimeType === "application/pdf" ? "document" : "image",
               source: { type: "base64", media_type: file.mimeType, data: file.base64 }
             })),
+            ...stagedNote,
             { type: "text", text: request.direction }
           ]
         }

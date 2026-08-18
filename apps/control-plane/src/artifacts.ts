@@ -6,7 +6,6 @@ import {
   AttachArtifactInputSchema,
   BeginArtifactInputSchema,
   BeginRunnerArtifactInputSchema,
-  ARTIFACT_MIME_TYPES,
   MAX_RECORDING_BYTES,
   MAX_SCREENSHOT_BYTES,
   MAX_THUMBNAIL_BYTES,
@@ -442,10 +441,13 @@ export function registerArtifactRoutes(app: FastifyInstance, deps: RouteDeps): v
   if (store instanceof LocalArtifactStore) {
     // The blob body arrives as a raw stream; these are the only content types
     // any route accepts as bytes.
-    app.addContentTypeParser(
-      [...ARTIFACT_MIME_TYPES],
-      (_request, payload, done) => done(null, payload)
-    );
+    // The blob body is raw bytes of whatever type the promise named, and an
+    // attachment may be any type at all (D-153) — so the parser is by wildcard
+    // rather than by list. Nothing is *interpreted* here: the stream is handed
+    // to the store, which decides whether it is what was promised by hashing
+    // it. A second hand-written list would only be another thing to forget to
+    // widen, which is exactly how the previous one was found.
+    app.addContentTypeParser("*", (_request, payload, done) => done(null, payload));
 
     app.put(
       "/artifact-store/:key",

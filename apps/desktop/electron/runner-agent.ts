@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import {
   ApiErrorSchema,
   ArtifactSchema,
@@ -19,7 +20,8 @@ import {
   type PermissionProfile,
   type RunnerCommand,
   type RunnerEvent,
-  type SequencedRunnerEvent
+  type SequencedRunnerEvent,
+  attachmentForm
 } from "@novus/contracts";
 import { z } from "zod";
 import { ApiError, type ControlPlaneClient } from "./api-client";
@@ -30,7 +32,7 @@ import {
 import { CAPTURE_TOOL_FULL_NAME, CAPTURE_TOOL_NAME, PUSH_TOOL_FULL_NAME, PUSH_TOOL_NAME, mintToolGrant, registerCaptureTurn } from "./artifact-mcp";
 import { startRecording } from "./artifact-recording";
 import { SCREENSHOT_CLAIM } from "./artifact-policy";
-import { redact } from "./secret-policy";
+import { ATTACHMENT_DIR, redact } from "./secret-policy";
 import { processLogsFor } from "./workspace";
 import { startTurn, type RunningTurn, type TurnResult } from "./execution";
 import { EventOutbox } from "./outbox";
@@ -822,9 +824,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
    */
   async function fetchAttachments(
     enrolment: Enrolment,
-    claimed: readonly { artifactId: string; mimeType: string; label: string }[]
-  ): Promise<{ mimeType: string; base64: string; label: string }[]> {
-    const fetched: { mimeType: string; base64: string; label: string }[] = [];
+    claimed: readonly { artifactId: string; mimeType: string; label: string }[],
+    worktreePath: string | null
+  ): Promise<{ mimeType: string; base64: string; label: string; path: string | null }[]> {
+    const fetched: { mimeType: string; base64: string; label: string; path: string | null }[] = [];
     for (const image of claimed) {
       try {
         const granted = await runnerFetch(
@@ -845,10 +848,21 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           continue;
         }
         const bytes = Buffer.from(await blob.arrayBuffer());
+        const mimeType = typeof grant.mimeType === "string" ? grant.mimeType : image.mimeType;
+        // A file the model cannot read is staged on disk instead of inlined
+        // (D-153) — that is the whole point of the second road, and it is what
+        // makes an mp3 or a video answerable at all.
+        const staged =
+          attachmentForm(mimeType) === "file" && worktreePath !== null
+            ? await stageAttachment(worktreePath, image.artifactId, image.label, bytes)
+            : null;
         fetched.push({
-          mimeType: typeof grant.mimeType === "string" ? grant.mimeType : image.mimeType,
-          base64: bytes.toString("base64"),
-          label: image.label
+          mimeType,
+          // Nothing is inlined that cannot be read: a staged file's bytes stay
+          // on disk, and only its path travels into the turn.
+          base64: staged === null ? bytes.toString("base64") : "",
+          label: image.label,
+          path: staged
         });
       } catch (error) {
         console.warn("[runner] an attachment could not be fetched:", messageOf(error));
@@ -857,19 +871,73 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     return fetched;
   }
 
+  /**
+   * Writes one staged attachment into the lane's worktree and makes git ignore
+   * it (D-153).
+   *
+   * Three things are load-bearing here, and all three are about a person's own
+   * file never becoming part of the mission's work:
+   *
+   *  - The directory is added to **`.git/info/exclude`**, not to the project's
+   *    `.gitignore`. That file is per clone and is never committed, so a
+   *    repository Novus is operating on is not edited to make Novus work.
+   *  - The file is written **0600 and never executable**. It lands in a
+   *    directory an agent runs shell commands in; a bit that would let it be
+   *    run is a bit worth not setting.
+   *  - The name is rebuilt from the artifact id plus a sanitized label, so
+   *    nothing a person called their file can escape the directory.
+   *
+   * The checkpoint refuses this path outright as well (`isAttachmentPath`),
+   * because the consequence of one of these failing is somebody's private file
+   * in a public pull request.
+   */
+  async function stageAttachment(
+    worktreePath: string,
+    artifactId: string,
+    label: string,
+    bytes: Buffer
+  ): Promise<string | null> {
+    try {
+      const directory = join(worktreePath, ATTACHMENT_DIR);
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      // `.git` in a worktree is a file pointing at the real directory, so the
+      // exclude path is asked for rather than assumed.
+      const asked = await cloneGitExec(worktreePath, ["rev-parse", "--git-dir"], null);
+      const gitDir = asked.code === 0 ? asked.stdout.trim() : ".git";
+      const excludeFile = join(isAbsolute(gitDir) ? gitDir : join(worktreePath, gitDir), "info", "exclude");
+      await mkdir(dirname(excludeFile), { recursive: true });
+      const current = await readFile(excludeFile, "utf8").catch(() => "");
+      if (!current.split("\n").some((line) => line.trim() === "/.novus/")) {
+        await writeFile(
+          excludeFile,
+          `${current}${current.endsWith("\n") || current === "" ? "" : "\n"}/.novus/\n`,
+          { mode: 0o600 }
+        );
+      }
+      const safeName = label.replace(/[^A-Za-z0-9._-]/g, "_").slice(-60) || "attachment";
+      const relative = `${ATTACHMENT_DIR}/${artifactId}-${safeName}`;
+      await writeFile(join(worktreePath, relative), bytes, { mode: 0o600 });
+      return relative;
+    } catch (error) {
+      console.warn("[runner] an attachment could not be staged:", messageOf(error));
+      return null;
+    }
+  }
+
   /** The enrolment this lane's fetches authenticate with, or no images at
    *  all: an unenrolled lane has no credential to read anything under. */
   async function turnAttachments(
     workstreamId: string,
-    claimed: readonly { artifactId: string; mimeType: string; label: string }[]
-  ): Promise<{ mimeType: string; base64: string; label: string }[]> {
+    claimed: readonly { artifactId: string; mimeType: string; label: string }[],
+    worktreePath: string | null
+  ): Promise<{ mimeType: string; base64: string; label: string; path: string | null }[]> {
     if (claimed.length === 0) return [];
     const enrolment = enrolments.get(workstreamId);
     if (!enrolment) {
       console.warn("[runner] no enrolment for this lane; its attachments were not fetched");
       return [];
     }
-    return fetchAttachments(enrolment, claimed);
+    return fetchAttachments(enrolment, claimed, worktreePath);
   }
 
   function outboxFor(workstreamId: string): EventOutbox {
@@ -1512,7 +1580,11 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           : (payload.data.resumeSessionId ?? workstream.harnessSessionId),
       // Fetched now rather than at spawn: an image that cannot be fetched must
       // not silently become a turn that never saw it (D-150).
-      attachments: await turnAttachments(workstreamId, payload.data.attachments),
+      attachments: await turnAttachments(
+        workstreamId,
+        payload.data.attachments,
+        join(worktreeRoot, workstreamId)
+      ),
       access: payload.data.access,
       scope: payload.data.scope,
       permissionProfile: payload.data.permissionProfile,
@@ -1587,8 +1659,9 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     model: string;
     effort: string;
     resumeSessionId: string | null;
-    /** Images the person attached, already fetched (D-150). */
-    attachments: { mimeType: string; base64: string; label: string }[];
+    /** Files the person attached, already fetched (D-150): inlined bytes, or
+     *  a worktree path for anything staged instead (D-153). */
+    attachments: { mimeType: string; base64: string; label: string; path: string | null }[];
     /** What the turn may do to the worktree (D-095). */
     access: "write" | "read";
     /** The chat's file scope, pinned at dispatch (D-097); null unscoped. */

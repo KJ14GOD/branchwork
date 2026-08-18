@@ -148,6 +148,42 @@ function magentaPdf(): Buffer {
   return out;
 }
 
+/**
+ * A minimal but genuine MP3: an ID3v2 header carrying a title, then one silent
+ * MPEG frame so the file is real audio rather than a tag with nothing behind
+ * it. The title is the fact under test — it lives only inside these bytes.
+ */
+function taggedMp3(): Buffer {
+  const title = "Grimsby Interlude";
+  const titleFrame = Buffer.concat([
+    Buffer.from("TIT2", "ascii"),
+    (() => {
+      const size = Buffer.alloc(4);
+      size.writeUInt32BE(title.length + 1);
+      return size;
+    })(),
+    Buffer.from([0x00, 0x00]),
+    Buffer.from([0x00]), // ISO-8859-1
+    Buffer.from(title, "latin1")
+  ]);
+  const body = titleFrame;
+  // ID3v2 sizes are synchsafe: seven bits per byte.
+  const synchsafe = Buffer.from([
+    (body.length >> 21) & 0x7f,
+    (body.length >> 14) & 0x7f,
+    (body.length >> 7) & 0x7f,
+    body.length & 0x7f
+  ]);
+  const header = Buffer.concat([
+    Buffer.from("ID3", "ascii"),
+    Buffer.from([0x03, 0x00, 0x00]),
+    synchsafe
+  ]);
+  // One MPEG-1 Layer III frame, 128 kbps, 44.1 kHz, followed by its silence.
+  const frame = Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x00]), Buffer.alloc(413)]);
+  return Buffer.concat([header, body, frame, frame, frame]);
+}
+
 /** CRC-32, for the Node versions whose zlib does not expose one. */
 function crc32(buffer: Buffer): number {
   let crc = 0xffffffff;
@@ -166,6 +202,47 @@ async function detail(missionId: string): Promise<MissionDetailResponse> {
     if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
     return result.value;
   }, missionId);
+}
+
+/** How many permission questions this run answered, so the test can assert
+ *  that opening a staged file really did go through a person. */
+let approvalsAnswered = 0;
+
+/**
+ * Like `until`, but answers permission questions while it waits — which is
+ * what a person sitting in the room does. Reading a staged file takes at least
+ * one shell command and often several, each its own question, so a helper that
+ * answers exactly one would stall the turn at the second.
+ */
+async function untilAnswering(
+  missionId: string,
+  predicate: (value: MissionDetailResponse) => boolean,
+  what: string,
+  timeoutMs: number
+): Promise<MissionDetailResponse> {
+  const deadline = Date.now() + timeoutMs;
+  let last: MissionDetailResponse | null = null;
+  while (Date.now() < deadline) {
+    last = await detail(missionId);
+    if (predicate(last)) return last;
+    for (const approval of last.approvals.filter((row) => row.state === "pending")) {
+      await page.evaluate(
+        async (approvalId) => {
+          const result = await window.novus.missions.respondApproval({
+            approvalId,
+            decision: "approve"
+          });
+          if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+        },
+        approval.approvalId
+      );
+      approvalsAnswered += 1;
+    }
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  throw new Error(
+    `timed out waiting for ${what}; last execution state: ${last?.executions.at(-1)?.state ?? "none"}`
+  );
 }
 
 async function until(
@@ -516,5 +593,79 @@ describe.skipIf(!LIVE)("an attached image reaching a real Claude Code turn", () 
     await page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
     await page.waitForTimeout(2_500);
     await page.screenshot({ path: join(evidenceDir, "196-image-and-pdf-together.png") });
+
+    // --- A file the model cannot read at all ---------------------------------
+    // The second road (D-153): an MP3 has no content block to be, so it is
+    // staged in the worktree and the agent opens it with its own tools. The
+    // assertion is on a fact carried only inside the file's own metadata —
+    // the title tag — which nothing in the prompt mentions.
+    const songPath = join(imageDir, "the-track.mp3");
+    writeFileSync(songPath, taggedMp3());
+    const attachedSong = await page.evaluate(
+      async (input) => {
+        const result = await window.novus.missions.attachImage({
+          missionId: input.missionId,
+          path: input.path
+        });
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+        return result.value;
+      },
+      { missionId, path: songPath }
+    );
+    expect(attachedSong.mimeType).toBe("audio/mpeg");
+    expect(attachedSong.form).toBe("file");
+
+    await page.evaluate(
+      async (input) => {
+        const result = await window.novus.missions.direct({
+          missionId: input.missionId,
+          body:
+            "An audio file was attached. Read its metadata tags and reply with " +
+            "exactly the track title stored in it and nothing else.",
+          model: "claude-fable-5",
+          effort: "low",
+          attachmentIds: [input.artifactId]
+        });
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      },
+      { missionId, artifactId: attachedSong.artifactId }
+    );
+
+    // Opening a staged file means running shell commands, and Bash is always a
+    // person's question (D-097) — so the turn asks, and that is the product
+    // working rather than a fault. It asks **once per command**, and it will
+    // take more than one: the first attempt here was `ffprobe`, which is not
+    // installed on this machine, and the agent then reached for `python3` to
+    // read the tag bytes itself. So the person is present for the whole turn,
+    // which is what `manual` means.
+    const readTags = await untilAnswering(
+      missionId,
+      (value) =>
+        value.events.some(
+          (event) =>
+            event.kind === "harness.text" &&
+            /grimsby/i.test(String((event.payload as { text?: unknown }).text ?? ""))
+        ),
+      "the real Claude to open the staged audio file and read its tags",
+      300_000
+    );
+    expect(approvalsAnswered).toBeGreaterThan(0);
+    const aboutSong = readTags.events
+      .filter((event) => event.kind === "harness.text")
+      .map((event) => String((event.payload as { text?: unknown }).text ?? ""))
+      .join(" ");
+    // The title exists only inside the file's ID3 tag.
+    expect(aboutSong).toMatch(/grimsby/i);
+
+    // And the file it opened is not, and never becomes, the mission's work.
+    const afterStaging = git(repoDir, ["status", "--porcelain"]);
+    expect(afterStaging).not.toMatch(/\.novus/);
+    expect(afterStaging).not.toMatch(/mp3/);
+
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
+    await page.waitForTimeout(2_500);
+    await page.screenshot({ path: join(evidenceDir, "197-staged-file-opened.png") });
   }, 900_000);
 });

@@ -79,6 +79,29 @@ const TEMPLATE_PATTERNS = [
 ];
 
 /**
+ * Where an attached file a person handed the agent is staged inside the
+ * worktree (D-153). Relative to the worktree root, always.
+ */
+export const ATTACHMENT_DIR = ".novus/attachments";
+
+/**
+ * True when this path is a staged attachment rather than the mission's work.
+ *
+ * Two things keep an attachment out of a commit and this is the second one.
+ * The first is `.git/info/exclude`, which makes git itself ignore the
+ * directory — per clone, never committed, so the project's own `.gitignore`
+ * is never touched. This is the belt to that's braces: the checkpoint refuses
+ * the path outright, so a missing or hand-edited exclude file cannot put
+ * somebody's screenshot into a mission branch and from there into a pull
+ * request. The consequence of being wrong here is a person's private file in
+ * a public PR, which is worth two independent guards.
+ */
+export function isAttachmentPath(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/").replace(/^\.\//, "");
+  return normalized === ATTACHMENT_DIR || normalized.startsWith(`${ATTACHMENT_DIR}/`);
+}
+
+/**
  * True when this path should not be listed, read, or written by an ordinary
  * file surface.
  *

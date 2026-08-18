@@ -51,6 +51,7 @@ import {
   WriteWorkspaceFileInputSchema,
   type ArtifactViewResponse,
   type IpcAuthStatus,
+  attachmentForm,
   type IpcResult,
   type PreparedAttachment
 } from "@novus/contracts";
@@ -1129,6 +1130,7 @@ function registerIpc(): void {
       // The prepared type, not the row's: an artifact may be a recording,
       // which an attachment never is, and the row echoes what was sent anyway.
       mimeType: prepared.mimeType,
+      form: attachmentForm(prepared.mimeType),
       byteSize: artifact.byteSize,
       resized: prepared.resized,
       convertedFrom: prepared.convertedFrom
@@ -1186,6 +1188,10 @@ function registerIpc(): void {
     const chosen = await dialog.showOpenDialog({
       title: "Attach an image",
       properties: ["openFile"],
+      // Any file (D-153). Images and PDFs are read by the model itself;
+      // everything else is staged in the worktree for the agent's own tools,
+      // so there is nothing left to filter out. The named group is first only
+      // so the common case is one click away.
       filters: [
         {
           name: "Images and PDFs",
@@ -1196,7 +1202,8 @@ function registerIpc(): void {
             "heic", "heif", "tif", "tiff", "bmp",
             "pdf"
           ]
-        }
+        },
+        { name: "All files", extensions: ["*"] }
       ]
     });
     if (chosen.canceled || chosen.filePaths.length === 0) return ok(null);

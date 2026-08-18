@@ -3,6 +3,7 @@ import {
   BeginAttachmentInputSchema,
   MAX_ATTACHMENT_BYTES,
   MAX_DOCUMENT_BYTES,
+  MAX_FILE_BYTES,
   attachmentForm,
   type Artifact
 } from "@novus/contracts";
@@ -204,16 +205,23 @@ export function registerAttachmentRoutes(app: FastifyInstance, deps: RouteDeps):
     }
     const ended = await closedRefusal(deps.db, access.missionId);
     if (ended) return deps.sendError(reply, 409, "mission_closed", ended);
-    // Bounded by form, not by one number (D-151): a document is not resizable,
-    // so it gets its own ceiling rather than being refused at the image's.
-    const isDocument = attachmentForm(body.data.mimeType) === "document";
-    const ceiling = isDocument ? MAX_DOCUMENT_BYTES : MAX_ATTACHMENT_BYTES;
+    // Bounded by form, not by one number (D-151, D-153). An image is resizable
+    // and a document is not, so they differ; a staged file differs again and by
+    // more, because its bytes never enter the harness's context at all — they
+    // sit on disk until the agent opens them.
+    const form = attachmentForm(body.data.mimeType);
+    const ceiling =
+      form === "file"
+        ? MAX_FILE_BYTES
+        : form === "document"
+          ? MAX_DOCUMENT_BYTES
+          : MAX_ATTACHMENT_BYTES;
     if (body.data.byteSize > ceiling) {
       return deps.sendError(
         reply,
         422,
         "attachment_too_large",
-        `An attached ${isDocument ? "document" : "image"} may be at most ${ceiling} bytes.`
+        `An attached ${form === "file" ? "file" : form} may be at most ${ceiling} bytes.`
       );
     }
     // A chat this lane does not own is answered as not found, never adopted —

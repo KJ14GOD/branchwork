@@ -876,14 +876,34 @@ export const ATTACHMENT_MIME_TYPES = [
 export const AttachmentMimeSchema = z.enum(ATTACHMENT_MIME_TYPES);
 export type AttachmentMime = z.infer<typeof AttachmentMimeSchema>;
 
-/** How one attachment reaches the harness. An image is seen; a document is
- *  read. They are different content blocks, so the difference is carried
- *  rather than re-derived from the MIME type at each site. */
-export const AttachmentFormSchema = z.enum(["image", "document"]);
+/**
+ * How one attachment reaches the harness (D-153).
+ *
+ * `image` and `document` are **inlined**: the bytes go into the turn's own
+ * message as content blocks, the model reads them directly, and nothing is
+ * written to disk. `file` is everything else — an mp3, a video, a CSV, an
+ * archive — for which there is no content block to inline into, so it is
+ * **staged in the worktree** and its path is named to the agent, which then
+ * uses its own tools on it.
+ *
+ * The split is not a preference. It is the difference between what the model
+ * can parse and what a shell command has to open, and the second road exists
+ * because the first one simply stops at five formats.
+ */
+export const AttachmentFormSchema = z.enum(["image", "document", "file"]);
 export type AttachmentForm = z.infer<typeof AttachmentFormSchema>;
 
-export function attachmentForm(mime: AttachmentMime): AttachmentForm {
-  return mime === "application/pdf" ? "document" : "image";
+/** MIME types are open for attachments — a person may hand over any file, and
+ *  enumerating the world is not possible. Bounded and shaped, never free. */
+export const MimeTypeSchema = z
+  .string()
+  .min(3)
+  .max(120)
+  .regex(/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/, "must be a MIME type");
+
+export function attachmentForm(mime: string): AttachmentForm {
+  if (mime === "application/pdf") return "document";
+  return (ATTACHMENT_MIME_TYPES as readonly string[]).includes(mime) ? "image" : "file";
 }
 
 export const MAX_SCREENSHOT_BYTES = 20_000_000;
@@ -903,6 +923,14 @@ export const MAX_ATTACHMENT_BYTES = 5_000_000;
  * 32MB because every page becomes tokens the turn pays for.
  */
 export const MAX_DOCUMENT_BYTES = 10_000_000;
+/**
+ * A staged file's ceiling (D-153). Much higher than either inlined form, and
+ * for the opposite reason: these bytes never enter the harness's context —
+ * they sit on disk until the agent chooses to open them — so what bounds them
+ * is the store and the wire, not tokens. Large enough for a phone video, which
+ * is the thing people will actually attach.
+ */
+export const MAX_FILE_BYTES = 50_000_000;
 /** The longest edge an attachment is scaled down to before upload. */
 export const MAX_ATTACHMENT_EDGE = 1568;
 /** How many images one direction may carry. Bounded because every one of them
@@ -932,7 +960,9 @@ export type DirectionState = z.infer<typeof DirectionStateSchema>;
  */
 export const DirectionAttachmentSchema = z.object({
   artifactId: z.string().startsWith("art_"),
-  mimeType: AttachmentMimeSchema,
+  /** Open, not an enum (D-153): a person may attach any file, and the four
+   *  inlined image types plus PDF are a subset rather than the whole world. */
+  mimeType: MimeTypeSchema,
   byteSize: z.number().int().positive(),
   /** The person's own filename, shown as the image's name. */
   label: z.string().min(1).max(120),
@@ -947,6 +977,9 @@ export type DirectionAttachment = z.infer<typeof DirectionAttachmentSchema>;
  *  the words (D-150). `resized` is stated rather than hidden: a person who
  *  attached a 12-megapixel screenshot should know a smaller one was sent. */
 export const PreparedAttachmentSchema = DirectionAttachmentSchema.omit({ state: true }).extend({
+  /** How this one will travel (D-153): inlined into the message, or staged in
+   *  the worktree for the agent's own tools. The composer says which. */
+  form: AttachmentFormSchema,
   resized: z.boolean(),
   /** The format this was decoded from, when the harness could not read the
    *  original (D-151) — "HEIC", "TIFF", "BMP". Null when it was carried as
@@ -1693,7 +1726,11 @@ export const ArtifactSchema = z.object({
    *  for a person's own capture. */
   executionId: z.string().nullable(),
   kind: ArtifactKindSchema,
-  mimeType: ArtifactMimeSchema,
+  /** Closed for a capture — a screenshot is a PNG and a recording is WebM —
+   *  and open for an attachment, which is whatever a person handed over
+   *  (D-153). One field, so the strictness lives where it can be enforced:
+   *  the capture routes take `ArtifactMimeSchema` on the way in. */
+  mimeType: MimeTypeSchema,
   byteSize: z.number().int().positive(),
   /** The blob's content digest, promised at begin and verified by the store
    *  before the artifact may read as evidence. The blob is immutable; this is
@@ -1792,11 +1829,11 @@ export const BeginAttachmentInputSchema = z.object({
   /** The conversation this image was attached in. The direction it rides on
    *  belongs to one, so unlike a person's own capture this is never null. */
   sessionId: z.string().startsWith("csn_").optional(),
-  mimeType: AttachmentMimeSchema,
-  /** Bounded per form (D-151): the image ceiling, or the document one for a
-   *  PDF. The narrower bound is checked again at the route, which is where the
-   *  MIME and the size are finally judged together. */
-  byteSize: z.number().int().positive().max(MAX_DOCUMENT_BYTES),
+  mimeType: MimeTypeSchema,
+  /** Bounded per form (D-151, D-153): images, documents and staged files each
+   *  have their own ceiling, and the narrower one is checked at the route,
+   *  which is where the MIME and the size are finally judged together. */
+  byteSize: z.number().int().positive().max(MAX_FILE_BYTES),
   sha256: Sha256Schema,
   /** The person's own name for the file, kept only as a label. It is never a
    *  path, never a key, and never used to address anything. */

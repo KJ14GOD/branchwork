@@ -1010,7 +1010,16 @@ alter table artifacts add constraint artifacts_capture_source_check
 -- The blob types an attachment may be (D-151), every one of them a format the
 -- harness was observed to actually read. Widened in this one place for the
 -- same reason as the two above.
+-- A capture's blob type stays a closed vocabulary; an attachment's cannot be
+-- one (D-153). A person may hand over any file, and enumerating the world is
+-- not possible — so the shape is checked and the vocabulary is not, and the
+-- strictness stays where it can be enforced: the capture routes, which take a
+-- closed enum on the way in.
 alter table artifacts drop constraint if exists artifacts_mime_type_check;
 alter table artifacts add constraint artifacts_mime_type_check
-  check (mime_type in ('image/png', 'video/webm', 'image/jpeg', 'image/gif',
-                       'image/webp', 'application/pdf'));
+  check (
+    case when kind = 'attachment'
+      then mime_type ~ '^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$' and length(mime_type) <= 120
+      else mime_type in ('image/png', 'video/webm')
+    end
+  );
