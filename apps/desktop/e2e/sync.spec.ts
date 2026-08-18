@@ -258,7 +258,7 @@ describe("following a moved base", () => {
       expect(await page.getByTestId("base-drift").innerText()).toMatch(/base moved — 2 commits ahead/);
       const sync = page.getByTestId("base-sync");
       expect(await sync.innerText()).toBe("Sync");
-      await shot(page, "160-base-drift-sync-action.png");
+      await shot(page, "167-base-drift-sync-action.png");
 
       const laneHeadBefore = git(worktree, ["rev-parse", "HEAD"]);
       await sync.click();
@@ -276,7 +276,7 @@ describe("following a moved base", () => {
       git(worktree, ["merge-base", "--is-ancestor", laneHeadBefore, laneHeadAfter]);
       git(worktree, ["merge-base", "--is-ancestor", tip, laneHeadAfter]);
       expect(existsSync(join(worktree, "base-news.txt"))).toBe(true);
-      await shot(page, "161-base-synced.png");
+      await shot(page, "168-base-synced.png");
       await app.close();
     },
     240_000
@@ -305,7 +305,7 @@ describe("following a moved base", () => {
       expect(await page.getByTestId("action-error").innerText()).toMatch(/conflicts in README\.md/);
       expect(git(worktree, ["rev-parse", "HEAD"])).toBe(laneHead);
       expect(await page.getByTestId("base-drift").count()).toBe(1);
-      await shot(page, "162-base-sync-conflict.png");
+      await shot(page, "169-base-sync-conflict.png");
     },
     240_000
   );

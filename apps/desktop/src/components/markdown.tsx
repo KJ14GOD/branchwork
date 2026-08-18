@@ -13,12 +13,15 @@ import type { ReactNode } from "react";
  * here ever builds a markup string. Text becomes elements, and an element can
  * only ever be what this file names.
  *
- * The subset is what a project's own documentation actually uses. Anything
- * outside it renders as its own source text, which is honest — the reader sees
- * exactly what is in the file rather than a silently dropped line.
+ * The subset is what a project's own documentation actually uses — headings,
+ * lists (nested, ordered from any start, task items), tables, quotes, fences,
+ * rules, and the inline set. Anything outside it renders as its own source
+ * text, which is honest — the reader sees exactly what is in the file rather
+ * than a silently dropped line.
  */
 
-/** Inline emphasis, code, and links, without a regex that can backtrack. */
+/** Inline emphasis, code, strikethrough, and links, without a regex that can
+ *  backtrack. */
 function inline(text: string, key: string): ReactNode[] {
   const out: ReactNode[] = [];
   let buffer = "";
@@ -58,11 +61,18 @@ function inline(text: string, key: string): ReactNode[] {
       index += emphasis[0].length;
       continue;
     }
-    const link = /^\[([^\]]*)\]\(([^)\s]+)\)/.exec(rest);
+    const strike = /^~~([^~\n]+)~~/.exec(rest);
+    if (strike?.[1] !== undefined) {
+      push(<del>{strike[1]}</del>);
+      index += strike[0].length;
+      continue;
+    }
+    const link = /^\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^")]*")?\)/.exec(rest);
     if (link?.[1] !== undefined && link[2] !== undefined) {
       // Rendered as text carrying its destination, never as something that
       // navigates: a link in repository content is somebody else's URL, and
-      // this pane is not the place to follow one.
+      // this pane is not the place to follow one. A quoted title in the
+      // source is tolerated and dropped — the destination is the truth shown.
       push(
         <span className="md-link" title={link[2]}>
           {link[1] === "" ? link[2] : link[1]}
@@ -79,12 +89,80 @@ function inline(text: string, key: string): ReactNode[] {
   return out;
 }
 
+interface ListItem {
+  text: string;
+  /** null: an ordinary item; true/false: a task item with its checked state. */
+  done: boolean | null;
+  child: ListGroup | null;
+}
+
+interface ListGroup {
+  ordered: boolean;
+  /** The number the source starts at, so a list continued from prose keeps it. */
+  start: number;
+  items: ListItem[];
+}
+
 interface Block {
-  kind: "heading" | "paragraph" | "code" | "list" | "quote" | "rule";
+  kind: "heading" | "paragraph" | "code" | "list" | "quote" | "rule" | "table";
   level?: number;
   language?: string;
   lines: string[];
-  ordered?: boolean;
+  list?: ListGroup;
+  header?: string[];
+  rows?: string[][];
+}
+
+const LIST_LINE = /^(\s*)([-*+]|\d+\.)\s+(.*)$/;
+
+/** Contiguous list lines into a tree, depth read from indentation — two
+ *  spaces (or a tab) per level, which is what hand-written READMEs use. */
+function listOf(lines: string[]): ListGroup {
+  const groups: ListGroup[] = [];
+  for (const line of lines) {
+    const match = LIST_LINE.exec(line);
+    if (!match) continue;
+    const depth = Math.floor((match[1] ?? "").replace(/\t/g, "  ").length / 2);
+    const marker = match[2] ?? "-";
+    const ordered = /\d/.test(marker);
+    let text = match[3] ?? "";
+    let done: boolean | null = null;
+    const task = /^\[( |x|X)\]\s+(.*)$/.exec(text);
+    if (task) {
+      done = task[1] !== " ";
+      text = task[2] ?? "";
+    }
+    while (groups.length > depth + 1) groups.pop();
+    if (groups.length === depth && depth > 0) {
+      // A jump of more than one level lands on the deepest list that exists.
+    }
+    if (groups.length <= depth) {
+      const start = ordered ? Number.parseInt(marker, 10) || 1 : 1;
+      const group: ListGroup = { ordered, start, items: [] };
+      if (groups.length === 0) {
+        groups.push(group);
+      } else {
+        const parent = groups[groups.length - 1];
+        const holder = parent?.items[parent.items.length - 1];
+        if (holder) holder.child = group;
+        groups.push(group);
+      }
+    }
+    const group = groups[groups.length - 1];
+    group?.items.push({ text, done, child: null });
+  }
+  return groups[0] ?? { ordered: false, start: 1, items: [] };
+}
+
+const TABLE_DIVIDER = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+
+function cellsOf(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
 }
 
 /** Line-at-a-time, because a document is a sequence of blocks and treating it
@@ -115,7 +193,8 @@ function blocksOf(source: string): Block[] {
       continue;
     }
 
-    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    // Up to three leading spaces, which markdown allows and people type.
+    const heading = /^ {0,3}(#{1,6})\s+(.*)$/.exec(line);
     if (heading?.[1] !== undefined) {
       blocks.push({ kind: "heading", level: heading[1].length, lines: [heading[2] ?? ""] });
       index += 1;
@@ -138,15 +217,27 @@ function blocksOf(source: string): Block[] {
       continue;
     }
 
-    const bullet = /^\s*([-*+]|\d+\.)\s+/.exec(line);
-    if (bullet) {
-      const ordered = /\d/.test(bullet[1] ?? "");
-      const body: string[] = [];
-      while (index < lines.length && /^\s*(?:[-*+]|\d+\.)\s+/.test(lines[index] ?? "")) {
-        body.push((lines[index] ?? "").replace(/^\s*(?:[-*+]|\d+\.)\s+/, ""));
+    // A pipe row followed by a divider row is a table; anything else with
+    // pipes is just prose and falls through.
+    if (line.includes("|") && TABLE_DIVIDER.test(lines[index + 1] ?? "")) {
+      const header = cellsOf(line);
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length && (lines[index] ?? "").includes("|")) {
+        rows.push(cellsOf(lines[index] ?? ""));
         index += 1;
       }
-      blocks.push({ kind: "list", ordered, lines: body });
+      blocks.push({ kind: "table", lines: [], header, rows });
+      continue;
+    }
+
+    if (LIST_LINE.test(line)) {
+      const body: string[] = [];
+      while (index < lines.length && LIST_LINE.test(lines[index] ?? "")) {
+        body.push(lines[index] ?? "");
+        index += 1;
+      }
+      blocks.push({ kind: "list", lines: body, list: listOf(body) });
       continue;
     }
 
@@ -154,7 +245,9 @@ function blocksOf(source: string): Block[] {
     while (
       index < lines.length &&
       (lines[index] ?? "").trim() !== "" &&
-      !/^(?:#{1,6}\s|```|\s*>|\s*(?:[-*+]|\d+\.)\s)/.test(lines[index] ?? "")
+      !/^ {0,3}#{1,6}\s/.test(lines[index] ?? "") &&
+      !/^(?:```|\s*>)/.test(lines[index] ?? "") &&
+      !LIST_LINE.test(lines[index] ?? "")
     ) {
       body.push(lines[index] ?? "");
       index += 1;
@@ -163,6 +256,25 @@ function blocksOf(source: string): Block[] {
   }
 
   return blocks;
+}
+
+function ListView({ group, path }: { group: ListGroup; path: string }) {
+  const items = group.items.map((item, at) => (
+    <li key={`${path}-${at}`}>
+      {item.done !== null && (
+        <span className="md-task" data-done={item.done ? "true" : "false"} aria-hidden="true" />
+      )}
+      {inline(item.text, `${path}-${at}`)}
+      {item.child && <ListView group={item.child} path={`${path}-${at}`} />}
+    </li>
+  ));
+  return group.ordered ? (
+    <ol className="md-list" {...(group.start !== 1 ? { start: group.start } : {})}>
+      {items}
+    </ol>
+  ) : (
+    <ul className="md-list">{items}</ul>
+  );
 }
 
 export function Markdown({ source }: { source: string }) {
@@ -194,20 +306,31 @@ export function Markdown({ source }: { source: string }) {
                 {inline(block.lines.join(" "), key)}
               </blockquote>
             );
-          case "list":
-            return block.ordered ? (
-              <ol key={key} className="md-list">
-                {block.lines.map((item, at) => (
-                  <li key={`${key}-${at}`}>{inline(item, `${key}-${at}`)}</li>
-                ))}
-              </ol>
-            ) : (
-              <ul key={key} className="md-list">
-                {block.lines.map((item, at) => (
-                  <li key={`${key}-${at}`}>{inline(item, `${key}-${at}`)}</li>
-                ))}
-              </ul>
+          case "table":
+            return (
+              <div key={key} className="md-table-scroll">
+                <table className="md-table">
+                  <thead>
+                    <tr>
+                      {(block.header ?? []).map((cell, at) => (
+                        <th key={`${key}-h${at}`}>{inline(cell, `${key}-h${at}`)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(block.rows ?? []).map((row, atRow) => (
+                      <tr key={`${key}-r${atRow}`}>
+                        {row.map((cell, at) => (
+                          <td key={`${key}-r${atRow}-${at}`}>{inline(cell, `${key}-r${atRow}-${at}`)}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             );
+          case "list":
+            return <ListView key={key} group={block.list ?? { ordered: false, start: 1, items: [] }} path={key} />;
           default:
             return (
               <p key={key} className="md-p">
