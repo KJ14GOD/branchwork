@@ -1,10 +1,12 @@
 import pg from "pg";
 import { MISSION_EVENT_CHANNEL } from "./events.ts";
+import { RUNNER_COMMAND_CHANNEL } from "./runners.ts";
 
 /**
- * Fan-out of mission event notifications to the clients watching a room
- * (D-149). One dedicated connection holds `LISTEN`; every open stream is a
- * subscriber in this process's own map.
+ * Fan-out of Postgres notifications to whoever is waiting on them: clients
+ * watching a room (D-149), and the machines waiting for work on a lane
+ * (D-154). **One** dedicated connection holds `LISTEN` for both channels —
+ * two would be two things to reconnect, for one thing to hear.
  *
  * Postgres rather than an in-process emitter for two reasons, both load-bearing:
  * a notification sent inside the writing transaction is delivered on commit and
@@ -26,6 +28,7 @@ export interface MissionChange {
 }
 
 type Listener = (change: MissionChange) => void;
+type WorkListener = () => void;
 
 /** Reconnection backoff for the listening connection, in milliseconds. */
 const RETRY_BASE_MS = 250;
@@ -34,6 +37,10 @@ const RETRY_MAX_MS = 10_000;
 export interface MissionBus {
   /** Registers interest in one mission. The returned function unsubscribes. */
   subscribe(missionId: string, listener: Listener): () => void;
+  /** Registers interest in work arriving for one lane (D-154). The signal
+   *  carries nothing: the runner asks for its own commands, under its own
+   *  credential, exactly as it does on its timer. */
+  subscribeWork(workstreamId: string, listener: WorkListener): () => void;
   /** Watchers currently registered, across every mission. Test and health use. */
   readonly size: number;
   stop(): Promise<void>;
@@ -49,6 +56,7 @@ export interface MissionBus {
 export function inertMissionBus(): MissionBus {
   return {
     subscribe: () => () => undefined,
+    subscribeWork: () => () => undefined,
     size: 0,
     stop: async () => undefined
   };
@@ -56,6 +64,7 @@ export function inertMissionBus(): MissionBus {
 
 export function createMissionBus(databaseUrl: string): MissionBus {
   const listeners = new Map<string, Set<Listener>>();
+  const workListeners = new Map<string, Set<WorkListener>>();
   let client: pg.Client | null = null;
   let stopped = false;
   let attempts = 0;
@@ -85,6 +94,27 @@ export function createMissionBus(databaseUrl: string): MissionBus {
     }
   };
 
+  const deliverWork = (raw: string | undefined): void => {
+    if (!raw) return;
+    let workstreamId: string;
+    try {
+      const parsed = JSON.parse(raw) as { workstreamId?: unknown };
+      if (typeof parsed.workstreamId !== "string") return;
+      workstreamId = parsed.workstreamId;
+    } catch {
+      return;
+    }
+    const set = workListeners.get(workstreamId);
+    if (!set) return;
+    for (const listener of [...set]) {
+      try {
+        listener();
+      } catch {
+        // One waiting machine's write failing must not deny the others.
+      }
+    }
+  };
+
   const connect = async (): Promise<void> => {
     if (stopped) return;
     const next = new pg.Client({ connectionString: databaseUrl });
@@ -96,10 +126,12 @@ export function createMissionBus(databaseUrl: string): MissionBus {
     next.on("end", () => void reconnect());
     next.on("notification", (message) => {
       if (message.channel === MISSION_EVENT_CHANNEL) deliver(message.payload);
+      if (message.channel === RUNNER_COMMAND_CHANNEL) deliverWork(message.payload);
     });
     try {
       await next.connect();
       await next.query(`listen ${MISSION_EVENT_CHANNEL}`);
+      await next.query(`listen ${RUNNER_COMMAND_CHANNEL}`);
       client = next;
       attempts = 0;
     } catch {
@@ -135,9 +167,21 @@ export function createMissionBus(databaseUrl: string): MissionBus {
         if (current.size === 0) listeners.delete(missionId);
       };
     },
+    subscribeWork(workstreamId, listener) {
+      const set = workListeners.get(workstreamId) ?? new Set<WorkListener>();
+      set.add(listener);
+      workListeners.set(workstreamId, set);
+      return () => {
+        const current = workListeners.get(workstreamId);
+        if (!current) return;
+        current.delete(listener);
+        if (current.size === 0) workListeners.delete(workstreamId);
+      };
+    },
     get size() {
       let total = 0;
       for (const set of listeners.values()) total += set.size;
+      for (const set of workListeners.values()) total += set.size;
       return total;
     },
     async stop() {
@@ -145,6 +189,7 @@ export function createMissionBus(databaseUrl: string): MissionBus {
       if (retryTimer) clearTimeout(retryTimer);
       retryTimer = null;
       listeners.clear();
+      workListeners.clear();
       const open = client;
       client = null;
       if (open) await open.end().catch(() => undefined);

@@ -117,6 +117,25 @@ export interface EnqueueArgs {
  * once: the second insert loses to the unique index and the caller gets the
  * command that already exists.
  */
+/**
+ * Tells the machine holding this lane that work is waiting (D-154).
+ *
+ * Sent inside the enqueueing transaction, so Postgres delivers it on commit
+ * and never on rollback — a runner is never woken for a command that does not
+ * exist. The payload is an address and nothing more: the runner still asks
+ * `GET /runner/commands` under its own credential, so the durable queue, its
+ * idempotency keys, its ordering and its acknowledgement lifecycle are all
+ * exactly as they were. This only removes the waiting.
+ */
+export const RUNNER_COMMAND_CHANNEL = "novus_runner_command";
+
+async function notifyRunner(client: pg.PoolClient, workstreamId: string): Promise<void> {
+  await client.query("select pg_notify($1, $2)", [
+    RUNNER_COMMAND_CHANNEL,
+    JSON.stringify({ workstreamId })
+  ]);
+}
+
 export async function enqueueCommand(client: pg.PoolClient, args: EnqueueArgs): Promise<string> {
   const commandId = newCommandId();
   const inserted = await client.query(
@@ -138,7 +157,10 @@ export async function enqueueCommand(client: pg.PoolClient, args: EnqueueArgs): 
     ]
   );
   const fresh = inserted.rows[0]?.cmd_id as string | undefined;
-  if (fresh) return fresh;
+  if (fresh) {
+    await notifyRunner(client, args.workstreamId);
+    return fresh;
+  }
   const existing = await client.query(
     "select cmd_id from runner_commands where wst_id = $1 and idempotency_key = $2",
     [args.workstreamId, args.idempotencyKey]
@@ -201,5 +223,6 @@ export async function enqueueRepeatable(
       `${args.kind}:${args.name ?? "*"}:${commandId}`
     ]
   );
+  await notifyRunner(client, args.workstreamId);
   return { kind: "enqueued", commandId };
 }

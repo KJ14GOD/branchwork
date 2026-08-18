@@ -165,7 +165,15 @@ function electronHost(): RunnerHost {
 const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 const DISCOVER_EVERY_MS = 15_000;
+/**
+ * How often a lane asks for its own commands when nothing is telling it
+ * (D-035). This is the floor, and which floor depends on whether the lane is
+ * holding a live signal: with one, work arrives the instant it is enqueued and
+ * this is only a safety net; without one, it is the whole mechanism and has to
+ * stay short enough that pressing send still feels immediate (D-154).
+ */
 const POLL_EVERY_MS = 2_000;
+const POLL_WHEN_LISTENING_MS = 15_000;
 /** How long a stopped turn is given to unwind before the app stops waiting. */
 const SHUTDOWN_GRACE_MS = 8_000;
 /** Bound on the remembered command ids: enough to cover a relaunch, not a log. */
@@ -413,6 +421,11 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
 
   let discovering = false;
   let polling = false;
+  /** Lanes holding a live command stream, and when each was last asked
+   *  (D-154). Together they decide which floor a lane polls on. */
+  const streams = new Map<string, AbortController>();
+  const listening = new Set<string>();
+  const lastPolled = new Map<string, number>();
   let stopped = false;
   let reconciled = false;
 
@@ -440,6 +453,13 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
 
   const discoverTimer = setInterval(() => void discover(), DISCOVER_EVERY_MS);
   const pollTimer = setInterval(() => void poll(), POLL_EVERY_MS);
+  // Every enrolment holds its own stream, re-dialled whenever one is missing:
+  // a lane enrolled after start, or one whose connection died, is picked up on
+  // the next tick rather than waiting for the next discovery (D-154).
+  const listenTimer = setInterval(() => {
+    if (stopped) return;
+    for (const [workstreamId, enrolment] of [...enrolments]) listen(workstreamId, enrolment);
+  }, POLL_EVERY_MS);
   // Parked is no longer forever: every discovery pass re-offers delivery to
   // any outbox still holding events, so ~32 s of control-plane downtime costs
   // fifteen more seconds of delay, not silence until the app quits (D-110).
@@ -454,7 +474,12 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   return {
     discoverNow: () => void discover(),
     republish: (missionId) => void republishFor(missionId),
-    pollNow: () => void poll(),
+    // A person just acted on this machine, so the floor does not apply: it
+    // exists to keep an idle runner quiet, not to make a click wait (D-154).
+    pollNow: () => {
+      lastPolled.clear();
+      void poll();
+    },
     captureScreenshot: capturePersonScreenshot,
     syncMovedBase,
     startRecording: startPersonRecording,
@@ -1228,16 +1253,87 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
 
   // --- Command loop ---------------------------------------------------------
 
+  /**
+   * The floor beneath the signal (D-154). A lane whose stream is live is asked
+   * every fifteen seconds rather than every two: the signal already brings its
+   * work the moment it is enqueued, and this is only here so a missed
+   * notification costs latency instead of silence. A lane with no live stream
+   * keeps the two-second floor, because then the floor is the mechanism.
+   */
   async function poll(): Promise<void> {
     if (stopped || polling) return;
     polling = true;
     try {
+      const now = Date.now();
       for (const [workstreamId, enrolment] of [...enrolments]) {
+        const floor = listening.has(workstreamId) ? POLL_WHEN_LISTENING_MS : POLL_EVERY_MS;
+        if (now - (lastPolled.get(workstreamId) ?? 0) < floor - 100) continue;
+        lastPolled.set(workstreamId, now);
         await pollWorkstream(workstreamId, enrolment);
       }
     } finally {
       polling = false;
     }
+  }
+
+  /**
+   * Holds one lane's command stream open (D-154).
+   *
+   * One connection per enrolment rather than one per machine, because a runner
+   * credential is scoped to a single (organization, mission, workstream,
+   * runner) — the scoping is what makes the endpoint safe, so it is also what
+   * decides the shape. A machine working several lanes holds several, which is
+   * the honest cost of that scoping and is a handful of connections, not a
+   * fan-out.
+   *
+   * A signal means only *ask for your commands*. Nothing about the queue, the
+   * idempotency keys, the ordering or the acknowledgements changes; a stream
+   * that never connects at all leaves the runner exactly as it was before this
+   * existed, polling on its two-second floor.
+   */
+  function listen(workstreamId: string, enrolment: Enrolment): void {
+    if (streams.has(workstreamId)) return;
+    const controller = new AbortController();
+    streams.set(workstreamId, controller);
+    void (async () => {
+      try {
+        const response = await httpFetch(`${deps.controlPlaneUrl}/runner/stream`, {
+          method: "GET",
+          headers: {
+            accept: "text/event-stream",
+            authorization: `Runner ${enrolment.credential}`
+          },
+          signal: controller.signal
+        });
+        if (!response.ok || !response.body) return;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let split = buffer.indexOf("\n\n");
+          while (split !== -1) {
+            const frame = buffer.slice(0, split);
+            buffer = buffer.slice(split + 2);
+            if (frame.startsWith("event: ready")) listening.add(workstreamId);
+            if (frame.startsWith("event: work")) {
+              lastPolled.set(workstreamId, Date.now());
+              void pollWorkstream(workstreamId, enrolment);
+            }
+            split = buffer.indexOf("\n\n");
+          }
+          if (buffer.length > 8 * 1024) buffer = "";
+        }
+      } catch {
+        // Aborted at shutdown, or the connection died. Both land here, and
+        // both mean the same thing: this lane is back on its short floor.
+      } finally {
+        listening.delete(workstreamId);
+        streams.delete(workstreamId);
+      }
+    })();
   }
 
   async function pollWorkstream(workstreamId: string, enrolment: Enrolment): Promise<void> {
@@ -2014,6 +2110,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     stopped = true;
     clearInterval(discoverTimer);
     clearInterval(pollTimer);
+    clearInterval(listenTimer);
+    for (const controller of streams.values()) controller.abort();
+    streams.clear();
+    listening.clear();
     clearInterval(outboxTimer);
 
     for (const [, running] of active) running.turn.stop(reason);

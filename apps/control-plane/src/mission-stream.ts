@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { RouteDeps } from "./routes.ts";
 import { missionAccess } from "./authz.ts";
 import { touchHeldLeases, touchPresence } from "./reliability.ts";
+import { runnerAuthenticator } from "./runner.ts";
 import type { MissionBus } from "./mission-bus.ts";
 
 const MissionParamsSchema = z.object({ missionId: z.string().startsWith("msn_") });
@@ -49,6 +50,69 @@ const PRESENCE_TOUCH_MS = 10_000;
  * nothing that endpoint would not already return, and the projection stays the
  * single place that decides what a given person may see.
  */
+/**
+ * The runner's own wait (D-154).
+ *
+ * The same shape as the room's stream and for the same reason: everything on
+ * this wire travels one way, and the runner's other half — posting events,
+ * acknowledging commands, reporting completion — already has authorized routes
+ * that are unchanged. What crosses is a **bare signal**: work is waiting on
+ * this lane. No command, no payload, no id. The runner then asks
+ * `GET /runner/commands` under its own credential exactly as it does on its
+ * timer, so the durable queue keeps its idempotency keys, its ordering, its
+ * delivered/acknowledged/completed lifecycle and its de-duplication untouched.
+ * This removes the waiting and nothing else, which is precisely why it is
+ * cheap: D-035's semantics never enter the transport.
+ */
+export function registerRunnerStreamRoutes(app: FastifyInstance, deps: RouteDeps, bus: MissionBus): void {
+  const requireRunner = runnerAuthenticator(deps);
+
+  app.get("/runner/stream", async (request, reply) => {
+    const runner = await requireRunner(request, reply);
+    if (!runner) return;
+
+    const raw = reply.raw;
+    reply.hijack();
+    raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no"
+    });
+
+    let open = true;
+    const write = (line: string): void => {
+      if (!open) return;
+      try {
+        raw.write(line);
+      } catch {
+        close();
+      }
+    };
+
+    write(`event: ready\ndata: ${JSON.stringify({ workstreamId: runner.workstreamId })}\n\n`);
+    const unsubscribe = bus.subscribeWork(runner.workstreamId, () => {
+      write("event: work\ndata: {}\n\n");
+    });
+    const heartbeat = setInterval(() => write(": heartbeat\n\n"), HEARTBEAT_MS);
+
+    function close(): void {
+      if (!open) return;
+      open = false;
+      clearInterval(heartbeat);
+      unsubscribe();
+      try {
+        raw.end();
+      } catch {
+        // Already gone.
+      }
+    }
+
+    request.raw.on("close", close);
+    request.raw.on("error", close);
+  });
+}
+
 export function registerMissionStreamRoutes(app: FastifyInstance, deps: RouteDeps, bus: MissionBus): void {
   app.get("/missions/:missionId/stream", async (request, reply) => {
     const ctx = await deps.requireAuth(request, reply);

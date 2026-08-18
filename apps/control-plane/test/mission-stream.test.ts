@@ -48,6 +48,36 @@ afterAll(async () => {
   await harness?.close();
 });
 
+async function missionWithLane(): Promise<{ missionId: string; workstreamId: string }> {
+  const localId = randomUUID();
+  const headSha = sha(localId);
+  await harness.app.inject({
+    method: "POST",
+    url: "/repositories/local",
+    headers: bearer(kartik),
+    payload: { localId, name: "novus/local", defaultBranch: "main", headSha }
+  });
+  const created = await harness.app.inject({
+    method: "POST",
+    url: "/missions",
+    headers: bearer(kartik),
+    payload: {
+      goal: "Hear about work without asking",
+      successCriteria: "The machine is told",
+      provider: "local",
+      providerRepoId: localId,
+      baseRef: "main",
+      baseSha: headSha,
+      creationKey: randomUUID()
+    }
+  });
+  expect(created.statusCode).toBe(201);
+  return {
+    missionId: created.json().mission.missionId as string,
+    workstreamId: created.json().workstream.workstreamId as string
+  };
+}
+
 async function mission(): Promise<{ missionId: string; orgId: string }> {
   const localId = randomUUID();
   const headSha = sha(localId);
@@ -135,6 +165,130 @@ async function eventually<T>(read: () => T, predicate: (value: T) => boolean, ms
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
+
+/** Enrols this machine as the lane's runner and returns its credential. */
+async function enrolRunner(room: { missionId: string; workstreamId: string }): Promise<string> {
+  await harness.app.inject({
+    method: "POST",
+    url: `/workstreams/${room.workstreamId}/branch/report`,
+    headers: bearer(kartik),
+    payload: { status: "created" }
+  });
+  const enrolled = await harness.app.inject({
+    method: "POST",
+    url: `/workstreams/${room.workstreamId}/runner`,
+    headers: bearer(kartik),
+    payload: { workstreamId: room.workstreamId, label: "test-machine" }
+  });
+  expect(enrolled.statusCode).toBe(200);
+  return enrolled.json().credential as string;
+}
+
+/** Opens the runner's command stream and counts the work signals it gets. */
+async function openRunnerStream(
+  credential: string
+): Promise<{ signals: () => number; ready: Promise<void>; close: () => void }> {
+  const controller = new AbortController();
+  let count = 0;
+  let markReady = (): void => undefined;
+  const ready = new Promise<void>((resolve) => {
+    markReady = resolve;
+  });
+  const response = await fetch(`${origin}/runner/stream`, {
+    headers: { authorization: `Runner ${credential}` },
+    signal: controller.signal
+  });
+  expect(response.status).toBe(200);
+  void (async () => {
+    const reader = response.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        buffer += decoder.decode(value, { stream: true });
+        let split = buffer.indexOf("\n\n");
+        while (split !== -1) {
+          const frame = buffer.slice(0, split);
+          buffer = buffer.slice(split + 2);
+          if (frame.startsWith("event: ready")) markReady();
+          if (frame.startsWith("event: work")) count += 1;
+          split = buffer.indexOf("\n\n");
+        }
+      }
+    } catch {
+      // Aborted at the end of a test.
+    }
+  })();
+  await ready;
+  return { signals: () => count, ready, close: () => controller.abort() };
+}
+
+/**
+ * The runner's own wait (D-154).
+ *
+ * The claim is narrow on purpose: a signal means *ask for your commands*, and
+ * nothing about the durable queue changes. So these check that the signal
+ * arrives when work is enqueued, that it is scoped to the lane the credential
+ * names, and that no credential means no stream at all.
+ */
+describe("the runner command stream", () => {
+  it("signals the lane when a command is enqueued for it", async () => {
+    const room = await missionWithLane();
+    const credential = await enrolRunner(room);
+    const stream = await openRunnerStream(credential);
+    try {
+      const directed = await harness.app.inject({
+        method: "POST",
+        url: `/missions/${room.missionId}/direction`,
+        headers: bearer(kartik),
+        payload: { body: "Do the thing", workstreamId: room.workstreamId }
+      });
+      expect(directed.statusCode).toBe(200);
+      const seen = await eventually(
+        () => stream.signals(),
+        (count) => count > 0
+      );
+      expect(seen).toBeGreaterThan(0);
+    } finally {
+      stream.close();
+    }
+  }, 30_000);
+
+  it("does not signal one lane about another lane's work", async () => {
+    const mine = await missionWithLane();
+    const other = await missionWithLane();
+    const credential = await enrolRunner(mine);
+    await enrolRunner(other);
+    const stream = await openRunnerStream(credential);
+    try {
+      const directed = await harness.app.inject({
+        method: "POST",
+        url: `/missions/${other.missionId}/direction`,
+        headers: bearer(kartik),
+        payload: { body: "Work for somebody else", workstreamId: other.workstreamId }
+      });
+      expect(directed.statusCode).toBe(200);
+      // Longer than delivery ever needs, then insist on silence.
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      expect(stream.signals()).toBe(0);
+    } finally {
+      stream.close();
+    }
+  }, 30_000);
+
+  it("is refused without a runner credential, and to a user session", async () => {
+    const anonymous = await fetch(`${origin}/runner/stream`);
+    expect(anonymous.status).toBe(401);
+    // A user session is not a runner: the schemes are deliberately distinct.
+    const asPerson = await fetch(`${origin}/runner/stream`, {
+      headers: { authorization: `Bearer ${kartik.token}` }
+    });
+    expect(asPerson.status).toBe(401);
+  }, 30_000);
+});
 
 describe("the mission stream", () => {
   it("tells an open room that the mission moved, naming the sequence", async () => {
