@@ -1052,7 +1052,14 @@ describe("an unconfigured store (D-122)", () => {
     const previous = process.env.NOVUS_ARTIFACT_STORE;
     process.env.NOVUS_ARTIFACT_STORE = "";
     const bare = await createHarness("novus_test_artifacts_unconfigured", new FakeRepositoryProvider());
-    process.env.NOVUS_ARTIFACT_STORE = previous;
+    // Assigning `undefined` to a process env var sets the *string*
+    // "undefined", which is neither "local" nor "s3" — so every harness built
+    // after this one in the same process silently had no artifact store. It
+    // went unnoticed while this file owned the only store-dependent suite;
+    // the D-150 suite is the second, and it failed on a 503 whose cause was
+    // here. Unset means unset.
+    if (previous === undefined) delete process.env.NOVUS_ARTIFACT_STORE;
+    else process.env.NOVUS_ARTIFACT_STORE = previous;
     try {
       const person = await bare.signIn("kartik");
       const localId = randomUUID();

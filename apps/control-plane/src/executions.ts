@@ -286,6 +286,21 @@ export async function dispatchDirection(
       return { executionId: null, commandId: null, deferred: "That direction is no longer available." };
     }
 
+    // The images this direction was submitted with (D-150). Addresses and
+    // facts, never bytes: the runner fetches each blob under its own
+    // credential and hands it to the harness. A command payload is durable and
+    // replayable, and a base64 image inside one would be both forever.
+    const attachments = (
+      await client.query(
+        `select a.art_id, a.mime_type, a.label
+           from direction_attachments da
+           join artifacts a on a.art_id = da.art_id
+          where da.dir_id = $1 and a.state = 'available'
+          order by da.ordinal`,
+        [args.directionId]
+      )
+    ).rows as { art_id: string; mime_type: string; label: string }[];
+
     const base = {
       orgId: access.orgId,
       missionId: access.missionId,
@@ -311,6 +326,12 @@ export async function dispatchDirection(
           // (found by the D-109 audit; the D-083 rule, finally applied here).
           sessionId,
           resumeSessionId: await sessionResumePoint(client, sessionId),
+          // What the person attached, for the harness to actually see (D-150).
+          attachments: attachments.map((row) => ({
+            artifactId: row.art_id,
+            mimeType: row.mime_type,
+            label: row.label
+          })),
           // Same reasoning for the profile (D-115): a live turn keeps the one
           // pinned at its own dispatch, and the fresh process an after-end
           // apply spawns must state its policy rather than inherit a default.
@@ -425,6 +446,13 @@ export async function dispatchDirection(
         effort: args.effort,
         sessionId,
         resumeSessionId,
+        // What the person attached (D-150), by address — the first turn of a
+        // direction sees the same images a later apply of it would.
+        attachments: attachments.map((row) => ({
+          artifactId: row.art_id,
+          mimeType: row.mime_type,
+          label: row.label
+        })),
         // Pinned at dispatch (D-097, the D-043 pattern): the turn enforces
         // the scope the controller had approved when it was authorized.
         scope,
@@ -678,7 +706,8 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
       {
         ...(body.data.sessionId ? { sessionId: body.data.sessionId } : {}),
         newSession: body.data.newSession
-      }
+      },
+      body.data.attachmentIds
     );
     // Only the controller's own direction proceeds toward the harness; anyone
     // else's waits, visibly, for whoever holds the baton. Alongside starts a

@@ -980,3 +980,30 @@ create unique index if not exists artifact_attachments_one_live
 -- The decision's chosen visual evidence (D-122): exact artifact ids, frozen
 -- at record time with the rationale, preserved into the receipt snapshot.
 alter table decisions add column if not exists artifact_ids jsonb not null default '[]'::jsonb;
+
+-- Images a person attached to a direction (D-150). A join table rather than a
+-- column on directions: the ordering is the person's own, and the artifact row
+-- keeps its digest, state and lifecycle exactly as every other artifact does.
+-- Deliberately not `artifact_attachments`: that table records where an
+-- artifact is presented *as evidence*, an act with its own capability and its
+-- own detach. This is what a direction was submitted carrying, which is fixed
+-- the moment it is submitted and never changes again.
+create table if not exists direction_attachments (
+  dir_id       text not null references directions(dir_id) on delete cascade,
+  art_id       text not null references artifacts(art_id),
+  ordinal      int  not null,
+  primary key (dir_id, art_id)
+);
+create index if not exists direction_attachments_by_direction
+  on direction_attachments (dir_id, ordinal);
+
+-- The artifact vocabulary widens for the kind a person supplies rather than
+-- Novus capturing (D-150). Both constraints are re-stated in one place each,
+-- the D-035 lesson: a vocabulary widened in two places is a migration that
+-- can never run twice.
+alter table artifacts drop constraint if exists artifacts_kind_check;
+alter table artifacts add constraint artifacts_kind_check
+  check (kind in ('screenshot', 'recording', 'attachment'));
+alter table artifacts drop constraint if exists artifacts_capture_source_check;
+alter table artifacts add constraint artifacts_capture_source_check
+  check (capture_source in ('preview', 'upload'));

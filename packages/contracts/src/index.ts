@@ -792,6 +792,97 @@ export const ParticipantSchema = z.object({
 });
 export type Participant = z.infer<typeof ParticipantSchema>;
 
+// --- Artifact primitives, defined here because direction carries them ------
+//
+// The artifact section proper is further down (D-022, D-122); these are its
+// vocabulary, lifted above the first schema that needs them — a direction may
+// carry attached images (D-150), and a schema cannot reference one declared
+// after it.
+
+/**
+ * `attachment` (D-150) is the one kind a person *supplies* rather than Novus
+ * capturing: an image handed to the room with a direction. It shares the whole
+ * artifact lifecycle — promised digest, store-verified bytes, expiring view
+ * grants — because a picture the agent acted on is evidence exactly as a
+ * captured one is, and it must survive the laptop that sent it.
+ */
+export const ArtifactKindSchema = z.enum(["screenshot", "recording", "attachment"]);
+
+/** What a *capture* may produce (D-122). Deliberately narrower than the kind
+ *  vocabulary: an attachment is supplied, never captured, so the capture
+ *  routes refuse the word by type rather than by a check somebody could
+ *  forget to write. */
+export const CaptureKindSchema = z.enum(["screenshot", "recording"]);
+export type CaptureKind = z.infer<typeof CaptureKindSchema>;
+export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
+
+/**
+ * The artifact's lifecycle. `pending` and `uploading` are never evidence;
+ * `failed` never pretends otherwise; `interrupted` is a recording whose bytes
+ * are real but whose ending was not its own Stop — playable, and marked.
+ */
+export const ArtifactStateSchema = z.enum([
+  "pending",
+  "uploading",
+  "available",
+  "interrupted",
+  "failed"
+]);
+export type ArtifactState = z.infer<typeof ArtifactStateSchema>;
+
+/** Who caused the capture: a person's own click, or a coding agent's request
+ *  routed through the approval machinery (D-123). Never ambiguous. */
+export const ArtifactInitiatorSchema = z.enum(["person", "agent"]);
+export type ArtifactInitiator = z.infer<typeof ArtifactInitiatorSchema>;
+
+/** Where an artifact's bytes came from. `preview` is the validated loopback
+ *  Preview of the lane's own running application (D-098) — the only surface
+ *  Novus captures. `upload` is a person's own file, which Novus never
+ *  captured and never claims to have (D-150); an enum so a further source is
+ *  a deliberate widening, never a free string. */
+export const ArtifactCaptureSourceSchema = z.enum(["preview", "upload"]);
+
+/** The allowed blob types, closed. PNG is what `capturePage` produces; WebM
+ *  is what Chromium's own recorder produces and replays (D-123). */
+export const ARTIFACT_MIME_TYPES = [
+  "image/png",
+  "video/webm",
+  "image/jpeg",
+  "image/gif",
+  "image/webp"
+] as const;
+export const ArtifactMimeSchema = z.enum(ARTIFACT_MIME_TYPES);
+
+/**
+ * What a person may attach to a direction (D-150) — images only, and a closed
+ * set of them. Everything here is a format the harness can be handed and a
+ * browser can render; anything else is refused by name rather than sent as
+ * bytes nothing downstream can read.
+ */
+export const ATTACHMENT_MIME_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+export const AttachmentMimeSchema = z.enum(ATTACHMENT_MIME_TYPES);
+export type AttachmentMime = z.infer<typeof AttachmentMimeSchema>;
+
+export const MAX_SCREENSHOT_BYTES = 20_000_000;
+export const MAX_RECORDING_BYTES = 200_000_000;
+export const MAX_THUMBNAIL_BYTES = 1_000_000;
+/**
+ * The ceiling on one attached image *after* the client has resized it
+ * (D-150). The resize happens before the upload rather than after, so a phone
+ * screenshot costs the store, the wire, and the harness's context what a
+ * readable image costs and not what the camera produced.
+ */
+export const MAX_ATTACHMENT_BYTES = 5_000_000;
+/** The longest edge an attachment is scaled down to before upload. */
+export const MAX_ATTACHMENT_EDGE = 1568;
+/** How many images one direction may carry. Bounded because every one of them
+ *  is re-read into the harness's context on the turn it belongs to. */
+export const MAX_DIRECTION_ATTACHMENTS = 4;
+/** A recording stops itself at this bound, stated in the interface (D-123). */
+export const MAX_RECORDING_MS = 5 * 60_000;
+
+export const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, "must be a lowercase hex SHA-256");
+
 // --- Direction (PRODUCT.md#direction) ---------------------------------------
 
 export const DirectionStateSchema = z.enum([
@@ -803,6 +894,32 @@ export const DirectionStateSchema = z.enum([
   "cancelled"
 ]);
 export type DirectionState = z.infer<typeof DirectionStateSchema>;
+
+/**
+ * One image carried by a direction (D-150), as the room reads it. The bytes
+ * live in the artifact store; this is the address and the facts a reader needs
+ * to decide whether to open it.
+ */
+export const DirectionAttachmentSchema = z.object({
+  artifactId: z.string().startsWith("art_"),
+  mimeType: AttachmentMimeSchema,
+  byteSize: z.number().int().positive(),
+  /** The person's own filename, shown as the image's name. */
+  label: z.string().min(1).max(120),
+  /** Only an `available` attachment was ever handed to the harness. One that
+   *  failed its digest check is still listed — silently dropping it would make
+   *  the record claim the turn saw something it did not. */
+  state: ArtifactStateSchema
+});
+export type DirectionAttachment = z.infer<typeof DirectionAttachmentSchema>;
+
+/** One image the composer is holding, uploaded and ready to be submitted with
+ *  the words (D-150). `resized` is stated rather than hidden: a person who
+ *  attached a 12-megapixel screenshot should know a smaller one was sent. */
+export const PreparedAttachmentSchema = DirectionAttachmentSchema.omit({ state: true }).extend({
+  resized: z.boolean()
+});
+export type PreparedAttachment = z.infer<typeof PreparedAttachmentSchema>;
 
 export const DirectionSchema = z.object({
   directionId: z.string().startsWith("dir_"),
@@ -819,7 +936,12 @@ export const DirectionSchema = z.object({
   submittedAt: z.string().datetime(),
   appliedAt: z.string().datetime().nullable(),
   resolutionReason: z.string().nullable(),
-  consumedByExecutionId: z.string().nullable()
+  consumedByExecutionId: z.string().nullable(),
+  /** Images this direction was submitted with (D-150), oldest first. Ids and
+   *  their facts, never bytes: viewing one mints its own expiring grant like
+   *  every other artifact read. Empty for every direction that carried none,
+   *  which is every direction written before this existed. */
+  attachments: z.array(DirectionAttachmentSchema).max(MAX_DIRECTION_ATTACHMENTS).default([])
 });
 export type Direction = z.infer<typeof DirectionSchema>;
 
@@ -846,7 +968,15 @@ export const DirectionInputSchema = z.object({
    *  immediate dispatch does. The turn may not change the worktree — every
    *  permission request it raises is denied by policy — and it records no
    *  checkpoint. */
-  alongside: z.boolean().default(false)
+  alongside: z.boolean().default(false),
+  /** Images to hand the harness with these words (D-150). Each must already be
+   *  an `available` attachment of this mission, uploaded and digest-verified
+   *  before the direction is submitted — a direction is never held open
+   *  waiting for bytes. Ids only: the wire carries no image data. */
+  attachmentIds: z
+    .array(z.string().startsWith("art_"))
+    .max(MAX_DIRECTION_ATTACHMENTS)
+    .default([])
 });
 export type DirectionInput = z.infer<typeof DirectionInputSchema>;
 
@@ -1499,45 +1629,6 @@ export type WorkspaceProcess = z.infer<typeof WorkspaceProcessSchema>;
 // durable. An artifact is immutable once available: attaching it to a check,
 // decision, receipt, or pull request changes the relationship, not the blob.
 
-export const ArtifactKindSchema = z.enum(["screenshot", "recording"]);
-export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
-
-/**
- * The artifact's lifecycle. `pending` and `uploading` are never evidence;
- * `failed` never pretends otherwise; `interrupted` is a recording whose bytes
- * are real but whose ending was not its own Stop — playable, and marked.
- */
-export const ArtifactStateSchema = z.enum([
-  "pending",
-  "uploading",
-  "available",
-  "interrupted",
-  "failed"
-]);
-export type ArtifactState = z.infer<typeof ArtifactStateSchema>;
-
-/** Who caused the capture: a person's own click, or a coding agent's request
- *  routed through the approval machinery (D-123). Never ambiguous. */
-export const ArtifactInitiatorSchema = z.enum(["person", "agent"]);
-export type ArtifactInitiator = z.infer<typeof ArtifactInitiatorSchema>;
-
-/** The only capture surface this build has: the validated loopback Preview of
- *  the lane's own running application (D-098). An enum so a future source is
- *  a deliberate widening, never a free string. */
-export const ArtifactCaptureSourceSchema = z.enum(["preview"]);
-
-/** The allowed blob types, closed. PNG is what `capturePage` produces; WebM
- *  is what Chromium's own recorder produces and replays (D-123). */
-export const ARTIFACT_MIME_TYPES = ["image/png", "video/webm"] as const;
-export const ArtifactMimeSchema = z.enum(ARTIFACT_MIME_TYPES);
-
-export const MAX_SCREENSHOT_BYTES = 20_000_000;
-export const MAX_RECORDING_BYTES = 200_000_000;
-export const MAX_THUMBNAIL_BYTES = 1_000_000;
-/** A recording stops itself at this bound, stated in the interface (D-123). */
-export const MAX_RECORDING_MS = 5 * 60_000;
-
-export const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, "must be a lowercase hex SHA-256");
 
 
 /** Where an artifact is being used as evidence. Decisions carry their chosen
@@ -1637,7 +1728,7 @@ export type ArtifactProvenance = z.infer<typeof ArtifactProvenanceSchema>;
 
 export const BeginArtifactInputSchema = z.object({
   workstreamId: z.string().startsWith("wst_").optional(),
-  kind: ArtifactKindSchema,
+  kind: CaptureKindSchema,
   mimeType: ArtifactMimeSchema,
   byteSize: z.number().int().positive(),
   sha256: Sha256Schema,
@@ -1653,6 +1744,27 @@ export const BeginArtifactInputSchema = z.object({
   provenance: ArtifactProvenanceSchema
 });
 export type BeginArtifactInput = z.infer<typeof BeginArtifactInputSchema>;
+
+/**
+ * A person attaching an image to a direction (D-150). Deliberately *not*
+ * `BeginArtifactInput`: that shape demands capture provenance — a process, a
+ * validated origin, a readiness — and an attachment has none of it. Novus did
+ * not photograph anything here; somebody handed it a file, and the record says
+ * so rather than inventing a producer.
+ */
+export const BeginAttachmentInputSchema = z.object({
+  workstreamId: z.string().startsWith("wst_").optional(),
+  /** The conversation this image was attached in. The direction it rides on
+   *  belongs to one, so unlike a person's own capture this is never null. */
+  sessionId: z.string().startsWith("csn_").optional(),
+  mimeType: AttachmentMimeSchema,
+  byteSize: z.number().int().positive().max(MAX_ATTACHMENT_BYTES),
+  sha256: Sha256Schema,
+  /** The person's own name for the file, kept only as a label. It is never a
+   *  path, never a key, and never used to address anything. */
+  filename: z.string().min(1).max(120)
+});
+export type BeginAttachmentInput = z.infer<typeof BeginAttachmentInputSchema>;
 
 /** The runner's begin (agent-requested capture): the same claim plus the
  *  execution that asked, whose approval routing authorized the act (D-123). */
@@ -1673,6 +1785,15 @@ export const ArtifactUploadGrantSchema = z.object({
   expiresAt: z.string().datetime()
 });
 export type ArtifactUploadGrant = z.infer<typeof ArtifactUploadGrantSchema>;
+
+/** What begins an attachment: the row as the room will read it, and the one
+ *  short-lived grant that carries its bytes to the store. No thumbnail —
+ *  an attached image is its own thumbnail. */
+export const BeginAttachmentResponseSchema = z.object({
+  artifact: ArtifactSchema,
+  upload: ArtifactUploadGrantSchema
+});
+export type BeginAttachmentResponse = z.infer<typeof BeginAttachmentResponseSchema>;
 
 export const BeginArtifactResponseSchema = z.object({
   artifact: ArtifactSchema,
@@ -3096,7 +3217,14 @@ export const IpcDirectInputSchema = z.object({
   /** Creates a session from these words and directs it (D-083). */
   newSession: z.boolean().default(false),
   /** Run this chat's turn alongside the workspace's, read-only (D-095). */
-  alongside: z.boolean().default(false)
+  alongside: z.boolean().default(false),
+  /** Images this direction carries (D-150), already uploaded. Bounded here as
+   *  well as at the control plane: the bridge is a validation boundary in its
+   *  own right, and a field it does not name is a field it silently drops. */
+  attachmentIds: z
+    .array(z.string().startsWith("art_"))
+    .max(MAX_DIRECTION_ATTACHMENTS)
+    .default([])
 });
 export type IpcDirectInput = z.infer<typeof IpcDirectInputSchema>;
 
@@ -3196,6 +3324,20 @@ export interface NovusBridge {
     /** Fires when the watched mission moves. The listener re-reads through
      *  `get`; the signal itself carries no room data. */
     onChanged(listener: (change: MissionChange) => void): () => void;
+    /** Opens this machine's file picker for an image, returning the chosen
+     *  path or null (D-150). The path is the main process's to read; the
+     *  renderer only hands it back to `attachImage`. */
+    pickImage(): Promise<IpcResult<string | null>>;
+    /** Prepares and uploads one image, returning the attachment a direction
+     *  can then carry (D-150). Resizing, hashing, the upload grant, and the
+     *  store's verification all happen in the main process — the renderer
+     *  never holds bytes, a digest, or a credential. */
+    attachImage(input: {
+      missionId: string;
+      workstreamId?: string;
+      sessionId?: string;
+      path: string;
+    }): Promise<IpcResult<PreparedAttachment>>;
     retryBranch(workstreamId: string): Promise<IpcResult<Workstream>>;
     /** Follows a moved base (D-144): this machine merges the base branch's
      *  tip into every lane's worktree — all lanes or none — and the control
@@ -3220,6 +3362,9 @@ export interface NovusBridge {
       /** Run this chat alongside the workspace's turn, read-only (D-095).
        *  Baton holder only; the server refuses anyone else in words. */
       alongside?: boolean;
+      /** Images to hand the harness with these words (D-150), already
+       *  uploaded through `attachImage`. */
+      attachmentIds?: string[];
     }): Promise<
       IpcResult<{
         directionId: string;

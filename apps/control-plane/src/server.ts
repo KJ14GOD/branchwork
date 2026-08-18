@@ -34,6 +34,7 @@ import { registerArtifactRoutes } from "./artifacts.ts";
 import { registerArchiveRoutes } from "./archive.ts";
 import { registerCloseRoutes } from "./close.ts";
 import { registerMissionStreamRoutes } from "./mission-stream.ts";
+import { registerAttachmentRoutes } from "./attachments.ts";
 import { inertMissionBus, type MissionBus } from "./mission-bus.ts";
 import { registerAuthorityRoutes } from "./authority.ts";
 import { registerExecutionRoutes } from "./executions.ts";
@@ -333,6 +334,7 @@ export function buildServer(
   registerApprovalRoutes(app, deps);
   registerApproachRoutes(app, deps);
   registerArtifactRoutes(app, deps);
+  registerAttachmentRoutes(app, deps);
   registerArchiveRoutes(app, deps);
   registerCloseRoutes(app, deps);
   registerAuthorityRoutes(app, deps);

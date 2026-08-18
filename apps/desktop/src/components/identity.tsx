@@ -74,6 +74,21 @@ export function SignOutGlyph() {
   );
 }
 
+/** An image, in the same stroke set as the rest of the glyphs (D-150): a
+ *  frame with a horizon and a sun, which reads as a picture at 14px where a
+ *  photograph outline does not. */
+export function ImageGlyph({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" width="14" height="14" fill="none"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true">
+      <rect x="2.25" y="3.25" width="11.5" height="9.5" rx="1.5" />
+      <path d="M2.5 10.5 5.75 7.5l2.5 2.25 2-1.75 3.25 2.75" />
+      <circle cx="6" cy="6" r="1" />
+    </svg>
+  );
+}
+
 export function ClaudeGlyph({ className = "harness-glyph" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="Claude Code">

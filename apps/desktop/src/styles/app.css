@@ -5805,3 +5805,91 @@ body.resizing {
   align-items: center;
   gap: 8px;
 }
+
+/* Images attached to a direction (D-150).
+   In the composer they are named, not shown: the box is a place to write, and
+   a thumbnail strip there would make it a gallery. In the trace they are shown,
+   because there the picture is what the turn is about. */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+}
+
+.composer-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-1) var(--s-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+  font: var(--type-micro);
+  color: var(--text-2);
+}
+
+.composer-attachment-glyph {
+  color: var(--text-3);
+}
+
+.composer-attachment-name {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment-note {
+  color: var(--text-3);
+}
+
+.composer-attachment-remove {
+  border: 0;
+  background: none;
+  padding: 0 var(--s-1);
+  color: var(--text-3);
+  cursor: pointer;
+  font: var(--type-meta);
+}
+
+.composer-attachment-remove:hover:not(:disabled) {
+  color: var(--text-1);
+}
+
+.trace-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: var(--s-2) 0 var(--s-3);
+}
+
+.trace-attachment {
+  margin: 0;
+  max-width: 320px;
+}
+
+.trace-attachment-image {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+}
+
+.trace-attachment-name {
+  margin-top: var(--s-1);
+  font: var(--type-micro);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Named rather than dropped: the record must never imply the turn saw
+   something it did not. */
+.trace-attachment-missing {
+  font: var(--type-micro);
+  color: var(--warn);
+}

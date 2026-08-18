@@ -14,6 +14,7 @@ import {
   FileDiffResponseSchema,
   InvitationListResponseSchema,
   MeResponseSchema,
+  BeginAttachmentResponseSchema,
   MissionChangeSchema,
   MissionDetailResponseSchema,
   MissionListResponseSchema,
@@ -32,6 +33,7 @@ import {
   type AuthClaimResponse,
   type AuthStartResponse,
   type BeginArtifactResponse,
+  type BeginAttachmentResponse,
   type AvailableRepository,
   type BaseRevision,
   type CreateMissionInput,
@@ -333,6 +335,8 @@ export class ControlPlaneClient {
       sessionId?: string;
       newSession?: boolean;
       alongside?: boolean;
+      /** Images this direction carries (D-150), already uploaded. */
+      attachmentIds?: string[];
     }
   ): Promise<z.infer<typeof SubmitDirectionResponseSchema>> {
     return this.request(
@@ -495,6 +499,19 @@ export class ControlPlaneClient {
       input
     );
     return body.decisionId;
+  }
+
+  // --- Images attached to a direction (D-150) --------------------------------
+
+  /** Begins one attachment: the promise in, the row and its upload grant out.
+   *  The bytes travel to the store directly, never through this client. */
+  beginAttachment(missionId: string, input: unknown): Promise<BeginAttachmentResponse> {
+    return this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/attachments`,
+      BeginAttachmentResponseSchema,
+      input
+    );
   }
 
   // --- Durable visual evidence (D-122) --------------------------------------

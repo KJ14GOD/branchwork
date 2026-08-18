@@ -327,6 +327,34 @@ export function TraceView({
         </p>
       )}
 
+      {/* What the person sent with the words (D-150). The image itself, at a
+          size that reads without taking the turn over — the picture is the
+          point, and a filename beside a turn about a screenshot says less than
+          the screenshot does. An attachment whose bytes never verified is
+          named rather than dropped: the record must not imply the harness saw
+          something it did not. */}
+      {(direction?.attachments ?? []).length > 0 && (
+        <div className="trace-attachments" data-testid="direction-attachments">
+          {(direction?.attachments ?? []).map((image) =>
+            image.state === "available" ? (
+              <figure className="trace-attachment" key={image.artifactId}>
+                <img
+                  className="trace-attachment-image"
+                  src={`novus-artifact://${image.artifactId}/blob`}
+                  alt={image.label}
+                  loading="lazy"
+                />
+                <figcaption className="trace-attachment-name">{image.label}</figcaption>
+              </figure>
+            ) : (
+              <span className="trace-attachment-missing" key={image.artifactId}>
+                {image.label} — not uploaded, so the turn never saw it
+              </span>
+            )
+          )}
+        </div>
+      )}
+
       {/* The controller's own direction applies at the next receptive point
           without further action (PRODUCT.md#direction), so it is never
           presented to them as something to approve. */}

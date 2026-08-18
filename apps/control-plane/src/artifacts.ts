@@ -50,12 +50,12 @@ const VIEW_TTL_SECONDS = 300;
  *  evidence forever. */
 export const PENDING_ARTIFACT_TTL_MS = 15 * 60_000;
 
-const blobKey = (missionId: string, artifactId: string) =>
+export const blobKey = (missionId: string, artifactId: string) =>
   `missions/${missionId}/artifacts/${artifactId}/blob`;
 const thumbKey = (missionId: string, artifactId: string) =>
   `missions/${missionId}/artifacts/${artifactId}/thumb`;
 
-interface ArtifactRow {
+export interface ArtifactRow {
   art_id: string;
   org_id: string;
   mission_id: string;
@@ -93,7 +93,7 @@ interface ArtifactRow {
   created_at: Date;
 }
 
-function serveArtifact(row: ArtifactRow, attachments: ArtifactAttachmentRef[]): Artifact {
+export function serveArtifact(row: ArtifactRow, attachments: ArtifactAttachmentRef[]): Artifact {
   return ArtifactSchema.parse({
     artifactId: row.art_id,
     missionId: row.mission_id,
@@ -128,7 +128,7 @@ function serveArtifact(row: ArtifactRow, attachments: ArtifactAttachmentRef[]): 
   });
 }
 
-const ARTIFACT_SELECT = `
+export const ARTIFACT_SELECT = `
   select a.*, u.login as created_by_login
     from artifacts a
     left join users u on u.user_id = a.created_by`;

@@ -1,4 +1,4 @@
-import type { Direction, DirectionState } from "@novus/contracts";
+import type { Direction, DirectionAttachment, DirectionState } from "@novus/contracts";
 import type pg from "pg";
 import type { Db, Queryable } from "./db.ts";
 import { withTransaction } from "./db.ts";
@@ -8,6 +8,7 @@ import { closedRefusal } from "./close.ts";
 import { resolveSessionForDirection, titleSessionFromFirstDirection } from "./sessions.ts";
 import type { MissionAccess } from "./authz.ts";
 import { AuthorizationError } from "./authz.ts";
+import { attachmentsForDirections, linkDirectionAttachments, resolveDirectionAttachments } from "./attachments.ts";
 
 /**
  * The direction lifecycle (PRODUCT.md#direction). Attributed instruction in,
@@ -48,7 +49,7 @@ const DIRECTION_SELECT = `
     from directions d
     join users u on u.user_id = d.author_user_id`;
 
-export function toDirection(row: DirectionRow): Direction {
+export function toDirection(row: DirectionRow, attachments: DirectionAttachment[] = []): Direction {
   return {
     directionId: row.dir_id,
     workstreamId: row.wst_id,
@@ -61,7 +62,8 @@ export function toDirection(row: DirectionRow): Direction {
     submittedAt: row.submitted_at.toISOString(),
     appliedAt: row.applied_at ? row.applied_at.toISOString() : null,
     resolutionReason: row.resolution_reason,
-    consumedByExecutionId: row.consumed_by_execution_id
+    consumedByExecutionId: row.consumed_by_execution_id,
+    attachments
   };
 }
 
@@ -69,7 +71,25 @@ export async function listDirections(db: Queryable, missionId: string): Promise<
   const result = await db.query(`${DIRECTION_SELECT} where d.mission_id = $1 order by d.ordinal`, [
     missionId
   ]);
-  return (result.rows as DirectionRow[]).map(toDirection);
+  const rows = result.rows as DirectionRow[];
+  // One query for every direction's images rather than one per direction
+  // (D-150): the room reads the whole mission's directions at once.
+  const attachments = await attachmentsForDirections(
+    db,
+    rows.map((row) => row.dir_id)
+  );
+  return rows.map((row) =>
+    toDirection(
+      row,
+      (attachments.get(row.dir_id) ?? []).map((found) => ({
+        artifactId: found.artifactId,
+        mimeType: found.mimeType as DirectionAttachment["mimeType"],
+        byteSize: found.byteSize,
+        label: found.label,
+        state: found.state as DirectionAttachment["state"]
+      }))
+    )
+  );
 }
 
 export interface SubmittedDirection {
@@ -91,7 +111,11 @@ export async function submitDirection(
   author: { userId: string; login: string },
   body: string,
   harness: { model: string; effort: string },
-  session: { sessionId?: string; newSession: boolean }
+  session: { sessionId?: string; newSession: boolean },
+  /** Images this direction carries (D-150). Already uploaded and verified —
+   *  the ids are resolved against this mission before anything is written, so
+   *  a direction never exists claiming an image that does not. */
+  attachmentIds: string[] = []
 ): Promise<SubmittedDirection> {
   if (!access.workstreamId) {
     throw new AuthorizationError("no_workstream", "This mission has no workstream yet.", 409);
@@ -100,6 +124,8 @@ export async function submitDirection(
   // is refused in words, which also closes every dispatch path behind it.
   const closed = await closedRefusal(db, access.missionId);
   if (closed) throw new AuthorizationError("mission_closed", closed, 409);
+  const claimed = await resolveDirectionAttachments(db, access.missionId, attachmentIds);
+  if (!claimed.ok) throw new AuthorizationError("invalid_attachment", claimed.message, 422);
   const workstreamId = access.workstreamId;
   const authorIsController = access.isController;
   const dirId = newDirectionId();
@@ -134,6 +160,8 @@ export async function submitDirection(
     // The session's first words name it (D-083). A no-op for every session
     // that already has a title, including the one `newSession` just made.
     await titleSessionFromFirstDirection(client, resolved.sessionId, body);
+    // Words and images land together or not at all.
+    await linkDirectionAttachments(client, id, claimed.ids);
     await recordEvent(client, {
       orgId: access.orgId,
       missionId: access.missionId,
@@ -149,7 +177,10 @@ export async function submitDirection(
         authorIsController,
         model: harness.model,
         effort: harness.effort,
-        sessionId: resolved.sessionId
+        sessionId: resolved.sessionId,
+        // Ids and a count, never bytes: an event is durable and projected into
+        // receipts, and an image belongs in the store (D-150).
+        attachmentIds: claimed.ids
       }
     });
     if (!authorIsController) {
@@ -170,7 +201,15 @@ export async function submitDirection(
     return fetched.rows[0] as DirectionRow;
   });
 
-  return { direction: toDirection(row), authorIsController };
+  const carried = await attachmentsForDirections(db, [row.dir_id]);
+  const images = (carried.get(row.dir_id) ?? []).map((found) => ({
+    artifactId: found.artifactId,
+    mimeType: found.mimeType as DirectionAttachment["mimeType"],
+    byteSize: found.byteSize,
+    label: found.label,
+    state: found.state as DirectionAttachment["state"]
+  }));
+  return { direction: toDirection(row, images), authorIsController };
 }
 
 /**

@@ -293,7 +293,20 @@ const StartPayloadSchema = z.object({
    *  plane carries nothing rather than something. */
   skills: EnabledSkillsSchema.default([]),
   /** The enabled MCP servers (D-119), same rule. */
-  mcpServers: EnabledMcpServersSchema.default([])
+  mcpServers: EnabledMcpServersSchema.default([]),
+  /** Images the person attached to this direction (D-150), by address. The
+   *  bytes are fetched here, under this machine's own runner credential, and
+   *  handed to the harness in the turn's first message. Defaulted empty so a
+   *  command from an older control plane carries none rather than failing. */
+  attachments: z
+    .array(
+      z.object({
+        artifactId: z.string(),
+        mimeType: z.string(),
+        label: z.string().default("")
+      })
+    )
+    .default([])
 });
 
 /** The push the control plane authorized (D-099): the branch, and the exact
@@ -790,6 +803,73 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       },
       body: body === undefined ? undefined : JSON.stringify(body)
     });
+  }
+
+  /**
+   * Fetches the images a direction carried, ready to hand to the harness
+   * (D-150).
+   *
+   * Two grants, in order: the control plane mints a short-lived download URL
+   * for this machine's runner credential — which is scoped to one mission, so
+   * an id from another mission resolves to nothing — and the bytes are then
+   * read from the store directly. Nothing is written to disk: the image goes
+   * into the turn's first message and lives only as long as the process does,
+   * so no attachment can be swept into a checkpoint.
+   *
+   * An image that cannot be fetched is **dropped with a warning, never
+   * silently**: a turn that quietly ran without the picture it was asked about
+   * is worse than one that says a picture was missing.
+   */
+  async function fetchAttachments(
+    enrolment: Enrolment,
+    claimed: readonly { artifactId: string; mimeType: string; label: string }[]
+  ): Promise<{ mimeType: string; base64: string; label: string }[]> {
+    const fetched: { mimeType: string; base64: string; label: string }[] = [];
+    for (const image of claimed) {
+      try {
+        const granted = await runnerFetch(
+          enrolment,
+          `/runner/attachments/${encodeURIComponent(image.artifactId)}/view`,
+          "POST",
+          {}
+        );
+        if (!granted.ok) {
+          console.warn(`[runner] the control plane refused an attachment (${granted.status})`);
+          continue;
+        }
+        const grant = (await granted.json()) as { url?: unknown; mimeType?: unknown };
+        if (typeof grant.url !== "string") continue;
+        const blob = await httpFetch(grant.url, { method: "GET" });
+        if (!blob.ok) {
+          console.warn(`[runner] the artifact store refused an attachment (${blob.status})`);
+          continue;
+        }
+        const bytes = Buffer.from(await blob.arrayBuffer());
+        fetched.push({
+          mimeType: typeof grant.mimeType === "string" ? grant.mimeType : image.mimeType,
+          base64: bytes.toString("base64"),
+          label: image.label
+        });
+      } catch (error) {
+        console.warn("[runner] an attachment could not be fetched:", messageOf(error));
+      }
+    }
+    return fetched;
+  }
+
+  /** The enrolment this lane's fetches authenticate with, or no images at
+   *  all: an unenrolled lane has no credential to read anything under. */
+  async function turnAttachments(
+    workstreamId: string,
+    claimed: readonly { artifactId: string; mimeType: string; label: string }[]
+  ): Promise<{ mimeType: string; base64: string; label: string }[]> {
+    if (claimed.length === 0) return [];
+    const enrolment = enrolments.get(workstreamId);
+    if (!enrolment) {
+      console.warn("[runner] no enrolment for this lane; its attachments were not fetched");
+      return [];
+    }
+    return fetchAttachments(enrolment, claimed);
   }
 
   function outboxFor(workstreamId: string): EventOutbox {
@@ -1430,6 +1510,9 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         payload.data.sessionId !== null
           ? payload.data.resumeSessionId
           : (payload.data.resumeSessionId ?? workstream.harnessSessionId),
+      // Fetched now rather than at spawn: an image that cannot be fetched must
+      // not silently become a turn that never saw it (D-150).
+      attachments: await turnAttachments(workstreamId, payload.data.attachments),
       access: payload.data.access,
       scope: payload.data.scope,
       permissionProfile: payload.data.permissionProfile,
@@ -1504,6 +1587,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     model: string;
     effort: string;
     resumeSessionId: string | null;
+    /** Images the person attached, already fetched (D-150). */
+    attachments: { mimeType: string; base64: string; label: string }[];
     /** What the turn may do to the worktree (D-095). */
     access: "write" | "read";
     /** The chat's file scope, pinned at dispatch (D-097); null unscoped. */
@@ -1651,6 +1736,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       model: args.model,
       effort: args.effort,
       resumeSessionId: args.resumeSessionId,
+      attachments: args.attachments,
       access: args.access,
       scope: args.scope,
       permissionProfile: args.permissionProfile,

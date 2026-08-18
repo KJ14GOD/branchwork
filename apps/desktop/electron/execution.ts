@@ -268,6 +268,12 @@ export interface TurnRequest {
   effort: string;
   /** The session this workstream continues, or null for a fresh one. */
   resumeSessionId: string | null;
+  /** Images the person attached to this direction (D-150), already fetched
+   *  from the artifact store by the machine running the turn. They ride in the
+   *  same stream-json user message the words do — the harness reads image
+   *  content blocks directly, so nothing is written into the worktree and no
+   *  checkpoint can sweep an attachment in. Empty for a turn with none. */
+  attachments?: readonly { mimeType: string; base64: string; label: string }[];
   /** What this turn may do to the worktree (D-095). `read` runs alongside the
    *  lane's write turn: every permission request is denied on the spot with
    *  the reason, no approval ever reaches the room, no checkpoint is captured,
@@ -1034,9 +1040,21 @@ export function startTurn(request: TurnRequest): RunningTurn {
       // The direction, as the first stream-json message. Written before any
       // stop is honoured so the two orderings converge on the same place: an
       // interrupt for a turn that has not started still ends it.
+      // The direction, and anything the person attached to it. The images come
+      // first: a picture followed by the words about it is the order a person
+      // writes in, and the order the harness reads best.
       writeControl({
         type: "user",
-        message: { role: "user", content: [{ type: "text", text: request.direction }] }
+        message: {
+          role: "user",
+          content: [
+            ...(request.attachments ?? []).map((image) => ({
+              type: "image",
+              source: { type: "base64", media_type: image.mimeType, data: image.base64 }
+            })),
+            { type: "text", text: request.direction }
+          ]
+        }
       });
       if (stopReason !== null) stop(stopReason); // stopped between the decision and the spawn
 

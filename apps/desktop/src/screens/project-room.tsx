@@ -409,12 +409,14 @@ export function ProjectRoom({
     body,
     model,
     effort,
-    alongside = false
+    alongside = false,
+    attachmentIds = []
   }: {
     body: string;
     model: ModelId;
     effort: Effort;
     alongside?: boolean;
+    attachmentIds?: string[];
   }): Promise<SubmitOutcome> => {
     setActionError(null);
     if (isDraft) {
@@ -443,7 +445,8 @@ export function ProjectRoom({
         missionId: created.value.mission.missionId,
         body,
         model,
-        effort
+        effort,
+        ...(attachmentIds.length > 0 ? { attachmentIds } : {})
       });
       setDraft(null);
       onCreated(created.value.mission);
@@ -474,7 +477,8 @@ export function ProjectRoom({
         effort,
         workstreamId: detail.workstream.workstreamId,
         newSession: true,
-        ...(alongside ? { alongside: true } : {})
+        ...(alongside ? { alongside: true } : {}),
+        ...(attachmentIds.length > 0 ? { attachmentIds } : {})
       });
       if (!created.ok) return { ok: false, message: offlineOr(created.code, created.message) };
       onSessionDraft(false);
@@ -494,7 +498,8 @@ export function ProjectRoom({
       effort,
       workstreamId: detail.workstream.workstreamId,
       ...(selectedSessionId !== null ? { sessionId: selectedSessionId } : {}),
-      ...(alongside ? { alongside: true } : {})
+      ...(alongside ? { alongside: true } : {}),
+      ...(attachmentIds.length > 0 ? { attachmentIds } : {})
     });
     if (!result.ok) return { ok: false, message: offlineOr(result.code, result.message) };
     return { ok: true, queued: !result.value.dispatched, deferred: result.value.deferred };
@@ -1923,6 +1928,29 @@ export function ProjectRoom({
         alongsideOffer={alongsideOffer}
         policy={isDraft ? null : policyControl}
         onSubmit={submit}
+        attach={
+          isDraft || !detail
+            ? undefined
+            : ((room) => ({
+                pick: async () => {
+                  const picked = await novus().missions.pickImage();
+                  return picked.ok
+                    ? { ok: true as const, path: picked.value }
+                    : { ok: false as const, message: offlineOr(picked.code, picked.message) };
+                },
+                upload: async (path: string) => {
+                  const uploaded = await novus().missions.attachImage({
+                    missionId: room.mission.missionId,
+                    ...(room.workstream ? { workstreamId: room.workstream.workstreamId } : {}),
+                    ...(selectedSessionId !== null ? { sessionId: selectedSessionId } : {}),
+                    path
+                  });
+                  return uploaded.ok
+                    ? { ok: true as const, attachment: uploaded.value }
+                    : { ok: false as const, message: offlineOr(uploaded.code, uploaded.message) };
+                }
+              }))(detail)
+        }
       />
       )}
 

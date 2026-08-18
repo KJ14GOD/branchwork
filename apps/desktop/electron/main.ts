@@ -1,6 +1,7 @@
-import { BrowserWindow, app, ipcMain, protocol, session, shell, type WebContents } from "electron";
+import { BrowserWindow, app, dialog, ipcMain, protocol, session, shell, type WebContents } from "electron";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { AttachmentRefused, prepareAttachment, sha256Of } from "./attachment-upload";
 import {
   APPROACH_INTENT_MAX,
   CreateMissionInputSchema,
@@ -832,7 +833,8 @@ function registerIpc(): void {
         ...(input.workstreamId ? { workstreamId: input.workstreamId } : {}),
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         ...(input.newSession ? { newSession: true } : {}),
-        ...(input.alongside ? { alongside: true } : {})
+        ...(input.alongside ? { alongside: true } : {}),
+        ...(input.attachmentIds.length > 0 ? { attachmentIds: input.attachmentIds } : {})
       })
     );
     if (!result.ok) return result;
@@ -1070,6 +1072,71 @@ function registerIpc(): void {
   // The room's live connection (D-149). One at a time: a window shows one
   // mission, and the stream follows it. The credential stays here — the
   // renderer receives the signal, never the connection.
+  // Attaching an image to a direction (D-150). The whole act is the main
+  // process's: the renderer names a file it picked, and never holds bytes, a
+  // digest, a grant, or the session credential that mints one.
+  ipcMain.handle("novus:missions:attach-image", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: MissionIdSchema,
+        workstreamId: z.string().startsWith("wst_").optional(),
+        sessionId: z.string().startsWith("csn_").optional(),
+        path: z.string().min(1).max(4096)
+      })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed attachment." };
+    try {
+      const prepared = await prepareAttachment(parsed.data.path);
+      const begun = await api.beginAttachment(parsed.data.missionId, {
+        ...(parsed.data.workstreamId ? { workstreamId: parsed.data.workstreamId } : {}),
+        ...(parsed.data.sessionId ? { sessionId: parsed.data.sessionId } : {}),
+        mimeType: prepared.mimeType,
+        byteSize: prepared.bytes.byteLength,
+        sha256: sha256Of(prepared.bytes),
+        filename: prepared.filename
+      });
+      const artifactId = begun.artifact.artifactId;
+      try {
+        const put = await fetch(begun.upload.url, {
+          method: begun.upload.method,
+          headers: begun.upload.headers,
+          body: new Uint8Array(prepared.bytes)
+        });
+        if (!put.ok) throw new Error(`The artifact store refused the upload (${put.status}).`);
+      } catch (error) {
+        // The row must say what happened rather than linger as almost-evidence.
+        const reason = error instanceof Error ? error.message.slice(0, 300) : "The upload did not complete.";
+        await api.completeArtifact(artifactId, "failed", reason).catch(() => undefined);
+        throw error;
+      }
+      const artifact = await api.completeArtifact(artifactId, "uploaded");
+      return ok({
+        artifactId: artifact.artifactId,
+        label: artifact.label,
+        mimeType: artifact.mimeType,
+        byteSize: artifact.byteSize,
+        resized: prepared.resized
+      });
+    } catch (error) {
+      if (error instanceof AttachmentRefused) {
+        return { ok: false, code: "invalid_attachment", message: error.message };
+      }
+      return fail(error);
+    }
+  });
+
+  /** The file picker for an attachment. Opened by the main process, which is
+   *  the only party that may read a path the renderer names. */
+  ipcMain.handle("novus:missions:pick-image", async () => {
+    const chosen = await dialog.showOpenDialog({
+      title: "Attach an image",
+      properties: ["openFile"],
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }]
+    });
+    if (chosen.canceled || chosen.filePaths.length === 0) return ok(null);
+    return ok(chosen.filePaths[0] ?? null);
+  });
+
   ipcMain.handle("novus:missions:watch", async (_event, raw: unknown) => {
     const parsed = MissionIdSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };

@@ -4,15 +4,17 @@ import {
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
   EFFORTS,
+  MAX_DIRECTION_ATTACHMENTS,
   PERMISSION_PROFILES,
   type Capability,
   type Effort,
   type ModelId,
-  type PermissionProfile
+  type PermissionProfile,
+  type PreparedAttachment
 } from "@novus/contracts";
 import codexIcon from "../assets/codex-icon.png";
 import { Dialog } from "./dialog";
-import { ClaudeGlyph } from "./identity";
+import { ClaudeGlyph, ImageGlyph } from "./identity";
 
 /** One short line on what each profile answers, keyed to the vocabulary the
  *  server enforces (D-115). The wire never changes: the harness always asks,
@@ -122,7 +124,8 @@ export function Composer({
   alongsideOffer,
   policy,
   onEmptySubmit,
-  onSubmit
+  onSubmit,
+  attach
 }: {
   /** Null until the server has said what this viewer may do. The composer
    *  never guesses a capability it has not been told about. */
@@ -153,7 +156,17 @@ export function Composer({
     model: ModelId;
     effort: Effort;
     alongside?: boolean;
+    attachmentIds?: string[];
   }) => Promise<SubmitOutcome>;
+  /** Attaching an image (D-150). Absent where the surface cannot attach —
+   *  a composer with no mission behind it yet. The verbs are the room's; the
+   *  composer only holds what came back. */
+  attach?: {
+    pick: () => Promise<{ ok: true; path: string | null } | { ok: false; message: string }>;
+    upload: (path: string) => Promise<
+      { ok: true; attachment: PreparedAttachment } | { ok: false; message: string }
+    >;
+  };
 }) {
   const [textValue, setTextValue] = useState("");
   const [model, setModel] = useState<ModelId>(() => {
@@ -203,6 +216,34 @@ export function Composer({
   };
 
   const [pendingChoice, setPendingChoice] = useState(false);
+  /** Images already uploaded and waiting to go with the next direction. They
+   *  exist in the store the moment they are added, so a slow upload never
+   *  delays the words — and abandoning the composer leaves an unattached
+   *  artifact the sweep fails, never a half-sent direction. */
+  const [attachments, setAttachments] = useState<PreparedAttachment[]>([]);
+  const [attaching, setAttaching] = useState(false);
+
+  const addImage = async () => {
+    if (!attach || attaching || attachments.length >= MAX_DIRECTION_ATTACHMENTS) return;
+    setError(null);
+    setAttaching(true);
+    try {
+      const picked = await attach.pick();
+      if (!picked.ok) {
+        setError(picked.message);
+        return;
+      }
+      if (picked.path === null) return;
+      const uploaded = await attach.upload(picked.path);
+      if (!uploaded.ok) {
+        setError(uploaded.message);
+        return;
+      }
+      setAttachments((held) => [...held, uploaded.attachment].slice(0, MAX_DIRECTION_ATTACHMENTS));
+    } finally {
+      setAttaching(false);
+    }
+  };
 
   const perform = async (alongside: boolean) => {
     const body = textValue.trim();
@@ -211,13 +252,22 @@ export function Composer({
     setSending(true);
     setError(null);
     setQueuedNote(null);
-    const outcome = await onSubmit({ body, model, effort, alongside });
+    const outcome = await onSubmit({
+      body,
+      model,
+      effort,
+      alongside,
+      attachmentIds: attachments.map((image) => image.artifactId)
+    });
     setSending(false);
     if (!outcome.ok) {
+      // The images stay held: a refused direction is one a person will send
+      // again, and making them re-attach would be punishing them for it.
       setError(outcome.message ?? "That direction did not go through.");
       return;
     }
     setTextValue("");
+    setAttachments([]);
     // The box returns to one row: a composer that stays tall after sending is
     // a blank canvas, which the room is not (DESIGN.md prohibited pattern 9).
     if (inputRef.current) inputRef.current.style.height = "";
@@ -332,7 +382,54 @@ export function Composer({
           aria-label="Direct Claude Code"
           data-testid="composer-input"
         />
+        {/* What the next direction will carry (D-150). Above the words, where
+            the reading order matches the sending order, and each image says
+            its own name rather than showing a thumbnail the box has no room
+            for. */}
+        {attachments.length > 0 && (
+          <div className="composer-attachments" data-testid="composer-attachments">
+            {attachments.map((image) => (
+              <span className="composer-attachment" key={image.artifactId}>
+                <ImageGlyph className="composer-attachment-glyph" />
+                <span className="composer-attachment-name">{image.label}</span>
+                {image.resized && (
+                  <span className="composer-attachment-note" title="Scaled down before sending">
+                    resized
+                  </span>
+                )}
+                <button
+                  className="composer-attachment-remove"
+                  aria-label={`Remove ${image.label}`}
+                  disabled={sending}
+                  onClick={() =>
+                    setAttachments((held) =>
+                      held.filter((candidate) => candidate.artifactId !== image.artifactId)
+                    )
+                  }
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="composer-foot" ref={footRef}>
+          {attach && (
+            <button
+              className="chip-button"
+              disabled={!enabled || attaching || attachments.length >= MAX_DIRECTION_ATTACHMENTS}
+              onClick={() => void addImage()}
+              title={
+                attachments.length >= MAX_DIRECTION_ATTACHMENTS
+                  ? `A direction may carry ${MAX_DIRECTION_ATTACHMENTS} images.`
+                  : "Attach an image"
+              }
+              data-testid="attach-image"
+            >
+              <ImageGlyph className="chip-glyph" />
+              {attaching ? "Attaching" : "Image"}
+            </button>
+          )}
           <span className="chip-wrap">
             <button
               className="chip-button"

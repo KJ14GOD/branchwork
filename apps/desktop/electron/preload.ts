@@ -61,6 +61,8 @@ const novus: NovusBridge = {
       ipcRenderer.on("novus:mission-changed", wrapped);
       return () => ipcRenderer.removeListener("novus:mission-changed", wrapped);
     },
+    pickImage: () => ipcRenderer.invoke("novus:missions:pick-image"),
+    attachImage: (input) => ipcRenderer.invoke("novus:missions:attach-image", input),
     retryBranch: (workstreamId) => ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
     syncBase: (missionId) => ipcRenderer.invoke("novus:missions:sync-base", missionId),
     direct: (input) => ipcRenderer.invoke("novus:missions:direct", input),
