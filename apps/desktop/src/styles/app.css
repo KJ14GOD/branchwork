@@ -1124,6 +1124,16 @@ body {
   flex: 0 0 auto;
 }
 
+/* No visible bar — the mission strip's own reasoning (D-067): one row tall,
+   trackpad-scrolled, nothing for a person to operate. */
+.tabbar {
+  scrollbar-width: none;
+}
+
+.tabbar::-webkit-scrollbar {
+  display: none;
+}
+
 .tab {
   display: inline-flex;
   align-items: center;
