@@ -10,6 +10,16 @@ import { newEventId } from "./ids.ts";
  * nothing a client sends decides it.
  */
 
+/**
+ * The Postgres notification channel every mission event announces itself on
+ * (D-149). The payload is an address, never content: mission, sequence, and
+ * kind, so a listener knows *that* something happened and re-reads through the
+ * same authorized projection as any other client. Notification payloads are
+ * capped at 8000 bytes by Postgres, which an address can never approach and an
+ * event payload frequently would.
+ */
+export const MISSION_EVENT_CHANNEL = "novus_mission_event";
+
 export interface RecordEventArgs {
   orgId: string;
   missionId: string;
@@ -88,7 +98,19 @@ export async function recordEventAtSeq(
       JSON.stringify(args.payload)
     ]
   );
-  return (result.rows[0]?.event_id as string | undefined) ?? "";
+  const written = (result.rows[0]?.event_id as string | undefined) ?? "";
+  // The room learns here (D-149). `pg_notify` inside the writing transaction
+  // is delivered by Postgres *on commit* and not at all on rollback, so a
+  // listener can never be told to re-read a row that is not yet visible —
+  // the ordering trap an in-process emitter at this line would have. A
+  // de-duplicated replay wrote nothing and says nothing.
+  if (written) {
+    await client.query("select pg_notify($1, $2)", [
+      MISSION_EVENT_CHANNEL,
+      JSON.stringify({ missionId: args.missionId, seq, kind: args.kind })
+    ]);
+  }
+  return written;
 }
 
 export interface EventRow {

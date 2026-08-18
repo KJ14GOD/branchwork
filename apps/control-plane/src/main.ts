@@ -4,6 +4,7 @@ import { buildServer } from "./server.ts";
 import { startReliabilitySweep } from "./reliability.ts";
 import { startPullRequestSweep } from "./publication.ts";
 import { selectRepositoryProvider } from "./repo-provider.ts";
+import { createMissionBus } from "./mission-bus.ts";
 
 const config = loadConfig();
 const pool = createPool(config.databaseUrl);
@@ -11,7 +12,13 @@ await migrate(pool);
 // One provider instance for the routes and the sweep alike: the fake's
 // in-memory host state must be the same host both talk to.
 const provider = selectRepositoryProvider(config);
-const app = buildServer(pool, config, provider);
+// The room's live fan-out (D-149): one listening connection for this process,
+// shared by every open stream. Built here rather than in buildServer for the
+// same reason the sweeps are — a server constructed for a test must not dial a
+// second connection to a database that test is about to drop.
+const bus = createMissionBus(config.databaseUrl);
+const app = buildServer(pool, config, provider, bus);
+app.addHook("onClose", async () => bus.stop());
 
 // A host that disappears and a controller who disappears are both defined by an
 // absence, so they are swept rather than triggered. Started here rather than in

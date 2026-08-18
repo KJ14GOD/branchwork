@@ -109,6 +109,14 @@ interface Draft {
   base: BaseLoad;
 }
 
+/**
+ * The floor under the live signal (D-149): how often an open room re-reads
+ * even when nothing told it to. Long on purpose — this is the safety net for a
+ * dropped stream or a missed signal, not the way the room normally learns, and
+ * a busy room re-reads on every change instead.
+ */
+const SLOW_READ_MS = 30_000;
+
 function offlineOr(code: string, message: string): string {
   return code === "offline" ? "Can't reach Novus. Check your connection and try again." : message;
 }
@@ -297,27 +305,57 @@ export function ProjectRoom({
     if (isDraft && draft === null) void resolveBase();
   }, [isDraft, draft, resolveBase]);
 
-  // One poll carries the whole room: state, participants, control, directions,
-  // executions, evidence (ARCHITECTURE.md — MissionDetailResponse).
+  // One read carries the whole room: state, participants, control, directions,
+  // executions, evidence (ARCHITECTURE.md — MissionDetailResponse). The room
+  // is *told* when to take it (D-149) rather than asking on a timer.
+  //
+  // Three things drive a read, and the order matters. The signal is the fast
+  // path — a change arrives and the room re-reads at once. The coalescing
+  // window is what keeps a busy turn from making one read per event: a signal
+  // during an in-flight read is remembered and satisfied by a single read
+  // after it, never a queue of them. The slow fallback is the honest floor —
+  // a stream that is down or a signal that was missed costs latency, not
+  // truth, because this fires regardless.
   useEffect(() => {
     if (selectedMissionId === null) return;
     let live = true;
-    const tick = async () => {
-      const result = await novus().missions.get(selectedMissionId, activeWorkstreamId ?? undefined);
+    let reading = false;
+    let missed = false;
+
+    const read = async (): Promise<void> => {
       if (!live) return;
-      if (result.ok) {
-        onDetail(result.value);
+      if (reading) {
+        missed = true;
         return;
       }
-      // A remembered lane the mission no longer has: fall back to the lane the
-      // mission started with rather than polling a 404 forever.
-      if (activeWorkstreamId !== null && result.code === "not_found") onSelectLane(null);
+      reading = true;
+      try {
+        const result = await novus().missions.get(selectedMissionId, activeWorkstreamId ?? undefined);
+        if (!live) return;
+        if (result.ok) onDetail(result.value);
+        // A remembered lane the mission no longer has: fall back to the lane
+        // the mission started with rather than re-reading a 404 forever.
+        else if (activeWorkstreamId !== null && result.code === "not_found") onSelectLane(null);
+      } finally {
+        reading = false;
+      }
+      if (live && missed) {
+        missed = false;
+        void read();
+      }
     };
-    void tick();
-    const timer = setInterval(() => void tick(), 2000);
+
+    void read();
+    void novus().missions.watch(selectedMissionId);
+    const stopListening = novus().missions.onChanged((change) => {
+      if (change.missionId === selectedMissionId) void read();
+    });
+    const fallback = setInterval(() => void read(), SLOW_READ_MS);
     return () => {
       live = false;
-      clearInterval(timer);
+      stopListening();
+      clearInterval(fallback);
+      void novus().missions.unwatch();
     };
   }, [selectedMissionId, activeWorkstreamId, onDetail, onSelectLane]);
 

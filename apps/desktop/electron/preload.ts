@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { IpcAuthStatus, NovusBridge, ProcessLogChunk, TerminalChunk } from "@novus/contracts";
+import type {
+  IpcAuthStatus,
+  MissionChange,
+  NovusBridge,
+  ProcessLogChunk,
+  TerminalChunk
+} from "@novus/contracts";
 
 /**
  * The complete renderer surface. No Node, no Electron internals, no session
@@ -44,6 +50,17 @@ const novus: NovusBridge = {
         "novus:missions:get",
         workstreamId ? { missionId, workstreamId } : missionId
       ),
+    // The room's live connection (D-149). The stream itself is the main
+    // process's — it carries the session credential, which never crosses this
+    // bridge — so the renderer asks for a mission to be watched and is told
+    // when it moves.
+    watch: (missionId) => ipcRenderer.invoke("novus:missions:watch", missionId),
+    unwatch: () => ipcRenderer.invoke("novus:missions:unwatch"),
+    onChanged: (listener: (change: MissionChange) => void) => {
+      const wrapped = (_event: unknown, change: MissionChange) => listener(change);
+      ipcRenderer.on("novus:mission-changed", wrapped);
+      return () => ipcRenderer.removeListener("novus:mission-changed", wrapped);
+    },
     retryBranch: (workstreamId) => ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
     syncBase: (missionId) => ipcRenderer.invoke("novus:missions:sync-base", missionId),
     direct: (input) => ipcRenderer.invoke("novus:missions:direct", input),

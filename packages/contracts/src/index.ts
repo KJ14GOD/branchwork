@@ -2190,6 +2190,20 @@ export const ProcessLogChunkSchema = z.object({
 });
 export type ProcessLogChunk = z.infer<typeof ProcessLogChunkSchema>;
 
+/**
+ * The room's live signal (D-149): the mission moved, to this sequence, with
+ * this event kind. An **address, never content** — a watcher re-reads the
+ * mission through the same authorized projection every other reader passes, so
+ * nothing here can widen what a person may see. The kind rides along only so a
+ * client can decide how urgently to re-read; it is never rendered on its own.
+ */
+export const MissionChangeSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  seq: z.number().int().nonnegative(),
+  kind: z.string()
+});
+export type MissionChange = z.infer<typeof MissionChangeSchema>;
+
 // --- Reading the workspace's files (D-048) -----------------------------------
 // The worktree is on this machine, so browsing it is a local act like every
 // other one in this block: there is no control-plane route and no runner
@@ -3170,6 +3184,18 @@ export interface NovusBridge {
      *  control, capabilities, runner, workspace and state are that lane's own
      *  (D-080). Absent means the lane the mission started with. */
     get(missionId: string, workstreamId?: string): Promise<IpcResult<MissionDetailResponse>>;
+    /** Watches one mission for changes (D-149), replacing any mission this
+     *  window was watching. The connection is the main process's; what crosses
+     *  the bridge is the signal, never a credential. A room that cannot open
+     *  one is not broken — `onChanged` simply stays quiet and the room's own
+     *  slow re-read carries it. */
+    watch(missionId: string): Promise<IpcResult<null>>;
+    /** Stops watching. Called when the room closes; the main process also
+     *  drops the connection on its own when the window goes. */
+    unwatch(): Promise<IpcResult<null>>;
+    /** Fires when the watched mission moves. The listener re-reads through
+     *  `get`; the signal itself carries no room data. */
+    onChanged(listener: (change: MissionChange) => void): () => void;
     retryBranch(workstreamId: string): Promise<IpcResult<Workstream>>;
     /** Follows a moved base (D-144): this machine merges the base branch's
      *  tip into every lane's worktree — all lanes or none — and the control

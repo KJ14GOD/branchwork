@@ -33,6 +33,8 @@ import { registerApproachRoutes } from "./approaches.ts";
 import { registerArtifactRoutes } from "./artifacts.ts";
 import { registerArchiveRoutes } from "./archive.ts";
 import { registerCloseRoutes } from "./close.ts";
+import { registerMissionStreamRoutes } from "./mission-stream.ts";
+import { inertMissionBus, type MissionBus } from "./mission-bus.ts";
 import { registerAuthorityRoutes } from "./authority.ts";
 import { registerExecutionRoutes } from "./executions.ts";
 import { registerPolicyRoutes } from "./policy.ts";
@@ -60,7 +62,15 @@ declare module "fastify" {
 const StateSchema = z.object({ state: z.string().min(16).max(64) });
 const CallbackSchema = z.object({ code: z.string().min(1).max(200), state: z.string().min(16).max(64) });
 
-export function buildServer(db: Db, config: Config, providerOverride?: RepositoryProvider): FastifyInstance {
+export function buildServer(
+  db: Db,
+  config: Config,
+  providerOverride?: RepositoryProvider,
+  /** The room's live fan-out (D-149). Inert by default so a server built for a
+   *  test acquires no listening connection it never asked for — the same rule
+   *  the background sweeps follow. */
+  bus: MissionBus = inertMissionBus()
+): FastifyInstance {
   // Checkpoint reports carry bounded per-file diffs; the ceiling is generous
   // enough for a real turn and small enough to stay a bound.
   const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
@@ -331,6 +341,7 @@ export function buildServer(db: Db, config: Config, providerOverride?: Repositor
   registerSkillsRoutes(app, deps);
   registerPullRequestRoutes(app, deps);
   registerBaseSyncRoutes(app, deps);
+  registerMissionStreamRoutes(app, deps, bus);
   registerWebhookRoutes(app, deps);
   registerRunnerRoutes(app, deps);
   registerSessionRoutes(app, deps);

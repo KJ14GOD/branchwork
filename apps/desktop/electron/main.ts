@@ -133,6 +133,8 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let window: BrowserWindow | null = null;
+/** The mission this window is watching live (D-149), and how to stop. */
+let watched: { missionId: string; stop: () => void } | null = null;
 let authStatus: IpcAuthStatus = { state: "signed_out" };
 let pollTimer: NodeJS.Timeout | null = null;
 let runner: RunnerAgent | null = null;
@@ -1065,6 +1067,27 @@ function registerIpc(): void {
     return result;
   });
 
+  // The room's live connection (D-149). One at a time: a window shows one
+  // mission, and the stream follows it. The credential stays here — the
+  // renderer receives the signal, never the connection.
+  ipcMain.handle("novus:missions:watch", async (_event, raw: unknown) => {
+    const parsed = MissionIdSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed mission id." };
+    if (watched?.missionId === parsed.data) return ok(null);
+    watched?.stop();
+    const stop = api.watchMission(parsed.data, {
+      onChange: (change) => window?.webContents.send("novus:mission-changed", change)
+    });
+    watched = { missionId: parsed.data, stop };
+    return ok(null);
+  });
+
+  ipcMain.handle("novus:missions:unwatch", async () => {
+    watched?.stop();
+    watched = null;
+    return ok(null);
+  });
+
   ipcMain.handle("novus:missions:get", async (_event, raw: unknown) => {
     // A bare id, or an id with the lane being read (D-080): the room asks for
     // the lane it is showing, and everything lane-scoped comes back for it.
@@ -1548,6 +1571,9 @@ function createWindow(): void {
   });
   window.on("closed", () => {
     window = null;
+    // Nothing left to tell: the stream's only listener is gone (D-149).
+    watched?.stop();
+    watched = null;
   });
 }
 
