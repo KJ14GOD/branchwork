@@ -1,6 +1,7 @@
 import type { ApprovalRequest, Direction, MissionDetailResponse } from "@novus/contracts";
 import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../format";
 import { HarnessMark, HumanMark } from "./identity";
+import { Markdown } from "./markdown";
 import type { ControlBlock, Feed, FeedBlock, Segment, ToolStep, TraceBlock, UsageTotals, WorkerView } from "./derive-feed";
 import { buildFeed, HARNESS_NAME, workerFiles, workerState } from "./derive-feed";
 
@@ -193,10 +194,12 @@ function SegmentView({
             <span className="harness-name">{HARNESS_NAME}</span>
           </span>
           <div className="harness-body">
+            {/* The harness speaks markdown; showing its `##` and `**` raw made
+                every substantive reply read like source. Rendered through the
+                same element-only Markdown as a file preview (D-048), because a
+                reply is repository-adjacent content by the same argument. */}
             {segment.texts.map((paragraph, index) => (
-              <p key={index} className="prose">
-                {paragraph}
-              </p>
+              <Markdown key={index} source={paragraph} />
             ))}
           </div>
         </div>

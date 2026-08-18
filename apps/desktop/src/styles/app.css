@@ -1543,6 +1543,16 @@ body {
   padding-left: calc(20px + var(--s-2));
 }
 
+/* The reply rendered as markdown keeps speech's own scale and measure —
+   it is still the person-facing voice of the turn, not a document pane. */
+.harness-body .md {
+  font: var(--type-speech);
+  max-width: 720px;
+}
+.harness-body .md > :last-child {
+  margin-bottom: 0;
+}
+
 .tool-list {
   list-style: none;
   padding: var(--s-1) 0 0 calc(14px + var(--s-2));
@@ -3877,27 +3887,62 @@ body {
   font: var(--type-body);
 }
 
-.md-h1 { font: var(--type-mission); margin: var(--s-5) 0 var(--s-3); }
-.md-h2 { font: var(--type-title); margin: var(--s-5) 0 var(--s-3); }
-.md-h3 { font: var(--type-section); margin: var(--s-4) 0 var(--s-2); }
-.md-h4 { font: var(--type-body); font-weight: 600; margin: var(--s-4) 0 var(--s-2); }
+/* A document's headings live at the reading scale: the mission scale is the
+   mission's own name and nothing inside a file competes with it. */
+.md-h1 { font: var(--type-title); margin: var(--s-5) 0 var(--s-3); }
+.md-h2 { font: var(--type-section); margin: var(--s-5) 0 var(--s-3); }
+.md-h3 { font: var(--type-body); font-weight: 600; margin: var(--s-4) 0 var(--s-2); }
+.md-h4 { font: var(--type-body); font-weight: 600; margin: var(--s-4) 0 var(--s-2); color: var(--text-2); }
 .md-p { margin: 0 0 var(--s-3); }
 .md-list { margin: 0 0 var(--s-3); padding-left: var(--s-5); }
 .md-list li { margin-bottom: var(--s-1); }
+.md-list .md-list { margin: var(--s-1) 0 0; }
+
+/* A task item's state is a glyph the reader cannot toggle — the file owns it. */
+.md-task {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--s-3);
+  height: var(--s-3);
+  margin-right: var(--s-2);
+  border: 1px solid var(--edge-hover);
+  border-radius: calc(var(--r-control) / 2);
+  font: var(--type-micro);
+  color: var(--text-2);
+}
+
+.md-table-scroll {
+  overflow-x: auto;
+  margin: 0 0 var(--s-4);
+}
+.md-table {
+  border-collapse: collapse;
+  font: var(--type-row);
+}
+.md-table th,
+.md-table td {
+  text-align: left;
+  padding: var(--s-1) var(--s-3);
+  border: 1px solid var(--edge);
+}
+.md-table th {
+  font-weight: 600;
+  background: var(--surface-1);
+}
 
 .md-code {
+  font: var(--type-row);
   font-family: var(--font-mono);
-  font-size: 13px;
-  padding: 1px 4px;
-  border-radius: 4px;
+  padding: 1px var(--s-1);
+  border-radius: var(--r-control);
   background: var(--surface-2);
   color: var(--text-1);
 }
 
 .md-pre {
+  font: var(--type-row);
   font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 20px;
   background: var(--surface-1);
   border: 1px solid var(--edge);
   border-radius: var(--r-button);

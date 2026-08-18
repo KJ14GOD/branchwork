@@ -133,9 +133,8 @@ function listOf(lines: string[]): ListGroup {
       text = task[2] ?? "";
     }
     while (groups.length > depth + 1) groups.pop();
-    if (groups.length === depth && depth > 0) {
-      // A jump of more than one level lands on the deepest list that exists.
-    }
+    // A jump of more than one level deep lands on the deepest list that
+    // exists, so a ragged source cannot open unreachable levels.
     if (groups.length <= depth) {
       const start = ordered ? Number.parseInt(marker, 10) || 1 : 1;
       const group: ListGroup = { ordered, start, items: [] };
@@ -262,7 +261,9 @@ function ListView({ group, path }: { group: ListGroup; path: string }) {
   const items = group.items.map((item, at) => (
     <li key={`${path}-${at}`}>
       {item.done !== null && (
-        <span className="md-task" data-done={item.done ? "true" : "false"} aria-hidden="true" />
+        <span className="md-task" data-done={item.done ? "true" : "false"} aria-hidden="true">
+          {item.done ? "✓" : ""}
+        </span>
       )}
       {inline(item.text, `${path}-${at}`)}
       {item.child && <ListView group={item.child} path={`${path}-${at}`} />}
