@@ -643,7 +643,7 @@ function PullChanges({
         {open && (
           <span className="file-modes" role="group" aria-label="How to show the diff">
             <button
-              className={view === "unified" ? "dock-view active" : "dock-view"}
+              className={view === "unified" ? "segment-tab active" : "segment-tab"}
               aria-pressed={view === "unified"}
               onClick={() => setView("unified")}
               data-testid="diff-unified"
@@ -651,7 +651,7 @@ function PullChanges({
               Unified
             </button>
             <button
-              className={view === "split" ? "dock-view active" : "dock-view"}
+              className={view === "split" ? "segment-tab active" : "segment-tab"}
               aria-pressed={view === "split"}
               onClick={() => setView("split")}
               data-testid="diff-split"

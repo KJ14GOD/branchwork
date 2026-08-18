@@ -173,7 +173,7 @@ export function FileView({
         {isMarkdown(path) && readable && (
           <span className="file-modes" role="group" aria-label="How to show this file">
             <button
-              className={mode === "preview" ? "dock-view active" : "dock-view"}
+              className={mode === "preview" ? "segment-tab active" : "segment-tab"}
               aria-pressed={mode === "preview"}
               onClick={() => setMode("preview")}
               data-testid="file-preview"
@@ -181,7 +181,7 @@ export function FileView({
               Preview
             </button>
             <button
-              className={mode === "edit" ? "dock-view active" : "dock-view"}
+              className={mode === "edit" ? "segment-tab active" : "segment-tab"}
               aria-pressed={mode === "edit"}
               onClick={() => setMode("edit")}
               data-testid="file-edit"
