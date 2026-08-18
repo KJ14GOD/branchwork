@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { IpcDirectInputSchema, MAX_DIRECTION_ATTACHMENTS } from "@novus/contracts";
-import { sniffImageMime } from "../electron/attachment-upload.ts";
+import { sniffAttachment, sniffImageMime } from "../electron/attachment-upload.ts";
 
 /**
  * Preparing an image a person attached (D-150).
@@ -95,5 +95,65 @@ describe("what the direction bridge carries", () => {
         attachmentIds: ["msn_not_an_artifact"]
       })
     ).toThrow();
+  });
+});
+
+/**
+ * What each format is routed to (D-151).
+ *
+ * Every verdict here was decided by probing the real CLI, not by reading a
+ * spec. The one that matters most is HEIC: passed through it does **not**
+ * error — one probe answered "Red green" about a red-on-blue picture, and
+ * another refused. A format that makes the model confidently wrong is worse
+ * than one that fails, so it converts or it does not go.
+ */
+describe("how a picked file is routed", () => {
+  const heic = Buffer.concat([
+    Buffer.from("00000018", "hex"),
+    Buffer.from("ftypheic", "ascii"),
+    Buffer.alloc(8)
+  ]);
+  const tiffLE = Buffer.concat([Buffer.from("49492a00", "hex"), Buffer.alloc(8)]);
+  const tiffBE = Buffer.concat([Buffer.from("4d4d002a", "hex"), Buffer.alloc(8)]);
+  const bmp = Buffer.concat([Buffer.from("BM", "ascii"), Buffer.alloc(12)]);
+  const pdf = Buffer.concat([Buffer.from("%PDF-1.4\n", "ascii"), Buffer.alloc(8)]);
+
+  it("carries the four image types the harness reads", () => {
+    expect(sniffAttachment(png)).toEqual({ kind: "carry", mime: "image/png" });
+    expect(sniffAttachment(jpeg)).toEqual({ kind: "carry", mime: "image/jpeg" });
+    expect(sniffAttachment(gif)).toEqual({ kind: "carry", mime: "image/gif" });
+    expect(sniffAttachment(webp)).toEqual({ kind: "carry", mime: "image/webp" });
+  });
+
+  it("carries a PDF, which the harness reads as a document rather than sees", () => {
+    expect(sniffAttachment(pdf)).toEqual({ kind: "carry", mime: "application/pdf" });
+  });
+
+  it("converts the formats the harness cannot read, rather than hoping", () => {
+    expect(sniffAttachment(heic)).toEqual({ kind: "convert", label: "HEIC" });
+    expect(sniffAttachment(tiffLE)).toEqual({ kind: "convert", label: "TIFF" });
+    expect(sniffAttachment(tiffBE)).toEqual({ kind: "convert", label: "TIFF" });
+    expect(sniffAttachment(bmp)).toEqual({ kind: "convert", label: "BMP" });
+  });
+
+  it("refuses everything else, including a video and a zip", () => {
+    const zip = Buffer.from("504b03041400000008", "hex");
+    const mp4 = Buffer.concat([
+      Buffer.from("00000018", "hex"),
+      Buffer.from("ftypmp42", "ascii"),
+      Buffer.alloc(8)
+    ]);
+    expect(sniffAttachment(zip)).toEqual({ kind: "refuse" });
+    // Same ISO container family as HEIC — the brand is what separates them,
+    // so an mp4 must not sneak in through the HEIC branch.
+    expect(sniffAttachment(mp4)).toEqual({ kind: "refuse" });
+  });
+
+  it("still reports only carried images through the narrower helper", () => {
+    // A PDF is an attachment but never an image: the composer and the trace
+    // both branch on this, and a PDF rendered into an <img> shows nothing.
+    expect(sniffImageMime(pdf)).toBeNull();
+    expect(sniffImageMime(heic)).toBeNull();
+    expect(sniffImageMime(png)).toBe("image/png");
   });
 });

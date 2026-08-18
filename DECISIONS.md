@@ -2075,3 +2075,30 @@ The control lease's heartbeat moves onto the connection (D-051's stated revisit)
 **Consequences.** `attachments.ts` joins the control plane with one person route and one runner route; `attachment-upload.ts` joins the desktop main process with the sniffing and resizing; `direction_attachments` joins the schema and the artifact kind and capture-source constraints widen in one place each. `Direction` grows `attachments`, `DirectionInput` grows `attachmentIds`, and three bridge verbs — `pickImage`, `attachImage`, and the composer's own holding — join the contract. The renderer never holds bytes, a digest, or a grant: the file picker, the resize, the hash, and the upload are all the main process's, because the session credential that mints a grant never crosses the bridge. PRODUCT.md's Artifact and Direction both say what an attachment is and is not; DESIGN.md gains the composer chip, the named rows above the words, and the shown image in the trace.
 
 **Revisit when.** A second harness's adapter needs a different way to be handed an image; PDFs or other documents want the same road (the allowlist is the one place to widen, and the harness's own document blocks are the question to ask first); or an agent — rather than a person — wants to attach something it produced, which is D-123's two-key lock again and not this decision.
+
+## D-151 — What may be attached is decided by what the harness was observed to read
+
+**Context.** D-150 shipped attachments with four image types, chosen because the model provider documents them. The owner asked for the union of what Codex's app accepts and what Claude accepts — a picker that shows PNG and JPEG while a Mac's own photo library is HEIC and half the useful documents are PDFs is a feature people cannot actually use. Codex's desktop app is closed source, so its exact accept list cannot be read from anywhere; what *can* be established is the only thing that matters here — what our harness actually does with each format.
+
+**Decision.** The allowlist is settled **by probe, not by documentation**. Every format below was piped into the real `claude` binary on stream-json stdin and asked a question only the file could answer:
+
+| format | as | result | verdict |
+| --- | --- | --- | --- |
+| PNG, JPEG, GIF, WebP | `image` block | answered correctly | carried |
+| PDF | `document` block | read the printed word | carried |
+| HEIC | `image` block | **answered wrongly and confidently**, then refused on a second probe | converted first |
+| TIFF | `image` block | "Unable to view" | converted first |
+
+So there are three outcomes and no fourth. **Carried**: the five formats above, images as image blocks and PDF as a document block — different blocks, because sending one as the other is not an error the CLI reports, it is an answer about nothing. **Converted**: HEIC/HEIF, TIFF and BMP are decoded to PNG before upload, with the original format stated in the interface. **Refused by name**: everything else.
+
+HEIC is the reason this decision is written as a rule rather than a list. Passed through, it does not fail — one probe returned *"Red green"* for a red square on a blue ground. A format that makes the model confidently wrong is worse than one that errors, because the failure is invisible to everyone downstream. **Nothing reaches the harness that the harness was not observed to read.**
+
+Conversion is `sips`, macOS's own decoder. Chromium — and therefore `nativeImage` — decodes neither HEIC nor TIFF, so there is nothing in-process to fall back to; on a platform without `sips` the file is refused by name, which is the honest answer until that platform is supported at all.
+
+A document gets **its own size ceiling**, 10MB against an image's 5MB. An image that is too large is resized; there is no smaller-but-still-readable version of a contract, so a document is carried whole or refused. Both ceilings stay well under the API's own 32MB, because every page is tokens the turn pays for on each re-read.
+
+**Alternatives.** Trusting the provider's documented format list (rejected: it is the list of what the *API* accepts, and the CLI is a second layer that can and does differ — the probe cost ten minutes and changed two decisions). Passing HEIC through and letting the model say it cannot read it (rejected: it does not reliably say that; it guesses). Converting on the control plane (rejected: it would put image decoding in the one plane that must never process untrusted content, and the bytes are already on the machine that picked them). Rendering PDF pages to images ourselves (rejected: the harness reads PDFs natively and better than a page rasteriser would; this would be re-implementing what it already does). One ceiling for everything (rejected: it forces the document limit down to an image's, or an image's up to a document's, and neither is the right number for the other).
+
+**Consequences.** `ATTACHMENT_MIME_TYPES` gains `application/pdf` and grows an `attachmentForm` helper so the image/document split is carried rather than re-derived at each site; `ARTIFACT_MIME_TYPES` and the `artifacts_mime_type` constraint widen with it — the third constraint this family has needed, found by a 500 rather than by reading, and the local store's content-type parser now reads the same list rather than a second hand-written one. `prepareAttachment` returns `convertedFrom`, which the composer states beside `resized`. A PDF renders in the trace as a named row with a document glyph, because it has nothing to show — the one case where the filename is the only thing a reader has, and the reason images lost their caption in the same change: a screenshot's filename tells a reader nothing the picture does not.
+
+**Revisit when.** A second harness's adapter reads a format this one does not, and the allowlist becomes per-adapter rather than global; Windows or Linux support arrives and conversion needs a decoder that is not `sips`; or the harness starts reading video, which is the next thing people will try to attach.

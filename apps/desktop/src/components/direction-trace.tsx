@@ -1,6 +1,6 @@
 import type { ApprovalRequest, Direction, MissionDetailResponse } from "@novus/contracts";
 import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../format";
-import { HarnessMark, HumanMark } from "./identity";
+import { DocumentGlyph, HarnessMark, HumanMark } from "./identity";
 import { Markdown } from "./markdown";
 import type { ControlBlock, Feed, FeedBlock, Segment, ToolStep, TraceBlock, UsageTotals, WorkerView } from "./derive-feed";
 import { buildFeed, HARNESS_NAME, workerFiles, workerState } from "./derive-feed";
@@ -336,25 +336,34 @@ export function TraceView({
       {(direction?.attachments ?? []).length > 0 && (
         <div className="trace-attachments" data-testid="direction-attachments">
           {(direction?.attachments ?? []).map((image) =>
-            image.state === "available" ? (
-              <figure className="trace-attachment" key={image.artifactId}>
-                <img
-                  className="trace-attachment-image"
-                  src={`novus-artifact://${image.artifactId}/blob`}
-                  alt={image.label}
-                  loading="lazy"
-                />
-                <figcaption className="trace-attachment-name">{image.label}</figcaption>
-              </figure>
-            ) : (
+            image.state !== "available" ? (
               <span className="trace-attachment-missing" key={image.artifactId}>
                 {image.label} — not uploaded, so the turn never saw it
               </span>
+            ) : image.mimeType === "application/pdf" ? (
+              // A document has nothing to show, so it is named — the one case
+              // where the filename is the only thing a reader has (D-151).
+              <span className="trace-attachment-doc" key={image.artifactId}>
+                <DocumentGlyph className="trace-attachment-doc-glyph" />
+                {image.label}
+              </span>
+            ) : (
+              <img
+                className="trace-attachment-image"
+                key={image.artifactId}
+                src={`novus-artifact://${image.artifactId}/blob`}
+                // The name is not shown — a screenshot's filename says nothing
+                // a person reading the picture needs — but it stays the
+                // accessible name, which is the one place it is still the only
+                // thing a reader has.
+                alt={image.label}
+                title={image.label}
+                loading="lazy"
+              />
             )
           )}
         </div>
       )}
-
       {/* The controller's own direction applies at the next receptive point
           without further action (PRODUCT.md#direction), so it is never
           presented to them as something to approve. */}

@@ -849,19 +849,42 @@ export const ARTIFACT_MIME_TYPES = [
   "video/webm",
   "image/jpeg",
   "image/gif",
-  "image/webp"
+  "image/webp",
+  "application/pdf"
 ] as const;
 export const ArtifactMimeSchema = z.enum(ARTIFACT_MIME_TYPES);
 
 /**
- * What a person may attach to a direction (D-150) — images only, and a closed
- * set of them. Everything here is a format the harness can be handed and a
- * browser can render; anything else is refused by name rather than sent as
- * bytes nothing downstream can read.
+ * What a person may attach to a direction (D-150, widened by D-151) — a closed
+ * set, and every member of it is a format the harness **was observed to
+ * actually read**, not one a document claims it supports.
+ *
+ * The four image types travel as image content blocks; PDF travels as a
+ * document block. Anything else a person picks is converted to PNG first or
+ * refused by name — never handed over hoping. That rule is not caution: HEIC
+ * passed straight through does not error, it makes the model answer *wrongly
+ * and confidently* about a picture it could not decode, which is worse than
+ * any refusal.
  */
-export const ATTACHMENT_MIME_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+export const ATTACHMENT_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf"
+] as const;
 export const AttachmentMimeSchema = z.enum(ATTACHMENT_MIME_TYPES);
 export type AttachmentMime = z.infer<typeof AttachmentMimeSchema>;
+
+/** How one attachment reaches the harness. An image is seen; a document is
+ *  read. They are different content blocks, so the difference is carried
+ *  rather than re-derived from the MIME type at each site. */
+export const AttachmentFormSchema = z.enum(["image", "document"]);
+export type AttachmentForm = z.infer<typeof AttachmentFormSchema>;
+
+export function attachmentForm(mime: AttachmentMime): AttachmentForm {
+  return mime === "application/pdf" ? "document" : "image";
+}
 
 export const MAX_SCREENSHOT_BYTES = 20_000_000;
 export const MAX_RECORDING_BYTES = 200_000_000;
@@ -873,6 +896,13 @@ export const MAX_THUMBNAIL_BYTES = 1_000_000;
  * readable image costs and not what the camera produced.
  */
 export const MAX_ATTACHMENT_BYTES = 5_000_000;
+/**
+ * A PDF's own ceiling (D-151). Higher than an image's because a document is
+ * not resizable — there is no "smaller but still readable" for a contract or a
+ * form, so the choice is carry it or refuse it — and lower than the API's own
+ * 32MB because every page becomes tokens the turn pays for.
+ */
+export const MAX_DOCUMENT_BYTES = 10_000_000;
 /** The longest edge an attachment is scaled down to before upload. */
 export const MAX_ATTACHMENT_EDGE = 1568;
 /** How many images one direction may carry. Bounded because every one of them
@@ -917,7 +947,12 @@ export type DirectionAttachment = z.infer<typeof DirectionAttachmentSchema>;
  *  the words (D-150). `resized` is stated rather than hidden: a person who
  *  attached a 12-megapixel screenshot should know a smaller one was sent. */
 export const PreparedAttachmentSchema = DirectionAttachmentSchema.omit({ state: true }).extend({
-  resized: z.boolean()
+  resized: z.boolean(),
+  /** The format this was decoded from, when the harness could not read the
+   *  original (D-151) — "HEIC", "TIFF", "BMP". Null when it was carried as
+   *  it was. Stated in the interface: a person should know their photo was
+   *  converted, not discover it. */
+  convertedFrom: z.string().max(20).nullable().default(null)
 });
 export type PreparedAttachment = z.infer<typeof PreparedAttachmentSchema>;
 
@@ -1758,7 +1793,10 @@ export const BeginAttachmentInputSchema = z.object({
    *  belongs to one, so unlike a person's own capture this is never null. */
   sessionId: z.string().startsWith("csn_").optional(),
   mimeType: AttachmentMimeSchema,
-  byteSize: z.number().int().positive().max(MAX_ATTACHMENT_BYTES),
+  /** Bounded per form (D-151): the image ceiling, or the document one for a
+   *  PDF. The narrower bound is checked again at the route, which is where the
+   *  MIME and the size are finally judged together. */
+  byteSize: z.number().int().positive().max(MAX_DOCUMENT_BYTES),
   sha256: Sha256Schema,
   /** The person's own name for the file, kept only as a label. It is never a
    *  path, never a key, and never used to address anything. */

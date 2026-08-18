@@ -14,7 +14,7 @@ import {
 } from "@novus/contracts";
 import codexIcon from "../assets/codex-icon.png";
 import { Dialog } from "./dialog";
-import { ClaudeGlyph, ImageGlyph } from "./identity";
+import { ClaudeGlyph, DocumentGlyph, ImageGlyph } from "./identity";
 
 /** One short line on what each profile answers, keyed to the vocabulary the
  *  server enforces (D-115). The wire never changes: the harness always asks,
@@ -390,8 +390,22 @@ export function Composer({
           <div className="composer-attachments" data-testid="composer-attachments">
             {attachments.map((image) => (
               <span className="composer-attachment" key={image.artifactId}>
-                <ImageGlyph className="composer-attachment-glyph" />
+                {image.mimeType === "application/pdf" ? (
+                  <DocumentGlyph className="composer-attachment-glyph" />
+                ) : (
+                  <ImageGlyph className="composer-attachment-glyph" />
+                )}
                 <span className="composer-attachment-name">{image.label}</span>
+                {/* Both are stated rather than hidden (D-151): a person should
+                    know their photo was converted or scaled, not find out. */}
+                {image.convertedFrom !== null && (
+                  <span
+                    className="composer-attachment-note"
+                    title={`Converted from ${image.convertedFrom} — the agent cannot read that format`}
+                  >
+                    from {image.convertedFrom}
+                  </span>
+                )}
                 {image.resized && (
                   <span className="composer-attachment-note" title="Scaled down before sending">
                     resized
@@ -421,13 +435,13 @@ export function Composer({
               onClick={() => void addImage()}
               title={
                 attachments.length >= MAX_DIRECTION_ATTACHMENTS
-                  ? `A direction may carry ${MAX_DIRECTION_ATTACHMENTS} images.`
-                  : "Attach an image"
+                  ? `A direction may carry ${MAX_DIRECTION_ATTACHMENTS} files.`
+                  : "Attach an image or PDF"
               }
               data-testid="attach-image"
             >
               <ImageGlyph className="chip-glyph" />
-              {attaching ? "Attaching" : "Image"}
+              {attaching ? "Attaching" : "Attach"}
             </button>
           )}
           <span className="chip-wrap">

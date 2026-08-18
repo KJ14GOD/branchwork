@@ -6,6 +6,7 @@ import {
   AttachArtifactInputSchema,
   BeginArtifactInputSchema,
   BeginRunnerArtifactInputSchema,
+  ARTIFACT_MIME_TYPES,
   MAX_RECORDING_BYTES,
   MAX_SCREENSHOT_BYTES,
   MAX_THUMBNAIL_BYTES,
@@ -441,8 +442,9 @@ export function registerArtifactRoutes(app: FastifyInstance, deps: RouteDeps): v
   if (store instanceof LocalArtifactStore) {
     // The blob body arrives as a raw stream; these are the only content types
     // any route accepts as bytes.
-    app.addContentTypeParser(["image/png", "video/webm"], (_request, payload, done) =>
-      done(null, payload)
+    app.addContentTypeParser(
+      [...ARTIFACT_MIME_TYPES],
+      (_request, payload, done) => done(null, payload)
     );
 
     app.put(

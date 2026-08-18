@@ -1115,7 +1115,8 @@ function registerIpc(): void {
         label: artifact.label,
         mimeType: artifact.mimeType,
         byteSize: artifact.byteSize,
-        resized: prepared.resized
+        resized: prepared.resized,
+        convertedFrom: prepared.convertedFrom
       });
     } catch (error) {
       if (error instanceof AttachmentRefused) {
@@ -1131,7 +1132,18 @@ function registerIpc(): void {
     const chosen = await dialog.showOpenDialog({
       title: "Attach an image",
       properties: ["openFile"],
-      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }]
+      filters: [
+        {
+          name: "Images and PDFs",
+          extensions: [
+            "png", "jpg", "jpeg", "gif", "webp",
+            // Converted to PNG before upload (D-151); offered because these
+            // are what a Mac's own screenshots and photos actually are.
+            "heic", "heif", "tif", "tiff", "bmp",
+            "pdf"
+          ]
+        }
+      ]
     });
     if (chosen.canceled || chosen.filePaths.length === 0) return ok(null);
     return ok(chosen.filePaths[0] ?? null);

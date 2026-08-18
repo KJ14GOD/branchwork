@@ -5864,11 +5864,6 @@ body.resizing {
   margin: var(--s-2) 0 var(--s-3);
 }
 
-.trace-attachment {
-  margin: 0;
-  max-width: 320px;
-}
-
 .trace-attachment-image {
   display: block;
   max-width: 100%;
@@ -5878,18 +5873,32 @@ body.resizing {
   background: var(--surface-2);
 }
 
-.trace-attachment-name {
-  margin-top: var(--s-1);
-  font: var(--type-micro);
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Named rather than dropped: the record must never imply the turn saw
    something it did not. */
 .trace-attachment-missing {
   font: var(--type-micro);
   color: var(--warn);
+}
+
+/* A PDF in the trace (D-151). Nothing to show, so it is named — a quiet row
+   at the same weight as the picture's own presence, never a card. */
+.trace-attachment-doc {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+  font: var(--type-row);
+  color: var(--text-2);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-attachment-doc-glyph {
+  flex: none;
+  color: var(--text-3);
 }

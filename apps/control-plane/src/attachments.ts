@@ -1,5 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { BeginAttachmentInputSchema, MAX_ATTACHMENT_BYTES, type Artifact } from "@novus/contracts";
+import {
+  BeginAttachmentInputSchema,
+  MAX_ATTACHMENT_BYTES,
+  MAX_DOCUMENT_BYTES,
+  attachmentForm,
+  type Artifact
+} from "@novus/contracts";
 import { z } from "zod";
 import { missionAccess, require as requireCapability } from "./authz.ts";
 import type { Db, Queryable } from "./db.ts";
@@ -198,12 +204,16 @@ export function registerAttachmentRoutes(app: FastifyInstance, deps: RouteDeps):
     }
     const ended = await closedRefusal(deps.db, access.missionId);
     if (ended) return deps.sendError(reply, 409, "mission_closed", ended);
-    if (body.data.byteSize > MAX_ATTACHMENT_BYTES) {
+    // Bounded by form, not by one number (D-151): a document is not resizable,
+    // so it gets its own ceiling rather than being refused at the image's.
+    const isDocument = attachmentForm(body.data.mimeType) === "document";
+    const ceiling = isDocument ? MAX_DOCUMENT_BYTES : MAX_ATTACHMENT_BYTES;
+    if (body.data.byteSize > ceiling) {
       return deps.sendError(
         reply,
         422,
         "attachment_too_large",
-        `An attached image may be at most ${MAX_ATTACHMENT_BYTES} bytes.`
+        `An attached ${isDocument ? "document" : "image"} may be at most ${ceiling} bytes.`
       );
     }
     // A chat this lane does not own is answered as not found, never adopted —

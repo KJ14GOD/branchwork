@@ -89,6 +89,20 @@ export function ImageGlyph({ className }: { className?: string }) {
   );
 }
 
+/** A document, in the same stroke set (D-151): a page with a folded corner
+ *  and two lines of text — what a PDF looks like at 14px. */
+export function DocumentGlyph({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" width="14" height="14" fill="none"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true">
+      <path d="M9.25 1.75H4.5A1.25 1.25 0 0 0 3.25 3v10A1.25 1.25 0 0 0 4.5 14.25h7A1.25 1.25 0 0 0 12.75 13V5.25z" />
+      <path d="M9.25 1.75v3.5h3.5" />
+      <path d="M5.75 9.25h4.5M5.75 11.25h3" />
+    </svg>
+  );
+}
+
 export function ClaudeGlyph({ className = "harness-glyph" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="Claude Code">

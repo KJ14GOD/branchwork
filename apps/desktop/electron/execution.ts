@@ -1048,9 +1048,13 @@ export function startTurn(request: TurnRequest): RunningTurn {
         message: {
           role: "user",
           content: [
-            ...(request.attachments ?? []).map((image) => ({
-              type: "image",
-              source: { type: "base64", media_type: image.mimeType, data: image.base64 }
+            // An image is *seen* and a PDF is *read*, and the harness takes
+            // them as different blocks (D-151, each verified against the real
+            // CLI). Sending one as the other is not an error the CLI reports —
+            // it is an answer about nothing.
+            ...(request.attachments ?? []).map((file) => ({
+              type: file.mimeType === "application/pdf" ? "document" : "image",
+              source: { type: "base64", media_type: file.mimeType, data: file.base64 }
             })),
             { type: "text", text: request.direction }
           ]

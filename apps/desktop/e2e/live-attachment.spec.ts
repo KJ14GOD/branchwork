@@ -8,8 +8,8 @@ import { basename, join, resolve } from "node:path";
 import type { MissionDetailResponse, NovusBridge } from "@novus/contracts";
 
 /**
- * Live proof: an image a person attached actually reaches Claude, and the
- * answer proves the model saw it (D-150).
+ * Live proof: a file a person attached actually reaches Claude, and the answer
+ * proves the model received it (D-150, extended to documents by D-151).
  *
  * The whole chain is real — the file on disk, the resize, the digest, the
  * store's verification, the runner's fetch under its own credential, the
@@ -100,6 +100,52 @@ function redOnBluePng(): Buffer {
     chunk("IDAT", zlib.deflateSync(Buffer.concat(rows))),
     chunk("IEND", Buffer.alloc(0))
   ]);
+}
+
+/**
+ * A one-page PDF printing a single word. Built here rather than fixtured for
+ * the same reason as the image: the test owns exactly what the agent is asked
+ * about, and the word appears nowhere in the prompt.
+ */
+function magentaPdf(): Buffer {
+  const content = Buffer.from("BT /F1 36 Tf 72 700 Td (MAGENTA) Tj ET", "ascii");
+  const objects = [
+    Buffer.from("<< /Type /Catalog /Pages 2 0 R >>", "ascii"),
+    Buffer.from("<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "ascii"),
+    Buffer.from(
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R " +
+        "/Resources << /Font << /F1 5 0 R >> >> >>",
+      "ascii"
+    ),
+    Buffer.concat([
+      Buffer.from(`<< /Length ${content.length} >>\nstream\n`, "ascii"),
+      content,
+      Buffer.from("\nendstream", "ascii")
+    ]),
+    Buffer.from("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", "ascii")
+  ];
+  let out = Buffer.from("%PDF-1.4\n", "ascii");
+  const offsets: number[] = [];
+  objects.forEach((object, index) => {
+    offsets.push(out.length);
+    out = Buffer.concat([
+      out,
+      Buffer.from(`${index + 1} 0 obj\n`, "ascii"),
+      object,
+      Buffer.from("\nendobj\n", "ascii")
+    ]);
+  });
+  const xref = out.length;
+  out = Buffer.concat([
+    out,
+    Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`, "ascii"),
+    Buffer.from(offsets.map((off) => `${String(off).padStart(10, "0")} 00000 n \n`).join(""), "ascii"),
+    Buffer.from(
+      `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`,
+      "ascii"
+    )
+  ]);
+  return out;
 }
 
 /** CRC-32, for the Node versions whose zlib does not expose one. */
@@ -335,5 +381,64 @@ describe.skipIf(!LIVE)("an attached image reaching a real Claude Code turn", () 
     await page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
     await page.waitForTimeout(2_500);
     await page.screenshot({ path: join(evidenceDir, "194-attached-image-answered.png") });
-  }, 600_000);
+
+    // --- The same road for a PDF, which the harness reads rather than sees ---
+    // A different content block on the CLI's stdin (`document`, not `image`),
+    // so it is a separate claim and gets its own proof (D-151). The word is
+    // printed only inside the file.
+    const pdfPath = join(imageDir, "the-contract.pdf");
+    writeFileSync(pdfPath, magentaPdf());
+    const attachedPdf = await page.evaluate(
+      async (input) => {
+        const result = await window.novus.missions.attachImage({
+          missionId: input.missionId,
+          path: input.path
+        });
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+        return result.value;
+      },
+      { missionId, path: pdfPath }
+    );
+    expect(attachedPdf.mimeType).toBe("application/pdf");
+
+    await page.evaluate(
+      async (input) => {
+        const result = await window.novus.missions.direct({
+          missionId: input.missionId,
+          body:
+            "Read the attached document. Reply with exactly the one word printed " +
+            "in it and nothing else. Do not use any tools.",
+          model: "claude-fable-5",
+          effort: "low",
+          attachmentIds: [input.artifactId]
+        });
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      },
+      { missionId, artifactId: attachedPdf.artifactId }
+    );
+
+    const readIt = await until(
+      missionId,
+      (value) =>
+        value.events.some(
+          (event) =>
+            event.kind === "harness.text" &&
+            /magenta/i.test(String((event.payload as { text?: unknown }).text ?? ""))
+        ),
+      "the real Claude to read the attached PDF",
+      300_000
+    );
+    const fromDocument = readIt.events
+      .filter((event) => event.kind === "harness.text")
+      .map((event) => String((event.payload as { text?: unknown }).text ?? ""))
+      .join(" ");
+    // The word exists only inside the PDF's content stream.
+    expect(fromDocument).toMatch(/magenta/i);
+
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
+    await page.waitForTimeout(2_500);
+    await page.screenshot({ path: join(evidenceDir, "195-attached-pdf-read.png") });
+  }, 900_000);
 });

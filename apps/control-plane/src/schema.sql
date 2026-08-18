@@ -1007,3 +1007,10 @@ alter table artifacts add constraint artifacts_kind_check
 alter table artifacts drop constraint if exists artifacts_capture_source_check;
 alter table artifacts add constraint artifacts_capture_source_check
   check (capture_source in ('preview', 'upload'));
+-- The blob types an attachment may be (D-151), every one of them a format the
+-- harness was observed to actually read. Widened in this one place for the
+-- same reason as the two above.
+alter table artifacts drop constraint if exists artifacts_mime_type_check;
+alter table artifacts add constraint artifacts_mime_type_check
+  check (mime_type in ('image/png', 'video/webm', 'image/jpeg', 'image/gif',
+                       'image/webp', 'application/pdf'));

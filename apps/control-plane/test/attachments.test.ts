@@ -235,6 +235,37 @@ describe("attaching an image to a direction", () => {
     expect(begun.statusCode).toBe(404);
   }, 30_000);
 
+  it("carries a PDF, bounded by the document ceiling rather than the image one", async () => {
+    const room = await mission();
+    // Bigger than an image may be, smaller than a document may be: the point
+    // is that one number for both would have refused this.
+    const pdf = Buffer.alloc(6_000_000, 7);
+    const attached = await attach(room, kartik, pdf, {
+      mimeType: "application/pdf",
+      filename: "contract.pdf"
+    });
+    expect(attached.status).toBe(201);
+    const submitted = await direct(room, kartik, "Read this", [attached.artifactId as string]);
+    expect(submitted.statusCode).toBe(200);
+  }, 30_000);
+
+  it("refuses a PDF past the document ceiling", async () => {
+    const room = await mission();
+    const begun = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${room.missionId}/attachments`,
+      headers: bearer(kartik),
+      payload: {
+        workstreamId: room.workstreamId,
+        mimeType: "application/pdf",
+        byteSize: 11_000_000,
+        sha256: sha("big"),
+        filename: "enormous.pdf"
+      }
+    });
+    expect(begun.statusCode).toBe(422);
+  }, 30_000);
+
   it("refuses a MIME type nothing downstream can read", async () => {
     const room = await mission();
     const begun = await harness.app.inject({
