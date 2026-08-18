@@ -293,6 +293,58 @@ describe("who may end a mission, and what completion means", () => {
   });
 });
 
+/**
+ * Giving the workspaces back (D-155).
+ *
+ * The control plane's half is small and its two properties are both about
+ * durability: the command is enqueued **inside the closing transaction**, so a
+ * mission that ended is a mission whose machines have been told; and it is
+ * keyed per lane, so a mission with competing approaches asks for each one
+ * rather than the first.
+ */
+describe("ending a mission asks for its workspaces back", () => {
+  it("enqueues a release for the lane, in the same transaction as the close", async () => {
+    const lane = await mission();
+    await settled(lane);
+    await decide(lane);
+    expect((await close(lane, "completed")).statusCode).toBe(200);
+
+    const queued = await harness.db.query(
+      "select kind, wst_id, state from runner_commands where mission_id = $1 and kind = 'release_workspace'",
+      [lane.missionId]
+    );
+    expect(queued.rowCount).toBe(1);
+    expect(queued.rows[0].wst_id).toBe(lane.workstreamId);
+    expect(queued.rows[0].state).toBe("pending");
+  }, 30_000);
+
+  it("asks once however many times the close is attempted", async () => {
+    const lane = await mission();
+    await settled(lane);
+    await decide(lane);
+    expect((await close(lane, "completed")).statusCode).toBe(200);
+    // A second close is refused as already-closed, and must not queue a
+    // second release behind the first.
+    expect((await close(lane, "completed")).statusCode).toBe(409);
+
+    const queued = await harness.db.query(
+      "select count(*)::int as n from runner_commands where mission_id = $1 and kind = 'release_workspace'",
+      [lane.missionId]
+    );
+    expect(queued.rows[0].n).toBe(1);
+  }, 30_000);
+
+  it("does not ask while the mission is still open", async () => {
+    const lane = await mission();
+    await settled(lane);
+    const queued = await harness.db.query(
+      "select count(*)::int as n from runner_commands where mission_id = $1 and kind = 'release_workspace'",
+      [lane.missionId]
+    );
+    expect(queued.rows[0].n).toBe(0);
+  }, 30_000);
+});
+
 describe("the receipt", () => {
   it("is snapshotted deterministically with its event range, and served on the detail", async () => {
     const lane = await mission();

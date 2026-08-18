@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { basename, join, resolve as resolvePath, sep } from "node:path";
 import {
   MIN_SECRET_LENGTH,
@@ -21,6 +21,7 @@ import {
 } from "@novus/contracts";
 import { ApiError } from "./api-client";
 import { createSanitizer } from "./evidence";
+import { ATTACHMENT_DIR, isAttachmentPath } from "./secret-policy";
 import { declaredCommands, sameCommands, sameSkills } from "./workspace-commands";
 import { discoverProjectSkills } from "./skills";
 import { discoverProjectMcp } from "./mcp";
@@ -263,6 +264,101 @@ async function prepareWorktree(
     throw new WorkspaceCommandError(`This workspace could not be created: ${added.stderr.slice(0, 300)}`);
   }
   return worktree;
+}
+
+/**
+ * Gives a lane's checkout back once its mission has ended (D-155).
+ *
+ * The order matters and each step is a rule rather than a convenience:
+ *
+ *  1. **Stop what is running there.** Processes and terminals in a worktree
+ *     hold it open; a removal that raced them would leave half a directory and
+ *     a supervisor pointing at nothing.
+ *  2. **Remove the staged attachments** (D-153) unconditionally. They are the
+ *     person's own input and the artifact store holds them durably, so the
+ *     copy on disk is a cache and nothing is lost with it.
+ *  3. **Refuse if anything else is uncommitted.** This is the whole safety
+ *     rule: uncommitted work is somebody's, and tidying up is never a reason
+ *     to delete it. The lane is kept, the count is reported, and a person can
+ *     go and look. `retireLegacyWorktree` above has taken exactly this
+ *     position since before this existed.
+ *  4. **Remove the worktree, never the branch.** The branch carries every
+ *     checkpoint, the receipt names it, and an open pull request points at it.
+ *     A worktree is a working copy; the branch is the record.
+ */
+export async function releaseWorkspaceWorktree(
+  userDataPath: string,
+  workstreamId: string,
+  repositoryPath: string,
+  options: { git?: GitExec } = {}
+): Promise<{
+  outcome: "released" | "kept" | "absent";
+  reason: string | null;
+  uncommitted: number;
+  attachmentsRemoved: number;
+}> {
+  const git = options.git ?? gitExec;
+  const worktree = worktreeFor(userDataPath, workstreamId);
+  if (!existsSync(worktree)) {
+    await git(repositoryPath, ["worktree", "prune"]);
+    return { outcome: "absent", reason: null, uncommitted: 0, attachmentsRemoved: 0 };
+  }
+
+  const supervisor = supervisorsByWorkstream.get(workstreamId);
+  if (supervisor) {
+    await supervisor.stopAll("the mission ended").catch(() => undefined);
+    supervisorsByWorkstream.delete(workstreamId);
+  }
+  if (sessions) {
+    for (const session of sessions.list(workstreamId)) {
+      await sessions.close(session.sessionId).catch(() => undefined);
+    }
+  }
+
+  let attachmentsRemoved = 0;
+  const staged = join(worktree, ATTACHMENT_DIR);
+  if (existsSync(staged)) {
+    try {
+      attachmentsRemoved = readdirSync(staged).length;
+    } catch {
+      attachmentsRemoved = 0;
+    }
+    rmSync(staged, { recursive: true, force: true });
+  }
+
+  const status = await git(worktree, ["status", "--porcelain", "--untracked-files=all"]);
+  if (status.code !== 0) {
+    return {
+      outcome: "kept",
+      reason: "This machine could not read the workspace's state, so nothing was removed.",
+      uncommitted: 0,
+      attachmentsRemoved
+    };
+  }
+  const dirty = status.stdout
+    .split("\n")
+    .map((line) => line.slice(3).trim())
+    .filter((path) => path.length > 0 && !isAttachmentPath(path));
+  if (dirty.length > 0) {
+    return {
+      outcome: "kept",
+      reason: `The workspace still holds ${dirty.length} uncommitted ${dirty.length === 1 ? "file" : "files"}, so it was left alone. Novus does not delete uncommitted work.`,
+      uncommitted: dirty.length,
+      attachmentsRemoved
+    };
+  }
+
+  const removed = await git(repositoryPath, ["worktree", "remove", "--", worktree]);
+  if (removed.code !== 0) {
+    return {
+      outcome: "kept",
+      reason: `The workspace could not be removed: ${removed.stderr.slice(0, 200)}`,
+      uncommitted: 0,
+      attachmentsRemoved
+    };
+  }
+  await git(repositoryPath, ["worktree", "prune"]);
+  return { outcome: "released", reason: null, uncommitted: 0, attachmentsRemoved };
 }
 
 /**

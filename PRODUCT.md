@@ -252,6 +252,8 @@ The states below are the canonical vocabulary; [DESIGN.md](DESIGN.md#state-prese
 | Pull request open | PR created/adopted; tracking checks, reviews, mergeability. |
 | Completed | Result accepted, PR resolved, receipt snapshotted. Terminal. |
 | Cancelled | Deliberately ended without acceptance; receipt records what happened and what was abandoned. Terminal. |
+
+Ending a mission also **gives its workspaces back** (D-155): each lane's machine stops what is running there and removes the checkout. It is the ending that does this, never archival — filing a record away is not finishing with the work. A workspace still holding uncommitted work is **kept**, with the reason said in words: tidying up is never a reason to delete somebody's work, and the room would rather leave a directory behind than lose one. The mission branch is never removed — it carries every checkpoint, the receipt names it, and a pull request may point at it.
 | Execution interrupted | The runner or harness died mid-execution; last events preserved. Resume-or-restart is a human choice — a new execution in the same workstream continues the work. |
 | Execution stalled *(overlay)* | Watchdog timeout: the harness has made no progress and reached no boundary. The recovery path is Stop; a stop that then goes unanswered may be force-interrupted — an explicit, logged act (D-111). |
 | Repository sync error *(overlay)* | The workspace cannot sync with GitHub — token expiry or revocation, force-push, or branch conflict with base. Human-visible remediation; never silent retries. |

@@ -39,6 +39,7 @@ import { EventOutbox } from "./outbox";
 import {
   createWorkspaceRuntime,
   ensureWorkspaceWorktree,
+  releaseWorkspaceWorktree,
   secretValuesFor,
   type PinnedCommand,
   type WorkspaceCommandContext
@@ -1597,6 +1598,44 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       command.kind === "run_verification"
     ) {
       await runWorkspaceCommand(command, workstream);
+      return;
+    }
+    if (command.kind === "release_workspace") {
+      // The mission ended, so this machine gives the lane's checkout back
+      // (D-155). Refusal is a real outcome here, not an error: a worktree
+      // holding uncommitted work is kept and says so, because tidying up is
+      // never a reason to delete somebody's work.
+      const repositoryPath = host.repositoryPath(workstream.providerRepoId);
+      if (repositoryPath === null) {
+        outboxFor(workstreamId).append(null, {
+          kind: "workspace.released",
+          payload: {
+            outcome: "absent",
+            reason: null,
+            uncommitted: 0,
+            attachmentsRemoved: 0
+          }
+        });
+        return;
+      }
+      const released = await releaseWorkspaceWorktree(userData, workstreamId, repositoryPath);
+      // Enrolment ends with the checkout: a lane with no worktree has nothing
+      // for this machine to do, and a stream held open for it is a connection
+      // waiting for work that can never come.
+      if (released.outcome !== "kept") {
+        streams.get(workstreamId)?.abort();
+        enrolments.delete(workstreamId);
+        persistEnrolments();
+      }
+      outboxFor(workstreamId).append(null, {
+        kind: "workspace.released",
+        payload: {
+          outcome: released.outcome,
+          reason: released.reason,
+          uncommitted: released.uncommitted,
+          attachmentsRemoved: released.attachmentsRemoved
+        }
+      });
       return;
     }
     if (command.kind === "push_branch") {

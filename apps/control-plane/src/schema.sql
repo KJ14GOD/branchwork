@@ -616,7 +616,9 @@ alter table runner_commands add constraint runner_commands_kind_check
   check (kind in ('start_execution', 'apply_direction', 'stop_execution', 'boundary_request',
                   'respond_approval',
                   'run_setup', 'run_command', 'stop_command', 'run_verification',
-                  'push_branch'));
+                  'push_branch',
+                  -- Give back a lane's checkout once its mission ended (D-155).
+                  'release_workspace'));
 
 -- A check proves one lane's revision (D-074). Harness-observed checks could
 -- always be traced through their execution; participant-run ones carry no

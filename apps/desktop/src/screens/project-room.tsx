@@ -390,10 +390,23 @@ export function ProjectRoom({
     return () => observer.disconnect();
   }, []);
 
+  const [awayFromLatest, setAwayFromLatest] = useState(false);
   const onScroll = () => {
     const element = scrollRef.current;
     if (!element) return;
     pinnedRef.current = element.scrollTop + element.clientHeight >= element.scrollHeight - 48;
+    // A roomier threshold than the pin's, so the arrow never flickers at the
+    // bottom edge: it appears once the reader has genuinely left the latest.
+    setAwayFromLatest(
+      element.scrollHeight - (element.scrollTop + element.clientHeight) > 160
+    );
+  };
+
+  const jumpToLatest = () => {
+    const element = scrollRef.current;
+    if (!element) return;
+    pinnedRef.current = true;
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   };
 
   // Room keys (DESIGN.md#keyboard): G then C/V/A, R to request control.
@@ -1712,6 +1725,7 @@ export function ProjectRoom({
           </div>
         </div>
       ) : (
+      <div className="feed-holder">
       <div className="feed-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="feed" data-testid="chat">
           {isDraft ? (
@@ -1926,6 +1940,32 @@ export function ProjectRoom({
             </div>
           )}
         </div>
+      </div>
+      {/* The way back down: floats only while the reader is away from the
+          latest, and one press returns them to where new words land. */}
+      {awayFromLatest && (
+        <button
+          className="feed-jump"
+          onClick={jumpToLatest}
+          aria-label="Jump to the latest"
+          title="Jump to the latest"
+          data-testid="feed-jump"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            width="14"
+            height="14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M8 3v10M3.5 8.5 8 13l4.5-4.5" />
+          </svg>
+        </button>
+      )}
       </div>
       )}
 

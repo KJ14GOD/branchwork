@@ -2655,7 +2655,13 @@ export const RunnerCommandKindSchema = z.enum([
    *  credential is minted per operation, write-scoped, and never stored.
    *  There is deliberately no merge command: this vocabulary can put a
    *  branch on a host and can never combine one with another. */
-  "push_branch"
+  "push_branch",
+  /** Give back a lane's checkout once its mission has ended (D-155). The
+   *  machine stops what is running there, removes its staged attachments, and
+   *  removes the worktree — but **never the branch**, which is the record the
+   *  receipt and any pull request point at, and never a worktree still holding
+   *  uncommitted work, which it reports instead. */
+  "release_workspace"
 ]);
 export type RunnerCommandKind = z.infer<typeof RunnerCommandKindSchema>;
 
@@ -2909,6 +2915,25 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
       .object({
         branch: BOUNDED_LINE,
         sha: z.string().regex(/^[0-9a-f]{40}$/)
+      })
+      .strict()
+  }),
+  z.object({
+    /** A lane's checkout given back after its mission ended (D-155), or the
+     *  honest reason it was not. `kept` is not a failure: uncommitted work is
+     *  somebody's, and a cleanup that deletes it to tidy up is worse than one
+     *  that leaves a directory behind and says so. */
+    kind: z.literal("workspace.released"),
+    payload: z
+      .object({
+        outcome: z.enum(["released", "kept", "absent"]),
+        /** Why it was kept, in words a person can act on. */
+        reason: BOUNDED_LINE.nullable().default(null),
+        /** How many files were left uncommitted, when that is the reason. */
+        uncommitted: z.number().int().nonnegative().default(0),
+        /** Staged attachments removed with it — always removed, because the
+         *  store already holds them durably. */
+        attachmentsRemoved: z.number().int().nonnegative().default(0)
       })
       .strict()
   }),

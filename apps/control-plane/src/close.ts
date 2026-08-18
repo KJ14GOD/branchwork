@@ -12,6 +12,7 @@ import { missionAccess, require as requireCapability, type MissionAccess } from 
 import { withMission } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { standingDecision } from "./approaches.ts";
+import { enqueueCommand } from "./runners.ts";
 import { newReceiptId } from "./ids.ts";
 import type { RouteDeps } from "./routes.ts";
 
@@ -305,6 +306,31 @@ export function registerCloseRoutes(app: FastifyInstance, deps: RouteDeps): void
           snapshot.eventRange.toSeq
         ]
       );
+      // Every lane's checkout is asked for back (D-155). Enqueued inside the
+      // closing transaction, so a mission that ends is a mission whose
+      // machines have been told — and the queue is durable, so a laptop that
+      // is closed right now does the work when it next comes back. A lane
+      // whose machine is gone for good leaves a pending command, which is the
+      // same shape as every other command nobody is there to take.
+      const lanes = await client.query(
+        `select w.wst_id, r.runner_id
+           from workstreams w
+           join runners r on r.wst_id = w.wst_id and r.revoked_at is null
+          where w.mission_id = $1`,
+        [missionId]
+      );
+      for (const lane of lanes.rows as { wst_id: string; runner_id: string }[]) {
+        await enqueueCommand(client, {
+          orgId: access.orgId,
+          missionId,
+          workstreamId: lane.wst_id,
+          executionId: null,
+          runnerId: lane.runner_id,
+          kind: "release_workspace",
+          payload: {},
+          idempotencyKey: `release:${lane.wst_id}`
+        });
+      }
       return "closed" as const;
     });
 
