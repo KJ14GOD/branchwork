@@ -1951,3 +1951,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** `MissionTree` gains `focused`; `openLaneView`/`openPullTab` take an optional tab (one direct-handler callsite was passing the click event as the tab id — caught by the pr spec, fixed to an explicit closure). The token table gains the diff pair; DESIGN.md's rail paragraph reverses "only the active one" with the reason named. Full Electron e2e rerun for the rail-wide change.
 
 **Revisit when.** Background trees want live counts (a session's needs-you word going stale is the first real cost); or a third hue family request appears and the token table needs an inventory rule.
+
+## D-143 — Evidence images live in the repository, nowhere else
+
+**Context.** Owner-directed. A small visual fix was verified by screenshot, and the verification images were handed to the owner as copies on the Desktop. The owner keeps a numbered evidence library at `apps/desktop/e2e/evidence/` — the same one the Electron e2e suite writes — and wants every image that documents the product to land there, tracked, instead of scattering across the machine.
+
+**Decision.** Evidence images are repository artifacts. Any screenshot or image that documents a change — e2e output or a hand-captured verification shot — is saved into `apps/desktop/e2e/evidence/`, continuing the numeric sequence with a short kebab-case subject. A re-capture of a subject that already has a file replaces that file; a new subject gets the next number. Nothing is written to the Desktop, Downloads, or a temp path as the deliverable. AGENTS.md gains rule 17 saying so.
+
+**Alternatives.** A separate `docs/screenshots/` tree for hand-captured shots (rejected: two libraries with one purpose; the e2e evidence folder already is the product's picture record). Leaving hand-captured shots untracked (rejected: the gate refuses untracked files for exactly this reason — an image that proves a change is part of the change).
+
+**Consequences.** Rule 17 in AGENTS.md; the first hand-captured entry is `159-file-modes-segment-tab-zoom.png`, the after-shot of the segment-tab restyle of the file view's Preview/Edit switch.
+
+**Revisit when.** The evidence folder needs curation (hand-captured shots and spec-generated shots aging differently), or a release process wants evidence bundled elsewhere.

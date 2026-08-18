@@ -2,7 +2,7 @@ Purpose: The working contract for every implementation agent (and human) making 
 Authoritative for: agent workflow, the repository gate, documentation-update obligations, prohibitions.
 Not authoritative for: product truth (PRODUCT.md), design truth (DESIGN.md), system truth (ARCHITECTURE.md), status (PROGRESS.md), decisions (DECISIONS.md).
 Update when: the workflow, gate, or prohibitions change. Such changes require a DECISIONS.md entry.
-Last reviewed: 2026-08-01
+Last reviewed: 2026-08-17
 
 # Working rules for agents
 
@@ -29,6 +29,7 @@ For visual-only work, do not edit tests merely to accommodate a new layout, shor
 14. Never invent local design values. Every color, radius, shadow, type size, and spacing value comes from the token system in [DESIGN.md](DESIGN.md#tokens); a literal hex, px shadow, or one-off size in component code fails review.
 15. Never use gradients. No CSS gradient functions anywhere unless DESIGN.md explicitly introduces an approved semantic gradient by name.
 16. Never use Fleet or any parallel implementation fan-out until the contracts in ARCHITECTURE.md are stable and the task is genuinely divisible into independent slices. One agent, one coherent change, is the default.
+17. Never save a screenshot or any other evidence image outside the repository — not the Desktop, not Downloads, not a temp path handed to the user (D-143). Evidence images live in `apps/desktop/e2e/evidence/`, numbered in sequence with a short kebab-case subject; a re-capture of a subject that already has a file replaces that file rather than adding a sibling.
 
 ## The repository gate
 
