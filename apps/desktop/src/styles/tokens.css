@@ -82,6 +82,7 @@
   --type-section: 600 16px/24px var(--font-ui);
   --type-title: 600 20px/28px var(--font-ui);
   --type-mission: 650 28px/34px var(--font-ui);
+  --type-display: 650 40px/46px var(--font-ui);
 
   /* Spacing scale */
   --s-1: 4px;

@@ -2011,3 +2011,15 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 **Consequences.** CSS gains `.select`/`.select-wrap`, the checkbox rules, and six hook rules; loses `.invite-select` and the segment-chip rule. Five components and one screen touched. Before/after pairs `177`–`188` in the evidence library, rendered through the real component and stylesheet.
 
 **Revisit when.** A third select or checkbox variant appears (the idiom should absorb it), or approaches want a real visual identity in the compare grid.
+
+## D-147 — The first-run room composes to the window
+
+**Context.** Owner-directed, on sight of the signed-in setup screen: "seems empty and uninviting." The surface obeyed its recorded design — content in the upper third, mission-scale title — and the result at full-window height was a small form pinned to the top with two-thirds of the canvas dead below it, the Finish action floating in the void.
+
+**Decision.** The room composes to the window. Flexible spacers (2:3) hold the block a little above optical center and collapse into a scrolling column when the window is short. The greeting takes a new top type step — `--type-display`, 40/46 at 650, recorded in the scale with the rule that nothing inside the working shell ever uses it — and the subtitle moves up to the speech scale so it holds under the larger title. A content-width hairline separates the connection cards from the Theme row, marking the shift from connect to adjust. Everything else stays: the card row, the observed-local-facts rule, Finish setup bottom-right of the composition.
+
+**Alternatives.** Filling the void with content — product tour copy, feature list, illustration (rejected: clutter is not invitation; the surface's job is three connections and a door). A wordmark hero (rejected for now: the greeting already names the product; a second mark is repetition). Keeping the mission scale and centering alone (rejected on the render: 28px in a 1470-point window still read as a form, not a moment).
+
+**Consequences.** `tokens.css` gains `--type-display`; the setup styles gain the spacers, the display greeting, the speech subtitle, and the theme hairline; DESIGN.md's type table and first-run section are rewritten, the upper-third placement superseded with the reason named. D-126's reserved 28/34 row becomes true again — setup was its last user. Evidence: before `189` (the owner's own screenshot), after `190` (the real stylesheet over the real markup at window size; live capture pends the next signed-out run, since signing the owner out to stage one was not worth it).
+
+**Revisit when.** The setup room gains a real fourth connection or cloud execution arrives — the composition's balance assumes three cards and one action.

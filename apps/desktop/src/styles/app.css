@@ -392,28 +392,41 @@ body {
   -webkit-app-region: drag;
 }
 
+/* The first-run room composes to the window, not to its top edge: flexible
+   spacers hold the block a little above optical center (2:3), so the surface
+   reads as a composed moment instead of a form stranded over a void (D-147).
+   When the window is short the spacers collapse and the column scrolls. */
 .setup {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  padding: var(--s-8) var(--s-8) var(--s-7);
-  padding-top: 96px;
+  padding: var(--s-8);
   max-width: 1160px;
   width: 100%;
   margin: 0 auto;
 }
 
+.setup::before {
+  content: "";
+  flex: 2;
+}
+
+.setup::after {
+  content: "";
+  flex: 3;
+}
+
 .setup h1 {
-  font: var(--type-mission);
-  margin-bottom: var(--s-2);
+  font: var(--type-display);
+  margin-bottom: var(--s-3);
 }
 
 .setup .setup-sub {
-  font: var(--type-body);
+  font: var(--type-speech);
   color: var(--text-2);
-  margin-bottom: var(--s-6);
+  margin-bottom: var(--s-7);
 }
 
 .setup-cards {
@@ -423,12 +436,16 @@ body {
   justify-content: flex-end;
 }
 
+/* The theme row is settled apparatus beneath the connections: a hairline
+   marks the shift from "connect" to "adjust". */
 .setup-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--s-6);
   margin-top: var(--s-7);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--edge);
 }
 
 .setup-row .setup-row-label {
@@ -3647,11 +3664,16 @@ body {
 .family-asset { color: var(--term-bright-magenta); background: color-mix(in srgb, var(--term-bright-magenta) 12%, transparent); }
 
 /* A file is its own tab beside the room's, marked as a file (D-048). */
+/* Same opt-out as .session-tab, for the same reason: the base .tab width
+   budget clips the row's tail, and a file tab's tail is its close — the name
+   carries its own 22ch ellipsis, so the tab stays bounded without it. */
 .file-tab {
   display: inline-flex;
   align-items: center;
   padding-right: 2px;
   border-bottom: 2px solid transparent;
+  max-width: none;
+  overflow: visible;
 }
 
 .file-tab.active {
