@@ -166,6 +166,12 @@ export function Composer({
     upload: (path: string) => Promise<
       { ok: true; attachment: PreparedAttachment } | { ok: false; message: string }
     >;
+    /** Whatever image the clipboard holds, or null when it holds none (D-152). */
+    paste: () => Promise<
+      { ok: true; attachment: PreparedAttachment | null } | { ok: false; message: string }
+    >;
+    /** The path behind a dropped file, resolved by the bridge (D-152). */
+    pathOf: (file: File) => string | null;
   };
 }) {
   const [textValue, setTextValue] = useState("");
@@ -223,27 +229,72 @@ export function Composer({
   const [attachments, setAttachments] = useState<PreparedAttachment[]>([]);
   const [attaching, setAttaching] = useState(false);
 
-  const addImage = async () => {
-    if (!attach || attaching || attachments.length >= MAX_DIRECTION_ATTACHMENTS) return;
+  const room = attachments.length < MAX_DIRECTION_ATTACHMENTS;
+
+  /**
+   * Uploads a run of files one after another (D-152), stopping at the bound.
+   *
+   * Sequential rather than parallel on purpose: the bound is checked against
+   * what is already held, and four concurrent uploads all see the same empty
+   * list. Any mixture is fine — images and PDFs land in the same list in the
+   * order they were given, which is the order the harness reads them.
+   */
+  const addFiles = async (paths: string[]) => {
+    if (!attach || attaching || paths.length === 0) return;
     setError(null);
     setAttaching(true);
     try {
-      const picked = await attach.pick();
-      if (!picked.ok) {
-        setError(picked.message);
-        return;
+      let held = attachments.length;
+      let refusedOne: string | null = null;
+      for (const path of paths) {
+        if (held >= MAX_DIRECTION_ATTACHMENTS) {
+          refusedOne = `A direction may carry ${MAX_DIRECTION_ATTACHMENTS} files; the rest were not attached.`;
+          break;
+        }
+        const uploaded = await attach.upload(path);
+        if (!uploaded.ok) {
+          // One bad file among several does not discard the good ones: the
+          // reason is shown and the rest still go.
+          refusedOne = uploaded.message;
+          continue;
+        }
+        held += 1;
+        setAttachments((current) => [...current, uploaded.attachment].slice(0, MAX_DIRECTION_ATTACHMENTS));
       }
-      if (picked.path === null) return;
-      const uploaded = await attach.upload(picked.path);
-      if (!uploaded.ok) {
-        setError(uploaded.message);
-        return;
-      }
-      setAttachments((held) => [...held, uploaded.attachment].slice(0, MAX_DIRECTION_ATTACHMENTS));
+      if (refusedOne) setError(refusedOne);
     } finally {
       setAttaching(false);
     }
   };
+
+  const addImage = async () => {
+    if (!attach || attaching || !room) return;
+    setError(null);
+    const picked = await attach.pick();
+    if (!picked.ok) {
+      setError(picked.message);
+      return;
+    }
+    if (picked.path === null) return;
+    await addFiles([picked.path]);
+  };
+
+  /** Paste (D-152). Returns true when an image was taken, so the caller knows
+   *  whether to let the ordinary text paste happen. */
+  const pasteImage = async (): Promise<boolean> => {
+    if (!attach || attaching || !room) return false;
+    const pasted = await attach.paste();
+    if (!pasted.ok) {
+      setError(pasted.message);
+      return true;
+    }
+    const taken = pasted.attachment;
+    if (taken === null) return false;
+    setAttachments((current) => [...current, taken].slice(0, MAX_DIRECTION_ATTACHMENTS));
+    return true;
+  };
+
+  const [dropping, setDropping] = useState(false);
 
   const perform = async (alongside: boolean) => {
     const body = textValue.trim();
@@ -340,7 +391,32 @@ export function Composer({
         </p>
       )}
       <div
-        className="composer-box"
+        className={dropping ? "composer-box composer-box-dropping" : "composer-box"}
+        // Dropping onto the box (D-152). The whole box is the target rather
+        // than a strip inside it: a person dragging a screenshot at a text
+        // area should not have to aim.
+        onDragOver={(event) => {
+          if (!attach || !enabled) return;
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+          setDropping(true);
+        }}
+        onDragLeave={(event) => {
+          // Only when the pointer truly leaves the box — dragging across a
+          // child fires leave on the parent otherwise, and the wash flickers.
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false);
+        }}
+        onDrop={(event) => {
+          if (!attach || !enabled) return;
+          const paths = [...event.dataTransfer.files]
+            .map((file) => attach.pathOf(file))
+            .filter((path): path is string => path !== null);
+          if (paths.length === 0) return;
+          event.preventDefault();
+          setDropping(false);
+          void addFiles(paths);
+        }}
         title={
           known && !mayDirect
             ? denialReason ??
@@ -371,6 +447,17 @@ export function Composer({
             // the direction as it stood (D-095).
             setPendingChoice(false);
             grow(event.target);
+          }}
+          onPaste={(event) => {
+            if (!attach) return;
+            // Only a clipboard actually carrying an image is intercepted; a
+            // pasted paragraph is words and must stay words (D-152).
+            const hasImage = [...event.clipboardData.items].some((item) =>
+              item.type.startsWith("image/")
+            );
+            if (!hasImage) return;
+            event.preventDefault();
+            void pasteImage();
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
@@ -431,7 +518,7 @@ export function Composer({
           {attach && (
             <button
               className="chip-button"
-              disabled={!enabled || attaching || attachments.length >= MAX_DIRECTION_ATTACHMENTS}
+              disabled={!enabled || attaching || !room}
               onClick={() => void addImage()}
               title={
                 attachments.length >= MAX_DIRECTION_ATTACHMENTS

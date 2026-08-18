@@ -359,6 +359,25 @@ export function ProjectRoom({
     };
   }, [selectedMissionId, activeWorkstreamId, onDetail, onSelectLane]);
 
+  /** The attached image being read at full size (D-152), or null. Room state
+   *  rather than trace state: it covers the whole surface, and the trace is
+   *  one of the things it covers. */
+  const [openImage, setOpenImage] = useState<{ artifactId: string; label: string } | null>(null);
+
+  // Escape closes the image (D-152). Registered in the capture phase so it
+  // answers before the room's other Escape handlers do: while a picture is
+  // covering the surface, Escape means "put it back" and nothing else.
+  useEffect(() => {
+    if (!openImage) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setOpenImage(null);
+    };
+    window.addEventListener("keydown", close, true);
+    return () => window.removeEventListener("keydown", close, true);
+  }, [openImage]);
+
   // Resizing the window must not strand the feed halfway up: a reader who was
   // at the bottom stays at the bottom.
   useEffect(() => {
@@ -1748,6 +1767,7 @@ export function ProjectRoom({
                     onOpenChanges={() => onInspector("changes")}
                     onOpenVerification={() => onInspector("verification")}
                     onOpenWorker={openWorkerOn(block.key)}
+                    onOpenImage={setOpenImage}
                     actions={block.direction ? directionActions(block.direction) : null}
                     // The queue is the lane's, not the conversation's: its one
                     // workspace takes turns (D-083), so position is computed
@@ -1948,10 +1968,43 @@ export function ProjectRoom({
                   return uploaded.ok
                     ? { ok: true as const, attachment: uploaded.value }
                     : { ok: false as const, message: offlineOr(uploaded.code, uploaded.message) };
-                }
+                },
+                paste: async () => {
+                  const pasted = await novus().missions.attachClipboardImage({
+                    missionId: room.mission.missionId,
+                    ...(room.workstream ? { workstreamId: room.workstream.workstreamId } : {}),
+                    ...(selectedSessionId !== null ? { sessionId: selectedSessionId } : {})
+                  });
+                  return pasted.ok
+                    ? { ok: true as const, attachment: pasted.value }
+                    : { ok: false as const, message: offlineOr(pasted.code, pasted.message) };
+                },
+                pathOf: (file: File) => novus().missions.pathForDroppedFile(file)
               }))(detail)
         }
       />
+      )}
+
+      {/* An attached image, read at full size (D-152). It covers the room
+          rather than opening anywhere: nothing navigated, so Escape or a click
+          on the ground puts it back exactly where it was. */}
+      {openImage && (
+        <div
+          className="lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={openImage.label}
+          data-testid="image-lightbox"
+          onClick={() => setOpenImage(null)}
+        >
+          <img
+            className="lightbox-image"
+            src={`novus-artifact://${openImage.artifactId}/blob`}
+            alt={openImage.label}
+            // A click on the picture itself is not a click on the ground.
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
       )}
 
       {/* The bottom dock. It shares the room's width and shortens the trace

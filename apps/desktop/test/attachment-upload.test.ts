@@ -157,3 +157,75 @@ describe("how a picked file is routed", () => {
     expect(sniffImageMime(png)).toBe("image/png");
   });
 });
+
+/**
+ * Attaching several files at once (D-152).
+ *
+ * The composer uploads a dropped run **sequentially**, and these are why. The
+ * bound is checked against what is already held, so four concurrent uploads
+ * all read the same empty list and four becomes eight. And one bad file among
+ * several must not discard the good ones — a person who drags a folder's worth
+ * of screenshots and one stray zip should get the screenshots.
+ */
+describe("a run of files against the bound", () => {
+  /** The composer's own accumulation rule, extracted so it can be exercised
+   *  without a renderer: take until full, skip failures, report one reason. */
+  function accumulate(
+    held: string[],
+    incoming: { path: string; ok: boolean }[]
+  ): { held: string[]; refused: string | null } {
+    const next = [...held];
+    let refused: string | null = null;
+    for (const file of incoming) {
+      if (next.length >= MAX_DIRECTION_ATTACHMENTS) {
+        refused = `A direction may carry ${MAX_DIRECTION_ATTACHMENTS} files; the rest were not attached.`;
+        break;
+      }
+      if (!file.ok) {
+        refused = `${file.path} was refused`;
+        continue;
+      }
+      next.push(file.path);
+    }
+    return { held: next, refused };
+  }
+
+  it("takes every file when they fit", () => {
+    const result = accumulate([], [
+      { path: "a.png", ok: true },
+      { path: "b.pdf", ok: true },
+      { path: "c.jpg", ok: true }
+    ]);
+    expect(result.held).toEqual(["a.png", "b.pdf", "c.jpg"]);
+    expect(result.refused).toBeNull();
+  });
+
+  it("stops at the bound and says the rest did not go", () => {
+    const result = accumulate(
+      ["already.png"],
+      Array.from({ length: 6 }, (_, i) => ({ path: `${i}.png`, ok: true }))
+    );
+    expect(result.held).toHaveLength(MAX_DIRECTION_ATTACHMENTS);
+    expect(result.refused).toContain("were not attached");
+  });
+
+  it("keeps the good files when one in the middle is refused", () => {
+    const result = accumulate([], [
+      { path: "good.png", ok: true },
+      { path: "stray.zip", ok: false },
+      { path: "also-good.pdf", ok: true }
+    ]);
+    expect(result.held).toEqual(["good.png", "also-good.pdf"]);
+    expect(result.refused).toContain("stray.zip");
+  });
+
+  it("counts what is already held, which is why the uploads are sequential", () => {
+    // Four in flight against an empty list would each see room for four.
+    const result = accumulate(["one.png", "two.png", "three.png"], [
+      { path: "four.png", ok: true },
+      { path: "five.png", ok: true }
+    ]);
+    expect(result.held).toHaveLength(MAX_DIRECTION_ATTACHMENTS);
+    expect(result.held).not.toContain("five.png");
+  });
+});

@@ -2102,3 +2102,27 @@ A document gets **its own size ceiling**, 10MB against an image's 5MB. An image 
 **Consequences.** `ATTACHMENT_MIME_TYPES` gains `application/pdf` and grows an `attachmentForm` helper so the image/document split is carried rather than re-derived at each site; `ARTIFACT_MIME_TYPES` and the `artifacts_mime_type` constraint widen with it — the third constraint this family has needed, found by a 500 rather than by reading, and the local store's content-type parser now reads the same list rather than a second hand-written one. `prepareAttachment` returns `convertedFrom`, which the composer states beside `resized`. A PDF renders in the trace as a named row with a document glyph, because it has nothing to show — the one case where the filename is the only thing a reader has, and the reason images lost their caption in the same change: a screenshot's filename tells a reader nothing the picture does not.
 
 **Revisit when.** A second harness's adapter reads a format this one does not, and the allowlist becomes per-adapter rather than global; Windows or Linux support arrives and conversion needs a decoder that is not `sips`; or the harness starts reading video, which is the next thing people will try to attach.
+
+## D-152 — Attaching is a gesture, not a dialog; and a picture opens where it already is
+
+**Context.** D-150 and D-151 built the road an attachment travels and proved it end to end, but left exactly one way onto it: a file picker behind a chip. Nobody takes a screenshot and then goes looking for a menu — they hit paste, or they drag the file at the box. And once an image was in the trace there was no way to look at it properly; it sat at the size the layout allowed and that was the whole offer.
+
+**Decision.** Three gestures, one road.
+
+**Paste.** An image on the clipboard becomes an attachment; pasted text stays text. The composer only intercepts a paste whose clipboard actually carries an image, so the ordinary case — words — is untouched. Electron hands back decoded pixels rather than a file, so there is nothing to sniff and no filename to keep: the bytes are PNG on arrival and the name is generated.
+
+**Drop.** The whole composer box is the target, not a strip inside it: somebody dragging a screenshot at a text area should not have to aim. Several files at once are taken. Electron 32 removed `File.path`, so the path comes from `webUtils.getPathForFile` behind a bridge verb — the renderer resolves a path the browser already holds and gains no new reach.
+
+**Open.** Clicking an image in the trace brings it to the front over the room, at full size. It **navigates nowhere** — no tab, no route, no history — so Escape or a click on the ground puts it back exactly where it was. The Escape listener is registered in the capture phase, because while a picture covers the surface, Escape means *put it back* and nothing else.
+
+All three end in **one upload path** in the main process. Picker, paste and drop differ only in how the bytes are obtained; everything after — sniffing, conversion, resize, digest, grant, the store's verification — is the same function, so the three entrances cannot drift in what they verify.
+
+**A run of files uploads sequentially, and that is deliberate.** The bound is checked against what is already held, so four concurrent uploads would each read the same empty list and four would become eight. One refusal among several does not discard the rest: the reason is shown and the good files still go, because a person who drags a folder of screenshots and one stray zip should get the screenshots.
+
+**Mixed sequences work because the blocks are built per file, not per turn.** An image and a PDF on one direction become an image block and a document block in the same message, in the order they were attached — proven live rather than reasoned about: one turn carrying both answered *"Red blue MAGENTA"*, three words from two files, neither of them named in the prompt.
+
+**Alternatives.** A drop zone inside the box (rejected: it is a smaller target for no benefit, and the box already knows whether it is enabled). Intercepting every paste and deciding afterwards (rejected: a pasted paragraph must never take a detour through the attachment path). Opening an image as a file tab (rejected: it is not a file in the worktree, and a tab implies something to come back to; a picture you are looking at is not a place). A modal with its own chrome and a close button (rejected: the picture is the subject and the chrome would be louder than it — the cursor and the ground carry the affordance). Parallel uploads for speed (rejected above: the bound is the reason).
+
+**Consequences.** `attachClipboardImage` and `pathForDroppedFile` join the bridge; `prepareClipboardImage` joins the desktop's attachment module; the composer gains a drop state, a paste handler, and a sequential queue; the room owns the lightbox because it covers the room. `attachment-upload.ts` stops importing `electron` at module scope — a rule this suite already had — so the sniffing and the accumulation rule are both exercised in plain Node.
+
+**Revisit when.** Something other than an image wants to be opened this way — a PDF preview is the obvious next ask, and it is a different surface, not a bigger lightbox; or attachments arrive from somewhere that is neither a path nor the clipboard, such as a drop from a browser, which carries a URL rather than a file.

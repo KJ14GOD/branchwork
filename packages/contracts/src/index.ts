@@ -3366,16 +3366,29 @@ export interface NovusBridge {
      *  path or null (D-150). The path is the main process's to read; the
      *  renderer only hands it back to `attachImage`. */
     pickImage(): Promise<IpcResult<string | null>>;
-    /** Prepares and uploads one image, returning the attachment a direction
-     *  can then carry (D-150). Resizing, hashing, the upload grant, and the
-     *  store's verification all happen in the main process — the renderer
-     *  never holds bytes, a digest, or a credential. */
+    /** Prepares and uploads one file, returning the attachment a direction
+     *  can then carry (D-150). Resizing, sniffing, conversion, hashing, the
+     *  upload grant, and the store's verification all happen in the main
+     *  process — the renderer never holds bytes, a digest, or a credential. */
     attachImage(input: {
       missionId: string;
       workstreamId?: string;
       sessionId?: string;
       path: string;
     }): Promise<IpcResult<PreparedAttachment>>;
+    /** Attaches whatever image the system clipboard is holding (D-152), for
+     *  paste. Answers `null` when the clipboard holds no image, which is not
+     *  an error — most pastes are text and the composer takes those as words. */
+    attachClipboardImage(input: {
+      missionId: string;
+      workstreamId?: string;
+      sessionId?: string;
+    }): Promise<IpcResult<PreparedAttachment | null>>;
+    /** The filesystem path behind a dropped `File` (D-152). Electron stopped
+     *  putting it on the object itself, and the renderer may not resolve one
+     *  on its own, so the bridge answers and the main process does the
+     *  reading — the same division as the picker. */
+    pathForDroppedFile(file: File): string | null;
     retryBranch(workstreamId: string): Promise<IpcResult<Workstream>>;
     /** Follows a moved base (D-144): this machine merges the base branch's
      *  tip into every lane's worktree — all lanes or none — and the control

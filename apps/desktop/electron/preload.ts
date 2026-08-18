@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   IpcAuthStatus,
   MissionChange,
@@ -63,6 +63,20 @@ const novus: NovusBridge = {
     },
     pickImage: () => ipcRenderer.invoke("novus:missions:pick-image"),
     attachImage: (input) => ipcRenderer.invoke("novus:missions:attach-image", input),
+    attachClipboardImage: (input) =>
+      ipcRenderer.invoke("novus:missions:attach-clipboard", input),
+    // Not an `invoke`: the renderer has a `File` in hand and needs the path
+    // *now*, inside the drop event. Electron 32 removed `File.path`, and this
+    // is its sanctioned replacement — it resolves a path the browser already
+    // holds rather than granting the renderer any new reach.
+    pathForDroppedFile: (file: File) => {
+      try {
+        const path = webUtils.getPathForFile(file);
+        return path.length > 0 ? path : null;
+      } catch {
+        return null;
+      }
+    },
     retryBranch: (workstreamId) => ipcRenderer.invoke("novus:missions:retry-branch", workstreamId),
     syncBase: (missionId) => ipcRenderer.invoke("novus:missions:sync-base", missionId),
     direct: (input) => ipcRenderer.invoke("novus:missions:direct", input),

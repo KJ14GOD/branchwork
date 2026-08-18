@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { nativeImage } from "electron";
 import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_EDGE,
@@ -137,9 +136,17 @@ async function convertToPng(path: string, label: string): Promise<Buffer> {
   }
 }
 
-/** Scales an image down to the bound, re-encoding as PNG. Returns null when
- *  the image already fits and needs no work. */
+/**
+ * Scales an image down to the bound, re-encoding as PNG. Returns null when the
+ * image already fits and needs no work.
+ *
+ * `electron` is required here rather than imported at module scope: this
+ * suite's own rule is that a module under deterministic test must not pull the
+ * app object in on import, and the sniffing and routing above are exactly the
+ * parts worth testing in plain Node.
+ */
 function shrink(bytes: Buffer): Buffer | null {
+  const { nativeImage } = require("electron") as typeof import("electron");
   const image = nativeImage.createFromBuffer(bytes);
   if (image.isEmpty()) return null;
   const size = image.getSize();
@@ -153,6 +160,31 @@ function shrink(bytes: Buffer): Buffer | null {
       quality: "good"
     })
     .toPNG();
+}
+
+/**
+ * Prepares an image pasted from the system clipboard (D-152).
+ *
+ * Electron hands back decoded pixels rather than a file, so there is nothing
+ * to sniff and no filename to keep: the bytes are already PNG by the time they
+ * arrive, and the name is generated. Everything after this — the digest, the
+ * grant, the store's verification — is the same road a picked file takes.
+ */
+export function prepareClipboardImage(png: Buffer): PreparedFile {
+  const shrunk = shrink(png);
+  const bytes = shrunk ?? png;
+  if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+    throw new AttachmentRefused(
+      `That pasted image is ${megabytes(bytes.byteLength)} MB after resizing, and an attached image may be at most ${MAX_ATTACHMENT_BYTES / 1_000_000} MB.`
+    );
+  }
+  return {
+    bytes,
+    mimeType: "image/png",
+    filename: "Pasted image.png",
+    resized: shrunk !== null,
+    convertedFrom: null
+  };
 }
 
 export async function prepareAttachment(path: string): Promise<PreparedFile> {

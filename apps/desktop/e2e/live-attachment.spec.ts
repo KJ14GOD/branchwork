@@ -440,5 +440,81 @@ describe.skipIf(!LIVE)("an attached image reaching a real Claude Code turn", () 
     await page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
     await page.waitForTimeout(2_500);
     await page.screenshot({ path: join(evidenceDir, "195-attached-pdf-read.png") });
+
+    // --- Both at once, on one direction ---------------------------------------
+    // A mixed sequence is the real question (D-152): the two travel as
+    // different content blocks, so a turn carrying both proves the blocks are
+    // built per file rather than per turn. Each answer is a word only its own
+    // file holds.
+    const mixedImage = join(imageDir, "mixed.png");
+    writeFileSync(mixedImage, redOnBluePng());
+    const mixedPdf = join(imageDir, "mixed.pdf");
+    writeFileSync(mixedPdf, magentaPdf());
+    const both = await page.evaluate(
+      async (input) => {
+        const ids: string[] = [];
+        for (const path of input.paths) {
+          const result = await window.novus.missions.attachImage({
+            missionId: input.missionId,
+            path
+          });
+          if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+          ids.push(result.value.artifactId);
+        }
+        return ids;
+      },
+      { missionId, paths: [mixedImage, mixedPdf] }
+    );
+    expect(both).toHaveLength(2);
+
+    await page.evaluate(
+      async (input) => {
+        const result = await window.novus.missions.direct({
+          missionId: input.missionId,
+          body:
+            "You have been given a picture and a document. Reply with exactly " +
+            "three words and nothing else: the colour of the shape in the " +
+            "picture, the colour of its background, then the single word " +
+            "printed in the document. Do not use any tools.",
+          model: "claude-fable-5",
+          effort: "low",
+          attachmentIds: input.ids
+        });
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      },
+      { missionId, ids: both }
+    );
+
+    const sawBoth = await until(
+      missionId,
+      (value) =>
+        value.events.some((event) => {
+          if (event.kind !== "harness.text") return false;
+          const text = String((event.payload as { text?: unknown }).text ?? "");
+          return /magenta/i.test(text) && /red/i.test(text);
+        }),
+      "the real Claude to answer from an image and a document at once",
+      300_000
+    );
+    const mixedSaid = sawBoth.events
+      .filter((event) => event.kind === "harness.text")
+      .map((event) => String((event.payload as { text?: unknown }).text ?? ""))
+      .join(" ");
+    expect(mixedSaid).toMatch(/red/i);
+    expect(mixedSaid).toMatch(/blue/i);
+    expect(mixedSaid).toMatch(/magenta/i);
+
+    // The direction records both, in the order they were attached.
+    const carriedBoth = sawBoth.directions.find((row) => row.attachments.length === 2);
+    expect(carriedBoth?.attachments.map((file) => file.mimeType)).toEqual([
+      "image/png",
+      "application/pdf"
+    ]);
+
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
+    await page.waitForTimeout(2_500);
+    await page.screenshot({ path: join(evidenceDir, "196-image-and-pdf-together.png") });
   }, 900_000);
 });

@@ -268,6 +268,7 @@ export function TraceView({
   onOpenChanges,
   onOpenVerification,
   onOpenWorker,
+  onOpenImage,
   actions,
   approvals,
   queuePosition
@@ -280,6 +281,8 @@ export function TraceView({
   onOpenVerification: () => void;
   /** Opens one worker's own view on the canvas (D-107). */
   onOpenWorker?: (workerId: string) => void;
+  /** Brings an attached image to the front at full size (D-152). */
+  onOpenImage?: (image: { artifactId: string; label: string }) => void;
   /** Apply / Reject / Cancel for a direction still awaiting judgment. */
   actions?: React.ReactNode;
   /** Permission questions this execution is blocked on, if any. */
@@ -348,18 +351,26 @@ export function TraceView({
                 {image.label}
               </span>
             ) : (
-              <img
-                className="trace-attachment-image"
+              <button
+                className="trace-attachment-open"
                 key={image.artifactId}
-                src={`novus-artifact://${image.artifactId}/blob`}
-                // The name is not shown — a screenshot's filename says nothing
-                // a person reading the picture needs — but it stays the
-                // accessible name, which is the one place it is still the only
-                // thing a reader has.
-                alt={image.label}
-                title={image.label}
-                loading="lazy"
-              />
+                // The picture is the control (D-152): clicking it brings it to
+                // the front at full size, and nothing about it navigates.
+                onClick={() => onOpenImage?.({ artifactId: image.artifactId, label: image.label })}
+                aria-label={`Open ${image.label}`}
+              >
+                <img
+                  className="trace-attachment-image"
+                  src={`novus-artifact://${image.artifactId}/blob`}
+                  // The name is not shown — a screenshot's filename says
+                  // nothing a person reading the picture needs — but it stays
+                  // the accessible name, the one place it is still the only
+                  // thing a reader has.
+                  alt={image.label}
+                  title={image.label}
+                  loading="lazy"
+                />
+              </button>
             )
           )}
         </div>
