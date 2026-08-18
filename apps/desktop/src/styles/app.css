@@ -1116,6 +1116,14 @@ body {
   border-bottom: 1px solid var(--edge);
 }
 
+/* A full row scrolls sideways, exactly as the mission strip does. Without the
+   shrink floor the ellipsizing names gave flex permission to crush every tab
+   instead — names vanishing and close controls clipped — and the scroll the
+   row already owned never engaged. */
+.tabbar > .tab {
+  flex: 0 0 auto;
+}
+
 .tab {
   display: inline-flex;
   align-items: center;
@@ -3662,6 +3670,7 @@ body {
   max-width: 22ch;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-tab-close {
@@ -3735,6 +3744,7 @@ body {
   max-width: 22ch;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-tab-close {
