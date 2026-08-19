@@ -136,7 +136,7 @@ function detach(preview: EmbeddedPreview): void {
 function applyBounds(preview: EmbeddedPreview): void {
   // The renderer measures in page pixels; a native view is placed in
   // device-independent ones, and the two differ by exactly the page zoom
-  // (D-159) — a person who pressed Cmd+plus once had every placement land
+  // (D-160) — a person who pressed Cmd+plus once had every placement land
   // offset, painting the view over whatever sat beside the room. Converted
   // here, the one chokepoint every placement passes through, re-read on each
   // placement so a zoom change corrects within a keeper tick.

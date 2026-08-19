@@ -2266,7 +2266,7 @@ It stays visible and disabled when the lane's workspace is on somebody else's ma
 
 **Revisit when.** The preview wants multiple simultaneous rectangles (split view), or the e2e suite grows a reload-orphan spec — the two-second flow a person can do by hand is exactly a spec worth having.
 
-## D-159 — The rectangle is in page pixels; the window speaks device-independent ones
+## D-160 — The rectangle is in page pixels; the window speaks device-independent ones
 
 **Context.** D-158's keeper and heartbeat landed and the ghost survived them. A temporary on-screen diagnostic settled it: the keeper was measuring and placing an honest rectangle (`244,185 884×642`, all five coverage samples its own), yet the native view painted up-and-left of the room, spilling over the inspector. The window's page was **zoomed** — Cmd+plus once, remembered by Electron across launches — and the keeper measures in page pixels while `setBounds` takes device-independent ones. At zoom 1 the two are equal, which is why every test, every e2e run, and every un-zoomed reproduction looked correct while the owner's zoomed window stayed broken.
 
