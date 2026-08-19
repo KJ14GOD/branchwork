@@ -2400,6 +2400,38 @@ export const MissionChangeSchema = z.object({
 });
 export type MissionChange = z.infer<typeof MissionChangeSchema>;
 
+// --- Opening the workspace elsewhere (D-159) ---------------------------------
+// A lane's checkout is a real directory on the machine that holds it, and the
+// tools a person already uses live outside Novus. This opens it in one of
+// them. The renderer names a **lane**, never a path: the worktree is resolved
+// in the main process and the application comes from a closed list, so there
+// is no input here that could name another directory or another program.
+
+export const OpenTargetSchema = z.enum([
+  "finder",
+  "terminal",
+  "iterm",
+  "cursor",
+  "vscode",
+  "zed",
+  "copy-path"
+]);
+export type OpenTarget = z.infer<typeof OpenTargetSchema>;
+
+/** One entry the room may offer, as this machine actually found it. */
+export const OpenTargetOptionSchema = z.object({
+  id: OpenTargetSchema,
+  label: z.string().min(1).max(40)
+});
+export type OpenTargetOption = z.infer<typeof OpenTargetOptionSchema>;
+
+export const OpenWorkspaceInputSchema = z.object({
+  missionId: z.string().startsWith("msn_"),
+  workstreamId: z.string().startsWith("wst_"),
+  target: OpenTargetSchema
+});
+export type OpenWorkspaceInput = z.infer<typeof OpenWorkspaceInputSchema>;
+
 // --- Reading the workspace's files (D-048) -----------------------------------
 // The worktree is on this machine, so browsing it is a local act like every
 // other one in this block: there is no control-plane route and no runner
@@ -3784,6 +3816,14 @@ export interface NovusBridge {
      * is on this machine, every path is resolved against it and refused if it
      * leaves, and what comes back is shown rather than reported.
      */
+    /** What this machine can open a checkout in (D-159) — Finder and Copy
+     *  path always, plus whichever editors and terminals are installed. Empty
+     *  off macOS, where nothing is wired yet. */
+    openTargets(): Promise<IpcResult<OpenTargetOption[]>>;
+    /** Opens one lane's checkout in one of them, or copies its path. The
+     *  renderer names the lane; the path is the main process's to resolve, so
+     *  no window can name a directory of its own. */
+    openWorkspaceIn(input: OpenWorkspaceInput): Promise<IpcResult<null>>;
     listFiles(input: { missionId: string; workstreamId?: string; path?: string }): Promise<IpcResult<WorkspaceEntry[]>>;
     readFile(input: { missionId: string; workstreamId?: string; path: string }): Promise<IpcResult<WorkspaceFile>>;
     writeFile(input: { missionId: string; workstreamId?: string; path: string; text: string }): Promise<IpcResult<null>>;

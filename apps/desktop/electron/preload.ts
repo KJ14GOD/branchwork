@@ -202,6 +202,8 @@ const novus: NovusBridge = {
         return () => ipcRenderer.removeListener("novus:preview-status", wrapped);
       }
     },
+    openTargets: () => ipcRenderer.invoke("novus:workspace:open-targets"),
+    openWorkspaceIn: (input) => ipcRenderer.invoke("novus:workspace:open-in", input),
     listFiles: (input) => ipcRenderer.invoke("novus:workspace:list-files", input),
     readFile: (input) => ipcRenderer.invoke("novus:workspace:read-file", input),
     writeFile: (input) => ipcRenderer.invoke("novus:workspace:write-file", input)

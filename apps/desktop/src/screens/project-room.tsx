@@ -409,6 +409,83 @@ export function ProjectRoom({
     element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   };
 
+  // Find in the conversation (Cmd+F). The stream is the whole search domain —
+  // not the rail, not the panel, not the composer — because "where did it say
+  // that" is a question about this mission's record. Matches paint through the
+  // CSS custom-highlight registry, so nothing about the feed's own DOM moves.
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findIndex, setFindIndex] = useState(0);
+  const [findCount, setFindCount] = useState(0);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const findRangesRef = useRef<Range[]>([]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setFindOpen(true);
+        setTimeout(() => findInputRef.current?.select(), 0);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    const registry = CSS.highlights;
+    if (!registry) return;
+    registry.delete("novus-find");
+    findRangesRef.current = [];
+    const needle = findQuery.trim().toLowerCase();
+    if (!findOpen || needle.length === 0) {
+      setFindCount(0);
+      return;
+    }
+    const root = scrollRef.current;
+    if (!root) return;
+    const ranges: Range[] = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode()) && ranges.length < 500) {
+      const hay = (node.textContent ?? "").toLowerCase();
+      let at = hay.indexOf(needle);
+      while (at !== -1 && ranges.length < 500) {
+        const range = new Range();
+        range.setStart(node, at);
+        range.setEnd(node, at + needle.length);
+        ranges.push(range);
+        at = hay.indexOf(needle, at + needle.length);
+      }
+    }
+    findRangesRef.current = ranges;
+    setFindCount(ranges.length);
+    setFindIndex((current) => (ranges.length === 0 ? 0 : Math.min(current, ranges.length - 1)));
+    if (ranges.length > 0) registry.set("novus-find", new Highlight(...ranges));
+  }, [findQuery, findOpen, detail]);
+
+  useEffect(() => {
+    const registry = CSS.highlights;
+    if (!registry) return;
+    registry.delete("novus-find-current");
+    const range = findRangesRef.current[findIndex];
+    if (!findOpen || !range) return;
+    registry.set("novus-find-current", new Highlight(range));
+    (range.startContainer.parentElement ?? null)?.scrollIntoView({ block: "center" });
+  }, [findIndex, findCount, findOpen]);
+
+  const stepFind = (direction: 1 | -1) => {
+    const total = findRangesRef.current.length;
+    if (total === 0) return;
+    setFindIndex((current) => (current + direction + total) % total);
+  };
+
+  const closeFind = () => {
+    setFindOpen(false);
+    setFindQuery("");
+    setFindIndex(0);
+  };
+
   // Room keys (DESIGN.md#keyboard): G then C/V/A, R to request control.
   const chordRef = useRef(false);
   useEffect(() => {
@@ -1941,6 +2018,42 @@ export function ProjectRoom({
           )}
         </div>
       </div>
+      {findOpen && (
+        <div className="feed-find" data-testid="feed-find">
+          <input
+            ref={findInputRef}
+            className="feed-find-input"
+            placeholder="Find in conversation"
+            value={findQuery}
+            onChange={(event) => {
+              setFindQuery(event.target.value);
+              setFindIndex(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                stepFind(event.shiftKey ? -1 : 1);
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeFind();
+              }
+            }}
+          />
+          <span className="feed-find-count" data-testid="feed-find-count">
+            {findCount === 0 ? (findQuery.trim() === "" ? "" : "0 found") : `${findIndex + 1} of ${findCount}`}
+          </span>
+          <button className="feed-find-step" onClick={() => stepFind(-1)} aria-label="Previous match">
+            ‹
+          </button>
+          <button className="feed-find-step" onClick={() => stepFind(1)} aria-label="Next match">
+            ›
+          </button>
+          <button className="feed-find-step" onClick={closeFind} aria-label="Close find">
+            ×
+          </button>
+        </div>
+      )}
       {/* The way back down: floats only while the reader is away from the
           latest, and one press returns them to where new words land. */}
       {awayFromLatest && (

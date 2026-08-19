@@ -1492,6 +1492,22 @@ body {
   overflow-y: auto;
 }
 
+/* Words a person reads are words a person may copy: the whole feed and any
+   rendered markdown select as text — the agent's replies most of all — while
+   the controls living among them stay un-grabbable, so a drag across a turn
+   never picks up button labels. The body's global user-select: none remains
+   the default for chrome everywhere else. */
+.feed,
+.md,
+.file-body {
+  user-select: text;
+}
+
+.feed button,
+.file-body button {
+  user-select: none;
+}
+
 /* The holder exists so the jump control can float over the feed without
    scrolling with it: the positioned ancestor, nothing more. */
 .feed-holder {
@@ -1526,10 +1542,68 @@ body {
   box-shadow: var(--elev-1);
 }
 
+/* --hover is a translucent wash for rows on solid ground; as this floating
+   circle's fill it read as a hole in the feed. The wash lays over the opaque
+   surface instead, so the button stays a thing words pass behind. */
 .feed-jump:hover {
   color: var(--text-1);
-  background: var(--hover);
+  box-shadow: inset 0 0 0 999px var(--hover), var(--elev-1);
   border-color: var(--edge-hover);
+}
+
+/* Find in the conversation (Cmd+F): a quiet bar pinned to the feed's top
+   corner. Matches paint through the highlight registry, so the feed's own
+   markup never changes shape while a person searches it. */
+.feed-find {
+  position: absolute;
+  top: var(--s-3);
+  right: var(--s-5);
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+  box-shadow: var(--elev-1);
+}
+
+.feed-find-input {
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font: var(--type-row);
+  width: 200px;
+  outline: none;
+}
+
+.feed-find-count {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.feed-find-step {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font: var(--type-row);
+  cursor: pointer;
+  padding: 0 var(--s-1);
+}
+
+.feed-find-step:hover {
+  color: var(--text-1);
+}
+
+::highlight(novus-find) {
+  background-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--text-1);
+}
+
+::highlight(novus-find-current) {
+  background-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--bg);
 }
 
 .feed {
@@ -5671,6 +5745,11 @@ body.resizing {
 
 .evidence-thumb.empty {
   background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: var(--type-meta);
+  color: var(--text-3);
 }
 
 .evidence-text {
@@ -5925,17 +6004,37 @@ body.resizing {
 .trace-attachment-doc {
   display: inline-flex;
   align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-2) var(--s-3);
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4) var(--s-2) var(--s-3);
   border: 1px solid var(--edge);
   border-radius: var(--r-control);
   background: var(--surface-2);
   font: var(--type-row);
   color: var(--text-2);
-  max-width: 320px;
+  max-width: 360px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The chip's two lines: the person's own filename first, the kind and weight
+   as quiet meta beneath — a file, not a bare word. */
+.trace-attachment-doc-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.trace-attachment-doc-name {
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-attachment-doc-meta {
+  font: var(--type-meta);
+  color: var(--text-3);
 }
 
 .trace-attachment-doc-glyph {
@@ -5998,4 +6097,37 @@ body.resizing {
   object-fit: contain;
   border-radius: var(--r-control);
   cursor: default;
+}
+
+/* Opening a workspace elsewhere (D-156). The same menu as the composer's
+   chips, hung from the header instead — so it drops down and aligns to its
+   own right edge, where the corner it lives in is. */
+.open-in-menu {
+  top: 32px;
+  bottom: auto;
+  left: auto;
+  right: 0;
+  min-width: 200px;
+}
+
+/* The position in the list, quiet: what a person counts down to, never a
+   keyboard shortcut, which would be a claim the product does not keep. */
+.chip-menu-index {
+  margin-left: auto;
+  color: var(--text-3);
+  font: var(--type-meta);
+}
+
+.open-in-copied {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  white-space: nowrap;
+  padding: var(--s-1) var(--s-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+  font: var(--type-micro);
+  color: var(--text-2);
+  z-index: 30;
 }

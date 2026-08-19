@@ -346,11 +346,16 @@ export function TraceView({
               </span>
             ) : attachmentForm(image.mimeType) !== "image" ? (
               // A document or a staged file has nothing to show, so it is
-              // named — the one case where the filename is all a reader has
-              // (D-151, D-153).
+              // named — with its kind and weight as a quiet second line, so
+              // the chip reads as a file and not a bare word (D-151, D-153).
               <span className="trace-attachment-doc" key={image.artifactId}>
                 <DocumentGlyph className="trace-attachment-doc-glyph" />
-                {image.label}
+                <span className="trace-attachment-doc-text">
+                  <span className="trace-attachment-doc-name">{image.label}</span>
+                  <span className="trace-attachment-doc-meta">
+                    {docKindOf(image.mimeType)} · {docSizeOf(image.byteSize)}
+                  </span>
+                </span>
               </span>
             ) : (
               <button
@@ -581,4 +586,19 @@ export function ControlEventRow({ block }: { block: ControlBlock }) {
       <span className="trace-time">{clockTime(block.at)}</span>
     </div>
   );
+}
+
+/** The kind a document chip states beneath its name. */
+function docKindOf(mime: string): string {
+  if (mime === "application/pdf") return "PDF · read by the model";
+  if (mime.startsWith("audio/")) return "Audio · staged for the agent";
+  if (mime.startsWith("video/")) return "Video · staged for the agent";
+  if (mime.startsWith("text/")) return "Text · staged for the agent";
+  return "File · staged for the agent";
+}
+
+function docSizeOf(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

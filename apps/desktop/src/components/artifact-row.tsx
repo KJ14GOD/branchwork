@@ -2,6 +2,21 @@ import type { Artifact } from "@novus/contracts";
 import { clockTime } from "../format";
 import { artifactIsEvidence, artifactMetaLine, artifactStateWord } from "./artifacts";
 
+/** The short word a typed square shows for bytes it cannot picture. */
+function typeWordOf(mime: string): string {
+  const named: Record<string, string> = {
+    "application/pdf": "pdf",
+    "audio/mpeg": "mp3",
+    "video/quicktime": "mov",
+    "video/x-matroska": "mkv",
+    "video/x-msvideo": "avi",
+    "audio/mp4": "m4a"
+  };
+  const tail = mime.split("/")[1] ?? "";
+  return (named[mime] ?? tail.replace(/^x-/, "")).slice(0, 4);
+}
+
+
 /**
  * One artifact as a restrained thumbnail row (D-122): the same anatomy
  * wherever evidence is listed — the panel's Evidence section, beside a check,
@@ -28,8 +43,20 @@ export function ArtifactThumbRow({
           src={`novus-artifact://${artifact.artifactId}/thumb`}
           alt=""
         />
+      ) : artifactIsEvidence(artifact) && artifact.mimeType.startsWith("image/") ? (
+        // An attached image is its own thumbnail (the begin-attachment
+        // contract's words) — the row finally honors them.
+        <img
+          className="evidence-thumb"
+          src={`novus-artifact://${artifact.artifactId}/blob`}
+          alt=""
+        />
       ) : (
-        <span className="evidence-thumb empty" aria-hidden="true" />
+        // Not blank: the square says what kind of bytes it holds, the same
+        // quiet fact the file tree's extension badges state.
+        <span className="evidence-thumb empty" aria-hidden="true">
+          {typeWordOf(artifact.mimeType)}
+        </span>
       )}
       <span className="evidence-text">
         <span className="evidence-label">

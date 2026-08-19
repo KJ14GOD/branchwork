@@ -9,7 +9,7 @@ import {
   shell,
   type WebContents
 } from "electron";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AttachmentRefused,
@@ -28,6 +28,7 @@ import {
   MAX_ACCEPTED_RISKS,
   MAX_RATIONALE,
   MissionRoleSchema,
+  OpenWorkspaceInputSchema,
   OpenPreviewInputSchema,
   CloseMissionInputSchema,
   EnabledMcpServersSchema,
@@ -94,8 +95,10 @@ import {
   terminalScrollback,
   writeFile,
   writeTerminal,
+  worktreeFor,
   type WorkspaceTarget
 } from "./workspace";
+import { OpenRefused, installedApplications, openWith } from "./workspace-open";
 import { resolvePreviewTarget } from "./preview-policy";
 import {
   attachPreviewHost,
@@ -1184,15 +1187,75 @@ function registerIpc(): void {
 
   /** The file picker for an attachment. Opened by the main process, which is
    *  the only party that may read a path the renderer names. */
+  /** What this machine can open a checkout in (D-159). Detected rather than
+   *  declared: a menu full of applications that are not installed is worse
+   *  than a short one. */
+  ipcMain.handle("novus:workspace:open-targets", async () => {
+    if (process.platform !== "darwin") return ok([]);
+    return ok([
+      { id: "finder" as const, label: "Finder" },
+      ...installedApplications().map((entry) => ({ id: entry.id, label: entry.label })),
+      { id: "copy-path" as const, label: "Copy path" }
+    ]);
+  });
+
+  /**
+   * Opens one lane's checkout elsewhere (D-159).
+   *
+   * The renderer names a **lane**; the path is resolved here. That is the
+   * whole security story: no window can name a directory, the application
+   * comes from a closed list, and nothing is passed to a shell.
+   */
+  ipcMain.handle("novus:workspace:open-in", async (_event, raw: unknown) => {
+    const parsed = OpenWorkspaceInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    const worktree = worktreeFor(app.getPath("userData"), parsed.data.workstreamId);
+    if (!existsSync(worktree)) {
+      return {
+        ok: false,
+        code: "not_here",
+        message: "This lane's workspace is not on this machine."
+      };
+    }
+    try {
+      if (parsed.data.target === "copy-path") {
+        clipboard.writeText(worktree);
+        return ok(null);
+      }
+      if (parsed.data.target === "finder") {
+        const failure = await shell.openPath(worktree);
+        if (failure) return { ok: false, code: "open_failed", message: failure };
+        return ok(null);
+      }
+      const application = installedApplications().find((entry) => entry.id === parsed.data.target);
+      if (!application) {
+        return {
+          ok: false,
+          code: "not_installed",
+          message: "That application is not installed on this machine."
+        };
+      }
+      await openWith(application.application, worktree);
+      return ok(null);
+    } catch (error) {
+      if (error instanceof OpenRefused) {
+        return { ok: false, code: "open_failed", message: error.message };
+      }
+      return fail(error);
+    }
+  });
+
   ipcMain.handle("novus:missions:pick-image", async () => {
     const chosen = await dialog.showOpenDialog({
-      title: "Attach an image",
+      title: "Attach files",
       properties: ["openFile"],
-      // Any file (D-153). Images and PDFs are read by the model itself;
-      // everything else is staged in the worktree for the agent's own tools,
-      // so there is nothing left to filter out. The named group is first only
-      // so the common case is one click away.
+      // Any file (D-153): images and PDFs are read by the model itself,
+      // everything else is staged in the worktree for the agent's own tools.
+      // "All files" leads, because a leading named group grays out every
+      // other file in the dialog — an mp3 looked *disabled*, when nothing
+      // refuses it. The named groups remain for narrowing on purpose.
       filters: [
+        { name: "All files", extensions: ["*"] },
         {
           name: "Images and PDFs",
           extensions: [
@@ -1203,7 +1266,10 @@ function registerIpc(): void {
             "pdf"
           ]
         },
-        { name: "All files", extensions: ["*"] }
+        {
+          name: "Audio and video",
+          extensions: ["mp3", "m4a", "wav", "aac", "flac", "ogg", "mp4", "mov", "m4v", "webm", "avi", "mkv"]
+        }
       ]
     });
     if (chosen.canceled || chosen.filePaths.length === 0) return ok(null);

@@ -434,6 +434,35 @@ afterAll(async () => {
   controlPlane?.kill("SIGTERM");
 });
 
+describe("opening the workspace elsewhere (D-159)", () => {
+  it("offers what this machine has, in the corner beside Run", async () => {
+    const control = page.getByTestId("open-in");
+    await control.waitFor({ timeout: 30_000 });
+    // The corner's rule: visible and enabled here, because this machine is
+    // the one holding the checkout.
+    await expect.poll(() => control.isEnabled(), { timeout: 20_000 }).toBe(true);
+    await control.click();
+    const menu = page.getByTestId("open-in-menu");
+    await menu.waitFor({ timeout: 20_000 });
+
+    // Finder and Copy path need no application and are always there; whatever
+    // sits between them is whatever this machine actually installed, which is
+    // the point — the list is detected, never declared.
+    await page.getByTestId("open-in-finder").waitFor({ timeout: 10_000 });
+    await page.getByTestId("open-in-copy-path").waitFor({ timeout: 10_000 });
+    await page.screenshot({ path: join(evidenceDir, "198-open-in-menu.png") });
+
+    // Copying is the one entry with no visible effect anywhere else, so it
+    // says so itself — and it is safe to exercise, where launching an editor
+    // in a test run is not.
+    await page.getByTestId("open-in-copy-path").click();
+    await page.getByTestId("open-in-copied").waitFor({ timeout: 10_000 });
+    const copied = await page.evaluate(() => navigator.clipboard.readText().catch(() => ""));
+    // The path is the main process's to resolve; the renderer never sent one.
+    expect(copied).toContain("worktrees");
+  }, 120_000);
+});
+
 describe("the terminal, through the interface", () => {
   it("opens in the mission worktree and never in the user's own checkout", async () => {
     // Showing the dock is the request: the screen is there at once and a

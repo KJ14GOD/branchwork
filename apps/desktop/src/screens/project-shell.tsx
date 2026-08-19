@@ -17,6 +17,7 @@ import { Dialog } from "../components/dialog";
 import { HumanMark, SignOutGlyph } from "../components/identity";
 import { MissionTabs } from "../components/mission-tabs";
 import { ColumnHandle, useColumnWidth } from "../components/resizable";
+import { OpenInControl } from "../components/open-in";
 import { RunControl } from "../components/run-control";
 import { TerminalToggle } from "../components/runtime-dock";
 import { WorkspaceSetupDialog } from "../components/workspace-setup";
@@ -2012,6 +2013,15 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             onToggle={() => setTerminalOpen((open) => !open)}
             availableHere={currentProject?.onThisMachine === true}
             disabled={activeMissionId === null}
+          />
+          {/* The same corner, the same rule: one icon, one menu, never a
+              second navigation (D-159). It names the lane on screen, so a
+              mission with competing approaches opens the one being read. */}
+          <OpenInControl
+            missionId={activeMissionId}
+            workstreamId={openDetail?.workstream?.workstreamId ?? null}
+            availableHere={currentProject?.onThisMachine === true}
+            disabled={activeMissionId === null || !openDetail?.workstream}
           />
           <button
             className={inspector ? "icon-button active" : "icon-button"}
