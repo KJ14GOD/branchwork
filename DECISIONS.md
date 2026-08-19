@@ -2277,3 +2277,35 @@ It stays visible and disabled when the lane's workspace is on somebody else's ma
 **Consequences.** One multiplication in `workspace-preview.ts`. The D-158 keeper/heartbeat hardening stands — the diagnostic proved those layers now behave; this was the remaining lie between them. **Honest limit**: like D-158, the conversion lives in the Electron-scoped module unit tests deliberately cannot import; verified against the owner's zoomed window, with the e2e preview suite's next regeneration as the standing automated check — an explicit zoomed-window spec is the follow-up worth writing.
 
 **Revisit when.** The e2e suite grows the zoomed-window preview spec, or Electron changes what `getZoomFactor` reports for pinch versus page zoom.
+
+## D-161 — The preview's chrome gets out of the page's way
+
+**Context.** Owner-directed. The preview surface carried two rows of chrome plus a standing sentence: a head with four text actions, the captured-pixels warning as a permanent meta line beneath it, and the window corner showing `serve :8123 · Open preview · Stop` even while the preview tab was already open. The owner called the setup weird and the standing sentence bad; the chrome was visibly eating the page's room.
+
+**Decision.** One slim head row: the origin chip and the process's state word, then four glyph actions in the file view's stroke set — capture, record, reload, open-in-browser — each an icon control with its words as tooltip. The captured-pixels sentence moves onto the two capture controls as their standing tooltip: still verbatim, still at the capture point (D-123's requirement), no longer a row of standing chrome. The corner's running cluster becomes one quiet pill — the command's name and port in mono, **Preview** only while the preview tab is not already open (the tab is the way back once it is), **Stop** as a text action. `GatedAction` gains an `icon` variant and a `hint` (a permitted-state tooltip). Amended the same evening, owner-directed and relayed through a sibling session: the composer does not render while the preview tab is selected — a running app's view stands alone, reversing D-048's "the composer stays" for this one tab; file tabs keep theirs.
+
+**Alternatives.** Keeping the standing warning row (rejected by the owner on sight; the sentence survives verbatim where the act happens). A one-time dismissible banner (rejected: dismissed state is memory chrome, and the tooltip keeps the words at every capture forever).
+
+**Consequences.** preview-surface head restyled; run-control pill with `previewOpen`; the artifacts spec's warning assertion reads the capture control's title. DESIGN's Preview-surface and Run paragraphs amended.
+
+**Revisit when.** A capture flow gains a confirmation step — the sentence's natural home would then be that step, stronger than any tooltip.
+
+## D-162 — The room is a conversation with two sides, centred
+
+**Context.** Owner-directed, from three captures: the trace pinned to the room's left edge with the right half empty, and Codex beside it. *"look at how left aligned it is… i want it so my messages are right aligned and responses come left like codex… and they have everything centred."*
+
+The pinning was deliberate once. D-066 gave the trace and the composer one content axis so the room read as a single column rather than two systems, and that axis was the room's left edge. It held while windows were narrow. On a wide one it fails plainly: a turn becomes a ribbon against the edge, half the room is empty, and — the part that actually costs a reader — the question and the answer are indistinguishable until you read them both.
+
+**Decision.** One axis still, **centred**, and each speaker gets a side.
+
+The feed, the state line and the composer share `--measure-room` and centre in the room. The measure is 900px: wide enough for a code block at the mono size without wrapping, narrow enough that a line of prose is one eye movement.
+
+**A person's words sit on the right**, in a bubble at the button radius on `--surface-2`, bounded to 78% so it never spans the measure — a bubble the width of the column is a paragraph with a background. **The harness answers on the left, with no bubble at all.** That asymmetry is the point rather than an oversight: one side is a short thing somebody typed, the other is prose, code blocks, checkpoints and evidence, and a box drawn around the second would be a box around the room.
+
+**Attribution stays** on the person's side — name, baton, time. Codex can drop it because a two-party chat has nothing to attribute; this room can hold several people, and which of them said a thing is the product's subject.
+
+**Alternatives.** Bubbles on both sides (rejected: it boxes the evidence, and the room's own prohibition on cards-inside-cards is exactly this shape). Keeping the left pin and only widening the measure (rejected: it leaves the empty half and does nothing for telling the two speakers apart, which was the other half of the ask). Dropping attribution to match Codex more closely (rejected: multiplayer is the product). A fixed pixel gutter instead of a centred measure (rejected: it is the same thing said in a way that breaks at a width nobody tested).
+
+**Consequences.** `--measure-room` joins the tokens; `.feed`, `.room-header` and `.composer` take it; the person's half of a turn is wrapped in `.trace-said` so it can hold its own side while the harness's half stays where it was. DESIGN.md's "same measure and the same left edge" sentence becomes "same measure, centred", with the two sides stated. The e2e measures both facts **on screen** rather than trusting the stylesheet: the left and right gaps agree within a pixel, and the person's words end hard against the column's right edge while staying narrower than it.
+
+**Revisit when.** A window narrow enough that a centred measure wastes more than the pin did — the single-column breakpoint already exists and this should meet it there; or a third speaker appears in a turn (a worker's own voice), at which point two sides stop being enough.

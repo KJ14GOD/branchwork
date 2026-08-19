@@ -105,6 +105,7 @@ import {
   closeEmbeddedPreview,
   embeddedPreviewStatus,
   hideEmbeddedPreview,
+  snapshotEmbeddedPreview,
   noteProcessChunk,
   onEmbeddedPreviewStatus,
   openEmbeddedPreview,
@@ -1633,6 +1634,10 @@ function registerIpc(): void {
       hideEmbeddedPreview();
       return null;
     });
+  });
+
+  ipcMain.handle("novus:preview:snapshot", async () => {
+    return call(async () => snapshotEmbeddedPreview());
   });
 
   ipcMain.handle("novus:preview:reload", async () => {

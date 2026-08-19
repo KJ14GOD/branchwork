@@ -287,8 +287,9 @@ describe("durable visual evidence (D-122, D-123)", () => {
   it(
     "a person captures the live preview and the artifact carries its provenance",
     async () => {
-      // The standing warning is at the capture point, before any capture.
-      expect(await page.getByTestId("preview-capture-warning").textContent()).toContain(
+      // The warning is at the capture point, before any capture — carried on
+      // the capture control itself since D-161, no longer a standing row.
+      expect(await page.getByTestId("preview-capture").getAttribute("title")).toContain(
         "may contain sensitive data"
       );
 

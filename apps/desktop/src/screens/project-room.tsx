@@ -2083,8 +2083,12 @@ export function ProjectRoom({
       )}
 
       {/* Terminal states never resume (D-121): the composer is hidden, not
-          disabled — there is nothing to direct and no state it returns in. */}
-      {detail?.state !== "completed" && detail?.state !== "cancelled" && (
+          disabled — there is nothing to direct and no state it returns in.
+          The preview tab also stands alone (D-161, owner-directed): a running
+          app's view carries no direction box beneath it — the conversation
+          tab is one click away and is where directing happens. File tabs keep
+          theirs; the reversal is the preview's alone. */}
+      {detail?.state !== "completed" && detail?.state !== "cancelled" && !previewSelected && (
       <Composer
         key={selectedMissionId ?? "draft"}
         /* A draft has no mission yet, so no server capabilities exist to read:

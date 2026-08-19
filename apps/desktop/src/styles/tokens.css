@@ -118,6 +118,10 @@
   /* The window's own buttons live here. Anything Novus puts in the top row
      starts after them, or it sits on top of them (D-067). */
   --traffic-inset: 78px;
+  /* The room's reading measure (D-162): wide enough for a code block at the
+     mono size without wrapping, narrow enough that a line of prose is one
+     eye movement. The trace, the state line and the composer all take it. */
+  --measure-room: 900px;
 }
 
 /* Light theme: token-for-token override, screen-proven 2026-08-10

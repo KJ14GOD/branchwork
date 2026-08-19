@@ -314,21 +314,25 @@ export function TraceView({
 
   return (
     <article className={traceStateClass(direction)} data-testid="direction-trace" data-direction-state={direction?.state ?? "none"}>
+      {/* What the person said, on the room's right (D-162). A turn is a
+          conversation with two sides, and giving each its own side is what
+          lets a reader find the question without reading the answer. The
+          attribution stays — this room can hold several people, so "who said
+          it" is not decoration the way it is in a two-party chat. */}
       {block.body !== null && (
-        <header className="trace-head">
-          {block.authorLogin && <HumanMark login={block.authorLogin} />}
-          <span className="trace-author">{block.authorLogin ?? "Unattributed"}</span>
-          {block.authorUserId && block.authorUserId === controllerUserId && (
-            <span className="trace-controller">holds the baton</span>
-          )}
-          {block.at && <span className="trace-time">{clockTime(block.at)}</span>}
-        </header>
-      )}
-
-      {block.body !== null && (
-        <p className="trace-body prose" data-testid="msg-user">
-          {block.body}
-        </p>
+        <div className="trace-said">
+          <header className="trace-head">
+            {block.authorLogin && <HumanMark login={block.authorLogin} />}
+            <span className="trace-author">{block.authorLogin ?? "Unattributed"}</span>
+            {block.authorUserId && block.authorUserId === controllerUserId && (
+              <span className="trace-controller">holds the baton</span>
+            )}
+            {block.at && <span className="trace-time">{clockTime(block.at)}</span>}
+          </header>
+          <p className="trace-body prose" data-testid="msg-user">
+            {block.body}
+          </p>
+        </div>
       )}
 
       {/* What the person sent with the words (D-150). The image itself, at a

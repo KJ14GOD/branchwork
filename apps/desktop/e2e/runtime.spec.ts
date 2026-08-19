@@ -434,6 +434,77 @@ afterAll(async () => {
   controlPlane?.kill("SIGTERM");
 });
 
+describe("the room reads as a conversation (D-162)", () => {
+  it("centres its column and puts the person's words on the right", async () => {
+    const feed = page.locator(".feed").first();
+    await feed.waitFor({ timeout: 30_000 });
+    const room = page.getByTestId("room-area");
+
+    const feedBox = await feed.boundingBox();
+    const roomBox = await room.boundingBox();
+    expect(feedBox).not.toBeNull();
+    expect(roomBox).not.toBeNull();
+
+    // Centred: the gap on the left and the gap on the right agree. Measured
+    // rather than asserted from the stylesheet, because a max-width with a
+    // stray margin somewhere reads as centred in CSS and is not on screen.
+    const left = (feedBox?.x ?? 0) - (roomBox?.x ?? 0);
+    const right =
+      (roomBox?.x ?? 0) + (roomBox?.width ?? 0) - ((feedBox?.x ?? 0) + (feedBox?.width ?? 0));
+    expect(Math.abs(left - right)).toBeLessThan(2);
+    // And it is a measure, not the whole width.
+    expect(feedBox?.width).toBeLessThan(roomBox?.width ?? 0);
+
+    // The person's words sit on the right of that column; the harness answers
+    // on the left. Their right edges and left edges are what separate them.
+    const said = page.getByTestId("msg-user").first();
+    if ((await said.count()) > 0) {
+      const saidBox = await said.boundingBox();
+      const saidRight = (saidBox?.x ?? 0) + (saidBox?.width ?? 0);
+      const feedRight = (feedBox?.x ?? 0) + (feedBox?.width ?? 0);
+      // Hard against the column's right edge, inside its padding.
+      expect(feedRight - saidRight).toBeLessThan(40);
+      // And genuinely narrower than the column, so it reads as a bubble.
+      expect(saidBox?.width).toBeLessThan((feedBox?.width ?? 0) * 0.9);
+    }
+  }, 120_000);
+});
+
+describe("hiding the projects rail", () => {
+  it("leaves the switch exactly where it was, and gives the room the width", async () => {
+    const toggle = page.getByTestId("rail-toggle");
+    await toggle.first().waitFor({ timeout: 30_000 });
+    const room = page.getByTestId("project-shell");
+
+    const before = await toggle.first().boundingBox();
+    const roomBefore = await room.boundingBox();
+    expect(before).not.toBeNull();
+
+    // Away.
+    await toggle.first().click();
+    await expect.poll(async () => (await toggle.count()) > 0, { timeout: 10_000 }).toBe(true);
+    const after = await toggle.first().boundingBox();
+
+    // The rule the CSS has claimed since D-068 and nothing enforced: a control
+    // that relocates on its own click makes a person find it again to undo it.
+    expect(Math.round(after?.x ?? -1)).toBe(Math.round(before?.x ?? -2));
+    expect(Math.round(after?.y ?? -1)).toBe(Math.round(before?.y ?? -2));
+
+    // And the room takes the freed column rather than leaving a gap where the
+    // rail was.
+    const tabsAfter = await page.getByTestId("room-area").boundingBox().catch(() => null);
+    const roomAfter = await room.boundingBox();
+    expect(roomAfter?.width).toBeGreaterThanOrEqual((roomBefore?.width ?? 0) - 1);
+    if (tabsAfter) expect(tabsAfter.x).toBeLessThan(40);
+
+    // Back, so the rest of the suite finds the rail where it expects it.
+    await toggle.first().click();
+    await expect
+      .poll(async () => (await page.getByTestId("sidebar").count()) > 0, { timeout: 10_000 })
+      .toBe(true);
+  }, 120_000);
+});
+
 describe("opening the workspace elsewhere (D-159)", () => {
   it("offers what this machine has, in the corner beside Run", async () => {
     const control = page.getByTestId("open-in");

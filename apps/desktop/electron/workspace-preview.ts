@@ -281,6 +281,22 @@ export function hideEmbeddedPreview(): void {
   detach(current);
 }
 
+/**
+ * The view's current pixels for the frozen-frame swap (D-160): while a menu
+ * or dialog sits over the rectangle, the renderer shows this still and the
+ * native view leaves the screen, so the overlay reads as being above the
+ * page. Presentation only — no provenance, no redaction, no storage — which
+ * is why it is not the D-123 capture path: these pixels go to the same
+ * renderer that was already displaying them, and nowhere else.
+ */
+export async function snapshotEmbeddedPreview(): Promise<string | null> {
+  if (current === null) return null;
+  if (current.status.phase !== "loading" && current.status.phase !== "ready") return null;
+  const image = await current.view.webContents.capturePage();
+  if (image.isEmpty()) return null;
+  return image.toDataURL();
+}
+
 export function reloadEmbeddedPreview(): void {
   if (current === null) return;
   if (current.status.phase === "stopped") return; // nothing is serving; reopening is the verb

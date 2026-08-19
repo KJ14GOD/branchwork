@@ -49,7 +49,8 @@ const DENIAL = "Invoking a command this project declared needs the workspace.com
 export function RunControl({
   detail,
   onSetup,
-  onOpenPreview
+  onOpenPreview,
+  previewOpen = false
 }: {
   detail: MissionDetailResponse;
   /** Opens the bounded setup dialog. Owned by the shell, because the state
@@ -58,6 +59,9 @@ export function RunControl({
   /** Opens the preview surface in the room (D-098). Owned by the shell,
    *  because the tab it opens sits on the room's working row. */
   onOpenPreview: (url: string) => void;
+  /** True while the preview tab is already on the working row — the tab is
+   *  then the way back, and a second door reads as a broken first one. */
+  previewOpen?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [proposal, setProposal] = useState<Proposal>({ kind: "unread" });
@@ -159,6 +163,10 @@ export function RunControl({
   return (
     <span className="run-control" ref={wrapRef}>
       {running ? (
+        /* One quiet pill (D-161): the command's own name and port in mono,
+           the way in while the preview is not already open — the tab is the
+           way back once it is — and Stop as a word, not a second button box
+           shouting beside the corner's icons. */
         <span className="run-live" data-testid="run-live">
           <span className="mono run-live-name" title={running.command}>
             {running.name}
@@ -166,9 +174,9 @@ export function RunControl({
           </span>
           {/* Only when the process itself reported one: the room never invents
               an address for something that never said it had one. */}
-          {previewUrl !== null && (
+          {previewUrl !== null && !previewOpen && (
             <button className="btn btn-text" onClick={() => onOpenPreview(previewUrl)} data-testid="open-preview">
-              Open preview
+              Preview
             </button>
           )}
           <GatedAction
@@ -177,7 +185,7 @@ export function RunControl({
             denialReason={DENIAL}
             holderLogin={detail.control.holderLogin}
             onClick={() => void stop(running.name)}
-            variant="secondary"
+            variant="text"
             label="Stop"
             testid="stop-run"
           >

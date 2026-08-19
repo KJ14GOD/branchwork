@@ -3811,6 +3811,11 @@ export interface NovusBridge {
       /** Takes the view off screen without discarding it — the tab lost the
        *  canvas, not the person's place in the page. */
       hide(): Promise<IpcResult<null>>;
+      /** The view's current pixels as a data URL, for the frozen-frame swap
+       *  while an overlay is above the rectangle (D-160): presentation only —
+       *  never stored, never evidence, gone when the overlay is. Null when no
+       *  page is showing. */
+      snapshot(): Promise<IpcResult<string | null>>;
       /** Reloads the page. The process is not touched. */
       reload(): Promise<IpcResult<null>>;
       /** Discards the view. The process is never stopped by this. */

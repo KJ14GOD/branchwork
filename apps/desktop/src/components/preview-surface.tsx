@@ -36,6 +36,44 @@ const DENIAL = "Invoking a command this project declared needs the workspace.com
  *  this catches overlays that change nothing about the rectangle itself. */
 const COVER_CHECK_MS = 300;
 
+/** The head's action glyphs — the file view's stroke set (D-151), so the
+ *  preview's chrome reads as the app's own and never a browser's. */
+function CameraGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h1.6l1-1.5h3.8l1 1.5h1.6A1.5 1.5 0 0 1 14 5.5v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z" />
+      <circle cx="8" cy="8.5" r="2.4" />
+    </svg>
+  );
+}
+
+function RecordGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.6" />
+      <circle cx="8" cy="8" r="2.1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function ReloadGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.8" />
+      <path d="M13.4 1.8v2.8h-2.8" />
+    </svg>
+  );
+}
+
+function ExternalGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6.5 3.5H4A1.5 1.5 0 0 0 2.5 5v7A1.5 1.5 0 0 0 4 13.5h7A1.5 1.5 0 0 0 12.5 12V9.5" />
+      <path d="M9.5 2.5h4v4M13.2 2.8 8 8" />
+    </svg>
+  );
+}
+
 export function PreviewSurface({
   missionId,
   workstreamId,
@@ -64,6 +102,13 @@ export function PreviewSurface({
   /** The last capture's quiet confirmation; clears itself. */
   const [captured, setCaptured] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  /** The frozen-frame swap (D-160): the view's own pixels as a still while an
+   *  overlay is above the rectangle. Null when the live view is on screen;
+   *  the ref mirrors the state so the keeper's tick can read it without
+   *  re-subscribing. */
+  const [frozen, setFrozen] = useState<string | null>(null);
+  const frozenRef = useRef<string | null>(null);
+  const freezingRef = useRef(false);
 
   const running = detail ? liveRunProcess(detail) : null;
   const view = previewPresentation(status, running, openError);
@@ -145,9 +190,51 @@ export function PreviewSurface({
         const top = document.elementFromPoint(x, y);
         return top !== null && !element.contains(top);
       });
-      if (covered) {
-        void novus().workspace.preview.hide();
+      // Sample points catch broad coverage; a small menu slips between them
+      // (the open-in menu lost its lower rows this way), so anything the room
+      // presents as an overlay is also checked by geometry.
+      const overlaid =
+        covered ||
+        [...document.querySelectorAll('[role="menu"], [role="dialog"], [role="listbox"], .theme-popover')].some(
+          (overlay) => {
+            if (element.contains(overlay)) return false;
+            const o = overlay.getBoundingClientRect();
+            return (
+              o.width > 0 &&
+              o.height > 0 &&
+              o.x < rect.x + rect.width &&
+              o.x + o.width > rect.x &&
+              o.y < rect.y + rect.height &&
+              o.y + o.height > rect.y
+            );
+          }
+        );
+      // The frozen-frame swap (D-160, owner-directed): DOM can never paint
+      // above the native view, so while anything overlaps the rectangle the
+      // view's own pixels stand in as a still image and the view leaves the
+      // screen — the page appears exactly where it was, the overlay reads as
+      // above it, and nothing moves or reflows. The live view returns the
+      // tick the rectangle clears.
+      if (overlaid) {
+        if (frozenRef.current === null && !freezingRef.current) {
+          freezingRef.current = true;
+          void novus()
+            .workspace.preview.snapshot()
+            .then((result) => {
+              freezingRef.current = false;
+              const still = result.ok ? result.value : null;
+              frozenRef.current = still ?? "";
+              setFrozen(still);
+              void novus().workspace.preview.hide();
+            });
+        } else {
+          void novus().workspace.preview.hide();
+        }
         return;
+      }
+      if (frozenRef.current !== null) {
+        frozenRef.current = null;
+        setFrozen(null);
       }
       void novus().workspace.preview.setBounds({
         x: rect.x,
@@ -310,16 +397,21 @@ export function PreviewSurface({
         ) : (
           detail && (
             <>
+              {/* The capture warning rides the capture controls themselves
+                  (D-161): still at the capture point, no longer a standing
+                  row stealing the page's height. */}
               <GatedAction
                 capability="artifact.capture"
                 capabilities={detail.capabilities}
                 denialReason="Capturing evidence needs the artifact.capture capability."
                 holderLogin={detail.control.holderLogin}
                 onClick={() => void capture()}
-                variant="text"
+                variant="icon"
+                label="Capture screenshot"
+                hint={`Capture screenshot — ${PIXELS_WARNING}`}
                 testid="preview-capture"
               >
-                Capture screenshot
+                <CameraGlyph />
               </GatedAction>
               <GatedAction
                 capability="artifact.capture"
@@ -327,28 +419,35 @@ export function PreviewSurface({
                 denialReason="Capturing evidence needs the artifact.capture capability."
                 holderLogin={detail.control.holderLogin}
                 onClick={() => void startRecording()}
-                variant="text"
+                variant="icon"
+                label="Start recording"
+                hint={`Start recording — ${PIXELS_WARNING}`}
                 testid="recording-start"
               >
-                Start recording
+                <RecordGlyph />
               </GatedAction>
             </>
           )
         )}
-        <button className="btn btn-text" onClick={reload} data-testid="preview-reload">
-          Reload
+        <button
+          className="icon-button"
+          onClick={reload}
+          title="Reload"
+          aria-label="Reload"
+          data-testid="preview-reload"
+        >
+          <ReloadGlyph />
         </button>
-        <button className="btn btn-text" onClick={() => void openExternal()} data-testid="preview-external">
-          Open in browser
+        <button
+          className="icon-button"
+          onClick={() => void openExternal()}
+          title="Open in browser"
+          aria-label="Open in browser"
+          data-testid="preview-external"
+        >
+          <ExternalGlyph />
         </button>
       </header>
-      {/* The standing human warning at the capture point (D-123): the pixels
-          are the application's own, and Novus does not scan them. */}
-      {detail && (
-        <p className="preview-capture-warning" data-testid="preview-capture-warning">
-          {PIXELS_WARNING}
-        </p>
-      )}
       {note && (
         <p className="inline-error preview-note" role="alert">
           {note}
@@ -360,6 +459,12 @@ export function PreviewSurface({
       {/* The reserved rectangle. While the page is on screen the native view
           sits exactly over this; in every other state these words do. */}
       <div className="preview-body" ref={bodyRef} data-testid="preview-body" data-phase={status?.phase ?? "none"}>
+        {/* The page's own last pixels, standing in while an overlay is above
+            the rectangle (D-160). Inside the reserved element on purpose: the
+            keeper's coverage check ignores its own children. */}
+        {frozen && (
+          <img className="preview-frozen" src={frozen} alt="" aria-hidden="true" data-testid="preview-frozen" />
+        )}
         {view.panel && (
           <div className="preview-panel" data-testid="preview-panel">
             <p className="preview-panel-title">{view.panel.title}</p>

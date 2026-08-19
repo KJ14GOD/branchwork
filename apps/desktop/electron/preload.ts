@@ -193,6 +193,7 @@ const novus: NovusBridge = {
       open: (input) => ipcRenderer.invoke("novus:preview:open", input),
       setBounds: (bounds) => ipcRenderer.invoke("novus:preview:set-bounds", bounds),
       hide: () => ipcRenderer.invoke("novus:preview:hide"),
+      snapshot: () => ipcRenderer.invoke("novus:preview:snapshot"),
       reload: () => ipcRenderer.invoke("novus:preview:reload"),
       close: () => ipcRenderer.invoke("novus:preview:close"),
       status: () => ipcRenderer.invoke("novus:preview:status"),

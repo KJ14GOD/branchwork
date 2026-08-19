@@ -1943,7 +1943,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
 
         {railOpen && <div className="rail-scrim" onClick={() => setRailOpen(false)} />}
 
-        <section className="room-area">
+        <section className="room-area" data-testid="room-area">
         <header className={railHidden ? "topbar topbar-alone" : "topbar"}>
           {/* Visible only while the rail is away — hidden by choice at any
               width, or collapsed to an overlay below 1200px, where this is the
@@ -1994,6 +1994,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               detail={laneView(openDetail)}
               onSetup={() => setSetupOpen(true)}
               onOpenPreview={openPreviewTab}
+              previewOpen={previewTab !== null}
             />
           ) : (
             <button

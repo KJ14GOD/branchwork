@@ -20,6 +20,7 @@ export function GatedAction({
   children,
   variant = "secondary",
   busy,
+  hint,
   disabled,
   disabledReason,
   label,
@@ -33,8 +34,11 @@ export function GatedAction({
   holderLogin?: string | null;
   onClick: () => void;
   children: ReactNode;
-  variant?: "primary" | "secondary" | "text";
+  variant?: "primary" | "secondary" | "text" | "icon";
   busy?: boolean;
+  /** A standing tooltip while the action is permitted — where a control needs
+   *  its words at the point of use (the capture warning's home, D-161). */
+  hint?: string;
   /** A state reason to be unavailable, beyond the capability — disabled with
    *  its own words, in the same informative-never-mysterious spirit. */
   disabled?: boolean;
@@ -51,12 +55,12 @@ export function GatedAction({
       : denialReason
     : disabled
       ? disabledReason
-      : undefined;
+      : hint;
   const name = typeof children === "string" ? children : label;
 
   return (
     <button
-      className={`btn btn-${variant}`}
+      className={variant === "icon" ? "icon-button" : `btn btn-${variant}`}
       onClick={onClick}
       disabled={!permitted || busy || disabled}
       title={tooltip}

@@ -125,9 +125,15 @@ body {
   margin-left: var(--s-8);
 }
 
-/* The rail is away by choice (any width): this is the way back. */
+/* The rail is away by choice (any width): this is the way back — and it sits
+   exactly where the rail's own copy sat, which the inset above already
+   provides. The margin below clears the window buttons in the *overlay* case,
+   where this row has no inset of its own; adding it here as well put the
+   switch 64px right of where it had just been, so using it moved it. The rule
+   two blocks up has claimed since D-068 that it must not. */
 .topbar-alone .rail-toggle {
   display: inline-flex;
+  margin-left: 0;
 }
 
 .topbar .spacer {
@@ -815,9 +821,12 @@ body {
   align-items: center;
   /* Hard against the inset, which is exactly where the room's copy sits when
      the rail is away. The switch must not move when it is used: a control that
-     relocates on its own click makes you find it again to undo it. */
+     relocates on its own click makes you find it again to undo it.
+     The rail carries its own `--s-2` side padding, so the inset is measured
+     from the *window* edge by subtracting it — otherwise this lands eight
+     pixels right of the room's copy, which is what it did. */
   justify-content: flex-start;
-  padding: 0 var(--s-2) 0 var(--traffic-inset);
+  padding: 0 var(--s-2) 0 calc(var(--traffic-inset) - var(--s-2));
   -webkit-app-region: drag;
 }
 
@@ -2832,10 +2841,16 @@ body {
 }
 
 /* While a run command is alive the control says which one, and offers Stop. */
+/* The running command as one quiet pill (D-161): name, way in, Stop — a
+   single bordered unit in the corner rather than three loose controls. */
 .run-live {
   display: inline-flex;
   align-items: center;
-  gap: var(--s-2);
+  gap: var(--s-3);
+  padding: var(--s-1) var(--s-2) var(--s-1) var(--s-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-button);
+  background: var(--surface-1);
 }
 
 .run-live-name {
@@ -4098,7 +4113,7 @@ body {
   align-items: center;
   gap: var(--s-3);
   flex: none;
-  padding: var(--s-3) var(--s-6);
+  padding: var(--s-2) var(--s-5);
 }
 
 .preview-note {
@@ -4111,6 +4126,15 @@ body {
   min-height: 0;
   position: relative;
   background: var(--surface-1);
+}
+
+/* The frozen frame (D-160): the page's own last pixels while an overlay is
+   above the rectangle, exactly where the live view was. */
+.preview-frozen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .preview-panel {
@@ -5858,13 +5882,6 @@ body.resizing {
   overflow-wrap: anywhere;
 }
 
-.preview-capture-warning {
-  font: var(--type-meta);
-  color: var(--text-3);
-  margin: 0;
-  padding: 4px 12px 0;
-}
-
 .recording-word {
   font: var(--type-meta);
   color: var(--warn);
@@ -6175,4 +6192,50 @@ body.resizing {
 
 .open-in-menu .chip-menu-index {
   padding-left: var(--s-4);
+}
+
+/* ---------- The room reads as a conversation with two sides (D-162) ----------
+   The trace ran the full width and hugged the left edge, so on a wide window
+   a turn was a narrow ribbon with an empty half beside it, and the question
+   and its answer were indistinguishable until you read them. Three changes,
+   one idea: give the room a measure, and give each speaker a side. */
+
+/* One centred column. The feed, the state line, and the composer share it —
+   the same axis they have shared since D-066, now centred rather than pinned
+   left. */
+.feed,
+.room-header,
+.composer {
+  width: 100%;
+  max-width: var(--measure-room);
+  margin-inline: auto;
+}
+
+/* The person's own words sit on the right, in a bubble that is theirs. The
+   harness answers on the left with no bubble at all: one side is a short
+   thing somebody typed, the other is prose, code, and evidence, and a bubble
+   around the second would be a box around the room. */
+.trace-said {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--s-1);
+}
+
+.trace-said .trace-head {
+  justify-content: flex-end;
+}
+
+.trace-said .trace-body {
+  max-width: 78%;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-button);
+  background: var(--surface-2);
+  color: var(--text-1);
+  text-align: left;
+}
+
+/* Attachments follow the words they were sent with, on the same side. */
+.trace-said + .trace-attachments {
+  justify-content: flex-end;
 }
