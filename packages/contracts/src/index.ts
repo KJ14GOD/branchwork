@@ -2421,7 +2421,15 @@ export type OpenTarget = z.infer<typeof OpenTargetSchema>;
 /** One entry the room may offer, as this machine actually found it. */
 export const OpenTargetOptionSchema = z.object({
   id: OpenTargetSchema,
-  label: z.string().min(1).max(40)
+  label: z.string().min(1).max(40),
+  /** The application's **own** icon, read off this machine's copy of it and
+   *  inlined as a data URL (D-159 amended). Not an asset Novus ships: an app's
+   *  icon is the thing a person recognizes before they read anything, and a
+   *  bundled copy would go stale the moment the app is redesigned. Null for
+   *  the entries that are not applications — Copy path — and whenever the icon
+   *  could not be read, which is a reason to show the row without one rather
+   *  than to drop it. */
+  icon: z.string().max(200_000).nullable().default(null)
 });
 export type OpenTargetOption = z.infer<typeof OpenTargetOptionSchema>;
 

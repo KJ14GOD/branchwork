@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import type { OpenTarget } from "@novus/contracts";
 
 /**
@@ -29,6 +32,14 @@ export interface OpenApplication {
 
 /** Every application Novus will hand a worktree to, and nothing else. */
 export const OPEN_APPLICATIONS: readonly OpenApplication[] = [
+  {
+    id: "finder",
+    label: "Finder",
+    application: "Finder",
+    // Always present, and named here so it carries its own icon like the
+    // rest; the open itself still goes through `shell.openPath`.
+    paths: ["/System/Library/CoreServices/Finder.app"]
+  },
   {
     id: "cursor",
     label: "Cursor",
@@ -69,6 +80,47 @@ export function installedApplications(
   if (process.platform !== "darwin") return [];
   return OPEN_APPLICATIONS.filter((entry) => entry.paths.some((path) => exists(path)));
 }
+
+/**
+ * The application's own icon, as PNG bytes (D-159 amended).
+ *
+ * Read out of the bundle rather than asked for: Electron's `getFileIcon`
+ * returns a **generic document icon** for a `.app` on macOS — the same 1181
+ * bytes for Finder, Cursor and Terminal, which is how this was found — so the
+ * icon comes from where the icon actually is. `Info.plist` names the icon
+ * file, `Resources/` holds it, and `sips` converts `.icns` to something a
+ * renderer can show.
+ *
+ * Never bundled with Novus: an app's icon is the thing a person recognizes
+ * before reading anything, and a copy we ship goes stale the moment the app is
+ * redesigned. A failure here drops the icon and keeps the row.
+ */
+export async function applicationIcon(
+  appPath: string,
+  run: (file: string, args: string[]) => Promise<string> = execFileText
+): Promise<Buffer | null> {
+  try {
+    const declared = (await run("defaults", ["read", join(appPath, "Contents/Info.plist"), "CFBundleIconFile"])).trim();
+    if (!declared) return null;
+    // The key sometimes carries the extension and sometimes does not.
+    const icns = join(appPath, "Contents/Resources", declared.endsWith(".icns") ? declared : `${declared}.icns`);
+    if (!existsSync(icns)) return null;
+    const out = join(await mkdtemp(join(tmpdir(), "novus-icon-")), "icon.png");
+    await run("sips", ["-s", "format", "png", "-Z", "32", icns, "--out", out]);
+    const bytes = await readFile(out);
+    await rm(dirname(out), { recursive: true, force: true }).catch(() => undefined);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+const execFileText = (file: string, args: string[]): Promise<string> =>
+  new Promise((resolve, reject) => {
+    execFile(file, args, { timeout: 10_000 }, (error, stdout) =>
+      error ? reject(error) : resolve(stdout)
+    );
+  });
 
 export class OpenRefused extends Error {}
 

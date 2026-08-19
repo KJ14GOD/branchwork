@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OPEN_APPLICATIONS, installedApplications } from "../electron/workspace-open";
+import { OPEN_APPLICATIONS, applicationIcon, installedApplications } from "../electron/workspace-open";
 
 /**
  * Which applications a workspace may be handed to (D-159).
@@ -51,5 +51,47 @@ describe("the applications a checkout may be opened in", () => {
     for (const entry of OPEN_APPLICATIONS) {
       expect(known.has(entry.id), entry.id).toBe(true);
     }
+  });
+});
+
+/**
+ * The application's own icon (D-159 amended).
+ *
+ * Read out of the bundle rather than asked for. Electron's `getFileIcon`
+ * returns a **generic document icon** for a `.app` on macOS — the identical
+ * 1181 bytes for Finder, Cursor and Terminal, which is how this was found —
+ * so the icon comes from where the icon actually is: `Info.plist` names it,
+ * `Resources/` holds it, `sips` converts it.
+ *
+ * Nothing is ever bundled with Novus. An app's icon is what a person
+ * recognizes before reading anything, and a copy we ship goes stale the moment
+ * the app is redesigned.
+ */
+describe("an application's own icon", () => {
+  it("reads the name from Info.plist and looks for the icns beside it", async () => {
+    const asked: string[][] = [];
+    const bytes = await applicationIcon("/Applications/Cursor.app", async (file, args) => {
+      asked.push([file, ...args]);
+      if (file === "defaults") return "Cursor.icns\n";
+      return "";
+    });
+    expect(asked[0]?.[0]).toBe("defaults");
+    expect(asked[0]?.slice(-1)[0]).toBe("CFBundleIconFile");
+    // No icns exists at that path in this test, so it stops before sips and
+    // answers null rather than inventing an icon.
+    expect(bytes).toBeNull();
+  });
+
+  it("answers null rather than throwing when the bundle names nothing", async () => {
+    expect(await applicationIcon("/Applications/Nothing.app", async () => "")).toBeNull();
+  });
+
+  it("answers null when reading the bundle fails outright", async () => {
+    // A missing icon drops the icon, never the row.
+    expect(
+      await applicationIcon("/Applications/Broken.app", async () => {
+        throw new Error("no such plist");
+      })
+    ).toBeNull();
   });
 });

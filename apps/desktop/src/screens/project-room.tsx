@@ -1113,6 +1113,42 @@ export function ProjectRoom({
   return (
     <div className="room" data-testid="project-room">
       <div className="room-main">
+      {findOpen && (
+        <div className="feed-find" data-testid="feed-find">
+          <input
+            ref={findInputRef}
+            className="feed-find-input"
+            placeholder="Find in conversation"
+            value={findQuery}
+            onChange={(event) => {
+              setFindQuery(event.target.value);
+              setFindIndex(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                stepFind(event.shiftKey ? -1 : 1);
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeFind();
+              }
+            }}
+          />
+          <span className="feed-find-count" data-testid="feed-find-count">
+            {findCount === 0 ? (findQuery.trim() === "" ? "" : "0 found") : `${findIndex + 1} of ${findCount}`}
+          </span>
+          <button className="feed-find-step" onClick={() => stepFind(-1)} aria-label="Previous match">
+            ‹
+          </button>
+          <button className="feed-find-step" onClick={() => stepFind(1)} aria-label="Next match">
+            ›
+          </button>
+          <button className="feed-find-step" onClick={closeFind} aria-label="Close find">
+            ×
+          </button>
+        </div>
+      )}
       {/* This strip is the mission's working row (D-086): the top strip holds
           one tab per mission, and this one — one level below, exactly where an
           open file appears — holds the mission's approaches as colour-dotted
@@ -2018,42 +2054,6 @@ export function ProjectRoom({
           )}
         </div>
       </div>
-      {findOpen && (
-        <div className="feed-find" data-testid="feed-find">
-          <input
-            ref={findInputRef}
-            className="feed-find-input"
-            placeholder="Find in conversation"
-            value={findQuery}
-            onChange={(event) => {
-              setFindQuery(event.target.value);
-              setFindIndex(0);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                stepFind(event.shiftKey ? -1 : 1);
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                closeFind();
-              }
-            }}
-          />
-          <span className="feed-find-count" data-testid="feed-find-count">
-            {findCount === 0 ? (findQuery.trim() === "" ? "" : "0 found") : `${findIndex + 1} of ${findCount}`}
-          </span>
-          <button className="feed-find-step" onClick={() => stepFind(-1)} aria-label="Previous match">
-            ‹
-          </button>
-          <button className="feed-find-step" onClick={() => stepFind(1)} aria-label="Next match">
-            ›
-          </button>
-          <button className="feed-find-step" onClick={closeFind} aria-label="Close find">
-            ×
-          </button>
-        </div>
-      )}
       {/* The way back down: floats only while the reader is away from the
           latest, and one press returns them to where new words land. */}
       {awayFromLatest && (

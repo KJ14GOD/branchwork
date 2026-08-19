@@ -452,14 +452,34 @@ describe("opening the workspace elsewhere (D-159)", () => {
     await page.getByTestId("open-in-copy-path").waitFor({ timeout: 10_000 });
     await page.screenshot({ path: join(evidenceDir, "198-open-in-menu.png") });
 
-    // Copying is the one entry with no visible effect anywhere else, so it
-    // says so itself — and it is safe to exercise, where launching an editor
-    // in a test run is not.
-    await page.getByTestId("open-in-copy-path").click();
+    // Every row carries the application's own icon, read off this machine —
+    // except Copy path, which is not an application.
+    const icons = await menu.locator("img.open-in-icon").count();
+    expect(icons).toBeGreaterThan(0);
+
+    // The digits beside the rows work while the menu is open (D-159 amended).
+    // Exercised on Copy path rather than an editor: pressing a number that
+    // launches Cursor in a test run is a real application on somebody's
+    // screen, and Copy path proves the same handler.
+    const rows = await menu.locator("button").count();
+    await page.keyboard.press(String(rows));
     await page.getByTestId("open-in-copied").waitFor({ timeout: 10_000 });
     const copied = await page.evaluate(() => navigator.clipboard.readText().catch(() => ""));
     // The path is the main process's to resolve; the renderer never sent one.
     expect(copied).toContain("worktrees");
+
+    // Choosing hands attention elsewhere, so the trigger keeps the keyboard
+    // and loses the ring until the keyboard is genuinely used again (D-106's
+    // pattern) — otherwise coming back from Cursor finds a white box around a
+    // button nobody navigated to.
+    await expect
+      .poll(() => page.getByTestId("open-in").getAttribute("data-focus-quiet"), { timeout: 10_000 })
+      .toBe("true");
+    // And a real key press gives it back.
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() => page.getByTestId("open-in").getAttribute("data-focus-quiet"), { timeout: 10_000 })
+      .toBeNull();
   }, 120_000);
 });
 

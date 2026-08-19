@@ -1177,6 +1177,7 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .tabbar {
@@ -1554,18 +1555,22 @@ body {
 /* Find in the conversation (Cmd+F): a quiet bar pinned to the feed's top
    corner. Matches paint through the highlight registry, so the feed's own
    markup never changes shape while a person searches it. */
+/* Hung from the canvas's own top edge, the way a browser's find bar drops
+   in — not floating mid-feed. The count keeps a reserved width so the bar
+   never resizes as digits come and go. */
 .feed-find {
-  position: absolute;
-  top: var(--s-3);
-  right: var(--s-5);
+  position: fixed;
+  top: var(--s-4);
+  right: var(--s-4);
+  z-index: 50;
   display: flex;
   align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-2) var(--s-3);
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
   border: 1px solid var(--edge);
-  border-radius: var(--r-control);
-  background: var(--surface-2);
-  box-shadow: var(--elev-1);
+  border-radius: var(--r-dialog);
+  background: var(--surface-1);
+  box-shadow: var(--elev-2);
 }
 
 .feed-find-input {
@@ -1573,7 +1578,7 @@ body {
   background: transparent;
   color: var(--text-1);
   font: var(--type-row);
-  width: 200px;
+  width: 100px;
   outline: none;
 }
 
@@ -1581,28 +1586,39 @@ body {
   font: var(--type-meta);
   color: var(--text-3);
   white-space: nowrap;
+  min-width: 52px;
+  text-align: right;
 }
 
 .feed-find-step {
   border: none;
   background: transparent;
-  color: var(--text-3);
-  font: var(--type-row);
+  color: var(--text-2);
+  font: var(--type-title);
+  line-height: 1;
   cursor: pointer;
-  padding: 0 var(--s-1);
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-control);
 }
 
 .feed-find-step:hover {
   color: var(--text-1);
+  background: var(--hover);
 }
 
+/* Found words wear the warn amber — the one hue in the room that exists to
+   pull an eye — the current match at full strength. */
 ::highlight(novus-find) {
-  background-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  background-color: color-mix(in srgb, var(--warn) 35%, transparent);
   color: var(--text-1);
 }
 
 ::highlight(novus-find-current) {
-  background-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background-color: var(--warn);
   color: var(--bg);
 }
 
@@ -2503,6 +2519,9 @@ body {
   padding: var(--s-1) var(--s-2);
   min-height: 28px;
   cursor: pointer;
+  /* A tab's name is one word-shape however tight the row gets: "All files"
+     wrapping into a two-line tab read as a different control (D-160 batch). */
+  white-space: nowrap;
 }
 
 .inspector-tab:hover {
@@ -6107,7 +6126,11 @@ body.resizing {
   bottom: auto;
   left: auto;
   right: 0;
-  min-width: 200px;
+  /* Sized by its own content: a wide floor pushed the digit far from the
+     label it belongs to, which read as two columns rather than one row. Wide
+     enough that no label wraps — a two-line row in a menu of four is worse
+     than a little air. */
+  min-width: 176px;
 }
 
 /* The position in the list, quiet: what a person counts down to, never a
@@ -6130,4 +6153,26 @@ body.resizing {
   font: var(--type-micro);
   color: var(--text-2);
   z-index: 30;
+}
+
+/* The application's own icon in the open-in menu (D-159 amended). A fixed box
+   whether or not there is an icon, so every label sits on one axis — a row
+   that shifts because its neighbour has a picture reads as two lists. */
+.open-in-icon {
+  flex: none;
+  /* The extraction renders at 32px, so this stays crisp at any of these. */
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+/* The row breathes for the icon without the label drifting from its digit. */
+.open-in-menu .chip-menu-row {
+  min-height: 32px;
+  gap: var(--s-3);
+  white-space: nowrap;
+}
+
+.open-in-menu .chip-menu-index {
+  padding-left: var(--s-4);
 }

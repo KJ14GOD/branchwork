@@ -98,7 +98,7 @@ import {
   worktreeFor,
   type WorkspaceTarget
 } from "./workspace";
-import { OpenRefused, installedApplications, openWith } from "./workspace-open";
+import { OpenRefused, applicationIcon, installedApplications, openWith } from "./workspace-open";
 import { resolvePreviewTarget } from "./preview-policy";
 import {
   attachPreviewHost,
@@ -1192,11 +1192,23 @@ function registerIpc(): void {
    *  than a short one. */
   ipcMain.handle("novus:workspace:open-targets", async () => {
     if (process.platform !== "darwin") return ok([]);
-    return ok([
-      { id: "finder" as const, label: "Finder" },
-      ...installedApplications().map((entry) => ({ id: entry.id, label: entry.label })),
-      { id: "copy-path" as const, label: "Copy path" }
-    ]);
+    // The application's own icon, read off this machine's copy of it — an app
+    // is recognized by its icon before its name is read, and a bundled copy
+    // would go stale the moment the app is redesigned. A failure here drops
+    // the icon, never the row.
+    const iconFor = async (path: string): Promise<string | null> => {
+      const bytes = await applicationIcon(path);
+      return bytes === null ? null : `data:image/png;base64,${bytes.toString("base64")}`;
+    };
+    const found = installedApplications();
+    const entries = await Promise.all(
+      found.map(async (entry) => ({
+        id: entry.id,
+        label: entry.label,
+        icon: await iconFor(entry.paths.find((path) => existsSync(path)) ?? entry.paths[0] ?? "")
+      }))
+    );
+    return ok([...entries, { id: "copy-path" as const, label: "Copy path", icon: null }]);
   });
 
   /**

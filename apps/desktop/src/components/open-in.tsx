@@ -31,6 +31,7 @@ export function OpenInControl({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const wrap = useRef<HTMLSpanElement | null>(null);
+  const trigger = useRef<HTMLButtonElement | null>(null);
 
   // Asked once the menu is first wanted rather than at mount: it reads the
   // filesystem, and a room nobody opened this in should not pay for it.
@@ -42,22 +43,6 @@ export function OpenInControl({
     })();
   }, [open, targets.length]);
 
-  useEffect(() => {
-    if (!open) return;
-    const dismiss = (event: MouseEvent) => {
-      if (!wrap.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", dismiss);
-    window.addEventListener("keydown", escape);
-    return () => {
-      window.removeEventListener("mousedown", dismiss);
-      window.removeEventListener("keydown", escape);
-    };
-  }, [open]);
-
   const choose = async (target: OpenTarget) => {
     if (missionId === null || workstreamId === null) return;
     setError(null);
@@ -67,6 +52,13 @@ export function OpenInControl({
       return;
     }
     setOpen(false);
+    // The person's attention just went to another application. When they come
+    // back, this window regains focus and the browser re-decides that the
+    // still-focused trigger was reached by keyboard — drawing a ring around a
+    // button nobody navigated to. D-106 hit exactly this on a dialog's opener
+    // and named it in the same words; the same suppression applies, and the
+    // ring returns the moment the keyboard is genuinely used again.
+    quietFocus(trigger.current);
     // Copying is silent otherwise: the one action with no visible effect
     // anywhere says so itself.
     if (target === "copy-path") {
@@ -74,6 +66,36 @@ export function OpenInControl({
       setTimeout(() => setCopied(false), 1_500);
     }
   };
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: MouseEvent) => {
+      if (!wrap.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        return;
+      }
+      // The numbers beside the rows are real (D-159 amended): while the menu
+      // is open, its own digits choose. Scoped to the open menu and nothing
+      // else — a number typed anywhere else in the room is a number, and a
+      // global shortcut on a bare digit would take them all.
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const position = Number.parseInt(event.key, 10);
+      if (!Number.isInteger(position) || position < 1 || position > targets.length) return;
+      event.preventDefault();
+      const target = targets[position - 1];
+      if (target) void choose(target.id);
+    };
+    window.addEventListener("mousedown", dismiss);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("mousedown", dismiss);
+      window.removeEventListener("keydown", key);
+    };
+  });
+
 
   const unavailable = disabled
     ? "Available once a mission is open"
@@ -84,6 +106,7 @@ export function OpenInControl({
   return (
     <span className="chip-wrap" ref={wrap}>
       <button
+        ref={trigger}
         className={open ? "icon-button active" : "icon-button"}
         onClick={() => setOpen((current) => !current)}
         aria-haspopup="menu"
@@ -105,10 +128,17 @@ export function OpenInControl({
               onClick={() => void choose(target.id)}
               data-testid={`open-in-${target.id}`}
             >
+              {/* The application's own icon, read off this machine (D-159
+                  amended): an app is recognized by its icon before its name is
+                  read. An entry that has none — Copy path — keeps the space so
+                  the labels stay on one axis. */}
+              {target.icon ? (
+                <img className="open-in-icon" src={target.icon} alt="" aria-hidden="true" />
+              ) : (
+                <span className="open-in-icon" aria-hidden="true" />
+              )}
               <span>{target.label}</span>
-              {/* The position, as a menu of a few things can honestly show —
-                  not a keyboard shortcut, which would be a claim we do not
-                  keep. */}
+              {/* The digit, and it works while this menu is open. */}
               <span className="chip-menu-index">{index + 1}</span>
             </button>
           ))}
@@ -129,6 +159,27 @@ export function OpenInControl({
       )}
     </span>
   );
+}
+
+/**
+ * Keeps the focus and suppresses the ring, until the keyboard is used again
+ * (D-106's pattern, applied to a control that hands attention to another
+ * application rather than to a dialog).
+ */
+function quietFocus(element: HTMLElement | null): void {
+  if (!element) return;
+  element.dataset.focusQuiet = "true";
+  // Cleared on the next key press and **not** on blur, which is where this
+  // differs from D-106's dialog. Leaving another application blurs the
+  // element, so a blur listener would lift the suppression on the way out and
+  // the ring would be waiting on the way back — the exact thing being
+  // suppressed. A person who tabs here later clears it with the Tab itself,
+  // which fires before focus lands.
+  const speak = () => {
+    delete element.dataset.focusQuiet;
+    window.removeEventListener("keydown", speak, true);
+  };
+  window.addEventListener("keydown", speak, true);
 }
 
 /** An arrow leaving a frame: the stroke set's way of saying "out of here". */
