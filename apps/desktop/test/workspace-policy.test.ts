@@ -14,6 +14,7 @@ import { commandDigest, declaredCommands } from "../electron/workspace-commands"
 import { gitExec } from "../electron/workspace-git";
 import {
   parseLoopbackHttpUrl,
+  sameLoopbackAddress,
   readinessTarget,
   WorkspaceProcesses,
   type Invocation,
@@ -474,6 +475,24 @@ describe("opening a local preview", () => {
       "http://[::1]:3000/"
     ]) {
       expect(parseLoopbackHttpUrl(accepted)).not.toBeNull();
+    }
+  });
+
+  it("treats loopback spellings as one address on the same scheme and port (D-157)", () => {
+    for (const [first, second] of [
+      ["http://localhost:8123", "http://127.0.0.1:8123/"],
+      ["http://[::1]:8123", "http://localhost:8123"],
+      ["https://localhost:443/", "https://127.0.0.1/"] // the scheme's default port, written and omitted
+    ]) {
+      expect(sameLoopbackAddress(first!, second!), `${first} ≡ ${second}`).toBe(true);
+    }
+    for (const [first, second] of [
+      ["http://localhost:8123", "http://127.0.0.1:9999/"], // a port is an application
+      ["http://localhost:8123", "https://localhost:8123/"], // a scheme is a contract
+      ["http://localhost:8123", "http://192.168.1.10:8123/"], // not loopback at all
+      ["http://localhost:8123", "not a url"]
+    ]) {
+      expect(sameLoopbackAddress(first!, second!), `${first} ≢ ${second}`).toBe(false);
     }
   });
 

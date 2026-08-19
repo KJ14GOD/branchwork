@@ -1,6 +1,6 @@
 import type { ProcessLog, ProcessLogChunk } from "@novus/contracts";
 import { ApiError } from "./api-client";
-import { parseLoopbackHttpUrl } from "./workspace-processes";
+import { parseLoopbackHttpUrl, sameLoopbackAddress } from "./workspace-processes";
 
 /**
  * The embedded preview's policy (D-098) — every decision, none of the view.
@@ -42,7 +42,9 @@ export function resolvePreviewTarget(rawUrl: string, logs: ProcessLog[]): Previe
       log.kind === "run" &&
       (log.state === "starting" || log.state === "running") &&
       log.previewUrl !== null &&
-      (log.previewUrl === rawUrl || log.previewUrl === parsed.toString())
+      // Exact match, or the same loopback machine written another way
+      // (localhost / 127.0.0.1 / [::1] on the same scheme and port, D-157).
+      (log.previewUrl === rawUrl || sameLoopbackAddress(log.previewUrl, rawUrl))
   );
   if (live === undefined) {
     throw new ApiError(
@@ -56,16 +58,18 @@ export function resolvePreviewTarget(rawUrl: string, logs: ProcessLog[]): Previe
 
 /**
  * Whether the embedded top frame may go to `candidate`: the same loopback
- * origin the preview was opened on, and nothing else. Scheme, hostname, and
- * port all have to agree — `http://localhost:3000` and `http://localhost:9999`
- * are different applications, and `https://evil.example` is not a preview.
- * Runs through the same parser as the open gate so whitespace and credential
+ * application the preview was opened on, and nothing else. Scheme and port
+ * have to agree — `http://localhost:3000` and `http://localhost:9999` are
+ * different applications, and `https://evil.example` is not a preview — while
+ * the loopback hostname spellings are one machine (D-157): an app opened on
+ * `localhost` that redirects itself to `127.0.0.1` is still itself. Runs
+ * through the same parser as the open gate so whitespace and credential
  * smuggling are refused here identically.
  */
 export function previewNavigationAllowed(approvedOrigin: string, candidate: string): boolean {
   const parsed = parseLoopbackHttpUrl(candidate);
   if (parsed === null) return false;
-  return parsed.origin === approvedOrigin;
+  return parsed.origin === approvedOrigin || sameLoopbackAddress(approvedOrigin, parsed.toString());
 }
 
 /**

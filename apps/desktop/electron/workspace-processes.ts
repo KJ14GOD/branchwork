@@ -1015,6 +1015,22 @@ export function detectPreviewUrl(text: string): string | null {
  * `http://localhost@evil.example` has the authority `evil.example` and a
  * `startsWith("http://localhost")` check would wave it straight through.
  */
+/**
+ * Whether two strings name the same loopback address: `localhost`,
+ * `127.0.0.1`, and `[::1]` are one machine written three ways, so a process
+ * that reported one spelling has honestly reported them all (D-157). Scheme
+ * and effective port still have to agree — different ports are different
+ * applications. This widens *matching* only; what counts as loopback at all
+ * stays `parseLoopbackHttpUrl`'s narrow list.
+ */
+export function sameLoopbackAddress(first: string, second: string): boolean {
+  const left = parseLoopbackHttpUrl(first);
+  const right = parseLoopbackHttpUrl(second);
+  if (left === null || right === null) return false;
+  const portOf = (url: URL) => (url.port !== "" ? url.port : url.protocol === "https:" ? "443" : "80");
+  return left.protocol === right.protocol && portOf(left) === portOf(right);
+}
+
 export function parseLoopbackHttpUrl(candidate: string): URL | null {
   // Refused before parsing rather than after: the URL parser silently strips
   // or percent-encodes whitespace and control characters, so a string carrying

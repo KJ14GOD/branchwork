@@ -34,6 +34,7 @@ import { emptySecretStore, fileSecretStore, type SecretStore } from "./workspace
 import { projectEnv, terminalEnv, proxyCredentials } from "./workspace-env";
 import {
   parseLoopbackHttpUrl,
+  sameLoopbackAddress,
   reconcileRecordedProcesses,
   WorkspaceCommandError,
   WorkspaceProcesses,
@@ -595,7 +596,10 @@ export async function openPreview(
   }
   const supervisor = supervisorsByWorkstream.get(workstreamId);
   const known = supervisor?.previewUrls() ?? [];
-  if (!known.includes(parsed.toString()) && !known.includes(url)) {
+  // Loopback spellings are one machine (D-157): a process that reported
+  // 127.0.0.1 has reported localhost, and refusing the other spelling was a
+  // literalism, not a protection.
+  if (!known.some((entry) => entry === url || sameLoopbackAddress(entry, url))) {
     throw new ApiError(
       "preview_unknown",
       "Nothing running in this workspace reported that address.",
