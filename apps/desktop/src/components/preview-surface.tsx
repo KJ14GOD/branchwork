@@ -111,12 +111,28 @@ export function PreviewSurface({
   // on top — a dialog, a popover, the dock-as-overlay below 900px, the rail
   // overlay — the view hides until the rectangle is clear again.
   useEffect(() => {
-    const element = bodyRef.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    let hidden = false;
+    if (typeof ResizeObserver === "undefined") return;
+    // Stateless on purpose (D-158): every tick re-resolves the element and
+    // states the whole truth — hide, or these exact bounds. A remembered
+    // "already hidden" flag once wedged the view: something else re-attached
+    // it (a reopen, a re-render) while the flag said hidden, and the keeper
+    // never spoke again, leaving stale bounds painted over the inspector.
+    // hide() and setBounds() are idempotent; repeating them is cheap, and
+    // repeating them is what makes the rectangle self-healing.
     const sync = () => {
+      const element = bodyRef.current;
+      // A rectangle that cannot be measured is a rectangle that must not be
+      // painted: a detached or collapsed body means the surface is not
+      // honestly on screen, whatever the view remembers.
+      if (!element || !element.isConnected) {
+        void novus().workspace.preview.hide();
+        return;
+      }
       const rect = element.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
+      if (rect.width === 0 || rect.height === 0) {
+        void novus().workspace.preview.hide();
+        return;
+      }
       const inset = 8;
       const points: [number, number][] = [
         [rect.x + rect.width / 2, rect.y + rect.height / 2],
@@ -130,13 +146,9 @@ export function PreviewSurface({
         return top !== null && !element.contains(top);
       });
       if (covered) {
-        if (!hidden) {
-          hidden = true;
-          void novus().workspace.preview.hide();
-        }
+        void novus().workspace.preview.hide();
         return;
       }
-      hidden = false;
       void novus().workspace.preview.setBounds({
         x: rect.x,
         y: rect.y,
@@ -145,7 +157,7 @@ export function PreviewSurface({
       });
     };
     const observer = new ResizeObserver(sync);
-    observer.observe(element);
+    if (bodyRef.current) observer.observe(bodyRef.current);
     window.addEventListener("resize", sync);
     const timer = setInterval(sync, COVER_CHECK_MS);
     sync();

@@ -2227,3 +2227,35 @@ Enrolment ends with the checkout: a lane with no worktree has nothing for that m
 **Consequences.** `sameLoopbackAddress` in `workspace-processes.ts`; `openPreview`, `resolvePreviewTarget`, and `previewNavigationAllowed` match through it; the "different spelling is a different origin" navigation test is deliberately reversed with the reason in place. Evidence: `workspace-policy.test.ts` (25 — the equivalence table with its refusals: cross-port, cross-scheme, non-loopback), `preview-policy.test.ts` (13 — the wild case verbatim: reported `127.0.0.1:8123`, asked `localhost:8123`; and the containment following the app across spellings while still refusing other ports).
 
 **Revisit when.** IPv6-mapped forms (`[::ffff:127.0.0.1]`) or additional loopback names want admission — today they are refused at the parser, deliberately, and widening *that* list is a different decision than this one.
+
+## D-159 — A checkout opens where a person already works, from a list this machine actually has
+
+**Context.** A lane's workspace is a real directory on the machine holding it, and the tools people use on a repository — an editor, a terminal, Finder — live outside Novus. Until now there was no way to reach it except finding the path by hand. The owner asked for the control Conductor puts in the same corner.
+
+**Decision.** One icon in the room's top-right, beside Run and the evidence toggle, opening one menu: **Finder**, whichever editors and terminals are installed, and **Copy path**. Not a toolbar and not a second navigation — the corner's existing rule, unchanged.
+
+**The renderer names a lane, never a path.** That sentence is the whole security posture. The worktree is resolved in the main process from the workstream id; the application comes from a closed list in `workspace-open.ts`; and the launch is `execFile` with an argument vector, never a shell line. So there is no input that could name `/etc`, no input that could name a program nobody vetted, and no string that a directory's own name could turn into a command. "Open in whatever the user configured" is the same hole with a friendlier name, and adding an editor is deliberately an edit to that list.
+
+**The list is detected, not declared.** An entry appears only when its application is on disk. A menu offering Cursor to somebody without Cursor is a control that does nothing, which this product's own rule already forbids elsewhere. Finder and Copy path need no application and are always there.
+
+**Words, not logos.** D-139 re-dressed add-project on exactly this point, and a menu of app icons here would fight a decision already made. The trailing number is the item's **position**, not a keyboard shortcut — a shortcut would be a claim the product does not keep.
+
+It stays visible and disabled when the lane's workspace is on somebody else's machine, saying so in words: disabled-with-reason, never hidden, the same posture the terminal toggle takes for the same fact.
+
+**Alternatives.** A configurable command template — "open with `$EDITOR`" or a settings field (rejected: it is arbitrary command execution wearing a preference's clothes, and the list costs one edit per editor). Passing the path from the renderer (rejected for the obvious reason: the window would then be naming directories, and the whole guard is that it cannot). Listing every editor regardless of installation and failing at launch (rejected: the failure would arrive after the click, when the honest answer was available before it). App icons as in the reference (rejected: D-139). Opening a file rather than the directory (rejected: the tools people mean here take a project).
+
+**Consequences.** `workspace-open.ts` joins the desktop main process with the closed list and the detection; `OpenTarget`, `OpenTargetOption` and `OpenWorkspaceInput` join the contract; two bridge verbs join `workspace`. macOS only, and it says so in the menu rather than offering entries that cannot work — Windows and Linux have never been run at all, so this is the same honesty the rest of the product already keeps about them.
+
+**Revisit when.** A second platform is genuinely supported and its own applications and launch mechanism need naming; a person wants an editor the list does not carry, which is an edit here and a deliberate one; or the menu grows past a handful, at which point positions stop being useful and it wants a different shape.
+
+## D-158 — A native rectangle needs a living keeper
+
+**Context.** Owner-hit: with the preview running, opening the evidence panel left the preview's native view painted over the inspector at its old width; a renderer reload made it worse — the view stayed painted over the mission transcript with no preview surface mounted at all. The embedded view is a native surface above the DOM; the renderer's keeper was its only truth, and that keeper kept private state: a remembered `hidden` flag that wedged (anything re-attaching the view left the keeper believing it was hidden, so it never spoke again), a 0-size early return that went silent instead of hiding, and no story at all for a renderer that reloads or never re-adopts the view.
+
+**Decision.** Two halves, both stateless. **The keeper repeats the whole truth**: every tick it re-resolves its element and states either "hide" or "these exact bounds" — no remembered flags, hide and place both idempotent, a detached or collapsed body meaning hide, not silence. **The main process stops trusting silence**: placements are a heartbeat, and a view attached with no placement inside 1.5s has lost its keeper — a reloaded renderer, a closed tab, a crashed page — and is detached (never closed: the page and process live on; the next placement shows it again). A host renderer that starts loading detaches the view immediately, because a navigating renderer takes its rectangle claims with it.
+
+**Alternatives.** Fixing only the renderer flag (rejected: the reload orphan proves the main process must not rely on any single renderer behaving). Closing the orphaned view instead of detaching (rejected: closing a window onto the app is not stopping the app — D-098's line — and a reload should not cost the preview its state). Clipping the view in the main process against panel geometry (rejected: the main process cannot know the renderer's layout; the renderer owns the rectangle, the main process owns the right to doubt it).
+
+**Consequences.** `preview-surface.tsx`'s keeper is stateless and self-healing at its 300ms tick; `workspace-preview.ts` gains the placement heartbeat and the did-start-loading detach. **Honest limit:** the heartbeat lives in the Electron-scoped module that plain-node tests deliberately cannot import (its own design rule), so it is verified by the running app and the e2e preview suite's next regeneration, not by a unit test; the keeper's decisions remain covered by `preview-policy` where they are testable.
+
+**Revisit when.** The preview wants multiple simultaneous rectangles (split view), or the e2e suite grows a reload-orphan spec — the two-second flow a person can do by hand is exactly a spec worth having.

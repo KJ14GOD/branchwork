@@ -43,6 +43,29 @@ let host: BrowserWindow | null = null;
 let current: EmbeddedPreview | null = null;
 const statusListeners = new Set<(status: PreviewStatus | null) => void>();
 
+/**
+ * The keeper's heartbeat (D-158). The renderer places the rectangle every few
+ * hundred milliseconds while its surface is honestly on screen; a native view
+ * whose placements stop arriving has lost its keeper — a reloaded renderer, a
+ * closed tab, a crashed page — and a view with no keeper must not stay
+ * painted over whatever renders next. Detached, never closed: the page and
+ * the process live on, and the next placement shows the view again.
+ */
+const KEEPER_SILENCE_MS = 1500;
+let lastPlacedAt = 0;
+let heartbeat: NodeJS.Timeout | null = null;
+
+function notePlacement(): void {
+  lastPlacedAt = Date.now();
+  if (heartbeat === null) {
+    heartbeat = setInterval(() => {
+      if (current === null || !current.attached) return;
+      if (Date.now() - lastPlacedAt > KEEPER_SILENCE_MS) detach(current);
+    }, KEEPER_SILENCE_MS / 3);
+    heartbeat.unref();
+  }
+}
+
 export function onEmbeddedPreviewStatus(listener: (status: PreviewStatus | null) => void): () => void {
   statusListeners.add(listener);
   return () => {
@@ -75,6 +98,12 @@ export function attachPreviewHost(window: BrowserWindow): void {
       current = null;
     }
   });
+  // A renderer that navigates or reloads takes every rectangle claim with it:
+  // the fresh page starts with no preview on screen and asks again if it
+  // wants one (D-158).
+  window.webContents.on("did-start-loading", () => {
+    if (current !== null) detach(current);
+  });
 }
 
 function setPhase(preview: EmbeddedPreview, phase: PreviewStatus["phase"], detail: string | null): void {
@@ -91,6 +120,7 @@ function setPhase(preview: EmbeddedPreview, phase: PreviewStatus["phase"], detai
 }
 
 function attach(preview: EmbeddedPreview): void {
+  notePlacement();
   if (host === null || preview.attached) return;
   host.contentView.addChildView(preview.view);
   applyBounds(preview);
@@ -231,6 +261,7 @@ export function openEmbeddedPreview(
 
 export function setEmbeddedPreviewBounds(bounds: PreviewBounds): void {
   if (current === null) return;
+  notePlacement();
   current.bounds = bounds;
   applyBounds(current);
   // Placing the rectangle is also showing it — but only for a view that has a
