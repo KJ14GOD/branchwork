@@ -2238,7 +2238,13 @@ Enrolment ends with the checkout: a lane with no worktree has nothing for that m
 
 **The list is detected, not declared.** An entry appears only when its application is on disk. A menu offering Cursor to somebody without Cursor is a control that does nothing, which this product's own rule already forbids elsewhere. Finder and Copy path need no application and are always there.
 
-**Words, not logos.** D-139 re-dressed add-project on exactly this point, and a menu of app icons here would fight a decision already made. The trailing number is the item's **position**, not a keyboard shortcut — a shortcut would be a claim the product does not keep.
+**Amended the same day, owner-directed, reversing two of this entry's own calls.** *"do these hot keys work also show the icons there"* — they did not, and there were none.
+
+The digits are now **live while the menu is open**: 1 through however many rows there are, scoped to the open menu and nothing else, because a bare digit bound globally would take every digit in the room. The number beside a row was a position pretending to be nothing; it is now the thing it looks like.
+
+And each application carries **its own icon**, read off this machine. The original "words, not logos" reasoning cited D-139, which is about *add-project's repository rows* — a list of the person's own projects, where a provider logo is decoration. This is a list of **applications**, and an application is recognized by its icon before its name is read. The rule was borrowed onto a surface it did not describe.
+
+Getting the icon was itself a finding. Electron's `app.getFileIcon` returns a **generic document icon** for a `.app` on macOS — the identical 1181 bytes for Finder, Cursor and Terminal, which is how it was caught, and it rendered as three blank squares in the first screenshot. The icon is read from where the icon is: `Info.plist` names it, `Contents/Resources/` holds it, `sips` converts the `.icns`. Nothing is bundled with Novus — a copy we ship goes stale the moment an app is redesigned — and a failure drops the icon, never the row.
 
 It stays visible and disabled when the lane's workspace is on somebody else's machine, saying so in words: disabled-with-reason, never hidden, the same posture the terminal toggle takes for the same fact.
 
@@ -2259,3 +2265,15 @@ It stays visible and disabled when the lane's workspace is on somebody else's ma
 **Consequences.** `preview-surface.tsx`'s keeper is stateless and self-healing at its 300ms tick; `workspace-preview.ts` gains the placement heartbeat and the did-start-loading detach. **Honest limit:** the heartbeat lives in the Electron-scoped module that plain-node tests deliberately cannot import (its own design rule), so it is verified by the running app and the e2e preview suite's next regeneration, not by a unit test; the keeper's decisions remain covered by `preview-policy` where they are testable.
 
 **Revisit when.** The preview wants multiple simultaneous rectangles (split view), or the e2e suite grows a reload-orphan spec — the two-second flow a person can do by hand is exactly a spec worth having.
+
+## D-159 — The rectangle is in page pixels; the window speaks device-independent ones
+
+**Context.** D-158's keeper and heartbeat landed and the ghost survived them. A temporary on-screen diagnostic settled it: the keeper was measuring and placing an honest rectangle (`244,185 884×642`, all five coverage samples its own), yet the native view painted up-and-left of the room, spilling over the inspector. The window's page was **zoomed** — Cmd+plus once, remembered by Electron across launches — and the keeper measures in page pixels while `setBounds` takes device-independent ones. At zoom 1 the two are equal, which is why every test, every e2e run, and every un-zoomed reproduction looked correct while the owner's zoomed window stayed broken.
+
+**Decision.** Convert at the one chokepoint every placement passes through: `applyBounds` multiplies the renderer's rectangle by `webContents.getZoomFactor()`, re-read on each placement so a zoom change corrects within one keeper tick. The keeper stays zoom-ignorant — page pixels are the only truth it can honestly measure — and the main process, which owns the native coordinate space, owns the conversion. Both temporary diagnostics (the renderer badge, the main-process trace log) are removed with the fix.
+
+**Alternatives.** Converting in the renderer via `outerWidth/innerWidth` (rejected: an approximation that scrollbars and platform quirks bend; the main process can just ask for the factor). Resetting the app's zoom to 1 and disabling zoom (rejected: a person's zoom is their accessibility choice, not a bug to confiscate).
+
+**Consequences.** One multiplication in `workspace-preview.ts`. The D-158 keeper/heartbeat hardening stands — the diagnostic proved those layers now behave; this was the remaining lie between them. **Honest limit**: like D-158, the conversion lives in the Electron-scoped module unit tests deliberately cannot import; verified against the owner's zoomed window, with the e2e preview suite's next regeneration as the standing automated check — an explicit zoomed-window spec is the follow-up worth writing.
+
+**Revisit when.** The e2e suite grows the zoomed-window preview spec, or Electron changes what `getZoomFactor` reports for pinch versus page zoom.

@@ -134,11 +134,18 @@ function detach(preview: EmbeddedPreview): void {
 }
 
 function applyBounds(preview: EmbeddedPreview): void {
+  // The renderer measures in page pixels; a native view is placed in
+  // device-independent ones, and the two differ by exactly the page zoom
+  // (D-159) — a person who pressed Cmd+plus once had every placement land
+  // offset, painting the view over whatever sat beside the room. Converted
+  // here, the one chokepoint every placement passes through, re-read on each
+  // placement so a zoom change corrects within a keeper tick.
+  const zoom = host?.webContents.getZoomFactor() ?? 1;
   preview.view.setBounds({
-    x: Math.round(preview.bounds.x),
-    y: Math.round(preview.bounds.y),
-    width: Math.max(0, Math.round(preview.bounds.width)),
-    height: Math.max(0, Math.round(preview.bounds.height))
+    x: Math.round(preview.bounds.x * zoom),
+    y: Math.round(preview.bounds.y * zoom),
+    width: Math.max(0, Math.round(preview.bounds.width * zoom)),
+    height: Math.max(0, Math.round(preview.bounds.height * zoom))
   });
 }
 
