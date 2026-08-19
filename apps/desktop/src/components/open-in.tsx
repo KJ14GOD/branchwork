@@ -46,11 +46,11 @@ export function OpenInControl({
   const choose = async (target: OpenTarget) => {
     if (missionId === null || workstreamId === null) return;
     setError(null);
-    const result = await novus().workspace.openWorkspaceIn({ missionId, workstreamId, target });
-    if (!result.ok) {
-      setError(result.message);
-      return;
-    }
+    // The menu closes before the act, not after: launching another
+    // application takes the operating system a visible beat, and a menu that
+    // hangs open while Finder comes forward reads as the click not taking.
+    // The rare failure — an application gone since detection — reopens the
+    // menu with its reason, which is also the only place the reason renders.
     setOpen(false);
     // The person's attention just went to another application. When they come
     // back, this window regains focus and the browser re-decides that the
@@ -59,6 +59,12 @@ export function OpenInControl({
     // and named it in the same words; the same suppression applies, and the
     // ring returns the moment the keyboard is genuinely used again.
     quietFocus(trigger.current);
+    const result = await novus().workspace.openWorkspaceIn({ missionId, workstreamId, target });
+    if (!result.ok) {
+      setError(result.message);
+      setOpen(true);
+      return;
+    }
     // Copying is silent otherwise: the one action with no visible effect
     // anywhere says so itself.
     if (target === "copy-path") {

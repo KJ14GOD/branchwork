@@ -103,6 +103,71 @@ export function DocumentGlyph({ className }: { className?: string }) {
   );
 }
 
+/**
+ * A file's kind as the mark a person already knows (D-165 amended, the Codex
+ * shape the owner pointed at): a filled page with a folded corner in the
+ * kind's terminal-palette tint — the same fact-about-the-file family the
+ * tree's extension badges established — with the kind's own three letters on
+ * it. PDFs are red everywhere a person has ever seen one.
+ */
+export function FileBadge({ mime, size = 20 }: { mime: string; size?: number }) {
+  const kind = mime.toLowerCase().split(";")[0]?.trim() ?? "";
+  const tint =
+    kind === "application/pdf"
+      ? "var(--term-red)"
+      : kind.startsWith("video/")
+        ? "var(--term-magenta)"
+        : kind.startsWith("audio/")
+          ? "var(--term-cyan)"
+          : kind.startsWith("image/")
+            ? "var(--term-green)"
+            : "var(--text-3)";
+  const named: Record<string, string> = {
+    "application/pdf": "PDF",
+    "audio/mpeg": "MP3",
+    "audio/mp4": "M4A",
+    "video/quicktime": "MOV",
+    "video/x-matroska": "MKV",
+    "video/x-msvideo": "AVI"
+  };
+  const word = named[kind] ?? (kind.split("/")[1] ?? "").replace(/^x-/, "").slice(0, 3).toUpperCase();
+  return (
+    <svg viewBox="0 0 20 20" width={size} height={size} aria-hidden="true">
+      <path
+        d="M6 2h6.6L17 6.4V16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"
+        fill={tint}
+      />
+      <path
+        d="M12.6 2 17 6.4h-3.6a0.9 0.9 0 0 1-0.9-0.9Z"
+        fill="color-mix(in srgb, var(--term-bg) 32%, transparent)"
+      />
+      <text
+        x="10.5"
+        y="14.6"
+        textAnchor="middle"
+        fontSize="5.4"
+        fontWeight="700"
+        fontFamily="var(--font-ui)"
+        fill="var(--term-bg)"
+      >
+        {word}
+      </text>
+    </svg>
+  );
+}
+
+export function GearGlyph({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" width="14" height="14" fill="none"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true">
+      <circle cx="8" cy="8" r="2.1" />
+      <path d="M8 1.9v1.6M8 12.5v1.6M1.9 8h1.6M12.5 8h1.6M3.7 3.7l1.1 1.1M11.2 11.2l1.1 1.1M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1" />
+      <circle cx="8" cy="8" r="4.6" />
+    </svg>
+  );
+}
+
 export function ClaudeGlyph({ className = "harness-glyph" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="Claude Code">

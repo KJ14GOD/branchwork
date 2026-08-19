@@ -12,7 +12,12 @@ import {
 } from "@novus/contracts";
 import { ApiError } from "./api-client";
 import { captureProvenance, captureRefusal } from "./artifact-policy";
-import { uploadCapturedArtifact, worktreeRevision, type ArtifactUploader } from "./artifact-capture";
+import {
+  awaitReadyIfReloading,
+  uploadCapturedArtifact,
+  worktreeRevision,
+  type ArtifactUploader
+} from "./artifact-capture";
 import {
   capturePreviewImage,
   embeddedPreviewStatus,
@@ -164,6 +169,7 @@ export async function startRecording(args: {
       409
     );
   }
+  await awaitReadyIfReloading(args.workstreamId);
   const refusal = captureRefusal(embeddedPreviewStatus(), args.workstreamId, args.logs());
   if (refusal !== null) throw new ApiError("recording_refused", refusal, 409);
   const source = previewContentsForRecording(args.workstreamId);

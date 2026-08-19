@@ -10,6 +10,7 @@ import {
   artifactStateWord
 } from "./artifacts";
 import { GatedAction } from "./gated";
+import { Markdown } from "./markdown";
 
 /**
  * One artifact, looked at closely (D-122): the full image or the recording's
@@ -24,12 +25,24 @@ import { GatedAction } from "./gated";
 export function ArtifactView({
   artifact,
   detail,
-  onBack
+  onBack,
+  onViewInSession
 }: {
   artifact: Artifact;
   /** The lane's own view, for the attachment targets and the capability. */
   detail: MissionDetailResponse;
   onBack: () => void;
+  /** Jumps to the conversation this capture is honestly attributable to
+   *  (D-167), and where possible the exact turn (D-168) — the execution's
+   *  starting direction, when the execution that captured it is still on
+   *  record. Omitted entirely when `artifact.sessionId` is null — a person's
+   *  own click belongs to no chat, and there is nowhere honest to jump: the
+   *  provenance below is the whole answer for that capture. */
+  onViewInSession?: (target: {
+    sessionId: string;
+    executionId: string | null;
+    artifactId: string;
+  }) => void;
 }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -108,6 +121,30 @@ export function ArtifactView({
         {state && <span className={`artifact-word ${state.tone}`}>{state.word}</span>}
         <span className="file-meta">{artifactMetaLine(artifact)}</span>
         <span className="head-spacer" />
+        {artifact.sessionId && onViewInSession && (
+          <button
+            className="btn btn-text"
+            onClick={() =>
+              onViewInSession({
+                sessionId: artifact.sessionId!,
+                executionId: artifact.executionId,
+                artifactId: artifact.artifactId
+              })
+            }
+            title="Opens the conversation this capture came from"
+            data-testid="artifact-view-in-session"
+          >
+            View in conversation
+          </button>
+        )}
+        <button
+          className="btn btn-text"
+          onClick={() => void novus().artifacts.revealLocal(artifact.artifactId)}
+          title="Fetches the file into Novus's own temp corner and shows it in the file manager"
+          data-testid="artifact-reveal"
+        >
+          Reveal in Finder
+        </button>
         <button className="btn btn-text" onClick={copyProvenance} data-testid="artifact-copy-provenance">
           Copy provenance
         </button>
@@ -117,7 +154,10 @@ export function ArtifactView({
       </header>
 
       {viewable ? (
-        artifact.kind === "recording" ? (
+        // By what the bytes are, not what made them (D-165 amended): a
+        // recording and an attached mp4 are both video; a PDF renders in
+        // Chromium's own viewer, in the app, never handed outside first.
+        artifact.kind === "recording" || artifact.mimeType.startsWith("video/") ? (
           <video
             className="artifact-media"
             controls
@@ -128,6 +168,25 @@ export function ArtifactView({
             }
             data-testid="artifact-video"
           />
+        ) : artifact.mimeType === "application/pdf" ? (
+          <iframe
+            className="artifact-media artifact-pdf"
+            src={`novus-artifact://${artifact.artifactId}/blob`}
+            title={artifact.label}
+            data-testid="artifact-pdf"
+          />
+        ) : artifact.mimeType.startsWith("audio/") ? (
+          <audio
+            className="artifact-audio"
+            controls
+            preload="metadata"
+            src={`novus-artifact://${artifact.artifactId}/blob`}
+            data-testid="artifact-audio"
+          />
+        ) : artifact.mimeType === "text/markdown" ? (
+          // A transcript (D-173) — or any markdown attachment — is read here
+          // as the document it is, through the same renderer the feed uses.
+          <ArtifactText artifactId={artifact.artifactId} />
         ) : (
           <img
             className="artifact-media"
@@ -234,5 +293,41 @@ export function ArtifactView({
         )}
       </div>
     </section>
+  );
+}
+
+/** A markdown artifact's bytes, fetched through the artifact protocol like
+ *  every other blob and rendered as the document they are (D-173). */
+function ArtifactText({ artifactId }: { artifactId: string }) {
+  const [text, setText] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let stale = false;
+    setText(null);
+    setFailed(false);
+    fetch(`novus-artifact://${artifactId}/blob`)
+      .then((response) => (response.ok ? response.text() : Promise.reject(new Error(String(response.status)))))
+      .then((body) => {
+        if (!stale) setText(body);
+      })
+      .catch(() => {
+        if (!stale) setFailed(true);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [artifactId]);
+  if (failed) {
+    return (
+      <p className="quiet" data-testid="artifact-text-failed">
+        The document's bytes could not be read.
+      </p>
+    );
+  }
+  if (text === null) return <p className="quiet">Loading…</p>;
+  return (
+    <div className="artifact-text" data-testid="artifact-text">
+      <Markdown source={text} />
+    </div>
   );
 }

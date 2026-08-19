@@ -471,16 +471,37 @@ export function registerArtifactRoutes(app: FastifyInstance, deps: RouteDeps): v
       if (!store.authorizeGet(key, request.query as Record<string, string>)) {
         return deps.sendError(reply, 403, "view_refused", "This viewing grant is not valid.");
       }
-      const blob = await store.open(key);
-      if (blob === null) {
+      // Video seeking is a range request (D-165 amended): the route answers
+      // 206 with exactly the bytes asked, or the whole file as before.
+      const head = await store.open(key);
+      if (head === null) {
         return deps.sendError(reply, 404, "not_found", "The store holds nothing at this key.");
       }
-      reply.header("content-type", blob.contentType);
-      reply.header("content-length", String(blob.byteSize));
+      reply.header("content-type", head.contentType);
+      reply.header("accept-ranges", "bytes");
       // A grant is for these bytes now; nothing may cache them into a longer
       // life than the grant has.
       reply.header("cache-control", "private, no-store");
-      return reply.send(blob.stream);
+      const asked = /^bytes=(\d*)-(\d*)$/.exec(request.headers.range ?? "");
+      if (asked && (asked[1] !== "" || asked[2] !== "")) {
+        const size = head.byteSize;
+        const start = asked[1] === "" ? Math.max(0, size - Number(asked[2])) : Number(asked[1]);
+        const end = asked[1] !== "" && asked[2] !== "" ? Math.min(Number(asked[2]), size - 1) : size - 1;
+        if (start >= size || start > end) {
+          reply.header("content-range", `bytes */${size}`);
+          return reply.code(416).send();
+        }
+        head.stream.destroy();
+        const part = await store.open(key, { start, end });
+        if (part === null) {
+          return deps.sendError(reply, 404, "not_found", "The store holds nothing at this key.");
+        }
+        reply.header("content-range", `bytes ${start}-${end}/${size}`);
+        reply.header("content-length", String(end - start + 1));
+        return reply.code(206).send(part.stream);
+      }
+      reply.header("content-length", String(head.byteSize));
+      return reply.send(head.stream);
     });
   }
 

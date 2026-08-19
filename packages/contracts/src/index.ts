@@ -806,7 +806,7 @@ export type Participant = z.infer<typeof ParticipantSchema>;
  * grants — because a picture the agent acted on is evidence exactly as a
  * captured one is, and it must survive the laptop that sent it.
  */
-export const ArtifactKindSchema = z.enum(["screenshot", "recording", "attachment"]);
+export const ArtifactKindSchema = z.enum(["screenshot", "recording", "attachment", "transcript"]);
 
 /** What a *capture* may produce (D-122). Deliberately narrower than the kind
  *  vocabulary: an attachment is supplied, never captured, so the capture
@@ -1837,7 +1837,14 @@ export const BeginAttachmentInputSchema = z.object({
   sha256: Sha256Schema,
   /** The person's own name for the file, kept only as a label. It is never a
    *  path, never a key, and never used to address anything. */
-  filename: z.string().min(1).max(120)
+  filename: z.string().min(1).max(120),
+  /** Present when these bytes are a rendered transcript of one of this lane's
+   *  own conversations (D-173): the source session. The row lands as kind
+   *  `transcript` with its sessionId pointing at that source — so "View in
+   *  conversation" on the artifact opens the chat it was projected from —
+   *  and the label is derived server-side from the source's own title, never
+   *  from the client's filename. Only `text/markdown` may claim this. */
+  transcriptOf: z.string().startsWith("csn_").optional()
 });
 export type BeginAttachmentInput = z.infer<typeof BeginAttachmentInputSchema>;
 
@@ -1887,7 +1894,9 @@ export type CompleteArtifactInput = z.infer<typeof CompleteArtifactInputSchema>;
  *  asks and never persisted (D-022). The URL outlives nothing. */
 export const ArtifactViewResponseSchema = z.object({
   url: z.string().min(1),
-  mimeType: ArtifactMimeSchema,
+  /** Open, not the capture enum (D-153 widened attachments to any file; the
+   *  closed enum here made an mp4 attachment's view fail its parse). */
+  mimeType: MimeTypeSchema,
   expiresAt: z.string().datetime(),
   thumbnailUrl: z.string().nullable()
 });
@@ -3398,6 +3407,10 @@ export interface NovusBridge {
   setup: {
     probe(): Promise<IpcResult<SetupProbeResponse>>;
   };
+  system: {
+    /** The build a person is running, for the settings About page (D-174). */
+    version(): Promise<IpcResult<{ app: string; electron: string }>>;
+  };
   /**
    * The face a person already has. Everyone in a mission signed in with
    * GitHub, so their picture is theirs and Novus stores none of it: the main
@@ -3486,6 +3499,18 @@ export interface NovusBridge {
       workstreamId?: string;
       sessionId?: string;
     }): Promise<IpcResult<PreparedAttachment | null>>;
+    /** Uploads a rendered transcript of one of this lane's own conversations,
+     *  for a new chat to continue from (D-173). The renderer projects the
+     *  markdown — the one feed derivation is the one projection — and the
+     *  main process bounds, hashes, and uploads it like any attachment; the
+     *  row lands as kind `transcript`, labelled server-side from the source
+     *  chat's own title. */
+    attachTranscript(input: {
+      missionId: string;
+      workstreamId?: string;
+      sourceSessionId: string;
+      markdown: string;
+    }): Promise<IpcResult<PreparedAttachment>>;
     /** The filesystem path behind a dropped `File` (D-152). Electron stopped
      *  putting it on the object itself, and the renderer may not resolve one
      *  on its own, so the bridge answers and the main process does the
@@ -3673,6 +3698,12 @@ export interface NovusBridge {
       artifactId: string;
       target: { kind: "check" | "pull_request"; id: string };
     }): Promise<IpcResult<null>>;
+    /** Opens the artifact's bytes with the machine's own default app (D-165):
+     *  fetched to the app's swept temp corner and handed to `shell.openPath`
+     *  under a viewer-only allowlist — refused in words for anything else. */
+    openLocal(artifactId: string): Promise<IpcResult<null>>;
+    /** Reveals the same fetched file in the OS file manager (D-165). */
+    revealLocal(artifactId: string): Promise<IpcResult<null>>;
   };
   /**
    * Publishing a decision as a pull request, and stewarding it (D-099).
@@ -3804,18 +3835,7 @@ export interface NovusBridge {
         missionId: string;
         workstreamId?: string;
         url: string;
-        bounds: PreviewBounds;
       }): Promise<IpcResult<PreviewStatus>>;
-      /** Where the reserved rectangle currently is. Also shows a hidden view. */
-      setBounds(bounds: PreviewBounds): Promise<IpcResult<null>>;
-      /** Takes the view off screen without discarding it — the tab lost the
-       *  canvas, not the person's place in the page. */
-      hide(): Promise<IpcResult<null>>;
-      /** The view's current pixels as a data URL, for the frozen-frame swap
-       *  while an overlay is above the rectangle (D-160): presentation only —
-       *  never stored, never evidence, gone when the overlay is. Null when no
-       *  page is showing. */
-      snapshot(): Promise<IpcResult<string | null>>;
       /** Reloads the page. The process is not touched. */
       reload(): Promise<IpcResult<null>>;
       /** Discards the view. The process is never stopped by this. */

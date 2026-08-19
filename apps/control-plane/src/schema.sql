@@ -1025,3 +1025,20 @@ alter table artifacts add constraint artifacts_mime_type_check
       else mime_type in ('image/png', 'video/webm')
     end
   );
+
+-- The transcript kind (D-173): a projection of one of the lane's own
+-- conversations, carried into a new chat. Markdown and nothing else — the
+-- kind is a claim about what the bytes are, and this one is checkable.
+alter table artifacts drop constraint if exists artifacts_kind_check;
+alter table artifacts add constraint artifacts_kind_check
+  check (kind in ('screenshot', 'recording', 'attachment', 'transcript'));
+alter table artifacts drop constraint if exists artifacts_mime_type_check;
+alter table artifacts add constraint artifacts_mime_type_check
+  check (
+    case when kind = 'attachment'
+      then mime_type ~ '^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$' and length(mime_type) <= 120
+    when kind = 'transcript'
+      then mime_type = 'text/markdown'
+      else mime_type in ('image/png', 'video/webm')
+    end
+  );

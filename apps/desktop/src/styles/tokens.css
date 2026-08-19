@@ -36,6 +36,12 @@
      Identification of change, never judgment of it. */
   --diff-add: #3fb950;
   --diff-del: #f85149;
+  /* The web platform's own default canvas (D-163): the preview's guest page
+     composites transparently, and a page that never sets a background — most
+     pages — must sit on the same white every browser paints, not on the
+     room's dark surface. Identical in both themes on purpose: it is the
+     web's constant, not Novus's palette. */
+  --preview-canvas: #ffffff;
 
   /* Interaction states */
   --hover: rgba(255, 255, 255, 0.06);

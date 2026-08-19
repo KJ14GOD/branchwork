@@ -531,4 +531,55 @@ describe("shared sessions inside one approach", () => {
       BrowserWindow.getAllWindows()[0]?.setContentSize(1440, 900);
     });
   }, 300_000);
+
+  it("a new chat continues from a chosen sibling, carrying its transcript (D-173)", async () => {
+    // The draft offers the lane's existing chats as sources.
+    await page.getByTestId("rail-new-session").click();
+    await page.getByTestId("draft-continue").waitFor({ timeout: 30_000 });
+    const before = await detail();
+    const sourceSession = before.sessions.find(
+      (session) => session.title === "write the guard file"
+    )!;
+    expect(sourceSession).toBeDefined();
+    await page.getByTestId(`continue-from-${sourceSession.sessionId}`).check();
+    await shot("202-continue-from-draft.png");
+    await compose("review what the first chat built");
+
+    const three = await until(
+      "the third session to exist",
+      (value) => value.sessions.length === 3
+    );
+    const sessionC = three.sessions.find(
+      (session) => session.title === "review what the first chat built"
+    )!;
+    expect(sessionC).toBeDefined();
+
+    // The first direction carries the transcript like any attachment (D-153)…
+    const directionC = three.directions.find(
+      (direction) => direction.sessionId === sessionC.sessionId
+    )!;
+    expect(directionC.attachments.length).toBe(1);
+    expect(directionC.attachments[0]!.mimeType).toBe("text/markdown");
+
+    // …and the artifact is honest about what it is: kind transcript, labelled
+    // from the source chat's own title, its sessionId pointing at the SOURCE —
+    // "View in conversation" opens what was projected (D-167 for free).
+    const transcript = three.artifacts.find((artifact) => artifact.kind === "transcript")!;
+    expect(transcript).toBeDefined();
+    expect(transcript.artifactId).toBe(directionC.attachments[0]!.artifactId);
+    expect(transcript.sessionId).toBe(sourceSession.sessionId);
+    expect(transcript.label).toBe("Transcript · write the guard file");
+    expect(transcript.state).toBe("available");
+
+    await approvePending();
+    await until(
+      "the continued chat's turn to complete",
+      (value) =>
+        value.executions.some(
+          (execution) =>
+            execution.sessionId === sessionC.sessionId && execution.state === "completed"
+        )
+    );
+    await shot("203-continued-chat-carries-the-transcript.png");
+  }, 180_000);
 });

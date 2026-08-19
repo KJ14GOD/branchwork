@@ -14,7 +14,8 @@ import { novus } from "../bridge";
 import { AddProjectDialog, type PickedRepository } from "../components/add-project-dialog";
 import { Composer } from "../components/composer";
 import { Dialog } from "../components/dialog";
-import { HumanMark, SignOutGlyph } from "../components/identity";
+import { GearGlyph, HumanMark, SignOutGlyph } from "../components/identity";
+import { SettingsDialog } from "../components/settings-dialog";
 import { MissionTabs } from "../components/mission-tabs";
 import { ColumnHandle, useColumnWidth } from "../components/resizable";
 import { OpenInControl } from "../components/open-in";
@@ -819,6 +820,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [archived, setArchived] = useState<Mission[] | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   /** The setup dialog is held here because two surfaces open the same one: the
    *  state line's action inside the room, and the Run control beside it. */
@@ -1859,6 +1861,18 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                 onToggle={() => setSettingsOpen((previous) => !previous)}
                 onClose={() => setSettingsOpen(false)}
               />
+              {/* The gear beside them (D-174): the full settings dialog —
+                  several pages, the shape every peer app carries — where the
+                  account corner already is. */}
+              <button
+                className="icon-button"
+                onClick={() => setSettingsDialogOpen(true)}
+                aria-label="Settings"
+                title="Settings"
+                data-testid="open-settings"
+              >
+                <GearGlyph />
+              </button>
               {/* Beside the theme block, and shaped like it: the account
                   corner is icons, and a door with an arrow out of it says
                   leaving as plainly as the word did (D-105). */}
@@ -1928,6 +1942,16 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           />
         )}
 
+        {settingsDialogOpen && (
+          <SettingsDialog
+            user={user}
+            onClose={() => setSettingsDialogOpen(false)}
+            onSignOut={() => {
+              setSettingsDialogOpen(false);
+              void novus().auth.signOut();
+            }}
+          />
+        )}
         {archivedOpen && (
           <ArchivedDialog
             missions={archived ?? []}
@@ -2213,7 +2237,19 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             });
             setActiveFileByTab((previous) => ({ ...previous, [active.id]: key }));
           }}
-          onOpenArtifact={(artifactId) => setOpenArtifact({ tabId: active.id, artifactId })}
+          onOpenArtifact={(artifactId) => {
+            // The artifact look belongs to the conversation canvas alone
+            // (D-165 amended twice, owner-hit: it was hijacking every canvas
+            // — files, preview, all of them — until dismissed). Opening one
+            // IS a navigation to the conversation: whatever tab was selected
+            // steps back, and Compare closes, so the look never contends
+            // with another canvas anywhere.
+            setActiveFileByTab((previous) =>
+              previous[active.id] === null ? previous : { ...previous, [active.id]: null }
+            );
+            setDecisionOpen(false);
+            setOpenArtifact({ tabId: active.id, artifactId });
+          }}
           onClose={() => setInspector(null)}
           onDetail={handleDetail}
           onRevoke={() => void novus().control.revoke(openDetail.mission.missionId)}

@@ -2014,6 +2014,42 @@ body {
   max-width: 720px;
 }
 
+/* Continue from (D-173): the lane's other chats offered as transcript
+   sources on the new-chat draft. A quiet list under the lead — the draft
+   stays one sentence and an ask; this is the ask's optional luggage. */
+.draft-continue {
+  margin-top: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-width: 720px;
+}
+
+.draft-continue-lead {
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.draft-continue-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font: var(--type-body);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.draft-continue-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draft-continue-note {
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
 /* ---------- Approach overview (D-089) ---------- */
 
 /* The approach's own page: a brief and its conversations as links. Text on
@@ -2841,7 +2877,7 @@ body {
 }
 
 /* While a run command is alive the control says which one, and offers Stop. */
-/* The running command as one quiet pill (D-161): name, way in, Stop — a
+/* The running command as one quiet pill (D-164): name, way in, Stop — a
    single bordered unit in the corner rather than three loose controls. */
 .run-live {
   display: inline-flex;
@@ -4108,6 +4144,31 @@ body {
   flex-direction: column;
 }
 
+/* The preview's persistent slot (D-170): a flex child exactly like the
+   canvas ternary's own branches when the tab is selected, and entirely out
+   of the layout — no space, no paint — when it is not. The page inside
+   never remounts either way. */
+.room-canvas-slot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.room-canvas-slot.hidden {
+  /* Stays painted, not display:none (D-170 fix, round 2): an unpainted
+     webview guest hands capturePage() an empty image, so an agent's capture
+     request made while the person is looking at chat came back refused.
+     Absolute-positioned off the flow and behind everything at opacity 0
+     keeps its compositor surface alive without taking flex space or
+     intercepting input. */
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
 .preview-head {
   display: flex;
   align-items: center;
@@ -4128,13 +4189,16 @@ body {
   background: var(--surface-1);
 }
 
-/* The frozen frame (D-160): the page's own last pixels while an overlay is
-   above the rectangle, exactly where the live view was. */
-.preview-frozen {
+/* The page's element (D-163): its own process, the room's own stacking
+   order — everything above it in the DOM is simply above it. */
+.preview-webview {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+  /* The browser's default canvas under a transparently-composited guest:
+     a page that wants dark paints over it, exactly as it would in Chrome. */
+  background: var(--preview-canvas);
 }
 
 .preview-panel {
@@ -6047,10 +6111,17 @@ body.resizing {
   background: var(--surface-2);
   font: var(--type-row);
   color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
   max-width: 360px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.trace-attachment-doc:hover {
+  border-color: var(--edge-hover);
+  color: var(--text-1);
 }
 
 /* The chip's two lines: the person's own filename first, the kind and weight
@@ -6133,6 +6204,83 @@ body.resizing {
   object-fit: contain;
   border-radius: var(--r-control);
   cursor: default;
+}
+
+/* The document card (D-165 amended): Novus's own head over the clean page —
+   name, Open, Reveal — the Codex shape. The viewer's chrome is suppressed;
+   this head is the only chrome. */
+.lightbox-card {
+  display: flex;
+  flex-direction: column;
+  width: min(960px, 90vw);
+  height: 88vh;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-dialog);
+  background: var(--surface-1);
+  overflow: hidden;
+  box-shadow: var(--elev-2);
+}
+
+.lightbox-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3) var(--s-2) var(--s-4);
+  border-bottom: 1px solid var(--edge);
+  flex: none;
+}
+
+.lightbox-card-name {
+  font: var(--type-row);
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.lightbox-doc {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  background: var(--surface-1);
+}
+
+.lightbox-media {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  background: var(--bg);
+}
+
+.lightbox-audio {
+  width: min(560px, 80vw);
+  margin: var(--s-6) auto;
+}
+
+.artifact-pdf {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  border: none;
+  background: var(--surface-1);
+}
+
+.artifact-audio {
+  width: min(560px, 100%);
+  margin: var(--s-4) 0;
+}
+
+/* A markdown artifact read in place (D-173): a bounded document column,
+   the same reading measure the feed keeps. */
+.artifact-text {
+  max-width: 720px;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background: var(--surface-1);
+  padding: var(--s-4);
+  overflow-x: auto;
 }
 
 /* Opening a workspace elsewhere (D-156). The same menu as the composer's
@@ -6238,4 +6386,209 @@ body.resizing {
 /* Attachments follow the words they were sent with, on the same side. */
 .trace-said + .trace-attachments {
   justify-content: flex-end;
+}
+
+/* Settings as a place (D-174, re-dressed to the Codex anatomy on sight):
+   a full-window opaque layer — the shell beneath stays mounted so the
+   preview's webview never dies (D-170) — with Back to app and search over a
+   grouped, icon-led nav, and card-grouped rows on a centred measure. */
+.settings-page-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  grid-template-columns: 264px 1fr;
+  background: var(--bg);
+}
+
+.settings-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-5) var(--s-4);
+  border-right: 1px solid var(--edge);
+  background: var(--surface-1);
+  overflow-y: auto;
+}
+
+.settings-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: var(--type-row);
+  padding: var(--s-2) var(--s-2);
+  border-radius: var(--r-control);
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.settings-back:hover {
+  color: var(--text-1);
+  background: var(--hover);
+}
+
+.settings-search {
+  border: 1px solid var(--edge);
+  border-radius: var(--r-button);
+  background: var(--bg);
+  color: var(--text-1);
+  font: var(--type-row);
+  padding: var(--s-2) var(--s-3);
+  outline: none;
+  margin: var(--s-2) 0 var(--s-3);
+}
+
+.settings-search:focus {
+  border-color: var(--edge-hover);
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--s-3);
+}
+
+.settings-group-label {
+  font: var(--type-meta);
+  color: var(--text-3);
+  padding: var(--s-1) var(--s-2);
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: var(--type-row);
+  text-align: left;
+  padding: var(--s-2) var(--s-2);
+  border-radius: var(--r-control);
+  cursor: pointer;
+}
+
+.settings-nav-item:hover {
+  color: var(--text-1);
+  background: var(--hover);
+}
+
+.settings-nav-item.active {
+  color: var(--text-1);
+  background: var(--surface-2);
+}
+
+.settings-main {
+  overflow-y: auto;
+  padding: var(--s-8) var(--s-6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.settings-main > * {
+  width: min(720px, 100%);
+}
+
+.settings-page-title {
+  font: var(--type-display);
+  color: var(--text-1);
+  margin: 0 0 var(--s-3);
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.settings-section-heading {
+  font: var(--type-row);
+  color: var(--text-2);
+  margin: var(--s-3) 0 0;
+}
+
+.settings-card {
+  border: 1px solid var(--edge);
+  border-radius: var(--r-dialog);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+.settings-card-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+}
+
+.settings-card-row + .settings-card-row {
+  border-top: 1px solid var(--edge);
+}
+
+.settings-hit {
+  cursor: pointer;
+}
+
+.settings-hit:hover {
+  background: var(--hover);
+}
+
+.settings-card-words {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-card-title {
+  font: var(--type-row);
+  color: var(--text-1);
+}
+
+.settings-card-desc {
+  font: var(--type-meta);
+  color: var(--text-3);
+  max-width: 52ch;
+}
+
+.settings-card-trailing {
+  flex: none;
+}
+
+.settings-card-value {
+  font: var(--type-row);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.settings-hint {
+  font: var(--type-meta);
+  color: var(--text-3);
+  margin: 0;
+  max-width: 52ch;
+}
+
+.settings-key {
+  color: var(--text-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  padding: 2px var(--s-2);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+
+.settings-theme {
+  display: inline-flex;
+  gap: var(--s-1);
 }

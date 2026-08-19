@@ -163,7 +163,7 @@ export function RunControl({
   return (
     <span className="run-control" ref={wrapRef}>
       {running ? (
-        /* One quiet pill (D-161): the command's own name and port in mono,
+        /* One quiet pill (D-164): the command's own name and port in mono,
            the way in while the preview is not already open — the tab is the
            way back once it is — and Stop as a word, not a second button box
            shouting beside the corner's icons. */

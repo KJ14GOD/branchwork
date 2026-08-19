@@ -117,8 +117,12 @@ export async function resolveDirectionAttachments(
     return { ok: false, message: "The same image was attached twice." };
   }
   const found = await db.query(
+    // A transcript rides a direction exactly as a person's own file does
+    // (D-173): both are supplied bytes the turn should see. Captures stay
+    // out — a screenshot becomes a direction's cargo by attaching it in the
+    // composer, which re-uploads it as what it then is.
     `select art_id, state from artifacts
-      where mission_id = $1 and art_id = any($2::text[]) and kind = 'attachment'`,
+      where mission_id = $1 and art_id = any($2::text[]) and kind in ('attachment', 'transcript')`,
     [missionId, artifactIds]
   );
   const states = new Map(
@@ -236,29 +240,60 @@ export function registerAttachmentRoutes(app: FastifyInstance, deps: RouteDeps):
       }
     }
 
+    // A transcript (D-173): the same upload machinery, an honest different
+    // record. The kind says what these bytes are — a projection of one of
+    // this lane's own conversations, not a person's file — the row's session
+    // is the SOURCE chat so "View in conversation" opens what was projected,
+    // and the label comes from that chat's own title, never from a filename
+    // a client could spoof. Only markdown may make this claim.
+    let transcriptTitle: string | null = null;
+    if (body.data.transcriptOf) {
+      if (body.data.mimeType !== "text/markdown") {
+        return deps.sendError(
+          reply,
+          422,
+          "invalid_attachment",
+          "A transcript is markdown; these bytes claim to be something else."
+        );
+      }
+      const source = await deps.db.query(
+        "select title from workstream_sessions where csn_id = $1 and wst_id = $2",
+        [body.data.transcriptOf, access.workstreamId]
+      );
+      if ((source.rowCount ?? 0) === 0) {
+        return deps.sendError(reply, 404, "not_found", "No such conversation in this lane.");
+      }
+      transcriptTitle = (source.rows[0] as { title: string | null }).title ?? "untitled";
+    }
+
     const artifactId = newArtifactId();
     const key = blobKey(access.missionId, artifactId);
     await deps.db.query(
       `insert into artifacts (
          art_id, org_id, mission_id, wst_id, csn_id, exe_id, kind, mime_type, byte_size, sha256,
          object_key, state, label, initiator, capture_source, created_by, environment, captured_at)
-       values ($1, $2, $3, $4, $5, null, 'attachment', $6, $7, $8, $9, 'pending', $10, 'person',
-               'upload', $11, $12, now())`,
+       values ($1, $2, $3, $4, $5, null, $6, $7, $8, $9, $10, 'pending', $11, 'person',
+               'upload', $12, $13, now())`,
       [
         artifactId,
         access.orgId,
         access.missionId,
         access.workstreamId,
-        body.data.sessionId ?? null,
+        body.data.transcriptOf ?? body.data.sessionId ?? null,
+        body.data.transcriptOf ? "transcript" : "attachment",
         body.data.mimeType,
         body.data.byteSize,
         body.data.sha256,
         key,
-        labelFor(body.data.filename),
+        transcriptTitle !== null
+          ? `Transcript · ${transcriptTitle}`.slice(0, 120)
+          : labelFor(body.data.filename),
         ctx.userId,
         // Not a machine claim: the person's own client sent these bytes, and
         // no runner is involved in an attachment at all.
-        "attached by a person"
+        body.data.transcriptOf
+          ? "projected from the conversation record by the person's client"
+          : "attached by a person"
       ]
     );
 
@@ -301,7 +336,7 @@ export async function attachmentBlobKey(
 ): Promise<{ key: string; mimeType: string } | null> {
   const row = await db.query(
     `select object_key, mime_type from artifacts
-      where art_id = $1 and mission_id = $2 and kind = 'attachment' and state = 'available'`,
+      where art_id = $1 and mission_id = $2 and kind in ('attachment', 'transcript') and state = 'available'`,
     [artifactId, missionId]
   );
   const found = row.rows[0] as { object_key: string; mime_type: string } | undefined;

@@ -141,6 +141,33 @@ export async function uploadCapturedArtifact(args: {
  * dirtiness stated; textual metadata passes the caller's redaction before it
  * travels. Throws an ApiError whose message is the refusal, in words.
  */
+/** How long a capture waits out a page mid-reload before refusing (D-169).
+ *  The preview's element remounts, and so reloads, every time its tab is
+ *  left and returned to (the guest page's own process does not survive a
+ *  React unmount, unlike the native view this replaced) — a real page on a
+ *  real local server finishes that reload in well under this bound, and a
+ *  request that lands in the middle of it deserves the wait, not an honest
+ *  but avoidable refusal. */
+const RELOAD_WAIT_MS = 8_000;
+const RELOAD_POLL_MS = 100;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Waits out a *this lane's own* page reloading, and only that: every other
+ *  refusal reason (wrong lane, unreachable, crashed, stopped, no live
+ *  process) is exactly as immediate as it always was. Exported for the
+ *  recording entry point (D-169), which faces the identical race. */
+export async function awaitReadyIfReloading(workstreamId: string): Promise<void> {
+  const deadline = Date.now() + RELOAD_WAIT_MS;
+  while (Date.now() < deadline) {
+    const status = embeddedPreviewStatus();
+    if (status === null || status.workstreamId !== workstreamId || status.phase !== "loading") return;
+    await sleep(RELOAD_POLL_MS);
+  }
+}
+
 export async function captureScreenshot(args: {
   workstreamId: string;
   worktreePath: string;
@@ -150,6 +177,7 @@ export async function captureScreenshot(args: {
   sanitize: (text: string) => string;
   uploader: ArtifactUploader;
 }): Promise<Artifact> {
+  await awaitReadyIfReloading(args.workstreamId);
   const refusal = captureRefusal(embeddedPreviewStatus(), args.workstreamId, args.logs);
   if (refusal !== null) throw new ApiError("capture_refused", refusal, 409);
 

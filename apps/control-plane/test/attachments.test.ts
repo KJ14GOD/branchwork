@@ -354,3 +354,82 @@ describe("attaching an image to a direction", () => {
     expect(submitted.statusCode).toBe(422);
   }, 30_000);
 });
+
+/**
+ * Carrying a conversation's transcript into a new chat (D-173).
+ *
+ * The same upload machinery, an honestly different record: the kind says
+ * these bytes are a projection of one of this lane's own conversations, the
+ * row's session points at the SOURCE chat, and the label comes from that
+ * chat's own title — never from a filename a client could spoof. The ways
+ * this could lie: markdown-shaped bytes claiming a foreign lane's chat, a
+ * non-markdown blob wearing the transcript kind, a label smuggled in through
+ * the filename.
+ */
+describe("carrying a transcript into a new chat", () => {
+  /** The lane's first session, titled by directing once. */
+  async function titledSession(room: Room): Promise<{ sessionId: string; title: string }> {
+    const submitted = await direct(room, kartik, "Implement the auth flow end to end", []);
+    expect(submitted.statusCode).toBeLessThan(300);
+    const detail = await harness.app.inject({
+      method: "GET",
+      url: `/missions/${room.missionId}`,
+      headers: bearer(kartik)
+    });
+    const sessions = detail.json().sessions as { sessionId: string; title: string | null }[];
+    expect(sessions.length).toBeGreaterThan(0);
+    return { sessionId: sessions[0]!.sessionId, title: sessions[0]!.title ?? "untitled" };
+  }
+
+  it("lands as kind transcript, labelled from the source chat, pointing at it", async () => {
+    const room = await mission();
+    const source = await titledSession(room);
+    const bytes = Buffer.from("# Transcript\n\nWhat was said.", "utf8");
+    const carried = await attach(room, kartik, bytes, {
+      mimeType: "text/markdown",
+      filename: "spoofed-name.md",
+      transcriptOf: source.sessionId
+    });
+    expect(carried.status).toBe(201);
+    const artifact = carried.body.artifact as {
+      kind: string;
+      label: string;
+      sessionId: string | null;
+      initiator: string;
+    };
+    expect(artifact.kind).toBe("transcript");
+    // The source chat's own title — the spoofable filename never lands.
+    expect(artifact.label).toBe(`Transcript · ${source.title}`);
+    expect(artifact.label).not.toContain("spoofed");
+    // "View in conversation" opens what was projected.
+    expect(artifact.sessionId).toBe(source.sessionId);
+    expect(artifact.initiator).toBe("person");
+    // And a direction carries it like any attachment.
+    const submitted = await direct(room, kartik, "Continue where that chat left off", [
+      carried.artifactId!
+    ]);
+    expect(submitted.statusCode).toBeLessThan(300);
+  }, 30_000);
+
+  it("refuses non-markdown bytes wearing the transcript claim", async () => {
+    const room = await mission();
+    const source = await titledSession(room);
+    const carried = await attach(room, kartik, Buffer.from("not-markdown"), {
+      mimeType: "image/png",
+      transcriptOf: source.sessionId
+    });
+    expect(carried.status).toBe(422);
+  }, 30_000);
+
+  it("refuses a transcript claiming a chat this lane does not own", async () => {
+    const room = await mission();
+    const other = await mission();
+    const foreign = await titledSession(other);
+    const carried = await attach(room, kartik, Buffer.from("# Transcript"), {
+      mimeType: "text/markdown",
+      filename: "transcript.md",
+      transcriptOf: foreign.sessionId
+    });
+    expect(carried.status).toBe(404);
+  }, 30_000);
+});

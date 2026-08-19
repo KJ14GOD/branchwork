@@ -37,7 +37,7 @@ export function GatedAction({
   variant?: "primary" | "secondary" | "text" | "icon";
   busy?: boolean;
   /** A standing tooltip while the action is permitted — where a control needs
-   *  its words at the point of use (the capture warning's home, D-161). */
+   *  its words at the point of use (the capture warning's home, D-164). */
   hint?: string;
   /** A state reason to be unavailable, beyond the capability — disabled with
    *  its own words, in the same informative-never-mysterious spirit. */

@@ -160,7 +160,11 @@ beforeAll(async () => {
     [
       'import { createServer } from "node:http";',
       "const port = Number(process.env.NOVUS_PORT ?? 4600);",
-      "const page = `<!doctype html><html><body style=\"background:darkslategray\">",
+      // No declared background, deliberately: the common class of page that
+      // relies on the browser's default white canvas. A capture of it proves
+      // the guest paints that canvas itself — a transparent guest photographs
+      // as black frames (the D-172 regression this fixture now guards).
+      "const page = `<!doctype html><html><body>",
       '<h1 id="title">Artifact fixture</h1>',
       '<div id="out">steady</div>',
       "</body></html>`;",
@@ -288,7 +292,7 @@ describe("durable visual evidence (D-122, D-123)", () => {
     "a person captures the live preview and the artifact carries its provenance",
     async () => {
       // The warning is at the capture point, before any capture — carried on
-      // the capture control itself since D-161, no longer a standing row.
+      // the capture control itself since D-164, no longer a standing row.
       expect(await page.getByTestId("preview-capture").getAttribute("title")).toContain(
         "may contain sensitive data"
       );
@@ -348,6 +352,14 @@ describe("durable visual evidence (D-122, D-123)", () => {
       // the provenance ledger and the honest claim.
       await row.click();
       await page.getByTestId("artifact-view").waitFor({ timeout: 20_000 });
+      // The Preview tab is the running app's, always (owner-directed,
+      // reversing D-171's hide-under): opening an artifact steps back to the
+      // conversation, so the artifact reads over the chat canvas and the
+      // persistently-mounted preview (D-170) hides with its unselected tab.
+      expect(await page.locator(".room-canvas-slot").getAttribute("class")).toContain("hidden");
+      expect(
+        await page.getByTestId("preview-tab").getAttribute("aria-selected").catch(() => null)
+      ).not.toBe("true");
       const image = page.getByTestId("artifact-image");
       await image.waitFor({ timeout: 20_000 });
       await expect
@@ -413,6 +425,45 @@ describe("durable visual evidence (D-122, D-123)", () => {
         .poll(async () => page.getByTestId("evidence-row").count(), { timeout: 20_000 })
         .toBe(2);
       await shot(page, "132-agent-capture.png");
+
+      // The agent-captured row has a real conversation to jump to (D-167),
+      // and the exact turn (D-168); the person's own click from earlier in
+      // this spec does not, and asserted its sessionId null at line ~326.
+      const startingDirectionId = await page.evaluate(async ({ missionId, executionId }) => {
+        const result = await window.novus.missions.get(missionId);
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+        return result.value.executions.find((entry) => entry.executionId === executionId)
+          ?.startingDirectionId;
+      }, { missionId, executionId: agentArtifact!.executionId! });
+      expect(startingDirectionId).toBeTruthy();
+
+      await page
+        .locator(`[data-testid="evidence-row"][data-artifact="${agentArtifact!.artifactId}"]`)
+        .click();
+      await page.getByTestId("artifact-view").waitFor({ timeout: 20_000 });
+      await page.getByTestId("artifact-view-in-session").click();
+      await page.getByTestId("artifact-view").waitFor({ state: "detached", timeout: 10_000 });
+      // Landed on the conversation itself, not merely closed the artifact —
+      // and on the exact turn: its block is not just present but scrolled to
+      // the centre of the viewport, never off the top or bottom edge.
+      await page.getByTestId("chat").waitFor({ timeout: 10_000 });
+      const turnBlock = page.locator(`[data-block-key="${startingDirectionId}"]`);
+      await turnBlock.waitFor({ timeout: 10_000 });
+      await expect
+        .poll(async () => {
+          const box = await turnBlock.boundingBox();
+          // Playwright never tracks a viewport size for an Electron
+          // BrowserWindow — page.viewportSize() is always null there — so
+          // the window's actual rendered size is read from the page itself.
+          const viewport = await page.evaluate(() => ({
+            width: window.innerWidth,
+            height: window.innerHeight
+          }));
+          if (!box) return false;
+          const centre = box.y + box.height / 2;
+          return centre > 0 && centre < viewport.height;
+        }, { timeout: 10_000 })
+        .toBe(true);
     },
     240_000
   );

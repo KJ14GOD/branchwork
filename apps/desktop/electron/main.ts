@@ -9,8 +9,9 @@ import {
   shell,
   type WebContents
 } from "electron";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { openableExtensionOf, openRefusalFor } from "./artifact-open";
 import {
   AttachmentRefused,
   prepareAttachment,
@@ -37,7 +38,6 @@ import {
   MergeInputSchema,
   PullCommentInputSchema,
   PullMetadataInputSchema,
-  PreviewBoundsSchema,
   PrepareLocalFilesInputSchema,
   ReadWorkspaceFileInputSchema,
   PermissionProfileSchema,
@@ -101,16 +101,13 @@ import {
 import { OpenRefused, applicationIcon, installedApplications, openWith } from "./workspace-open";
 import { resolvePreviewTarget } from "./preview-policy";
 import {
-  attachPreviewHost,
   closeEmbeddedPreview,
   embeddedPreviewStatus,
-  hideEmbeddedPreview,
-  snapshotEmbeddedPreview,
   noteProcessChunk,
   onEmbeddedPreviewStatus,
   openEmbeddedPreview,
-  reloadEmbeddedPreview,
-  setEmbeddedPreviewBounds
+  registerPreviewWebviewHooks,
+  reloadEmbeddedPreview
 } from "./workspace-preview";
 import {
   cancelRecording,
@@ -647,6 +644,30 @@ function registerIpc(): void {
     return call(async () => recordingStatus());
   });
 
+  ipcMain.handle("novus:system:version", async () => {
+    return ok({ app: app.getVersion(), electron: process.versions.electron });
+  });
+
+  ipcMain.handle("novus:artifacts:open-local", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("art_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed artifact id." };
+    return call(async () => {
+      const path = await fetchArtifactToDisk(parsed.data);
+      const failure = await shell.openPath(path);
+      if (failure) throw new ApiError("open_failed", failure, 500);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:artifacts:reveal-local", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("art_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed artifact id." };
+    return call(async () => {
+      shell.showItemInFolder(await fetchArtifactToDisk(parsed.data));
+      return null;
+    });
+  });
+
   ipcMain.handle("novus:artifacts:attach", async (_event, raw: unknown) => {
     const parsed = z
       .object({
@@ -1101,13 +1122,14 @@ function registerIpc(): void {
    *  `read` produces the prepared bytes; everything after it is identical, so
    *  the three entry points cannot drift in what they verify (D-152). */
   const uploadAttachment = async (
-    target: { missionId: string; workstreamId?: string; sessionId?: string },
+    target: { missionId: string; workstreamId?: string; sessionId?: string; transcriptOf?: string },
     read: () => Promise<PreparedFile>
   ): Promise<IpcResult<PreparedAttachment>> => {
     const prepared = await read();
     const begun = await api.beginAttachment(target.missionId, {
       ...(target.workstreamId ? { workstreamId: target.workstreamId } : {}),
       ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+      ...(target.transcriptOf ? { transcriptOf: target.transcriptOf } : {}),
       mimeType: prepared.mimeType,
       byteSize: prepared.bytes.byteLength,
       sha256: sha256Of(prepared.bytes),
@@ -1157,6 +1179,45 @@ function registerIpc(): void {
     try {
       return await uploadAttachment(parsed.data, async () =>
         prepareClipboardImage(image.toPNG())
+      );
+    } catch (error) {
+      if (error instanceof AttachmentRefused) {
+        return { ok: false, code: "invalid_attachment", message: error.message };
+      }
+      return fail(error);
+    }
+  });
+
+  /** A rendered transcript for a new chat to continue from (D-173). The
+   *  renderer projects the markdown — the one feed derivation is the one
+   *  projection — and this side only bounds, hashes, and uploads it; the
+   *  control plane derives the kind, the label, and the source linkage. */
+  ipcMain.handle("novus:missions:attach-transcript", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: MissionIdSchema,
+        workstreamId: z.string().startsWith("wst_").optional(),
+        sourceSessionId: z.string().startsWith("csn_"),
+        markdown: z.string().min(1).max(2_000_000)
+      })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed transcript." };
+    try {
+      return await uploadAttachment(
+        {
+          missionId: parsed.data.missionId,
+          ...(parsed.data.workstreamId ? { workstreamId: parsed.data.workstreamId } : {}),
+          transcriptOf: parsed.data.sourceSessionId
+        },
+        async () => ({
+          bytes: Buffer.from(parsed.data.markdown, "utf8"),
+          mimeType: "text/markdown",
+          // Never used: the control plane labels a transcript from the source
+          // chat's own title. Present because every prepared file has a name.
+          filename: "transcript.md",
+          resized: false,
+          convertedFrom: null
+        })
       );
     } catch (error) {
       if (error instanceof AttachmentRefused) {
@@ -1608,7 +1669,7 @@ function registerIpc(): void {
   // renderer only reserves a rectangle and reads what happened.
 
   ipcMain.handle("novus:preview:open", async (_event, raw: unknown) => {
-    const parsed = OpenPreviewInputSchema.and(z.object({ bounds: PreviewBoundsSchema })).safeParse(raw);
+    const parsed = OpenPreviewInputSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed preview request." };
     return call(async () => {
       const target = await targetFor(parsed.data.missionId, parsed.data.workstreamId);
@@ -1616,28 +1677,8 @@ function registerIpc(): void {
         parsed.data.url,
         processLogsFor(target.workstreamId)
       );
-      return openEmbeddedPreview(target.workstreamId, resolved, parsed.data.bounds);
+      return openEmbeddedPreview(target.workstreamId, resolved);
     });
-  });
-
-  ipcMain.handle("novus:preview:set-bounds", async (_event, raw: unknown) => {
-    const parsed = PreviewBoundsSchema.safeParse(raw);
-    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed bounds." };
-    return call(async () => {
-      setEmbeddedPreviewBounds(parsed.data);
-      return null;
-    });
-  });
-
-  ipcMain.handle("novus:preview:hide", async () => {
-    return call(async () => {
-      hideEmbeddedPreview();
-      return null;
-    });
-  });
-
-  ipcMain.handle("novus:preview:snapshot", async () => {
-    return call(async () => snapshotEmbeddedPreview());
   });
 
   ipcMain.handle("novus:preview:reload", async () => {
@@ -1783,11 +1824,18 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      webSecurity: true
+      webSecurity: true,
+      // Chromium's own PDF viewer, for the artifact view's in-app documents
+      // (D-165 amended): a plugin, not a plugin system — nothing else loads.
+      plugins: true,
+      // The preview's element (D-163): a webview may exist, and only under
+      // the will-attach gate registered below — address and partition against
+      // the standing approval, attributes replaced with the locked-down set.
+      webviewTag: true
     }
   });
   window.loadFile(join(__dirname, "..", "dist-renderer", "index.html"));
-  attachPreviewHost(window);
+  registerPreviewWebviewHooks(window);
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://")) shell.openExternal(url);
     return { action: "deny" };
@@ -1803,6 +1851,29 @@ function createWindow(): void {
 /** Short-lived viewing grants, cached only until they expire — a grant is
  *  spent on bytes, never stored (D-022). */
 const artifactViewCache = new Map<string, { view: ArtifactViewResponse; expiresAtMs: number }>();
+
+/**
+ * Opening an artifact with the machine's own default application (D-165):
+ * the bytes land in Novus's 0700 temp corner, `shell.openPath` — never
+ * openExternal, never anything the allowlist calls executable — and the
+ * corner is swept on quit. Reveal shows the same file in the file manager.
+ */
+const openTempDir = () => join(app.getPath("temp"), "novus-open");
+
+async function fetchArtifactToDisk(artifactId: string): Promise<string> {
+  const view = await api.viewArtifact(artifactId);
+  const extension = openableExtensionOf(view.mimeType);
+  if (extension === null) throw new ApiError("not_openable", openRefusalFor(view.mimeType), 409);
+  const dir = openTempDir();
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const path = join(dir, `${artifactId}.${extension}`);
+  if (!existsSync(path)) {
+    const upstream = await fetch(view.url);
+    if (!upstream.ok) throw new ApiError("unavailable", "The artifact store did not serve the bytes.", 502);
+    writeFileSync(path, Buffer.from(await upstream.arrayBuffer()), { mode: 0o600 });
+  }
+  return path;
+}
 
 /** Serves `novus-artifact://{artifactId}/{blob|thumb}` for the app's own
  *  window. Authorization happens here per request: the session asks the
@@ -1824,17 +1895,24 @@ async function serveArtifactBytes(request: Request): Promise<Response> {
     }
     const target = variant === "thumb" ? view.thumbnailUrl : view.url;
     if (!target) return new Response("Not found", { status: 404 });
-    const upstream = await fetch(target);
+    // The range rides through (D-165 amended): video seeking is a range
+    // request, and a proxy that flattens 206 to 200 cannot be scrubbed.
+    const range = request.headers.get("range");
+    const upstream = await fetch(target, range ? { headers: { range } } : undefined);
     if (!upstream.ok || upstream.body === null) {
       artifactViewCache.delete(artifactId);
       return new Response("Unavailable", { status: 502 });
     }
-    return new Response(upstream.body, {
-      headers: {
-        "content-type": variant === "thumb" ? "image/png" : view.mimeType,
-        "cache-control": "private, max-age=300"
-      }
-    });
+    const headers: Record<string, string> = {
+      "content-type": variant === "thumb" ? "image/png" : view.mimeType,
+      "accept-ranges": "bytes",
+      "cache-control": "private, max-age=300"
+    };
+    for (const name of ["content-range", "content-length"]) {
+      const value = upstream.headers.get(name);
+      if (value) headers[name] = value;
+    }
+    return new Response(upstream.body, { status: upstream.status, headers });
   } catch (error) {
     const status = error instanceof ApiError && error.status === 404 ? 404 : 502;
     return new Response("Unavailable", { status });
@@ -1844,6 +1922,11 @@ async function serveArtifactBytes(request: Request): Promise<Response> {
 /** The capture session's name: the hidden recorder page lives in it, and its
  *  display-media ask is answered with the preview contents alone (D-123). */
 const CAPTURE_PARTITION = "capture";
+
+app.on("will-quit", () => {
+  // The opened-files corner holds copies only; the artifacts remain the truth.
+  rmSync(openTempDir(), { recursive: true, force: true });
+});
 
 app.whenReady().then(async () => {
   protocol.handle("novus-artifact", serveArtifactBytes);

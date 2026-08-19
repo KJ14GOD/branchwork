@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   PIXELS_WARNING,
   type MissionDetailResponse,
-  type PreviewBounds,
   type PreviewStatus,
   type RecordingStatus
 } from "@novus/contracts";
@@ -13,28 +12,34 @@ import { previewPresentation } from "./preview";
 import { GatedAction } from "./gated";
 
 /**
- * The preview surface (D-098): the room's window onto the running app.
+ * The preview surface (D-098, rebuilt in D-163): the room's window onto the
+ * running app.
  *
- * The page itself is a native view the main process owns; this component
- * reserves the rectangle, keeps the view placed over it, and says the states
- * in words. Two jobs matter here and both are about honesty:
- *
- *  - the reserved rectangle is *reserved*: the native view paints above every
- *    piece of DOM, so whenever anything of the room's own would overlap it —
- *    a dialog, a menu, the narrow-width dock — the view is taken off screen
- *    until the rectangle is clear again;
- *  - the head's state word is the **process's** own, in the runtime
- *    vocabulary (D-045) — the page loading never promotes it, so "starting"
- *    stays on screen until the declared signal answers, however rendered the
- *    page looks.
+ * The page renders through an in-DOM `webview` — its own isolated process,
+ * composited in the room's own stacking order, so a menu or dialog above the
+ * preview is simply above it. The main process approves the address before
+ * the element may attach and clamps everything about it (`will-attach-webview`);
+ * this component renders the approved element and says the states in words.
+ * The head's state word is the **process's** own, in the runtime vocabulary
+ * (D-045) — the page loading never promotes it, so "starting" stays on screen
+ * until the declared signal answers, however rendered the page looks.
  */
 
-const DENIAL = "Invoking a command this project declared needs the workspace.command capability.";
+// The webview element, for JSX: Electron's tag, not a component. Only the
+// attributes this surface actually writes are typed, and the main process
+// replaces whatever is written with the locked-down set regardless.
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
+        src?: string;
+        partition?: string;
+      };
+    }
+  }
+}
 
-/** How often the rectangle is re-checked for something covering it. The cheap
- *  half of correctness: resize and layout changes land via the observer, and
- *  this catches overlays that change nothing about the rectangle itself. */
-const COVER_CHECK_MS = 300;
+const DENIAL = "Invoking a command this project declared needs the workspace.command capability.";
 
 /** The head's action glyphs — the file view's stroke set (D-151), so the
  *  preview's chrome reads as the app's own and never a browser's. */
@@ -102,33 +107,16 @@ export function PreviewSurface({
   /** The last capture's quiet confirmation; clears itself. */
   const [captured, setCaptured] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  /** The frozen-frame swap (D-160): the view's own pixels as a still while an
-   *  overlay is above the rectangle. Null when the live view is on screen;
-   *  the ref mirrors the state so the keeper's tick can read it without
-   *  re-subscribing. */
-  const [frozen, setFrozen] = useState<string | null>(null);
-  const frozenRef = useRef<string | null>(null);
-  const freezingRef = useRef(false);
 
   const running = detail ? liveRunProcess(detail) : null;
   const view = previewPresentation(status, running, openError);
 
-  const measure = useCallback((): PreviewBounds | null => {
-    const element = bodyRef.current;
-    if (!element) return null;
-    const rect = element.getBoundingClientRect();
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-  }, []);
-
   const open = useCallback(async () => {
-    const bounds = measure();
-    if (bounds === null) return;
     setOpenError(null);
     const result = await novus().workspace.preview.open({
       missionId,
       ...(workstreamId ? { workstreamId } : {}),
-      url,
-      bounds
+      url
     });
     if (result.ok) {
       setStatus(result.value);
@@ -136,124 +124,18 @@ export function PreviewSurface({
       setStatus(null);
       setOpenError(result.message);
     }
-  }, [missionId, workstreamId, url, measure]);
+  }, [missionId, workstreamId, url]);
 
-  // Opening is showing: mount asks for the view, unmount takes it off screen
-  // — and only off screen. The view and the process both survive the tab
-  // losing the canvas; closing the tab is the shell's own act.
+  // Opening asks for the approval; the element below attaches under it
+  // (D-163). Unmounting removes the element and its page process with it;
+  // the approval stands, so a re-opened tab re-attaches where it left off is
+  // not promised — the page reloads, which is what a closed-and-reopened
+  // window onto an app honestly does.
   useEffect(() => {
     void open();
-    return () => {
-      void novus().workspace.preview.hide();
-    };
   }, [open]);
 
   useEffect(() => novus().workspace.preview.onStatus((next) => setStatus(next)), []);
-
-  // The rectangle's keeper. The native view cannot be covered by DOM, so the
-  // rule is: while every sample point of the reserved rectangle is actually
-  // this surface's own DOM, the view sits on it; the moment anything else is
-  // on top — a dialog, a popover, the dock-as-overlay below 900px, the rail
-  // overlay — the view hides until the rectangle is clear again.
-  useEffect(() => {
-    if (typeof ResizeObserver === "undefined") return;
-    // Stateless on purpose (D-158): every tick re-resolves the element and
-    // states the whole truth — hide, or these exact bounds. A remembered
-    // "already hidden" flag once wedged the view: something else re-attached
-    // it (a reopen, a re-render) while the flag said hidden, and the keeper
-    // never spoke again, leaving stale bounds painted over the inspector.
-    // hide() and setBounds() are idempotent; repeating them is cheap, and
-    // repeating them is what makes the rectangle self-healing.
-    const sync = () => {
-      const element = bodyRef.current;
-      // A rectangle that cannot be measured is a rectangle that must not be
-      // painted: a detached or collapsed body means the surface is not
-      // honestly on screen, whatever the view remembers.
-      if (!element || !element.isConnected) {
-        void novus().workspace.preview.hide();
-        return;
-      }
-      const rect = element.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) {
-        void novus().workspace.preview.hide();
-        return;
-      }
-      const inset = 8;
-      const points: [number, number][] = [
-        [rect.x + rect.width / 2, rect.y + rect.height / 2],
-        [rect.x + inset, rect.y + inset],
-        [rect.x + rect.width - inset, rect.y + inset],
-        [rect.x + inset, rect.y + rect.height - inset],
-        [rect.x + rect.width - inset, rect.y + rect.height - inset]
-      ];
-      const covered = points.some(([x, y]) => {
-        const top = document.elementFromPoint(x, y);
-        return top !== null && !element.contains(top);
-      });
-      // Sample points catch broad coverage; a small menu slips between them
-      // (the open-in menu lost its lower rows this way), so anything the room
-      // presents as an overlay is also checked by geometry.
-      const overlaid =
-        covered ||
-        [...document.querySelectorAll('[role="menu"], [role="dialog"], [role="listbox"], .theme-popover')].some(
-          (overlay) => {
-            if (element.contains(overlay)) return false;
-            const o = overlay.getBoundingClientRect();
-            return (
-              o.width > 0 &&
-              o.height > 0 &&
-              o.x < rect.x + rect.width &&
-              o.x + o.width > rect.x &&
-              o.y < rect.y + rect.height &&
-              o.y + o.height > rect.y
-            );
-          }
-        );
-      // The frozen-frame swap (D-160, owner-directed): DOM can never paint
-      // above the native view, so while anything overlaps the rectangle the
-      // view's own pixels stand in as a still image and the view leaves the
-      // screen — the page appears exactly where it was, the overlay reads as
-      // above it, and nothing moves or reflows. The live view returns the
-      // tick the rectangle clears.
-      if (overlaid) {
-        if (frozenRef.current === null && !freezingRef.current) {
-          freezingRef.current = true;
-          void novus()
-            .workspace.preview.snapshot()
-            .then((result) => {
-              freezingRef.current = false;
-              const still = result.ok ? result.value : null;
-              frozenRef.current = still ?? "";
-              setFrozen(still);
-              void novus().workspace.preview.hide();
-            });
-        } else {
-          void novus().workspace.preview.hide();
-        }
-        return;
-      }
-      if (frozenRef.current !== null) {
-        frozenRef.current = null;
-        setFrozen(null);
-      }
-      void novus().workspace.preview.setBounds({
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: rect.height
-      });
-    };
-    const observer = new ResizeObserver(sync);
-    if (bodyRef.current) observer.observe(bodyRef.current);
-    window.addEventListener("resize", sync);
-    const timer = setInterval(sync, COVER_CHECK_MS);
-    sync();
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", sync);
-      clearInterval(timer);
-    };
-  }, []);
 
   const runAgain = async () => {
     const commandName = status?.processName ?? running?.name ?? name;
@@ -329,6 +211,11 @@ export function PreviewSurface({
 
   const startRecording = async () => {
     setNote(null);
+    // A screenshot's toast from moments ago must not survive into a
+    // recording's own words: this surface no longer remounts on every canvas
+    // switch (D-170), so a stale message would otherwise sit here until its
+    // own 6-second timer caught up.
+    setCaptured(null);
     const result = await novus().artifacts.startRecording({
       missionId,
       ...(workstreamId ? { workstreamId } : {})
@@ -398,7 +285,7 @@ export function PreviewSurface({
           detail && (
             <>
               {/* The capture warning rides the capture controls themselves
-                  (D-161): still at the capture point, no longer a standing
+                  (D-164): still at the capture point, no longer a standing
                   row stealing the page's height. */}
               <GatedAction
                 capability="artifact.capture"
@@ -456,14 +343,16 @@ export function PreviewSurface({
           </button>
         </p>
       )}
-      {/* The reserved rectangle. While the page is on screen the native view
-          sits exactly over this; in every other state these words do. */}
+      {/* The page, in the room's own stacking order (D-163). While it is on
+          screen it fills this element; in every other state the words do. */}
       <div className="preview-body" ref={bodyRef} data-testid="preview-body" data-phase={status?.phase ?? "none"}>
-        {/* The page's own last pixels, standing in while an overlay is above
-            the rectangle (D-160). Inside the reserved element on purpose: the
-            keeper's coverage check ignores its own children. */}
-        {frozen && (
-          <img className="preview-frozen" src={frozen} alt="" aria-hidden="true" data-testid="preview-frozen" />
+        {status && (status.phase === "loading" || status.phase === "ready") && (
+          <webview
+            className="preview-webview"
+            src={status.url}
+            partition={`preview:${status.workstreamId}`}
+            data-testid="preview-webview"
+          />
         )}
         {view.panel && (
           <div className="preview-panel" data-testid="preview-panel">

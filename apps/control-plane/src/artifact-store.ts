@@ -217,7 +217,8 @@ export class LocalArtifactStore implements ArtifactStore {
   }
 
   async open(
-    key: string
+    key: string,
+    range?: { start: number; end: number }
   ): Promise<{ stream: Readable; byteSize: number; contentType: string } | null> {
     const path = safeBlobPath(this.rootDir, key);
     if (path === null) return null;
@@ -226,7 +227,9 @@ export class LocalArtifactStore implements ArtifactStore {
       if (!blob.isFile()) return null;
       const meta = JSON.parse(metaText) as LocalMeta;
       return {
-        stream: createReadStream(path),
+        // A byte range when one was asked: video seeking is a range request,
+        // and a stream that always starts at zero cannot be scrubbed.
+        stream: range ? createReadStream(path, { start: range.start, end: range.end }) : createReadStream(path),
         byteSize: blob.size,
         contentType: meta.contentType || "application/octet-stream"
       };

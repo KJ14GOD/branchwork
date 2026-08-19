@@ -28,6 +28,9 @@ const novus: NovusBridge = {
   setup: {
     probe: () => ipcRenderer.invoke("novus:setup:probe")
   },
+  system: {
+    version: () => ipcRenderer.invoke("novus:system:version")
+  },
   people: {
     avatar: (login) => ipcRenderer.invoke("novus:people:avatar", login)
   },
@@ -65,6 +68,8 @@ const novus: NovusBridge = {
     attachImage: (input) => ipcRenderer.invoke("novus:missions:attach-image", input),
     attachClipboardImage: (input) =>
       ipcRenderer.invoke("novus:missions:attach-clipboard", input),
+    attachTranscript: (input) =>
+      ipcRenderer.invoke("novus:missions:attach-transcript", input),
     // Not an `invoke`: the renderer has a `File` in hand and needs the path
     // *now*, inside the drop event. Electron 32 removed `File.path`, and this
     // is its sanctioned replacement — it resolves a path the browser already
@@ -130,6 +135,8 @@ const novus: NovusBridge = {
       return () => ipcRenderer.removeListener("novus:recording-status", wrapped);
     },
     attach: (input) => ipcRenderer.invoke("novus:artifacts:attach", input),
+    openLocal: (artifactId) => ipcRenderer.invoke("novus:artifacts:open-local", artifactId),
+    revealLocal: (artifactId) => ipcRenderer.invoke("novus:artifacts:reveal-local", artifactId),
     detach: (input) => ipcRenderer.invoke("novus:artifacts:detach", input)
   },
   // Publishing a decision as a pull request (D-099). No merge verb exists on
@@ -191,9 +198,6 @@ const novus: NovusBridge = {
     // the main process.
     preview: {
       open: (input) => ipcRenderer.invoke("novus:preview:open", input),
-      setBounds: (bounds) => ipcRenderer.invoke("novus:preview:set-bounds", bounds),
-      hide: () => ipcRenderer.invoke("novus:preview:hide"),
-      snapshot: () => ipcRenderer.invoke("novus:preview:snapshot"),
       reload: () => ipcRenderer.invoke("novus:preview:reload"),
       close: () => ipcRenderer.invoke("novus:preview:close"),
       status: () => ipcRenderer.invoke("novus:preview:status"),

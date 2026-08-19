@@ -1,4 +1,4 @@
-import { RECORDING_CLAIM, SCREENSHOT_CLAIM, type Artifact } from "@novus/contracts";
+import { RECORDING_CLAIM, SCREENSHOT_CLAIM, TRANSCRIPT_CLAIM, type Artifact } from "@novus/contracts";
 import { clockTime, elapsed, shortSha } from "../format";
 
 /**
@@ -28,6 +28,10 @@ export function artifactIsEvidence(artifact: Artifact): boolean {
 /** The row's meta line: when, and against what. */
 export function artifactMetaLine(artifact: Artifact): string {
   const parts = [clockTime(artifact.capturedAt)];
+  // A transcript has no capture revision and does not pretend to (D-173):
+  // it is a projection of the conversation record, not a photograph of a
+  // worktree, so "revision unknown" would state a gap that never existed.
+  if (artifact.kind === "transcript") return parts.join(" · ");
   if (artifact.revisionSha) {
     parts.push(
       artifact.revisionDirty
@@ -47,11 +51,18 @@ export function artifactMetaLine(artifact: Artifact): string {
  *  approved request, never ambiguous. */
 export function artifactActorLine(artifact: Artifact): string {
   if (artifact.initiator === "agent") return "Requested by the agent, approved in the room";
+  if (artifact.kind === "transcript") {
+    // Nobody photographed anything (D-173): a person carried a projection.
+    return artifact.createdByLogin
+      ? `Carried over by ${artifact.createdByLogin}`
+      : "Carried over by a person";
+  }
   return artifact.createdByLogin ? `Captured by ${artifact.createdByLogin}` : "Captured by a person";
 }
 
-/** The honest claim to print beside the artifact, by kind (D-122). */
+/** The honest claim to print beside the artifact, by kind (D-122, D-173). */
 export function artifactClaim(artifact: Artifact): string {
+  if (artifact.kind === "transcript") return TRANSCRIPT_CLAIM;
   return artifact.kind === "recording" ? RECORDING_CLAIM : SCREENSHOT_CLAIM;
 }
 

@@ -100,6 +100,12 @@ export const SCREENSHOT_CLAIM =
 export const RECORDING_CLAIM =
   "A recording proves what the preview displayed and how it responded during this span. It does not prove the application is correct.";
 
+/** The transcript's honest claim (D-173): a deterministic projection of one
+ *  conversation's record, carried into another. It proves what was said, not
+ *  that any of it was right. */
+export const TRANSCRIPT_CLAIM =
+  "A transcript is a projection of one conversation's record at the moment it was carried over. It proves what was said, not that any of it was correct.";
+
 /** The standing warning at the capture controls: pixels are the application's
  *  own output, and Novus does not scan them (ARCHITECTURE.md#secret-placement). */
 export const PIXELS_WARNING =

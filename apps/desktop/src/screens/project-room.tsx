@@ -43,6 +43,7 @@ import {
 import { GatedAction } from "../components/gated";
 import { HumanMark } from "../components/identity";
 import { ArtifactView } from "../components/artifact-view";
+import { renderTranscript } from "../components/transcript";
 import { WorkerInspector } from "../components/worker-inspector";
 import type { InspectorSection } from "../components/inspector";
 import { DecisionRoom } from "../components/decision-room";
@@ -258,6 +259,23 @@ export function ProjectRoom({
   /** One of the turn's workers opened on the canvas (D-107). Room-local, like
    *  a disclosure: never a tab, never a rail row, never the working set's. */
   const [openWorker, setOpenWorker] = useState<{ blockKey: string; workerId: string } | null>(null);
+  /** Set once, by View in conversation (D-168): the direction whose block the
+   *  feed should scroll to and briefly mark, the next time that block is on
+   *  screen. `sessionView` is a pure client-side filter over `detail`, so
+   *  switching sessions never re-fetches — the target is already in `detail`
+   *  the instant it is set, and the effect below finds it on the very next
+   *  paint. Cleared once found; left standing (silently) if the execution
+   *  never had a starting direction to point at. */
+  const [scrollToBlockKey, setScrollToBlockKey] = useState<string | null>(null);
+  /** The sibling chats a new-chat draft will continue from (D-173): their
+   *  transcripts are projected and carried on the draft's first direction.
+   *  Only meaningful while the draft surface is open; cleared when it closes. */
+  const [continueFrom, setContinueFrom] = useState<string[]>([]);
+  // An abandoned draft carries nothing forward: the selection dies with the
+  // surface it was made on (D-173, same rule as the draft's own words).
+  useEffect(() => {
+    if (!sessionDraft) setContinueFrom([]);
+  }, [sessionDraft]);
   /** Where the reader was in the conversation when they opened a worker, so
    *  Back to chat returns them there rather than to the top. */
   const savedScrollRef = useRef<number | null>(null);
@@ -362,7 +380,7 @@ export function ProjectRoom({
   /** The attached image being read at full size (D-152), or null. Room state
    *  rather than trace state: it covers the whole surface, and the trace is
    *  one of the things it covers. */
-  const [openImage, setOpenImage] = useState<{ artifactId: string; label: string } | null>(null);
+  const [openImage, setOpenImage] = useState<{ artifactId: string; label: string; mimeType?: string } | null>(null);
 
   // Escape closes the image (D-152). Registered in the capture phase so it
   // answers before the room's other Escape handlers do: while a picture is
@@ -579,6 +597,36 @@ export function ProjectRoom({
     // A new-session draft: these words create the session, title it, and land
     // in it, in one transaction (D-083). Nothing existed until now.
     if (sessionDraft) {
+      // The chosen chats travel first (D-173): each is projected from the
+      // detail already on screen — the one feed derivation, rendered to
+      // markdown — and uploaded as a transcript artifact the first direction
+      // then carries. A transcript that cannot be carried refuses the send in
+      // words: a chat that silently started without the context it promised
+      // is worse than one that asks again.
+      const transcriptIds: string[] = [];
+      for (const sourceId of continueFrom) {
+        const source = sessions.find((session) => session.sessionId === sourceId);
+        if (!source) continue; // swept away since selection; nothing to carry
+        const rendered = renderTranscript(
+          buildFeed(sessionView(detail, sourceId)),
+          source.title ?? "untitled",
+          new Date().toISOString()
+        );
+        const uploaded = await novus().missions.attachTranscript({
+          missionId: detail.mission.missionId,
+          workstreamId: detail.workstream.workstreamId,
+          sourceSessionId: sourceId,
+          markdown: rendered
+        });
+        if (!uploaded.ok) {
+          return {
+            ok: false,
+            message: `The transcript of "${source.title ?? "untitled"}" could not be carried: ${uploaded.message}`
+          };
+        }
+        transcriptIds.push(uploaded.value.artifactId);
+      }
+      const allAttachmentIds = [...transcriptIds, ...attachmentIds];
       const created = await novus().missions.direct({
         missionId: detail.mission.missionId,
         body,
@@ -587,7 +635,7 @@ export function ProjectRoom({
         workstreamId: detail.workstream.workstreamId,
         newSession: true,
         ...(alongside ? { alongside: true } : {}),
-        ...(attachmentIds.length > 0 ? { attachmentIds } : {})
+        ...(allAttachmentIds.length > 0 ? { attachmentIds: allAttachmentIds } : {})
       });
       if (!created.ok) return { ok: false, message: offlineOr(created.code, created.message) };
       onSessionDraft(false);
@@ -749,6 +797,22 @@ export function ProjectRoom({
     [detail, selectedSessionId]
   );
   const feed = useMemo(() => (sessionDetail ? buildFeed(sessionDetail) : null), [sessionDetail]);
+
+  // View in conversation's landing (D-168): once the target session's feed
+  // is the one on screen, find the turn by its block key and centre it. Runs
+  // on every feed change while a target stands, because the block a person
+  // is jumping to may not exist until this exact render — the session switch
+  // and the feed recompute are two renders, not one.
+  useEffect(() => {
+    if (scrollToBlockKey === null || feed === null) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    const target = container.querySelector(`[data-block-key="${scrollToBlockKey}"]`);
+    if (target) {
+      target.scrollIntoView({ block: "center" });
+      setScrollToBlockKey(null);
+    }
+  }, [feed, scrollToBlockKey]);
 
   // Leaving the conversation puts the worker view away; it belongs to the
   // turn being read, not to the room (D-107).
@@ -1704,6 +1768,46 @@ export function ProjectRoom({
           )}
           </span>
         </div>
+        {/* The workspace row lives in the persistent header, not the
+            scrolling feed (D-166, owner-hit): the base's standing and its
+            one Sync action are exactly the kind of thing that must not
+            require scrolling to the top of a long conversation to reach. */}
+        {detail && feed?.setup && (
+          <div
+            className={feed.setup.danger ? "workspace-row danger" : "workspace-row"}
+            data-testid="setup-row"
+          >
+            <span>{feed.setup.label}</span>
+            {/* The base's standing, in words, where the base is named
+                (D-139): silent while current, and silent while the answer is
+                merely unknown — absence of a check is not an alarm, it is
+                Overview's to state. */}
+            {baseDriftWords(baseStatus) && (
+              <span className="tone-warn workspace-drift" data-testid="base-drift">
+                · {baseDriftWords(baseStatus)}
+              </span>
+            )}
+            {/* Syncing is offered only for a base that moved forward: a
+                rewritten or vanished base is a rethink, not a merge. */}
+            {baseStatus?.state === "moved" && (
+              <button
+                className="btn btn-text workspace-row-action"
+                onClick={() => void syncBase()}
+                disabled={syncingBase}
+                data-testid="base-sync"
+              >
+                {syncingBase ? "Syncing…" : "Sync"}
+              </button>
+            )}
+            <button
+              className="btn btn-text workspace-row-action"
+              onClick={() => onInspector("overview")}
+              data-testid="setup-overview"
+            >
+              Overview
+            </button>
+          </div>
+        )}
       </header>
       )}
 
@@ -1739,13 +1843,80 @@ export function ProjectRoom({
         />
       )}
 
-      {openArtifactView && detail ? (
+      {/* Persistently mounted, never remounted by which tab is selected
+          (D-170, fixing the D-163 rebuild's own regression): the old native
+          view survived a tab switch untouched, because the main process held
+          it regardless of the React tree. The in-DOM webview that replaced
+          it has no such independence — unmounting it destroys its guest
+          page — so this instance stands outside the canvas switch below and
+          is only ever hidden, never torn down, while its tab exists. Hidden
+          means painted-but-invisible (absolute, opacity 0 — so capture keeps
+          its pixels), and it hides when another tab is selected. The artifact
+          look never paints here: the Preview tab is the running app's,
+          always — opening an artifact steps back to the conversation
+          (owner-directed, reversing D-171's hide-under). */}
+      {previewTab !== null && selectedMissionId !== null && (
+        <div
+          className={previewSelected ? "room-canvas-slot" : "room-canvas-slot hidden"}
+        >
+          <PreviewSurface
+            key={`${previewTab.workstreamId ?? "first"}:${previewTab.url}`}
+            missionId={selectedMissionId}
+            workstreamId={previewTab.workstreamId}
+            url={previewTab.url}
+            name={previewTab.name}
+            detail={detail ?? null}
+            onReopen={onReopenPreview}
+          />
+        </div>
+      )}
+
+      {/* The look renders only where the conversation would (owner-directed,
+          the full fix): a file tab shows its file, the preview its app, the
+          pull page its request — an open artifact never hijacks them. */}
+      {openArtifactView && detail && activeFile === null && !decisionOpen ? (
         /* One artifact, looked at closely (D-122): a transient look over
            whatever canvas was showing — the worker-view shape, opened from
            the Evidence section only, closed with Esc or Back, never a tab. */
         <div className="feed-scroll">
           <div className="feed">
-            <ArtifactView artifact={openArtifactView} detail={detail} onBack={onCloseArtifact} />
+            <ArtifactView
+              artifact={openArtifactView}
+              detail={detail}
+              onBack={onCloseArtifact}
+              onViewInSession={({ sessionId, executionId, artifactId }) => {
+                // Close the look-over-the-canvas first: opening the session
+                // is a real navigation, not a further layer on top of one
+                // (D-167, same shape as Back to chat).
+                onCloseArtifact();
+                // The exact turn (D-168): an agent capture lands on the turn
+                // whose execution requested it; an image a person attached
+                // lands on the message that carried it — the direction whose
+                // attachments name this artifact. `detail` holds the lane's
+                // full record, unaffected by which session is on screen, so
+                // both lookups are stable across the switch below.
+                const execution = executionId
+                  ? detail.executions.find((entry) => entry.executionId === executionId)
+                  : null;
+                const attachingDirection =
+                  execution === null
+                    ? detail.directions.find((direction) =>
+                        direction.attachments.some(
+                          (attachment) => attachment.artifactId === artifactId
+                        )
+                      )
+                    : null;
+                // Unpin before the landing runs: otherwise the "stay at the
+                // latest activity" effect (keyed on the very same session
+                // switch) fires in the same commit and snaps back to the
+                // bottom right after this centres the turn (D-168 follow-up).
+                pinnedRef.current = false;
+                setScrollToBlockKey(
+                  execution?.startingDirectionId ?? attachingDirection?.directionId ?? null
+                );
+                onOpenSession(sessionId);
+              }}
+            />
           </div>
         </div>
       ) : activeFileEntry !== null && selectedMissionId !== null ? (
@@ -1759,15 +1930,12 @@ export function ProjectRoom({
           path={activeFileEntry.path}
         />
       ) : previewSelected && previewTab !== null && selectedMissionId !== null ? (
-        <PreviewSurface
-          key={`${previewTab.workstreamId ?? "first"}:${previewTab.url}`}
-          missionId={selectedMissionId}
-          workstreamId={previewTab.workstreamId}
-          url={previewTab.url}
-          name={previewTab.name}
-          detail={detail ?? null}
-          onReopen={onReopenPreview}
-        />
+        // The pixels live in the persistently-mounted instance rendered
+        // above this switch, not here (D-170): this branch's only job left
+        // is to keep "what is selected" legible in the one place every other
+        // canvas kind is decided, without standing up a second, competing
+        // PreviewSurface every time the tab is chosen.
+        null
       ) : pullSelected && detail && currentDecision ? (
         <div className="feed-scroll">
           <div className="feed">
@@ -1798,13 +1966,40 @@ export function ProjectRoom({
       ) : sessionDraft ? (
         /* An empty conversation: one quiet sentence, and the composer below is
            the ask. Nothing exists yet, so there is nothing else to show
-           (D-077 one level down, D-083). */
+           (D-077 one level down, D-083) — except what this chat may carry in:
+           the lane's other conversations, offered as transcripts (D-173). */
         <div className="feed-scroll">
           <div className="feed">
             <div className="draft-canvas">
               <p className="draft-lead" data-testid="session-draft-lead">
                 The first direction starts this session.
               </p>
+              {sessions.length > 0 && (
+                <div className="draft-continue" data-testid="draft-continue">
+                  <p className="draft-continue-lead">Continue from</p>
+                  {sessions.map((session) => (
+                    <label key={session.sessionId} className="draft-continue-row">
+                      <input
+                        type="checkbox"
+                        checked={continueFrom.includes(session.sessionId)}
+                        onChange={(event) =>
+                          setContinueFrom((previous) =>
+                            event.target.checked
+                              ? [...previous, session.sessionId]
+                              : previous.filter((id) => id !== session.sessionId)
+                          )
+                        }
+                        data-testid={`continue-from-${session.sessionId}`}
+                      />
+                      <span className="draft-continue-title">{session.title ?? "untitled"}</span>
+                    </label>
+                  ))}
+                  <p className="draft-continue-note">
+                    Each chosen chat's transcript — its record, projected — travels with your
+                    first message.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1821,6 +2016,10 @@ export function ProjectRoom({
               onOpenSession={onOpenSession}
               mayScope={isController}
               onEditScope={(session) => setScopeEditing(session)}
+              onContinueFrom={(sessionId) => {
+                setContinueFrom([sessionId]);
+                onSessionDraft(true);
+              }}
             />
           </div>
         </div>
@@ -1845,42 +2044,6 @@ export function ProjectRoom({
             <DraftCanvas draft={draft} project={project} onRetry={() => void resolveBase()} />
           ) : detail && feed ? (
             <>
-              {feed.setup && (
-                <div
-                  className={feed.setup.danger ? "workspace-row danger" : "workspace-row"}
-                  data-testid="setup-row"
-                >
-                  <span>{feed.setup.label}</span>
-                  {/* The base's standing, in words, where the base is named
-                      (D-139): silent while current, and silent while the
-                      answer is merely unknown — absence of a check is not an
-                      alarm, it is Overview's to state. */}
-                  {baseDriftWords(baseStatus) && (
-                    <span className="tone-warn workspace-drift" data-testid="base-drift">
-                      · {baseDriftWords(baseStatus)}
-                    </span>
-                  )}
-                  {/* Syncing is offered only for a base that moved forward: a
-                      rewritten or vanished base is a rethink, not a merge. */}
-                  {baseStatus?.state === "moved" && (
-                    <button
-                      className="btn btn-text workspace-row-action"
-                      onClick={() => void syncBase()}
-                      disabled={syncingBase}
-                      data-testid="base-sync"
-                    >
-                      {syncingBase ? "Syncing…" : "Sync"}
-                    </button>
-                  )}
-                  <button
-                    className="btn btn-text workspace-row-action"
-                    onClick={() => onInspector("overview")}
-                    data-testid="setup-overview"
-                  >
-                    Overview
-                  </button>
-                </div>
-              )}
               {feed.blocks.map((block) =>
                 block.kind === "control" ? (
                   <ControlEventRow key={block.key} block={block} />
@@ -2084,7 +2247,7 @@ export function ProjectRoom({
 
       {/* Terminal states never resume (D-121): the composer is hidden, not
           disabled — there is nothing to direct and no state it returns in.
-          The preview tab also stands alone (D-161, owner-directed): a running
+          The preview tab also stands alone (D-164, owner-directed): a running
           app's view carries no direction box beneath it — the conversation
           tab is one click away and is where directing happens. File tabs keep
           theirs; the reversal is the preview's alone. */}
@@ -2154,6 +2317,71 @@ export function ProjectRoom({
           data-testid="image-lightbox"
           onClick={() => setOpenImage(null)}
         >
+          {openImage.mimeType === "application/pdf" ||
+          openImage.mimeType?.startsWith("video/") ||
+          openImage.mimeType?.startsWith("audio/") ? (
+            /* The document card (D-165 amended, the Codex shape the owner
+               pointed at): Novus's own slim head — the file's name and its
+               two actions — over the clean page or player, Chromium's
+               toolbar and sidebar suppressed by the viewer's own fragment
+               parameters. */
+            <div
+              className="lightbox-card"
+              data-testid="lightbox-card"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <header className="lightbox-card-head">
+                <span className="lightbox-card-name" title={openImage.label}>
+                  {openImage.label}
+                </span>
+                <span className="head-spacer" />
+                <button
+                  className="btn btn-text"
+                  onClick={() => void novus().artifacts.openLocal(openImage.artifactId)}
+                  title="Open with the default app"
+                >
+                  Open
+                </button>
+                <button
+                  className="btn btn-text"
+                  onClick={() => void novus().artifacts.revealLocal(openImage.artifactId)}
+                >
+                  Reveal in Finder
+                </button>
+                <button
+                  className="icon-button"
+                  onClick={() => setOpenImage(null)}
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </header>
+              {openImage.mimeType === "application/pdf" ? (
+                <iframe
+                  className="lightbox-doc"
+                  src={`novus-artifact://${openImage.artifactId}/blob#toolbar=0&navpanes=0&view=FitH`}
+                  title={openImage.label}
+                  data-testid="lightbox-doc"
+                />
+              ) : openImage.mimeType?.startsWith("video/") ? (
+                <video
+                  className="lightbox-media"
+                  controls
+                  autoPlay
+                  src={`novus-artifact://${openImage.artifactId}/blob`}
+                  data-testid="lightbox-video"
+                />
+              ) : (
+                <audio
+                  className="lightbox-audio"
+                  controls
+                  autoPlay
+                  src={`novus-artifact://${openImage.artifactId}/blob`}
+                  data-testid="lightbox-audio"
+                />
+              )}
+            </div>
+          ) : (
           <img
             className="lightbox-image"
             src={`novus-artifact://${openImage.artifactId}/blob`}
@@ -2161,6 +2389,7 @@ export function ProjectRoom({
             // A click on the picture itself is not a click on the ground.
             onClick={(event) => event.stopPropagation()}
           />
+          )}
         </div>
       )}
 
@@ -2194,7 +2423,8 @@ function ApproachOverview({
   detail,
   onOpenSession,
   mayScope,
-  onEditScope
+  onEditScope,
+  onContinueFrom
 }: {
   lane: Workstream | null;
   summary: ApproachSummary | undefined;
@@ -2205,6 +2435,10 @@ function ApproachOverview({
    *  standing write authority, so it is the baton's act (D-097). */
   mayScope: boolean;
   onEditScope: (session: Session) => void;
+  /** Opens the new-chat draft with this chat preselected as a transcript
+   *  source (D-173) — the directional shortcut for "pick up where this chat
+   *  is, in a fresh one". */
+  onContinueFrom?: (sessionId: string) => void;
 }) {
   // The lane's own facts, from the same summary Compare reads — counted, not
   // fetched. Checks appear only once something ran; zero run is the state
@@ -2306,6 +2540,16 @@ function ApproachOverview({
                   data-testid="overview-scope"
                 >
                   Scope
+                </button>
+              )}
+              {onContinueFrom && (
+                <button
+                  className="btn btn-text overview-scope-button"
+                  onClick={() => onContinueFrom(session.sessionId)}
+                  title={`Start a new chat carrying the transcript of "${session.title ?? "this session"}"`}
+                  data-testid="overview-continue-from"
+                >
+                  Continue
                 </button>
               )}
             </div>

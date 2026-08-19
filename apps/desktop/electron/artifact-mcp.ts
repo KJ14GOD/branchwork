@@ -248,7 +248,8 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
     }
     // The grant is the routed approval's receipt: no allow, no act —
     // whoever is asking, however they found the socket.
-    if (!consumeToolGrant(turn.executionId, tool.name)) {
+    const grantOk = consumeToolGrant(turn.executionId, tool.name);
+    if (!grantOk) {
       json(
         response,
         200,

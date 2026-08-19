@@ -1,20 +1,9 @@
+import { useState } from "react";
 import type { Artifact } from "@novus/contracts";
+import { novus } from "../bridge";
+import { FileBadge } from "./identity";
 import { clockTime } from "../format";
 import { artifactIsEvidence, artifactMetaLine, artifactStateWord } from "./artifacts";
-
-/** The short word a typed square shows for bytes it cannot picture. */
-function typeWordOf(mime: string): string {
-  const named: Record<string, string> = {
-    "application/pdf": "pdf",
-    "audio/mpeg": "mp3",
-    "video/quicktime": "mov",
-    "video/x-matroska": "mkv",
-    "video/x-msvideo": "avi",
-    "audio/mp4": "m4a"
-  };
-  const tail = mime.split("/")[1] ?? "";
-  return (named[mime] ?? tail.replace(/^x-/, "")).slice(0, 4);
-}
 
 
 /**
@@ -35,6 +24,24 @@ export function ArtifactThumbRow({
   testid?: string;
 }) {
   const state = artifactStateWord(artifact);
+  // A kind the canvas can show opens on the canvas; everything else — a PDF,
+  // an mp4, an mp3 — opens with the machine's own default app (D-165), which
+  // is what clicking a file means everywhere else on the machine.
+  const [openError, setOpenError] = useState<string | null>(null);
+  const canvasViewable =
+    artifact.mimeType.startsWith("image/") ||
+    artifact.mimeType.startsWith("video/") ||
+    artifact.mimeType.startsWith("audio/") ||
+    artifact.mimeType === "application/pdf";
+  const openRow = onOpen && canvasViewable
+    ? () => onOpen(artifact.artifactId)
+    : artifactIsEvidence(artifact)
+      ? () => {
+          void novus()
+            .artifacts.openLocal(artifact.artifactId)
+            .then((result) => setOpenError(result.ok ? null : result.message ?? null));
+        }
+      : undefined;
   const body = (
     <>
       {artifactIsEvidence(artifact) && artifact.hasThumbnail ? (
@@ -52,10 +59,10 @@ export function ArtifactThumbRow({
           alt=""
         />
       ) : (
-        // Not blank: the square says what kind of bytes it holds, the same
-        // quiet fact the file tree's extension badges state.
+        // Not blank: the mark a person already knows — a red PDF is a red
+        // PDF (D-165 amended), the tree badges' fact-tint family.
         <span className="evidence-thumb empty" aria-hidden="true">
-          {typeWordOf(artifact.mimeType)}
+          <FileBadge mime={artifact.mimeType} size={22} />
         </span>
       )}
       <span className="evidence-text">
@@ -63,11 +70,11 @@ export function ArtifactThumbRow({
           {artifact.label}
           {state && <span className={`artifact-word ${state.tone}`}> · {state.word}</span>}
         </span>
-        <span className="evidence-meta">{artifactMetaLine(artifact)}</span>
+        <span className="evidence-meta">{openError ?? artifactMetaLine(artifact)}</span>
       </span>
     </>
   );
-  if (!onOpen) {
+  if (!openRow) {
     return (
       <span className="evidence-row" data-testid={testid} data-artifact={artifact.artifactId}>
         {body}
@@ -77,7 +84,7 @@ export function ArtifactThumbRow({
   return (
     <button
       className="evidence-row"
-      onClick={() => onOpen(artifact.artifactId)}
+      onClick={openRow}
       aria-label={`${artifact.label} — ${artifactMetaLine(artifact)}`}
       data-testid={testid}
       data-artifact={artifact.artifactId}

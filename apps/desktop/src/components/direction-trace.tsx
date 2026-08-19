@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { attachmentForm } from "@novus/contracts";
-import type { ApprovalRequest, Direction, MissionDetailResponse } from "@novus/contracts";
+import type { ApprovalRequest, Direction, DirectionAttachment, MissionDetailResponse } from "@novus/contracts";
+import { novus } from "../bridge";
 import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../format";
-import { DocumentGlyph, HarnessMark, HumanMark } from "./identity";
+import { FileBadge, HarnessMark, HumanMark } from "./identity";
 import { Markdown } from "./markdown";
 import type { ControlBlock, Feed, FeedBlock, Segment, ToolStep, TraceBlock, UsageTotals, WorkerView } from "./derive-feed";
 import { buildFeed, HARNESS_NAME, workerFiles, workerState } from "./derive-feed";
@@ -283,7 +285,7 @@ export function TraceView({
   /** Opens one worker's own view on the canvas (D-107). */
   onOpenWorker?: (workerId: string) => void;
   /** Brings an attached image to the front at full size (D-152). */
-  onOpenImage?: (image: { artifactId: string; label: string }) => void;
+  onOpenImage?: (image: { artifactId: string; label: string; mimeType: string }) => void;
   /** Apply / Reject / Cancel for a direction still awaiting judgment. */
   actions?: React.ReactNode;
   /** Permission questions this execution is blocked on, if any. */
@@ -313,7 +315,15 @@ export function TraceView({
   const outcomes = block.segments.filter((segment) => segment.kind === "outcome");
 
   return (
-    <article className={traceStateClass(direction)} data-testid="direction-trace" data-direction-state={direction?.state ?? "none"}>
+    <article
+      className={traceStateClass(direction)}
+      data-testid="direction-trace"
+      data-direction-state={direction?.state ?? "none"}
+      // The block's own address (D-168): the direction that opened it, so a
+      // capture's `executionId` can resolve to a real turn to scroll to
+      // rather than only the conversation it happened in.
+      data-block-key={block.key}
+    >
       {/* What the person said, on the room's right (D-162). A turn is a
           conversation with two sides, and giving each its own side is what
           lets a reader find the question without reading the answer. The
@@ -349,25 +359,30 @@ export function TraceView({
                 {image.label} — not uploaded, so the turn never saw it
               </span>
             ) : attachmentForm(image.mimeType) !== "image" ? (
-              // A document or a staged file has nothing to show, so it is
-              // named — with its kind and weight as a quiet second line, so
-              // the chip reads as a file and not a bare word (D-151, D-153).
-              <span className="trace-attachment-doc" key={image.artifactId}>
-                <DocumentGlyph className="trace-attachment-doc-glyph" />
-                <span className="trace-attachment-doc-text">
-                  <span className="trace-attachment-doc-name">{image.label}</span>
-                  <span className="trace-attachment-doc-meta">
-                    {docKindOf(image.mimeType)} · {docSizeOf(image.byteSize)}
-                  </span>
-                </span>
-              </span>
+              <DocChip
+                key={image.artifactId}
+                attachment={image}
+                onOpen={
+                  onOpenImage &&
+                  (image.mimeType === "application/pdf" ||
+                    image.mimeType.startsWith("video/") ||
+                    image.mimeType.startsWith("audio/"))
+                    ? () =>
+                        onOpenImage({
+                          artifactId: image.artifactId,
+                          label: image.label,
+                          mimeType: image.mimeType
+                        })
+                    : undefined
+                }
+              />
             ) : (
               <button
                 className="trace-attachment-open"
                 key={image.artifactId}
                 // The picture is the control (D-152): clicking it brings it to
                 // the front at full size, and nothing about it navigates.
-                onClick={() => onOpenImage?.({ artifactId: image.artifactId, label: image.label })}
+                onClick={() => onOpenImage?.({ artifactId: image.artifactId, label: image.label, mimeType: image.mimeType })}
                 aria-label={`Open ${image.label}`}
               >
                 <img
@@ -605,4 +620,45 @@ function docSizeOf(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * A document or staged file as a clickable chip (D-151, D-153, D-165): named
+ * with its kind and weight, and clicking opens it with the machine's own
+ * default app — what clicking a file means everywhere else. A refusal takes
+ * the meta line's place in its own words.
+ */
+function DocChip({
+  attachment,
+  onOpen
+}: {
+  attachment: DirectionAttachment;
+  /** Opens on the room's own canvas — PDFs, video, audio (D-165 amended,
+   *  in-app first like Codex); absent falls back to the OS default app. */
+  onOpen?: () => void;
+}) {
+  const [note, setNote] = useState<string | null>(null);
+  return (
+    <button
+      className="trace-attachment-doc"
+      onClick={() => {
+        if (onOpen) {
+          onOpen();
+          return;
+        }
+        void novus()
+          .artifacts.openLocal(attachment.artifactId)
+          .then((result) => setNote(result.ok ? null : result.message ?? null));
+      }}
+      title={`Open ${attachment.label}`}
+    >
+      <FileBadge mime={attachment.mimeType} size={24} />
+      <span className="trace-attachment-doc-text">
+        <span className="trace-attachment-doc-name">{attachment.label}</span>
+        <span className="trace-attachment-doc-meta">
+          {note ?? `${docKindOf(attachment.mimeType)} · ${docSizeOf(attachment.byteSize)}`}
+        </span>
+      </span>
+    </button>
+  );
 }
