@@ -372,6 +372,23 @@ body {
 
 /* Overlays sit on a dimmed room; the dim is the background token, not a new
    colour (DESIGN.md#tokens: color is semantic or absent). */
+/* Electron hit-tests window-drag regions before the DOM paints its order:
+   a draggable strip bleeds through anything floating above it, deadening
+   parts of buttons and inputs (owner-hit three times — Back to app, the
+   find bar, and it would take any menu near the window's top the same way).
+   Every floating surface therefore declares itself no-drag, wholesale. */
+.scrim,
+.dialog,
+.lightbox,
+.feed-find,
+.settings-page-layer,
+.run-menu,
+.theme-popover,
+.ask-base-menu,
+.open-in-menu {
+  -webkit-app-region: no-drag;
+}
+
 .scrim {
   position: fixed;
   inset: 0;
