@@ -2014,9 +2014,10 @@ body {
   max-width: 720px;
 }
 
-/* Continue from (D-173): the lane's other chats offered as transcript
-   sources on the new-chat draft. A quiet list under the lead — the draft
-   stays one sentence and an ask; this is the ask's optional luggage. */
+/* Add chat transcripts (D-173, restyled D-175): the lane's other chats as
+   toggle pills under the draft's lead. Picking one puts a chip in the
+   composer — the box shows everything the send will carry — so the pills
+   themselves stay quiet offers, pressed while picked. */
 .draft-continue {
   margin-top: var(--s-4);
   display: flex;
@@ -2030,24 +2031,40 @@ body {
   color: var(--text-3);
 }
 
-.draft-continue-row {
+.draft-continue-pills {
   display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.draft-continue-pill {
+  display: inline-flex;
   align-items: center;
   gap: var(--s-2);
+  padding: var(--s-1) var(--s-3);
   font: var(--type-body);
   color: var(--text-2);
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
   cursor: pointer;
+  max-width: 320px;
+}
+
+.draft-continue-pill:hover {
+  background: var(--hover);
+}
+
+.draft-continue-pill[aria-pressed="true"] {
+  color: var(--text-1);
+  background: var(--hover);
+  border-color: var(--text-3);
 }
 
 .draft-continue-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.draft-continue-note {
-  font: var(--type-meta);
-  color: var(--text-3);
 }
 
 /* ---------- Approach overview (D-089) ---------- */
@@ -2214,17 +2231,6 @@ body {
 .composer {
   flex: none;
   padding: 0 var(--s-6) var(--s-4);
-}
-
-/* The dock's eyebrow (D-124): which lane and conversation the words go to,
-   said before they are typed. Micro step, never louder than the input. */
-.composer-target {
-  display: block;
-  font: var(--type-micro);
-  letter-spacing: 0.02em;
-  color: var(--text-3);
-  padding-bottom: var(--s-1);
-  user-select: none;
 }
 
 .composer-error {
@@ -6101,6 +6107,34 @@ body.resizing {
 
 /* A PDF in the trace (D-151). Nothing to show, so it is named — a quiet row
    at the same weight as the picture's own presence, never a card. */
+/* A carried transcript on the message that carried it (D-175): one quiet
+   line, not a file card — it is context the reader may open, not cargo the
+   turn is about. */
+.trace-attachment-transcript {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-3);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  background: transparent;
+  font: var(--type-meta);
+  color: var(--text-3);
+  cursor: pointer;
+  max-width: 100%;
+}
+
+.trace-attachment-transcript:hover {
+  color: var(--text-2);
+  border-color: var(--edge-hover);
+}
+
+.trace-attachment-transcript-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .trace-attachment-doc {
   display: inline-flex;
   align-items: center;
@@ -6399,13 +6433,28 @@ body.resizing {
   display: grid;
   grid-template-columns: 264px 1fr;
   background: var(--bg);
+  /* The shell's own drag strips sit underneath this layer, and Electron's
+     drag regions bleed through overlays — everything here must say no-drag
+     or corners of buttons go dead (owner-hit on Back to app). The layer's
+     own top edge is the draggable strip instead. */
+  -webkit-app-region: no-drag;
+}
+
+.settings-drag-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  -webkit-app-region: drag;
 }
 
 .settings-side {
   display: flex;
   flex-direction: column;
   gap: var(--s-2);
-  padding: var(--s-5) var(--s-4);
+  /* Clear of the window's own traffic lights. */
+  padding: 44px var(--s-4) var(--s-5);
   border-right: 1px solid var(--edge);
   background: var(--surface-1);
   overflow-y: auto;
@@ -6422,7 +6471,11 @@ body.resizing {
   padding: var(--s-2) var(--s-2);
   border-radius: var(--r-control);
   cursor: pointer;
-  align-self: flex-start;
+  align-self: stretch;
+  width: 100%;
+  position: relative;
+  z-index: 1;
+  -webkit-app-region: no-drag;
 }
 
 .settings-back:hover {

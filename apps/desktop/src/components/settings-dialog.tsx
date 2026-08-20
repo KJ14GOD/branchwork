@@ -118,6 +118,10 @@ const PAGE_LABEL: Record<Page, string> = {
 /** The room's real keys — the ones the code binds, nothing aspirational. */
 const KEYS: { keys: string; does: string }[] = [
   { keys: "⌘T", does: "Start a mission in the selected project" },
+  { keys: "⌘1 – ⌘9", does: "Open the selected project's missions" },
+  { keys: "⌘B", does: "Show or hide the projects rail" },
+  { keys: "⌘J", does: "Show or hide the terminal dock" },
+  { keys: "⌘E", does: "Show or hide the evidence panel" },
   { keys: "⌘F", does: "Find in the conversation" },
   { keys: "⌘,", does: "Open the theme control" },
   { keys: "G then C", does: "Open the Changes section" },
@@ -251,6 +255,7 @@ export function SettingsDialog({
 
   return (
     <div className="settings-page-layer" role="dialog" aria-label="Settings" data-testid="settings-dialog">
+      <div className="settings-drag-strip" aria-hidden="true" />
       <aside className="settings-side">
         <button className="settings-back" onClick={onClose} data-testid="settings-back">
           <BackGlyph />

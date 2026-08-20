@@ -1184,13 +1184,31 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
 
   // Keyboard: ⌘T a new mission in the repository you are in, ⌘, Settings —
   // the platform's own chord for it — ⌘1–9 the rail's missions for that
-  // project (DESIGN.md#keyboard).
+  // project, and the three surfaces every desktop app keys the same way
+  // (D-177): ⌘B the rail, ⌘J the terminal dock, ⌘E the evidence panel
+  // (DESIGN.md#keyboard).
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key === "t") {
         event.preventDefault();
         newMissionHere();
+      } else if (event.key === "b") {
+        event.preventDefault();
+        setRailHidden((hidden) => !hidden);
+      } else if (event.key === "j") {
+        event.preventDefault();
+        setTerminalOpen((open) => !open);
+      } else if (event.key === "e") {
+        event.preventDefault();
+        if (activeMissionId === null) return;
+        setInspector((current) => {
+          if (current) {
+            lastSection.current = current;
+            return null;
+          }
+          return lastSection.current ?? "overview";
+        });
       } else if (event.key === ",") {
         event.preventDefault();
         // The popover is anchored in the rail; the chord shows the rail
@@ -1208,7 +1226,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentProject, newMissionHere, openMissionTab]);
+  }, [currentProject, newMissionHere, openMissionTab, activeMissionId]);
 
   // A dialog about one mission's workspace must not survive a move to
   // another mission.
