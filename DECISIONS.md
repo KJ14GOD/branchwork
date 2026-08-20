@@ -2562,7 +2562,7 @@ Read from the events rather than carried as a column on the workstream: it is on
 
 **Revisit when.** A third reference kind arrives (a checkpoint, an artifact, a sibling chat's single message — each named in the design conversation); or @-mention wants building on top; or eight proves the wrong bound.
 
-## D-180 — What an approach's row does, in the order a person wants it
+## D-183 — What an approach's row does, in the order a person wants it
 
 **Context.** Owner-reported, with the sequence: fold an approach's conversations, go to its sibling, come back — and the click that chooses it changes nothing on screen. *"i cant open that again… the workaround is if i click on another approach inside of that then i click it and see it."*
 

@@ -32,15 +32,6 @@ type Load<T> =
 
 type Source = "github" | "local";
 
-/** Who these repositories are being listed for. A personal organization is
- *  named after its owner, so it is never printed twice. */
-function githubIdentity(user: User, org: Organization): string {
-  const login = user.login.trim();
-  const orgName = org.name.trim();
-  const same = orgName.toLowerCase() === login.toLowerCase();
-  return same ? `Signed in as ${login}` : `Signed in as ${login} · ${orgName}`;
-}
-
 function githubRow(repo: AvailableRepository): Row {
   const slash = repo.name.lastIndexOf("/");
   const owner = slash > 0 ? repo.name.slice(0, slash) : null;
@@ -81,14 +72,14 @@ function RepoRowGlyph() {
 }
 
 export function AddProjectDialog({
-  user,
-  org,
   onOpen,
   onLocalAdded,
   onClose
 }: {
-  user: User;
-  org: Organization;
+  /** Kept in the contract for callers; the identity line they fed is gone
+   *  (D-139 amended — the rail's foot already says who is signed in). */
+  user?: User;
+  org?: Organization;
   onOpen: (picked: PickedRepository) => void;
   onLocalAdded: () => Promise<void> | void;
   onClose: () => void;
