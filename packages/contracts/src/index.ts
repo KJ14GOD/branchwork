@@ -997,6 +997,39 @@ export const PreparedAttachmentSchema = DirectionAttachmentSchema.omit({
 });
 export type PreparedAttachment = z.infer<typeof PreparedAttachmentSchema>;
 
+/**
+ * One reference the composer's top edge pinned onto a direction (D-182):
+ * a worktree file the turn should look at, or a verification check — most
+ * usefully a failing one — the turn should answer. References, never bytes:
+ * the agent already holds the worktree, and a check's facts are snapshotted
+ * at submit so the turn runs against what the person actually saw (the
+ * D-043 discipline), not whatever the row says by the time it runs.
+ */
+export const DirectionContextRefSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("file"),
+    /** Repository-relative; validated as a reference, resolved by the agent
+     *  in its own worktree. A path that no longer exists is the agent's to
+     *  discover and say — the reference is what the person pointed at. */
+    path: z.string().min(1).max(1024)
+  }),
+  z.object({
+    kind: z.literal("check"),
+    checkId: z.string().startsWith("chk_"),
+    name: z.string().min(1).max(200),
+    /** The outcome word as it stood when referenced. */
+    outcome: z.string().min(1).max(40),
+    command: z.string().min(1).max(2000),
+    /** The output's tail as the person saw it, bounded. Null when the check
+     *  recorded none. */
+    output: z.string().max(8000).nullable()
+  })
+]);
+export type DirectionContextRef = z.infer<typeof DirectionContextRefSchema>;
+
+/** A direction carries at most this many pinned references (D-182). */
+export const MAX_DIRECTION_CONTEXT = 8;
+
 export const DirectionSchema = z.object({
   directionId: z.string().startsWith("dir_"),
   workstreamId: z.string().startsWith("wst_"),
@@ -1017,7 +1050,11 @@ export const DirectionSchema = z.object({
    *  their facts, never bytes: viewing one mints its own expiring grant like
    *  every other artifact read. Empty for every direction that carried none,
    *  which is every direction written before this existed. */
-  attachments: z.array(DirectionAttachmentSchema).max(MAX_DIRECTION_ATTACHMENTS).default([])
+  attachments: z.array(DirectionAttachmentSchema).max(MAX_DIRECTION_ATTACHMENTS).default([]),
+  /** What the composer's top edge pinned (D-182): files and checks the turn
+   *  was pointed at, rendered as chips on the sent message. Empty for every
+   *  direction written before this existed. */
+  context: z.array(DirectionContextRefSchema).max(MAX_DIRECTION_CONTEXT).default([])
 });
 export type Direction = z.infer<typeof DirectionSchema>;
 
@@ -1052,7 +1089,9 @@ export const DirectionInputSchema = z.object({
   attachmentIds: z
     .array(z.string().startsWith("art_"))
     .max(MAX_DIRECTION_ATTACHMENTS)
-    .default([])
+    .default([]),
+  /** Pinned references (D-182), snapshotted client-side at submit. */
+  context: z.array(DirectionContextRefSchema).max(MAX_DIRECTION_CONTEXT).default([])
 });
 export type DirectionInput = z.infer<typeof DirectionInputSchema>;
 
@@ -3381,7 +3420,10 @@ export const IpcDirectInputSchema = z.object({
   attachmentIds: z
     .array(z.string().startsWith("art_"))
     .max(MAX_DIRECTION_ATTACHMENTS)
-    .default([])
+    .default([]),
+  /** Pinned references (D-182). Bounded here too: the bridge is a validation
+   *  boundary in its own right. */
+  context: z.array(DirectionContextRefSchema).max(MAX_DIRECTION_CONTEXT).default([])
 });
 export type IpcDirectInput = z.infer<typeof IpcDirectInputSchema>;
 
@@ -3418,6 +3460,14 @@ export interface NovusBridge {
   system: {
     /** The build a person is running, for the settings About page (D-174). */
     version(): Promise<IpcResult<{ app: string; electron: string }>>;
+  };
+  /** Native notifications (D-180): a turn ending, or the harness asking —
+   *  only while the window is elsewhere, each its own machine-local switch. */
+  notifications: {
+    get(): Promise<IpcResult<{ turns: boolean; needsYou: boolean }>>;
+    set(prefs: { turns: boolean; needsYou: boolean }): Promise<IpcResult<{ turns: boolean; needsYou: boolean }>>;
+    /** Fired when a notification's click brings the person back. */
+    onOpenMission(listener: (missionId: string) => void): () => void;
   };
   /**
    * The face a person already has. Everyone in a mission signed in with
@@ -3559,6 +3609,8 @@ export interface NovusBridge {
       /** Images to hand the harness with these words (D-150), already
        *  uploaded through `attachImage`. */
       attachmentIds?: string[];
+      /** Pinned references — files and checks (D-182). */
+      context?: DirectionContextRef[];
     }): Promise<
       IpcResult<{
         directionId: string;

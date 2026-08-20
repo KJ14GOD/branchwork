@@ -1218,6 +1218,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
 
   /** Whichever repository the person is in: the room they are reading, or the
    *  project the rail is showing when nothing is open. */
+// A notification's click brings the person back to the mission that asked
+  // (D-180): the main process focused the window; this opens the tab.
+  useEffect(() => {
+    return novus().notifications.onOpenMission((missionId) => {
+      const holder = projects.find((project) =>
+        project.missions.some((mission) => mission.missionId === missionId)
+      );
+      if (holder) openMissionTab(holder.key, missionId);
+    });
+  }, [projects, openMissionTab]);
+
   const newMissionHere = useCallback(() => {
     if (currentProject) {
       openNewMission(currentProject);

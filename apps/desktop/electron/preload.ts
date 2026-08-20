@@ -31,6 +31,15 @@ const novus: NovusBridge = {
   system: {
     version: () => ipcRenderer.invoke("novus:system:version")
   },
+  notifications: {
+    get: () => ipcRenderer.invoke("novus:notifications:get"),
+    set: (prefs) => ipcRenderer.invoke("novus:notifications:set", prefs),
+    onOpenMission: (listener) => {
+      const wrapped = (_event: unknown, missionId: string) => listener(missionId);
+      ipcRenderer.on("novus:open-mission", wrapped);
+      return () => ipcRenderer.removeListener("novus:open-mission", wrapped);
+    }
+  },
   people: {
     avatar: (login) => ipcRenderer.invoke("novus:people:avatar", login)
   },

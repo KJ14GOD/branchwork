@@ -1,5 +1,6 @@
 import {
   BrowserWindow,
+  Notification,
   app,
   clipboard,
   dialog,
@@ -12,6 +13,7 @@ import {
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openableExtensionOf, openRefusalFor } from "./artifact-open";
+import { createNotifier, type NotificationPrefs, type Notifier } from "./notifications";
 import {
   AttachmentRefused,
   prepareAttachment,
@@ -160,6 +162,7 @@ let watchedAll: { stop: () => void } | null = null;
 let authStatus: IpcAuthStatus = { state: "signed_out" };
 let pollTimer: NodeJS.Timeout | null = null;
 let runner: RunnerAgent | null = null;
+let notifier: Notifier | null = null;
 
 function setAuthStatus(next: IpcAuthStatus): void {
   authStatus = next;
@@ -175,7 +178,38 @@ function setAuthStatus(next: IpcAuthStatus): void {
  */
 function startRunner(): void {
   if (runner) return;
-  runner = startRunnerAgent({ api, controlPlaneUrl, getToken: () => store.load() });
+  // The notifier speaks only while the person is elsewhere (D-180): the
+  // window's own focus is the gate, the mission's goal is the body, and the
+  // click brings them back to the mission that asked.
+  if (!notifier) {
+    notifier = createNotifier({
+      userDataPath: app.getPath("userData"),
+      isFocused: () => window?.isFocused() ?? false,
+      show: (title, body, onClick) => {
+        const note = new Notification({ title, body });
+        note.on("click", onClick);
+        note.show();
+      },
+      open: (missionId) => {
+        if (window) {
+          if (window.isMinimized()) window.restore();
+          window.show();
+          window.focus();
+          window.webContents.send("novus:open-mission", missionId);
+        }
+      },
+      missionWords: async (missionId) => {
+        const detail = await api.getMission(missionId);
+        return detail.mission.goal;
+      }
+    });
+  }
+  runner = startRunnerAgent({
+    api,
+    controlPlaneUrl,
+    getToken: () => store.load(),
+    notify: (note) => notifier?.notify(note)
+  });
 }
 
 async function stopRunner(): Promise<void> {
@@ -646,6 +680,22 @@ function registerIpc(): void {
     return call(async () => recordingStatus());
   });
 
+  ipcMain.handle("novus:notifications:get", async () => {
+    return ok(
+      notifier?.prefs() ??
+        ({ turns: true, needsYou: true } satisfies NotificationPrefs)
+    );
+  });
+
+  ipcMain.handle("novus:notifications:set", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ turns: z.boolean(), needsYou: z.boolean() })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed preferences." };
+    notifier?.setPrefs(parsed.data);
+    return ok(parsed.data);
+  });
+
   ipcMain.handle("novus:system:version", async () => {
     return ok({ app: app.getVersion(), electron: process.versions.electron });
   });
@@ -879,7 +929,8 @@ function registerIpc(): void {
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         ...(input.newSession ? { newSession: true } : {}),
         ...(input.alongside ? { alongside: true } : {}),
-        ...(input.attachmentIds.length > 0 ? { attachmentIds: input.attachmentIds } : {})
+        ...(input.attachmentIds.length > 0 ? { attachmentIds: input.attachmentIds } : {}),
+        ...(input.context.length > 0 ? { context: input.context } : {})
       })
     );
     if (!result.ok) return result;

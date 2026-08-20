@@ -20,7 +20,7 @@ import { HumanMark } from "./identity";
  * that exists. A knob lands here the day its behavior does.
  */
 
-type Page = "account" | "appearance" | "agents" | "machine" | "keyboard" | "about";
+type Page = "account" | "appearance" | "notifications" | "agents" | "machine" | "keyboard" | "about";
 
 function PersonGlyph() {
   return (
@@ -36,6 +36,15 @@ function SwatchGlyph() {
     <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
       <circle cx="8" cy="8" r="5.9" />
       <path d="M8 2.1v11.8M8 8l4.2-4.2" />
+    </svg>
+  );
+}
+
+function BellGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 2.2a4 4 0 0 1 4 4c0 3 .8 4 1.6 4.7H2.4C3.2 10.2 4 9.2 4 6.2a4 4 0 0 1 4-4Z" />
+      <path d="M6.6 13.4a1.5 1.5 0 0 0 2.8 0" />
     </svg>
   );
 }
@@ -90,6 +99,7 @@ const NAV: { group: string; pages: { key: Page; label: string; glyph: () => Reac
     pages: [
       { key: "account", label: "Account", glyph: PersonGlyph },
       { key: "appearance", label: "Appearance", glyph: SwatchGlyph },
+      { key: "notifications", label: "Notifications", glyph: BellGlyph },
       { key: "keyboard", label: "Keyboard", glyph: KeysGlyph }
     ]
   },
@@ -109,6 +119,7 @@ const NAV: { group: string; pages: { key: Page; label: string; glyph: () => Reac
 const PAGE_LABEL: Record<Page, string> = {
   account: "Account",
   appearance: "Appearance",
+  notifications: "Notifications",
   agents: "Agents",
   machine: "Repositories",
   keyboard: "Keyboard",
@@ -180,11 +191,13 @@ export function SettingsDialog({
     { name: string; defaultBranch: string; onThisMachine: boolean }[] | null
   >(null);
   const [version, setVersion] = useState<{ app: string; electron: string } | null>(null);
+  const [notif, setNotif] = useState<{ turns: boolean; needsYou: boolean } | null>(null);
 
   useEffect(() => {
     void novus().setup.probe().then((result) => setProbe(result.ok ? result.value : null));
     void novus().repos.localList().then((result) => setRepos(result.ok ? result.value : []));
     void novus().system.version().then((result) => setVersion(result.ok ? result.value : null));
+    void novus().notifications.get().then((result) => setNotif(result.ok ? result.value : null));
   }, []);
 
   useEffect(() => {
@@ -209,6 +222,8 @@ export function SettingsDialog({
       { page: "account", title: user.name ?? user.login, description: `Signed in with GitHub as ${user.login}` },
       { page: "account", title: "Sign out", description: "Leave this machine signed out" },
       { page: "appearance", title: "Theme", description: "Light, dark, or follow the system" },
+      { page: "notifications", title: "Turn completions", description: "Tell me when a turn finishes while I am elsewhere" },
+      { page: "notifications", title: "Needs you", description: "Tell me when the agent asks a question while I am elsewhere" },
       ...KEYS.map((entry) => ({ page: "keyboard" as Page, title: entry.keys, description: entry.does })),
       { page: "agents", title: "Claude Code", description: probe?.claudeCode.installed ? `${probe.claudeCode.version ?? "installed"}${probe.claudeCode.account ? ` · ${probe.claudeCode.account}` : ""}` : "not found on this machine" },
       { page: "agents", title: "Codex", description: probe?.codex.installed ? `${probe.codex.version ?? "installed"}${probe.codex.account ? ` · ${probe.codex.account}` : ""}` : "not found on this machine" },
@@ -346,6 +361,67 @@ export function SettingsDialog({
             <Card heading="Theme">
               <CardRow title="Theme" description="Light, dark, or follow the system" trailing={themeSegment} />
             </Card>
+          </>
+        ) : page === "notifications" ? (
+          <>
+            <h2 className="settings-page-title">Notifications</h2>
+            <Card heading="While you are elsewhere">
+              <CardRow
+                title="Turn completions"
+                description="A turn finished or failed — the work is ready to read. Silent while the window is focused."
+                trailing={
+                  notif === null ? (
+                    <span className="settings-card-value">…</span>
+                  ) : (
+                    <div className="settings-theme" role="group" aria-label="Turn completions">
+                      {[true, false].map((value) => (
+                        <button
+                          key={String(value)}
+                          className={notif.turns === value ? "segment-tab active" : "segment-tab"}
+                          aria-pressed={notif.turns === value}
+                          onClick={() => {
+                            const next = { ...notif, turns: value };
+                            setNotif(next);
+                            void novus().notifications.set(next);
+                          }}
+                          data-testid={`notif-turns-${value ? "on" : "off"}`}
+                        >
+                          {value ? "On" : "Off"}
+                        </button>
+                      ))}
+                    </div>
+                  )
+}
+              />
+              <CardRow
+                title="Needs you"
+                description="The agent asked a question — nothing moves until somebody answers. Silent while the window is focused."
+                trailing={
+                  notif === null ? (
+                    <span className="settings-card-value">…</span>
+                  ) : (
+                    <div className="settings-theme" role="group" aria-label="Needs you">
+                      {[true, false].map((value) => (
+                        <button
+                          key={String(value)}
+                          className={notif.needsYou === value ? "segment-tab active" : "segment-tab"}
+                          aria-pressed={notif.needsYou === value}
+                          onClick={() => {
+                            const next = { ...notif, needsYou: value };
+                            setNotif(next);
+                            void novus().notifications.set(next);
+                          }}
+                          data-testid={`notif-needsYou-${value ? "on" : "off"}`}
+                        >
+                          {value ? "On" : "Off"}
+                        </button>
+                      ))}
+                    </div>
+                  )
+}
+              />
+            </Card>
+            <p className="settings-hint">Clicking a notification brings you back to the mission that asked.</p>
           </>
         ) : page === "agents" ? (
           <>

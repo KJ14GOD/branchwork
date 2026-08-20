@@ -152,6 +152,12 @@ export interface RunnerAgentDeps {
   /** Makes the scripted harness ask for permission before it writes, so the
    *  approval round trip is driven through this agent rather than mocked. */
   fakeApproval?: boolean;
+  /** Tells the person the room needs them while they are elsewhere (D-180):
+   *  a turn ending, or the harness asking a question. Absent in tests. */
+  notify?: (note: {
+    kind: "turn_completed" | "turn_failed" | "needs_you";
+    missionId: string;
+  }) => void;
 }
 
 interface ElectronAppShape {
@@ -1833,6 +1839,11 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     let directionPending = args.directionId;
     const emit = (event: RunnerEvent): void => {
       report(args.workstreamId, args.executionId, event);
+      // The harness asked a person's question: the one moment nothing moves
+      // until somebody comes back (D-180).
+      if (event.kind === "approval.requested") {
+        deps.notify?.({ kind: "needs_you", missionId: args.missionId });
+      }
       // Applied means the harness has it. The session event is the moment the
       // harness actually took the turn, so that is when it is marked.
       if (event.kind === "harness.session" && directionPending) {
@@ -2079,6 +2090,13 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     }
     openExecutions.delete(args.executionId);
     report(args.workstreamId, args.executionId, result.terminal);
+    // The work is ready to read (D-180). A *stopped* turn stays quiet — the
+    // person themselves asked it to stop, and telling them is an echo.
+    if (result.terminal.kind === "execution.completed") {
+      deps.notify?.({ kind: "turn_completed", missionId: args.missionId });
+    } else if (result.terminal.kind === "execution.failed" || result.terminal.kind === "execution.interrupted") {
+      deps.notify?.({ kind: "turn_failed", missionId: args.missionId });
+    }
 
     // A checkpoint that changed files is work nothing has verified yet, so the
     // declared checks run now, by themselves. After the terminal report and on

@@ -2535,3 +2535,15 @@ Read from the events rather than carried as a column on the workstream: it is on
 **Consequences.** `keptWorkspace` joins `derive.ts` beside the room's other derivations rather than living inside the panel, so it is exercised in plain Node: `room-presentation.test.ts` (+5 — the count, both quiet outcomes, a mission that has not ended, the newest answer winning after a second close, and another lane's workspace never reported as this one's). DESIGN.md's Overview list gains the row. D-155's stated gap closes; the other one it named — worktrees from missions that ended before it existed — stays open and stays named.
 
 **Revisit when.** A settle-it-here action belongs on that row (open the folder, discard, or commit), which is a different decision about who may do what to a lane whose mission has ended; or terminal-mission retention arrives and a kept workspace becomes something a sweep has an opinion about.
+
+## D-180 — The machine tells you when the room needs you
+
+**Context.** Owner-picked: the biggest gap against Conductor and Codex was silence — a turn could finish or the agent could ask a question while the person was in another app, and nothing said so.
+
+**Decision.** Native notifications for exactly two moments, because exactly two are a person's to act on: **a turn ending** (completed, or failed/interrupted — the work is ready to read) and **needs you** (the harness asked; nothing moves until somebody answers). A *stopped* turn stays silent — the person themselves asked. Both are suppressed while the window is focused: a watcher needs no echo. Each moment is its own machine-local switch, on by default, on the settings page this feature finally earns (the D-174 rule holding: the page landed the day its behavior did). The body is the mission's own goal, fetched when the moment comes; the click focuses the window and opens the mission that asked. The notifier is a pure gated module with the OS notification injected — the runner's only addition is a `notify` callback at its turn-terminal and approval-requested sites.
+
+**Alternatives.** Notifying every event kind (rejected: a feed relocated into the notification center is noise, not attention). Renderer-side notifications (rejected: the renderer may be reloading or hidden; the main process owns the window and the runner already lives there). OS notification permissions flow (nothing to build: Electron's Notification asks the OS itself).
+
+**Consequences.** `notifications.ts` (+5 gating tests), the runner's notify hooks, main's notifier + prefs IPC + open-mission focus path, the bridge's `notifications` namespace, the settings Notifications page, the shell's open-mission listener. Live-proven: the page's switch flipped Off persisted through the real IPC (`{turns:false, needsYou:true}` read back); evidence 205.
+
+**Revisit when.** Notifications want mission-level muting, sound, or a "checks failed" third moment — each is a switch the day it exists.
