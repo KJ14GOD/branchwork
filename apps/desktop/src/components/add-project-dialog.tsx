@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import type { AvailableRepository, Organization, User } from "@novus/contracts";
 import { agoLabel } from "../format";
 import { novus } from "../bridge";
+import { focusQuietly } from "./dialog";
 
 export interface PickedRepository {
   provider: "github" | "local";
@@ -137,8 +138,11 @@ export function AddProjectDialog({
     searchRef.current?.focus();
   }, []);
 
-  // Esc closes and focus is trapped (DESIGN.md#keyboard: every dialog).
+  // Esc closes and focus is trapped (DESIGN.md#keyboard: every dialog), and
+  // focus returns to the opener on close — quietly (D-106), because closing
+  // with Esc is a dismissal, not keyboard navigation.
   useEffect(() => {
+    const opener = document.activeElement;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -163,7 +167,10 @@ export function AddProjectDialog({
       }
     };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      focusQuietly(opener);
+    };
   }, [onClose]);
 
   const rows = useMemo<Row[]>(() => {

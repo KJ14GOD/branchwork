@@ -14,7 +14,7 @@ import {
   type PreparedAttachment
 } from "@novus/contracts";
 import codexIcon from "../assets/codex-icon.png";
-import { Dialog } from "./dialog";
+import { Dialog, focusQuietly } from "./dialog";
 import { ClaudeGlyph, DocumentGlyph, ImageGlyph } from "./identity";
 import { FileBadge } from "./file-badge";
 
@@ -236,7 +236,11 @@ export function Composer({
       if (!footRef.current?.contains(event.target as Node)) setOpenMenu(null);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpenMenu(null);
+      if (event.key !== "Escape") return;
+      // The chip kept focus while its menu was open; dismissing is not
+      // keyboard navigation, so the ring stays off (D-106).
+      focusQuietly(document.activeElement);
+      setOpenMenu(null);
     };
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);

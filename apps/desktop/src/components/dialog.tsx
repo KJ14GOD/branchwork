@@ -1,6 +1,35 @@
 import { useEffect, useRef } from "react";
 
 /**
+ * Focus an element without the ring, until the keyboard is genuinely used
+ * again (D-106, generalized for every overlay).
+ *
+ * Closing anything with Esc is a key press, so the browser treats whatever
+ * holds focus afterwards as keyboard-navigated and draws the focus ring — a
+ * box around a control nobody navigated to. That is right for a person
+ * tabbing and wrong for a person dismissing, and the browser cannot tell them
+ * apart. This marks the element so the ring stays off until the next real
+ * key press (which restores it — a keyboard user loses nothing), or until
+ * focus moves on.
+ *
+ * Works for both shapes of the bug: a menu whose trigger *kept* focus while
+ * it was open, and a dialog that *returns* focus to its opener on close.
+ */
+export function focusQuietly(target: Element | null | undefined): void {
+  const opener = target as HTMLElement | null | undefined;
+  if (!opener?.focus) return;
+  opener.dataset.focusQuiet = "true";
+  opener.focus({ preventScroll: true });
+  const speak = () => {
+    delete opener.dataset.focusQuiet;
+    opener.removeEventListener("blur", speak);
+    window.removeEventListener("keydown", speak, true);
+  };
+  opener.addEventListener("blur", speak);
+  window.addEventListener("keydown", speak, true);
+}
+
+/**
  * The Dialog primitive DESIGN.md's list has always named, finally extracted.
  *
  * Three behaviours every dialog in the product owes a person, in one place
@@ -50,17 +79,7 @@ export function Dialog({
       // on hover, at the rail's edge, that ring is a white box around a button
       // nobody navigated to. The mark is suppressed until the person actually
       // uses the keyboard again, and the focus itself is untouched.
-      const opener = restoreTo.current;
-      if (!opener?.focus) return;
-      opener.dataset.focusQuiet = "true";
-      opener.focus({ preventScroll: true });
-      const speak = () => {
-        delete opener.dataset.focusQuiet;
-        opener.removeEventListener("blur", speak);
-        window.removeEventListener("keydown", speak, true);
-      };
-      opener.addEventListener("blur", speak);
-      window.addEventListener("keydown", speak, true);
+      focusQuietly(restoreTo.current);
     };
   }, []);
 

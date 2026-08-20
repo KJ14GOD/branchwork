@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MIN_SECRET_LENGTH, type SecretState, type SettingsScope, type WorkspaceProposal } from "@novus/contracts";
 import { novus } from "../bridge";
+import { focusQuietly } from "./dialog";
 import { draftFrom, settingsToSave, type SetupDraft } from "./workspace-config";
 
 /**
@@ -287,7 +288,8 @@ export function WorkspaceSetupDialog({
     window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("keydown", onKey, true);
-      opener?.focus();
+      // Quietly (D-106): closing with Esc must not ring the opener.
+      focusQuietly(opener);
     };
   }, [onClose]);
 

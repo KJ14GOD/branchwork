@@ -1391,8 +1391,8 @@ body {
 }
 
 .ask-base .mono {
+  font: var(--type-meta);
   font-family: var(--font-mono);
-  font-size: 12px;
 }
 
 .ask-base-menu {
@@ -1413,7 +1413,7 @@ body {
 }
 
 .base-branch-name {
-  font-size: 12px;
+  font: var(--type-meta);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2168,7 +2168,7 @@ body {
   background: var(--surface-1);
   color: var(--text-1);
   border: 1px solid var(--edge);
-  border-radius: 6px;
+  border-radius: var(--r-control);
   padding: var(--s-2) var(--s-3);
 }
 
@@ -5483,14 +5483,17 @@ body.resizing {
   border-top: 1px solid var(--edge);
 }
 
+/* The receipt joins the page's own flow: it renders inside a surface that
+   already scrolls (the PR page's feed, the decision record), and a capped
+   porthole there was a scroller inside a scroller — two thumbs for one read
+   (DESIGN.md#overflow). Horizontal stays its own, for the rare unwrappable
+   line. */
 .prepared-body {
   font: var(--type-row);
   font-family: var(--font-mono);
   color: var(--text-2);
   white-space: pre-wrap;
   overflow-x: auto;
-  max-height: 320px;
-  overflow-y: auto;
   width: 100%;
 }
 
@@ -5862,7 +5865,7 @@ body.resizing {
   text-align: left;
   background: var(--surface-1);
   border: 1px solid var(--edge);
-  border-radius: 10px;
+  border-radius: var(--r-button);
   padding: var(--s-3);
   cursor: pointer;
   color: var(--text-2);
@@ -5997,16 +6000,16 @@ body.resizing {
 .evidence-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--s-1);
 }
 
 .evidence-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 8px;
+  gap: var(--s-3);
+  padding: var(--s-1) var(--s-2);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--r-control);
   background: transparent;
   color: var(--text-1);
   text-align: left;
@@ -6023,7 +6026,7 @@ body.resizing {
   width: 48px;
   height: 32px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--r-control);
   border: 1px solid var(--edge);
   flex: none;
 }
@@ -6076,13 +6079,13 @@ body.resizing {
 .artifact-view {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--s-3);
 }
 
 .artifact-view-head {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: var(--s-3);
 }
 
 .artifact-view-title {
@@ -6093,7 +6096,7 @@ body.resizing {
 .artifact-media {
   max-width: 100%;
   border: 1px solid var(--edge);
-  border-radius: 10px;
+  border-radius: var(--r-button);
   background: var(--surface-1);
 }
 
@@ -6104,12 +6107,12 @@ body.resizing {
 .artifact-provenance {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--s-1);
 }
 
 .artifact-provenance-row {
   display: flex;
-  gap: 12px;
+  gap: var(--s-3);
   font: var(--type-meta);
 }
 
@@ -6143,7 +6146,7 @@ body.resizing {
   padding-left: 12px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--s-1);
 }
 
 .decision-artifact-option {
@@ -6188,7 +6191,7 @@ body.resizing {
 .artifact-attachment-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--s-1);
 }
 
 .artifact-attachment {
@@ -6494,7 +6497,7 @@ span.trace-attachment-transcript:hover {
 .artifact-text {
   max-width: 720px;
   border: 1px solid var(--edge);
-  border-radius: 10px;
+  border-radius: var(--r-button);
   background: var(--surface-1);
   padding: var(--s-4);
   overflow-x: auto;

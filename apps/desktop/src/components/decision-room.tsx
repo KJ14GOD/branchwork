@@ -330,10 +330,10 @@ function ApproachColumn({
           "None yet"
         ) : (
           <details className="disclosure">
-            <summary>
-              Files
-              <span className="disclosure-count">{plural(approach.paths.length, "path")}</span>
-            </summary>
+            {/* The row's own label already says "Files"; the summary carries
+                only what opening it adds — the count. Repeating the word made
+                the cell read "Files Files 1 path". */}
+            <summary>{plural(approach.paths.length, "path")}</summary>
             <ul className="tool-list">
               {approach.paths.map((path) => (
                 <li key={path}>

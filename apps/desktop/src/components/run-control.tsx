@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MissionDetailResponse } from "@novus/contracts";
 import { novus } from "../bridge";
+import { focusQuietly } from "./dialog";
 import { liveRunProcess } from "./derive";
 import { GatedAction } from "./gated";
 import { commandItems, type CommandItem } from "./workspace-config";
@@ -113,6 +114,8 @@ export function RunControl({
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // Dismissing the menu is not keyboard navigation (D-106).
+      focusQuietly(document.activeElement);
       setOpen(false);
       setNote(null);
     };

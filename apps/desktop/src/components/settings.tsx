@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { focusQuietly } from "./dialog";
 import {
   applyTheme,
   themePreference,
@@ -86,6 +87,8 @@ export function ThemeControl({
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.stopPropagation();
+      // Dismissing the popover is not keyboard navigation (D-106).
+      focusQuietly(document.activeElement);
       onClose();
     };
     document.addEventListener("mousedown", onPress);

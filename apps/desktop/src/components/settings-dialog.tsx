@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SetupProbeResponse } from "@novus/contracts";
 import { novus } from "../bridge";
+import { focusQuietly } from "./dialog";
 import { applyTheme, themePreference, THEME_CHOICES, type ThemePreference } from "../theme";
 import {
   BINDING_ACTIONS,
@@ -227,6 +228,7 @@ export function SettingsDialog({
   }, []);
 
   useEffect(() => {
+    const opener = document.activeElement;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -234,7 +236,12 @@ export function SettingsDialog({
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      // Back to the opener, quietly (D-106): Esc is a dismissal, not
+      // keyboard navigation, and must not ring the control it lands on.
+      focusQuietly(opener);
+    };
   }, [onClose]);
 
   // While a chord is being recorded every keydown belongs to the recording:
