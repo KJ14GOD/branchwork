@@ -2559,3 +2559,19 @@ Read from the events rather than carried as a column on the workstream: it is on
 **Consequences.** Landed in two parts, honestly. **Part 1 (this entry)**: contracts (`DirectionContextRefSchema`, `MAX_DIRECTION_CONTEXT`, direction/input/bridge surfaces), the `directions.context` column, storage at submit, serving on the wire, both dispatch payloads, and the composer/room chip wiring — proven by `sessions.test.ts` (+2: stored-served-dispatched exactly as submitted; the ninth reference refused in words). Part 1 ships partly because a sibling slice's commit swept the contract hunks onto main ahead of their entry (the gate's cited-but-never-written check went red for everyone), and restoring consistency beat holding the whole slice. **Part 2 (follows immediately)**: the inspector/file-view pickers, the sent-message chips, and the runner's prompt block that actually hands the references to the harness — PROGRESS states plainly that until part 2 lands, a pinned reference is carried and displayed but not yet spoken to the agent.
 
 **Revisit when.** A third reference kind arrives (a checkpoint, an artifact, a sibling chat's single message — each named in the design conversation); or @-mention wants building on top; or eight proves the wrong bound.
+
+## D-180 — Choosing an approach shows it: selection unfolds
+
+**Context.** Owner-reported, with the sequence: fold an approach's conversations, go to its sibling, come back — and the click that chooses it changes nothing on screen. *"i cant open that again… the workaround is if i click on another approach inside of that then i click it and see it."*
+
+D-134 amended the rail so the selected approach's row folds and unfolds its own conversations, and said in the same breath that any *other* approach's click selects it "leaving every fold as it was". That second half was written to protect somebody's disclosure from moving when the selection did, which is right for the lanes you are not choosing — and wrong for the one you are. A folded lane you return to swallows the click: nothing moves, so the control reads as broken, and the way back is a second click nobody discovers except by accident.
+
+**Decision.** Selecting an approach **unfolds it**. Choosing a lane is asking to see it, and a request to see something that answers with nothing is not a fold, it is a dead control.
+
+Every other lane's fold still survives the selection moving, which is what D-134's rule was actually for. And the selected row stays a toggle: once it is the lane you are reading, its click folds and unfolds as before.
+
+**Alternatives.** Leaving it and treating the second click as the way (rejected: that is the bug, described as a feature). Folding the lane you leave (rejected: it moves a disclosure the person did not touch, which is exactly what D-134 refused). Never folding on selection *or* on click, and putting a twisty on the row (rejected: D-134 removed that twisty deliberately — the row is the target, and a chevron on every lane is the row-controls accretion the rail has been pruning since D-084).
+
+**Consequences.** One branch in the rail's `activate`. The decision spec — the only fixture with two approaches, which is what this needs — now folds a lane, leaves, returns in one click, and then toggles it twice, because a toggle that works once has state somewhere it should not. The sessions spec was where this was first probed and it passed, which is the honest reason the bug survived: one approach cannot express it.
+
+**Revisit when.** A lane can be folded from somewhere other than its own row, and "selection unfolds" starts fighting an explicit fold made elsewhere.

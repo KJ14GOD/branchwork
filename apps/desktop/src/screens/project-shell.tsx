@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type BranchInfo,
+  type DirectionContextRef,
   type Effort,
   type Mission,
   type ModelId,
@@ -565,7 +566,14 @@ function MissionTree({
             laneSessions.some((session) => sessionNeedsYou(detail, session.sessionId));
           // The selected approach's row has no selection left to make, so its
           // click folds and unfolds its conversations; any other approach's
-          // click selects it, leaving every fold as it was (D-134, amended).
+          // click selects it — and **unfolds it**, because choosing a lane is
+          // asking to see it (D-180, owner-reported).
+          //
+          // Leaving the fold alone on selection was deliberate once and was
+          // wrong in the one case that matters: a folded lane you come back to
+          // swallows the click. Nothing on screen changes, so the control
+          // reads as broken, and the way back was to click a second time —
+          // which nobody discovers except by accident.
           const activate = () => {
             if (selected) {
               setFoldedLanes((previous) => {
@@ -575,6 +583,12 @@ function MissionTree({
                 return next;
               });
             } else {
+              setFoldedLanes((previous) => {
+                if (!previous.has(lane.workstreamId)) return previous;
+                const next = new Set(previous);
+                next.delete(lane.workstreamId);
+                return next;
+              });
               onSelectApproach(lane.workstreamId === firstLaneId ? null : lane.workstreamId);
             }
           };
@@ -833,6 +847,13 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** The rail's Try-another-approach row asks; the room owns the dialog
    *  (D-126). A counter, so every ask opens it even after a cancel. */
   const [forkAsk, setForkAsk] = useState(0);
+  /** A pinned reference asked for from the panel (D-182): the inspector's
+   *  rows live here in the shell, the composer's chips live in the room, so
+   *  the ask crosses as a nonced value the room consumes — the forkAsk
+   *  pattern, carrying a payload. */
+  const [contextAsk, setContextAsk] = useState<{ ref: DirectionContextRef; n: number } | null>(
+    null
+  );
   /** The docked evidence panel. Held here because its toggle lives in the top
    *  bar and because the panel outlives the mission selected beside it. */
   const [inspector, setInspector] = useState<InspectorSection | null>(null);
@@ -2301,6 +2322,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             <ProjectRoom
               key={active.id}
               forkAsk={forkAsk}
+              contextAsk={contextAsk}
               findAsk={findAsk}
               onFindConsumed={() => setFindAsk(0)}
               onForkConsumed={() => setForkAsk(0)}
@@ -2468,6 +2490,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             });
             setActiveFileByTab((previous) => ({ ...previous, [active.id]: key }));
           }}
+          onAddContext={(ref) => setContextAsk((prev) => ({ ref, n: (prev?.n ?? 0) + 1 }))}
           onOpenArtifact={(artifactId) => {
             // The artifact look belongs to the conversation canvas alone
             // (D-165 amended twice, owner-hit: it was hijacking every canvas

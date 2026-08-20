@@ -261,7 +261,8 @@ function LedgerEntry({
   busy,
   onRerun,
   attachedArtifacts,
-  onOpenArtifact
+  onOpenArtifact,
+  onAddContext
 }: {
   check: VerificationCheck;
   /** The conversation whose checkpoint this check ran at, named only while
@@ -814,6 +815,7 @@ export function Inspector({
   onSection,
   openPath,
   onOpenFile,
+  onAddContext,
   onOpenArtifact,
   hostedHere,
   onClose,
@@ -827,6 +829,9 @@ export function Inspector({
   /** The file currently taking the room's canvas, so the tree can mark it. */
   openPath: string | null;
   onOpenFile: (path: string) => void;
+  /** Pins a reference onto the composer's next send (D-182): a changed file's
+   *  path, or a check with its facts snapshotted as they stand on this row. */
+  onAddContext?: (ref: DirectionContextRef) => void;
   /** Opens one artifact's own view on the room's canvas (D-122). */
   onOpenArtifact: (artifactId: string) => void;
   /** False when this workstream's repository is not checked out here. Output
@@ -1060,6 +1065,11 @@ export function Inspector({
                       expanded={expanded === file.changeId}
                       onToggle={() => void toggleFile(file)}
                       load={diffs[file.changeId]}
+                      onAddContext={
+                        onAddContext
+                          ? () => onAddContext({ kind: "file", path: file.path })
+                          : undefined
+                      }
                     />
                   ))}
                 </>
@@ -1129,6 +1139,19 @@ export function Inspector({
                         check.artifactIds.includes(artifact.artifactId)
                       )}
                       onOpenArtifact={onOpenArtifact}
+                      onAddContext={
+                        onAddContext
+                          ? () =>
+                              onAddContext({
+                                kind: "check",
+                                checkId: check.checkId,
+                                name: check.name,
+                                outcome: check.outcome,
+                                command: check.command,
+                                output: check.output ? check.output.slice(-8000) : null
+                              })
+                          : undefined
+                      }
                     />
                   ))}
                 </div>

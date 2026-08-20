@@ -9,6 +9,8 @@ import {
   BeginArtifactResponseSchema,
   DEFAULT_PERMISSION_PROFILE,
   DeclaredCommandSchema,
+  DirectionContextRefSchema,
+  type DirectionContextRef,
   EnabledMcpServersSchema,
   EnabledSkillsSchema,
   PermissionProfileSchema,
@@ -341,7 +343,11 @@ const StartPayloadSchema = z.object({
         label: z.string().default("")
       })
     )
-    .default([])
+    .default([]),
+  /** Pinned references (D-182): files and checks the person pointed this
+   *  direction at, rendered into the turn's first message beside the words.
+   *  Defaulted empty so a command from an older control plane carries none. */
+  context: z.array(DirectionContextRefSchema).default([])
 });
 
 /** The push the control plane authorized (D-099): the branch, and the exact
@@ -1744,6 +1750,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         payload.data.attachments,
         join(worktreeRoot, workstreamId)
       ),
+      context: payload.data.context,
       access: payload.data.access,
       scope: payload.data.scope,
       permissionProfile: payload.data.permissionProfile,
@@ -1821,6 +1828,9 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     /** Files the person attached, already fetched (D-150): inlined bytes, or
      *  a worktree path for anything staged instead (D-153). */
     attachments: { mimeType: string; base64: string; label: string; path: string | null }[];
+    /** Pinned references (D-182): worktree files and snapshotted checks the
+     *  person pointed this direction at. */
+    context: DirectionContextRef[];
     /** What the turn may do to the worktree (D-095). */
     access: "write" | "read";
     /** The chat's file scope, pinned at dispatch (D-097); null unscoped. */
@@ -2031,6 +2041,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       effort: args.effort,
       resumeSessionId: args.resumeSessionId,
       attachments: args.attachments,
+      context: args.context,
       access: args.access,
       scope: args.scope,
       permissionProfile: args.permissionProfile,

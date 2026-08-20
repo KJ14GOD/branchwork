@@ -320,6 +320,42 @@ describe("competing approaches, compared and decided", () => {
     expect(await page.getByTestId("mission-approaches-count").innerText()).toContain("2 approaches");
     expect(await page.getByTestId("mission-row").count()).toBe(1);
 
+    // --- Choosing a folded approach shows it -------------------------------
+    // Owner-reported: fold one approach's conversations, go to its sibling,
+    // come back — and the click that chooses it changes nothing on screen,
+    // because selecting deliberately left the fold alone. The way back was to
+    // click it a second time, which reads as a dead control. Choosing a lane
+    // is asking to see it.
+    const chatsIn = (row: number) =>
+      page.evaluate((index) => {
+        const rows = [...document.querySelectorAll('[data-testid="rail-approach-row"]')];
+        const target = rows[index];
+        if (!target) return -1;
+        // A lane's conversations live in the `.side-children` block that
+        // follows its row, so counting siblings is counting the wrong thing.
+        const children = target.nextElementSibling;
+        if (!children || !children.classList.contains("side-children")) return 0;
+        return children.querySelectorAll('[data-testid="rail-session-row"]').length;
+      }, row);
+
+    // Alternative is the selected lane here, so fold its own conversations.
+    const openBefore = await chatsIn(1);
+    expect(openBefore).toBeGreaterThan(0);
+    await laneRows.nth(1).click();
+    await expect.poll(() => chatsIn(1), { timeout: 10_000 }).toBe(0);
+
+    // Away to the sibling, then back. One click, and it is showing again.
+    await laneRows.nth(0).click();
+    await page.waitForTimeout(400);
+    await laneRows.nth(1).click();
+    await expect.poll(() => chatsIn(1), { timeout: 10_000 }).toBe(openBefore);
+
+    // And it is still a toggle once it is the selected lane.
+    await laneRows.nth(1).click();
+    await expect.poll(() => chatsIn(1), { timeout: 10_000 }).toBe(0);
+    await laneRows.nth(1).click();
+    await expect.poll(() => chatsIn(1), { timeout: 10_000 }).toBe(openBefore);
+
     // --- The room lands in the lane that was just made ----------------------
     // Start approach selects the new lane (D-084): the room you asked for is
     // the room you get, its row washed in the tree beside its sibling's.

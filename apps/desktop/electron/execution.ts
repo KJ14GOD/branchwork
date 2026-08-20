@@ -281,6 +281,20 @@ export interface TurnRequest {
      *  cannot be handed directly (D-153). Null for an inlined image or PDF. */
     path: string | null;
   }[];
+  /** Pinned references (D-182): worktree files and snapshotted checks the
+   *  person pointed this direction at, said to the harness in words beside
+   *  the direction. References, never bytes — the agent holds the worktree. */
+  context?: readonly (
+    | { kind: "file"; path: string }
+    | {
+        kind: "check";
+        checkId: string;
+        name: string;
+        outcome: string;
+        command: string;
+        output: string | null;
+      }
+  )[];
   /** What this turn may do to the worktree (D-095). `read` runs alongside the
    *  lane's write turn: every permission request is denied on the spot with
    *  the reason, no approval ever reaches the room, no checkpoint is captured,
@@ -1074,6 +1088,35 @@ export function startTurn(request: TurnRequest): RunningTurn {
                   `request needs it.`
               }
             ];
+      // The pinned references (D-182), in words before the words they steer:
+      // a file is named as the path the person pointed at — the agent holds
+      // the worktree and opens it itself — and a check carries the facts
+      // snapshotted when the person referenced it, its output fenced so a
+      // stack trace reads as the quotation it is.
+      const refs = request.context ?? [];
+      const files = refs.filter((ref) => ref.kind === "file");
+      const checks = refs.filter((ref) => ref.kind === "check");
+      const contextNote =
+        refs.length === 0
+          ? []
+          : [
+              {
+                type: "text",
+                text: [
+                  ...(files.length > 0
+                    ? [
+                        `The person pinned ${files.length === 1 ? "this file" : "these files"} to this message — look at ${files.length === 1 ? "it" : "them"} in the working directory:\n` +
+                          files.map((ref) => `- ${ref.path}`).join("\n")
+                      ]
+                    : []),
+                  ...checks.map(
+                    (ref) =>
+                      `The person referenced the verification check "${ref.name}" (${ref.outcome} when referenced; command: ${ref.command}).` +
+                      (ref.output ? `\nIts output then:\n\`\`\`\n${ref.output}\n\`\`\`` : "")
+                  )
+                ].join("\n\n")
+              }
+            ];
       writeControl({
         type: "user",
         message: {
@@ -1083,6 +1126,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
               type: file.mimeType === "application/pdf" ? "document" : "image",
               source: { type: "base64", media_type: file.mimeType, data: file.base64 }
             })),
+            ...contextNote,
             ...stagedNote,
             { type: "text", text: request.direction }
           ]
