@@ -14,6 +14,7 @@ import type {
   Workstream
 } from "@novus/contracts";
 import { novus } from "../bridge";
+import { matchesChord, useKeybindings } from "../keybindings";
 import {
   Composer,
   profileLabel,
@@ -453,9 +454,10 @@ export function ProjectRoom({
   const findInputRef = useRef<HTMLInputElement>(null);
   const findRangesRef = useRef<Range[]>([]);
 
+  const keys = useKeybindings();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "f") {
+      if (matchesChord(event, keys.find)) {
         event.preventDefault();
         setFindOpen(true);
         setTimeout(() => findInputRef.current?.select(), 0);
@@ -463,7 +465,7 @@ export function ProjectRoom({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [keys]);
 
   useEffect(() => {
     const registry = CSS.highlights;

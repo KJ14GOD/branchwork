@@ -3980,7 +3980,7 @@ body {
 
 /* A file's type is a fact about the file, not something Novus is saying, which
    is why these are the one other place hues live outside their semantic tokens
-   (D-046, D-048, D-195). The mark is the language's own, so the slot holds a
+   (D-046, D-048, D-197). The mark is the language's own, so the slot holds a
    glyph rather than a chip: no fill, no radius, nothing drawn around it — a
    row of marks reads as a list of files, where a row of filled blocks read as
    a list of labels. */
@@ -6822,6 +6822,32 @@ span.trace-attachment-transcript:hover {
   padding: 2px var(--s-2);
   background: var(--surface-2);
   white-space: nowrap;
+}
+
+/* One chord row's controls: the chip, the pencil, and the trash (or its
+   reserved space) on a single line, so chips align down the card whether or
+   not a row has anything to reset. */
+.settings-key-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.settings-key-action {
+  width: 24px;
+  height: 24px;
+  color: var(--text-3);
+}
+
+.settings-key-action-space {
+  width: 24px;
+  height: 24px;
+  flex: none;
+}
+
+.settings-key-recording {
+  color: var(--text-2);
+  border-style: dashed;
 }
 
 .settings-theme {

@@ -258,37 +258,50 @@ export function Composer({
   const [mentionMatches, setMentionMatches] = useState<string[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
 
-  // The candidates for the token being typed. Opening the token is answered at
-  // once — there is nothing to debounce at the moment @ is pressed, and a beat
-  // of blankness there is the whole of what the popover feels like. Only
-  // refinement keystrokes wait, so a burst still costs one read rather than
-  // six. The effect keys on the query itself rather than the token object, so
-  // a re-render cannot restart the wait.
+  /**
+   * The candidates for the token being typed, kept level with the typing.
+   *
+   * A trailing debounce was the obvious shape and the wrong one: it updates
+   * the list only once the keys go quiet, so a fast burst leaves the popover
+   * showing the first letter's answer for the whole burst and then jumps —
+   * which reads as the feature being slow rather than as it waiting. The read
+   * is a bounded git list, cheap enough to run per keystroke, so instead of
+   * waiting this holds **one read in flight at a time**: the newest query
+   * queues behind the one running, every older one is dropped, and an answer
+   * is used only if it is still the query that is typed. Fast typing therefore
+   * costs one read per round trip rather than one per keystroke, and the list
+   * is never further behind than a single read.
+   */
   const mentionQuery = mentionToken?.query ?? null;
+  const typedQuery = useRef<string | null>(null);
+  const readingQuery = useRef<string | null>(null);
+  const queuedQuery = useRef<string | null>(null);
   useEffect(() => {
+    typedQuery.current = mentionQuery;
     if (!mention || mentionQuery === null) {
       setMentionMatches([]);
       return;
     }
-    let stale = false;
-    const read = () => {
-      void mention.search(mentionQuery).then((paths) => {
-        if (stale) return;
-        setMentionMatches(paths.slice(0, 8));
-        setMentionIndex(0);
+    const read = (query: string): void => {
+      readingQuery.current = query;
+      void mention.search(query).then((paths) => {
+        readingQuery.current = null;
+        // Only the answer to what is typed right now reaches the popover; an
+        // answer overtaken while it was in flight is discarded, never shown.
+        if (typedQuery.current === query) {
+          setMentionMatches(paths.slice(0, 8));
+          setMentionIndex(0);
+        }
+        const next = queuedQuery.current;
+        queuedQuery.current = null;
+        if (next !== null && next !== query && typedQuery.current === next) read(next);
       });
     };
-    if (mentionQuery === "") {
-      read();
-      return () => {
-        stale = true;
-      };
+    if (readingQuery.current !== null) {
+      queuedQuery.current = mentionQuery;
+      return;
     }
-    const timer = setTimeout(read, 120);
-    return () => {
-      stale = true;
-      clearTimeout(timer);
-    };
+    read(mentionQuery);
   }, [mention, mentionQuery]);
 
   /** Finds the @-token the cursor is inside: an @ at the start or after

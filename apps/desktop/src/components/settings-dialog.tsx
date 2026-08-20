@@ -2,6 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import type { SetupProbeResponse } from "@novus/contracts";
 import { novus } from "../bridge";
 import { applyTheme, themePreference, THEME_CHOICES, type ThemePreference } from "../theme";
+import {
+  BINDING_ACTIONS,
+  chordFromEvent,
+  chordLabel,
+  chordRefusal,
+  isOverridden,
+  resetBinding,
+  setBinding,
+  useKeybindings,
+  type BindingAction
+} from "../keybindings";
 import { HumanMark } from "./identity";
 
 /**
@@ -126,22 +137,33 @@ const PAGE_LABEL: Record<Page, string> = {
   about: "About"
 };
 
-/** The room's real keys — the ones the code binds, nothing aspirational. */
-const KEYS: { keys: string; does: string }[] = [
-  { keys: "⌘K", does: "Open the command palette" },
-  { keys: "⌘T", does: "Start a mission in the selected project" },
+/** The keys that stay themselves: a range, the room's modal letters, and the
+ *  platform's own Esc. Everything that is one ⌘ chord is rebindable and lives
+ *  in the bindings registry instead (D-177's recorded revisit). */
+const FIXED_KEYS: { keys: string; does: string }[] = [
   { keys: "⌘1 – ⌘9", does: "Open the selected project's missions" },
-  { keys: "⌘B", does: "Show or hide the projects rail" },
-  { keys: "⌘J", does: "Show or hide the terminal dock" },
-  { keys: "⌘E", does: "Show or hide the evidence panel" },
-  { keys: "⌘F", does: "Find in the conversation" },
-  { keys: "⌘,", does: "Open the theme control" },
   { keys: "G then C", does: "Open the Changes section" },
   { keys: "G then V", does: "Open the Verification section" },
   { keys: "G then A", does: "Open All files" },
   { keys: "R", does: "Request control of the lane" },
   { keys: "Esc", does: "Close the open dialog, find bar, or look" }
 ];
+
+function PencilGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9.7 3.6l2.7 2.7L5.9 12.8l-3.3.6.6-3.3zM11.6 1.7l2.7 2.7" />
+    </svg>
+  );
+}
+
+function TrashGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.8 4.4h10.4M6.2 4.4V2.9h3.6v1.5M4.2 4.4l.7 8.7h6.2l.7-8.7M6.6 7v3.7M9.4 7v3.7" />
+    </svg>
+  );
+}
 
 function CardRow({
   title,
@@ -192,6 +214,10 @@ export function SettingsDialog({
   >(null);
   const [version, setVersion] = useState<{ app: string; electron: string } | null>(null);
   const [notif, setNotif] = useState<{ turns: boolean; needsYou: boolean } | null>(null);
+  const bindings = useKeybindings();
+  /** The action whose next chord is being recorded, if any. */
+  const [recording, setRecording] = useState<BindingAction | null>(null);
+  const [keyProblem, setKeyProblem] = useState<string | null>(null);
 
   useEffect(() => {
     void novus().setup.probe().then((result) => setProbe(result.ok ? result.value : null));
@@ -211,6 +237,46 @@ export function SettingsDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // While a chord is being recorded every keydown belongs to the recording:
+  // captured before the shell's own handler, so pressing the chord being
+  // replaced does not also fire it. Esc cancels; a chord the registry refuses
+  // says why in words and keeps listening.
+  useEffect(() => {
+    if (recording === null) return;
+    const onKey = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.key === "Escape") {
+        setRecording(null);
+        setKeyProblem(null);
+        return;
+      }
+      const chord = chordFromEvent(event);
+      if (chord === null) {
+        if (!["Meta", "Control", "Shift", "Alt"].includes(event.key)) {
+          setKeyProblem("Hold ⌘ — a global key without it would eat plain typing.");
+        }
+        return;
+      }
+      const refusal = chordRefusal(recording, chord, bindings);
+      if (refusal !== null) {
+        setKeyProblem(refusal);
+        return;
+      }
+      setBinding(recording, chord);
+      setRecording(null);
+      setKeyProblem(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording, bindings]);
+
+  // A recording must not outlive the page it started on.
+  useEffect(() => {
+    setRecording(null);
+    setKeyProblem(null);
+  }, [page]);
+
   const choose = (next: ThemePreference) => {
     setPreference(next);
     applyTheme(next);
@@ -224,7 +290,12 @@ export function SettingsDialog({
       { page: "appearance", title: "Theme", description: "Light, dark, or follow the system" },
       { page: "notifications", title: "Turn completions", description: "Tell me when a turn finishes while I am elsewhere" },
       { page: "notifications", title: "Needs you", description: "Tell me when the agent asks a question while I am elsewhere" },
-      ...KEYS.map((entry) => ({ page: "keyboard" as Page, title: entry.keys, description: entry.does })),
+      ...BINDING_ACTIONS.map(({ action, does }) => ({
+        page: "keyboard" as Page,
+        title: chordLabel(bindings[action]),
+        description: does
+      })),
+      ...FIXED_KEYS.map((entry) => ({ page: "keyboard" as Page, title: entry.keys, description: entry.does })),
       { page: "agents", title: "Claude Code", description: probe?.claudeCode.installed ? `${probe.claudeCode.version ?? "installed"}${probe.claudeCode.account ? ` · ${probe.claudeCode.account}` : ""}` : "not found on this machine" },
       { page: "agents", title: "Codex", description: probe?.codex.installed ? `${probe.codex.version ?? "installed"}${probe.codex.account ? ` · ${probe.codex.account}` : ""}` : "not found on this machine" },
       ...(repos ?? []).map((repo) => ({ page: "machine" as Page, title: repo.name, description: repo.onThisMachine ? repo.defaultBranch : "on another machine" })),
@@ -232,7 +303,7 @@ export function SettingsDialog({
       { page: "about", title: "Electron", description: version?.electron ?? "" }
     ];
     return rows;
-  }, [user, probe, repos, version]);
+  }, [user, probe, repos, version, bindings]);
 
   const needle = query.trim().toLowerCase();
   const hits = needle.length === 0
@@ -470,8 +541,60 @@ export function SettingsDialog({
         ) : page === "keyboard" ? (
           <>
             <h2 className="settings-page-title">Keyboard</h2>
-            <Card heading="The room">
-              {KEYS.map((entry) => (
+            <Card heading="Chords">
+              {BINDING_ACTIONS.map(({ action, does }) => (
+                <CardRow
+                  key={action}
+                  title={does}
+                  testid={`key-${action}`}
+                  trailing={
+                    recording === action ? (
+                      <span className="settings-key mono settings-key-recording" data-testid="key-recording">
+                        Press the new keys… Esc cancels
+                      </span>
+                    ) : (
+                      <span className="settings-key-controls">
+                        <span className="settings-key mono">{chordLabel(bindings[action])}</span>
+                        <button
+                          className="icon-button settings-key-action"
+                          aria-label={`Rebind “${does}”`}
+                          title="Rebind"
+                          onClick={() => {
+                            setRecording(action);
+                            setKeyProblem(null);
+                          }}
+                          data-testid={`rebind-${action}`}
+                        >
+                          <PencilGlyph />
+                        </button>
+                        {isOverridden(action) ? (
+                          <button
+                            className="icon-button settings-key-action"
+                            aria-label={`Reset “${does}” to its default key`}
+                            title="Reset to default"
+                            onClick={() => resetBinding(action)}
+                            data-testid={`reset-${action}`}
+                          >
+                            <TrashGlyph />
+                          </button>
+                        ) : (
+                          /* Keeps every row's chip on one column whether or
+                             not the trash has anything to undo. */
+                          <span className="settings-key-action-space" aria-hidden="true" />
+                        )}
+                      </span>
+                    )
+                  }
+                />
+              ))}
+            </Card>
+            {keyProblem !== null && (
+              <p className="inline-error" role="alert" data-testid="key-problem">
+                {keyProblem}
+              </p>
+            )}
+            <Card heading="Fixed keys">
+              {FIXED_KEYS.map((entry) => (
                 <CardRow
                   key={entry.keys}
                   title={entry.does}
@@ -479,6 +602,9 @@ export function SettingsDialog({
                 />
               ))}
             </Card>
+            <p className="settings-hint">
+              A chord holds ⌘ and lives on this machine. The trash returns a key you changed to what Novus ships.
+            </p>
           </>
         ) : (
           <>

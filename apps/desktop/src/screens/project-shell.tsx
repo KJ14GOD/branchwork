@@ -19,6 +19,7 @@ import { GearGlyph, HumanMark, SignOutGlyph } from "../components/identity";
 import { SettingsDialog } from "../components/settings-dialog";
 import { CommandPalette, type PaletteCommand } from "../components/command-palette";
 import { applyTheme } from "../theme";
+import { chordLabel, matchesChord, useKeybindings } from "../keybindings";
 import { MissionTabs } from "../components/mission-tabs";
 import { ColumnHandle, useColumnWidth } from "../components/resizable";
 import { OpenInControl } from "../components/open-in";
@@ -1182,24 +1183,27 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   // the platform's own chord for it — ⌘1–9 the rail's missions for that
   // project, and the three surfaces every desktop app keys the same way
   // (D-177): ⌘B the rail, ⌘J the terminal dock, ⌘E the evidence panel
-  // (DESIGN.md#keyboard).
+  // (DESIGN.md#keyboard). Each chord is read from the bindings registry, so
+  // the settings Keyboard page's rebinding takes effect the keystroke after
+  // it is recorded.
+  const keys = useKeybindings();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey)) return;
-      if (event.key === "t") {
+      if (matchesChord(event, keys.newMission)) {
         event.preventDefault();
         newMissionHere();
-      } else if (event.key === "k") {
+      } else if (matchesChord(event, keys.palette)) {
         event.preventDefault();
         setSettingsDialogOpen(false);
         setPaletteOpen((open) => !open);
-      } else if (event.key === "b") {
+      } else if (matchesChord(event, keys.toggleRail)) {
         event.preventDefault();
         setRailHidden((hidden) => !hidden);
-      } else if (event.key === "j") {
+      } else if (matchesChord(event, keys.toggleDock)) {
         event.preventDefault();
         setTerminalOpen((open) => !open);
-      } else if (event.key === "e") {
+      } else if (matchesChord(event, keys.togglePanel)) {
         event.preventDefault();
         if (activeMissionId === null) return;
         setInspector((current) => {
@@ -1209,13 +1213,13 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           }
           return lastSection.current ?? "overview";
         });
-      } else if (event.key === ",") {
+      } else if (matchesChord(event, keys.openSettings)) {
         event.preventDefault();
         // The popover is anchored in the rail; the chord shows the rail
         // first when it was put away, so the block has somewhere to open.
         setRailHidden(false);
         setSettingsOpen((previous) => !previous);
-      } else if (/^[1-9]$/.test(event.key)) {
+      } else if (/^[1-9]$/.test(event.key) && !event.shiftKey && !event.altKey) {
         if (!currentProject) return;
         const mission = currentProject.missions[Number(event.key) - 1];
         if (mission) {
@@ -1226,7 +1230,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentProject, newMissionHere, openMissionTab, activeMissionId]);
+  }, [currentProject, newMissionHere, openMissionTab, activeMissionId, keys]);
 
   // A dialog about one mission's workspace must not survive a move to
   // another mission.
@@ -1979,14 +1983,14 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                 id: "rail",
                 group: "Toggle",
                 label: railHidden ? "Show the projects rail" : "Hide the projects rail",
-                hint: "⌘B",
+                hint: chordLabel(keys.toggleRail),
                 run: () => setRailHidden((hidden) => !hidden)
               });
               commands.push({
                 id: "terminal",
                 group: "Toggle",
                 label: terminalOpen ? "Hide the terminal dock" : "Show the terminal dock",
-                hint: "⌘J",
+                hint: chordLabel(keys.toggleDock),
                 run: () => setTerminalOpen((open) => !open)
               });
               if (activeMissionId !== null) {
@@ -1994,7 +1998,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                   id: "panel",
                   group: "Toggle",
                   label: inspector ? "Hide the evidence panel" : "Show the evidence panel",
-                  hint: "⌘E",
+                  hint: chordLabel(keys.togglePanel),
                   run: () =>
                     setInspector((current) => {
                       if (current) {
@@ -2026,7 +2030,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                   id: "new-mission",
                   group: "Mission",
                   label: `Start a mission in ${currentProject.name}`,
-                  hint: "⌘T",
+                  hint: chordLabel(keys.newMission),
                   run: () => newMissionHere()
                 });
               }
@@ -2035,7 +2039,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                   id: "find",
                   group: "Mission",
                   label: "Find in the conversation",
-                  hint: "⌘F",
+                  hint: chordLabel(keys.find),
                   run: () => setFindAsk((ask) => ask + 1)
                 });
                 const detail = openDetail;
