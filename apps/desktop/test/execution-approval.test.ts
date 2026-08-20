@@ -284,6 +284,39 @@ describe("the permission policy Novus pins", () => {
     });
   }, 40_000);
 
+  it("says the pinned references to the harness, before the words they steer (D-182)", async () => {
+    installStub("approval");
+    const running = begin({
+      context: [
+        { kind: "file", path: "src/auth.ts" },
+        {
+          kind: "check",
+          checkId: "chk_0123456789abcdef",
+          name: "unit",
+          outcome: "failed",
+          command: "pnpm test",
+          output: "1 failing: auth rejects a stale token"
+        }
+      ]
+    });
+    await waitFor("the approval to arrive", () => running.turn.pendingApprovals().length > 0);
+    running.turn.respondApproval("stub-request-1", "approve", null);
+    await running.finished;
+
+    const written = readFileSync(stdinPath, "utf8");
+    const first = JSON.parse(written.split("\n")[0] ?? "{}") as {
+      message: { content: { type: string; text?: string }[] };
+    };
+    const texts = first.message.content.filter((block) => block.type === "text");
+    // The references read before the direction, as their own block.
+    expect(texts).toHaveLength(2);
+    expect(texts[0]!.text).toContain("The person pinned this file");
+    expect(texts[0]!.text).toContain("- src/auth.ts");
+    expect(texts[0]!.text).toContain('verification check "unit" (failed when referenced; command: pnpm test)');
+    expect(texts[0]!.text).toContain("1 failing: auth rejects a stale token");
+    expect(texts[1]!.text).toBe("Write APPROVED.md");
+  }, 40_000);
+
   it("a plan-profile turn runs the CLI's own plan mode; every other profile stays manual (D-115)", async () => {
     // Plan is the one profile that changes the flag: the CLI's plan mode
     // tells the model to propose. The router still denies the privileged act

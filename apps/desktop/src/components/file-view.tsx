@@ -95,12 +95,15 @@ function Source({ text, extension }: { text: string; extension: string }) {
 export function FileView({
   missionId,
   workstreamId,
-  path
+  path,
+  onAddContext
 }: {
   missionId: string;
   /** The lane whose worktree holds the file — the room's active approach (D-080). */
   workstreamId?: string;
   path: string;
+  /** Pins this file onto the composer's next send (D-182). */
+  onAddContext?: () => void;
 }) {
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [mode, setMode] = useState<Mode>("preview");
@@ -171,6 +174,17 @@ export function FileView({
           <span className="file-meta">{humanBytes(file.bytes)}</span>
         )}
         <span className="head-spacer" />
+
+        {onAddContext && (
+          <button
+            className="btn btn-text"
+            onClick={onAddContext}
+            title={`Pin ${path} onto your next message`}
+            data-testid="file-add-to-chat"
+          >
+            Add to chat
+          </button>
+        )}
 
         {isMarkdown(path) && readable && (
           <span className="file-modes" role="group" aria-label="How to show this file">

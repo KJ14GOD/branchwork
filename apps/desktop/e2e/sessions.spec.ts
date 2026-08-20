@@ -537,6 +537,41 @@ describe("shared sessions inside one approach", () => {
     });
   }, 300_000);
 
+  it("a changed file pins onto the next message, and the turn's record carries it (D-182)", async () => {
+    // The panel's Changes rows exist — earlier tests changed files. Pin one.
+    await page.getByTestId("panel-toggle").click();
+    await page.getByTestId("inspector-tab-changes").click();
+    await page.getByTestId("change-add-to-chat").first().waitFor({ timeout: 20_000 });
+    await page.getByTestId("change-add-to-chat").first().click();
+    // The chip appears in the composer: the box shows what the send carries.
+    await page.getByTestId("composer-context").waitFor({ timeout: 10_000 });
+    const pinned = await page.getByTestId("composer-context").innerText();
+    await shot("206-pinned-file-on-the-composer.png");
+
+    await compose("look closely at the pinned file");
+    await approvePending();
+    const settled = await until(
+      "the pinned direction's turn to complete",
+      (value) =>
+        value.directions.some(
+          (direction) =>
+            direction.body === "look closely at the pinned file" && direction.state === "applied"
+        )
+    );
+    // The wire carries the reference, exactly one, the file that was pinned.
+    const direction = settled.directions.find(
+      (candidate) => candidate.body === "look closely at the pinned file"
+    )!;
+    expect(direction.context).toHaveLength(1);
+    expect(direction.context[0]!.kind).toBe("file");
+    expect(pinned).toContain((direction.context[0] as { path: string }).path);
+    // And the sent message wears it as a quiet pill.
+    await page.getByTestId("trace-context").first().waitFor({ timeout: 20_000 });
+    // The chip is consumed by the send: the next message starts unpinned.
+    expect(await page.getByTestId("composer-context").count()).toBe(0);
+    await shot("207-pinned-file-on-the-message.png");
+  }, 180_000);
+
   it("a new chat continues from a chosen sibling, carrying its transcript (D-173)", async () => {
     // The draft offers the lane's existing chats as sources.
     await page.getByTestId("rail-new-session").click();

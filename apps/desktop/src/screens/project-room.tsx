@@ -95,7 +95,7 @@ function SessionGlyph() {
 
 import { RuntimeDock } from "../components/runtime-dock";
 import { clockTime, deriveGoal, elapsed, shortSha, truncateLabel, usd } from "../format";
-import { scopesDisjoint } from "@novus/contracts";
+import { MAX_DIRECTION_CONTEXT, scopesDisjoint } from "@novus/contracts";
 import type { Project } from "./project-shell";
 
 type BaseLoad =
@@ -137,6 +137,7 @@ export function ProjectRoom({
   project,
   details,
   forkAsk = 0,
+  contextAsk = null,
   onForkConsumed,
   findAsk = 0,
   onFindConsumed,
@@ -176,6 +177,9 @@ export function ProjectRoom({
   /** Incremented by the rail's Try-another-approach row (D-126); each tick
    *  opens the fork dialog, even after a cancel. */
   forkAsk?: number;
+  /** A pinned reference asked for from the panel (D-182): nonced so every
+   *  click lands once, deduped and capped here where the chips live. */
+  contextAsk?: { ref: DirectionContextRef; n: number } | null;
   /** The palette's ask to open the find bar (D-178) — consumed, forkAsk's own pattern. */
   findAsk?: number;
   onFindConsumed?: () => void;
@@ -734,6 +738,25 @@ export function ProjectRoom({
       onForkConsumed();
     }
   }, [forkAsk, onForkConsumed]);
+  // A panel row's Add to chat (D-182): appended once per nonce, deduped by
+  // identity (a file by its path, a check by its id), capped at the bound the
+  // wire enforces anyway — the ninth click changes nothing rather than
+  // surprising the send.
+  useEffect(() => {
+    if (contextAsk === null) return;
+    const ref = contextAsk.ref;
+    setPendingContext((previous) => {
+      const duplicate = previous.some((held) =>
+        held.kind === "file" && ref.kind === "file"
+          ? held.path === ref.path
+          : held.kind === "check" && ref.kind === "check"
+            ? held.checkId === ref.checkId
+            : false
+      );
+      if (duplicate || previous.length >= MAX_DIRECTION_CONTEXT) return previous;
+      return [...previous, ref];
+    });
+  }, [contextAsk]);
   const approaches = detail?.approaches ?? [];
   /** Something to fork from: an approach only means anything beside a result
    *  that already exists, so the control is absent until the lane being read
@@ -1938,6 +1961,14 @@ export function ProjectRoom({
           missionId={selectedMissionId}
           workstreamId={activeFileEntry.workstreamId ?? undefined}
           path={activeFileEntry.path}
+          onAddContext={() =>
+            setPendingContext((previous) =>
+              previous.some((held) => held.kind === "file" && held.path === activeFileEntry.path) ||
+              previous.length >= MAX_DIRECTION_CONTEXT
+                ? previous
+                : [...previous, { kind: "file", path: activeFileEntry.path }]
+            )
+          }
         />
       ) : previewSelected && previewTab !== null && selectedMissionId !== null ? (
         // The pixels live in the persistently-mounted instance rendered

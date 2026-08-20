@@ -6,7 +6,8 @@ import type {
   Invitation,
   MissionDetailResponse,
   MissionRole,
-  VerificationCheck
+  VerificationCheck,
+  DirectionContextRef
 } from "@novus/contracts";
 import { PIXELS_WARNING } from "@novus/contracts";
 import { novus } from "../bridge";
@@ -149,12 +150,15 @@ function ChangeRow({
   file,
   expanded,
   onToggle,
-  load
+  load,
+  onAddContext
 }: {
   file: FileChange;
   expanded: boolean;
   onToggle: () => void;
   load: DiffLoad | undefined;
+  /** Pins this file onto the composer's next send (D-182). */
+  onAddContext?: () => void;
 }) {
   return (
     <div className="change-item">
@@ -173,6 +177,16 @@ function ChangeRow({
           <span className="count-del">−{file.deletions}</span>
         </span>
       </button>
+      {onAddContext && (
+        <button
+          className="btn btn-text change-add-to-chat"
+          onClick={onAddContext}
+          title={`Pin ${file.path} onto your next message`}
+          data-testid="change-add-to-chat"
+        >
+          Add to chat
+        </button>
+      )}
       {expanded && (
         <div className="change-diff">
           {file.binary ? (
@@ -276,6 +290,9 @@ function LedgerEntry({
    *  evidence, never a verdict — the outcome column is the runner's alone. */
   attachedArtifacts: MissionDetailResponse["artifacts"];
   onOpenArtifact: (artifactId: string) => void;
+  /** Pins this check — its facts as they stand on this row — onto the
+   *  composer's next send (D-182). */
+  onAddContext?: () => void;
 }) {
   /* A result that failed, or that proved a revision the worktree has moved
      past, is the one a reader wants to try again — and trying again is the
@@ -294,6 +311,16 @@ function LedgerEntry({
           {check.name}
         </span>
         <span className={`mono ledger-outcome outcome-${check.outcome}`}>{check.outcome}</span>
+        {onAddContext && (
+          <button
+            className="btn btn-text"
+            onClick={onAddContext}
+            title={`Pin "${check.name}" (${check.outcome}) onto your next message`}
+            data-testid="ledger-add-to-chat"
+          >
+            Add to chat
+          </button>
+        )}
         {worthRunningAgain && (
           <GatedAction
             capability="workspace.command"

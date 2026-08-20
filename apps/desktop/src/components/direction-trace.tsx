@@ -351,6 +351,26 @@ export function TraceView({
           the screenshot does. An attachment whose bytes never verified is
           named rather than dropped: the record must not imply the harness saw
           something it did not. */}
+      {/* What the message was pointed at (D-182): quiet pills, the transcript
+          pill's shape — a file by its path, a check by its name and the
+          outcome it had when referenced. References the reader can follow in
+          the panel; nothing here opens bytes. */}
+      {(direction?.context ?? []).length > 0 && (
+        <div className="trace-attachments" data-testid="direction-context">
+          {(direction?.context ?? []).map((ref) => (
+            <span
+              className="trace-attachment-transcript"
+              key={ref.kind === "file" ? `file:${ref.path}` : `check:${ref.checkId}`}
+              title={ref.kind === "file" ? ref.path : ref.command}
+              data-testid="trace-context"
+            >
+              <span className="trace-attachment-transcript-name">
+                {ref.kind === "file" ? ref.path : `${ref.name} · ${ref.outcome}`}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
       {(direction?.attachments ?? []).length > 0 && (
         <div className="trace-attachments" data-testid="direction-attachments">
           {(direction?.attachments ?? []).map((image) =>

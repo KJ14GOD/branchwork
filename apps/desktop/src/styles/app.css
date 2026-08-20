@@ -6157,6 +6157,17 @@ body.resizing {
   max-width: 100%;
 }
 
+/* The same pill, non-interactive (D-182): a pinned reference is a fact on
+   the message, not a control — no pointer, no hover invitation. */
+span.trace-attachment-transcript {
+  cursor: default;
+}
+
+span.trace-attachment-transcript:hover {
+  color: var(--text-3);
+  border-color: var(--edge);
+}
+
 .trace-attachment-transcript:hover {
   color: var(--text-2);
   border-color: var(--edge-hover);
