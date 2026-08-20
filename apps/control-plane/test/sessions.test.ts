@@ -828,3 +828,69 @@ describe("a row names its lane", () => {
     );
   });
 });
+
+/**
+ * Pinned references on a direction (D-182): files and checks the composer's
+ * top edge pointed the turn at. The ways this could lie: a reference stored
+ * differently from what was submitted, a dispatch payload that drops what the
+ * row holds, or an unbounded pile of them.
+ */
+describe("a direction's pinned references", () => {
+  it("stores them, serves them on the direction, and carries them to the dispatch payload", async () => {
+    const lane = await mission();
+    const context = [
+      { kind: "file", path: "src/auth.ts" },
+      {
+        kind: "check",
+        checkId: "chk_0123456789abcdef",
+        name: "unit",
+        outcome: "failed",
+        command: "pnpm test",
+        output: "1 failing: auth rejects a stale token"
+      }
+    ];
+    const submitted = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/direction`,
+      headers: bearer(kartik),
+      payload: {
+        body: "fix the failing auth test",
+        model: "claude-fable-5",
+        effort: "high",
+        workstreamId: lane.workstreamId,
+        context
+      }
+    });
+    expect(submitted.statusCode).toBeLessThan(300);
+    const directionId = submitted.json().direction.directionId as string;
+    // Served back exactly as submitted.
+    expect(submitted.json().direction.context).toEqual(context);
+    // And on the dispatch payload, beside the words (the runner renders it).
+    const command = await harness.db.query(
+      "select payload from runner_commands where payload->>'directionId' = $1",
+      [directionId]
+    );
+    expect(command.rowCount).toBe(1);
+    expect((command.rows[0]!.payload as { context: unknown }).context).toEqual(context);
+  }, 30_000);
+
+  it("refuses more references than the bound, in words", async () => {
+    const lane = await mission();
+    const submitted = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/direction`,
+      headers: bearer(kartik),
+      payload: {
+        body: "too much pointing",
+        model: "claude-fable-5",
+        effort: "high",
+        workstreamId: lane.workstreamId,
+        context: Array.from({ length: 9 }, (_, index) => ({
+          kind: "file",
+          path: `src/file-${index}.ts`
+        }))
+      }
+    });
+    expect(submitted.statusCode).toBe(422);
+  }, 30_000);
+});

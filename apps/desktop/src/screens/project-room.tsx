@@ -4,6 +4,7 @@ import type {
   ApproachSummary,
   BaseRevision,
   Direction,
+  DirectionContextRef,
   Effort,
   Mission,
   MissionDetailResponse,
@@ -276,6 +277,10 @@ export function ProjectRoom({
    *  transcripts are projected and carried on the draft's first direction.
    *  Only meaningful while the draft surface is open; cleared when it closes. */
   const [continueFrom, setContinueFrom] = useState<string[]>([]);
+  /** Pinned references the next send carries (D-182): worktree files and
+   *  checks picked from the inspector, worn as chips on the composer's top
+   *  edge and cleared once the direction lands. */
+  const [pendingContext, setPendingContext] = useState<DirectionContextRef[]>([]);
   // An abandoned draft carries nothing forward: the selection dies with the
   // surface it was made on (D-173, same rule as the draft's own words).
   useEffect(() => {
@@ -648,9 +653,11 @@ export function ProjectRoom({
         workstreamId: detail.workstream.workstreamId,
         newSession: true,
         ...(alongside ? { alongside: true } : {}),
-        ...(allAttachmentIds.length > 0 ? { attachmentIds: allAttachmentIds } : {})
+        ...(allAttachmentIds.length > 0 ? { attachmentIds: allAttachmentIds } : {}),
+        ...(pendingContext.length > 0 ? { context: pendingContext } : {})
       });
       if (!created.ok) return { ok: false, message: offlineOr(created.code, created.message) };
+      setPendingContext([]);
       onSessionDraft(false);
       // The conversation exists now: its tab joins the working row, selected,
       // and its row the rail's tree (D-087).
@@ -669,9 +676,11 @@ export function ProjectRoom({
       workstreamId: detail.workstream.workstreamId,
       ...(selectedSessionId !== null ? { sessionId: selectedSessionId } : {}),
       ...(alongside ? { alongside: true } : {}),
-      ...(attachmentIds.length > 0 ? { attachmentIds } : {})
+      ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+      ...(pendingContext.length > 0 ? { context: pendingContext } : {})
     });
     if (!result.ok) return { ok: false, message: offlineOr(result.code, result.message) };
+    setPendingContext([]);
     return { ok: true, queued: !result.value.dispatched, deferred: result.value.deferred };
   };
 
@@ -2321,6 +2330,10 @@ export function ProjectRoom({
         }
         onRemoveTranscript={(sessionId) =>
           setContinueFrom((previous) => previous.filter((id) => id !== sessionId))
+        }
+        pendingContext={pendingContext}
+        onRemoveContext={(index) =>
+          setPendingContext((previous) => previous.filter((_, at) => at !== index))
         }
       />
       )}

@@ -1,4 +1,4 @@
-import type { Direction, DirectionAttachment, DirectionState } from "@novus/contracts";
+import type { Direction, DirectionAttachment, DirectionContextRef, DirectionState } from "@novus/contracts";
 import type pg from "pg";
 import type { Db, Queryable } from "./db.ts";
 import { withTransaction } from "./db.ts";
@@ -40,12 +40,13 @@ interface DirectionRow {
   applied_at: Date | null;
   resolution_reason: string | null;
   consumed_by_execution_id: string | null;
+  context: unknown;
 }
 
 const DIRECTION_SELECT = `
   select d.dir_id, d.wst_id, d.session_id, d.author_user_id, u.login as author_login, d.body,
          d.state, d.ordinal, d.submitted_at, d.applied_at, d.resolution_reason,
-         d.consumed_by_execution_id
+         d.consumed_by_execution_id, d.context
     from directions d
     join users u on u.user_id = d.author_user_id`;
 
@@ -63,7 +64,9 @@ export function toDirection(row: DirectionRow, attachments: DirectionAttachment[
     appliedAt: row.applied_at ? row.applied_at.toISOString() : null,
     resolutionReason: row.resolution_reason,
     consumedByExecutionId: row.consumed_by_execution_id,
-    attachments
+    attachments,
+    // Stored validated at submit; a row from before D-182 has null here.
+    context: Array.isArray(row.context) ? (row.context as Direction["context"]) : []
   };
 }
 
@@ -116,7 +119,9 @@ export async function submitDirection(
   /** Images this direction carries (D-150). Already uploaded and verified —
    *  the ids are resolved against this mission before anything is written, so
    *  a direction never exists claiming an image that does not. */
-  attachmentIds: string[] = []
+  attachmentIds: string[] = [],
+  /** Pinned references (D-182), already validated by the route's schema. */
+  context: DirectionContextRef[] = []
 ): Promise<SubmittedDirection> {
   if (!access.workstreamId) {
     throw new AuthorizationError("no_workstream", "This mission has no workstream yet.", 409);
@@ -143,8 +148,8 @@ export async function submitDirection(
       throw new AuthorizationError("not_found", "No such session in this workstream.", 404);
     }
     const inserted = await client.query(
-      `insert into directions (dir_id, org_id, mission_id, wst_id, session_id, author_user_id, body, state, model, effort)
-       values ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9) returning dir_id`,
+      `insert into directions (dir_id, org_id, mission_id, wst_id, session_id, author_user_id, body, state, model, effort, context)
+       values ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9, $10) returning dir_id`,
       [
         dirId,
         access.orgId,
@@ -154,7 +159,8 @@ export async function submitDirection(
         author.userId,
         body,
         harness.model,
-        harness.effort
+        harness.effort,
+        context.length > 0 ? JSON.stringify(context) : null
       ]
     );
     const id = inserted.rows[0]?.dir_id as string;

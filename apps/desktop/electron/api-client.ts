@@ -41,6 +41,7 @@ import {
   type Invitation,
   type MeResponse,
   type Mission,
+  type DirectionContextRef,
   type MissionChange,
   type MissionDetailResponse,
   type MergeMethod,
@@ -431,6 +432,8 @@ export class ControlPlaneClient {
       alongside?: boolean;
       /** Images this direction carries (D-150), already uploaded. */
       attachmentIds?: string[];
+      /** Pinned references — files and checks (D-182). */
+      context?: DirectionContextRef[];
     }
   ): Promise<z.infer<typeof SubmitDirectionResponseSchema>> {
     return this.request(

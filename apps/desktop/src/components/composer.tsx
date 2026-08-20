@@ -10,6 +10,7 @@ import {
   type Effort,
   type ModelId,
   type PermissionProfile,
+  type DirectionContextRef,
   type PreparedAttachment
 } from "@novus/contracts";
 import codexIcon from "../assets/codex-icon.png";
@@ -126,6 +127,8 @@ export function Composer({
   onSubmit,
   attach,
   pendingTranscripts,
+  pendingContext,
+  onRemoveContext,
   onRemoveTranscript
 }: {
   /** Null until the server has said what this viewer may do. The composer
@@ -178,6 +181,11 @@ export function Composer({
    *  images — the box shows everything the send will carry, in one place.
    *  They upload at send, so these are named intentions, not artifacts yet. */
   pendingTranscripts?: { sessionId: string; title: string }[];
+  /** Pinned references the next direction will carry (D-182): worktree files
+   *  and checks, worn as chips beside the transcripts — the box's top edge is
+   *  the one place everything a send carries is read before the words. */
+  pendingContext?: DirectionContextRef[];
+  onRemoveContext?: (index: number) => void;
   onRemoveTranscript?: (sessionId: string) => void;
 }) {
   const [textValue, setTextValue] = useState("");
@@ -437,8 +445,32 @@ export function Composer({
             extra context joins the box. The D-124 target eyebrow is retired
             (D-176): the selected tab already names the conversation, and the
             box stays the same box everywhere. */}
-        {(attachments.length > 0 || (pendingTranscripts?.length ?? 0) > 0) && (
+        {(attachments.length > 0 ||
+          (pendingTranscripts?.length ?? 0) > 0 ||
+          (pendingContext?.length ?? 0) > 0) && (
           <div className="composer-attachments" data-testid="composer-attachments">
+            {pendingContext?.map((ref, index) => (
+              <span
+                className="composer-attachment"
+                key={ref.kind === "file" ? `file:${ref.path}` : `check:${ref.checkId}`}
+                data-testid="composer-context"
+              >
+                <DocumentGlyph className="composer-attachment-glyph" />
+                <span className="composer-attachment-name">
+                  {ref.kind === "file" ? ref.path : `${ref.name} · ${ref.outcome}`}
+                </span>
+                {onRemoveContext && (
+                  <button
+                    className="composer-attachment-remove"
+                    aria-label={`Remove ${ref.kind === "file" ? ref.path : ref.name}`}
+                    disabled={sending}
+                    onClick={() => onRemoveContext(index)}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
             {pendingTranscripts?.map((transcript) => (
               <span
                 className="composer-attachment"

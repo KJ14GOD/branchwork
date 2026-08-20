@@ -1030,3 +1030,8 @@ alter table artifacts add constraint artifacts_mime_type_check
       else mime_type in ('image/png', 'video/webm')
     end
   );
+
+-- Pinned references on a direction (D-182): files and checks the composer's
+-- top edge pointed the turn at. Snapshotted at submit, bounded by the
+-- contract; empty for every direction written before this existed.
+alter table directions add column if not exists context jsonb;

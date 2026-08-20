@@ -262,7 +262,7 @@ export async function dispatchDirection(
     }
 
     const direction = await client.query(
-      `select d.body, d.session_id, s.scope, w.permission_profile, w.enabled_skills,
+      `select d.body, d.session_id, d.context, s.scope, w.permission_profile, w.enabled_skills,
               w.enabled_mcp_servers from directions d
          join workstream_sessions s on s.csn_id = d.session_id
          join workstreams w on w.wst_id = d.wst_id
@@ -282,6 +282,11 @@ export async function dispatchDirection(
     const skills = skillsOf(direction.rows[0]?.enabled_skills);
     // And the MCP servers (D-119), under exactly the same rule.
     const mcpServers = mcpOf(direction.rows[0]?.enabled_mcp_servers);
+    // The pinned references (D-182), stored validated at submit: files and
+    // checks the person pointed this direction at, carried to the turn as
+    // facts beside the words.
+    const rawContext = direction.rows[0]?.context;
+    const directionContext = Array.isArray(rawContext) ? rawContext : [];
     if (body === undefined || sessionId === undefined) {
       return { executionId: null, commandId: null, deferred: "That direction is no longer available." };
     }
@@ -332,6 +337,8 @@ export async function dispatchDirection(
             mimeType: row.mime_type,
             label: row.label
           })),
+          // The pinned references (D-182), beside the words they steer.
+          context: directionContext,
           // Same reasoning for the profile (D-115): a live turn keeps the one
           // pinned at its own dispatch, and the fresh process an after-end
           // apply spawns must state its policy rather than inherit a default.
@@ -453,6 +460,8 @@ export async function dispatchDirection(
           mimeType: row.mime_type,
           label: row.label
         })),
+        // The pinned references (D-182), beside the words they steer.
+        context: directionContext,
         // Pinned at dispatch (D-097, the D-043 pattern): the turn enforces
         // the scope the controller had approved when it was authorized.
         scope,
@@ -707,7 +716,8 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
         ...(body.data.sessionId ? { sessionId: body.data.sessionId } : {}),
         newSession: body.data.newSession
       },
-      body.data.attachmentIds
+      body.data.attachmentIds,
+      body.data.context
     );
     // Only the controller's own direction proceeds toward the harness; anyone
     // else's waits, visibly, for whoever holds the baton. Alongside starts a
