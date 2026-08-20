@@ -215,111 +215,6 @@ function JoinDialog({ onJoined, onClose }: { onJoined: () => void; onClose: () =
 }
 
 /** The rail's own switch: a pane with its left column marked. */
-/**
- * Finding a mission by name, across every project (D-066).
- *
- * Deliberately missions and not code: the rail's job is getting to a room, and
- * a box there that searched file contents would be a different feature wearing
- * the same control. Files are filtered where the files are.
- */
-function SearchDialog({
-  missions,
-  onOpen,
-  onClose
-}: {
-  missions: { missionId: string; goal: string; project: string }[];
-  onOpen: (missionId: string) => void;
-  onClose: () => void;
-}) {
-  const [term, setTerm] = useState("");
-  /** Which row Enter would open. Arrow keys move it; the pointer moves it too,
-   *  so the keyboard and the mouse never disagree about what is selected. */
-  const [active, setActive] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const needle = term.trim().toLowerCase();
-  const found =
-    needle === ""
-      ? missions
-      : missions.filter(
-          (mission) =>
-            mission.goal.toLowerCase().includes(needle) || mission.project.toLowerCase().includes(needle)
-        );
-  const cursor = Math.min(active, Math.max(0, found.length - 1));
-
-  return (
-    <>
-      <div className="scrim" onClick={onClose} />
-      <div className="dialog palette" role="dialog" aria-label="Find a mission" data-testid="search-dialog">
-        {/* One line, no box. A field drawn as a box inside a dialog is a box
-            inside a box, and the glyph already says what the line is for. */}
-        <div className="palette-query">
-          <SearchGlyph />
-          <input
-            ref={inputRef}
-            className="palette-input"
-            value={term}
-            placeholder="Find a mission"
-            onChange={(event) => {
-              setTerm(event.target.value);
-              setActive(0);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowDown") {
-                setActive((index) => Math.min(index + 1, found.length - 1));
-                event.preventDefault();
-              } else if (event.key === "ArrowUp") {
-                setActive((index) => Math.max(index - 1, 0));
-                event.preventDefault();
-              } else if (event.key === "Enter" && found[cursor]) {
-                onOpen(found[cursor].missionId);
-              }
-            }}
-            aria-label="Find a mission"
-            data-testid="search-input"
-          />
-          <kbd className="palette-hint">esc</kbd>
-        </div>
-
-        {found.length > 0 && (
-          <div className="palette-results" role="listbox" aria-label="Missions">
-            <div className="palette-group">Missions</div>
-            {found.map((mission, index) => (
-              <button
-                key={mission.missionId}
-                role="option"
-                aria-selected={index === cursor}
-                className={index === cursor ? "palette-hit active" : "palette-hit"}
-                onMouseEnter={() => setActive(index)}
-                onClick={() => onOpen(mission.missionId)}
-                data-testid="search-hit"
-              >
-                <span className="palette-name">{mission.goal}</span>
-                <span className="palette-where">{mission.project}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {found.length === 0 && (
-          <p className="palette-empty" data-testid="search-empty">
-            No mission here is called that.
-          </p>
-        )}
-      </div>
-    </>
-  );
-}
-
 /** The repository, as an open folder (D-130 — a place being worked in,
  *  the shape coding harnesses made familiar): the one glyph a project row
  *  leads with — same approved stroke set as Home and Search, always beside
@@ -831,7 +726,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** Hidden by choice, at any width — distinct from `railOpen`, which is the
    *  narrow-window overlay. */
   const [railHidden, setRailHidden] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
   // Both side columns are draggable and remember where they were put (D-065).
   const [railWidth, setRailWidth] = useColumnWidth("novus-rail-width", 240, 180, 420);
   const [panelWidth, setPanelWidth] = useColumnWidth("novus-panel-width", 380, 320, 760);
@@ -1645,7 +1539,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               <HomeGlyph />
               <span className="side-name">Home</span>
             </button>
-            <button className="side-row" onClick={() => setSearchOpen(true)} data-testid="rail-search">
+            <button className="side-row" onClick={() => setPaletteOpen(true)} data-testid="rail-search">
               <SearchGlyph />
               <span className="side-name">Search</span>
             </button>
@@ -2046,26 +1940,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           />
         )}
 
-        {searchOpen && (
-          <SearchDialog
-            missions={projects.flatMap((project) =>
-              project.missions.map((mission) => ({
-                missionId: mission.missionId,
-                goal: mission.goal,
-                project: project.name
-              }))
-            )}
-            onOpen={(missionId) => {
-              const owner = projects.find((project) =>
-                project.missions.some((mission) => mission.missionId === missionId)
-              );
-              if (owner) openMissionTab(owner.key, missionId);
-              setSearchOpen(false);
-            }}
-            onClose={() => setSearchOpen(false)}
-          />
-        )}
-
         {paletteOpen && (
           <CommandPalette
             onClose={() => setPaletteOpen(false)}
@@ -2077,20 +1951,19 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                 label: "Home — the board",
                 run: () => setWorkingSet((previous) => ({ ...previous, activeId: null }))
               });
-              commands.push({
-                id: "search",
-                group: "Go",
-                label: "Find a mission…",
-                run: () => setSearchOpen(true)
-              });
-              if (currentProject) {
-                currentProject.missions.slice(0, 9).forEach((mission, at) => {
+              // Every mission across every project (D-184 — the separate
+              // search dialog merged in here, the Conductor shape): the label
+              // carries the project so typing either finds it, and the
+              // current project's first nine keep their ⌘n.
+              for (const project of projects) {
+                project.missions.forEach((mission, at) => {
+                  const here = currentProject !== null && project.key === currentProject.key;
                   commands.push({
                     id: `mission-${mission.missionId}`,
-                    group: "Go",
-                    label: `Open "${mission.goal.slice(0, 60)}"`,
-                    hint: `⌘${at + 1}`,
-                    run: () => openMissionTab(currentProject.key, mission.missionId)
+                    group: "Missions",
+                    label: `${mission.goal.slice(0, 60)} · ${project.name}`,
+                    hint: here && at < 9 ? `⌘${at + 1}` : undefined,
+                    run: () => openMissionTab(project.key, mission.missionId)
                   });
                 });
               }

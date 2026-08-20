@@ -2589,3 +2589,15 @@ The ordering is the decision. The fold is the *least* likely thing a person want
 **Consequences.** Three branches in the rail's `activate`. The decision spec — the only fixture with two approaches, which is what this needs — now folds a lane, leaves, returns in one click, and then toggles it twice, because a toggle that works once has state somewhere it should not. The sessions spec was where this was first probed and it passed, which is the honest reason the bug survived: one approach cannot express it.
 
 **Revisit when.** A lane can be folded from somewhere other than its own row, and "selection unfolds" starts fighting an explicit fold made elsewhere; or the fold wants a gesture of its own, at which point the row is navigation alone and the ordering above collapses to one thing.
+
+## D-184 — One palette: the mission search folds into ⌘K
+
+**Context.** Owner, with Conductor's ⌘K beside ours: "it also includes the search stuff… let cmd k have everything, merge them." We had two palettes wearing one anatomy — ⌘K for commands, the rail's Search for missions.
+
+**Decision.** One. The palette gains a **Missions** group — every mission across every project, labelled `goal · project` so typing either finds it, the current project's first nine keeping their `⌘n` hints — and the separate search dialog is deleted, not hidden: the rail's Search row now opens the same palette. D-066's deliberate scope survives inside the merge: missions and not code, because the rail's job is getting to a room.
+
+**Alternatives.** Keeping both with cross-links (rejected: two surfaces wearing one anatomy for one kind of question is the confusion the owner named). Missions-first ordering over commands (deferred: groups are stable and typing disambiguates; reorder if use shows reaching past commands).
+
+**Consequences.** SearchDialog deleted from project-shell; rail-search rewired to the palette; the palette's per-project mission entries widened to all projects. Live-proven: the rail's Search opened the palette and a typed mission opened its room (the palette closing on run asserted); evidence: the palette shot with the Missions group.
+
+**Revisit when.** Mission count makes the flat group heavy (recency ordering or per-project subheads), or code search genuinely arrives — as its own feature, not this control.
