@@ -16,6 +16,7 @@ import {
 import codexIcon from "../assets/codex-icon.png";
 import { Dialog } from "./dialog";
 import { ClaudeGlyph, DocumentGlyph, ImageGlyph } from "./identity";
+import { FileBadge } from "./file-badge";
 
 /** One short line on what each profile answers, keyed to the vocabulary the
  *  server enforces (D-115). The wire never changes: the harness always asks,
@@ -130,6 +131,7 @@ export function Composer({
   pendingContext,
   onRemoveContext,
   mention,
+  slashCommands,
   onRemoveTranscript
 }: {
   /** Null until the server has said what this viewer may do. The composer
@@ -195,6 +197,11 @@ export function Composer({
     search: (query: string) => Promise<string[]>;
     add: (path: string) => void;
   };
+  /** The lane's enabled slash commands (D-187): typing / as the first
+   *  character offers them; picking one inserts the full invocation the CLI
+   *  registered for the composed command. Absent or empty, / stays an
+   *  ordinary character — never a dead popover. */
+  slashCommands?: { name: string; description: string | null; insert: string }[];
   onRemoveTranscript?: (sessionId: string) => void;
 }) {
   const [textValue, setTextValue] = useState("");
@@ -251,26 +258,38 @@ export function Composer({
   const [mentionMatches, setMentionMatches] = useState<string[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
 
-  // The candidates for the token being typed, debounced a beat: the git list
-  // is fast, but a keystroke burst should cost one read, not six.
+  // The candidates for the token being typed. Opening the token is answered at
+  // once — there is nothing to debounce at the moment @ is pressed, and a beat
+  // of blankness there is the whole of what the popover feels like. Only
+  // refinement keystrokes wait, so a burst still costs one read rather than
+  // six. The effect keys on the query itself rather than the token object, so
+  // a re-render cannot restart the wait.
+  const mentionQuery = mentionToken?.query ?? null;
   useEffect(() => {
-    if (!mention || mentionToken === null) {
+    if (!mention || mentionQuery === null) {
       setMentionMatches([]);
       return;
     }
     let stale = false;
-    const timer = setTimeout(() => {
-      void mention.search(mentionToken.query).then((paths) => {
+    const read = () => {
+      void mention.search(mentionQuery).then((paths) => {
         if (stale) return;
         setMentionMatches(paths.slice(0, 8));
         setMentionIndex(0);
       });
-    }, 120);
+    };
+    if (mentionQuery === "") {
+      read();
+      return () => {
+        stale = true;
+      };
+    }
+    const timer = setTimeout(read, 120);
     return () => {
       stale = true;
       clearTimeout(timer);
     };
-  }, [mention, mentionToken]);
+  }, [mention, mentionQuery]);
 
   /** Finds the @-token the cursor is inside: an @ at the start or after
    *  whitespace, with no whitespace between it and the cursor. */
@@ -281,6 +300,41 @@ export function Composer({
     const between = value.slice(at + 1, cursor);
     if (/\s/.test(between)) return null;
     return { start: at, query: between };
+  };
+
+  /** The active /-token (D-187): only a / opening the box starts one — a
+   *  command is the direction, so mid-sentence slashes stay paths. */
+  const [slashToken, setSlashToken] = useState<{ query: string } | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const commandMatches =
+    slashToken === null || !slashCommands || slashCommands.length === 0
+      ? []
+      : slashCommands
+          .filter((command) =>
+            command.name.toLowerCase().includes(slashToken.query.toLowerCase())
+          )
+          .slice(0, 8);
+
+  const readSlashToken = (value: string, cursor: number): { query: string } | null => {
+    if (!value.startsWith("/")) return null;
+    const between = value.slice(1, cursor);
+    if (cursor < 1 || /\s/.test(between)) return null;
+    return { query: between };
+  };
+
+  const pickSlashCommand = (insert: string): void => {
+    if (slashToken === null) return;
+    // The invocation replaces the /query; whatever followed it stays — the
+    // person goes on typing the command's arguments.
+    setTextValue((value) => `${insert} ${value.slice(1 + slashToken.query.length).trimStart()}`);
+    setSlashToken(null);
+    requestAnimationFrame(() => {
+      const box = inputRef.current;
+      if (box) {
+        box.focus();
+        box.setSelectionRange(insert.length + 1, insert.length + 1);
+      }
+    });
   };
 
   const pickMention = (path: string): void => {
@@ -518,7 +572,11 @@ export function Composer({
                 key={ref.kind === "file" ? `file:${ref.path}` : `check:${ref.checkId}`}
                 data-testid="composer-context"
               >
-                <DocumentGlyph className="composer-attachment-glyph" />
+                {ref.kind === "file" ? (
+                  <FileBadge path={ref.path} />
+                ) : (
+                  <DocumentGlyph className="composer-attachment-glyph" />
+                )}
                 <span className="composer-attachment-name">
                   {ref.kind === "file" ? ref.path : `${ref.name} · ${ref.outcome}`}
                 </span>
@@ -599,6 +657,31 @@ export function Composer({
             ))}
           </div>
         )}
+        {slashToken !== null && commandMatches.length > 0 && (
+          <div className="mention-popover" role="listbox" data-testid="slash-popover">
+            {commandMatches.map((command, index) => (
+              <button
+                key={command.name}
+                role="option"
+                aria-selected={index === slashIndex}
+                className={index === slashIndex ? "mention-row selected" : "mention-row"}
+                // Mouse down, not click: a click blurs the textarea first and
+                // the popover would be gone before it landed.
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  pickSlashCommand(command.insert);
+                }}
+                data-testid="slash-row"
+                data-command={command.name}
+              >
+                <span className="mono mention-path">/{command.name}</span>
+                {command.description && (
+                  <span className="mention-note">{command.description}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
         {mentionToken !== null && mentionMatches.length > 0 && (
           <div className="mention-popover" role="listbox" data-testid="mention-popover">
             {mentionMatches.map((path, index) => (
@@ -617,6 +700,7 @@ export function Composer({
                 }}
                 data-testid="mention-row"
               >
+                <FileBadge path={path} />
                 <span className="mono mention-path">{path}</span>
               </button>
             ))}
@@ -640,6 +724,14 @@ export function Composer({
                 readMentionToken(event.target.value, event.target.selectionStart ?? 0)
               );
             }
+            if (slashCommands && slashCommands.length > 0) {
+              const token = readSlashToken(
+                event.target.value,
+                event.target.selectionStart ?? 0
+              );
+              setSlashToken(token);
+              if (token) setSlashIndex(0);
+            }
             grow(event.target);
           }}
           onPaste={(event) => {
@@ -654,6 +746,32 @@ export function Composer({
             void pasteImage();
           }}
           onKeyDown={(event) => {
+            // The slash popover owns the keys while it is open (D-187), the
+            // mention popover's exact grammar: Enter picks, never sends.
+            if (slashToken !== null && commandMatches.length > 0) {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setSlashIndex((index) => (index + 1) % commandMatches.length);
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setSlashIndex(
+                  (index) => (index - 1 + commandMatches.length) % commandMatches.length
+                );
+                return;
+              }
+              if (event.key === "Enter" || event.key === "Tab") {
+                event.preventDefault();
+                pickSlashCommand(commandMatches[slashIndex]!.insert);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setSlashToken(null);
+                return;
+              }
+            }
             // The mention popover owns the keys while it is open (D-185):
             // Enter picks, never sends, and Escape closes only it.
             if (mentionToken !== null && mentionMatches.length > 0) {

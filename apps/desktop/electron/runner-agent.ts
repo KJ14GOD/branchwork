@@ -12,12 +12,10 @@ import {
   DirectionContextRefSchema,
   type DirectionContextRef,
   EnabledMcpServersSchema,
-  EnabledSkillsSchema,
   PermissionProfileSchema,
   RunnerCommandsResponseSchema,
   type Artifact,
   type EnabledMcpServer,
-  type EnabledSkill,
   type MissionDetailResponse,
   type PermissionProfile,
   type RunnerCommand,
@@ -29,6 +27,7 @@ import {
 } from "@novus/contracts";
 import { z } from "zod";
 import { ApiError, type ControlPlaneClient } from "./api-client";
+import { captureGlobalSlashCommands } from "./global-commands";
 import {
   captureScreenshot as capturePreviewScreenshot,
   type ArtifactUploader
@@ -288,7 +287,11 @@ const WorkspacePayloadSchema = z.object({
    * have edited since the participant pressed the control. Absent only for
    * `stop_command`, which names a process rather than a command line.
    */
-  command: DeclaredCommandSchema.nullable().optional()
+  command: DeclaredCommandSchema.nullable().optional(),
+  /** For `stop_command`: the processes the control plane still records as live
+   *  under that name. Any of them this machine is not actually running is
+   *  reported exited, so a stale "running" row cannot outlive a Stop. */
+  processIds: z.array(z.string().min(1).max(60)).default([])
 });
 
 /**
@@ -325,10 +328,6 @@ const StartPayloadSchema = z.object({
    *  (D-115). Defaulted to manual so a command from an older control plane
    *  runs as every turn always did: asking. */
   permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE),
-  /** The enabled skills, pinned at dispatch (D-118): each at the digest a
-   *  person reviewed. Defaulted empty so a command from an older control
-   *  plane carries nothing rather than something. */
-  skills: EnabledSkillsSchema.default([]),
   /** The enabled MCP servers (D-119), same rule. */
   mcpServers: EnabledMcpServersSchema.default([]),
   /** Images the person attached to this direction (D-150), by address. The
@@ -430,6 +429,11 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   /** The last configuration problem said out loud per workstream, so a broken
    *  settings file is one warning rather than one every discovery pass. */
   const announcedProblem = new Map<string, string>();
+  /** Lanes whose manifest this run has published at least once (D-186/D-188's
+   *  restart gap): enrolment used to be the only announce, so a restarted app
+   *  served whatever the previous run had said until a workspace command
+   *  happened to run. */
+  const announcedThisRun = new Set<string>();
   /** Lanes whose branch this machine has confirmed it holds, keyed
    *  `mission:workstream`, so the check above costs one `rev-parse` per lane
    *  per run rather than one every fifteen seconds forever. */
@@ -1069,12 +1073,38 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           if (lane.branchStatus !== "created") continue;
           const laneEnrolled = enrolments.has(workstreamId);
           const laneKey = `${mission.missionId}:${workstreamId}`;
-          if (laneEnrolled && !github && fetched.has(laneKey)) continue;
+          // A lane this run has not yet announced gets one manifest publish
+          // even when it is already enrolled: what the control plane holds is
+          // whatever the *last* run published, and the project's skills, its
+          // commands, and this machine's own (D-186, D-188) may all have
+          // moved while the app was closed. Once per run — the ordinary
+          // republish paths carry changes after that.
+          const announceOnce = () => {
+            if (announcedThisRun.has(laneKey)) return;
+            announcedThisRun.add(laneKey);
+            const workspaceId = detail.workspace?.workspaceId ?? null;
+            chain(workstreamId, () =>
+              announceCommands({
+                missionId: mission.missionId,
+                workstreamId,
+                providerRepoId: repository.providerRepoId,
+                missionBranch,
+                workspaceId
+              })
+            );
+          };
+          if (laneEnrolled && !github && fetched.has(laneKey)) {
+            announceOnce();
+            continue;
+          }
 
           const checkoutPath = host.repositoryPath(repository.providerRepoId);
           const needsCheckout = github && !(await hasMissionBranch(checkoutPath, missionBranch));
           if (!needsCheckout) fetched.add(laneKey);
-          if (laneEnrolled && !needsCheckout) continue;
+          if (laneEnrolled && !needsCheckout) {
+            announceOnce();
+            continue;
+          }
 
           if (!laneEnrolled) {
             if (github && !shouldHostGithub(detail)) continue;
@@ -1110,6 +1140,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           // there, which is real work on the same files a turn uses — so it
           // takes its turn in the lane rather than running beside one.
           const workspaceId = detail.workspace?.workspaceId ?? null;
+          announcedThisRun.add(laneKey);
           chain(workstreamId, () =>
             announceCommands({
               missionId: mission.missionId,
@@ -1754,7 +1785,6 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       access: payload.data.access,
       scope: payload.data.scope,
       permissionProfile: payload.data.permissionProfile,
-      skills: payload.data.skills,
       mcpServers: payload.data.mcpServers,
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
@@ -1808,7 +1838,9 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     const pinned: PinnedCommand = { name, snapshot: payload.data.command ?? null };
     if (command.kind === "run_setup") return workspace.runSetup(context, pinned);
     if (command.kind === "run_command") return workspace.runCommand(context, pinned);
-    if (command.kind === "stop_command") return workspace.stopCommand(context, name);
+    if (command.kind === "stop_command") {
+      return workspace.stopCommand(context, name, payload.data.processIds);
+    }
     return workspace.runVerification(context, pinned);
   }
 
@@ -1837,8 +1869,6 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     scope: string[] | null;
     /** The lane's answer policy, pinned at dispatch (D-115). */
     permissionProfile: PermissionProfile;
-    /** The enabled skills, pinned at dispatch (D-118). */
-    skills: EnabledSkill[];
     /** The enabled MCP servers, pinned at dispatch (D-119). */
     mcpServers: EnabledMcpServer[];
     announceStart: boolean;
@@ -2045,7 +2075,14 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       access: args.access,
       scope: args.scope,
       permissionProfile: args.permissionProfile,
-      skills: args.skills,
+      // The CLI announcing its own commands (D-188): remembered per machine,
+      // and — when the machine just learned something new — republished right
+      // away, so the / menu fills from the first turn rather than the second.
+      onSlashCommands: (announced, terminalOnly) => {
+        if (captureGlobalSlashCommands(userData, announced, terminalOnly)) {
+          void republishFor(args.missionId);
+        }
+      },
       mcpServers: args.mcpServers,
       novusCapture,
       onToolAllowed: (toolName) => {

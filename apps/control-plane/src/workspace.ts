@@ -124,6 +124,10 @@ async function enqueueWorkspaceCommand(
     /** The exact command being authorized. Null only for `stop_command`, which
      *  names a live process rather than a command line. */
     command: DeclaredCommand | null;
+    /** For `stop_command` only: the processes this workspace still records as
+     *  live under that name. The runner reports any of them it is not actually
+     *  running as exited, so a stale "running" row cannot outlive a Stop. */
+    processIds?: string[];
     requestedBy: string;
   }
 ): Promise<Enqueued> {
@@ -139,7 +143,12 @@ async function enqueueWorkspaceCommand(
     // an anonymous green row (D-037). The snapshot travels with it because the
     // runner must execute what was authorized, not what the file says later
     // (D-043).
-    payload: { name: args.name, command: args.command, requestedBy: args.requestedBy }
+    payload: {
+      name: args.name,
+      command: args.command,
+      requestedBy: args.requestedBy,
+      ...(args.processIds ? { processIds: args.processIds } : {})
+    }
   });
   return outcome.kind;
 }
@@ -284,6 +293,15 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: RouteDeps): 
     const outcome = await withMission(deps.db, access.missionId, async (client) => {
       const runnerId = (await activeRunner(client, workstreamId))?.runnerId;
       if (!runnerId) return "no_runner" as const;
+      // The rows this stop is about. They travel with the command so the
+      // runner can answer for each one: a row the machine is not actually
+      // running is reported exited rather than left saying "running" forever
+      // after its real exit report was lost.
+      const live = await client.query(
+        `select prc_id from workspace_processes
+          where wst_id = $1 and name = $2 and state in ('starting', 'running')`,
+        [workstreamId, body.data.name]
+      );
       const enqueued = await enqueueWorkspaceCommand(client, {
         orgId: access.orgId,
         missionId: access.missionId,
@@ -294,6 +312,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: RouteDeps): 
         // Stopping names a live process rather than a command line, so there is
         // nothing to pin: what it does is bounded by what is already running.
         command: null,
+        processIds: live.rows.map((row) => row.prc_id as string),
         requestedBy: ctx.userId
       });
       if (enqueued === "enqueued") {

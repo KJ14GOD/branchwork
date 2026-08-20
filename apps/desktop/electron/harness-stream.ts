@@ -99,6 +99,10 @@ export interface HarnessStreamOptions {
   /** Where control traffic goes instead of into the transcript. Absent in the
    *  parsing tests, which assert only that it never becomes prose. */
   onControl?: (message: HarnessControlMessage) => void;
+  /** The CLI's own slash commands, as its init line announces them (D-188) —
+   *  handed out for the machine to remember, with its terminal-only list
+   *  beside them so what cannot work headless is excluded at the source. */
+  onSlashCommands?: (announced: string[], terminalOnly: string[]) => void;
 }
 
 interface PendingTool {
@@ -126,6 +130,10 @@ interface StreamLine {
   message?: { content?: unknown };
   request_id?: string;
   request?: ControlRequestBody;
+  /** Present on the `system/init` line: everything this session can be asked
+   *  to run by name, and the subset that only draws terminal UI. */
+  slash_commands?: unknown;
+  terminal_slash_commands?: unknown;
   response?: { subtype?: string; request_id?: string };
   /**
    * Set by the CLI on messages produced by one of its **own** subagents, naming
@@ -233,7 +241,10 @@ function detailOf(tool: string, input: Record<string, unknown> | undefined): str
       ? ["command"]
       : tool === "Grep" || tool === "Glob"
         ? ["pattern", "query"]
-        : ["file_path", "path", "notebook_path", "url", "description", "prompt"];
+        : // A Skill call names the skill it launches (D-192) — without this
+          // the trace said only "Skill", which is the one thing a reader
+          // already knew.
+          ["file_path", "path", "notebook_path", "url", "skill", "description", "prompt"];
   for (const key of candidates) {
     const value = input[key];
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -247,6 +258,7 @@ export class HarnessStream {
   private readonly resumeSessionId: string | null;
   private readonly sanitize: (text: string) => string;
   private readonly onControl: (message: HarnessControlMessage) => void;
+  private readonly onSlashCommands: (announced: string[], terminalOnly: string[]) => void;
   private observedSessionId: string | null = null;
   private observedResumed = false;
   private observedResult: HarnessResult | null = null;
@@ -255,6 +267,7 @@ export class HarnessStream {
     this.resumeSessionId = options.resumeSessionId ?? null;
     this.sanitize = options.sanitize ?? ((text) => text);
     this.onControl = options.onControl ?? (() => undefined);
+    this.onSlashCommands = options.onSlashCommands ?? (() => undefined);
   }
 
   /** The session the harness actually used, once it has said so. */
@@ -433,6 +446,14 @@ export class HarnessStream {
 
   private consumeSystem(parsed: StreamLine): RunnerEvent[] {
     if (parsed.subtype !== "init" || typeof parsed.session_id !== "string") return [];
+    // The CLI enumerating its own commands (D-188): the one honest source for
+    // what / can invoke, handed out before the dedupe below — a resumed
+    // session's list is just as true as a fresh one's.
+    if (Array.isArray(parsed.slash_commands)) {
+      const strings = (value: unknown): string[] =>
+        Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+      this.onSlashCommands(strings(parsed.slash_commands), strings(parsed.terminal_slash_commands));
+    }
     const sessionId = parsed.session_id;
     if (this.observedSessionId === sessionId) return [];
     this.observedSessionId = sessionId;

@@ -354,6 +354,10 @@ beforeAll(async () => {
   repoName = basename(localRepoDir);
   git(localRepoDir, ["init", "-b", "main"]);
   writeFileSync(join(localRepoDir, "README.md"), "# runtime fixture\n");
+  // Two types a brand owns, so the files panel's marks (D-195) are exercised
+  // in colour rather than only in the room's own ink.
+  writeFileSync(join(localRepoDir, "train.py"), "print('fixture')\n");
+  writeFileSync(join(localRepoDir, "main.ts"), "export const fixture = true;\n");
   mkdirSync(join(localRepoDir, ".novus"), { recursive: true });
   writeFileSync(
     join(localRepoDir, ".novus", "settings.toml"),

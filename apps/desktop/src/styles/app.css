@@ -2200,6 +2200,21 @@ body {
   padding: var(--s-1) 0;
 }
 
+/* The name is the row's control (D-193): pressing it folds the description. */
+.skill-row-toggle {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+}
+
+.skill-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
 .skill-row-body {
   flex: 1;
   min-width: 0;
@@ -2267,7 +2282,9 @@ body {
 }
 
 .mention-row {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
   width: 100%;
   text-align: left;
   padding: var(--s-2) var(--s-3);
@@ -2289,6 +2306,18 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   display: block;
+  min-width: 0;
+}
+
+/* A slash row's second half (D-187): the command's own description, quiet
+   beside the invocation, truncating before it can wrap the row. */
+.mention-note {
+  font: var(--type-meta);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .composer-error {
@@ -3951,31 +3980,90 @@ body {
 
 /* A file's type is a fact about the file, not something Novus is saying, which
    is why these are the one other place hues live outside their semantic tokens
-   (D-046, D-048). Two-to-four letters rather than a glyph set: the extension is
-   already the answer and never goes stale. */
-.tree-badge {
+   (D-046, D-048, D-195). The mark is the language's own, so the slot holds a
+   glyph rather than a chip: no fill, no radius, nothing drawn around it — a
+   row of marks reads as a list of files, where a row of filled blocks read as
+   a list of labels. */
+.file-mark {
   flex: none;
-  width: 26px;
-  height: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  font: var(--type-micro);
-  font-family: var(--font-mono);
-  text-transform: lowercase;
-  letter-spacing: 0;
-  overflow: hidden;
-  background: var(--surface-2);
-  color: var(--text-3);
+  width: 15px;
+  height: 15px;
+  display: block;
 }
 
-.family-code { color: var(--term-blue); background: color-mix(in srgb, var(--term-blue) 14%, transparent); }
-.family-web { color: var(--term-magenta); background: color-mix(in srgb, var(--term-magenta) 14%, transparent); }
-.family-data { color: var(--term-yellow); background: color-mix(in srgb, var(--term-yellow) 14%, transparent); }
-.family-doc { color: var(--term-cyan); background: color-mix(in srgb, var(--term-cyan) 14%, transparent); }
-.family-config { color: var(--term-green); background: color-mix(in srgb, var(--term-green) 14%, transparent); }
-.family-asset { color: var(--term-bright-magenta); background: color-mix(in srgb, var(--term-bright-magenta) 12%, transparent); }
+/* A brand with no colour of its own borrows the room's ink, and a type no
+   brand owns takes its family's hue from the terminal palette. */
+.file-mark.ink { color: var(--text-2); }
+.family-code { color: var(--term-blue); }
+.family-web { color: var(--term-magenta); }
+.family-data { color: var(--term-yellow); }
+.family-doc { color: var(--term-cyan); }
+.family-config { color: var(--term-green); }
+.family-asset { color: var(--term-bright-magenta); }
+.family-plain { color: var(--text-3); }
+
+/* An extension's origin tag (D-190), the file badge's anatomy at word width:
+   where a thing came from is a fact about the thing — D-048's reasoning, the
+   same tokens, the same 14% tint — never a status, which stays in words. */
+.origin-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--s-1);
+  height: 16px;
+  border-radius: 4px;
+  font: var(--type-micro);
+  letter-spacing: 0;
+  text-transform: lowercase;
+}
+
+/* Bright enough to find at a glance (D-194): the bright terminal hues, the
+   diff family's own weight — a label is meant to be picked out of a list, and
+   the 14% wash read as grey text on grey. */
+.origin-project {
+  color: var(--term-bright-cyan);
+  background: color-mix(in srgb, var(--term-bright-cyan) 22%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-bright-cyan) 34%, transparent);
+  font-weight: 500;
+}
+
+.origin-machine {
+  color: var(--term-bright-yellow);
+  background: color-mix(in srgb, var(--term-bright-yellow) 22%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-bright-yellow) 34%, transparent);
+  font-weight: 500;
+}
+
+/* A group that folds. The heading is the control across its whole width, so
+   nothing floats beside it; the count keeps the fact readable while shut. */
+.extension-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: var(--s-2) 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-1);
+}
+
+.extension-group-head:hover .extension-group-name {
+  color: var(--text-1);
+}
+
+.extension-group-name {
+  font: var(--type-row);
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.extension-group-count {
+  font: var(--type-meta);
+  color: var(--text-3);
+  margin-left: auto;
+}
 
 /* A file is its own tab beside the room's, marked as a file (D-048). */
 /* Same opt-out as .session-tab, for the same reason: the base .tab width
@@ -6747,3 +6835,206 @@ span.trace-attachment-transcript:hover {
 .kv-action {
   margin-left: var(--s-2);
 }
+
+/* ---------- Extension labels (D-195) ---------- */
+/* The tag half of the collection/tag split: a team's own word laid over the
+   manifests. Colours name terminal tokens — the file badge's own family
+   (D-048) — so a label is drawn from the palette the product already has and
+   never from a value written here. */
+
+.extension-labels {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+  position: relative;
+}
+
+.extension-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--s-1);
+  height: 16px;
+  border-radius: 4px;
+  font: var(--type-micro);
+  letter-spacing: 0;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.extension-label-add {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  font: var(--type-micro);
+}
+
+/* The control appears with the row rather than sitting on it always: a plus
+   beside every name is thirty controls on a list of thirty skills. */
+.skill-row:hover .extension-label-add,
+.extension-label-add:focus-visible,
+.extension-label-add[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.extension-label-add:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.label-picker {
+  position: absolute;
+  top: calc(100% + var(--s-1));
+  right: 0;
+  width: 240px;
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  padding: var(--s-2);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.label-picker-field {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  padding: var(--s-1) var(--s-2);
+  color: var(--text-1);
+  font: var(--type-meta);
+}
+
+.label-picker-rows {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.label-picker-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  position: relative;
+}
+
+.label-row {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  padding: var(--s-1) var(--s-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-control);
+  cursor: pointer;
+  color: var(--text-2);
+  font: var(--type-meta);
+  text-align: left;
+}
+
+.label-row.selected,
+.label-row:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.label-row-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.label-row-check {
+  flex: none;
+  color: var(--text-3);
+}
+
+.label-row-edit {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 0 var(--s-1);
+  font: var(--type-meta);
+}
+
+.label-row-edit:hover {
+  color: var(--text-1);
+}
+
+.label-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.label-swatch.chosen {
+  box-shadow: 0 0 0 2px var(--surface-1), 0 0 0 3px var(--accent);
+}
+
+.label-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2);
+  margin-top: var(--s-1);
+  background: var(--surface-2);
+  border-radius: var(--r-control);
+}
+
+.label-editor-colors {
+  display: flex;
+  gap: var(--s-1);
+}
+
+.label-editor-delete {
+  align-self: flex-start;
+  font: var(--type-micro);
+  color: var(--danger);
+}
+
+.label-picker-empty,
+.label-picker-error {
+  font: var(--type-meta);
+  color: var(--text-3);
+  margin: 0;
+}
+
+/* One class per colour, both as a chip and as a swatch. */
+.label-red { color: var(--term-bright-red); background: color-mix(in srgb, var(--term-bright-red) 22%, transparent); }
+.label-orange { color: var(--warn); background: color-mix(in srgb, var(--warn) 22%, transparent); }
+.label-yellow { color: var(--term-bright-yellow); background: color-mix(in srgb, var(--term-bright-yellow) 22%, transparent); }
+.label-green { color: var(--term-bright-green); background: color-mix(in srgb, var(--term-bright-green) 22%, transparent); }
+.label-cyan { color: var(--term-bright-cyan); background: color-mix(in srgb, var(--term-bright-cyan) 22%, transparent); }
+.label-blue { color: var(--term-bright-blue); background: color-mix(in srgb, var(--term-bright-blue) 22%, transparent); }
+.label-magenta { color: var(--term-bright-magenta); background: color-mix(in srgb, var(--term-bright-magenta) 22%, transparent); }
+.label-grey { color: var(--text-2); background: color-mix(in srgb, var(--text-2) 20%, transparent); }
+
+.label-swatch.label-red { background: var(--term-bright-red); }
+.label-swatch.label-orange { background: var(--warn); }
+.label-swatch.label-yellow { background: var(--term-bright-yellow); }
+.label-swatch.label-green { background: var(--term-bright-green); }
+.label-swatch.label-cyan { background: var(--term-bright-cyan); }
+.label-swatch.label-blue { background: var(--term-bright-blue); }
+.label-swatch.label-magenta { background: var(--term-bright-magenta); }
+.label-swatch.label-grey { background: var(--text-2); }

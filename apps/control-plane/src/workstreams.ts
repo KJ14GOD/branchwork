@@ -1,6 +1,8 @@
 import {
   EnabledMcpServersSchema,
   EnabledSkillsSchema,
+  EnabledGlobalSkillsSchema,
+  EnabledSlashCommandsSchema,
   type Workstream
 } from "@novus/contracts";
 import type { Queryable } from "./db.ts";
@@ -39,6 +41,14 @@ export function toWorkstream(row: Record<string, unknown>): Workstream {
     // The skills a person enabled on this lane (D-118); malformed or
     // pre-migration reads as none, never as a wider grant.
     enabledSkills: EnabledSkillsSchema.catch([]).parse(row.enabled_skills ?? []),
+    // The slash commands (D-187), same posture.
+    enabledSlashCommands: EnabledSlashCommandsSchema.catch([]).parse(
+      row.enabled_slash_commands ?? []
+    ),
+    // The machine skills a person enabled (D-191), same posture.
+    enabledGlobalSkills: EnabledGlobalSkillsSchema.catch([]).parse(
+      row.enabled_global_skills ?? []
+    ),
     // And the MCP servers (D-119), same posture.
     enabledMcpServers: EnabledMcpServersSchema.catch([]).parse(row.enabled_mcp_servers ?? [])
   };

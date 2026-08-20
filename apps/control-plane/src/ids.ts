@@ -59,3 +59,6 @@ export const newReceiptId = () => `rcp_${opaque(20)}`;
 // Durable visual evidence (D-022, D-122).
 export const newArtifactId = () => `art_${opaque(20)}`;
 export const newAttachmentId = () => `att_${opaque(20)}`;
+
+/** An organization's own label for an extension (D-195). */
+export const newExtensionLabelId = () => `lbl_${opaque(20)}`;

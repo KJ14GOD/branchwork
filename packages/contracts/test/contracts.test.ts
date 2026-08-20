@@ -345,15 +345,17 @@ describe("project skills (D-118)", () => {
     }
   });
 
-  it("records what a turn carried and what it dropped, with the reason in words", () => {
+  it("records what a turn carried, at the digest that ran, and what it dropped (D-193)", () => {
     const parsed = RunnerEventSchema.safeParse({
       kind: "execution.running",
       payload: {
         harness: "claude-code",
         model: "m",
         effort: "high",
-        skills: ["zephyr-codes"],
-        skillsDropped: [{ name: "stale-one", reason: "changed since it was enabled" }]
+        // Carried entries name the bytes that ran (D-193): with no approval
+        // to check against, the digest is what the record is for.
+        skills: [{ name: "zephyr-codes", digest }],
+        skillsDropped: [{ name: "stale-one", reason: "could not be read" }]
       }
     });
     expect(parsed.success).toBe(true);

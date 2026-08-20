@@ -106,7 +106,15 @@ const novus: NovusBridge = {
     setPermissionProfile: (input) =>
       ipcRenderer.invoke("novus:missions:set-permission-profile", input),
     setEnabledSkills: (input) => ipcRenderer.invoke("novus:missions:set-enabled-skills", input),
+    setEnabledSlashCommands: (input) =>
+      ipcRenderer.invoke("novus:missions:set-enabled-slash-commands", input),
+    setEnabledGlobalSkills: (input) =>
+      ipcRenderer.invoke("novus:missions:set-enabled-global-skills", input),
     setEnabledMcpServers: (input) => ipcRenderer.invoke("novus:missions:set-enabled-mcp", input),
+    createExtensionLabel: (input) => ipcRenderer.invoke("novus:labels:create", input),
+    updateExtensionLabel: (input) => ipcRenderer.invoke("novus:labels:update", input),
+    deleteExtensionLabel: (input) => ipcRenderer.invoke("novus:labels:delete", input),
+    setExtensionLabels: (input) => ipcRenderer.invoke("novus:labels:assign", input),
     cancelDirection: (directionId) => ipcRenderer.invoke("novus:missions:cancel-direction", directionId),
     stop: (missionId, workstreamId, sessionId) =>
       ipcRenderer.invoke(

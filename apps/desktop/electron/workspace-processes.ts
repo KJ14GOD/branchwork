@@ -168,6 +168,12 @@ export class WorkspaceProcesses {
     return [...this.live.values()].map((supervised) => supervised.name);
   }
 
+  /** The ids of every process actually alive under this supervisor, so a stop
+   *  can tell a genuinely running process from a stale record of one. */
+  get runningProcessIds(): string[] {
+    return [...this.live.values()].map((supervised) => supervised.processId);
+  }
+
   /** Everything this workstream has run, still readable after it ended. */
   processLogs(): ProcessLog[] {
     return [...this.logs.values()].map((entry) => ({ ...entry.log }));

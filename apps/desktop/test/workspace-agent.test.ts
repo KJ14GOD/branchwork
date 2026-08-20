@@ -317,6 +317,24 @@ describe("workspace commands through the agent", () => {
     expect(plane.payloadsOf("process.exited")[0]?.processId).toBe(started?.processId);
   }, 40_000);
 
+  it("answers a stop naming a process nothing is running by reporting it gone", async () => {
+    start().discoverNow();
+    // The control plane still records this process as running — its real exit
+    // report was lost — so the stop carries its id and the machine corrects
+    // the record instead of returning silently, which left the room saying
+    // "App running" with a Stop that did nothing.
+    const stale = command("stop_command", { name: "dev", processIds: ["prc_stale00000000000000"] });
+    plane.enqueue(stale);
+
+    await waitFor("the stale row to be answered", () => plane.kinds().includes("process.exited"));
+    const exited = plane.payloadsOf("process.exited")[0];
+    expect(exited?.processId).toBe("prc_stale00000000000000");
+    expect(exited?.state).toBe("stopped");
+    expect(exited?.ending).toBe("cancelled");
+    expect(plane.kinds()).not.toContain("process.started");
+    await waitFor("the command to settle", () => plane.stateOf(stale.commandId) === "completed");
+  }, 40_000);
+
   it("runs a declared check and reports the revision it proves", async () => {
     start().discoverNow();
     await authorize("run_verification", "verification", "test");

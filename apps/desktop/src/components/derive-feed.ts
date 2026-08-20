@@ -177,6 +177,15 @@ export interface Feed {
   blocks: FeedBlock[];
 }
 
+/** The names out of a carried list (D-193): each entry is `{name, digest}`,
+ *  and the trace says the names while the record keeps the digests. */
+function namesOf(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (entry && typeof entry === "object" ? (entry as { name?: unknown }).name : entry))
+    .filter((name): name is string => typeof name === "string");
+}
+
 function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -533,9 +542,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         // the reason, in the warn tone, because a standing enablement that no
         // longer names real bytes is news a person acts on. Nothing carried
         // and nothing dropped says nothing, like every default.
-        const carried = Array.isArray(event.payload.skills)
-          ? event.payload.skills.filter((name): name is string => typeof name === "string")
-          : [];
+        const carried = namesOf(event.payload.skills);
         if (carried.length > 0) {
           push(block, {
             kind: "note",
@@ -555,6 +562,62 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
             kind: "note",
             key: `${event.eventId}-skill-drop-${name}`,
             text: `Project skill not carried — "${name}": ${
+              text((drop as { reason?: unknown }).reason) ?? "the reason was not stated"
+            }`,
+            login: null,
+            tone: "warn"
+          });
+        }
+        // The slash commands, same grammar (D-187).
+        const commandsCarried = namesOf(event.payload.slashCommands);
+        if (commandsCarried.length > 0) {
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-slash-commands`,
+            text: `Slash commands carried: ${commandsCarried.join(", ")}`,
+            login: null,
+            tone: "neutral"
+          });
+        }
+        const commandsDropped = Array.isArray(event.payload.slashCommandsDropped)
+          ? event.payload.slashCommandsDropped
+          : [];
+        for (const drop of commandsDropped) {
+          const name = text((drop as { name?: unknown }).name);
+          if (!name) continue;
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-slash-command-drop-${name}`,
+            text: `Slash command not carried — "${name}": ${
+              text((drop as { reason?: unknown }).reason) ?? "the reason was not stated"
+            }`,
+            login: null,
+            tone: "warn"
+          });
+        }
+        // The machine's own skills, same grammar (D-191) — named apart from
+        // the project's, because where a skill came from is the fact a reader
+        // of somebody else's turn most needs.
+        const globalsCarried = namesOf(event.payload.globalSkills);
+        if (globalsCarried.length > 0) {
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-global-skills`,
+            text: `Machine skills carried: ${globalsCarried.join(", ")}`,
+            login: null,
+            tone: "neutral"
+          });
+        }
+        const globalsDropped = Array.isArray(event.payload.globalSkillsDropped)
+          ? event.payload.globalSkillsDropped
+          : [];
+        for (const drop of globalsDropped) {
+          const name = text((drop as { name?: unknown }).name);
+          if (!name) continue;
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-global-skill-drop-${name}`,
+            text: `Machine skill not carried — "${name}": ${
               text((drop as { reason?: unknown }).reason) ?? "the reason was not stated"
             }`,
             login: null,

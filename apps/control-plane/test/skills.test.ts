@@ -5,18 +5,14 @@ import { FakeRepositoryProvider } from "../src/repo-provider.ts";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
 
 /**
- * Project skills (D-118).
+ * Project skills and the manifests around them (D-118, D-186, D-187, D-193).
  *
- * The rules under test at the control plane: the runner publishes the
- * worktree's `.claude/skills` manifest beside the declared commands (D-043's
- * pattern) and the control plane stores it verbatim; enabling is `skills.set`
- * — Mission Admin and Operator, never the baton — and every entry must match
- * the published manifest at exactly the digest the person was shown, because
- * what is approved is what was reviewed; a change is one recorded
- * `skills.changed` event with both sets verbatim; and the set a turn runs
- * with is pinned at dispatch, so an enablement mid-turn speaks from the next
- * turn. The runner-side half — composing the skills-only plugin directory and
- * dropping a stale digest by name — is proven in the desktop suites.
+ * What the control plane still owes after D-193 removed the skill and
+ * command enablement routes: the runner publishes what the worktree holds and
+ * what the machine holds, and the control plane stores it verbatim and serves
+ * it to every participant. Nothing here gates a skill any more — every
+ * declared skill is carried, and the turn's own record names what ran. MCP
+ * servers keep their gate and their tests, one tier up.
  */
 
 let harness: Harness;
@@ -39,7 +35,10 @@ const skill = (name: string, body: string, description: string | null = null): P
   name,
   description,
   digest: sha256(body),
-  bytes: Buffer.byteLength(body)
+  bytes: Buffer.byteLength(body),
+  // Whether the harness may reach for it unasked (D-192); the runner reads it
+  // from the SKILL.md, and the wire carries it like every other fact.
+  modelInvocable: true
 });
 const ZEPHYR = skill("zephyr-codes", "The codeword is XILOPHONE-72.", "Codewords for releases.");
 const RELEASE = skill("release-notes", "Write the notes in the changelog voice.");
@@ -137,18 +136,6 @@ async function joinAs(missionId: string, who: string, role: string): Promise<Sig
   return joiner;
 }
 
-async function setSkills(
-  lane: Lane,
-  skills: { name: string; digest: string }[],
-  options: { as?: SignedIn } = {}
-) {
-  return harness.app.inject({
-    method: "POST",
-    url: `/missions/${lane.missionId}/workstreams/${lane.workstreamId}/skills`,
-    headers: bearer(options.as ?? kartik),
-    payload: { skills }
-  });
-}
 
 const detailOf = async (lane: Lane, as: SignedIn = kartik) => {
   const response = await harness.app.inject({
@@ -183,155 +170,36 @@ describe("the published manifest", () => {
     await publish(lane, [ZEPHYR, RELEASE]);
     const detail = await detailOf(lane);
     expect(detail.workspace.skills).toEqual([ZEPHYR, RELEASE]);
-    expect(detail.workstream.enabledSkills).toEqual([]);
-    expect(detail.capabilities).toContain("skills.set");
   });
-});
 
-describe("who may enable", () => {
-  it("an Operator enables, the change is one recorded event, and a repeat records nothing", async () => {
+  it("carries the runner machine's global skills for display, apart from the enableable list (D-186)", async () => {
     const lane = await mission();
-    await publish(lane, [ZEPHYR, RELEASE]);
-    const operator = await joinAs(lane.missionId, "op-skills", "operator");
-    const enabled = await setSkills(lane, [{ name: ZEPHYR.name, digest: ZEPHYR.digest }], {
-      as: operator
+    const response = await harness.app.inject({
+      method: "POST",
+      url: "/runner/events",
+      headers: runnerAuth(lane.credential),
+      payload: {
+        executionId: null,
+        events: [
+          {
+            originSeq: (seq += 1),
+            event: {
+              kind: "workspace.declared",
+              payload: { commands: [], skills: [ZEPHYR], globalSkills: [RELEASE] }
+            }
+          }
+        ]
+      }
     });
-    expect(enabled.statusCode).toBe(200);
+    expect(response.statusCode).toBe(200);
     const detail = await detailOf(lane);
-    expect(detail.workstream.enabledSkills).toEqual([{ name: ZEPHYR.name, digest: ZEPHYR.digest }]);
-    const changes = await eventsOf(lane, "skills.changed");
-    expect(changes).toHaveLength(1);
-    expect(changes[0]?.payload).toMatchObject({
-      from: [],
-      to: [{ name: ZEPHYR.name, digest: ZEPHYR.digest }]
-    });
-    expect(changes[0]?.actor_kind).toBe("user");
-    // Same set twice is not a change: nothing is recorded for a repeat.
-    expect(
-      (await setSkills(lane, [{ name: ZEPHYR.name, digest: ZEPHYR.digest }], { as: operator }))
-        .statusCode
-    ).toBe(200);
-    expect(await eventsOf(lane, "skills.changed")).toHaveLength(1);
-  });
-
-  it("a Contributor is refused — holding the baton included — and a stranger is told nothing exists", async () => {
-    const lane = await mission();
-    await publish(lane, [ZEPHYR]);
-    const contributor = await joinAs(lane.missionId, "con-skills", "contributor");
-    const stranger = await harness.signIn("stranger-skills");
-    const entry = [{ name: ZEPHYR.name, digest: ZEPHYR.digest }];
-    expect((await setSkills(lane, entry, { as: contributor })).statusCode).toBe(403);
-    expect((await setSkills(lane, entry, { as: stranger })).statusCode).toBe(404);
-    // The ordinary handshake hands the contributor the baton; skills.set is
-    // in no lease list, so the refusal stands (the policy.set rule, D-115).
-    await harness.app.inject({
-      method: "POST",
-      url: `/missions/${lane.missionId}/control/request`,
-      headers: bearer(contributor),
-      payload: {}
-    });
-    await harness.app.inject({
-      method: "POST",
-      url: `/missions/${lane.missionId}/control/offer`,
-      headers: bearer(kartik),
-      payload: { toUserId: contributor.userId }
-    });
-    const offerId = (await detailOf(lane, contributor)).control.liveOffer.offerId as string;
-    await harness.app.inject({
-      method: "POST",
-      url: `/control/offers/${offerId}/accept`,
-      headers: bearer(contributor),
-      payload: {}
-    });
-    const detail = await detailOf(lane, contributor);
-    expect(detail.control.holderLogin).toBe("con-skills");
-    expect(detail.capabilities).not.toContain("skills.set");
-    expect((await setSkills(lane, entry, { as: contributor })).statusCode).toBe(403);
-    expect((await detailOf(lane)).workstream.enabledSkills).toEqual([]);
+    expect(detail.workspace.skills).toEqual([ZEPHYR]);
+    expect(detail.workspace.globalSkills).toEqual([RELEASE]);
   });
 });
 
-describe("what is approved is what was reviewed", () => {
-  it("refuses a skill the manifest does not carry, in words", async () => {
-    const lane = await mission();
-    await publish(lane, [ZEPHYR]);
-    const refused = await setSkills(lane, [{ name: "release-notes", digest: RELEASE.digest }]);
-    expect(refused.statusCode).toBe(409);
-    expect(refused.json().error.message).toContain("release-notes");
-    expect((await detailOf(lane)).workstream.enabledSkills).toEqual([]);
-  });
 
-  it("refuses a stale digest, and accepts the skill as it is now", async () => {
-    const lane = await mission();
-    await publish(lane, [ZEPHYR]);
-    const rewritten = skill("zephyr-codes", "The codeword is different now.");
-    // The agent rewrote the skill; the runner republished; the old review no
-    // longer names what is in the worktree.
-    await publish(lane, [rewritten]);
-    const stale = await setSkills(lane, [{ name: ZEPHYR.name, digest: ZEPHYR.digest }]);
-    expect(stale.statusCode).toBe(409);
-    expect(stale.json().error.message).toContain("changed since it was reviewed");
-    const fresh = await setSkills(lane, [{ name: rewritten.name, digest: rewritten.digest }]);
-    expect(fresh.statusCode).toBe(200);
-    expect((await detailOf(lane)).workstream.enabledSkills).toEqual([
-      { name: rewritten.name, digest: rewritten.digest }
-    ]);
-  });
 
-  it("refuses a malformed set — a path for a name, a short digest — as unparseable", async () => {
-    const lane = await mission();
-    await publish(lane, [ZEPHYR]);
-    for (const skills of [
-      [{ name: "../escape", digest: ZEPHYR.digest }],
-      [{ name: ZEPHYR.name, digest: "short" }]
-    ]) {
-      const refused = await setSkills(lane, skills);
-      expect(refused.statusCode).toBe(422);
-    }
-    expect((await detailOf(lane)).workstream.enabledSkills).toEqual([]);
-  });
-});
-
-describe("pinned at dispatch", () => {
-  it("a turn carries the set the lane stood under when it was authorized, and a change speaks from the next turn", async () => {
-    const lane = await mission();
-    await publish(lane, [ZEPHYR, RELEASE]);
-    const entry = [{ name: ZEPHYR.name, digest: ZEPHYR.digest }];
-    expect((await setSkills(lane, entry)).statusCode).toBe(200);
-    const first = await direct(lane, "use the codeword skill");
-    expect(first.statusCode).toBe(200);
-    const detail = await detailOf(lane);
-    const execution = detail.executions[0];
-    const command = await harness.db.query(
-      "select payload from runner_commands where exe_id = $1 and kind = 'start_execution'",
-      [execution.executionId]
-    );
-    expect(command.rowCount).toBe(1);
-    expect((command.rows[0].payload as { skills?: unknown }).skills).toEqual(entry);
-    // The lane's set changes; the running turn's pinned set does not.
-    expect((await setSkills(lane, [])).statusCode).toBe(200);
-    expect((await detailOf(lane)).workstream.enabledSkills).toEqual([]);
-    const pinned = await harness.db.query(
-      "select payload from runner_commands where exe_id = $1 and kind = 'start_execution'",
-      [execution.executionId]
-    );
-    expect((pinned.rows[0].payload as { skills?: unknown }).skills).toEqual(entry);
-  });
-
-  it("a foreign lane is answered as not found, never with the default lane's authority", async () => {
-    const lane = await mission();
-    const other = await mission();
-    await publish(other, [ZEPHYR]);
-    const refused = await harness.app.inject({
-      method: "POST",
-      url: `/missions/${lane.missionId}/workstreams/${other.workstreamId}/skills`,
-      headers: bearer(kartik),
-      payload: { skills: [{ name: ZEPHYR.name, digest: ZEPHYR.digest }] }
-    });
-    expect(refused.statusCode).toBe(404);
-    expect((await detailOf(other)).workstream.enabledSkills).toEqual([]);
-  });
-});
 
 describe("project MCP servers (D-119)", () => {
   const DOCS = {
@@ -466,3 +334,4 @@ describe("project MCP servers (D-119)", () => {
     expect((pinned.rows[0].payload as { mcpServers?: unknown }).mcpServers).toEqual(entry);
   });
 });
+

@@ -237,7 +237,13 @@ export const ProjectSkillSchema = z.object({
   /** SHA-256 of the SKILL.md bytes. The approval pins this, so what loads is
    *  what was reviewed — byte for byte — or nothing. */
   digest: z.string().regex(/^[0-9a-f]{64}$/),
-  bytes: z.number().int().positive().max(MAX_SKILL_BYTES)
+  bytes: z.number().int().positive().max(MAX_SKILL_BYTES),
+  /** Whether the harness may reach for this skill on its own (D-192). The
+   *  SKILL.md's own `disable-model-invocation: true` says it may not — such a
+   *  skill runs only when a person names it. Absent means the model decides
+   *  from the description, which is the ordinary case; defaulted true so an
+   *  older runner's manifest reads as what it was. */
+  modelInvocable: z.boolean().default(true)
 });
 export type ProjectSkill = z.infer<typeof ProjectSkillSchema>;
 
@@ -251,6 +257,109 @@ export const EnabledSkillSchema = z.object({
 export type EnabledSkill = z.infer<typeof EnabledSkillSchema>;
 
 export const EnabledSkillsSchema = z.array(EnabledSkillSchema).max(MAX_PROJECT_SKILLS);
+
+/** The runner machine's own user-level skills (`~/.claude/skills`), which the
+ *  CLI loads into every turn regardless of the pinned settings — D-118's
+ *  measured, standing limit. Published so that fact is visible instead of
+ *  silent: names, descriptions, digests — never bodies. They live in their own
+ *  list, apart from the project's, so `skills.set` structurally cannot name
+ *  one — there is nothing to enable, because they are already on. */
+export const MAX_GLOBAL_SKILLS = 40;
+export const GlobalSkillsSchema = z.array(ProjectSkillSchema).max(MAX_GLOBAL_SKILLS);
+
+/** One thing a turn carried, and the exact bytes it was (D-193). Every
+ *  discovered skill and command is carried now, so this record — not a prior
+ *  approval — is what answers "which bytes shaped this turn". */
+export const CarriedSkillSchema = z.object({
+  name: SkillNameSchema,
+  digest: z.string().regex(/^[0-9a-f]{64}$/)
+});
+export type CarriedSkill = z.infer<typeof CarriedSkillSchema>;
+
+/** A machine skill a person enabled for a lane (D-191), pinned to the exact
+ *  bytes reviewed — the project rule, applied to the operator's own
+ *  `~/.claude/skills`. These do **not** load by themselves under the pinned
+ *  argv (measured against 2.1.237, correcting D-118/D-186): Novus composes
+ *  the enabled ones into the same plugin directory, or the turn carries none. */
+export const EnabledGlobalSkillsSchema = z.array(EnabledSkillSchema).max(MAX_GLOBAL_SKILLS);
+
+// --- Project slash commands (D-187) ------------------------------------------
+// The worktree's own `.claude/commands/<name>.md` prompt templates, governed
+// exactly as its skills are (D-118): the runner publishes a bounded manifest,
+// a person enables named commands at the exact digest they reviewed — under
+// `skills.set`, the same tier, because a command is instructions the same way
+// a skill is and grants nothing — and the turn's composed plugin directory
+// carries the approved bytes, invocable as `/novus-project-skills:<name>`.
+// Hooks, `.mcp.json`, and agents stay never-written (D-072's boundary).
+// A command's identity is its filename minus `.md`, under the skill-name
+// grammar, so it can never be a traversal either.
+export const MAX_PROJECT_SLASH_COMMANDS = 40;
+export const ProjectSlashCommandSchema = ProjectSkillSchema;
+export type ProjectSlashCommand = ProjectSkill;
+export const EnabledSlashCommandsSchema = z
+  .array(EnabledSkillSchema)
+  .max(MAX_PROJECT_SLASH_COMMANDS);
+
+/** The harness's own slash commands (D-188): built-ins and the operator's
+ *  user-level commands, as the CLI's own `system/init` line announced them —
+ *  captured by the runner, remembered per machine, published for the
+ *  composer's / menu. Names only: already loaded, nothing to enable. */
+export const MAX_GLOBAL_SLASH_COMMANDS = 200;
+export const GlobalSlashCommandsSchema = z
+  .array(SkillNameSchema)
+  .max(MAX_GLOBAL_SLASH_COMMANDS);
+
+// --- Extension labels (D-195) ------------------------------------------------
+// Raindrop's distinction, in this product's words: an extension's **origin**
+// is its collection — intrinsic, exclusive, and nobody's to edit (a skill is
+// in the repository or it is on the machine) — while a **label** is a tag: a
+// team's own vocabulary, many per extension, named and coloured by people.
+// Labels are organizational, never authority: nothing about a label changes
+// what reaches a turn.
+
+/** How many labels an organization keeps, and how many one extension wears.
+ *  Bounds rather than policy: a label list nobody can read is not a taxonomy. */
+export const MAX_EXTENSION_LABELS = 60;
+export const MAX_LABELS_PER_EXTENSION = 8;
+export const EXTENSION_LABEL_NAME_MAX = 40;
+
+/** A label's colour names a token, never a value (DESIGN.md#tokens): the
+ *  terminal family the file badge already draws from (D-048), which is the
+ *  product's one sanctioned "fact about a thing" palette. */
+export const ExtensionLabelColorSchema = z.enum([
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "cyan",
+  "blue",
+  "magenta",
+  "grey"
+]);
+export type ExtensionLabelColor = z.infer<typeof ExtensionLabelColorSchema>;
+
+export const ExtensionLabelSchema = z.object({
+  labelId: z.string().startsWith("lbl_"),
+  name: z.string().min(1).max(EXTENSION_LABEL_NAME_MAX),
+  color: ExtensionLabelColorSchema
+});
+export type ExtensionLabel = z.infer<typeof ExtensionLabelSchema>;
+
+/** Which collection an extension belongs to — the fact the origin tag shows,
+ *  and the half of the model a person cannot edit. */
+export const ExtensionSourceSchema = z.enum(["repo", "machine"]);
+export type ExtensionSource = z.infer<typeof ExtensionSourceSchema>;
+
+/** One extension wearing one label. `name` is the skill's or command's own
+ *  name — the identity the manifest publishes — and `source` says which
+ *  collection it was in, so a repository skill and a machine skill that share
+ *  a name are never confused for each other. */
+export const ExtensionLabelAssignmentSchema = z.object({
+  labelId: z.string().startsWith("lbl_"),
+  source: ExtensionSourceSchema,
+  name: SkillNameSchema
+});
+export type ExtensionLabelAssignment = z.infer<typeof ExtensionLabelAssignmentSchema>;
 
 // --- Project MCP servers (D-119) ---------------------------------------------
 // The worktree's own `.mcp.json`, governed the same way as its skills: the
@@ -361,6 +470,12 @@ export const WorkstreamSchema = z.object({
    *  because nobody said anything. A fork starts empty, like the profile —
    *  trust is granted to a lane by a person, never inherited. */
   enabledSkills: EnabledSkillsSchema.default([]),
+  /** The project slash commands a person enabled on this lane (D-187),
+   *  pinned the same way. Defaulted empty, and a fork starts empty. */
+  enabledSlashCommands: EnabledSlashCommandsSchema.default([]),
+  /** The machine skills a person enabled on this lane (D-191), pinned the
+   *  same way. Defaulted empty, and a fork starts empty. */
+  enabledGlobalSkills: EnabledGlobalSkillsSchema.default([]),
   /** The project MCP servers a person enabled on this lane (D-119), pinned
    *  the same way. Defaulted empty, and a fork starts empty. */
   enabledMcpServers: EnabledMcpServersSchema.default([])
@@ -2218,6 +2333,17 @@ export const WorkspaceSchema = z.object({
    *  the same event as the declared commands. Never the bodies: a name, what
    *  it says it is, and the digest an approval would pin. */
   skills: z.array(ProjectSkillSchema).max(MAX_PROJECT_SKILLS).default([]),
+  /** The runner machine's user-level skills, as last read — always loaded by
+   *  the CLI itself (D-118's standing limit), published here so the fact is
+   *  visible rather than silent. Display only: never enableable, never pinned. */
+  globalSkills: GlobalSkillsSchema.default([]),
+  /** The project's slash commands, as the runner last read `.claude/commands`
+   *  (D-187) — the same review-then-enable manifest as the skills. */
+  slashCommands: z.array(ProjectSlashCommandSchema).max(MAX_PROJECT_SLASH_COMMANDS).default([]),
+  /** The harness's own slash commands on the runner machine (D-188), as the
+   *  CLI last announced them: already loaded into every turn, offered from
+   *  the composer's / menu, nothing to enable. */
+  globalSlashCommands: GlobalSlashCommandsSchema.default([]),
   /** The project's MCP servers, as the runner last read `.mcp.json` (D-119) —
    *  the same review-then-enable manifest, one tier up. */
   mcpServers: z.array(McpServerSchema).max(MAX_MCP_SERVERS).default([])
@@ -2834,10 +2960,11 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
          *  line can say what supervision the turn ran with. Defaulted so an
          *  older runner's report still validates as what it was: manual. */
         permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE),
-        /** The enabled skills this turn actually carried (D-118), by name —
-         *  the audit of what the harness was handed, stated by the runner
-         *  that composed it. Defaulted empty for older runners. */
-        skills: z.array(SkillNameSchema).max(MAX_PROJECT_SKILLS).default([]),
+        /** What this turn actually carried (D-193), each at the digest that
+         *  ran — since every discovered skill is carried, the record rather
+         *  than an approval is what says which bytes reached the harness.
+         *  Defaulted empty for older runners. */
+        skills: z.array(CarriedSkillSchema).max(MAX_PROJECT_SKILLS).default([]),
         /** Enabled skills this turn could NOT carry, each with the reason in
          *  words — the worktree's bytes no longer match the approved digest,
          *  the file is gone, or it stopped being a regular file. A drop is
@@ -2845,6 +2972,20 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         skillsDropped: z
           .array(z.object({ name: SkillNameSchema, reason: BOUNDED_LINE }).strict())
           .max(MAX_PROJECT_SKILLS)
+          .default([]),
+        /** The enabled slash commands this turn actually carried, and the
+         *  ones it could not, under exactly the skills' rules (D-187). */
+        slashCommands: z.array(CarriedSkillSchema).max(MAX_PROJECT_SLASH_COMMANDS).default([]),
+        slashCommandsDropped: z
+          .array(z.object({ name: SkillNameSchema, reason: BOUNDED_LINE }).strict())
+          .max(MAX_PROJECT_SLASH_COMMANDS)
+          .default([]),
+        /** The machine skills this turn carried, and the ones it could not
+         *  (D-191) — the same audit, from the operator's own directory. */
+        globalSkills: z.array(CarriedSkillSchema).max(MAX_GLOBAL_SKILLS).default([]),
+        globalSkillsDropped: z
+          .array(z.object({ name: SkillNameSchema, reason: BOUNDED_LINE }).strict())
+          .max(MAX_GLOBAL_SKILLS)
           .default([]),
         /** The enabled MCP servers this turn actually carried, and the ones
          *  it could not, under exactly the skills' rules (D-119). */
@@ -3053,6 +3194,18 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
          *  (D-118). Defaulted so an older runner's report still validates as
          *  what it was: a project with nothing published to enable. */
         skills: z.array(ProjectSkillSchema).max(MAX_PROJECT_SKILLS).default([]),
+        /** The runner machine's user-level skills, read at the same moment —
+         *  the CLI loads these into every turn on its own (D-118's standing
+         *  limit); publishing makes that visible. Same default rule. */
+        globalSkills: GlobalSkillsSchema.default([]),
+        /** The worktree's own `.claude/commands` (D-187), same rule. */
+        slashCommands: z
+          .array(ProjectSlashCommandSchema)
+          .max(MAX_PROJECT_SLASH_COMMANDS)
+          .default([]),
+        /** The CLI's own commands as this machine last heard them announce
+         *  themselves (D-188), same default rule. */
+        globalSlashCommands: GlobalSlashCommandsSchema.default([]),
         /** And the worktree's own `.mcp.json` (D-119), same rule. */
         mcpServers: z.array(McpServerSchema).max(MAX_MCP_SERVERS).default([])
       })
@@ -3298,6 +3451,14 @@ export const MissionDetailResponseSchema = z.object({
   /** Where the selected lane's branch stands on the remote — the push half
    *  of publishing (D-099). */
   branchPush: BranchPushSchema.nullable().default(null),
+  /** The organization's own label vocabulary (D-195), and which extensions
+   *  wear which — organizational metadata about the manifests above, never a
+   *  grant. Defaulted so an older server's response reads as none. */
+  extensionLabels: z.array(ExtensionLabelSchema).max(MAX_EXTENSION_LABELS).default([]),
+  extensionLabelAssignments: z
+    .array(ExtensionLabelAssignmentSchema)
+    .max(MAX_EXTENSION_LABELS * MAX_LABELS_PER_EXTENSION)
+    .default([]),
   events: z.array(EventSchema),
   participants: z.array(ParticipantSchema),
   directions: z.array(DirectionSchema),
@@ -3660,8 +3821,49 @@ export interface NovusBridge {
       workstreamId: string;
       skills: EnabledSkill[];
     }): Promise<IpcResult<null>>;
+    /** Sets a lane's enabled project slash commands (D-187) — the same act as
+     *  setEnabledSkills, on the `.claude/commands` manifest, under the same
+     *  `skills.set` tier. */
+    setEnabledSlashCommands(input: {
+      missionId: string;
+      workstreamId: string;
+      commands: EnabledSkill[];
+    }): Promise<IpcResult<null>>;
+    /** Sets a lane's enabled machine skills (D-191) — the operator's own
+     *  `~/.claude/skills`, which do not load by themselves under the pinned
+     *  argv and are composed by Novus when enabled. Same `skills.set` tier. */
+    setEnabledGlobalSkills(input: {
+      missionId: string;
+      workstreamId: string;
+      skills: EnabledSkill[];
+    }): Promise<IpcResult<null>>;
     /** Sets a lane's enabled MCP servers (D-119) — the whole set, digest-
      *  pinned like skills. `mcp.set` — Mission Admin alone. */
+    /** Creates one of the organization's extension labels (D-195). The name
+     *  is unique per organization, case-insensitively — typing an existing
+     *  name in the picker selects it rather than making a second one. */
+    createExtensionLabel(input: {
+      missionId: string;
+      name: string;
+      color: ExtensionLabelColor;
+    }): Promise<IpcResult<ExtensionLabel>>;
+    /** Renames or recolours one. */
+    updateExtensionLabel(input: {
+      missionId: string;
+      labelId: string;
+      name?: string;
+      color?: ExtensionLabelColor;
+    }): Promise<IpcResult<ExtensionLabel>>;
+    /** Removes one everywhere it is worn. */
+    deleteExtensionLabel(input: { missionId: string; labelId: string }): Promise<IpcResult<null>>;
+    /** Sets the whole label set one extension wears — set semantics, like
+     *  every other list this product writes. */
+    setExtensionLabels(input: {
+      missionId: string;
+      source: ExtensionSource;
+      name: string;
+      labelIds: string[];
+    }): Promise<IpcResult<null>>;
     setEnabledMcpServers(input: {
       missionId: string;
       workstreamId: string;
@@ -3926,10 +4128,16 @@ export interface NovusBridge {
      *  no window can name a directory of its own. */
     openWorkspaceIn(input: OpenWorkspaceInput): Promise<IpcResult<null>>;
     listFiles(input: { missionId: string; workstreamId?: string; path?: string }): Promise<IpcResult<WorkspaceEntry[]>>;
-    /** Flat, bounded file search over the lane's worktree for @-mentions
-     *  (D-185): git decides what the codebase is, the query filters, at most
-     *  twenty candidates come back. */
-    searchFiles(input: { missionId: string; workstreamId?: string; query: string }): Promise<IpcResult<string[]>>;
+    /** Flat, bounded file search over the lane's worktree (D-185): git decides
+     *  what the codebase is, the query filters. Twenty candidates by default —
+     *  the @-mention's portion — and up to `limit` for a caller that keeps the
+     *  list and filters it in memory, like the file tree's filter box. */
+    searchFiles(input: {
+      missionId: string;
+      workstreamId?: string;
+      query: string;
+      limit?: number;
+    }): Promise<IpcResult<string[]>>;
     readFile(input: { missionId: string; workstreamId?: string; path: string }): Promise<IpcResult<WorkspaceFile>>;
     writeFile(input: { missionId: string; workstreamId?: string; path: string; text: string }): Promise<IpcResult<null>>;
   };

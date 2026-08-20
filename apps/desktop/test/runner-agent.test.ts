@@ -269,12 +269,32 @@ describe("the agent driving one command", () => {
     expect(kinds).toContain("workspace.checkpoint");
     expect(kinds).toContain("execution.completed");
 
-    // Reported in order, once, for the execution the command named.
-    const sequences = plane.events().map((item) => item.originSeq);
-    expect(sequences).toEqual([...sequences].sort((left, right) => left - right));
-    expect(new Set(sequences).size).toBe(sequences.length);
-    expect(sequences[0]).toBe(1);
-    for (const delivery of plane.reported) expect(delivery.executionId).toBe(EXECUTION_ID);
+    // Reported in order and exactly once — **per stream**, which is what the
+    // outbox actually guarantees: a sequence is monotonic within one
+    // execution, and the workstream has a stream of its own for what happens
+    // outside a turn (the workspace manifest publish, D-186/D-193). Asserting
+    // one sorted run across both was only ever true while this fixture
+    // happened to emit nothing on the workstream stream.
+    // A delivery names the stream its batch belongs to; the events inside
+    // carry only their sequence within it.
+    const streams = new Map<string, number[]>();
+    for (const delivery of plane.reported) {
+      const key = delivery.executionId ?? "workstream";
+      streams.set(key, [
+        ...(streams.get(key) ?? []),
+        ...delivery.batch.map((item) => item.originSeq)
+      ]);
+    }
+    expect(streams.has(EXECUTION_ID)).toBe(true);
+    for (const [, sequences] of streams) {
+      expect(sequences).toEqual([...sequences].sort((left, right) => left - right));
+      expect(new Set(sequences).size).toBe(sequences.length);
+      expect(sequences[0]).toBe(1);
+    }
+    // Every delivery that names an execution names the one the command did.
+    for (const delivery of plane.reported) {
+      if (delivery.executionId !== null) expect(delivery.executionId).toBe(EXECUTION_ID);
+    }
 
     await waitFor("the command to settle", () => plane.stateOf("cmd_first00000000000000") === "completed");
     expect(plane.registrations).toEqual([WORKSTREAM_ID]);

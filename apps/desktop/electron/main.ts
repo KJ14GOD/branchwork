@@ -35,7 +35,14 @@ import {
   OpenPreviewInputSchema,
   CloseMissionInputSchema,
   EnabledMcpServersSchema,
+  EXTENSION_LABEL_NAME_MAX,
+  ExtensionLabelColorSchema,
+  ExtensionSourceSchema,
+  MAX_LABELS_PER_EXTENSION,
+  SkillNameSchema,
   EnabledSkillsSchema,
+  EnabledGlobalSkillsSchema,
+  EnabledSlashCommandsSchema,
   OpenTerminalInputSchema,
   MergeInputSchema,
   PullCommentInputSchema,
@@ -1040,6 +1047,139 @@ function registerIpc(): void {
     });
   });
 
+  ipcMain.handle("novus:missions:set-enabled-slash-commands", async (_event, raw: unknown) => {
+    // Asking is all this is (AGENTS.md rule 13): the server judges skills.set
+    // and the published-manifest match — this handler only refuses shapes
+    // that could never be a request (D-187).
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        workstreamId: z.string().startsWith("wst_"),
+        commands: EnabledSlashCommandsSchema
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "invalid_commands",
+        message: "That is not a set of slash commands Novus can enable."
+      };
+    }
+    return call(async () => {
+      await api.setEnabledSlashCommands(
+        parsed.data.missionId,
+        parsed.data.workstreamId,
+        parsed.data.commands
+      );
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:missions:set-enabled-global-skills", async (_event, raw: unknown) => {
+    // Asking is all this is (AGENTS.md rule 13): the server judges skills.set
+    // and the published-manifest match — this handler only refuses shapes
+    // that could never be a request (D-191).
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        workstreamId: z.string().startsWith("wst_"),
+        skills: EnabledGlobalSkillsSchema
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "invalid_skills",
+        message: "That is not a set of machine skills Novus can enable."
+      };
+    }
+    return call(async () => {
+      await api.setEnabledGlobalSkills(
+        parsed.data.missionId,
+        parsed.data.workstreamId,
+        parsed.data.skills
+      );
+      return null;
+    });
+  });
+
+  // Extension labels (D-195). Asking is all these are: the server judges
+  // `skills.set` and every uniqueness and ownership rule.
+  ipcMain.handle("novus:labels:create", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        name: z.string().min(1).max(EXTENSION_LABEL_NAME_MAX),
+        color: ExtensionLabelColorSchema
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, code: "invalid_label", message: "A label needs a name and a colour." };
+    }
+    return call(async () =>
+      api.createExtensionLabel(parsed.data.missionId, {
+        name: parsed.data.name,
+        color: parsed.data.color
+      })
+    );
+  });
+
+  ipcMain.handle("novus:labels:update", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        labelId: z.string().startsWith("lbl_"),
+        name: z.string().min(1).max(EXTENSION_LABEL_NAME_MAX).optional(),
+        color: ExtensionLabelColorSchema.optional()
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, code: "invalid_label", message: "Say a new name, a new colour, or both." };
+    }
+    return call(async () =>
+      api.updateExtensionLabel(parsed.data.missionId, parsed.data.labelId, {
+        ...(parsed.data.name === undefined ? {} : { name: parsed.data.name }),
+        ...(parsed.data.color === undefined ? {} : { color: parsed.data.color })
+      })
+    );
+  });
+
+  ipcMain.handle("novus:labels:delete", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        labelId: z.string().startsWith("lbl_")
+      })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "bad_id", message: "Malformed id." };
+    return call(async () => {
+      await api.deleteExtensionLabel(parsed.data.missionId, parsed.data.labelId);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:labels:assign", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        source: ExtensionSourceSchema,
+        name: SkillNameSchema,
+        labelIds: z.array(z.string().startsWith("lbl_")).max(MAX_LABELS_PER_EXTENSION)
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, code: "invalid_assignment", message: "That is not a label set Novus can apply." };
+    }
+    return call(async () => {
+      await api.setExtensionLabels(parsed.data.missionId, {
+        source: parsed.data.source,
+        name: parsed.data.name,
+        labelIds: parsed.data.labelIds
+      });
+      return null;
+    });
+  });
+
   ipcMain.handle("novus:missions:close", async (_event, raw: unknown) => {
     // Asking is all this is (AGENTS.md rule 13): the server judges
     // mission.close, the running/waiting refusals, and completion's gates.
@@ -1702,14 +1842,16 @@ function registerIpc(): void {
       .object({
         missionId: MissionIdSchema,
         workstreamId: z.string().startsWith("wst_").optional(),
-        query: z.string().max(200)
+        query: z.string().max(200),
+        limit: z.number().int().min(1).max(20_000).optional()
       })
       .safeParse(raw);
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed search." };
     return call(async () =>
       searchFiles(
         await targetFor(parsed.data.missionId, parsed.data.workstreamId),
-        parsed.data.query
+        parsed.data.query,
+        parsed.data.limit
       )
     );
   });

@@ -20,10 +20,16 @@ import {
   sessionNeedsYou,
   sessionOfCheck,
   sessionView,
+  globalSkillRows,
+  nextEnabledGlobalSkills,
+  nextEnabledSlashCommands,
+  slashCommandCompletions,
+  slashCommandRows,
   skillRows,
   usageSoFar,
   viewerIsController
 } from "../src/components/derive";
+import { labelsFor } from "../src/components/extension-labels";
 import { clockTime } from "../src/format";
 
 /**
@@ -876,9 +882,9 @@ describe("the lane's skills surface (D-118)", () => {
       })
     });
     expect(skillRows(fixture)).toEqual([
-      { name: "zephyr-codes", description: "Codewords.", state: "enabled", digest },
-      { name: "rewritten", description: null, state: "changed", digest: moved },
-      { name: "untouched", description: null, state: "off", digest },
+      { name: "zephyr-codes", description: "Codewords.", state: "enabled", digest, modelInvocable: true },
+      { name: "rewritten", description: null, state: "changed", digest: moved, modelInvocable: true },
+      { name: "untouched", description: null, state: "off", digest, modelInvocable: true },
       { name: "gone", description: null, state: "vanished", digest: null }
     ]);
     // A project that declares none, with nothing enabled, puts nothing here.
@@ -911,6 +917,125 @@ describe("the lane's skills surface (D-118)", () => {
     expect(nextEnabledSkills(fixture, { enable: "gone" })).toEqual([
       { name: "zephyr-codes", digest }
     ]);
+  });
+
+  it("derives the slash-command surface the same way, and offers the composer only what stands (D-187)", () => {
+    const fixture = detail({
+      workspace: {
+        ...workspaceWith([]),
+        slashCommands: [
+          { name: "relnotes", description: "Release notes.", digest, bytes: 40 },
+          { name: "rewritten", description: null, digest: moved, bytes: 40 },
+          { name: "unreviewed", description: null, digest, bytes: 40 }
+        ]
+      },
+      workstream: workstream({
+        enabledSlashCommands: [
+          { name: "relnotes", digest },
+          // Enabled at bytes the manifest no longer carries.
+          { name: "rewritten", digest }
+        ]
+      })
+    });
+    expect(slashCommandRows(fixture)).toEqual([
+      { name: "relnotes", description: "Release notes.", state: "enabled", digest },
+      { name: "rewritten", description: null, state: "changed", digest: moved },
+      { name: "unreviewed", description: null, state: "off", digest }
+    ]);
+    // Everything declared is carried, so everything declared is offered
+    // (D-193): commands by their registered invocation, in manifest order.
+    expect(slashCommandCompletions(fixture)).toEqual([
+      { name: "relnotes", description: "Release notes.", insert: "/novus-project-skills:relnotes" },
+      { name: "rewritten", description: null, insert: "/novus-project-skills:rewritten" },
+      { name: "unreviewed", description: null, insert: "/novus-project-skills:unreviewed" }
+    ]);
+    expect(nextEnabledSlashCommands(fixture, { enable: "unreviewed" })).toEqual([
+      { name: "relnotes", digest },
+      { name: "unreviewed", digest }
+    ]);
+  });
+
+  it("resolves the labels one extension wears, keeping the collections apart (D-195)", () => {
+    const fixture = detail({
+      extensionLabels: [
+        { labelId: "lbl_one", name: "review", color: "cyan" },
+        { labelId: "lbl_two", name: "writing", color: "magenta" }
+      ],
+      extensionLabelAssignments: [
+        { labelId: "lbl_one", source: "repo", name: "novus-ui" },
+        { labelId: "lbl_two", source: "machine", name: "novus-ui" }
+      ]
+    });
+    // Same name, different collection: a repository skill never wears the
+    // machine skill's labels, which is the whole point of the key.
+    expect(labelsFor(fixture, "repo", "novus-ui")).toEqual([
+      { labelId: "lbl_one", name: "review", color: "cyan" }
+    ]);
+    expect(labelsFor(fixture, "machine", "novus-ui")).toEqual([
+      { labelId: "lbl_two", name: "writing", color: "magenta" }
+    ]);
+    expect(labelsFor(fixture, "repo", "unlabelled")).toEqual([]);
+  });
+
+  it("offers skills beside commands, each inserting what invokes it (D-193)", () => {
+    const fixture = detail({
+      workspace: {
+        ...workspaceWith([{ name: "zephyr-codes", description: "Codewords.", digest, bytes: 40 }]),
+        globalSkills: [{ name: "unslop", description: "Cut AI tells.", digest, bytes: 40 }]
+      }
+    });
+    // A skill has no registered command: picking one writes the sentence that
+    // starts it, and the harness's own Skill tool reaches for it.
+    expect(slashCommandCompletions(fixture)).toEqual([
+      { name: "zephyr-codes", description: "Codewords.", insert: "Use the zephyr-codes skill:" },
+      { name: "unslop", description: "Cut AI tells.", insert: "Use the unslop skill:" }
+    ]);
+  });
+
+  it("offers the CLI's own commands after the project's, plainly invocable and deduplicated (D-188)", () => {
+    const fixture = detail({
+      workspace: {
+        ...workspaceWith([]),
+        slashCommands: [{ name: "compact", description: "The project's own.", digest, bytes: 40 }],
+        globalSlashCommands: ["compact", "review"]
+      },
+      workstream: workstream({
+        enabledSlashCommands: [{ name: "compact", digest }]
+      })
+    });
+    expect(slashCommandCompletions(fixture)).toEqual([
+      { name: "compact", description: "The project's own.", insert: "/novus-project-skills:compact" },
+      { name: "review", description: null, insert: "/review" }
+    ]);
+  });
+
+  it("renders the machine's own skills as genuinely enableable rows (D-191, correcting D-186)", () => {
+    // Measured against claude 2.1.237: these do NOT load by themselves under
+    // the pinned argv, so Novus carries the enabled ones and the row is a
+    // real control rather than a caption saying "always on".
+    const fixture = detail({
+      workspace: {
+        ...workspaceWith([]),
+        globalSkills: [
+          { name: "unslop", description: "Cut AI tells.", digest, bytes: 40 },
+          { name: "thermo", description: null, digest, bytes: 40, modelInvocable: false }
+        ]
+      },
+      workstream: workstream({ enabledGlobalSkills: [{ name: "unslop", digest }] })
+    });
+    expect(globalSkillRows(fixture)).toEqual([
+      { name: "unslop", description: "Cut AI tells.", state: "enabled", digest, modelInvocable: true },
+      // Its SKILL.md forbids model invocation (D-192), so the row will say
+      // it runs only when a person names it.
+      { name: "thermo", description: null, state: "off", digest, modelInvocable: false }
+    ]);
+    expect(nextEnabledGlobalSkills(fixture, { enable: "thermo" })).toEqual([
+      { name: "unslop", digest },
+      { name: "thermo", digest }
+    ]);
+    expect(nextEnabledGlobalSkills(fixture, { disable: "unslop" })).toEqual([]);
+    // No workspace published yet: this machine has offered nothing.
+    expect(globalSkillRows(detail())).toEqual([]);
   });
 });
 

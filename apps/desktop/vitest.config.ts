@@ -18,6 +18,14 @@ export default defineConfig({
     // passes on an idle one is not evidence of anything.
     fileParallelism: false,
     testTimeout: 30_000,
-    hookTimeout: 30_000
+    hookTimeout: 30_000,
+    env: {
+      // The runner publishes the machine's own user-level skills (D-186) by
+      // reading the CLI's config dir. Under test that must never be the
+      // developer's real ~/.claude — a fixture's events would carry whatever
+      // this machine happens to have installed. Suites that want global
+      // skills pass their own dir explicitly (skills.test.ts does).
+      CLAUDE_CONFIG_DIR: "/nonexistent-novus-test-config"
+    }
   }
 });

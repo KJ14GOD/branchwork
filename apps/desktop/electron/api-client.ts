@@ -9,6 +9,7 @@ import {
   BaseRevisionSchema,
   BeginArtifactResponseSchema,
   CreateMissionResponseSchema,
+  ExtensionLabelSchema,
   CreatedApproachSchema,
   CreatedInvitationSchema,
   FileDiffResponseSchema,
@@ -497,6 +498,79 @@ export class ControlPlaneClient {
       `/missions/${encodeURIComponent(missionId)}/workstreams/${encodeURIComponent(workstreamId)}/skills`,
       OkResponseSchema,
       { skills }
+    );
+  }
+
+  async setEnabledSlashCommands(
+    missionId: string,
+    workstreamId: string,
+    commands: { name: string; digest: string }[]
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/workstreams/${encodeURIComponent(workstreamId)}/commands`,
+      OkResponseSchema,
+      { commands }
+    );
+  }
+
+  async setEnabledGlobalSkills(
+    missionId: string,
+    workstreamId: string,
+    skills: { name: string; digest: string }[]
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/workstreams/${encodeURIComponent(workstreamId)}/global-skills`,
+      OkResponseSchema,
+      { skills }
+    );
+  }
+
+  async createExtensionLabel(
+    missionId: string,
+    input: { name: string; color: string }
+  ): Promise<import("@novus/contracts").ExtensionLabel> {
+    const body = await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/extension-labels`,
+      z.object({ label: ExtensionLabelSchema }),
+      input
+    );
+    return body.label;
+  }
+
+  async updateExtensionLabel(
+    missionId: string,
+    labelId: string,
+    input: { name?: string; color?: string }
+  ): Promise<import("@novus/contracts").ExtensionLabel> {
+    const body = await this.request(
+      "PATCH",
+      `/missions/${encodeURIComponent(missionId)}/extension-labels/${encodeURIComponent(labelId)}`,
+      z.object({ label: ExtensionLabelSchema }),
+      input
+    );
+    return body.label;
+  }
+
+  async deleteExtensionLabel(missionId: string, labelId: string): Promise<void> {
+    await this.request(
+      "DELETE",
+      `/missions/${encodeURIComponent(missionId)}/extension-labels/${encodeURIComponent(labelId)}`,
+      OkResponseSchema
+    );
+  }
+
+  async setExtensionLabels(
+    missionId: string,
+    input: { source: string; name: string; labelIds: string[] }
+  ): Promise<void> {
+    await this.request(
+      "PUT",
+      `/missions/${encodeURIComponent(missionId)}/extension-labels/assignments`,
+      OkResponseSchema,
+      input
     );
   }
 

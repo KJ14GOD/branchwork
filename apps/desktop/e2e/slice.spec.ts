@@ -877,8 +877,11 @@ describe("the workspace runtime", () => {
       durationMs: 3_100,
       byCreator: false
     });
+    // This insert bypasses the event log, so no live signal reaches the room
+    // (D-149): only the 30-second floor re-read picks it up. The wait must
+    // outlast one full floor cycle, not race it.
     await expect
-      .poll(async () => (await stateLine.textContent()) ?? "", { timeout: 30_000 })
+      .poll(async () => (await stateLine.textContent()) ?? "", { timeout: 45_000 })
       .toContain("Ready for review");
     // Two checks are recorded; exactly one of them counts.
     expect(await stateLine.textContent()).toContain("1 check passed");

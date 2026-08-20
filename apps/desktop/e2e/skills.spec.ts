@@ -106,6 +106,12 @@ beforeAll(async () => {
   writeFileSync(join(localRepoDir, "README.md"), "# skills fixture\n");
   mkdirSync(join(localRepoDir, ".claude", "skills", "zephyr-codes"), { recursive: true });
   writeFileSync(join(localRepoDir, ".claude", "skills", "zephyr-codes", "SKILL.md"), SKILL_BODY);
+  // And one slash command (D-187), the same review-then-enable road.
+  mkdirSync(join(localRepoDir, ".claude", "commands"), { recursive: true });
+  writeFileSync(
+    join(localRepoDir, ".claude", "commands", "relnotes.md"),
+    "---\ndescription: Draft release notes the project's way.\n---\n\nSay the codeword MELON-9: $ARGUMENTS\n"
+  );
   // And one declared MCP server (D-119), governed the same way one tier up.
   writeFileSync(
     join(localRepoDir, ".mcp.json"),
@@ -125,6 +131,16 @@ beforeAll(async () => {
   expect(registered.ok).toBe(true);
   writeFileSync(join(userDataDir, "local-repos.json"), JSON.stringify({ [localId]: localRepoDir }));
 
+  // The machine's own user-level skills (D-186): a fixture config dir stands
+  // in for ~/.claude, so the published display list is deterministic rather
+  // than whatever this developer machine happens to carry.
+  const configDir = mkdtempSync(join(tmpdir(), "novus-skills-config-"));
+  mkdirSync(join(configDir, "skills", "unslop"), { recursive: true });
+  writeFileSync(
+    join(configDir, "skills", "unslop", "SKILL.md"),
+    "---\ndescription: Cut AI tells from any writing.\n---\n\nBody.\n"
+  );
+
   app = await electron.launch({
     args: [desktopRoot],
     env: {
@@ -132,7 +148,8 @@ beforeAll(async () => {
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
-      NOVUS_USER_DATA_DIR: userDataDir
+      NOVUS_USER_DATA_DIR: userDataDir,
+      CLAUDE_CONFIG_DIR: configDir
     }
   });
   page = await app.firstWindow();
@@ -168,89 +185,91 @@ afterAll(async () => {
   controlPlane?.kill("SIGTERM");
 });
 
-describe("project skills reach the agent only after a person enabled them (D-118)", () => {
+describe("what a project declares is carried, and the record says which bytes (D-193)", () => {
   it(
-    "publishes the manifest, enables on a click, records the event, and the next turn carries it",
+    "lists what the project and the machine declare, folds each row, and carries them all",
     async () => {
-      // The first turn ran with nothing enabled — a fork of nothing, a grant
-      // of nothing — so its record says nothing about skills.
-      expect(
-        await page
-          .getByTestId("trace-note")
-          .filter({ hasText: "Project skills carried" })
-          .count()
-      ).toBe(0);
-
-      // The runner read the worktree and published what the project declares;
-      // the inspector's Overview offers it for review: name, what it says it
-      // is, and no standing answer yet.
       if ((await page.getByTestId("inspector").count()) === 0) {
         await page.getByTestId("panel-toggle").click();
       }
       await page.getByTestId("inspector").waitFor({ timeout: 20_000 });
-      // The drawer opens on Overview already; the trigger is a toggle, so a
-      // click while it shows would fold it away (the multiplayer spec's old
-      // trap).
-      if ((await page.getByTestId("inspector-overview").count()) === 0) {
-        await page.getByTestId("inspector-tab-overview").click();
+      if ((await page.getByTestId("inspector-extensions").count()) === 0) {
+        await page.getByTestId("inspector-tab-extensions").click();
       }
-      await page.getByTestId("inspector-overview").waitFor({ timeout: 20_000 });
+      await page.getByTestId("inspector-extensions").waitFor({ timeout: 20_000 });
+
+      // Repo skills and Global skills, each group named for what it holds and
+      // tagged with where it came from; no Enable anywhere on either (D-193).
       const row = page.getByTestId("skill-row").filter({ hasText: "zephyr-codes" });
       await row.waitFor({ timeout: 30_000 });
+      expect(await page.getByTestId("skill-action").count()).toBe(0);
+      expect(await page.getByTestId("global-skill-action").count()).toBe(0);
+      expect(await page.getByTestId("inspector-extensions").textContent()).toContain("Repo skills");
+      expect(await page.getByTestId("inspector-extensions").textContent()).toContain("Global skills");
+
+      // A row folds its own description (D-193): shut by default, opened by
+      // pressing the name.
+      expect(await row.textContent()).not.toContain("Codewords for releases.");
+      await page.getByTestId("skill-toggle").filter({ hasText: "zephyr-codes" }).click();
       expect(await row.textContent()).toContain("Codewords for releases.");
-      expect(await row.textContent()).not.toContain("enabled");
+      await page.getByTestId("global-skill-row").filter({ hasText: "unslop" }).waitFor({ timeout: 20_000 });
       await page.screenshot({ path: join(evidenceDir, "124-project-skills-in-overview.png") });
 
-      // Enabling is one click for the Mission Admin, and the standing answer
-      // comes back on the room's own poll, in words.
-      await page.getByTestId("skill-action").filter({ hasText: "Enable" }).click();
-      await page
-        .getByTestId("skill-row")
-        .filter({ hasText: "· enabled" })
-        .waitFor({ timeout: 20_000 });
-
-      // The enablement is durable and attributed: one skills.changed event,
-      // from nothing to exactly this skill at exactly the reviewed digest.
-      const pg = await import("pg");
-      const db = new pg.default.Pool({ connectionString: DB_URL });
-      const events = await db.query("select payload, actor_kind from events where kind = 'skills.changed'");
-      await db.end();
-      expect(events.rowCount).toBe(1);
-      const payload = events.rows[0].payload as {
-        from: unknown[];
-        to: { name: string; digest: string }[];
-      };
-      expect(events.rows[0].actor_kind).toBe("user");
-      expect(payload.from).toEqual([]);
-      expect(payload.to.map((entry) => entry.name)).toEqual(["zephyr-codes"]);
-      expect(payload.to[0]?.digest).toMatch(/^[0-9a-f]{64}$/);
-
-      // The next turn is dispatched with the set pinned; the runner composes
-      // the skills-only directory from the real worktree, verifies the digest,
-      // and the turn's own record states what it carried.
+      // The next turn carries everything declared, and the record names each
+      // with the digest that ran.
       await page.getByTestId("composer-input").fill("now use the codeword skill");
       await page.keyboard.press("Enter");
       await page
         .getByTestId("trace-note")
         .filter({ hasText: "Project skills carried: zephyr-codes" })
         .waitFor({ timeout: 90_000 });
+      await page
+        .getByTestId("trace-note")
+        .filter({ hasText: "Machine skills carried: unslop" })
+        .waitFor({ timeout: 90_000 });
       await page.screenshot({ path: join(evidenceDir, "125-skill-carried-on-the-turn.png") });
     },
     180_000
   );
 
+
+
   it(
-    "governs the project's MCP servers the same way, one tier up (D-119)",
+    "labels an extension: created by typing, worn on the row, recoloured, removed (D-195)",
     async () => {
-      // The declared server is published for review beside the skills: what
-      // this machine would run, in words, before anyone enables anything.
+      // The collection is the group it sits in; a label is the team's own
+      // word laid over it. Typing a name nothing matches makes it.
+      await page.getByTestId("extension-label-add").filter({ hasText: "+" }).first().click();
+      await page.getByTestId("label-picker").waitFor({ timeout: 10_000 });
+      await page.getByTestId("label-picker-field").fill("review");
+      await page.getByTestId("label-create").click();
+
+      // It is worn on the row, and it is the organization's from then on.
+      const chip = page.getByTestId("extension-label").filter({ hasText: "review" });
+      await chip.first().waitFor({ timeout: 20_000 });
+      await page.screenshot({ path: join(evidenceDir, "212-extension-labels.png") });
+
+      const pg = await import("pg");
+      const db = new pg.default.Pool({ connectionString: DB_URL });
+      const labels = await db.query("select name, color from extension_labels");
+      const worn = await db.query("select source, extension_name from extension_label_assignments");
+      await db.end();
+      expect(labels.rows.map((row) => row.name)).toEqual(["review"]);
+      expect(worn.rowCount).toBe(1);
+      // A repo skill's label is filed under its collection, never loose.
+      expect(worn.rows[0].source).toBe("repo");
+    },
+    120_000
+  );
+
+  it(
+    "keeps the MCP gate: a server is enabled by an Admin, not merely declared (D-119)",
+    async () => {
+      // Instructions are carried; new tool surface still asks (D-193's line).
       const row = page.getByTestId("mcp-row").filter({ hasText: "docs" });
       await row.waitFor({ timeout: 30_000 });
       expect(await row.textContent()).toContain("runs node mcp/docs.js");
       expect(await row.textContent()).not.toContain("enabled");
-
-      // Enabling is the Mission Admin's click; the standing answer returns on
-      // the room's own poll, and the event is durable with the reviewed digest.
       await page.getByTestId("mcp-action").filter({ hasText: "Enable" }).click();
       await page.getByTestId("mcp-row").filter({ hasText: "· enabled" }).waitFor({ timeout: 20_000 });
       await page.screenshot({ path: join(evidenceDir, "126-mcp-server-enabled.png") });
@@ -259,19 +278,43 @@ describe("project skills reach the agent only after a person enabled them (D-118
       const events = await db.query("select payload from events where kind = 'mcp.changed'");
       await db.end();
       expect(events.rowCount).toBe(1);
-      const payload = events.rows[0].payload as { to: { name: string; digest: string }[] };
-      expect(payload.to.map((entry) => entry.name)).toEqual(["docs"]);
-      expect(payload.to[0]?.digest).toMatch(/^[0-9a-f]{64}$/);
-
-      // The next turn composes the strict config from the real worktree and
-      // states what it carried on its own record.
-      await page.getByTestId("composer-input").fill("now look something up");
-      await page.keyboard.press("Enter");
-      await page
-        .getByTestId("trace-note")
-        .filter({ hasText: "MCP servers carried: docs" })
-        .waitFor({ timeout: 90_000 });
     },
     180_000
+  );
+
+  it(
+    "offers the project's command and its skills from the composer's / menu (D-193)",
+    async () => {
+      await page.getByTestId("composer-input").click();
+      await page.getByTestId("composer-input").fill("/");
+      await page.getByTestId("slash-row").first().waitFor({ timeout: 30_000 });
+      const offered = (await page.getByTestId("slash-row").allTextContents()).join(" ");
+      // The project's command, and the skills — declared is offered.
+      expect(offered).toContain("relnotes");
+      await page.screenshot({ path: join(evidenceDir, "209-slash-command-menu.png") });
+      await page.keyboard.press("Escape");
+      await page.getByTestId("composer-input").fill("");
+    },
+    120_000
+  );
+
+  it(
+    "offers the CLI's own commands too, captured from the session's announcement (D-188)",
+    async () => {
+      // The turns above already ran, so this machine has heard the harness
+      // announce its command list; the next publish carried it. Typing /
+      // offers those beside the project's — plainly, as /name — and never
+      // the terminal-only entry the CLI itself marked.
+      await page.getByTestId("composer-input").click();
+      await page.getByTestId("composer-input").fill("/");
+      await page.getByTestId("slash-row").filter({ hasText: "compact" }).waitFor({ timeout: 30_000 });
+      const offered = await page.getByTestId("slash-row").allTextContents();
+      expect(offered.join(" ")).toContain("/review");
+      expect(offered.join(" ")).not.toContain("doctor");
+      await page.screenshot({ path: join(evidenceDir, "211-global-commands-in-menu.png") });
+      await page.keyboard.press("Escape");
+      await page.getByTestId("composer-input").fill("");
+    },
+    120_000
   );
 });

@@ -512,6 +512,59 @@ describe("enqueueing a declared command", () => {
     );
     expect(stopped?.payload).toEqual({ name: "dev" });
   });
+
+  it("carries the live process ids on a stop, so a stale running row cannot outlive it", async () => {
+    const lane = await createLane();
+    expect((await invoke(kartik, lane.missionId, { kind: "run", name: "dev" })).statusCode).toBe(200);
+    const processId = "prc_staledev00000000000";
+    await report(lane.credential, null, [
+      {
+        originSeq: 1,
+        event: {
+          kind: "process.started",
+          payload: {
+            processId,
+            kind: "run",
+            name: "dev",
+            command: "pnpm dev",
+            port: 4100,
+            previewUrl: null,
+            readiness: "not_required"
+          }
+        }
+      }
+    ]);
+
+    expect((await stopCommand(kartik, lane.missionId, "dev")).statusCode).toBe(200);
+    const stop = (await commandsFor(lane.credential)).find(
+      (command) => command.kind === "stop_command"
+    );
+    expect(stop?.payload.processIds).toEqual([processId]);
+
+    // The machine is not actually running that process any more — its real
+    // exit report was lost — so it answers the named row as exited, and the
+    // room stops claiming the app is running.
+    await report(lane.credential, null, [
+      {
+        originSeq: 2,
+        event: {
+          kind: "process.exited",
+          payload: {
+            processId,
+            state: "stopped",
+            ending: "cancelled",
+            exitCode: null,
+            failureReason: "Nothing by this name is running on this machine any more."
+          }
+        }
+      }
+    ]);
+    const rows = await harness.db.query("select state from workspace_processes where prc_id = $1", [
+      processId
+    ]);
+    expect(rows.rows[0].state).toBe("stopped");
+    expect((await detail(kartik, lane.missionId)).overlays).not.toContain("app_running");
+  });
 });
 
 describe("what the runner reports about the machine", () => {

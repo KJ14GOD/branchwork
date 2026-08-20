@@ -11,7 +11,6 @@ import {
   pathInScope,
   type ApprovalDecision,
   type EnabledMcpServer,
-  type EnabledSkill,
   type PermissionProfile,
   type RunnerEvent
 } from "@novus/contracts";
@@ -324,13 +323,10 @@ export interface TurnRequest {
    *  read at checkpoint time (D-097) — their territory in flight is theirs,
    *  not this turn's drift. */
   siblingScopes?: () => readonly (readonly string[])[];
-  /** The project skills a person enabled, pinned at dispatch (D-118) — each
-   *  at the exact digest that was reviewed. The turn composes a skills-only
-   *  plugin directory from the worktree and carries a skill only when its
-   *  bytes still match; a mismatch drops it with the reason on the record.
-   *  Absent or empty means no `--plugin-dir` at all — exactly the pre-D-118
-   *  spawn. */
-  skills?: readonly EnabledSkill[] | null;
+  /** Where the CLI's own announced command list goes (D-188) — the machine
+   *  remembers it for the composer's / menu. Absent in tests that do not
+   *  care. */
+  onSlashCommands?: (announced: string[], terminalOnly: string[]) => void;
   /** The project MCP servers a person enabled, pinned at dispatch (D-119).
    *  Composed into a strict config Novus authors, or dropped by name under
    *  the same digest rule. Absent or empty means no `--mcp-config` at all —
@@ -836,9 +832,11 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // bytes written into a directory only Novus authors, a mismatch dropped by
     // name. Composed before the running event so the turn's record states what
     // it actually carries, and removed when the turn ends.
+    // Everything the project declares and everything the operator's own
+    // directory holds (D-193): discovered fresh at spawn, composed, and named
+    // on the record with the digest that ran.
     composedSkills = composeSkillsPlugin(
       worktreePath,
-      request.skills ?? [],
       join(request.worktreeRoot, ".skills-staging", request.executionId)
     );
     // The enabled MCP servers, under the same rule (D-119): re-derived from
@@ -861,6 +859,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
         permissionProfile: profile,
         skills: composedSkills.carried,
         skillsDropped: composedSkills.dropped,
+        slashCommands: composedSkills.carriedCommands,
+        slashCommandsDropped: composedSkills.droppedCommands,
+        globalSkills: composedSkills.carriedGlobals,
+        globalSkillsDropped: composedSkills.droppedGlobals,
         mcpServers: composedMcp.carried,
         mcpServersDropped: composedMcp.dropped
       }
@@ -880,7 +882,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
 
     let resumeSessionId = request.resumeSessionId;
     let optional = true;
-    let stream = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl });
+    let stream = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
     let outcome = await attempt(worktreePath, model, effort, stream, resumeSessionId, optional);
     cancelPending("The harness process ended before this was answered.");
 
@@ -890,7 +892,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // set, so this can never quietly become an unsupervised run.
     if (stopReason === null && refusedOptionalFlag(outcome)) {
       optional = false;
-      stream = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl });
+      stream = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
       outcome = await attempt(worktreePath, model, effort, stream, resumeSessionId, optional);
       cancelPending("The harness process ended before this was answered.");
     }
@@ -907,7 +909,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
       (outcome.spawnError !== null || outcome.code !== 0)
     ) {
       resumeSessionId = null;
-      stream = new HarnessStream({ resumeSessionId: null, sanitize, onControl: handleControl });
+      stream = new HarnessStream({ resumeSessionId: null, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
       outcome = await attempt(worktreePath, model, effort, stream, null, optional);
       cancelPending("The harness process ended before this was answered.");
     }
@@ -1193,7 +1195,17 @@ export function startTurn(request: TurnRequest): RunningTurn {
       const namedTarget = /\[fake-write:([^\]\s]+)\]/.exec(request.direction)?.[1] ?? null;
       const filePath = join(worktreePath, namedTarget ?? "NOVUS_FAKE_TURN.md");
       const lines = [
-        JSON.stringify({ type: "system", subtype: "init", session_id: sessionId, model: "fake-harness" }),
+        JSON.stringify({
+          type: "system",
+          subtype: "init",
+          session_id: sessionId,
+          model: "fake-harness",
+          // The real CLI announces its command list here (D-188); the double
+          // announces a deterministic one, with a terminal-only entry so the
+          // exclusion is exercised too.
+          slash_commands: ["compact", "review", "doctor"],
+          terminal_slash_commands: ["doctor"]
+        }),
         JSON.stringify({
           type: "assistant",
           message: { content: [{ type: "text", text: `Working on: ${request.direction}` }] }

@@ -23,7 +23,8 @@ import { ApiError } from "./api-client";
 import { createSanitizer } from "./evidence";
 import { ATTACHMENT_DIR, isAttachmentPath } from "./secret-policy";
 import { declaredCommands, sameCommands, sameSkills } from "./workspace-commands";
-import { discoverProjectSkills } from "./skills";
+import { recallGlobalSlashCommands } from "./global-commands";
+import { discoverGlobalSkills, discoverProjectCommands, discoverProjectSkills } from "./skills";
 import { discoverProjectMcp } from "./mcp";
 import { loadWorkspaceSettings, WorkspaceConfigError, writeWorkspaceSettings } from "./workspace-config";
 import { prepareLocalFiles as copyLocalFiles } from "./workspace-files";
@@ -241,8 +242,13 @@ async function prepareWorktree(
 ): Promise<string> {
   const root = worktreeRootFor(userDataPath);
   const worktree = worktreeFor(userDataPath, workstreamId);
-  await git(repositoryPath, ["worktree", "prune"]);
+  // The prepared worktree is the common case, and every workspace read resolves
+  // through here — the @-mention searches the file list on a keystroke. Answer
+  // that without spawning git at all. Pruning belongs to the *add* below, which
+  // is what a stale registration actually breaks; it is not something a read
+  // has to pay for.
   if (existsSync(join(worktree, ".git"))) return worktree;
+  await git(repositoryPath, ["worktree", "prune"]);
   mkdirSync(root, { recursive: true });
   // Whatever is here is not a worktree — it has no `.git` — so it is debris
   // from a preparation that did not finish, and `git worktree add` refuses a
@@ -689,6 +695,7 @@ export async function listFiles(
 export async function searchFiles(
   target: WorkspaceTarget,
   query: string,
+  limit = 20,
   host?: WorkspaceHost
 ): Promise<string[]> {
   return withMaskedPaths(target, host, async (resolved) => {
@@ -708,7 +715,7 @@ export async function searchFiles(
       if (path.length === 0) continue;
       if (needle.length > 0 && !path.toLowerCase().includes(needle)) continue;
       matches.push(path);
-      if (matches.length >= 20) break;
+      if (matches.length >= limit) break;
     }
     return matches;
   });
@@ -911,7 +918,15 @@ export interface PinnedCommand {
 export interface WorkspaceRuntime {
   runSetup(context: WorkspaceCommandContext, pinned: PinnedCommand): Promise<void>;
   runCommand(context: WorkspaceCommandContext, pinned: PinnedCommand): Promise<void>;
-  stopCommand(context: WorkspaceCommandContext, name: string | null): Promise<void>;
+  /** Stops the named live process. `named` carries the process ids the control
+   *  plane still records as live under that name: any of them this machine is
+   *  not actually running is reported exited, so a room whose exit report was
+   *  lost stops saying "App running" the moment somebody presses Stop. */
+  stopCommand(
+    context: WorkspaceCommandContext,
+    name: string | null,
+    named?: readonly string[]
+  ): Promise<void>;
   runVerification(context: WorkspaceCommandContext, pinned: PinnedCommand): Promise<void>;
   /** Every declared check, run by Novus itself against whatever revision the
    *  lane's worktree is at, each reported with origin `automatic`. The caller
@@ -946,7 +961,14 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
    *  configuration does not become an event every fifteen seconds. */
   const published = new Map<
     string,
-    { commands: DeclaredCommand[]; skills: ProjectSkill[]; mcp: McpServer[] }
+    {
+      commands: DeclaredCommand[];
+      skills: ProjectSkill[];
+      globalSkills: ProjectSkill[];
+      slashCommands: ProjectSkill[];
+      globalSlashCommands: string[];
+      mcp: McpServer[];
+    }
   >();
 
   interface Prepared {
@@ -1011,24 +1033,48 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
     // skill the agent rewrites republishes here so a stale review can never be
     // re-approved unseen. Its `.mcp.json` rides the same publish (D-119).
     const skills = discoverProjectSkills(worktree);
+    // This machine's own user-level skills ride into every turn regardless of
+    // what Novus pins (D-118's measured limit); publishing them is what keeps
+    // that fact visible instead of silent (D-186). Display only, never enabled.
+    const globalSkills = discoverGlobalSkills();
+    // The worktree's own `.claude/commands` (D-187), the same publish: what a
+    // person can enable is what this machine last read.
+    const slashCommands = discoverProjectCommands(worktree);
+    // The CLI's own commands, as this machine last heard a session announce
+    // them (D-188): already loaded into every turn, published so the / menu
+    // can offer what genuinely works.
+    const globalSlashCommands = recallGlobalSlashCommands(deps.host.userDataPath);
     const mcp = discoverProjectMcp(worktree);
     const previous = published.get(workstreamId);
-    if (previous === undefined && commands.length === 0 && skills.length === 0 && mcp.length === 0) {
-      published.set(workstreamId, { commands, skills, mcp });
+    const snapshot = { commands, skills, globalSkills, slashCommands, globalSlashCommands, mcp };
+    if (
+      previous === undefined &&
+      commands.length === 0 &&
+      skills.length === 0 &&
+      globalSkills.length === 0 &&
+      slashCommands.length === 0 &&
+      globalSlashCommands.length === 0 &&
+      mcp.length === 0
+    ) {
+      published.set(workstreamId, snapshot);
       return;
     }
     if (
       previous !== undefined &&
       sameCommands(previous.commands, commands) &&
       sameSkills(previous.skills, skills) &&
+      sameSkills(previous.globalSkills, globalSkills) &&
+      sameSkills(previous.slashCommands, slashCommands) &&
+      previous.globalSlashCommands.length === globalSlashCommands.length &&
+      previous.globalSlashCommands.every((name, index) => name === globalSlashCommands[index]) &&
       sameMcp(previous.mcp, mcp)
     ) {
       return;
     }
-    published.set(workstreamId, { commands, skills, mcp });
+    published.set(workstreamId, snapshot);
     deps.emit(workstreamId, {
       kind: "workspace.declared",
-      payload: { commands, skills, mcpServers: mcp }
+      payload: { commands, skills, globalSkills, slashCommands, globalSlashCommands, mcpServers: mcp }
     });
   }
 
@@ -1135,14 +1181,29 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
       );
     },
 
-    stopCommand: async (context, name) => {
+    stopCommand: async (context, name, named = []) => {
       const supervisor = supervisors.get(context.workstreamId);
-      if (!supervisor) return; // nothing of ours is running
-      if (name === null) {
-        await supervisor.stopAll("Stopped by a participant.");
-        return;
+      // Snapshotted before stopping: a process alive here answers the stop
+      // with its own genuine exit report, so only the ids nothing is running
+      // get the correction below — never both.
+      const alive = new Set(supervisor?.runningProcessIds ?? []);
+      if (supervisor) {
+        if (name === null) await supervisor.stopAll("Stopped by a participant.");
+        else await supervisor.stop(name, "Stopped by a participant.");
       }
-      await supervisor.stop(name, "Stopped by a participant.");
+      for (const processId of named) {
+        if (alive.has(processId)) continue;
+        deps.emit(context.workstreamId, {
+          kind: "process.exited",
+          payload: {
+            processId,
+            state: "stopped",
+            ending: "cancelled",
+            exitCode: null,
+            failureReason: "Nothing by this name is running on this machine any more."
+          }
+        });
+      }
     },
 
     runVerification: async (context, pinned) => {

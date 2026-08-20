@@ -673,13 +673,19 @@ export interface SkillRow {
   name: string;
   description: string | null;
   /** `enabled` — on, at the digest that was reviewed. `changed` — enabled,
-   *  but the worktree's bytes moved, so every turn drops it until it is
-   *  re-enabled as it now is. `vanished` — enabled, and the manifest no
-   *  longer lists it at all. `off` — published, not enabled. */
+   *  but the bytes moved, so every turn drops it until it is re-enabled as it
+   *  now is. `vanished` — enabled, and the manifest no longer lists it at all.
+   *  `off` — published, not enabled. Machine skills wear the same four
+   *  (D-191): they are carried by Novus, so they are genuinely enableable. */
   state: "enabled" | "changed" | "vanished" | "off";
   /** The digest an Enable would pin — the manifest's own. Null for a
    *  vanished skill, which has nothing left to approve. */
   digest: string | null;
+  /** False when the SKILL.md forbids the harness reaching for it on its own
+   *  (D-192) — such a skill runs only when a person names it, which is a
+   *  different promise from one that may fire at any time. Absent on rows
+   *  that are not skills. */
+  modelInvocable?: boolean;
 }
 
 /**
@@ -698,7 +704,8 @@ export function skillRows(detail: MissionDetailResponse): SkillRow[] {
       name: skill.name,
       description: skill.description,
       state: standing === undefined ? "off" : standing.digest === skill.digest ? "enabled" : "changed",
-      digest: skill.digest
+      digest: skill.digest,
+      modelInvocable: skill.modelInvocable
     };
   });
   for (const entry of enabled) {
@@ -706,6 +713,140 @@ export function skillRows(detail: MissionDetailResponse): SkillRow[] {
     rows.push({ name: entry.name, description: null, state: "vanished", digest: null });
   }
   return rows;
+}
+
+/**
+ * The lane's slash-command surface (D-187): the same grammar as skillRows,
+ * over the `.claude/commands` manifest and the lane's enabled set.
+ */
+export function slashCommandRows(detail: MissionDetailResponse): SkillRow[] {
+  const published = detail.workspace?.slashCommands ?? [];
+  const enabled = detail.workstream?.enabledSlashCommands ?? [];
+  const rows: SkillRow[] = published.map((command) => {
+    const standing = enabled.find((entry) => entry.name === command.name);
+    return {
+      name: command.name,
+      description: command.description,
+      state:
+        standing === undefined ? "off" : standing.digest === command.digest ? "enabled" : "changed",
+      digest: command.digest
+    };
+  });
+  for (const entry of enabled) {
+    if (published.some((command) => command.name === entry.name)) continue;
+    rows.push({ name: entry.name, description: null, state: "vanished", digest: null });
+  }
+  return rows;
+}
+
+/** The set a slash-command act submits — nextEnabledSkills' rule, on the
+ *  command lists (D-187). */
+export function nextEnabledSlashCommands(
+  detail: MissionDetailResponse,
+  act: { enable: string } | { disable: string }
+): EnabledSkill[] {
+  const published = detail.workspace?.slashCommands ?? [];
+  const enabled = detail.workstream?.enabledSlashCommands ?? [];
+  const valid = enabled.filter((entry) =>
+    published.some((command) => command.name === entry.name && command.digest === entry.digest)
+  );
+  if ("disable" in act) return valid.filter((entry) => entry.name !== act.disable);
+  const target = published.find((command) => command.name === act.enable);
+  if (!target) return valid;
+  return [
+    ...valid.filter((entry) => entry.name !== act.enable),
+    { name: target.name, digest: target.digest }
+  ];
+}
+
+/**
+ * What the composer's `/` popover offers (D-187): only the commands this lane
+ * has standing at the manifest's current bytes — an enabled-then-changed
+ * command is not offered, because the next turn would drop it. Each entry
+ * carries the exact text a pick inserts: the CLI registers a composed
+ * command under the plugin's name, so the invocation is
+ * `/novus-project-skills:<name>`.
+ */
+export function slashCommandCompletions(
+  detail: MissionDetailResponse
+): { name: string; description: string | null; insert: string }[] {
+  // Everything the lane carries is invocable, because everything declared is
+  // carried (D-193). Project commands first — they are this project's own
+  // procedures — then its skills, then the machine's, then the harness's own
+  // built-ins, each inserting the text that actually invokes it.
+  const commands = (detail.workspace?.slashCommands ?? []).map((command) => ({
+    name: command.name,
+    description: command.description,
+    insert: `/novus-project-skills:${command.name}`
+  }));
+  // A skill is invoked by naming it in words, not by a registered command, so
+  // picking one writes the sentence that starts it — the harness's own Skill
+  // tool then reaches for it (D-192's probe).
+  const skillEntry = (skill: { name: string; description: string | null }) => ({
+    name: skill.name,
+    description: skill.description,
+    insert: `Use the ${skill.name} skill:`
+  });
+  const skills = (detail.workspace?.skills ?? []).map(skillEntry);
+  const globals = (detail.workspace?.globalSkills ?? []).map(skillEntry);
+  const builtins = (detail.workspace?.globalSlashCommands ?? []).map((name) => ({
+    name,
+    description: null,
+    insert: `/${name}`
+  }));
+  const seen = new Set<string>();
+  return [...commands, ...skills, ...globals, ...builtins].filter((entry) => {
+    if (seen.has(entry.name)) return false;
+    seen.add(entry.name);
+    return true;
+  });
+}
+
+/**
+ * The runner machine's own user-level skills (D-186), as rows of the same
+ * grammar: always on, never actionable — the harness loads these itself on
+ * every turn, and the row exists so that fact is visible, not to offer a
+ * control nobody holds.
+ */
+export function globalSkillRows(detail: MissionDetailResponse): SkillRow[] {
+  const published = detail.workspace?.globalSkills ?? [];
+  const enabled = detail.workstream?.enabledGlobalSkills ?? [];
+  const rows: SkillRow[] = published.map((skill) => {
+    const standing = enabled.find((entry) => entry.name === skill.name);
+    return {
+      name: skill.name,
+      description: skill.description,
+      state:
+        standing === undefined ? "off" : standing.digest === skill.digest ? "enabled" : "changed",
+      digest: skill.digest,
+      modelInvocable: skill.modelInvocable
+    };
+  });
+  for (const entry of enabled) {
+    if (published.some((skill) => skill.name === entry.name)) continue;
+    rows.push({ name: entry.name, description: null, state: "vanished", digest: null });
+  }
+  return rows;
+}
+
+/** The set a machine-skill act submits — nextEnabledSkills' rule, on the
+ *  machine manifest (D-191). */
+export function nextEnabledGlobalSkills(
+  detail: MissionDetailResponse,
+  act: { enable: string } | { disable: string }
+): EnabledSkill[] {
+  const published = detail.workspace?.globalSkills ?? [];
+  const enabled = detail.workstream?.enabledGlobalSkills ?? [];
+  const valid = enabled.filter((entry) =>
+    published.some((skill) => skill.name === entry.name && skill.digest === entry.digest)
+  );
+  if ("disable" in act) return valid.filter((entry) => entry.name !== act.disable);
+  const target = published.find((skill) => skill.name === act.enable);
+  if (!target) return valid;
+  return [
+    ...valid.filter((entry) => entry.name !== act.enable),
+    { name: target.name, digest: target.digest }
+  ];
 }
 
 /**

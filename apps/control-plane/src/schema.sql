@@ -853,6 +853,29 @@ alter table executions add constraint executions_permission_profile_check
 alter table workspaces add column if not exists declared_skills jsonb not null default '[]'::jsonb;
 alter table workstreams add column if not exists enabled_skills jsonb not null default '[]'::jsonb;
 
+-- Project slash commands (D-187): the worktree's `.claude/commands` prompt
+-- templates, governed exactly as the skills above — published for review,
+-- enabled at the reviewed digest under `skills.set`, composed into the same
+-- Novus-authored plugin directory at dispatch. Stored verbatim, validated at
+-- the wire, never parsed here.
+alter table workspaces add column if not exists declared_slash_commands jsonb not null default '[]'::jsonb;
+alter table workstreams add column if not exists enabled_slash_commands jsonb not null default '[]'::jsonb;
+
+-- Global slash commands (D-188): the CLI's own command list as the runner
+-- machine last heard a session announce it — already loaded into every turn,
+-- display only, names only, nothing to enable.
+alter table workspaces add column if not exists declared_global_commands jsonb not null default '[]'::jsonb;
+
+-- Global skills (D-186): the runner machine's own user-level skills, which the
+-- CLI loads into every turn regardless of the pinned settings (D-118's
+-- measured, standing limit). Published so the fact is visible instead of
+-- silent — display only, never enableable, so no enabled twin exists.
+alter table workspaces add column if not exists declared_global_skills jsonb not null default '[]'::jsonb;
+-- Enabled machine skills (D-191): these do NOT load by themselves under the
+-- pinned argv (measured, correcting D-118/D-186), so a person enables them and
+-- Novus composes them like the project's own.
+alter table workstreams add column if not exists enabled_global_skills jsonb not null default '[]'::jsonb;
+
 -- Project MCP servers (D-119): the same publish-review-enable shape as the
 -- skills above, one tier up — `mcp.set` is Mission Admin's alone, because a
 -- server is new tool surface rather than instructions. Stored verbatim,
@@ -1035,3 +1058,40 @@ alter table artifacts add constraint artifacts_mime_type_check
 -- top edge pointed the turn at. Snapshotted at submit, bounded by the
 -- contract; empty for every direction written before this existed.
 alter table directions add column if not exists context jsonb;
+
+-- ---------------------------------------------------------------------------
+-- Extension labels (D-195). Raindrop's split, in this product's words: an
+-- extension's *origin* is its collection — intrinsic and uneditable — while a
+-- label is a tag the team writes for itself. Organizational metadata only:
+-- nothing here changes what reaches a turn, which is why no capability
+-- stronger than `skills.set` guards it.
+--
+-- A label belongs to the organization. An assignment names the extension by
+-- the identity its manifest publishes — its own name — plus which collection
+-- it came from, and, for repository content, which repository, because two
+-- projects may each declare a skill called `review` and mean different things.
+-- ---------------------------------------------------------------------------
+
+create table if not exists extension_labels (
+  label_id    text primary key,
+  org_id      text not null references organizations(org_id),
+  name        text not null,
+  color       text not null,
+  created_at  timestamptz not null default now()
+);
+create unique index if not exists extension_labels_name
+  on extension_labels (org_id, lower(name));
+
+create table if not exists extension_label_assignments (
+  label_id        text not null references extension_labels(label_id) on delete cascade,
+  org_id          text not null references organizations(org_id),
+  source          text not null check (source in ('repo', 'machine')),
+  -- The repository a repo-sourced extension belongs to; the empty string for
+  -- a machine one, so the key stays whole rather than nullable.
+  scope_key       text not null default '',
+  extension_name  text not null,
+  created_at      timestamptz not null default now(),
+  primary key (label_id, source, scope_key, extension_name)
+);
+create index if not exists extension_label_assignments_by_scope
+  on extension_label_assignments (org_id, source, scope_key);

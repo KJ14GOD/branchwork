@@ -267,6 +267,30 @@ describe("project skills in the room (D-118)", () => {
     expect(none.segments.filter((segment) => segment.kind === "note")).toHaveLength(0);
   });
 
+  it("states carried and dropped slash commands the same way (D-187)", () => {
+    const block = trace(
+      detail([
+        {
+          kind: "execution.running",
+          payload: {
+            harness: "claude-code",
+            model: "claude-fable-5",
+            effort: "high",
+            slashCommands: ["relnotes"],
+            slashCommandsDropped: [{ name: "deploy", reason: "changed since it was enabled" }]
+          }
+        }
+      ])
+    );
+    const notes = block.segments.filter((segment) => segment.kind === "note");
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toMatchObject({ text: "Slash commands carried: relnotes", tone: "neutral" });
+    expect(notes[1]).toMatchObject({
+      text: 'Slash command not carried — "deploy": changed since it was enabled',
+      tone: "warn"
+    });
+  });
+
   it("states carried and dropped MCP servers the same way (D-119)", () => {
     const block = trace(
       detail([

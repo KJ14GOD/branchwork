@@ -39,6 +39,7 @@ import { inertMissionBus, type MissionBus } from "./mission-bus.ts";
 import { registerAuthorityRoutes } from "./authority.ts";
 import { registerExecutionRoutes } from "./executions.ts";
 import { registerPolicyRoutes } from "./policy.ts";
+import { registerExtensionLabelRoutes } from "./extension-labels.ts";
 import { registerSkillsRoutes } from "./skills.ts";
 import { registerPullRequestRoutes, registerWebhookRoutes } from "./pull-requests.ts";
 import { registerBaseSyncRoutes } from "./base-sync.ts";
@@ -339,6 +340,7 @@ export function buildServer(
   registerCloseRoutes(app, deps);
   registerAuthorityRoutes(app, deps);
   registerExecutionRoutes(app, deps);
+  registerExtensionLabelRoutes(app, deps);
   registerPolicyRoutes(app, deps);
   registerSkillsRoutes(app, deps);
   registerPullRequestRoutes(app, deps);

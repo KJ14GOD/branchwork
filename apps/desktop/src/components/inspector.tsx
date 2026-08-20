@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   ProcessKind,
   FileChange,
@@ -23,9 +23,14 @@ import {
   nextEnabledSkills,
   keptWorkspace,
   sessionOfCheck,
+  globalSkillRows,
+  nextEnabledGlobalSkills,
+  nextEnabledSlashCommands,
   skillRows,
+  slashCommandRows,
   type SkillRow
 } from "./derive";
+import { ExtensionLabels } from "./extension-labels";
 import { GatedAction } from "./gated";
 import { FileTree } from "./file-tree";
 import { ProcessLogView } from "./process-log";
@@ -66,10 +71,13 @@ const SECTIONS: { id: InspectorSection; label: string }[] = [
 
 /** The two below the edge. They open a region of their own rather than taking
  *  the one above, so this is a type the panel can hold on to. */
-export type WorkspaceSection = "overview" | "output";
+export type WorkspaceSection = "overview" | "extensions" | "output";
 
 const WORKSPACE_SECTIONS: { id: WorkspaceSection; label: string }[] = [
   { id: "overview", label: "Overview" },
+  // What the lane's harness is handed beyond the repository (D-189): skills,
+  // slash commands, MCP servers — the governed rows and the machine's own.
+  { id: "extensions", label: "Extensions" },
   { id: "output", label: "Output" }
 ];
 
@@ -381,7 +389,201 @@ function LedgerEntry({
  * (the Permission-denied pattern); the server judges `skills.set` and the
  * manifest match either way.
  */
-function SkillsSection({ detail }: { detail: MissionDetailResponse }) {
+/**
+ * Where an extension came from (D-190), in the file badge's own anatomy and
+ * tokens (D-048): origin is a *fact about the thing*, the way an extension is
+ * a fact about a file — never a status, which stays in words. One tag per
+ * group rather than per row: the groups are homogeneous, so a tag on every
+ * line would repeat the heading thirty times.
+ */
+function OriginTag({ origin }: { origin: "project" | "machine" }) {
+  return (
+    <span
+      className={origin === "project" ? "origin-tag origin-project" : "origin-tag origin-machine"}
+      data-testid={`origin-${origin}`}
+    >
+      {origin === "project" ? "in repo" : "this machine"}
+    </span>
+  );
+}
+
+/**
+ * One folding group of the Extensions section (D-190). The heading is the
+ * control across its whole width — nothing floats beside it — carrying the
+ * group's name, where its contents come from, and, while it is shut, how many
+ * it holds, so folding never hides the fact that something is there. Each
+ * group remembers its own state on this machine.
+ */
+function ExtensionGroup({
+  id,
+  name,
+  origin,
+  count,
+  children
+}: {
+  id: string;
+  name: string;
+  origin: "project" | "machine";
+  count: number;
+  children: ReactNode;
+}) {
+  const key = `novus-extensions-${id}`;
+  const [open, setOpen] = useState(() => localStorage.getItem(key) !== "closed");
+  const toggle = (): void => {
+    setOpen((wasOpen) => {
+      localStorage.setItem(key, wasOpen ? "closed" : "open");
+      return !wasOpen;
+    });
+  };
+  return (
+    <div data-testid={`extension-group-${id}`}>
+      <button
+        className="extension-group-head"
+        onClick={toggle}
+        aria-expanded={open}
+        data-testid={`extension-group-toggle-${id}`}
+      >
+        <FoldGlyph open={open} />
+        <span className="extension-group-name">{name}</span>
+        <OriginTag origin={origin} />
+        <span className="extension-group-count">{count}</span>
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
+/**
+ * The Overview's one quiet line about the lot (D-189): how many things a
+ * person enabled, and how many ride from the machine itself. Null when there
+ * is nothing at all to say, so an unconfigured lane says nothing.
+ */
+function extensionsSummary(detail: MissionDetailResponse): string | null {
+  const enabled =
+    (detail.workstream?.enabledSkills.length ?? 0) +
+    (detail.workstream?.enabledSlashCommands.length ?? 0) +
+    (detail.workstream?.enabledGlobalSkills.length ?? 0) +
+    (detail.workstream?.enabledMcpServers.length ?? 0);
+  const available =
+    (detail.workspace?.skills.length ?? 0) +
+    (detail.workspace?.slashCommands.length ?? 0) +
+    (detail.workspace?.globalSkills.length ?? 0) +
+    (detail.workspace?.mcpServers.length ?? 0);
+  const machineCommands = detail.workspace?.globalSlashCommands.length ?? 0;
+  if (available === 0 && machineCommands === 0) return null;
+  const parts: string[] = [];
+  if (available > 0) parts.push(`${enabled} of ${available} enabled`);
+  if (machineCommands > 0) parts.push(`${machineCommands} commands from this machine`);
+  return parts.join(" · ");
+}
+
+/**
+ * One surface for everything the lane's harness is handed beyond the
+ * repository (D-189): the project's governed rows — skills, slash commands,
+ * MCP servers — and, last and quietest, what rides from the machine itself,
+ * grouped under a heading that states the fact once so no row wears a tag.
+ */
+function ExtensionsSection({
+  detail,
+  onDetail
+}: {
+  detail: MissionDetailResponse;
+  onDetail: (detail: MissionDetailResponse) => void;
+}) {
+  // A label is organizational and records no event, so nothing pushes it down
+  // the live stream: the surface that changed one re-reads and hands the room
+  // the fresh detail rather than waiting for the slow poll.
+  const onChanged = async (): Promise<void> => {
+    const fresh = await novus().missions.get(
+      detail.mission.missionId,
+      detail.workstream?.workstreamId
+    );
+    if (fresh.ok) onDetail(fresh.value);
+  };
+  const [busyGlobal, setBusyGlobal] = useState(false);
+  const [globalError, setGlobalError] = useState<string | null>(null);
+  const maySet = detail.capabilities.includes("skills.set");
+  const globals = globalSkillRows(detail);
+  const globalCommands = detail.workspace?.globalSlashCommands ?? [];
+  const machineLabel = detail.runner?.label ?? "the runner machine";
+  const empty =
+    extensionsSummary(detail) === null && globals.length === 0 && globalCommands.length === 0;
+
+  const actOnGlobal = async (choice: { enable: string } | { disable: string }) => {
+    if (!detail.workstream) return;
+    setBusyGlobal(true);
+    setGlobalError(null);
+    const result = await novus().missions.setEnabledGlobalSkills({
+      missionId: detail.mission.missionId,
+      workstreamId: detail.workstream.workstreamId,
+      skills: nextEnabledGlobalSkills(detail, choice)
+    });
+    setBusyGlobal(false);
+    if (!result.ok) setGlobalError(result.message);
+  };
+
+  return (
+    <div data-testid="inspector-extensions">
+      {empty && (
+        <p className="skill-foot">
+          Nothing yet. A project declares skills in .claude/skills, slash commands in
+          .claude/commands, and MCP servers in .mcp.json; they appear here for review.
+        </p>
+      )}
+      <SkillsSection detail={detail} onChanged={onChanged} />
+      <SlashCommandsSection detail={detail} onChanged={onChanged} />
+      <McpServersSection detail={detail} />
+      {(globals.length > 0 || globalCommands.length > 0) && (
+        <div data-testid="extensions-machine">
+          <ExtensionGroup
+            id="machine"
+            name="Global skills"
+            origin="machine"
+            count={globals.length}
+          >
+            <ManifestRows
+              rows={globals}
+              maySet={maySet}
+              busy={busyGlobal}
+              onAct={actOnGlobal}
+              deniedTitle=""
+              testid="global-skill"
+              readOnly
+              renderLabels={(name) => (
+                <ExtensionLabels
+                  detail={detail}
+                  source="machine"
+                  name={name}
+                  maySet={maySet}
+                  onChanged={onChanged}
+                />
+              )}
+            />
+            {globalError && (
+              <p className="skill-error tone-danger" role="alert" data-testid="global-skill-error">
+                {globalError}
+              </p>
+            )}
+            <p className="skill-foot" data-testid="global-skill-foot">
+              {machineLabel}'s own. The harness does not load these by itself — Novus carries
+              them, exactly as it carries the project's.
+              {globalCommands.length > 0 &&
+                ` Its ${globalCommands.length} built-in slash commands are in the composer's / menu.`}
+            </p>
+          </ExtensionGroup>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SkillsSection({
+  detail,
+  onChanged
+}: {
+  detail: MissionDetailResponse;
+  onChanged: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const maySet = detail.capabilities.includes("skills.set");
@@ -403,14 +605,24 @@ function SkillsSection({ detail }: { detail: MissionDetailResponse }) {
 
   return (
     <div data-testid="inspector-skills">
-      <h3 className="inspector-heading">Project skills</h3>
+      <ExtensionGroup id="skills" name="Repo skills" origin="project" count={rows.length}>
       <ManifestRows
         rows={rows}
         maySet={maySet}
         busy={busy}
         onAct={act}
-        deniedTitle="Only a Mission Admin or Operator can change skills (skills.set)."
+        deniedTitle=""
         testid="skill"
+        readOnly
+        renderLabels={(name) => (
+          <ExtensionLabels
+            detail={detail}
+            source="repo"
+            name={name}
+            maySet={maySet}
+            onChanged={onChanged}
+          />
+        )}
       />
       {error && (
         <p className="skill-error tone-danger" role="alert" data-testid="skill-error">
@@ -418,10 +630,75 @@ function SkillsSection({ detail }: { detail: MissionDetailResponse }) {
         </p>
       )}
       <p className="skill-foot">
-        A skill teaches the harness this project's own procedures. It grants nothing — every act
-        still asks under the lane's permissions — and one that changes is dropped from turns until
-        someone enables it as it now is.
+        Every skill here is carried into this lane's turns. A skill grants nothing — every act
+        still asks under the lane's permissions.
       </p>
+      </ExtensionGroup>
+    </div>
+  );
+}
+
+/**
+ * The project's slash commands (D-187): `.claude/commands` prompt templates,
+ * governed exactly as the skills are and under the same `skills.set` tier.
+ * An enabled command is what the composer's `/` popover offers.
+ */
+function SlashCommandsSection({
+  detail,
+  onChanged
+}: {
+  detail: MissionDetailResponse;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const maySet = detail.capabilities.includes("skills.set");
+  const rows = slashCommandRows(detail);
+  if (rows.length === 0) return null;
+
+  const act = async (choice: { enable: string } | { disable: string }) => {
+    if (!detail.workstream) return;
+    setBusy(true);
+    setError(null);
+    const result = await novus().missions.setEnabledSlashCommands({
+      missionId: detail.mission.missionId,
+      workstreamId: detail.workstream.workstreamId,
+      commands: nextEnabledSlashCommands(detail, choice)
+    });
+    setBusy(false);
+    if (!result.ok) setError(result.message);
+  };
+
+  return (
+    <div data-testid="inspector-slash-commands">
+      <ExtensionGroup id="commands" name="Repo commands" origin="project" count={rows.length}>
+      <ManifestRows
+        rows={rows}
+        maySet={maySet}
+        busy={busy}
+        onAct={act}
+        deniedTitle=""
+        testid="slash-command"
+        readOnly
+        renderLabels={(name) => (
+          <ExtensionLabels
+            detail={detail}
+            source="repo"
+            name={name}
+            maySet={maySet}
+            onChanged={onChanged}
+          />
+        )}
+      />
+      {error && (
+        <p className="skill-error tone-danger" role="alert" data-testid="slash-command-error">
+          {error}
+        </p>
+      )}
+      <p className="skill-foot">
+        Each of these is in the composer's / menu for this lane.
+      </p>
+      </ExtensionGroup>
     </div>
   );
 }
@@ -455,7 +732,7 @@ function McpServersSection({ detail }: { detail: MissionDetailResponse }) {
 
   return (
     <div data-testid="inspector-mcp">
-      <h3 className="inspector-heading">MCP servers</h3>
+      <ExtensionGroup id="mcp" name="MCP servers" origin="project" count={rows.length}>
       <ManifestRows
         rows={rows}
         maySet={maySet}
@@ -463,6 +740,7 @@ function McpServersSection({ detail }: { detail: MissionDetailResponse }) {
         onAct={act}
         deniedTitle="Only a Mission Admin can change MCP servers (mcp.set)."
         testid="mcp"
+        openByDefault
       />
       {error && (
         <p className="skill-error tone-danger" role="alert" data-testid="mcp-error">
@@ -470,10 +748,9 @@ function McpServersSection({ detail }: { detail: MissionDetailResponse }) {
         </p>
       )}
       <p className="skill-foot">
-        An MCP server is new tool surface — a program this machine runs, or a host it connects to.
-        Only what a Mission Admin enabled exists to the harness, and every call its tools make still
-        asks a person, under every permission profile short of Don&rsquo;t ask.
+        A server is new tools — Mission Admin enables, and its calls still ask a person.
       </p>
+      </ExtensionGroup>
     </div>
   );
 }
@@ -488,7 +765,10 @@ function ManifestRows({
   busy,
   onAct,
   deniedTitle,
-  testid
+  testid,
+  readOnly = false,
+  openByDefault = false,
+  renderLabels
 }: {
   rows: SkillRow[];
   maySet: boolean;
@@ -496,6 +776,14 @@ function ManifestRows({
   onAct: (choice: { enable: string } | { disable: string }) => Promise<void>;
   deniedTitle: string;
   testid: string;
+  /** True where nothing is enabled or disabled — every skill is carried, and
+   *  the row exists to be read (D-193). The row keeps its disclosure. */
+  readOnly?: boolean;
+  /** Rows that open by default: an MCP server's description is what a person
+   *  reviews before enabling it (D-119), so it is never folded away. */
+  openByDefault?: boolean;
+  /** Draws one row's labels (D-195); absent where labels do not apply. */
+  renderLabels?: (name: string) => ReactNode;
 }) {
   const stateWord = (row: SkillRow): { text: string; warn: boolean } | null => {
     if (row.state === "enabled") return { text: "enabled", warn: false };
@@ -505,40 +793,114 @@ function ManifestRows({
   };
   return (
     <>
-      {rows.map((row) => {
-        const word = stateWord(row);
-        // One action per row: a currently-enabled entry offers Disable; a
-        // changed one offers Enable — review it as it now is and approve
-        // that, the server's own refusal words — and a vanished grant is
-        // retired with Disable.
-        const action = row.state === "off" || row.state === "changed" ? "Enable" : "Disable";
-        return (
-          <div className="skill-row" data-testid={`${testid}-row`} data-skill={row.name} key={row.name}>
-            <span className="skill-row-body">
-              <span className="mono skill-name">{row.name}</span>
-              {word && <span className={word.warn ? "tone-warn" : "skill-state"}> · {word.text}</span>}
-              {row.description && <span className="skill-description">{row.description}</span>}
-            </span>
-            <button
-              className="btn btn-text skill-action"
-              disabled={!maySet || busy}
-              onClick={() => void onAct(action === "Enable" ? { enable: row.name } : { disable: row.name })}
-              title={
-                maySet
-                  ? action === "Enable"
-                    ? `Enable "${row.name}" for this lane's turns, exactly as published`
-                    : `Stop carrying "${row.name}"`
-                  : deniedTitle
-              }
-              data-testid={`${testid}-action`}
-              data-skill={row.name}
-            >
-              {action}
-            </button>
-          </div>
-        );
-      })}
+      {rows.map((row) => (
+        <ManifestRow
+          key={row.name}
+          row={row}
+          word={stateWord(row)}
+          maySet={maySet}
+          busy={busy}
+          onAct={onAct}
+          deniedTitle={deniedTitle}
+          testid={testid}
+          readOnly={readOnly}
+          openByDefault={openByDefault}
+          labels={renderLabels?.(row.name)}
+        />
+      ))}
     </>
+  );
+}
+
+/**
+ * One manifest row (D-193). The name is the control: pressing it folds the
+ * description away, so a project with a dozen skills reads as a list of names
+ * rather than a wall of paragraphs, and each row remembers its own state.
+ * Where the row is read-only there is no action at all — every skill is
+ * carried, and the row exists to say what one is.
+ */
+function ManifestRow({
+  row,
+  word,
+  maySet,
+  busy,
+  onAct,
+  deniedTitle,
+  testid,
+  readOnly,
+  openByDefault,
+  labels
+}: {
+  row: SkillRow;
+  word: { text: string; warn: boolean } | null;
+  maySet: boolean;
+  busy: boolean;
+  onAct: (choice: { enable: string } | { disable: string }) => Promise<void>;
+  deniedTitle: string;
+  testid: string;
+  readOnly: boolean;
+  openByDefault: boolean;
+  /** The row's own labels and the control that changes them (D-195). */
+  labels?: ReactNode;
+}) {
+  const key = `novus-row-${testid}-${row.name}`;
+  const [open, setOpen] = useState(() => {
+    const stored = localStorage.getItem(key);
+    return stored === null ? openByDefault : stored === "open";
+  });
+  // A currently-enabled entry offers Disable; a changed one offers Enable —
+  // review it as it now is and approve that, the server's own refusal words —
+  // and a vanished grant is retired with Disable.
+  const action = row.state === "off" || row.state === "changed" ? "Enable" : "Disable";
+  const toggle = (): void => {
+    setOpen((wasOpen) => {
+      localStorage.setItem(key, wasOpen ? "closed" : "open");
+      return !wasOpen;
+    });
+  };
+  return (
+    <div className="skill-row" data-testid={`${testid}-row`} data-skill={row.name}>
+      <button
+        className="skill-row-body skill-row-toggle"
+        onClick={toggle}
+        aria-expanded={open}
+        title={open ? `Fold ${row.name} away` : `What ${row.name} is`}
+        data-testid={`${testid}-toggle`}
+        data-skill={row.name}
+      >
+        <span className="skill-row-head">
+          <FoldGlyph open={open} />
+          <span className="mono skill-name">{row.name}</span>
+          {word && <span className={word.warn ? "tone-warn" : "skill-state"}> · {word.text}</span>}
+          {/* Whether the harness may reach for it unasked (D-192). Only the
+              restricted case is said: "the model may use this when it judges
+              it relevant" is what a skill *is*. */}
+          {row.modelInvocable === false && (
+            <span className="skill-state" data-testid="skill-on-request"> · on request only</span>
+          )}
+        </span>
+        {open && row.description && <span className="skill-description">{row.description}</span>}
+      </button>
+      {labels}
+      {!readOnly && (
+        <button
+          className="btn btn-text skill-action"
+          disabled={!maySet || busy}
+          onClick={() => void onAct(action === "Enable" ? { enable: row.name } : { disable: row.name })}
+          title={
+            maySet
+              ? action === "Enable"
+                ? `Enable "${row.name}" for this lane's turns, exactly as published`
+                : `Stop carrying "${row.name}"`
+              : deniedTitle
+          }
+          data-testid={`${testid}-action`}
+          data-skill={row.name}
+        >
+          {action}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -1273,6 +1635,8 @@ export function Inspector({
                 </>
               )}
 
+              {drawer === "extensions" && <ExtensionsSection detail={detail} onDetail={onDetail} />}
+
               {drawer === "overview" && (
                 <div data-testid="inspector-overview">
                   <div className="kv" data-testid="repo-block">
@@ -1375,10 +1739,23 @@ export function Inspector({
                         "No machine has registered to run this."
                       )}
                     </span>
-                  </div>
 
-                  <SkillsSection detail={detail} />
-                  <McpServersSection detail={detail} />
+                    {extensionsSummary(detail) && (
+                      <>
+                        <span className="kv-label">Extensions</span>
+                        <span className="kv-value">
+                          <button
+                            className="btn btn-text kv-action"
+                            onClick={() => setDrawer("extensions")}
+                            title="What this lane's harness is handed beyond the repository"
+                            data-testid="ws-extensions"
+                          >
+                            {extensionsSummary(detail)}
+                          </button>
+                        </span>
+                      </>
+                    )}
+                  </div>
 
                   <h3 className="inspector-heading">Participants</h3>
                   <ul className="participant-list" data-testid="participant-list">

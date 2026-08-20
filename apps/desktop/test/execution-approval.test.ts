@@ -451,34 +451,37 @@ describe("the permission policy Novus pins", () => {
     expect(args).not.toContain("--session-id");
   }, 40_000);
 
-  it("carries an enabled skill as a composed skills-only directory, and exactly the approved bytes (D-118)", async () => {
-    // The skill is repository content on the mission branch, like CLAUDE.md.
+  it("carries every skill and command the project declares, naming the bytes that ran (D-193)", async () => {
+    // Repository content on the mission branch, like CLAUDE.md. There is no
+    // enabled list any more: what the project declares is what the turn gets,
+    // and the record names each with the digest that reached the harness.
     const body = "---\nname: zephyr-codes\ndescription: Codewords.\n---\n\nThe codeword is XILOPHONE-72.\n";
+    const commandBody = "---\ndescription: Release notes.\n---\n\nSay MELON-9: $ARGUMENTS\n";
     mkdirSync(join(repo, ".claude", "skills", "zephyr-codes"), { recursive: true });
     writeFileSync(join(repo, ".claude", "skills", "zephyr-codes", "SKILL.md"), body);
+    mkdirSync(join(repo, ".claude", "commands"), { recursive: true });
+    writeFileSync(join(repo, ".claude", "commands", "relnotes.md"), commandBody);
     await git(repo, ["add", "-A"]);
     await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "skill"]);
     await git(repo, ["branch", "-f", MISSION_BRANCH, "HEAD"]);
-    const digest = createHash("sha256").update(body).digest("hex");
 
     installStub("approval");
-    const running = begin({ skills: [{ name: "zephyr-codes", digest }] });
+    const running = begin({});
     await waitFor("the approval to arrive", () => running.turn.pendingApprovals().length > 0);
 
     // While the turn is blocked, the composed directory is what the CLI was
-    // handed: Novus's own staging, never the worktree — and it contains the
-    // plugin manifest Novus authored, the approved bytes, and *nothing else* —
-    // no hooks, no .mcp.json, no commands, which is the structural half of
-    // D-072's refusal still standing.
+    // handed: Novus's own staging, never the worktree — holding the plugin
+    // manifest Novus authored, the declared skill, the declared command, and
+    // nothing else. No hooks, no .mcp.json, no agents: D-072's refusal is
+    // still structure.
     const args = argv();
     const dir = args[args.indexOf("--plugin-dir") + 1] as string;
     expect(dir).toContain(".skills-staging");
     expect(dir.startsWith(join(worktreeRoot, WORKSTREAM_ID))).toBe(false);
-    expect(readdirSync(dir).sort()).toEqual([".claude-plugin", "skills"]);
-    expect(readdirSync(join(dir, ".claude-plugin"))).toEqual(["plugin.json"]);
+    expect(readdirSync(dir).sort()).toEqual([".claude-plugin", "commands", "skills"]);
     expect(readdirSync(join(dir, "skills"))).toEqual(["zephyr-codes"]);
-    expect(readdirSync(join(dir, "skills", "zephyr-codes"))).toEqual(["SKILL.md"]);
     expect(readFileSync(join(dir, "skills", "zephyr-codes", "SKILL.md"), "utf8")).toBe(body);
+    expect(readFileSync(join(dir, "commands", "relnotes.md"), "utf8")).toBe(commandBody);
     // The pinned policy is untouched beside it.
     expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
 
@@ -486,11 +489,17 @@ describe("the permission policy Novus pins", () => {
     await running.finished;
     // The staging is the turn's own, and it leaves with the turn.
     expect(existsSync(dir)).toBe(false);
-    // The turn's record states what it carried.
-    expect(payloadOf(running.events, "execution.running")).toMatchObject({
-      skills: ["zephyr-codes"],
-      skillsDropped: []
-    });
+    // The record names what ran, at the digest that ran.
+    const payload = payloadOf(running.events, "execution.running") as {
+      skills: { name: string; digest: string }[];
+      slashCommands: { name: string; digest: string }[];
+    };
+    expect(payload.skills).toEqual([
+      { name: "zephyr-codes", digest: createHash("sha256").update(body).digest("hex") }
+    ]);
+    expect(payload.slashCommands).toEqual([
+      { name: "relnotes", digest: createHash("sha256").update(commandBody).digest("hex") }
+    ]);
   }, 40_000);
 
   it("carries an enabled MCP server as a strict config Novus authors, or nothing at all (D-119)", async () => {
@@ -546,28 +555,6 @@ describe("the permission policy Novus pins", () => {
     });
   }, 60_000);
 
-  it("drops a skill whose bytes changed since it was enabled, by name, and passes no directory", async () => {
-    const body = "---\nname: zephyr-codes\n---\n\nRewritten since the review.\n";
-    mkdirSync(join(repo, ".claude", "skills", "zephyr-codes"), { recursive: true });
-    writeFileSync(join(repo, ".claude", "skills", "zephyr-codes", "SKILL.md"), body);
-    await git(repo, ["add", "-A"]);
-    await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "skill"]);
-    await git(repo, ["branch", "-f", MISSION_BRANCH, "HEAD"]);
-
-    installStub("approval");
-    // Enabled at a digest the worktree no longer holds: the approval names
-    // bytes nobody can produce, so nothing is loaded — never the new bytes.
-    const running = begin({ skills: [{ name: "zephyr-codes", digest: "0".repeat(64) }] });
-    await waitFor("the approval to arrive", () => running.turn.pendingApprovals().length > 0);
-    running.turn.respondApproval("stub-request-1", "deny", null);
-    await running.finished;
-
-    expect(argv()).not.toContain("--plugin-dir");
-    expect(payloadOf(running.events, "execution.running")).toMatchObject({
-      skills: [],
-      skillsDropped: [{ name: "zephyr-codes", reason: "changed since it was enabled" }]
-    });
-  }, 40_000);
 });
 
 describe("answering one question", () => {

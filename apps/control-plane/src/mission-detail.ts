@@ -1,5 +1,6 @@
 import {
   DeclaredCommandSchema,
+  GlobalSlashCommandsSchema,
   McpServerSchema,
   ProjectSkillSchema,
   ReceiptSnapshotSchema
@@ -19,6 +20,10 @@ import type {
   WorkspaceProcess
 } from "@novus/contracts";
 import { listApprovals } from "./approvals.ts";
+import {
+  listExtensionLabelAssignments,
+  listExtensionLabels
+} from "./extension-labels.ts";
 import { artifactIdsByTarget, listArtifacts } from "./artifacts.ts";
 import {
   contestedPaths,
@@ -323,6 +328,17 @@ export async function workspaceOf(db: Queryable, workstreamId: string | null): P
     // The project's skill manifest as the runner last read it (D-118) — what
     // the enable control reviews against. Malformed reads as none published.
     skills: ProjectSkillSchema.array().catch([]).parse(row.declared_skills ?? []),
+    // The runner machine's own user-level skills (D-186) — always loaded by
+    // the CLI itself; served for visibility, never for enabling.
+    globalSkills: ProjectSkillSchema.array().catch([]).parse(row.declared_global_skills ?? []),
+    // The project's slash-command manifest (D-187) — the enable control
+    // reviews against this the way it does the skills'.
+    slashCommands: ProjectSkillSchema.array().catch([]).parse(row.declared_slash_commands ?? []),
+    // The CLI's own command list (D-188) — what the composer's / menu offers
+    // beside the project's governed commands.
+    globalSlashCommands: GlobalSlashCommandsSchema.catch([]).parse(
+      row.declared_global_commands ?? []
+    ),
     // And the MCP server manifest (D-119), same posture.
     mcpServers: McpServerSchema.array().catch([]).parse(row.declared_mcp ?? [])
   };
@@ -598,7 +614,9 @@ export async function missionDetail(
     runner,
     workspace,
     processes,
-    eventRows
+    eventRows,
+    extensionLabels,
+    extensionLabelAssignments
   ] = await Promise.all([
     listParticipants(db, access.missionId, access.controllerUserId),
     controlSnapshot(db, access.workstreamId),
@@ -613,7 +631,12 @@ export async function missionDetail(
     db.query(`${EVENT_SELECT} where org_id = $1 and mission_id = $2 order by seq`, [
       access.orgId,
       access.missionId
-    ])
+    ]),
+    // The organization's own label vocabulary, and which of this mission's
+    // extensions wear which (D-195). Organizational metadata about the
+    // manifests, read beside them and never mixed into them.
+    listExtensionLabels(db, access.orgId),
+    listExtensionLabelAssignments(db, access.orgId, base.mission.repository?.repoId ?? null)
   ]);
 
   // Every lane, and the evidence each one produced on its own. A mission that
@@ -805,6 +828,8 @@ export async function missionDetail(
     baseStatus: null,
     pullRequest,
     branchPush,
+    extensionLabels,
+    extensionLabelAssignments,
     events: (eventRows.rows as EventRow[]).map(toMissionEvent),
     participants,
     directions,

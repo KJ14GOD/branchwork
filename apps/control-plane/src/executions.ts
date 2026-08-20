@@ -6,13 +6,11 @@ import {
   DirectionInputSchema,
   DirectionResolutionSchema,
   EnabledMcpServersSchema,
-  EnabledSkillsSchema,
   ExecutionStateSchema,
   PermissionProfileSchema,
   scopesDisjoint,
   TERMINAL_EXECUTION_STATES,
   type EnabledMcpServer,
-  type EnabledSkill,
   type FileDiffResponse,
   type PermissionProfile
 } from "@novus/contracts";
@@ -87,13 +85,8 @@ function profileOf(value: unknown): PermissionProfile {
   return parsed.success ? parsed.data : DEFAULT_PERMISSION_PROFILE;
 }
 
-/** The lane's enabled skills, validated (D-118). Malformed or pre-migration
- *  reads as none enabled — nothing is ever carried by accident — the same
- *  failure posture as profileOf. */
-function skillsOf(value: unknown): EnabledSkill[] {
-  const parsed = EnabledSkillsSchema.safeParse(value);
-  return parsed.success ? parsed.data : [];
-}
+
+
 
 /** The lane's enabled MCP servers, same posture (D-119). */
 function mcpOf(value: unknown): EnabledMcpServer[] {
@@ -276,10 +269,6 @@ export async function dispatchDirection(
     // into this turn (D-115): a profile change mid-turn speaks from the next
     // dispatch, never into a running one (the D-043 pattern, as with scope).
     const permissionProfile = profileOf(direction.rows[0]?.permission_profile);
-    // And the skills a person enabled, pinned the same way (D-118): the turn
-    // carries the set — and the exact digests — that stood when it was
-    // authorized, so an enablement mid-turn speaks from the next dispatch.
-    const skills = skillsOf(direction.rows[0]?.enabled_skills);
     // And the MCP servers (D-119), under exactly the same rule.
     const mcpServers = mcpOf(direction.rows[0]?.enabled_mcp_servers);
     // The pinned references (D-182), stored validated at submit: files and
@@ -345,7 +334,6 @@ export async function dispatchDirection(
           permissionProfile,
           // And for the skills (D-118): the fresh process an after-end apply
           // spawns composes from this pinned set, never from the rows.
-          skills,
           mcpServers
         },
         idempotencyKey: `apply:${args.directionId}`
@@ -469,9 +457,6 @@ export async function dispatchDirection(
         // authorized (D-115) — the runner applies exactly this, so a profile
         // change never reaches into a turn already running.
         permissionProfile,
-        // And the skills a person had enabled (D-118), each at its approved
-        // digest — the runner composes exactly these or drops them by name.
-        skills,
         // And the MCP servers (D-119), composed into a strict config or
         // dropped by name under the same digest rule.
         mcpServers

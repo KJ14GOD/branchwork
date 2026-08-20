@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { WorkspaceEntry } from "@novus/contracts";
 import { novus } from "../bridge";
+import { FileBadge } from "./file-badge";
 
 /**
  * The workspace's files, in the evidence panel (D-048).
@@ -14,49 +15,6 @@ import { novus } from "../bridge";
  * project wants to see where a file sits, not to walk a path one level at a
  * time and lose the shape.
  */
-
-/**
- * How a row is tinted. Not decoration and not a semantic token: a file type is
- * a *fact about a file*, the same way a foreign program's colours in the
- * terminal are facts about that program, and the room says nothing by it
- * (D-048). Kept to the few families a repository actually has, because thirty
- * hues is a paint chart rather than a signal.
- */
-type FileFamily = "code" | "web" | "data" | "doc" | "config" | "asset" | "plain";
-
-const FAMILY: Record<string, FileFamily> = {
-  ts: "code", tsx: "code", js: "code", jsx: "code", mjs: "code", cjs: "code",
-  py: "code", rb: "code", go: "code", rs: "code", java: "code", kt: "code",
-  swift: "code", c: "code", h: "code", cc: "code", cpp: "code", hpp: "code",
-  sh: "code", bash: "code", zsh: "code", sql: "code", php: "code",
-  html: "web", css: "web", scss: "web", vue: "web", svelte: "web",
-  json: "data", yaml: "data", yml: "data", toml: "data", xml: "data",
-  csv: "data", lock: "data",
-  md: "doc", mdx: "doc", txt: "doc", rst: "doc", adoc: "doc",
-  env: "config", ini: "config", cfg: "config", conf: "config", properties: "config",
-  png: "asset", jpg: "asset", jpeg: "asset", gif: "asset", svg: "asset",
-  webp: "asset", ico: "asset", pdf: "asset", woff: "asset", woff2: "asset"
-};
-
-/** Dotfiles carry their meaning in the name rather than the extension. */
-function familyOf(entry: WorkspaceEntry): FileFamily {
-  if (entry.kind === "directory") return "plain";
-  const name = entry.name.toLowerCase();
-  if (name.startsWith(".env")) return "config";
-  if (name.startsWith(".git")) return "config";
-  if (name === "dockerfile" || name === "makefile" || name === "justfile") return "config";
-  return FAMILY[entry.extension] ?? "plain";
-}
-
-/** The two-or-three letters a row shows where an icon would be. A glyph set
- *  per language is a maintenance burden and a licence question; the extension
- *  is already the answer and is always right. */
-function badgeOf(entry: WorkspaceEntry): string {
-  if (entry.kind === "directory") return "";
-  if (entry.extension !== "") return entry.extension.slice(0, 4);
-  const name = entry.name.replace(/^\./, "");
-  return name.slice(0, 3).toLowerCase();
-}
 
 function FolderGlyph({ open }: { open: boolean }) {
   return (
@@ -76,6 +34,19 @@ function FolderGlyph({ open }: { open: boolean }) {
   );
 }
 
+/** A search hit as a row. The search returns file paths; the badge and the
+ *  open handler need the same shape a directory listing produces. */
+function fileEntry(path: string): WorkspaceEntry {
+  const name = path.split("/").pop() ?? path;
+  const dot = name.lastIndexOf(".");
+  return {
+    path,
+    name,
+    kind: "file",
+    extension: dot <= 0 ? "" : name.slice(dot + 1).toLowerCase().slice(0, 20)
+  };
+}
+
 function Row({
   entry,
   depth,
@@ -89,7 +60,6 @@ function Row({
   selected: boolean;
   onOpen: (entry: WorkspaceEntry) => void;
 }) {
-  const family = familyOf(entry);
   return (
     <button
       className={selected ? "tree-row selected" : "tree-row"}
@@ -100,13 +70,7 @@ function Row({
       data-kind={entry.kind}
       data-path={entry.path}
     >
-      {entry.kind === "directory" ? (
-        <FolderGlyph open={expanded} />
-      ) : (
-        <span className={`tree-badge family-${family}`} aria-hidden="true">
-          {badgeOf(entry)}
-        </span>
-      )}
+      {entry.kind === "directory" ? <FolderGlyph open={expanded} /> : <FileBadge path={entry.name} />}
       <span className="tree-name">{entry.name}</span>
     </button>
   );
@@ -129,6 +93,10 @@ export function FileTree({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  /** Every file in the worktree, fetched once when the tree mounts, so each
+   *  keystroke in the filter box narrows a list already in memory instead of
+   *  asking the machine again — typing filters instantly. */
+  const [census, setCensus] = useState<WorkspaceEntry[] | null>(null);
 
   const load = useCallback(
     async (path: string) => {
@@ -152,6 +120,26 @@ export function FileTree({
     setExpanded(new Set());
     void load("");
   }, [load]);
+
+  // The filter searches the worktree itself, through the same bridge the
+  // composer's mention uses (D-185): what a person can find must not depend on
+  // which folders they happen to have disclosed. Fetched whole and up front
+  // rather than queried per keystroke — the round trip made typing lag.
+  useEffect(() => {
+    let stale = false;
+    void (async () => {
+      const result = await novus().workspace.searchFiles({
+        missionId,
+        ...(workstreamId ? { workstreamId } : {}),
+        query: "",
+        limit: 20_000
+      });
+      if (!stale && result.ok) setCensus(result.value.map(fileEntry));
+    })();
+    return () => {
+      stale = true;
+    };
+  }, [missionId, workstreamId]);
 
   const open = (entry: WorkspaceEntry) => {
     if (entry.kind === "file") {
@@ -196,12 +184,23 @@ export function FileTree({
     );
   }
 
-  /* Filtering, not searching a repository: it narrows what is already open, so
-     a folder whose name matches keeps its children and a file matches on its
-     path. Anything deeper needs the worktree indexed, which is a bigger thing
-     than a box above a list (D-066). */
+  /* With text in the box the list is search results, flat: rows already
+     loaded that match, then every match the worktree search found beyond
+     them. Depth is dropped because a result's parents may not be rows at
+     all — indentation against absent parents reads as broken, not as a tree. */
   const needle = filter.trim().toLowerCase();
-  const shown = needle === "" ? rows : rows.filter((row) => row.entry.path.toLowerCase().includes(needle));
+  const loadedMatches = rows.filter((row) => row.entry.path.toLowerCase().includes(needle));
+  const already = new Set(loadedMatches.map((row) => row.entry.path));
+  const shown: { entry: WorkspaceEntry; depth: number }[] =
+    needle === ""
+      ? rows
+      : [
+          ...loadedMatches.map((row) => ({ entry: row.entry, depth: 0 })),
+          ...(census ?? [])
+            .filter((entry) => entry.path.toLowerCase().includes(needle) && !already.has(entry.path))
+            .slice(0, 200)
+            .map((entry) => ({ entry, depth: 0 }))
+        ];
 
   return (
     <>

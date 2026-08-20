@@ -33,6 +33,7 @@ import {
   sessionChecks,
   usageSoFar,
   sessionView,
+  slashCommandCompletions,
   viewerIsController
 } from "../components/derive";
 import {
@@ -785,6 +786,40 @@ export function ProjectRoom({
    *  every lane; session chrome exists only past one. */
   const sessions = useMemo(() => (detail ? laneSessions(detail) : []), [detail]);
   const firstSessionId = sessions[0]?.sessionId ?? null;
+
+  /**
+   * The @-mention provider (D-185), held stable across re-reads.
+   *
+   * The composer debounces its file search against this object, so a provider
+   * rebuilt on every render restarts that timer — and since D-149 the room
+   * re-reads on every streamed event, the timer could be restarted faster than
+   * it ever fires. Only the addresses it closes over actually change.
+   */
+  const mentionMissionId = detail?.mission.missionId ?? null;
+  const mentionWorkstreamId = detail?.workstream?.workstreamId ?? null;
+  const mention = useMemo(
+    () =>
+      mentionMissionId !== null && mentionWorkstreamId !== null
+        ? {
+            search: async (query: string) => {
+              const found = await novus().workspace.searchFiles({
+                missionId: mentionMissionId,
+                workstreamId: mentionWorkstreamId,
+                query
+              });
+              return found.ok ? found.value : [];
+            },
+            add: (path: string) =>
+              setPendingContext((previous) =>
+                previous.some((held) => held.kind === "file" && held.path === path) ||
+                previous.length >= MAX_DIRECTION_CONTEXT
+                  ? previous
+                  : [...previous, { kind: "file", path }]
+              )
+          }
+        : undefined,
+    [mentionMissionId, mentionWorkstreamId]
+  );
   /** The session being read. A remembered id the lane does not hold — another
    *  lane's, or one this poll has not caught up to yet — reads as the lane's
    *  first rather than as a broken canvas. */
@@ -2366,27 +2401,8 @@ export function ProjectRoom({
         onRemoveContext={(index) =>
           setPendingContext((previous) => previous.filter((_, at) => at !== index))
         }
-        mention={
-          detail && detail.workstream
-            ? {
-                search: async (query) => {
-                  const found = await novus().workspace.searchFiles({
-                    missionId: detail.mission.missionId,
-                    workstreamId: detail.workstream!.workstreamId,
-                    query
-                  });
-                  return found.ok ? found.value : [];
-                },
-                add: (path) =>
-                  setPendingContext((previous) =>
-                    previous.some((held) => held.kind === "file" && held.path === path) ||
-                    previous.length >= MAX_DIRECTION_CONTEXT
-                      ? previous
-                      : [...previous, { kind: "file", path }]
-                  )
-              }
-            : undefined
-        }
+        mention={mention}
+        slashCommands={detail ? slashCommandCompletions(detail) : undefined}
       />
       )}
 
