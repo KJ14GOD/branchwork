@@ -1003,9 +1003,12 @@ create index if not exists direction_attachments_by_direction
 -- Novus capturing (D-150). Both constraints are re-stated in one place each,
 -- the D-035 lesson: a vocabulary widened in two places is a migration that
 -- can never run twice.
+-- (Re-learned by D-173: the transcript kind was first appended as a second
+-- widen at the file's end, and a database already holding transcripts could
+-- not boot past this older list. One list, here, forever.)
 alter table artifacts drop constraint if exists artifacts_kind_check;
 alter table artifacts add constraint artifacts_kind_check
-  check (kind in ('screenshot', 'recording', 'attachment'));
+  check (kind in ('screenshot', 'recording', 'attachment', 'transcript'));
 alter table artifacts drop constraint if exists artifacts_capture_source_check;
 alter table artifacts add constraint artifacts_capture_source_check
   check (capture_source in ('preview', 'upload'));
@@ -1017,21 +1020,6 @@ alter table artifacts add constraint artifacts_capture_source_check
 -- not possible — so the shape is checked and the vocabulary is not, and the
 -- strictness stays where it can be enforced: the capture routes, which take a
 -- closed enum on the way in.
-alter table artifacts drop constraint if exists artifacts_mime_type_check;
-alter table artifacts add constraint artifacts_mime_type_check
-  check (
-    case when kind = 'attachment'
-      then mime_type ~ '^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$' and length(mime_type) <= 120
-      else mime_type in ('image/png', 'video/webm')
-    end
-  );
-
--- The transcript kind (D-173): a projection of one of the lane's own
--- conversations, carried into a new chat. Markdown and nothing else — the
--- kind is a claim about what the bytes are, and this one is checkable.
-alter table artifacts drop constraint if exists artifacts_kind_check;
-alter table artifacts add constraint artifacts_kind_check
-  check (kind in ('screenshot', 'recording', 'attachment', 'transcript'));
 alter table artifacts drop constraint if exists artifacts_mime_type_check;
 alter table artifacts add constraint artifacts_mime_type_check
   check (
