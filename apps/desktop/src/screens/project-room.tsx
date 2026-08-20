@@ -872,21 +872,9 @@ export function ProjectRoom({
   /** The composer's foot names its whole target (D-080, D-083): the lane once
    *  more than one exists, the conversation once more than one exists, and a
    *  draft by what it is about to become. One lane, one session: nothing. */
-  const readingSession =
-    sessions.find((session) => session.sessionId === readingSessionId) ?? null;
-  const sessionName = readingSession ? (readingSession.title ?? "New session") : null;
-  const laneName = activeLane?.name ?? detail?.workstream?.name ?? null;
-  const composerTarget = sessionDraft
-    ? laneName
-      ? `Directing a new session in ${laneName}`
-      : null
-    : multiSession && sessionName
-      ? multiLane && laneName
-        ? `Directing ${laneName} · "${sessionName}"`
-        : `Directing "${sessionName}"`
-      : multiLane && laneName
-        ? `Directing ${laneName}`
-        : null;
+  // The D-124 target eyebrow is retired (D-176): the selected tab and the
+  // rail's washed row already name the conversation, and the box stays the
+  // same box on every surface.
 
   // Auto-scroll on new activity unless the reader scrolled up. Keyed to the
   // conversation on screen: switching sessions lands at its latest activity.
@@ -1976,28 +1964,35 @@ export function ProjectRoom({
               </p>
               {sessions.length > 0 && (
                 <div className="draft-continue" data-testid="draft-continue">
-                  <p className="draft-continue-lead">Continue from</p>
-                  {sessions.map((session) => (
-                    <label key={session.sessionId} className="draft-continue-row">
-                      <input
-                        type="checkbox"
-                        checked={continueFrom.includes(session.sessionId)}
-                        onChange={(event) =>
-                          setContinueFrom((previous) =>
-                            event.target.checked
-                              ? [...previous, session.sessionId]
-                              : previous.filter((id) => id !== session.sessionId)
-                          )
-                        }
-                        data-testid={`continue-from-${session.sessionId}`}
-                      />
-                      <span className="draft-continue-title">{session.title ?? "untitled"}</span>
-                    </label>
-                  ))}
-                  <p className="draft-continue-note">
-                    Each chosen chat's transcript — its record, projected — travels with your
-                    first message.
-                  </p>
+                  <p className="draft-continue-lead">Add chat transcripts</p>
+                  <div className="draft-continue-pills">
+                    {sessions.map((session) => {
+                      const picked = continueFrom.includes(session.sessionId);
+                      return (
+                        <button
+                          key={session.sessionId}
+                          className="draft-continue-pill"
+                          aria-pressed={picked}
+                          title={
+                            picked
+                              ? `Remove the transcript of "${session.title ?? "untitled"}"`
+                              : `Carry the transcript of "${session.title ?? "untitled"}" with your first message`
+                          }
+                          onClick={() =>
+                            setContinueFrom((previous) =>
+                              picked
+                                ? previous.filter((id) => id !== session.sessionId)
+                                : [...previous, session.sessionId]
+                            )
+                          }
+                          data-testid={`continue-from-${session.sessionId}`}
+                        >
+                          <SessionGlyph />
+                          <span className="draft-continue-title">{session.title ?? "untitled"}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
@@ -2263,7 +2258,6 @@ export function ProjectRoom({
         // works it exactly like a folder somebody added (D-025, D-032).
         capabilities={isDraft ? ["direction.submit"] : (detail?.capabilities ?? null)}
         isController={isController || isDraft}
-        contextNote={composerTarget}
         placeholderOverride={sessionDraft ? "What should this session do?" : undefined}
         alongsideOffer={alongsideOffer}
         policy={isDraft ? null : policyControl}
@@ -2301,6 +2295,19 @@ export function ProjectRoom({
                 },
                 pathOf: (file: File) => novus().missions.pathForDroppedFile(file)
               }))(detail)
+        }
+        pendingTranscripts={
+          sessionDraft
+            ? continueFrom.flatMap((sourceId) => {
+                const source = sessions.find((session) => session.sessionId === sourceId);
+                return source
+                  ? [{ sessionId: sourceId, title: source.title ?? "untitled" }]
+                  : [];
+              })
+            : undefined
+        }
+        onRemoveTranscript={(sessionId) =>
+          setContinueFrom((previous) => previous.filter((id) => id !== sessionId))
         }
       />
       )}

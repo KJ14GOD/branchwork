@@ -960,6 +960,11 @@ export type DirectionState = z.infer<typeof DirectionStateSchema>;
  */
 export const DirectionAttachmentSchema = z.object({
   artifactId: z.string().startsWith("art_"),
+  /** What the artifact is (D-173/D-175): `attachment` for a person's own
+   *  file, `transcript` for a sibling chat's projected record — the trace
+   *  renders them differently, and a label prefix is not an identity.
+   *  Defaulted for rows written before the vocabulary widened. */
+  kind: ArtifactKindSchema.default("attachment"),
   /** Open, not an enum (D-153): a person may attach any file, and the four
    *  inlined image types plus PDF are a subset rather than the whole world. */
   mimeType: MimeTypeSchema,
@@ -976,7 +981,10 @@ export type DirectionAttachment = z.infer<typeof DirectionAttachmentSchema>;
 /** One image the composer is holding, uploaded and ready to be submitted with
  *  the words (D-150). `resized` is stated rather than hidden: a person who
  *  attached a 12-megapixel screenshot should know a smaller one was sent. */
-export const PreparedAttachmentSchema = DirectionAttachmentSchema.omit({ state: true }).extend({
+export const PreparedAttachmentSchema = DirectionAttachmentSchema.omit({
+  state: true,
+  kind: true
+}).extend({
   /** How this one will travel (D-153): inlined into the message, or staged in
    *  the worktree for the agent's own tools. The composer says which. */
   form: AttachmentFormSchema,

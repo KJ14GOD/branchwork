@@ -358,6 +358,19 @@ export function TraceView({
               <span className="trace-attachment-missing" key={image.artifactId}>
                 {image.label} — not uploaded, so the turn never saw it
               </span>
+            ) : image.kind === "transcript" ? (
+              /* A carried sibling's record (D-173), worn quietly (D-175): one
+                 line, no size, no staging note — context, not cargo. Clicking
+                 still opens the document. */
+              <button
+                className="trace-attachment-transcript"
+                key={image.artifactId}
+                onClick={() => void novus().artifacts.openLocal(image.artifactId)}
+                title={`Open ${image.label}`}
+                data-testid="trace-transcript"
+              >
+                <span className="trace-attachment-transcript-name">{image.label}</span>
+              </button>
             ) : attachmentForm(image.mimeType) !== "image" ? (
               <DocChip
                 key={image.artifactId}

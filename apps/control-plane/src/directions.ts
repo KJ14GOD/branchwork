@@ -83,6 +83,7 @@ export async function listDirections(db: Queryable, missionId: string): Promise<
       row,
       (attachments.get(row.dir_id) ?? []).map((found) => ({
         artifactId: found.artifactId,
+        kind: found.kind as DirectionAttachment["kind"],
         mimeType: found.mimeType as DirectionAttachment["mimeType"],
         byteSize: found.byteSize,
         label: found.label,
@@ -204,6 +205,7 @@ export async function submitDirection(
   const carried = await attachmentsForDirections(db, [row.dir_id]);
   const images = (carried.get(row.dir_id) ?? []).map((found) => ({
     artifactId: found.artifactId,
+    kind: found.kind as DirectionAttachment["kind"],
     mimeType: found.mimeType as DirectionAttachment["mimeType"],
     byteSize: found.byteSize,
     label: found.label,

@@ -119,13 +119,14 @@ export function Composer({
   capabilities,
   denialReason,
   isController,
-  contextNote,
   placeholderOverride,
   alongsideOffer,
   policy,
   onEmptySubmit,
   onSubmit,
-  attach
+  attach,
+  pendingTranscripts,
+  onRemoveTranscript
 }: {
   /** Null until the server has said what this viewer may do. The composer
    *  never guesses a capability it has not been told about. */
@@ -135,7 +136,6 @@ export function Composer({
    *  capabilities the person may well hold. */
   denialReason?: string;
   isController: boolean;
-  contextNote?: string | null;
   /** Overrides the state-derived placeholder — the ask-dialog is a question,
    *  not a room, and its placeholder is the question (D-077). */
   placeholderOverride?: string;
@@ -173,6 +173,12 @@ export function Composer({
     /** The path behind a dropped file, resolved by the bridge (D-152). */
     pathOf: (file: File) => string | null;
   };
+  /** Transcripts the next direction will carry (D-173, restyled D-175): the
+   *  chats picked on the draft canvas, worn here as chips beside the attached
+   *  images — the box shows everything the send will carry, in one place.
+   *  They upload at send, so these are named intentions, not artifacts yet. */
+  pendingTranscripts?: { sessionId: string; title: string }[];
+  onRemoveTranscript?: (sessionId: string) => void;
 }) {
   const [textValue, setTextValue] = useState("");
   const [model, setModel] = useState<ModelId>(() => {
@@ -425,13 +431,78 @@ export function Composer({
         }
         data-testid={known && !mayDirect ? "composer-no-capability" : undefined}
       >
-        {/* The dock names its whole target before a word is typed (D-124): the
-            lane and conversation as one quiet eyebrow on the box's own edge,
-            where the foot's mono note used to hide it. */}
-        {contextNote && (
-          <span className="composer-target" data-testid="composer-target">
-            {contextNote}
-          </span>
+        {/* What the next direction will carry (D-150, moved to the box's top
+            edge in D-176): every chip — carried transcripts, then attached
+            images — reads before the words it will travel with, the one place
+            extra context joins the box. The D-124 target eyebrow is retired
+            (D-176): the selected tab already names the conversation, and the
+            box stays the same box everywhere. */}
+        {(attachments.length > 0 || (pendingTranscripts?.length ?? 0) > 0) && (
+          <div className="composer-attachments" data-testid="composer-attachments">
+            {pendingTranscripts?.map((transcript) => (
+              <span
+                className="composer-attachment"
+                key={transcript.sessionId}
+                data-testid="composer-transcript"
+              >
+                <DocumentGlyph className="composer-attachment-glyph" />
+                <span className="composer-attachment-name">Transcript · {transcript.title}</span>
+                {onRemoveTranscript && (
+                  <button
+                    className="composer-attachment-remove"
+                    aria-label={`Remove the transcript of ${transcript.title}`}
+                    disabled={sending}
+                    onClick={() => onRemoveTranscript(transcript.sessionId)}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+            {attachments.map((image) => (
+              <span className="composer-attachment" key={image.artifactId}>
+                {image.form === "image" ? (
+                  <ImageGlyph className="composer-attachment-glyph" />
+                ) : (
+                  <DocumentGlyph className="composer-attachment-glyph" />
+                )}
+                <span className="composer-attachment-name">{image.label}</span>
+                {image.convertedFrom !== null && (
+                  <span
+                    className="composer-attachment-note"
+                    title={`Converted from ${image.convertedFrom} — the agent cannot read that format`}
+                  >
+                    from {image.convertedFrom}
+                  </span>
+                )}
+                {image.resized && (
+                  <span className="composer-attachment-note" title="Scaled down before sending">
+                    resized
+                  </span>
+                )}
+                {image.form === "file" && (
+                  <span
+                    className="composer-attachment-note"
+                    title="Placed in the workspace — the agent opens it with its own tools"
+                  >
+                    in workspace
+                  </span>
+                )}
+                <button
+                  className="composer-attachment-remove"
+                  aria-label={`Remove ${image.label}`}
+                  disabled={sending}
+                  onClick={() =>
+                    setAttachments((held) =>
+                      held.filter((candidate) => candidate.artifactId !== image.artifactId)
+                    )
+                  }
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
         )}
         <textarea
           ref={inputRef}
@@ -469,62 +540,6 @@ export function Composer({
           aria-label="Direct Claude Code"
           data-testid="composer-input"
         />
-        {/* What the next direction will carry (D-150). Above the words, where
-            the reading order matches the sending order, and each image says
-            its own name rather than showing a thumbnail the box has no room
-            for. */}
-        {attachments.length > 0 && (
-          <div className="composer-attachments" data-testid="composer-attachments">
-            {attachments.map((image) => (
-              <span className="composer-attachment" key={image.artifactId}>
-                {image.form === "image" ? (
-                  <ImageGlyph className="composer-attachment-glyph" />
-                ) : (
-                  <DocumentGlyph className="composer-attachment-glyph" />
-                )}
-                <span className="composer-attachment-name">{image.label}</span>
-                {/* Both are stated rather than hidden (D-151): a person should
-                    know their photo was converted or scaled, not find out. */}
-                {image.convertedFrom !== null && (
-                  <span
-                    className="composer-attachment-note"
-                    title={`Converted from ${image.convertedFrom} — the agent cannot read that format`}
-                  >
-                    from {image.convertedFrom}
-                  </span>
-                )}
-                {image.resized && (
-                  <span className="composer-attachment-note" title="Scaled down before sending">
-                    resized
-                  </span>
-                )}
-                {/* A staged file is a different promise from an inlined one:
-                    the agent has to open it, so the interface says so rather
-                    than implying it was read (D-153). */}
-                {image.form === "file" && (
-                  <span
-                    className="composer-attachment-note"
-                    title="Placed in the workspace — the agent opens it with its own tools"
-                  >
-                    in workspace
-                  </span>
-                )}
-                <button
-                  className="composer-attachment-remove"
-                  aria-label={`Remove ${image.label}`}
-                  disabled={sending}
-                  onClick={() =>
-                    setAttachments((held) =>
-                      held.filter((candidate) => candidate.artifactId !== image.artifactId)
-                    )
-                  }
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
         <div className="composer-foot" ref={footRef}>
           {attach && (
             <button

@@ -327,8 +327,11 @@ describe("shared sessions inside one approach", () => {
     await expect.poll(() => rows.count(), { timeout: 30_000 }).toBe(2);
     expect(await rows.nth(0).innerText()).toContain("write the guard file");
     expect(await rows.nth(1).innerText()).toContain("add the tests");
-    // The composer names its target in words, on screen.
-    expect(await page.getByTestId("composer").innerText()).toContain("add the tests");
+    // The selected tab names the conversation the words go to (D-176: the
+    // composer's own target eyebrow is retired; the tab is the name).
+    expect(
+      await page.locator('[data-testid="session-tab"].active').innerText()
+    ).toContain("add the tests");
 
     // The words landed in the session on screen — row, execution, and nothing
     // in the sibling (the composer never silently routes to the first).
@@ -469,7 +472,9 @@ describe("shared sessions inside one approach", () => {
     await expect
       .poll(() => page.getByTestId("rail-session-row").count(), { timeout: 30_000 })
       .toBe(2);
-    expect(await page.getByTestId("composer").innerText()).toContain("add the tests");
+    expect(
+      await page.locator('[data-testid="session-tab"].active').innerText()
+    ).toContain("add the tests");
     expect(await page.getByTestId("chat").innerText()).toContain("add the tests for the guard");
     await shot("96-reload-restores-the-session.png");
 
@@ -541,7 +546,14 @@ describe("shared sessions inside one approach", () => {
       (session) => session.title === "write the guard file"
     )!;
     expect(sourceSession).toBeDefined();
-    await page.getByTestId(`continue-from-${sourceSession.sessionId}`).check();
+    const pill = page.getByTestId(`continue-from-${sourceSession.sessionId}`);
+    await pill.click();
+    // Picking a pill presses it and puts a chip in the composer (D-175):
+    // the box shows everything the send will carry.
+    expect(await pill.getAttribute("aria-pressed")).toBe("true");
+    expect(await page.getByTestId("composer-transcript").innerText()).toContain(
+      "write the guard file"
+    );
     await shot("202-continue-from-draft.png");
     await compose("review what the first chat built");
 

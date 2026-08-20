@@ -61,14 +61,14 @@ function labelFor(filename: string): string {
 export async function attachmentsForDirections(
   db: Queryable,
   directionIds: string[]
-): Promise<Map<string, { artifactId: string; mimeType: string; byteSize: number; label: string; state: string }[]>> {
+): Promise<Map<string, { artifactId: string; kind: string; mimeType: string; byteSize: number; label: string; state: string }[]>> {
   const byDirection = new Map<
     string,
-    { artifactId: string; mimeType: string; byteSize: number; label: string; state: string }[]
+    { artifactId: string; kind: string; mimeType: string; byteSize: number; label: string; state: string }[]
   >();
   if (directionIds.length === 0) return byDirection;
   const result = await db.query(
-    `select da.dir_id, a.art_id, a.mime_type, a.byte_size, a.label, a.state
+    `select da.dir_id, a.art_id, a.kind, a.mime_type, a.byte_size, a.label, a.state
        from direction_attachments da
        join artifacts a on a.art_id = da.art_id
       where da.dir_id = any($1::text[])
@@ -78,6 +78,7 @@ export async function attachmentsForDirections(
   for (const row of result.rows as {
     dir_id: string;
     art_id: string;
+    kind: string;
     mime_type: string;
     byte_size: number;
     label: string;
@@ -86,6 +87,7 @@ export async function attachmentsForDirections(
     const list = byDirection.get(row.dir_id) ?? [];
     list.push({
       artifactId: row.art_id,
+      kind: row.kind,
       mimeType: row.mime_type,
       byteSize: Number(row.byte_size),
       label: row.label,

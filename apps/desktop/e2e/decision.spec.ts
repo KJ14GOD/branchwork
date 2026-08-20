@@ -334,10 +334,11 @@ describe("competing approaches, compared and decided", () => {
 
     // --- The approach runs, in its own worktree -----------------------------
     // Directed through the real composer while the Alternative is the active
-    // lane: the composer names its target, and the direction lands in the
-    // lane on screen rather than the mission's first (D-080). A different
-    // direction body, so the two lanes genuinely diverge.
-    expect(await page.getByTestId("composer").innerText()).toContain("Directing Alternative");
+    // lane: the rail names the lane (D-126; the composer's target eyebrow is
+    // retired, D-176), and the direction lands in the lane on screen rather
+    // than the mission's first (D-080). A different direction body, so the
+    // two lanes genuinely diverge.
+    expect(await page.getByTestId("lane-context").innerText()).toContain("Alternative");
     await page.getByTestId("composer-input").fill("write the fake turn file, the middleware way");
     await page.getByTestId("send").click();
     await until(
@@ -552,12 +553,9 @@ describe("competing approaches, compared and decided", () => {
     await expect
       .poll(() => page.getByTestId("lane-context").innerText(), { timeout: 30_000 })
       .toContain("Alternative");
-    // Polled: the rail names the lane from the shell's own selection, while
-    // the composer's eyebrow follows the room's lane view a detail-poll tick
-    // later (D-126 moved lane-context to the rail). Same end state required.
-    await expect
-      .poll(() => page.getByTestId("composer").innerText(), { timeout: 20_000 })
-      .toContain("Directing Alternative");
+    // The rail names the lane from the shell's own selection (D-126); the
+    // composer's target eyebrow is retired (D-176), so the rail's word and
+    // the state line below are the whole claim.
     const lineAfter = await page.getByTestId("state-line").innerText();
     expect(lineAfter).toContain("Decision recorded");
 
@@ -568,9 +566,6 @@ describe("competing approaches, compared and decided", () => {
     await expect
       .poll(async () => page.getByTestId("lane-context").innerText(), { timeout: 30_000 })
       .toContain("Current work");
-    await expect
-      .poll(() => page.getByTestId("composer").innerText(), { timeout: 20_000 })
-      .toContain("Directing Current work");
     // Both bright-path cases on the record (D-133): 89- holds the second
     // lane open; this one holds the first, captured after the canvas has
     // followed the rail.
