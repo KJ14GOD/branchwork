@@ -1082,7 +1082,7 @@ function interruptionReason(detail: MissionDetailResponse): string {
 }
 
 /**
- * The lane's last word about its own workspace (D-170), or null.
+ * The lane's last word about its own workspace (D-181), or null.
  *
  * Only `kept` is worth returning. `released` and `absent` are the workspace
  * being gone, which is what ending a mission is supposed to do and needs no

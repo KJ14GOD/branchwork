@@ -950,7 +950,7 @@ describe("the lane's MCP servers surface (D-119)", () => {
 });
 
 /**
- * A workspace this machine kept rather than removed (D-170).
+ * A workspace this machine kept rather than removed (D-181).
  *
  * The release refuses to delete uncommitted work, which is right — and until
  * this existed the refusal lived only in the event log, so a person closed a

@@ -6679,7 +6679,7 @@ body.resizing {
   gap: var(--s-1);
 }
 
-/* The path to a workspace this machine kept (D-170). A text action on the
+/* The path to a workspace this machine kept (D-181). A text action on the
    sentence, not a button beside it: the fact is the subject and the way to go
    look at it is a word. */
 .kv-action {

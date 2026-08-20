@@ -1232,7 +1232,7 @@ export function Inspector({
                     </span>
 
                     {/* A workspace this machine kept rather than removed
-                        (D-170). The release refuses to delete uncommitted work,
+                        (D-181). The release refuses to delete uncommitted work,
                         which is right — but a protection nobody is told about
                         is half a protection, and until now this fact lived only
                         in the event log. */}

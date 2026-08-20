@@ -2516,7 +2516,9 @@ A fourth thing turned out not to be a product bug at all: the D-168 e2e assertio
 
 **Revisit when.** The list read itself becomes the cost (hundreds of missions — then the stream wants to carry a projection-grade summary row, and the address-only invariant needs a deliberate amendment, not an erosion); or a second window per machine wants the main process to multiplex one connection to many renderers.
 
-## D-170 — A workspace the machine kept says so, where a person is already looking
+## D-181 — A workspace the machine kept says so, where a person is already looking
+
+*(Written as D-170 in the same hour another session's D-170 already stood on main — the fourth number race; renumbered per the standing convention: the later claim renumbers.)*
 
 **Context.** D-155 gave a closed mission's workspace back, and refused to remove one still holding uncommitted work — the lane is kept, the count reported, nothing deleted. That refusal is the right behaviour and it was recorded as its own honest gap in the same change: the reason went into the event log and **no surface rendered it**. So a person closed a mission, saw nothing unusual, and had no way to learn that their unsaved files were still sitting in a folder. A protection nobody is told about is half a protection.
 
