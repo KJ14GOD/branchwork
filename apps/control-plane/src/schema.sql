@@ -1095,3 +1095,10 @@ create table if not exists extension_label_assignments (
 );
 create index if not exists extension_label_assignments_by_scope
   on extension_label_assignments (org_id, source, scope_key);
+
+-- Machine MCP servers (D-198): the runner machine's own user-level servers,
+-- published as redacted reviewable summaries (env names, never values) and
+-- enabled only by a caller who is BOTH the machine's owner and holds
+-- `mcp.set` — their machine, and new tool surface, on one signature.
+alter table workspaces add column if not exists declared_machine_mcp jsonb not null default '[]'::jsonb;
+alter table workstreams add column if not exists enabled_machine_mcp jsonb not null default '[]'::jsonb;

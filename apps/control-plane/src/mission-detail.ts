@@ -1,6 +1,7 @@
 import {
   DeclaredCommandSchema,
   GlobalSlashCommandsSchema,
+  MachineMcpServerSchema,
   McpServerSchema,
   ProjectSkillSchema,
   ReceiptSnapshotSchema
@@ -340,7 +341,11 @@ export async function workspaceOf(db: Queryable, workstreamId: string | null): P
       row.declared_global_commands ?? []
     ),
     // And the MCP server manifest (D-119), same posture.
-    mcpServers: McpServerSchema.array().catch([]).parse(row.declared_mcp ?? [])
+    mcpServers: McpServerSchema.array().catch([]).parse(row.declared_mcp ?? []),
+    // The machine's own user-level servers (D-198), redacted for review.
+    machineMcpServers: MachineMcpServerSchema.array()
+      .catch([])
+      .parse(row.declared_machine_mcp ?? [])
   };
 }
 

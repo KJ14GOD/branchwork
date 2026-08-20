@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ResolvedMachineMcp } from "./machine-mcp";
 import { mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import {
@@ -38,6 +39,9 @@ export interface ComposedMcp {
   file: string | null;
   carried: string[];
   dropped: { name: string; reason: string }[];
+  /** The machine's own servers this turn carries and could not (D-198). */
+  machineCarried: string[];
+  machineDropped: { name: string; reason: string }[];
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -177,9 +181,12 @@ export function composeMcpConfig(
   worktreePath: string,
   enabled: readonly EnabledMcpServer[],
   configPath: string,
-  firstParty: FirstPartyEndpoint | null = null
+  firstParty: FirstPartyEndpoint | null = null,
+  machine: ResolvedMachineMcp = { carried: [], dropped: [] }
 ): ComposedMcp {
-  if (enabled.length === 0 && firstParty === null) return { file: null, carried: [], dropped: [] };
+  if (enabled.length === 0 && firstParty === null && machine.carried.length === 0) {
+    return { file: null, carried: [], dropped: [], machineCarried: [], machineDropped: machine.dropped };
+  }
   const declared = readDeclarations(worktreePath);
   const carried: McpServer[] = [];
   const dropped: { name: string; reason: string }[] = [];
@@ -204,11 +211,28 @@ export function composeMcpConfig(
     }
     carried.push(server);
   }
-  if (carried.length === 0 && firstParty === null) return { file: null, carried: [], dropped };
+  if (carried.length === 0 && firstParty === null && machine.carried.length === 0) {
+    return { file: null, carried: [], dropped, machineCarried: [], machineDropped: machine.dropped };
+  }
 
   const servers: Record<string, Record<string, unknown>> = Object.fromEntries(
     carried.map((server) => [server.name, cliEntry(server)])
   );
+  // The machine's own enabled servers (D-198) join the same strict config —
+  // resolved from the machine's own file by machine-mcp.ts, values never
+  // having crossed the wire. A name the project already holds is the
+  // project's: the reviewed repo declaration wins, and the collision is a
+  // stated drop rather than a silent shadowing.
+  const machineCarried: string[] = [];
+  const machineDropped = [...machine.dropped];
+  for (const { name, entry } of machine.carried) {
+    if (servers[name] !== undefined || name === "novus") {
+      machineDropped.push({ name, reason: "a project server already uses this name" });
+      continue;
+    }
+    servers[name] = entry;
+    machineCarried.push(name);
+  }
   if (firstParty !== null) {
     // The name is reserved at discovery, so nothing person-enabled can be
     // standing here under it.
@@ -220,7 +244,13 @@ export function composeMcpConfig(
   }
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify({ mcpServers: servers }, null, 2), { mode: 0o600 });
-  return { file: configPath, carried: carried.map((server) => server.name), dropped };
+  return {
+    file: configPath,
+    carried: carried.map((server) => server.name),
+    dropped,
+    machineCarried,
+    machineDropped
+  };
 }
 
 /** Removes a turn's composed config; staging outlives nothing. */

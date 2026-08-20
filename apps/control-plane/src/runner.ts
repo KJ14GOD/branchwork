@@ -188,7 +188,10 @@ function eventPayload(event: RunnerEvent): Record<string, unknown> {
       ),
       // Names only (D-188): the CLI's own list carries no bytes to pin.
       globalSlashCommands: event.payload.globalSlashCommands,
-      mcpServers: event.payload.mcpServers.map((server) => `${server.name}@${server.digest.slice(0, 12)}`)
+      mcpServers: event.payload.mcpServers.map((server) => `${server.name}@${server.digest.slice(0, 12)}`),
+      machineMcpServers: event.payload.machineMcpServers.map(
+        (server) => `${server.name}@${server.digest.slice(0, 12)}`
+      )
     };
   }
   if (event.kind !== "workspace.checkpoint") return { ...event.payload };
@@ -424,6 +427,7 @@ async function applyWorkspaceSideEffects(
         `update workspaces set declared = $2::jsonb, declared_skills = $3::jsonb,
                 declared_mcp = $4::jsonb, declared_global_skills = $5::jsonb,
                 declared_slash_commands = $6::jsonb, declared_global_commands = $7::jsonb,
+                declared_machine_mcp = $8::jsonb,
                 declared_at = now(), updated_at = now()
           where wsp_id = $1`,
         [
@@ -433,7 +437,8 @@ async function applyWorkspaceSideEffects(
           JSON.stringify(event.payload.mcpServers),
           JSON.stringify(event.payload.globalSkills),
           JSON.stringify(event.payload.slashCommands),
-          JSON.stringify(event.payload.globalSlashCommands)
+          JSON.stringify(event.payload.globalSlashCommands),
+          JSON.stringify(event.payload.machineMcpServers)
         ]
       );
       return true;

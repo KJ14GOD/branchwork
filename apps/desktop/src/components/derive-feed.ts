@@ -653,6 +653,34 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
             tone: "warn"
           });
         }
+        // The machine's own servers (D-198), named apart: whose machine a
+        // tool acts as is the fact a reader most needs.
+        const machineCarried = namesOf(event.payload.machineMcpServers);
+        if (machineCarried.length > 0) {
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-machine-mcp`,
+            text: `Machine MCP servers carried: ${machineCarried.join(", ")}`,
+            login: null,
+            tone: "neutral"
+          });
+        }
+        const machineDropped = Array.isArray(event.payload.machineMcpServersDropped)
+          ? event.payload.machineMcpServersDropped
+          : [];
+        for (const drop of machineDropped) {
+          const name = text((drop as { name?: unknown }).name);
+          if (!name) continue;
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-machine-mcp-drop-${name}`,
+            text: `Machine MCP server not carried — "${name}": ${
+              text((drop as { reason?: unknown }).reason) ?? "the reason was not stated"
+            }`,
+            login: null,
+            tone: "warn"
+          });
+        }
         break;
       }
       case "harness.session": {

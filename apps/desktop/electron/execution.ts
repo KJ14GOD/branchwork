@@ -10,12 +10,14 @@ import {
   ModelIdSchema,
   pathInScope,
   type ApprovalDecision,
+  type EnabledMachineMcpServer,
   type EnabledMcpServer,
   type PermissionProfile,
   type RunnerEvent
 } from "@novus/contracts";
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
 import { composeSkillsPlugin, removeComposedSkills, type ComposedSkills } from "./skills";
+import { resolveMachineMcp } from "./machine-mcp";
 import { composeMcpConfig, removeComposedMcp, type ComposedMcp } from "./mcp";
 import { HarnessStream, type HarnessApprovalRequest, type HarnessControlMessage } from "./harness-stream";
 import { harnessEnv } from "./workspace-env";
@@ -332,6 +334,9 @@ export interface TurnRequest {
    *  the same digest rule. Absent or empty means no `--mcp-config` at all —
    *  unless `novusCapture` is present, which always composes a config. */
   mcpServers?: readonly EnabledMcpServer[] | null;
+  /** The machine's own servers the owner enabled (D-198), pinned at dispatch;
+   *  resolved from this machine's own file, values never having travelled. */
+  machineMcpServers?: readonly EnabledMachineMcpServer[] | null;
   /** Novus's own capture endpoint for this turn (D-123): composed into the
    *  strict config as the `novus` server so the agent can *ask* for a
    *  screenshot. Asking is all it grants — the tool call routes through this
@@ -848,7 +853,8 @@ export function startTurn(request: TurnRequest): RunningTurn {
       worktreePath,
       request.mcpServers ?? [],
       join(request.worktreeRoot, ".mcp-staging", `${request.executionId}.json`),
-      readOnly ? null : request.novusCapture ?? null
+      readOnly ? null : request.novusCapture ?? null,
+      resolveMachineMcp(request.machineMcpServers ?? [])
     );
     emit({
       kind: "execution.running",
@@ -864,7 +870,9 @@ export function startTurn(request: TurnRequest): RunningTurn {
         globalSkills: composedSkills.carriedGlobals,
         globalSkillsDropped: composedSkills.droppedGlobals,
         mcpServers: composedMcp.carried,
-        mcpServersDropped: composedMcp.dropped
+        mcpServersDropped: composedMcp.dropped,
+        machineMcpServers: composedMcp.machineCarried,
+        machineMcpServersDropped: composedMcp.machineDropped
       }
     });
 

@@ -111,6 +111,8 @@ const novus: NovusBridge = {
     setEnabledGlobalSkills: (input) =>
       ipcRenderer.invoke("novus:missions:set-enabled-global-skills", input),
     setEnabledMcpServers: (input) => ipcRenderer.invoke("novus:missions:set-enabled-mcp", input),
+    setEnabledMachineMcpServers: (input) =>
+      ipcRenderer.invoke("novus:missions:set-enabled-machine-mcp", input),
     createExtensionLabel: (input) => ipcRenderer.invoke("novus:labels:create", input),
     updateExtensionLabel: (input) => ipcRenderer.invoke("novus:labels:update", input),
     deleteExtensionLabel: (input) => ipcRenderer.invoke("novus:labels:delete", input),

@@ -120,7 +120,13 @@ describe("composing a turn's strict config", () => {
   });
 
   it("composes nothing when nothing was enabled or everything dropped, and removal is quiet", () => {
-    expect(composeMcpConfig(worktree, [], config)).toEqual({ file: null, carried: [], dropped: [] });
+    expect(composeMcpConfig(worktree, [], config)).toEqual({
+      file: null,
+      carried: [],
+      dropped: [],
+      machineCarried: [],
+      machineDropped: []
+    });
     declare({ docs: { command: "node new.js" } });
     const allDropped = composeMcpConfig(worktree, [{ name: "docs", digest: "0".repeat(64) }], config);
     expect(allDropped.file).toBeNull();

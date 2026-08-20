@@ -11,10 +11,12 @@ import {
   DeclaredCommandSchema,
   DirectionContextRefSchema,
   type DirectionContextRef,
+  EnabledMachineMcpServersSchema,
   EnabledMcpServersSchema,
   PermissionProfileSchema,
   RunnerCommandsResponseSchema,
   type Artifact,
+  type EnabledMachineMcpServer,
   type EnabledMcpServer,
   type MissionDetailResponse,
   type PermissionProfile,
@@ -330,6 +332,8 @@ const StartPayloadSchema = z.object({
   permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE),
   /** The enabled MCP servers (D-119), same rule. */
   mcpServers: EnabledMcpServersSchema.default([]),
+  /** The machine's own enabled servers (D-198), same rule. */
+  machineMcpServers: EnabledMachineMcpServersSchema.default([]),
   /** Images the person attached to this direction (D-150), by address. The
    *  bytes are fetched here, under this machine's own runner credential, and
    *  handed to the harness in the turn's first message. Defaulted empty so a
@@ -1786,6 +1790,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       scope: payload.data.scope,
       permissionProfile: payload.data.permissionProfile,
       mcpServers: payload.data.mcpServers,
+      machineMcpServers: payload.data.machineMcpServers,
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });
@@ -1871,6 +1876,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     permissionProfile: PermissionProfile;
     /** The enabled MCP servers, pinned at dispatch (D-119). */
     mcpServers: EnabledMcpServer[];
+    /** The machine's own enabled servers, pinned at dispatch (D-198). */
+    machineMcpServers: EnabledMachineMcpServer[];
     announceStart: boolean;
     pendingApplies: () => Promise<boolean>;
   }
@@ -2084,6 +2091,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         }
       },
       mcpServers: args.mcpServers,
+      machineMcpServers: args.machineMcpServers,
       novusCapture,
       onToolAllowed: (toolName) => {
         if (toolName === CAPTURE_TOOL_FULL_NAME) mintToolGrant(args.executionId, CAPTURE_TOOL_NAME);

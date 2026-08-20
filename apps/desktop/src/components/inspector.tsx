@@ -18,7 +18,9 @@ import {
   changedFiles,
   checkTallies,
   laneSessions,
+  machineMcpRows,
   mcpRows,
+  nextEnabledMachineMcp,
   nextEnabledMcp,
   nextEnabledSkills,
   keptWorkspace,
@@ -533,6 +535,7 @@ function ExtensionsSection({
       <SkillsSection detail={detail} onChanged={onChanged} />
       <SlashCommandsSection detail={detail} onChanged={onChanged} />
       <McpServersSection detail={detail} />
+      <MachineMcpSection detail={detail} />
       {(globals.length > 0 || globalCommands.length > 0) && (
         <div data-testid="extensions-machine">
           <ExtensionGroup
@@ -899,6 +902,112 @@ function ManifestRow({
         >
           {action}
         </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The machine's own MCP servers (D-198): published as redacted summaries —
+ * env variable names, never values — and enabled only by a caller who is both
+ * the machine's owner and holds `mcp.set`. The consequence is confirmed in a
+ * sentence and recorded verbatim (the D-100 pattern), because once one is on,
+ * anyone directing the lane can ask it to act.
+ */
+const MACHINE_MCP_WARNING = (name: string, machine: string): string =>
+  `"${name}" runs as ${machine} with its own credentials. While it is on, anyone directing this lane can ask it to act, and its calls are answered under the lane's permissions.`;
+
+function MachineMcpSection({ detail }: { detail: MissionDetailResponse }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const rows = machineMcpRows(detail);
+  if (rows.length === 0) return null;
+
+  const machineLabel = detail.runner?.label ?? "the runner machine";
+  const viewerLogin = detail.participants.find(
+    (participant) => participant.userId === detail.viewerUserId
+  )?.login;
+  const isOwner = detail.runner !== null && detail.runner.ownerLogin === viewerLogin;
+  const hasTier = detail.capabilities.includes("mcp.set");
+  const maySet = isOwner && hasTier;
+  const deniedTitle = !isOwner
+    ? `These are ${machineLabel}'s own. Only the machine's owner may put them into a lane.`
+    : "Enabling a machine server needs mcp.set (Mission Admin).";
+
+  const submit = async (servers: { name: string; digest: string }[], acknowledged: string) => {
+    if (!detail.workstream) return;
+    setBusy(true);
+    setError(null);
+    const result = await novus().missions.setEnabledMachineMcpServers({
+      missionId: detail.mission.missionId,
+      workstreamId: detail.workstream.workstreamId,
+      servers,
+      acknowledged
+    });
+    setBusy(false);
+    if (!result.ok) setError(result.message);
+  };
+
+  const act = async (choice: { enable: string } | { disable: string }) => {
+    // Disabling narrows and needs no ceremony; enabling states its
+    // consequence first, and the sentence confirmed is what is recorded.
+    if ("enable" in choice) {
+      setConfirming(choice.enable);
+      return;
+    }
+    await submit(nextEnabledMachineMcp(detail, choice), "disabled");
+  };
+
+  return (
+    <div data-testid="inspector-machine-mcp">
+      <ExtensionGroup id="machine-mcp" name="Global MCP servers" origin="machine" count={rows.length}>
+        <ManifestRows
+          rows={rows}
+          maySet={maySet}
+          busy={busy}
+          onAct={act}
+          deniedTitle={deniedTitle}
+          testid="machine-mcp"
+          openByDefault
+        />
+        {error && (
+          <p className="skill-error tone-danger" role="alert" data-testid="machine-mcp-error">
+            {error}
+          </p>
+        )}
+        <p className="skill-foot">
+          {machineLabel}'s own, from its user-level config. Secret values never leave that machine
+          — reviews carry variable names only. claude.ai connectors are the harness's
+          account state, not a file, and cannot be carried.
+        </p>
+      </ExtensionGroup>
+      {confirming !== null && (
+        <Dialog onClose={() => setConfirming(null)} label="Enable a machine server">
+          <div className="machine-mcp-confirm" data-testid="machine-mcp-confirm">
+            <p className="skill-foot">{MACHINE_MCP_WARNING(confirming, machineLabel)}</p>
+            <div className="dialog-actions">
+              <button className="btn" onClick={() => setConfirming(null)} data-testid="machine-mcp-cancel">
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                disabled={busy}
+                onClick={() => {
+                  const name = confirming;
+                  setConfirming(null);
+                  void submit(
+                    nextEnabledMachineMcp(detail, { enable: name }),
+                    MACHINE_MCP_WARNING(name, machineLabel)
+                  );
+                }}
+                data-testid="machine-mcp-accept"
+              >
+                Enable, accepting this
+              </button>
+            </div>
+          </div>
+        </Dialog>
       )}
     </div>
   );

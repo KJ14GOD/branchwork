@@ -335,3 +335,109 @@ describe("project MCP servers (D-119)", () => {
   });
 });
 
+
+describe("machine MCP servers (D-198)", () => {
+  const MACHINE_SERVER = {
+    name: "linear",
+    transport: "stdio" as const,
+    command: "npx",
+    args: ["-y", "linear-mcp", "--api-key", "•••"],
+    envNames: ["LINEAR_TOKEN"],
+    url: null,
+    digest: sha256("machine-linear-declaration")
+  };
+  const ACK = "linear runs as kartik-macbook with its own credentials.";
+
+  async function publishMachine(lane: Lane, servers: unknown[]) {
+    const response = await harness.app.inject({
+      method: "POST",
+      url: "/runner/events",
+      headers: runnerAuth(lane.credential),
+      payload: {
+        executionId: null,
+        events: [
+          {
+            originSeq: (seq += 1),
+            event: {
+              kind: "workspace.declared",
+              payload: { commands: [], machineMcpServers: servers }
+            }
+          }
+        ]
+      }
+    });
+    expect(response.statusCode).toBe(200);
+  }
+
+  async function setMachine(
+    lane: Lane,
+    servers: { name: string; digest: string }[],
+    as: SignedIn = kartik,
+    acknowledged: string = ACK
+  ) {
+    return harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/workstreams/${lane.workstreamId}/machine-mcp`,
+      headers: bearer(as),
+      payload: { servers, acknowledged }
+    });
+  }
+
+  it("takes both keys on one caller: the machine's owner who holds mcp.set — and nobody else", async () => {
+    const lane = await mission();
+    await publishMachine(lane, [MACHINE_SERVER]);
+    const entry = [{ name: MACHINE_SERVER.name, digest: MACHINE_SERVER.digest }];
+
+    // A Mission Admin who does NOT own the machine: refused, with whose
+    // machine it is in the words. (kartik enrolled the runner in mission().)
+    const admin = await joinAs(lane.missionId, "admin-machine", "mission_admin");
+    const notOwner = await setMachine(lane, entry, admin);
+    expect(notOwner.statusCode).toBe(403);
+    expect(notOwner.json().error.message).toContain("machine's owner");
+
+    // The owner without the tier: refused by capability. An operator holds
+    // skills.set but not mcp.set — but the owner here is kartik, who is the
+    // admin, so the tier half is exercised through the operator below.
+    const operator = await joinAs(lane.missionId, "op-machine", "operator");
+    expect((await setMachine(lane, entry, operator)).statusCode).toBe(403);
+
+    // Both keys on one caller: enabled, and the acknowledgement is on the
+    // record verbatim with both sets.
+    expect((await setMachine(lane, entry)).statusCode).toBe(200);
+    expect((await detailOf(lane)).workstream.enabledMachineMcpServers).toEqual(entry);
+    const events = await eventsOf(lane, "machine-mcp.changed");
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload).toMatchObject({ from: [], to: entry, acknowledged: ACK });
+  });
+
+  it("refuses a stale digest and an unpublished server, in words", async () => {
+    const lane = await mission();
+    await publishMachine(lane, [MACHINE_SERVER]);
+    const unknown = await setMachine(lane, [{ name: "ghost", digest: MACHINE_SERVER.digest }]);
+    expect(unknown.statusCode).toBe(409);
+    expect(unknown.json().error.message).toContain("not among the servers this machine published");
+    const stale = await setMachine(lane, [{ name: "linear", digest: sha256("older-bytes") }]);
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().error.message).toContain("changed since it was reviewed");
+  });
+
+  it("pins the enabled set into the turn, and the wire never carried a value", async () => {
+    const lane = await mission();
+    await publishMachine(lane, [MACHINE_SERVER]);
+    const entry = [{ name: MACHINE_SERVER.name, digest: MACHINE_SERVER.digest }];
+    expect((await setMachine(lane, entry)).statusCode).toBe(200);
+    expect((await direct(lane, "use linear")).statusCode).toBe(200);
+    const detail = await detailOf(lane);
+    const command = await harness.db.query(
+      "select payload from runner_commands where exe_id = $1 and kind = 'start_execution'",
+      [detail.executions[0].executionId]
+    );
+    expect((command.rows[0].payload as { machineMcpServers?: unknown }).machineMcpServers).toEqual(entry);
+    // The stored manifest is the redacted projection: names, mask, no values.
+    const stored = await harness.db.query(
+      "select declared_machine_mcp from workspaces where wst_id = $1",
+      [lane.workstreamId]
+    );
+    expect(JSON.stringify(stored.rows[0].declared_machine_mcp)).not.toContain("LINEAR_TOKEN=");
+  });
+});

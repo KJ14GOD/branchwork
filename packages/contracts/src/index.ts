@@ -439,6 +439,75 @@ export type EnabledMcpServer = z.infer<typeof EnabledMcpServerSchema>;
 
 export const EnabledMcpServersSchema = z.array(EnabledMcpServerSchema).max(MAX_MCP_SERVERS);
 
+// --- Machine MCP servers (D-198) ---------------------------------------------
+// The runner machine's own user-level servers (`claude mcp add -s user`),
+// D-186's road at D-119's tier — with one more key. A machine server is the
+// owner's process and often the owner's credential, so enabling one takes
+// BOTH facts on one caller: `mcp.set` (it is new tool surface for the
+// mission) AND being the machine's owner (it is their machine). A Mission
+// Admin cannot switch on somebody else's Gmail; an owner without the tier
+// cannot widen the mission alone.
+//
+// What the wire carries is reviewable and never secret: the command line
+// (secretish flag values masked), the url, and env variable NAMES — never
+// values. The digest is computed on the machine over the full local
+// declaration; at spawn the runner re-reads its own file, verifies, and
+// writes the real values into the composed config locally, so a secret
+// never crosses the wire in either direction (D-041).
+
+export const MAX_MACHINE_MCP_SERVERS = 24;
+
+/** A user-level server's name is the person's own choice, so it is laxer
+ *  than a project name — but never path-shaped, never control characters,
+ *  and never the reserved first-party name. */
+export const MachineMcpNameSchema = z
+  .string()
+  .min(1)
+  .max(80)
+  .regex(/^[^\/\\\u0000-\u001f]+$/, "a server name carries no separators or control characters")
+  .refine((name) => !name.startsWith(".") && name !== "novus", {
+    message: "that name is reserved"
+  });
+
+export const MachineMcpServerSchema = z
+  .object({
+    name: MachineMcpNameSchema,
+    transport: z.enum(["stdio", "http", "sse"]),
+    command: z.string().max(400).nullable().default(null),
+    args: z.array(z.string().max(400)).max(20).default([]),
+    /** Names only (D-041): which variables the server needs is reviewable;
+     *  what they contain never leaves the machine. */
+    envNames: z.array(z.string().min(1).max(80)).max(10).default([]),
+    url: z.string().max(400).nullable().default(null),
+    digest: z.string().regex(/^[0-9a-f]{64}$/)
+  })
+  .strict()
+  .superRefine((server, ctx) => {
+    if (server.transport === "stdio") {
+      if (server.command === null || server.url !== null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "a stdio server names a command and no url" });
+      }
+      return;
+    }
+    if (server.url === null || server.command !== null || !validMcpUrl(server.url)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "a remote server names an https url (http only on loopback), with no credentials in the authority"
+      });
+    }
+  });
+export type MachineMcpServer = z.infer<typeof MachineMcpServerSchema>;
+
+export const EnabledMachineMcpServerSchema = z.object({
+  name: MachineMcpNameSchema,
+  digest: z.string().regex(/^[0-9a-f]{64}$/)
+});
+export type EnabledMachineMcpServer = z.infer<typeof EnabledMachineMcpServerSchema>;
+export const EnabledMachineMcpServersSchema = z
+  .array(EnabledMachineMcpServerSchema)
+  .max(MAX_MACHINE_MCP_SERVERS);
+
 export const WorkstreamSchema = z.object({
   workstreamId: z.string().startsWith("wst_"),
   missionId: z.string().startsWith("msn_"),
@@ -478,7 +547,10 @@ export const WorkstreamSchema = z.object({
   enabledGlobalSkills: EnabledGlobalSkillsSchema.default([]),
   /** The project MCP servers a person enabled on this lane (D-119), pinned
    *  the same way. Defaulted empty, and a fork starts empty. */
-  enabledMcpServers: EnabledMcpServersSchema.default([])
+  enabledMcpServers: EnabledMcpServersSchema.default([]),
+  /** The machine servers the machine's own admin-holding owner enabled
+   *  (D-198). Defaulted empty, and a fork starts empty. */
+  enabledMachineMcpServers: EnabledMachineMcpServersSchema.default([])
 });
 export type Workstream = z.infer<typeof WorkstreamSchema>;
 
@@ -2346,7 +2418,10 @@ export const WorkspaceSchema = z.object({
   globalSlashCommands: GlobalSlashCommandsSchema.default([]),
   /** The project's MCP servers, as the runner last read `.mcp.json` (D-119) —
    *  the same review-then-enable manifest, one tier up. */
-  mcpServers: z.array(McpServerSchema).max(MAX_MCP_SERVERS).default([])
+  mcpServers: z.array(McpServerSchema).max(MAX_MCP_SERVERS).default([]),
+  /** The machine's own user-level servers (D-198): reviewable summaries,
+   *  values redacted, enable gated on owner-and-admin in one caller. */
+  machineMcpServers: z.array(MachineMcpServerSchema).max(MAX_MACHINE_MCP_SERVERS).default([])
 });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 
@@ -2993,6 +3068,13 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         mcpServersDropped: z
           .array(z.object({ name: SkillNameSchema, reason: BOUNDED_LINE }).strict())
           .max(MAX_MCP_SERVERS)
+          .default([]),
+        /** The machine's own servers this turn carried and could not (D-198),
+         *  named apart because whose machine they act as matters to a reader. */
+        machineMcpServers: z.array(MachineMcpNameSchema).max(MAX_MACHINE_MCP_SERVERS).default([]),
+        machineMcpServersDropped: z
+          .array(z.object({ name: MachineMcpNameSchema, reason: BOUNDED_LINE }).strict())
+          .max(MAX_MACHINE_MCP_SERVERS)
           .default([])
       })
       .strict()
@@ -3207,7 +3289,12 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
          *  themselves (D-188), same default rule. */
         globalSlashCommands: GlobalSlashCommandsSchema.default([]),
         /** And the worktree's own `.mcp.json` (D-119), same rule. */
-        mcpServers: z.array(McpServerSchema).max(MAX_MCP_SERVERS).default([])
+        mcpServers: z.array(McpServerSchema).max(MAX_MCP_SERVERS).default([]),
+        /** The machine's own user-level servers (D-198), same default rule. */
+        machineMcpServers: z
+          .array(MachineMcpServerSchema)
+          .max(MAX_MACHINE_MCP_SERVERS)
+          .default([])
       })
       .strict()
   }),
@@ -3868,6 +3955,15 @@ export interface NovusBridge {
       missionId: string;
       workstreamId: string;
       servers: EnabledMcpServer[];
+    }): Promise<IpcResult<null>>;
+    /** Sets the machine servers this lane carries (D-198). The server judges
+     *  both keys — `mcp.set` and machine ownership — and records the
+     *  acknowledged consequence verbatim (the D-100 pattern). */
+    setEnabledMachineMcpServers(input: {
+      missionId: string;
+      workstreamId: string;
+      servers: EnabledMachineMcpServer[];
+      acknowledged: string;
     }): Promise<IpcResult<null>>;
     cancelDirection(directionId: string): Promise<IpcResult<null>>;
     /** Stops the named lane's running turn. The lane travels on the wire so a

@@ -34,6 +34,7 @@ import {
   OpenWorkspaceInputSchema,
   OpenPreviewInputSchema,
   CloseMissionInputSchema,
+  EnabledMachineMcpServersSchema,
   EnabledMcpServersSchema,
   EXTENSION_LABEL_NAME_MAX,
   ExtensionLabelColorSchema,
@@ -1098,6 +1099,35 @@ function registerIpc(): void {
         parsed.data.missionId,
         parsed.data.workstreamId,
         parsed.data.skills
+      );
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:missions:set-enabled-machine-mcp", async (_event, raw: unknown) => {
+    // Asking is all this is (AGENTS.md rule 13): the server judges both keys
+    // — mcp.set and machine ownership — and records the acknowledgement.
+    const parsed = z
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        workstreamId: z.string().startsWith("wst_"),
+        servers: EnabledMachineMcpServersSchema,
+        acknowledged: z.string().min(1).max(400)
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "invalid_servers",
+        message: "That is not a set of machine servers Novus can enable."
+      };
+    }
+    return call(async () => {
+      await api.setEnabledMachineMcpServers(
+        parsed.data.missionId,
+        parsed.data.workstreamId,
+        parsed.data.servers,
+        parsed.data.acknowledged
       );
       return null;
     });

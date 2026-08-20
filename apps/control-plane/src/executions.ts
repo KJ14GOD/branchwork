@@ -5,6 +5,7 @@ import {
   DEFAULT_PERMISSION_PROFILE,
   DirectionInputSchema,
   DirectionResolutionSchema,
+  EnabledMachineMcpServersSchema,
   EnabledMcpServersSchema,
   ExecutionStateSchema,
   PermissionProfileSchema,
@@ -256,7 +257,7 @@ export async function dispatchDirection(
 
     const direction = await client.query(
       `select d.body, d.session_id, d.context, s.scope, w.permission_profile, w.enabled_skills,
-              w.enabled_mcp_servers from directions d
+              w.enabled_mcp_servers, w.enabled_machine_mcp from directions d
          join workstream_sessions s on s.csn_id = d.session_id
          join workstreams w on w.wst_id = d.wst_id
         where d.dir_id = $1 and d.wst_id = $2`,
@@ -271,6 +272,10 @@ export async function dispatchDirection(
     const permissionProfile = profileOf(direction.rows[0]?.permission_profile);
     // And the MCP servers (D-119), under exactly the same rule.
     const mcpServers = mcpOf(direction.rows[0]?.enabled_mcp_servers);
+    // And the machine's own servers (D-198), under exactly the same rule.
+    const machineMcpServers = EnabledMachineMcpServersSchema.catch([]).parse(
+      direction.rows[0]?.enabled_machine_mcp ?? []
+    );
     // The pinned references (D-182), stored validated at submit: files and
     // checks the person pointed this direction at, carried to the turn as
     // facts beside the words.
@@ -334,7 +339,8 @@ export async function dispatchDirection(
           permissionProfile,
           // And for the skills (D-118): the fresh process an after-end apply
           // spawns composes from this pinned set, never from the rows.
-          mcpServers
+          mcpServers,
+          machineMcpServers
         },
         idempotencyKey: `apply:${args.directionId}`
       }),
@@ -459,7 +465,10 @@ export async function dispatchDirection(
         permissionProfile,
         // And the MCP servers (D-119), composed into a strict config or
         // dropped by name under the same digest rule.
-        mcpServers
+        mcpServers,
+        // And the machine's own (D-198), merged into the same strict config
+        // from the machine's own file, values never having crossed the wire.
+        machineMcpServers
       },
       // Keyed on the *execution*, not the direction. A direction that failed
       // and is directed again is a new attempt and needs a new command; keyed

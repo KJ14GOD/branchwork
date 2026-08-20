@@ -3,6 +3,7 @@ import { basename, join, resolve as resolvePath, sep } from "node:path";
 import {
   MIN_SECRET_LENGTH,
   type DeclaredCommand,
+  type MachineMcpServer,
   type McpServer,
   type PreparedFile,
   type ProcessLog,
@@ -25,6 +26,7 @@ import { ATTACHMENT_DIR, isAttachmentPath } from "./secret-policy";
 import { declaredCommands, sameCommands, sameSkills } from "./workspace-commands";
 import { recallGlobalSlashCommands } from "./global-commands";
 import { discoverGlobalSkills, discoverProjectCommands, discoverProjectSkills } from "./skills";
+import { discoverMachineMcp } from "./machine-mcp";
 import { discoverProjectMcp } from "./mcp";
 import { loadWorkspaceSettings, WorkspaceConfigError, writeWorkspaceSettings } from "./workspace-config";
 import { prepareLocalFiles as copyLocalFiles } from "./workspace-files";
@@ -968,6 +970,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
       slashCommands: ProjectSkill[];
       globalSlashCommands: string[];
       mcp: McpServer[];
+      machineMcp: MachineMcpServer[];
     }
   >();
 
@@ -1045,8 +1048,19 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
     // can offer what genuinely works.
     const globalSlashCommands = recallGlobalSlashCommands(deps.host.userDataPath);
     const mcp = discoverProjectMcp(worktree);
+    // The machine's own user-level servers (D-198): reviewable summaries,
+    // values redacted at the source, published so the owner can admit one.
+    const machineMcp = discoverMachineMcp();
     const previous = published.get(workstreamId);
-    const snapshot = { commands, skills, globalSkills, slashCommands, globalSlashCommands, mcp };
+    const snapshot = {
+      commands,
+      skills,
+      globalSkills,
+      slashCommands,
+      globalSlashCommands,
+      mcp,
+      machineMcp
+    };
     if (
       previous === undefined &&
       commands.length === 0 &&
@@ -1054,7 +1068,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
       globalSkills.length === 0 &&
       slashCommands.length === 0 &&
       globalSlashCommands.length === 0 &&
-      mcp.length === 0
+      mcp.length === 0 &&
+      machineMcp.length === 0
     ) {
       published.set(workstreamId, snapshot);
       return;
@@ -1067,14 +1082,27 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps): WorkspaceRun
       sameSkills(previous.slashCommands, slashCommands) &&
       previous.globalSlashCommands.length === globalSlashCommands.length &&
       previous.globalSlashCommands.every((name, index) => name === globalSlashCommands[index]) &&
-      sameMcp(previous.mcp, mcp)
+      sameMcp(previous.mcp, mcp) &&
+      previous.machineMcp.length === machineMcp.length &&
+      previous.machineMcp.every(
+        (entry, index) =>
+          entry.name === machineMcp[index]?.name && entry.digest === machineMcp[index]?.digest
+      )
     ) {
       return;
     }
     published.set(workstreamId, snapshot);
     deps.emit(workstreamId, {
       kind: "workspace.declared",
-      payload: { commands, skills, globalSkills, slashCommands, globalSlashCommands, mcpServers: mcp }
+      payload: {
+        commands,
+        skills,
+        globalSkills,
+        slashCommands,
+        globalSlashCommands,
+        mcpServers: mcp,
+        machineMcpServers: machineMcp
+      }
     });
   }
 

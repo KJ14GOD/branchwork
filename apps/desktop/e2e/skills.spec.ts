@@ -135,6 +135,16 @@ beforeAll(async () => {
   // in for ~/.claude, so the published display list is deterministic rather
   // than whatever this developer machine happens to carry.
   const configDir = mkdtempSync(join(tmpdir(), "novus-skills-config-"));
+  // And one machine MCP server (D-198), in the CLI's own user config shape —
+  // with a secret value that must never reach the wire.
+  writeFileSync(
+    join(configDir, ".claude.json"),
+    JSON.stringify({
+      mcpServers: {
+        linear: { command: "node", args: ["linear-mcp.js"], env: { LINEAR_TOKEN: "tok_secret_e2e" } }
+      }
+    })
+  );
   mkdirSync(join(configDir, "skills", "unslop"), { recursive: true });
   writeFileSync(
     join(configDir, "skills", "unslop", "SKILL.md"),
@@ -278,6 +288,51 @@ describe("what a project declares is carried, and the record says which bytes (D
       const events = await db.query("select payload from events where kind = 'mcp.changed'");
       await db.end();
       expect(events.rowCount).toBe(1);
+    },
+    180_000
+  );
+
+  it(
+    "admits a machine server on two keys, with the consequence recorded and no value on the wire (D-198)",
+    async () => {
+      // Published as a redacted summary under the machine origin.
+      const row = page.getByTestId("machine-mcp-row").filter({ hasText: "linear" });
+      await row.waitFor({ timeout: 30_000 });
+      expect(await row.textContent()).toContain("runs node linear-mcp.js");
+      expect(await row.textContent()).toContain("needs LINEAR_TOKEN");
+      expect(await row.textContent()).not.toContain("tok_secret_e2e");
+
+      // Enabling states its consequence; accepting records that sentence.
+      await page.getByTestId("machine-mcp-action").filter({ hasText: "Enable" }).click();
+      await page.getByTestId("machine-mcp-confirm").waitFor({ timeout: 10_000 });
+      await page.screenshot({ path: join(evidenceDir, "213-machine-mcp-confirm.png") });
+      await page.getByTestId("machine-mcp-accept").click();
+      await page
+        .getByTestId("machine-mcp-row")
+        .filter({ hasText: "· enabled" })
+        .waitFor({ timeout: 20_000 });
+
+      const pg = await import("pg");
+      const db = new pg.default.Pool({ connectionString: DB_URL });
+      const events = await db.query("select payload from events where kind = 'machine-mcp.changed'");
+      const manifest = await db.query("select declared_machine_mcp from workspaces limit 1");
+      await db.end();
+      expect(events.rowCount).toBe(1);
+      const payload = events.rows[0].payload as { acknowledged: string; to: { name: string }[] };
+      expect(payload.to.map((entry) => entry.name)).toEqual(["linear"]);
+      expect(payload.acknowledged).toContain("anyone directing this lane");
+      // The privacy rule, asserted at the store: the value never travelled.
+      expect(JSON.stringify(manifest.rows[0].declared_machine_mcp)).not.toContain("tok_secret_e2e");
+
+      // The next turn merges it into the strict config from this machine's
+      // own file, and the record names it apart.
+      await page.getByTestId("composer-input").fill("now use linear");
+      await page.keyboard.press("Enter");
+      await page
+        .getByTestId("trace-note")
+        .filter({ hasText: "Machine MCP servers carried: linear" })
+        .waitFor({ timeout: 90_000 });
+      await page.screenshot({ path: join(evidenceDir, "214-machine-mcp-carried.png") });
     },
     180_000
   );

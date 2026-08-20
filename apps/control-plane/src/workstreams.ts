@@ -1,4 +1,5 @@
 import {
+  EnabledMachineMcpServersSchema,
   EnabledMcpServersSchema,
   EnabledSkillsSchema,
   EnabledGlobalSkillsSchema,
@@ -50,7 +51,11 @@ export function toWorkstream(row: Record<string, unknown>): Workstream {
       row.enabled_global_skills ?? []
     ),
     // And the MCP servers (D-119), same posture.
-    enabledMcpServers: EnabledMcpServersSchema.catch([]).parse(row.enabled_mcp_servers ?? [])
+    enabledMcpServers: EnabledMcpServersSchema.catch([]).parse(row.enabled_mcp_servers ?? []),
+    // The machine servers (D-198), same posture.
+    enabledMachineMcpServers: EnabledMachineMcpServersSchema.catch([]).parse(
+      row.enabled_machine_mcp ?? []
+    )
   };
 }
 

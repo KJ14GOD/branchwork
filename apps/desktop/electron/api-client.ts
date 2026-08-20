@@ -527,6 +527,20 @@ export class ControlPlaneClient {
     );
   }
 
+  async setEnabledMachineMcpServers(
+    missionId: string,
+    workstreamId: string,
+    servers: { name: string; digest: string }[],
+    acknowledged: string
+  ): Promise<void> {
+    await this.request(
+      "POST",
+      `/missions/${encodeURIComponent(missionId)}/workstreams/${encodeURIComponent(workstreamId)}/machine-mcp`,
+      OkResponseSchema,
+      { servers, acknowledged }
+    );
+  }
+
   async createExtensionLabel(
     missionId: string,
     input: { name: string; color: string }
