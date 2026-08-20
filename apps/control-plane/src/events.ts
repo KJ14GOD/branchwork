@@ -107,7 +107,10 @@ export async function recordEventAtSeq(
   if (written) {
     await client.query("select pg_notify($1, $2)", [
       MISSION_EVENT_CHANNEL,
-      JSON.stringify({ missionId: args.missionId, seq, kind: args.kind })
+      // orgId travels for the all-missions stream's fan-out (D-179): the
+      // address still carries no content, and the stream verifies the
+      // watcher's participation before forwarding a mission it has not seen.
+      JSON.stringify({ missionId: args.missionId, seq, kind: args.kind, orgId: args.orgId })
     ]);
   }
   return written;

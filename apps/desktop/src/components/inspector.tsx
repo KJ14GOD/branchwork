@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ProcessKind,
   FileChange,
@@ -20,6 +20,7 @@ import {
   mcpRows,
   nextEnabledMcp,
   nextEnabledSkills,
+  keptWorkspace,
   sessionOfCheck,
   skillRows,
   type SkillRow
@@ -862,6 +863,23 @@ export function Inspector({
   const files = changedFiles(detail);
   const tallies = checkTallies(detail);
   const { mission, workstream } = detail;
+  const [copiedPath, setCopiedPath] = useState(false);
+
+  const kept = useMemo(
+    () => keptWorkspace(detail, workstream?.workstreamId ?? null),
+    [detail, workstream]
+  );
+
+  const copyWorkspacePath = async (workstreamId: string): Promise<void> => {
+    const done = await novus().workspace.openWorkspaceIn({
+      missionId: mission.missionId,
+      workstreamId,
+      target: "copy-path"
+    });
+    if (!done.ok) return;
+    setCopiedPath(true);
+    setTimeout(() => setCopiedPath(false), 1_500);
+  };
 
   /**
    * The region above the edge always shows one of its own three. A request for
@@ -1212,6 +1230,33 @@ export function Inspector({
                     <span className="kv-value" data-testid="repo-name">
                       {mission.repository?.name ?? "No repository recorded"}
                     </span>
+
+                    {/* A workspace this machine kept rather than removed
+                        (D-170). The release refuses to delete uncommitted work,
+                        which is right — but a protection nobody is told about
+                        is half a protection, and until now this fact lived only
+                        in the event log. */}
+                    {kept && (
+                      <>
+                        <span className="kv-label">Workspace</span>
+                        <span className="kv-value" data-testid="workspace-kept">
+                          <span className="tone-warn">
+                            Kept — {kept.uncommitted}{" "}
+                            {kept.uncommitted === 1 ? "file is" : "files are"} uncommitted
+                          </span>
+                          {hostedHere && workstream && (
+                            <button
+                              className="btn btn-text kv-action"
+                              onClick={() => void copyWorkspacePath(workstream.workstreamId)}
+                              title="Copy the folder's path so you can go and look"
+                              data-testid="workspace-kept-copy"
+                            >
+                              {copiedPath ? "Path copied" : "Copy path"}
+                            </button>
+                          )}
+                        </span>
+                      </>
+                    )}
 
                     {workstream && (
                       <>

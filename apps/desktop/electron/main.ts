@@ -155,6 +155,8 @@ protocol.registerSchemesAsPrivileged([
 let window: BrowserWindow | null = null;
 /** The mission this window is watching live (D-149), and how to stop. */
 let watched: { missionId: string; stop: () => void } | null = null;
+/** The one all-missions connection (D-179) — the rail's live signal. */
+let watchedAll: { stop: () => void } | null = null;
 let authStatus: IpcAuthStatus = { state: "signed_out" };
 let pollTimer: NodeJS.Timeout | null = null;
 let runner: RunnerAgent | null = null;
@@ -1365,6 +1367,21 @@ function registerIpc(): void {
   ipcMain.handle("novus:missions:unwatch", async () => {
     watched?.stop();
     watched = null;
+    return ok(null);
+  });
+
+  ipcMain.handle("novus:missions:watch-all", async () => {
+    if (watchedAll) return ok(null);
+    const stop = api.watchAllMissions({
+      onChange: (change) => window?.webContents.send("novus:mission-any-changed", change)
+    });
+    watchedAll = { stop };
+    return ok(null);
+  });
+
+  ipcMain.handle("novus:missions:unwatch-all", async () => {
+    watchedAll?.stop();
+    watchedAll = null;
     return ok(null);
   });
 

@@ -314,6 +314,100 @@ export class ControlPlaneClient {
     };
   }
 
+  /**
+   * Watches every mission this person participates in, on one connection
+   * (D-179) — the rail's live signal, replacing its five-second sweep. Same
+   * contract as `watchMission`: a signal only ever means *re-read*, so a
+   * stream that is down costs latency, never truth, and a slow re-read
+   * underneath still carries it.
+   */
+  watchAllMissions(
+    handlers: { onChange: (change: MissionChange) => void; onLive?: (live: boolean) => void }
+  ): () => void {
+    let stopped = false;
+    let controller: AbortController | null = null;
+    let attempts = 0;
+    let retryTimer: NodeJS.Timeout | null = null;
+
+    const scheduleRetry = (): void => {
+      if (stopped || retryTimer) return;
+      attempts += 1;
+      const delay = Math.min(500 * 2 ** (attempts - 1), 15_000);
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void run();
+      }, delay);
+    };
+
+    const run = async (): Promise<void> => {
+      if (stopped) return;
+      controller = new AbortController();
+      let response: Response;
+      try {
+        response = await fetch(`${this.baseUrl}/streams/missions`, {
+          headers: {
+            accept: "text/event-stream",
+            ...(this.getToken() ? { authorization: `Bearer ${this.getToken()}` } : {})
+          },
+          signal: controller.signal
+        });
+      } catch {
+        handlers.onLive?.(false);
+        scheduleRetry();
+        return;
+      }
+      if (!response.ok || !response.body) {
+        handlers.onLive?.(false);
+        if (response.status === 401 || response.status === 403 || response.status === 404) {
+          stopped = true;
+          return;
+        }
+        scheduleRetry();
+        return;
+      }
+      attempts = 0;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let split = buffer.indexOf("\n\n");
+          while (split !== -1) {
+            const frame = buffer.slice(0, split);
+            buffer = buffer.slice(split + 2);
+            if (frame.startsWith("event: ready")) handlers.onLive?.(true);
+            if (frame.startsWith("event: change")) {
+              const index = frame.indexOf("data: ");
+              if (index !== -1) {
+                const parsed = MissionChangeSchema.safeParse(
+                  JSON.parse(frame.slice(index + 6)) as unknown
+                );
+                if (parsed.success) handlers.onChange(parsed.data);
+              }
+            }
+            split = buffer.indexOf("\n\n");
+          }
+          if (buffer.length > 64 * 1024) buffer = "";
+        }
+      } catch {
+        // Abort at teardown, or the connection died. Both land here.
+      }
+      handlers.onLive?.(false);
+      scheduleRetry();
+    };
+
+    void run();
+    return () => {
+      stopped = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+      controller?.abort();
+    };
+  }
+
   getMission(missionId: string, workstreamId?: string): Promise<MissionDetailResponse> {
     const query = workstreamId ? `?workstream=${encodeURIComponent(workstreamId)}` : "";
     return this.request(

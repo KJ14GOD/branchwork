@@ -939,12 +939,71 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     return () => clearInterval(timer);
   }, [offline, refresh]);
 
-  // The rail reports on every mission, including the ones nobody has open. A
-  // mission whose tab was closed goes on running, and the attention lens is
-  // where that is visible — so the list and its states are re-read on a slow
-  // timer rather than once at mount.
+  // The rail reports on every mission, including the ones nobody has open —
+  // and it learns by being told, not by asking (D-179): one connection
+  // streams an address for any participant mission that moved, and the shell
+  // re-reads exactly that mission. Bursts collapse: a running turn emits many
+  // events, so each mission's re-read trails its last signal by a beat. An
+  // address the rail has never heard of is a new mission — the one case that
+  // re-reads the list itself.
   useEffect(() => {
-    const timer = setInterval(() => void refresh(), 5000);
+    void novus().missions.watchAll();
+    // Two trailing debounces, because two different reads answer a signal:
+    // the changed mission's own detail (per mission, so parallel missions
+    // never starve each other), and the list — whose rows carry the board
+    // fields (attention, working, lastActivityAt) the detail path
+    // deliberately leaves null, so a detail's mission row must never replace
+    // a list row.
+    const detailTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    let listTimer: ReturnType<typeof setTimeout> | null = null;
+    const stop = novus().missions.onAnyChanged((change) => {
+      const pending = detailTimers.get(change.missionId);
+      if (pending) clearTimeout(pending);
+      detailTimers.set(
+        change.missionId,
+        setTimeout(() => {
+          detailTimers.delete(change.missionId);
+          const tab = workingSetRef.current.tabs.find(
+            (entry) => entry.missionId === change.missionId
+          );
+          void novus()
+            .missions.get(change.missionId, tab?.workstreamId ?? undefined)
+            .then((result) => {
+              if (!result.ok) return;
+              setDetails((prev) => ({
+                ...prev,
+                [result.value.mission.missionId]: result.value
+              }));
+            });
+        }, 300)
+      );
+      if (listTimer) clearTimeout(listTimer);
+      listTimer = setTimeout(() => {
+        listTimer = null;
+        void novus()
+          .missions.list()
+          .then((result) => {
+            if (result.ok) {
+              setOffline(false);
+              setMissions(result.value);
+            }
+          });
+      }, 300);
+    });
+    return () => {
+      stop();
+      for (const timer of detailTimers.values()) clearTimeout(timer);
+      if (listTimer) clearTimeout(listTimer);
+      void novus().missions.unwatchAll();
+    };
+  }, []);
+
+  // The slow sweep underneath the stream (the D-149 pattern): a dropped
+  // connection or a missed signal costs latency, never truth. Also the only
+  // reader for what no mission event describes — local repos, checkouts, the
+  // archived list.
+  useEffect(() => {
+    const timer = setInterval(() => void refresh(), 45_000);
     return () => clearInterval(timer);
   }, [refresh]);
 

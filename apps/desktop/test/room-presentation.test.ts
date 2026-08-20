@@ -4,6 +4,7 @@ import {
   activeExecution,
   contestedAcrossSessions,
   controller,
+  keptWorkspace,
   deriveStateLine,
   laneView,
   mcpRows,
@@ -945,5 +946,60 @@ describe("the lane's MCP servers surface (D-119)", () => {
     ]);
     expect(nextEnabledMcp(fixture, { disable: "docs" })).toEqual([]);
     expect(mcpRows(detail())).toEqual([]);
+  });
+});
+
+/**
+ * A workspace this machine kept rather than removed (D-170).
+ *
+ * The release refuses to delete uncommitted work, which is right — and until
+ * this existed the refusal lived only in the event log, so a person closed a
+ * mission, saw nothing, and had no idea their unsaved files were still sitting
+ * in a folder. A protection nobody is told about is half a protection.
+ *
+ * Only `kept` earns a surface: released and absent are the workspace being
+ * gone, which is what ending a mission is supposed to do.
+ */
+describe("a workspace kept because work was uncommitted", () => {
+  const released = (outcome: string, uncommitted: number, workstreamId = "wst_one") => ({
+    eventId: `evt_${outcome}_${uncommitted}`,
+    missionId: "msn_one",
+    workstreamId,
+    executionId: null,
+    seq: 90 + uncommitted,
+    kind: "workspace.released",
+    actor: { kind: "runner", id: "rnr_one", login: null },
+    cause: { directionId: null, leaseId: null, offerId: null },
+    payload: { outcome, reason: null, uncommitted, attachmentsRemoved: 0 },
+    schemaVersion: 1,
+    occurredAt: T(9),
+    recordedAt: T(9)
+  });
+
+  it("says so, with the count, when the machine kept it", () => {
+    const view = detail({ events: [released("kept", 3)] });
+    expect(keptWorkspace(view, "wst_one")).toEqual({ uncommitted: 3 });
+  });
+
+  it("says nothing when the workspace was removed as it should be", () => {
+    expect(keptWorkspace(detail({ events: [released("released", 0)] }), "wst_one")).toBeNull();
+    expect(keptWorkspace(detail({ events: [released("absent", 0)] }), "wst_one")).toBeNull();
+  });
+
+  it("says nothing before a mission has ended at all", () => {
+    expect(keptWorkspace(detail(), "wst_one")).toBeNull();
+  });
+
+  it("takes the newest answer, because a close can be attempted twice", () => {
+    // Kept first, then settled and removed: the lane is clean now, and a
+    // surface still saying otherwise would send somebody looking for a folder
+    // that is gone.
+    const view = detail({ events: [released("kept", 3), released("released", 0)] });
+    expect(keptWorkspace(view, "wst_one")).toBeNull();
+  });
+
+  it("never reports another lane's workspace", () => {
+    const view = detail({ events: [released("kept", 2, "wst_other")] });
+    expect(keptWorkspace(view, "wst_one")).toBeNull();
   });
 });

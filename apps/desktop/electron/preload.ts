@@ -64,6 +64,13 @@ const novus: NovusBridge = {
       ipcRenderer.on("novus:mission-changed", wrapped);
       return () => ipcRenderer.removeListener("novus:mission-changed", wrapped);
     },
+    watchAll: () => ipcRenderer.invoke("novus:missions:watch-all"),
+    unwatchAll: () => ipcRenderer.invoke("novus:missions:unwatch-all"),
+    onAnyChanged: (listener: (change: MissionChange) => void) => {
+      const wrapped = (_event: unknown, change: MissionChange) => listener(change);
+      ipcRenderer.on("novus:mission-any-changed", wrapped);
+      return () => ipcRenderer.removeListener("novus:mission-any-changed", wrapped);
+    },
     pickImage: () => ipcRenderer.invoke("novus:missions:pick-image"),
     attachImage: (input) => ipcRenderer.invoke("novus:missions:attach-image", input),
     attachClipboardImage: (input) =>

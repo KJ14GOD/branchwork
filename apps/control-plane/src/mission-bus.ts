@@ -25,6 +25,9 @@ export interface MissionChange {
   missionId: string;
   seq: number;
   kind: string;
+  /** Present on the wire since D-179, for the all-missions stream's org-keyed
+   *  fan-out. Absent from a notification written before that deploy. */
+  orgId?: string;
 }
 
 type Listener = (change: MissionChange) => void;
@@ -37,6 +40,10 @@ const RETRY_MAX_MS = 10_000;
 export interface MissionBus {
   /** Registers interest in one mission. The returned function unsubscribes. */
   subscribe(missionId: string, listener: Listener): () => void;
+  /** Registers interest in every mission of one organization (D-179). The
+   *  caller verifies the watcher's participation per mission — this is
+   *  fan-out plumbing, never authorization. */
+  subscribeOrg(orgId: string, listener: Listener): () => void;
   /** Registers interest in work arriving for one lane (D-154). The signal
    *  carries nothing: the runner asks for its own commands, under its own
    *  credential, exactly as it does on its timer. */
@@ -56,6 +63,7 @@ export interface MissionBus {
 export function inertMissionBus(): MissionBus {
   return {
     subscribe: () => () => undefined,
+    subscribeOrg: () => () => undefined,
     subscribeWork: () => () => undefined,
     size: 0,
     stop: async () => undefined
@@ -64,6 +72,7 @@ export function inertMissionBus(): MissionBus {
 
 export function createMissionBus(databaseUrl: string): MissionBus {
   const listeners = new Map<string, Set<Listener>>();
+  const orgListeners = new Map<string, Set<Listener>>();
   const workListeners = new Map<string, Set<WorkListener>>();
   let client: pg.Client | null = null;
   let stopped = false;
@@ -76,20 +85,32 @@ export function createMissionBus(databaseUrl: string): MissionBus {
     try {
       const parsed = JSON.parse(raw) as Partial<MissionChange>;
       if (typeof parsed.missionId !== "string" || typeof parsed.seq !== "number") return;
-      change = { missionId: parsed.missionId, seq: parsed.seq, kind: String(parsed.kind ?? "") };
+      change = {
+        missionId: parsed.missionId,
+        seq: parsed.seq,
+        kind: String(parsed.kind ?? ""),
+        ...(typeof parsed.orgId === "string" ? { orgId: parsed.orgId } : {})
+      };
     } catch {
       // A malformed payload is noise on a channel anyone could notify. It is
       // never fatal: the connection stays up for the well-formed ones.
       return;
     }
     const set = listeners.get(change.missionId);
-    if (!set) return;
-    for (const listener of [...set]) {
+    for (const listener of set ? [...set] : []) {
       try {
         listener(change);
       } catch {
         // One watcher's write failing (a client that vanished mid-flush) must
         // not deny the notification to the others on the same mission.
+      }
+    }
+    const orgSet = change.orgId ? orgListeners.get(change.orgId) : undefined;
+    for (const listener of orgSet ? [...orgSet] : []) {
+      try {
+        listener(change);
+      } catch {
+        // Same rule, org-wide.
       }
     }
   };
@@ -167,6 +188,17 @@ export function createMissionBus(databaseUrl: string): MissionBus {
         if (current.size === 0) listeners.delete(missionId);
       };
     },
+    subscribeOrg(orgId, listener) {
+      const set = orgListeners.get(orgId) ?? new Set<Listener>();
+      set.add(listener);
+      orgListeners.set(orgId, set);
+      return () => {
+        const current = orgListeners.get(orgId);
+        if (!current) return;
+        current.delete(listener);
+        if (current.size === 0) orgListeners.delete(orgId);
+      };
+    },
     subscribeWork(workstreamId, listener) {
       const set = workListeners.get(workstreamId) ?? new Set<WorkListener>();
       set.add(listener);
@@ -181,6 +213,7 @@ export function createMissionBus(databaseUrl: string): MissionBus {
     get size() {
       let total = 0;
       for (const set of listeners.values()) total += set.size;
+      for (const set of orgListeners.values()) total += set.size;
       for (const set of workListeners.values()) total += set.size;
       return total;
     },
@@ -189,6 +222,7 @@ export function createMissionBus(databaseUrl: string): MissionBus {
       if (retryTimer) clearTimeout(retryTimer);
       retryTimer = null;
       listeners.clear();
+      orgListeners.clear();
       workListeners.clear();
       const open = client;
       client = null;

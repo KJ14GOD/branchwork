@@ -439,3 +439,157 @@ describe("the mission stream", () => {
     expect(settled).toBe(before);
   }, 30_000);
 });
+
+/** Opens the all-missions stream (D-179) and collects its change frames. */
+async function openAllStream(as: SignedIn): Promise<{
+  changes: { missionId: string; seq: number; kind: string }[];
+  close: () => void;
+}> {
+  const controller = new AbortController();
+  const changes: { missionId: string; seq: number; kind: string }[] = [];
+  let markReady = (): void => undefined;
+  const ready = new Promise<void>((resolve) => {
+    markReady = resolve;
+  });
+  const response = await fetch(`${origin}/streams/missions`, {
+    headers: { authorization: `Bearer ${as.token}` },
+    signal: controller.signal
+  });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("text/event-stream");
+  void (async () => {
+    const reader = response.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        buffer += decoder.decode(value, { stream: true });
+        let split = buffer.indexOf("\n\n");
+        while (split !== -1) {
+          const frame = buffer.slice(0, split);
+          buffer = buffer.slice(split + 2);
+          if (frame.startsWith("event: ready")) markReady();
+          if (frame.startsWith("event: change")) {
+            changes.push(JSON.parse(frame.slice(frame.indexOf("data: ") + 6)));
+          }
+          split = buffer.indexOf("\n\n");
+        }
+      }
+    } catch {
+      // Aborted at the end of a test.
+    }
+  })();
+  await ready;
+  return { changes, close: () => controller.abort() };
+}
+
+/**
+ * The all-missions stream (D-179).
+ *
+ * The rail's live signal. Two ways this transport could lie beyond the
+ * per-mission stream's: carrying more than one mission is only right if it
+ * carries ALL the watcher's missions on the one connection — half a rail
+ * updating live and half on the sweep would be worse than either — and
+ * carrying anything about a mission the watcher does not participate in
+ * would leak that it exists, because here the address IS the payload.
+ */
+describe("the all-missions stream", () => {
+  it("carries every participant mission's changes on one connection", async () => {
+    const first = await mission();
+    const second = await mission();
+    const stream = await openAllStream(kartik);
+    try {
+      for (const { missionId, orgId } of [first, second]) {
+        await withMission(harness.db, missionId, async (client) => {
+          await recordEvent(client, {
+            orgId,
+            missionId,
+            kind: "mission.note",
+            actorKind: "system",
+            actorId: "system",
+            payload: { note: "moved" }
+          });
+        });
+      }
+      const changes = await eventually(
+        () => stream.changes,
+        (seen) =>
+          seen.some((change) => change.missionId === first.missionId) &&
+          seen.some((change) => change.missionId === second.missionId)
+      );
+      expect(changes.some((change) => change.missionId === first.missionId)).toBe(true);
+      expect(changes.some((change) => change.missionId === second.missionId)).toBe(true);
+    } finally {
+      stream.close();
+    }
+  }, 30_000);
+
+  it("streams a mission created after the connection opened, from its first event", async () => {
+    const stream = await openAllStream(kartik);
+    try {
+      const late = await mission();
+      await withMission(harness.db, late.missionId, async (client) => {
+        await recordEvent(client, {
+          orgId: late.orgId,
+          missionId: late.missionId,
+          kind: "mission.note",
+          actorKind: "system",
+          actorId: "system",
+          payload: { note: "born mid-stream" }
+        });
+      });
+      const changes = await eventually(
+        () => stream.changes,
+        (seen) => seen.some((change) => change.missionId === late.missionId)
+      );
+      expect(changes.some((change) => change.missionId === late.missionId)).toBe(true);
+    } finally {
+      stream.close();
+    }
+  }, 30_000);
+
+  it("says nothing about a mission the watcher does not participate in", async () => {
+    // Maya's stream, kartik's mission: same organization, no participation —
+    // an address for it would leak that it exists.
+    const theirs = await mission();
+    const stream = await openAllStream(maya);
+    try {
+      await withMission(harness.db, theirs.missionId, async (client) => {
+        await recordEvent(client, {
+          orgId: theirs.orgId,
+          missionId: theirs.missionId,
+          kind: "mission.note",
+          actorKind: "system",
+          actorId: "system",
+          payload: { note: "not yours to hear" }
+        });
+      });
+      // Give the notification time to have arrived if it was going to.
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      expect(stream.changes.some((change) => change.missionId === theirs.missionId)).toBe(false);
+    } finally {
+      stream.close();
+    }
+  }, 30_000);
+
+  it("is refused without a session", async () => {
+    const response = await fetch(`${origin}/streams/missions`);
+    expect(response.status).toBe(401);
+  });
+
+  it("drops every subscription when the watcher goes away", async () => {
+    await mission();
+    const before = bus.size;
+    const stream = await openAllStream(kartik);
+    expect(bus.size).toBeGreaterThan(before);
+    stream.close();
+    const settled = await eventually(
+      () => bus.size,
+      (size) => size === before
+    );
+    expect(settled).toBe(before);
+  }, 30_000);
+});

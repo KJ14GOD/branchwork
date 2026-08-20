@@ -3485,6 +3485,14 @@ export interface NovusBridge {
     /** Fires when the watched mission moves. The listener re-reads through
      *  `get`; the signal itself carries no room data. */
     onChanged(listener: (change: MissionChange) => void): () => void;
+    /** Watches every mission this person participates in, on one connection
+     *  (D-179) — the rail's live signal, replacing its timed sweep. Idempotent:
+     *  a second call keeps the one connection. */
+    watchAll(): Promise<IpcResult<null>>;
+    unwatchAll(): Promise<IpcResult<null>>;
+    /** Fires when any of this person's missions moves. The listener re-reads
+     *  the one mission the address names; the signal carries no data. */
+    onAnyChanged(listener: (change: MissionChange) => void): () => void;
     /** Opens this machine's file picker for an image, returning the chosen
      *  path or null (D-150). The path is the main process's to read; the
      *  renderer only hands it back to `attachImage`. */

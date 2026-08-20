@@ -113,6 +113,145 @@ export function registerRunnerStreamRoutes(app: FastifyInstance, deps: RouteDeps
   });
 }
 
+/**
+ * How often the all-missions stream re-resolves its watcher's participant set
+ * (D-179): a mission created or joined mid-stream starts streaming within one
+ * beat instead of waiting for a reconnect, and a mission left stops.
+ */
+const RESUBSCRIBE_MS = 30_000;
+
+/**
+ * Every mission this person participates in, on one connection (D-179).
+ *
+ * The rail used to learn about background missions by re-reading the whole
+ * list — and every mission's full detail — on a five-second timer. This is
+ * the same shape as the room's stream and keeps its two load-bearing rules:
+ * what crosses is an **address** ({missionId, seq, kind}), never content, so
+ * the projection stays the one place that decides what a person may see; and
+ * the set of missions streamed is the watcher's own **participant** set —
+ * resolved at connect and re-resolved on a slow beat, never the whole
+ * organization's, because visibility is participation (missions.ts's
+ * VISIBLE_TO), and an address for a mission you cannot read is still a leak
+ * that it exists.
+ *
+ * Deliberately absent: presence and lease touching. Those are per-mission
+ * facts about a *room being read* (D-051, D-091), and this connection only
+ * proves the app is open.
+ */
+export function registerAllMissionsStreamRoute(
+  app: FastifyInstance,
+  deps: RouteDeps,
+  bus: MissionBus
+): void {
+  app.get("/streams/missions", async (request, reply) => {
+    const ctx = await deps.requireAuth(request, reply);
+    if (!ctx) return;
+
+    const participantMissions = async (): Promise<Set<string>> => {
+      const result = await deps.db.query(
+        `select m.mission_id from missions m
+           join participants p on p.mission_id = m.mission_id and p.user_id = $1
+           join organization_members om on om.org_id = m.org_id and om.user_id = $1`,
+        [ctx.userId]
+      );
+      return new Set((result.rows as { mission_id: string }[]).map((row) => row.mission_id));
+    };
+    const memberOrgs = async (): Promise<string[]> => {
+      const result = await deps.db.query(
+        "select org_id from organization_members where user_id = $1",
+        [ctx.userId]
+      );
+      return (result.rows as { org_id: string }[]).map((row) => row.org_id);
+    };
+
+    const raw = reply.raw;
+    reply.hijack();
+    raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no"
+    });
+
+    let open = true;
+    const write = (line: string): void => {
+      if (!open) return;
+      try {
+        raw.write(line);
+      } catch {
+        close();
+      }
+    };
+
+    // Fan-out is org-keyed so a mission created a moment ago streams from its
+    // first event; authorization stays per mission and per event: an address
+    // is forwarded only once this watcher's participation in that mission is
+    // on record. `foreign` caches the confirmed-not-mine answers so a busy
+    // sibling mission costs one membership query per realign beat, not one
+    // per event.
+    let mine = await participantMissions();
+    const foreign = new Set<string>();
+    let checking = false;
+    const onChange = (change: { missionId: string; seq: number; kind: string }): void => {
+      const address = {
+        missionId: change.missionId,
+        seq: change.seq,
+        kind: change.kind
+      };
+      if (mine.has(change.missionId)) {
+        write(`event: change\ndata: ${JSON.stringify(address)}\n\n`);
+        return;
+      }
+      if (foreign.has(change.missionId) || checking) return;
+      checking = true;
+      void participantMissions()
+        .then((ids) => {
+          mine = ids;
+          if (mine.has(change.missionId)) {
+            write(`event: change\ndata: ${JSON.stringify(address)}\n\n`);
+          } else {
+            foreign.add(change.missionId);
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          checking = false;
+        });
+    };
+    const subscriptions = (await memberOrgs()).map((orgId) => bus.subscribeOrg(orgId, onChange));
+    write("event: ready\ndata: {}\n\n");
+
+    const heartbeat = setInterval(() => write(": heartbeat\n\n"), HEARTBEAT_MS);
+    const realign = setInterval(() => {
+      // Removals take effect here; a failed re-resolve keeps the current set
+      // and the next beat tries again. The foreign cache clears so a mission
+      // this person was invited to since stops being ignored.
+      void participantMissions()
+        .then((ids) => {
+          mine = ids;
+          foreign.clear();
+        })
+        .catch(() => undefined);
+    }, RESUBSCRIBE_MS);
+
+    function close(): void {
+      if (!open) return;
+      open = false;
+      clearInterval(heartbeat);
+      clearInterval(realign);
+      for (const unsubscribe of subscriptions) unsubscribe();
+      try {
+        raw.end();
+      } catch {
+        // Already gone.
+      }
+    }
+
+    request.raw.on("close", close);
+    request.raw.on("error", close);
+  });
+}
+
 export function registerMissionStreamRoutes(app: FastifyInstance, deps: RouteDeps, bus: MissionBus): void {
   app.get("/missions/:missionId/stream", async (request, reply) => {
     const ctx = await deps.requireAuth(request, reply);

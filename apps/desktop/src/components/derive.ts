@@ -1080,3 +1080,33 @@ function interruptionReason(detail: MissionDetailResponse): string {
   }
   return "the execution ended before it finished";
 }
+
+/**
+ * The lane's last word about its own workspace (D-170), or null.
+ *
+ * Only `kept` is worth returning. `released` and `absent` are the workspace
+ * being gone, which is what ending a mission is supposed to do and needs no
+ * announcement; `kept` is the machine refusing to delete somebody's
+ * uncommitted work, and until this existed that refusal lived only in the
+ * event log — a protection nobody was told about.
+ *
+ * Read from the events rather than carried as a column: it is one fact that
+ * changes at most once per mission, at its ending. The **last** such event for
+ * the lane wins, because a close can be attempted more than once and the
+ * newest answer is the true one.
+ */
+export function keptWorkspace(
+  detail: MissionDetailResponse,
+  workstreamId: string | null
+): { uncommitted: number } | null {
+  if (workstreamId === null) return null;
+  for (let index = detail.events.length - 1; index >= 0; index -= 1) {
+    const event = detail.events[index];
+    if (event?.kind !== "workspace.released") continue;
+    if (event.workstreamId !== workstreamId) continue;
+    const payload = event.payload as { outcome?: unknown; uncommitted?: unknown };
+    if (payload.outcome !== "kept") return null;
+    return { uncommitted: typeof payload.uncommitted === "number" ? payload.uncommitted : 0 };
+  }
+  return null;
+}
