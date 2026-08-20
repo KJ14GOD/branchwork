@@ -572,6 +572,38 @@ describe("shared sessions inside one approach", () => {
     await shot("207-pinned-file-on-the-message.png");
   }, 180_000);
 
+  it("gets back to the approach's own page from inside one of its chats", async () => {
+    // Owner-reported: open a conversation, then try to return to the
+    // approach's overview by clicking its row — and the row only folds its
+    // conversations. The page was unreachable; the way back was to leave the
+    // mission entirely and come back.
+    const approach = page.getByTestId("rail-approach-row").first();
+    await approach.waitFor({ timeout: 30_000 });
+    await expect.poll(() => page.getByTestId("rail-session-row").count(), { timeout: 30_000 }).toBe(2);
+
+    // Into a conversation.
+    await page.getByTestId("rail-session-row").first().click();
+    await expect
+      .poll(() => page.getByTestId("approach-overview").count(), { timeout: 20_000 })
+      .toBe(0);
+
+    // And back, in one click on the approach's row.
+    await approach.click();
+    await expect
+      .poll(() => page.getByTestId("approach-overview").count(), { timeout: 20_000 })
+      .toBe(1);
+    // Its conversations are still listed: coming back to the page is not a
+    // reason to hide what is on it.
+    await expect.poll(() => page.getByTestId("rail-session-row").count(), { timeout: 20_000 }).toBe(2);
+
+    // Now that the page is what the canvas shows, the row is the fold again —
+    // there is nothing else left for it to mean.
+    await approach.click();
+    await expect.poll(() => page.getByTestId("rail-session-row").count(), { timeout: 20_000 }).toBe(0);
+    await approach.click();
+    await expect.poll(() => page.getByTestId("rail-session-row").count(), { timeout: 20_000 }).toBe(2);
+  }, 120_000);
+
   it("a new chat continues from a chosen sibling, carrying its transcript (D-173)", async () => {
     // The draft offers the lane's existing chats as sources.
     await page.getByTestId("rail-new-session").click();

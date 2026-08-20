@@ -564,18 +564,24 @@ function MissionTree({
           const needs =
             !selected &&
             laneSessions.some((session) => sessionNeedsYou(detail, session.sessionId));
-          // The selected approach's row has no selection left to make, so its
-          // click folds and unfolds its conversations; any other approach's
-          // click selects it — and **unfolds it**, because choosing a lane is
-          // asking to see it (D-180, owner-reported).
+          // What an approach's row does, in the order a person wants it
+          // (D-180, owner-reported twice — the second report is the one that found the real fault).
           //
-          // Leaving the fold alone on selection was deliberate once and was
-          // wrong in the one case that matters: a folded lane you come back to
-          // swallows the click. Nothing on screen changes, so the control
-          // reads as broken, and the way back was to click a second time —
-          // which nobody discovers except by accident.
+          //  1. Not the lane you are reading → select it, and **unfold** it:
+          //     choosing a lane is asking to see it, and a folded lane you
+          //     return to would otherwise swallow the click.
+          //  2. The lane you are reading, from inside one of its
+          //     conversations → **go back to the approach's own page**. This
+          //     was the missing one, and it left the page unreachable: the row
+          //     only folded, so the way back to a lane's overview was to leave
+          //     the mission entirely and come back.
+          //  3. The lane you are reading, already on its own page → fold and
+          //     unfold its conversations, which is all that is left to mean.
+          const readingASession = focused && selectedSessionId !== null && !decisionOpen;
           const activate = () => {
-            if (selected) {
+            if (selected && readingASession) {
+              onSelectApproach(lane.workstreamId === firstLaneId ? null : lane.workstreamId);
+            } else if (selected) {
               setFoldedLanes((previous) => {
                 const next = new Set(previous);
                 if (next.has(lane.workstreamId)) next.delete(lane.workstreamId);

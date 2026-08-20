@@ -1916,6 +1916,8 @@ A skill is instructions, never authority: every tool call a skill-bearing turn m
 
 **Revisit when.** The sync slice lands (it should absorb the moved-state warning into an action); a repository's hundred-branch cap is genuinely hit; or branch-of-branch missions need the PR chain drawn.
 
+**Amended 2026-08-19, owner-directed on sight**: the results list is bounded (the dialog had grown to the window's height — the scroller now lives inside one height), the "Signed in as" line is gone (the rail's foot already says it), and rows lead with the repository's open-folder mark — D-130's glyph, a shape and never a host logo, so the no-logos rule stands.
+
 ## D-140 — Push is an agent capability, and a one-lane mission publishes: Claude Code parity with Novus's spine intact
 
 **Context.** Owner-directed, with a principle stated for the record: *if Claude Code can do it, withholding it needs a strong, defensible reason — otherwise Novus should have the capability.* The owner had finished real work in a one-approach mission on their own repository and found no way to push it: publication was decision-gated and the decision surface only existed at two approaches, so the most ordinary mission there is had no in-product path to GitHub; and asking the agent to push — the way Claude Code is asked — was impossible by construction. The defensible parts of Novus's stance (attribution, no `--force`, mission branches only, per-operation credentials) had been protecting an indefensible part (nobody may start a push without a two-lane ceremony).
@@ -2560,7 +2562,7 @@ Read from the events rather than carried as a column on the workstream: it is on
 
 **Revisit when.** A third reference kind arrives (a checkpoint, an artifact, a sibling chat's single message — each named in the design conversation); or @-mention wants building on top; or eight proves the wrong bound.
 
-## D-180 — Choosing an approach shows it: selection unfolds
+## D-180 — What an approach's row does, in the order a person wants it
 
 **Context.** Owner-reported, with the sequence: fold an approach's conversations, go to its sibling, come back — and the click that chooses it changes nothing on screen. *"i cant open that again… the workaround is if i click on another approach inside of that then i click it and see it."*
 
@@ -2572,6 +2574,18 @@ Every other lane's fold still survives the selection moving, which is what D-134
 
 **Alternatives.** Leaving it and treating the second click as the way (rejected: that is the bug, described as a feature). Folding the lane you leave (rejected: it moves a disclosure the person did not touch, which is exactly what D-134 refused). Never folding on selection *or* on click, and putting a twisty on the row (rejected: D-134 removed that twisty deliberately — the row is the target, and a chevron on every lane is the row-controls accretion the rail has been pruning since D-084).
 
-**Consequences.** One branch in the rail's `activate`. The decision spec — the only fixture with two approaches, which is what this needs — now folds a lane, leaves, returns in one click, and then toggles it twice, because a toggle that works once has state somewhere it should not. The sessions spec was where this was first probed and it passed, which is the honest reason the bug survived: one approach cannot express it.
+**Amended immediately, same report, and the amendment is the part that mattered.** The first fix read the report as being about the fold and was not wrong, but it was not the bug: *"if i click inside the approach and i want to go back to seeing stuff in the approach page i cant, it just toggles it off. the workaround was i had to go to another mission then i can enter the approach page."*
 
-**Revisit when.** A lane can be folded from somewhere other than its own row, and "selection unfolds" starts fighting an explicit fold made elsewhere.
+An approach's own page — its intent, its facts, its conversations as links (D-089) — **had no way back from inside one of its conversations.** The row's only behaviour when selected was the fold, so once the canvas was in a chat, the overview was unreachable except by leaving the mission entirely and returning. A page you can only reach by accident is a page that does not exist.
+
+So the row does three things, ordered by what a person wants at that moment:
+
+1. **Not the lane you are reading** → select it, and unfold it.
+2. **The lane you are reading, from inside one of its conversations** → go back to the approach's own page.
+3. **The lane you are reading, already on its page** → fold and unfold its conversations, which is all that is left to mean.
+
+The ordering is the decision. The fold is the *least* likely thing a person wants from that row, so it is what the row does only when nothing else is left; navigation comes first because the row is a place, and a place that will not take you there is a decoration.
+
+**Consequences.** Three branches in the rail's `activate`. The decision spec — the only fixture with two approaches, which is what this needs — now folds a lane, leaves, returns in one click, and then toggles it twice, because a toggle that works once has state somewhere it should not. The sessions spec was where this was first probed and it passed, which is the honest reason the bug survived: one approach cannot express it.
+
+**Revisit when.** A lane can be folded from somewhere other than its own row, and "selection unfolds" starts fighting an explicit fold made elsewhere; or the fold wants a gesture of its own, at which point the row is navigation alone and the ordering above collapses to one thing.

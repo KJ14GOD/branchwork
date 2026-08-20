@@ -3250,8 +3250,16 @@ body {
 .dialog-results {
   flex: 1;
   min-height: 200px;
+  /* Bounded like every other dialog (owner-hit: the list grew the dialog to
+     the window's height) — the scroller inside is the growth, not the box. */
+  max-height: 46vh;
   overflow-y: auto;
   padding: var(--s-2);
+}
+
+.repo-row .repo-glyph {
+  flex: none;
+  color: var(--text-3);
 }
 
 .repo-row {
