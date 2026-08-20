@@ -2366,6 +2366,27 @@ export function ProjectRoom({
         onRemoveContext={(index) =>
           setPendingContext((previous) => previous.filter((_, at) => at !== index))
         }
+        mention={
+          detail && detail.workstream
+            ? {
+                search: async (query) => {
+                  const found = await novus().workspace.searchFiles({
+                    missionId: detail.mission.missionId,
+                    workstreamId: detail.workstream!.workstreamId,
+                    query
+                  });
+                  return found.ok ? found.value : [];
+                },
+                add: (path) =>
+                  setPendingContext((previous) =>
+                    previous.some((held) => held.kind === "file" && held.path === path) ||
+                    previous.length >= MAX_DIRECTION_CONTEXT
+                      ? previous
+                      : [...previous, { kind: "file", path }]
+                  )
+              }
+            : undefined
+        }
       />
       )}
 

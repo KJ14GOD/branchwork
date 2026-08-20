@@ -2250,12 +2250,55 @@ body {
   padding: 0 var(--s-6) var(--s-4);
 }
 
+/* The @-mention popover (D-185): the worktree's candidates, floated above
+   the input on the box's own surface. One column of mono paths, the selected
+   row washed — the file-chip vocabulary, never a second design. */
+.mention-popover {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: var(--s-2);
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  overflow: hidden;
+  z-index: 30;
+}
+
+.mention-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--s-2) var(--s-3);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-2);
+}
+
+.mention-row.selected,
+.mention-row:hover {
+  background: var(--hover);
+  color: var(--text-1);
+}
+
+.mention-path {
+  font: var(--type-meta);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
 .composer-error {
   display: block;
   margin-bottom: var(--s-2);
 }
 
 .composer-box {
+  /* The mention popover anchors to the box's own top edge (D-185). */
+  position: relative;
   border: 1px solid var(--edge);
   border-radius: var(--r-dialog);
   background: var(--surface-1);

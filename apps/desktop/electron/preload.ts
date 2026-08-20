@@ -226,6 +226,7 @@ const novus: NovusBridge = {
     openTargets: () => ipcRenderer.invoke("novus:workspace:open-targets"),
     openWorkspaceIn: (input) => ipcRenderer.invoke("novus:workspace:open-in", input),
     listFiles: (input) => ipcRenderer.invoke("novus:workspace:list-files", input),
+    searchFiles: (input) => ipcRenderer.invoke("novus:workspace:search-files", input),
     readFile: (input) => ipcRenderer.invoke("novus:workspace:read-file", input),
     writeFile: (input) => ipcRenderer.invoke("novus:workspace:write-file", input)
   },

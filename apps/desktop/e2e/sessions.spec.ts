@@ -570,6 +570,15 @@ describe("shared sessions inside one approach", () => {
     // The chip is consumed by the send: the next message starts unpinned.
     expect(await page.getByTestId("composer-context").count()).toBe(0);
     await shot("207-pinned-file-on-the-message.png");
+    // Settle the lane before the next test composes: a direction sent into a
+    // still-running turn steers it instead of dispatching fresh.
+    await until(
+      "the pinned turn to finish",
+      (value) =>
+        !value.executions.some((execution) =>
+          ["requested", "starting", "running", "needs_approval"].includes(execution.state)
+        )
+    );
   }, 180_000);
 
   it("gets back to the approach's own page from inside one of its chats", async () => {
@@ -603,6 +612,54 @@ describe("shared sessions inside one approach", () => {
     await approach.click();
     await expect.poll(() => page.getByTestId("rail-session-row").count(), { timeout: 20_000 }).toBe(2);
   }, 120_000);
+
+  it("typing @ offers the codebase, and picking a file pins it (D-185)", async () => {
+    // The token and its popover: git's own file list, filtered by the query.
+    await page.getByTestId("composer-input").fill("look at @READ");
+    await page.getByTestId("mention-popover").waitFor({ timeout: 10_000 });
+    const offered = await page.getByTestId("mention-row").allInnerTexts();
+    expect(offered.some((row) => row.includes("README.md"))).toBe(true);
+    await shot("208-mention-popover.png");
+
+    // Enter picks: the chip is the reference, the @query text is consumed.
+    await page.getByTestId("composer-input").press("Enter");
+    await page.getByTestId("composer-context").waitFor({ timeout: 10_000 });
+    expect(await page.getByTestId("composer-context").innerText()).toContain("README.md");
+    expect(await page.getByTestId("composer-input").inputValue()).toBe("look at ");
+    // And Enter now sends as it always did — the popover is gone.
+    expect(await page.getByTestId("mention-popover").count()).toBe(0);
+
+    // Compose from a conversation, explicitly: in this suite's full sequence
+    // the canvas has been observed to land on the approach overview after the
+    // previous test's turn settles (not yet root-caused — recorded in
+    // PROGRESS), and an approval card only renders on the chat canvas. A
+    // person composes in a chat; so does this test.
+    await page.getByTestId("rail-session-row").nth(1).click();
+    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
+    await compose("look at the mentioned file");
+    await approvePending();
+    const settled = await until(
+      "the mentioned direction's turn to complete",
+      (value) =>
+        value.directions.some(
+          (direction) =>
+            direction.body === "look at the mentioned file" && direction.state === "applied"
+        )
+    );
+    const direction = settled.directions.find(
+      (candidate) => candidate.body === "look at the mentioned file"
+    )!;
+    expect(direction.context).toHaveLength(1);
+    expect(direction.context[0]).toEqual({ kind: "file", path: "README.md" });
+    // Settle the lane before the next test composes.
+    await until(
+      "the mentioned turn to finish",
+      (value) =>
+        !value.executions.some((execution) =>
+          ["requested", "starting", "running", "needs_approval"].includes(execution.state)
+        )
+    );
+  }, 180_000);
 
   it("a new chat continues from a chosen sibling, carrying its transcript (D-173)", async () => {
     // The draft offers the lane's existing chats as sources.

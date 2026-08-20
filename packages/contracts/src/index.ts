@@ -3926,6 +3926,10 @@ export interface NovusBridge {
      *  no window can name a directory of its own. */
     openWorkspaceIn(input: OpenWorkspaceInput): Promise<IpcResult<null>>;
     listFiles(input: { missionId: string; workstreamId?: string; path?: string }): Promise<IpcResult<WorkspaceEntry[]>>;
+    /** Flat, bounded file search over the lane's worktree for @-mentions
+     *  (D-185): git decides what the codebase is, the query filters, at most
+     *  twenty candidates come back. */
+    searchFiles(input: { missionId: string; workstreamId?: string; query: string }): Promise<IpcResult<string[]>>;
     readFile(input: { missionId: string; workstreamId?: string; path: string }): Promise<IpcResult<WorkspaceFile>>;
     writeFile(input: { missionId: string; workstreamId?: string; path: string; text: string }): Promise<IpcResult<null>>;
   };

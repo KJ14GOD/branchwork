@@ -129,6 +129,7 @@ export function Composer({
   pendingTranscripts,
   pendingContext,
   onRemoveContext,
+  mention,
   onRemoveTranscript
 }: {
   /** Null until the server has said what this viewer may do. The composer
@@ -186,6 +187,14 @@ export function Composer({
    *  the one place everything a send carries is read before the words. */
   pendingContext?: DirectionContextRef[];
   onRemoveContext?: (index: number) => void;
+  /** The @-mention (D-185): typing @ in the box offers the worktree's files;
+   *  picking one pins it as a context chip and consumes the @query text.
+   *  Absent where no worktree exists yet — the @ then stays an ordinary
+   *  character, never a dead popover. */
+  mention?: {
+    search: (query: string) => Promise<string[]>;
+    add: (path: string) => void;
+  };
   onRemoveTranscript?: (sessionId: string) => void;
 }) {
   const [textValue, setTextValue] = useState("");
@@ -236,6 +245,60 @@ export function Composer({
   };
 
   const [pendingChoice, setPendingChoice] = useState(false);
+  /** The active @-token (D-185): its start offset in the text and the query
+   *  typed after it, or null while no mention is being written. */
+  const [mentionToken, setMentionToken] = useState<{ start: number; query: string } | null>(null);
+  const [mentionMatches, setMentionMatches] = useState<string[]>([]);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  // The candidates for the token being typed, debounced a beat: the git list
+  // is fast, but a keystroke burst should cost one read, not six.
+  useEffect(() => {
+    if (!mention || mentionToken === null) {
+      setMentionMatches([]);
+      return;
+    }
+    let stale = false;
+    const timer = setTimeout(() => {
+      void mention.search(mentionToken.query).then((paths) => {
+        if (stale) return;
+        setMentionMatches(paths.slice(0, 8));
+        setMentionIndex(0);
+      });
+    }, 120);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [mention, mentionToken]);
+
+  /** Finds the @-token the cursor is inside: an @ at the start or after
+   *  whitespace, with no whitespace between it and the cursor. */
+  const readMentionToken = (value: string, cursor: number): { start: number; query: string } | null => {
+    const at = value.lastIndexOf("@", cursor - 1);
+    if (at === -1) return null;
+    if (at > 0 && !/\s/.test(value[at - 1] ?? "")) return null;
+    const between = value.slice(at + 1, cursor);
+    if (/\s/.test(between)) return null;
+    return { start: at, query: between };
+  };
+
+  const pickMention = (path: string): void => {
+    if (!mention || mentionToken === null) return;
+    mention.add(path);
+    // The chip is the reference; the @query it was typed as is consumed.
+    const element = inputRef.current;
+    const cursor = element?.selectionStart ?? mentionToken.start + 1 + mentionToken.query.length;
+    setTextValue((value) => value.slice(0, mentionToken.start) + value.slice(cursor));
+    setMentionToken(null);
+    requestAnimationFrame(() => {
+      const box = inputRef.current;
+      if (box) {
+        box.focus();
+        box.setSelectionRange(mentionToken.start, mentionToken.start);
+      }
+    });
+  };
   /** Images already uploaded and waiting to go with the next direction. They
    *  exist in the store the moment they are added, so a slow upload never
    *  delays the words — and abandoning the composer leaves an unattached
@@ -536,6 +599,29 @@ export function Composer({
             ))}
           </div>
         )}
+        {mentionToken !== null && mentionMatches.length > 0 && (
+          <div className="mention-popover" role="listbox" data-testid="mention-popover">
+            {mentionMatches.map((path, index) => (
+              <button
+                key={path}
+                role="option"
+                aria-selected={index === mentionIndex}
+                className={
+                  index === mentionIndex ? "mention-row selected" : "mention-row"
+                }
+                // Mouse down, not click: a click blurs the textarea first and
+                // the popover would be gone before it landed.
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  pickMention(path);
+                }}
+                data-testid="mention-row"
+              >
+                <span className="mono mention-path">{path}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <textarea
           ref={inputRef}
           className="composer-input"
@@ -549,6 +635,11 @@ export function Composer({
             // Editing the words withdraws the question: the choice was about
             // the direction as it stood (D-095).
             setPendingChoice(false);
+            if (mention) {
+              setMentionToken(
+                readMentionToken(event.target.value, event.target.selectionStart ?? 0)
+              );
+            }
             grow(event.target);
           }}
           onPaste={(event) => {
@@ -563,6 +654,32 @@ export function Composer({
             void pasteImage();
           }}
           onKeyDown={(event) => {
+            // The mention popover owns the keys while it is open (D-185):
+            // Enter picks, never sends, and Escape closes only it.
+            if (mentionToken !== null && mentionMatches.length > 0) {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setMentionIndex((index) => (index + 1) % mentionMatches.length);
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setMentionIndex(
+                  (index) => (index - 1 + mentionMatches.length) % mentionMatches.length
+                );
+                return;
+              }
+              if (event.key === "Enter" || event.key === "Tab") {
+                event.preventDefault();
+                pickMention(mentionMatches[mentionIndex]!);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setMentionToken(null);
+                return;
+              }
+            }
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               void send();

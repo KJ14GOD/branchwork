@@ -79,6 +79,7 @@ import {
   forgetSecret,
   inspectWorkspace,
   listFiles,
+  searchFiles,
   listTerminals,
   onProcessLog,
   onTerminalOutput,
@@ -1693,6 +1694,23 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed folder." };
     return call(async () =>
       listFiles(await targetFor(parsed.data.missionId, parsed.data.workstreamId), parsed.data.path)
+    );
+  });
+
+  ipcMain.handle("novus:workspace:search-files", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: MissionIdSchema,
+        workstreamId: z.string().startsWith("wst_").optional(),
+        query: z.string().max(200)
+      })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed search." };
+    return call(async () =>
+      searchFiles(
+        await targetFor(parsed.data.missionId, parsed.data.workstreamId),
+        parsed.data.query
+      )
     );
   });
 

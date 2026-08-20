@@ -680,6 +680,40 @@ export async function listFiles(
   return withMaskedPaths(target, host, (resolved) => listWorkspaceTree(resolved.worktree, path ?? ""));
 }
 
+/**
+ * The worktree's files, flat, for the composer's @-mention (D-185). Git is
+ * the judge of what "the codebase" is — tracked files plus untracked ones
+ * nothing ignores — so build output and node_modules never crowd the list.
+ * Filtered here and bounded: the renderer gets candidates, never the census.
+ */
+export async function searchFiles(
+  target: WorkspaceTarget,
+  query: string,
+  host?: WorkspaceHost
+): Promise<string[]> {
+  return withMaskedPaths(target, host, async (resolved) => {
+    const { execFile } = await import("node:child_process");
+    const listed = await new Promise<string>((settle, refuse) => {
+      execFile(
+        "git",
+        ["ls-files", "--cached", "--others", "--exclude-standard"],
+        { cwd: resolved.worktree, maxBuffer: 10 * 1024 * 1024 },
+        (error, stdout) => (error ? refuse(error) : settle(stdout))
+      );
+    });
+    const needle = query.toLowerCase();
+    const matches: string[] = [];
+    for (const line of listed.split("\n")) {
+      const path = line.trim();
+      if (path.length === 0) continue;
+      if (needle.length > 0 && !path.toLowerCase().includes(needle)) continue;
+      matches.push(path);
+      if (matches.length >= 20) break;
+    }
+    return matches;
+  });
+}
+
 export async function readFile(
   target: WorkspaceTarget,
   path: string,
