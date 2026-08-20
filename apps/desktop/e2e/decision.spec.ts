@@ -338,7 +338,13 @@ describe("competing approaches, compared and decided", () => {
         return children.querySelectorAll('[data-testid="rail-session-row"]').length;
       }, row);
 
-    // Alternative is the selected lane here, so fold its own conversations.
+    // Alternative is the selected lane here, and it holds one conversation —
+    // so its row has no approach page to offer (D-089) and the click is the
+    // fold, first time, regardless of where the post-fork selection race
+    // landed the canvas. (This line spent an evening failing when the race
+    // shifted: D-183's page-click was claiming the click on a one-chat lane
+    // and clearing invisible state instead — a dead control, fixed in the
+    // shell rather than papered over here.)
     const openBefore = await chatsIn(1);
     expect(openBefore).toBeGreaterThan(0);
     await laneRows.nth(1).click();

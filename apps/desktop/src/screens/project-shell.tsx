@@ -473,7 +473,15 @@ function MissionTree({
           //     the mission entirely and come back.
           //  3. The lane you are reading, already on its own page → fold and
           //     unfold its conversations, which is all that is left to mean.
-          const readingASession = focused && selectedSessionId !== null && !decisionOpen;
+          //
+          // Meaning 2 exists only where the page does: a lane with a single
+          // conversation has no approach page (D-089 — it lands straight in
+          // the chat), so for it the row skips to meaning 3. Without this, the
+          // first click on a one-chat lane cleared invisible selection state
+          // and read as a dead control — the exact fault D-183's second
+          // report named, reintroduced for the single-chat case.
+          const readingASession =
+            focused && selectedSessionId !== null && !decisionOpen && laneSessions.length > 1;
           const activate = () => {
             if (selected && readingASession) {
               onSelectApproach(lane.workstreamId === firstLaneId ? null : lane.workstreamId);
