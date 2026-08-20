@@ -2491,3 +2491,15 @@ A fourth thing turned out not to be a product bug at all: the D-168 e2e assertio
 **Consequences.** project-shell keydown handler; the settings Keyboard list; DESIGN's Keyboard section rewritten to shipped-vs-destination; evidence 201 recaptured. Also the settings takeover's Back button un-broken: Electron drag regions bleed through overlays, so the layer says no-drag with its own top drag strip, the side column clears the traffic lights, and Back to app spans the panel.
 
 **Revisit when.** A rebinding UI (the Codex pencil-and-trash anatomy) or the ⌘K palette gets built — both are the Keyboard page's natural growth.
+
+## D-178 — Every act one keystroke away
+
+**Context.** Owner-picked as next after D-177: "there should be keyboard shortcuts for every feature." Keys don't scale to every feature; a palette does.
+
+**Decision.** `⌘K` opens the command palette, wearing the mission search's existing anatomy — one palette system, not a second. It lists every act the window can take *right now*: Go (Home, find a mission, the project's missions with their `⌘n`, Archived), Toggle (rail/terminal/panel with their keys), Panel (the sections with their chords), Mission (new mission, find in conversation, request control), Novus (Settings, the three themes). Two house rules shape the list: acts the state cannot offer are absent — nothing to refuse — while acts a capability gates are present, dimmed, and carry the same denial words their buttons do (rule 13 in the mirror). The room's find bar opens through a consumed ask counter, forkAsk's own pattern. Rows the palette runs are the same handlers the buttons run; the palette can never do what the interface cannot.
+
+**Alternatives.** A new floating anatomy (rejected: the search palette already is the house's palette). Hiding capability-refused rows (rejected: the palette may not hide a verb the server would allow — same reasoning as every gated button).
+
+**Consequences.** `command-palette.tsx`; `⌘K` in the shell's global handler (closing Settings if open); `findAsk` through the room; the Keyboard page's first row; DESIGN's keyboard sentence flips from destination to shipped. Live-proven: `⌘K → "find conv" → Enter` opened the find bar, `⌘K → "terminal"` opened the dock; evidence 204.
+
+**Revisit when.** New verbs land (they should register a palette row the day they ship), or the palette wants per-mission acts from the rail's tree (sync, publish, compare) — a natural second ring.

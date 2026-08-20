@@ -16,6 +16,8 @@ import { Composer } from "../components/composer";
 import { Dialog } from "../components/dialog";
 import { GearGlyph, HumanMark, SignOutGlyph } from "../components/identity";
 import { SettingsDialog } from "../components/settings-dialog";
+import { CommandPalette, type PaletteCommand } from "../components/command-palette";
+import { applyTheme } from "../theme";
 import { MissionTabs } from "../components/mission-tabs";
 import { ColumnHandle, useColumnWidth } from "../components/resizable";
 import { OpenInControl } from "../components/open-in";
@@ -821,6 +823,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // The room consumes this ask and opens its find bar (the forkAsk pattern).
+  const [findAsk, setFindAsk] = useState(0);
   const [joinOpen, setJoinOpen] = useState(false);
   /** The setup dialog is held here because two surfaces open the same one: the
    *  state line's action inside the room, and the Run control beside it. */
@@ -1193,6 +1198,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       if (event.key === "t") {
         event.preventDefault();
         newMissionHere();
+      } else if (event.key === "k") {
+        event.preventDefault();
+        setSettingsDialogOpen(false);
+        setPaletteOpen((open) => !open);
       } else if (event.key === "b") {
         event.preventDefault();
         setRailHidden((hidden) => !hidden);
@@ -1960,6 +1969,138 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           />
         )}
 
+        {paletteOpen && (
+          <CommandPalette
+            onClose={() => setPaletteOpen(false)}
+            commands={(() => {
+              const commands: PaletteCommand[] = [];
+              commands.push({
+                id: "home",
+                group: "Go",
+                label: "Home — the board",
+                run: () => setWorkingSet((previous) => ({ ...previous, activeId: null }))
+              });
+              commands.push({
+                id: "search",
+                group: "Go",
+                label: "Find a mission…",
+                run: () => setSearchOpen(true)
+              });
+              if (currentProject) {
+                currentProject.missions.slice(0, 9).forEach((mission, at) => {
+                  commands.push({
+                    id: `mission-${mission.missionId}`,
+                    group: "Go",
+                    label: `Open "${mission.goal.slice(0, 60)}"`,
+                    hint: `⌘${at + 1}`,
+                    run: () => openMissionTab(currentProject.key, mission.missionId)
+                  });
+                });
+              }
+              if (archived && archived.length > 0) {
+                commands.push({
+                  id: "archived",
+                  group: "Go",
+                  label: `Archived missions (${archived.length})`,
+                  run: () => setArchivedOpen(true)
+                });
+              }
+              commands.push({
+                id: "rail",
+                group: "Toggle",
+                label: railHidden ? "Show the projects rail" : "Hide the projects rail",
+                hint: "⌘B",
+                run: () => setRailHidden((hidden) => !hidden)
+              });
+              commands.push({
+                id: "terminal",
+                group: "Toggle",
+                label: terminalOpen ? "Hide the terminal dock" : "Show the terminal dock",
+                hint: "⌘J",
+                run: () => setTerminalOpen((open) => !open)
+              });
+              if (activeMissionId !== null) {
+                commands.push({
+                  id: "panel",
+                  group: "Toggle",
+                  label: inspector ? "Hide the evidence panel" : "Show the evidence panel",
+                  hint: "⌘E",
+                  run: () =>
+                    setInspector((current) => {
+                      if (current) {
+                        lastSection.current = current;
+                        return null;
+                      }
+                      return lastSection.current ?? "overview";
+                    })
+                });
+                const sections: { key: InspectorSection; label: string; hint?: string }[] = [
+                  { key: "changes", label: "Open Changes", hint: "G C" },
+                  { key: "verification", label: "Open Verification", hint: "G V" },
+                  { key: "files", label: "Open All files", hint: "G A" },
+                  { key: "overview", label: "Open Overview" },
+                  { key: "evidence", label: "Open Evidence" }
+                ];
+                for (const section of sections) {
+                  commands.push({
+                    id: `section-${section.key}`,
+                    group: "Panel",
+                    label: section.label,
+                    hint: section.hint,
+                    run: () => setInspector(section.key)
+                  });
+                }
+              }
+              if (currentProject) {
+                commands.push({
+                  id: "new-mission",
+                  group: "Mission",
+                  label: `Start a mission in ${currentProject.name}`,
+                  hint: "⌘T",
+                  run: () => newMissionHere()
+                });
+              }
+              if (activeMissionId !== null) {
+                commands.push({
+                  id: "find",
+                  group: "Mission",
+                  label: "Find in the conversation",
+                  hint: "⌘F",
+                  run: () => setFindAsk((ask) => ask + 1)
+                });
+                const detail = openDetail;
+                if (detail && detail.control.holderUserId !== detail.viewerUserId) {
+                  const may = detail.capabilities.includes("control.request");
+                  commands.push({
+                    id: "request-control",
+                    group: "Mission",
+                    label: "Request control",
+                    hint: "R",
+                    disabled: may
+                      ? undefined
+                      : "Only participants who can operate this mission may request control.",
+                    run: () => void novus().control.request(detail.mission.missionId)
+                  });
+                }
+              }
+              commands.push({
+                id: "settings",
+                group: "Novus",
+                label: "Open Settings",
+                run: () => setSettingsDialogOpen(true)
+              });
+              for (const theme of ["light", "dark", "system"] as const) {
+                commands.push({
+                  id: `theme-${theme}`,
+                  group: "Novus",
+                  label: `Theme: ${theme.charAt(0).toUpperCase()}${theme.slice(1)}`,
+                  run: () => applyTheme(theme)
+                });
+              }
+              return commands;
+            })()}
+          />
+        )}
         {settingsDialogOpen && (
           <SettingsDialog
             user={user}
@@ -2090,6 +2231,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             <ProjectRoom
               key={active.id}
               forkAsk={forkAsk}
+              findAsk={findAsk}
+              onFindConsumed={() => setFindAsk(0)}
               onForkConsumed={() => setForkAsk(0)}
               onOpenDecision={() => {
                 setSessionDraft(false);

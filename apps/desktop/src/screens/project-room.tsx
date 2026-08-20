@@ -137,6 +137,8 @@ export function ProjectRoom({
   details,
   forkAsk = 0,
   onForkConsumed,
+  findAsk = 0,
+  onFindConsumed,
   selectedMissionId,
   onInspector,
   onSetup,
@@ -173,6 +175,9 @@ export function ProjectRoom({
   /** Incremented by the rail's Try-another-approach row (D-126); each tick
    *  opens the fork dialog, even after a cancel. */
   forkAsk?: number;
+  /** The palette's ask to open the find bar (D-178) — consumed, forkAsk's own pattern. */
+  findAsk?: number;
+  onFindConsumed?: () => void;
   /** Resets the ask once the dialog opened — the counter is a message, not
    *  state to keep (D-142 batch). */
   onForkConsumed: () => void;
@@ -497,6 +502,14 @@ export function ProjectRoom({
     if (total === 0) return;
     setFindIndex((current) => (current + direction + total) % total);
   };
+
+  useEffect(() => {
+    if (findAsk > 0) {
+      setFindOpen(true);
+      setTimeout(() => findInputRef.current?.select(), 0);
+      onFindConsumed?.();
+    }
+  }, [findAsk, onFindConsumed]);
 
   const closeFind = () => {
     setFindOpen(false);

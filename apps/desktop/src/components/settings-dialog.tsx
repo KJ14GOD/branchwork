@@ -117,6 +117,7 @@ const PAGE_LABEL: Record<Page, string> = {
 
 /** The room's real keys — the ones the code binds, nothing aspirational. */
 const KEYS: { keys: string; does: string }[] = [
+  { keys: "⌘K", does: "Open the command palette" },
   { keys: "⌘T", does: "Start a mission in the selected project" },
   { keys: "⌘1 – ⌘9", does: "Open the selected project's missions" },
   { keys: "⌘B", does: "Show or hide the projects rail" },

@@ -5089,6 +5089,22 @@ body.resizing {
   font: var(--type-body);
 }
 
+/* A command the capabilities refuse stays visible with its reason (D-178):
+   dimmed, unrunnable, the same denial words its button carries. */
+.palette-hit.refused {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.palette-denial {
+  color: var(--text-3);
+  font: var(--type-meta);
+}
+
+.palette-where.mono {
+  font-family: var(--font-mono);
+}
+
 /* ---------- The Decision Room (D-074, D-075) ---------- */
 /* Columns are identical by construction: one grid track per approach, the same
    width, the same rows, in the order the server sent them. Nothing here can
