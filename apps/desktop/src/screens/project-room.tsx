@@ -149,6 +149,7 @@ export function ProjectRoom({
   onDetail,
   onCreated,
   terminalOpen,
+  onOpenTerminal,
   openFiles,
   activeFile,
   onSelectFile,
@@ -202,6 +203,9 @@ export function ProjectRoom({
    *  controls, so the shell owns the state and the room only renders it — the
    *  same toggle closes it, which is why the dock carries no Hide of its own. */
   terminalOpen: boolean;
+  /** Raises the dock the shell owns — the / menu's open-in-terminal row needs
+   *  it (D-199); the toggle itself stays the shell's. */
+  onOpenTerminal?: () => void;
   /** Files the reader opened from the panel. Each is a tab beside the
    *  room's own — a path in ONE lane's worktree, wearing that lane's identity
    *  dot once the mission has competing approaches, because the same path open
@@ -287,6 +291,9 @@ export function ProjectRoom({
    *  checks picked from the inspector, worn as chips on the composer's top
    *  edge and cleared once the direction lands. */
   const [pendingContext, setPendingContext] = useState<DirectionContextRef[]>([]);
+  /** A command waiting to be typed into the dock (D-199) — primed, never
+   *  submitted: pressing Enter in one's own session stays one's own act. */
+  const [dockPrime, setDockPrime] = useState<string | null>(null);
   // An abandoned draft carries nothing forward: the selection dies with the
   // surface it was made on (D-173, same rule as the draft's own words).
   useEffect(() => {
@@ -2405,6 +2412,16 @@ export function ProjectRoom({
         }
         mention={mention}
         slashCommands={detail ? slashCommandCompletions(detail) : undefined}
+        terminal={
+          executionAvailable && onOpenTerminal
+            ? (query) => {
+                // A terminal command is the person's own session, not a turn
+                // (D-199): raise the dock primed — typed, never submitted.
+                setDockPrime(query.length > 0 ? `claude ${JSON.stringify(`/${query}`)}` : "claude");
+                onOpenTerminal();
+              }
+            : undefined
+        }
       />
       )}
 
@@ -2504,6 +2521,8 @@ export function ProjectRoom({
           key={activeLaneId ?? "default"}
           missionId={selectedMissionId}
           workstreamId={activeLaneId ?? undefined}
+          prime={dockPrime}
+          onPrimed={() => setDockPrime(null)}
         />
       )}
 

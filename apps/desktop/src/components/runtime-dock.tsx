@@ -216,13 +216,20 @@ function usePanes(missionId: string, workstreamId?: string) {
  */
 export function RuntimeDock({
   missionId,
-  workstreamId
+  workstreamId,
+  prime,
+  onPrimed
 }: {
   missionId: string;
   /** The lane whose worktree the shell opens in — the room's active approach.
    *  Switching lanes remounts the dock, so a session in one worktree is never
    *  presented as the other's (D-080). */
   workstreamId?: string;
+  /** A command to type into a shell on arrival (D-199) — typed, never
+   *  submitted: the person presses Enter in their own session or does not.
+   *  Null asks for nothing. */
+  prime?: string | null;
+  onPrimed?: () => void;
 }) {
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -382,6 +389,30 @@ export function RuntimeDock({
 
   const active = sessions.find((session) => session.sessionId === activeId) ?? null;
 
+  /** The primed command (D-199): typed into the dock's own shell — the one
+   *  the mount effect opens — without a newline, so nothing runs that a
+   *  person did not fire themselves. The effect waits for that shell rather
+   *  than racing it with a second one, and consumes the prime exactly once,
+   *  after the shell has spoken (bytes fired into a still-initialising line
+   *  editor are eaten). */
+  const primed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!prime || primed.current === prime) return;
+    const shell = sessions.find((session) => session.kind === "shell");
+    if (!shell) return; // the mount effect is still opening it; deps re-run us
+    primed.current = prime;
+    setActiveId(shell.sessionId);
+    void (async () => {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const read = await novus().terminal.scrollback(shell.sessionId);
+        if (read.ok && read.value.length > 0) break;
+        await new Promise((settle) => setTimeout(settle, 250));
+      }
+      await novus().terminal.write({ sessionId: shell.sessionId, data: prime });
+      onPrimed?.();
+    })();
+  }, [prime, sessions, onPrimed]);
+
   const create = async (kind: TerminalKind) => {
     if (busy) return;
     setBusy(true);
@@ -481,6 +512,7 @@ export function RuntimeDock({
                 key={session.sessionId}
                 className={selected ? "terminal-tab active" : "terminal-tab"}
                 data-testid="terminal-tab"
+                data-session={session.sessionId}
                 data-kind={session.kind}
                 data-name={session.name}
                 data-state={tone.label}

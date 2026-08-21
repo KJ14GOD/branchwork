@@ -132,6 +132,7 @@ export function Composer({
   onRemoveContext,
   mention,
   slashCommands,
+  terminal,
   onRemoveTranscript
 }: {
   /** Null until the server has said what this viewer may do. The composer
@@ -202,6 +203,10 @@ export function Composer({
    *  registered for the composed command. Absent or empty, / stays an
    *  ordinary character — never a dead popover. */
   slashCommands?: { name: string; description: string | null; insert: string }[];
+  /** Opens the person's own Claude session in the terminal dock with the
+   *  typed command primed (D-199) — the road for the harness's terminal-only
+   *  surfaces (/mcp and friends). Absent where no dock can exist. */
+  terminal?: (query: string) => void;
   onRemoveTranscript?: (sessionId: string) => void;
 }) {
   const [textValue, setTextValue] = useState("");
@@ -331,6 +336,17 @@ export function Composer({
             command.name.toLowerCase().includes(slashToken.query.toLowerCase())
           )
           .slice(0, 8);
+  /** One more row when a dock exists (D-199): whatever was typed, in the
+   *  person's own session. It also keeps / alive where nothing matches, so a
+   *  terminal-only command like /mcp is never a dead end. */
+  const slashRows = terminal && slashToken !== null ? commandMatches.length + 1 : commandMatches.length;
+
+  const pickTerminal = (): void => {
+    if (!terminal || slashToken === null) return;
+    terminal(slashToken.query);
+    setTextValue((value) => value.slice(1 + slashToken.query.length).trimStart());
+    setSlashToken(null);
+  };
 
   const readSlashToken = (value: string, cursor: number): { query: string } | null => {
     if (!value.startsWith("/")) return null;
@@ -674,7 +690,7 @@ export function Composer({
             ))}
           </div>
         )}
-        {slashToken !== null && commandMatches.length > 0 && (
+        {slashToken !== null && slashRows > 0 && (
           <div className="mention-popover" role="listbox" data-testid="slash-popover">
             {commandMatches.map((command, index) => (
               <button
@@ -697,6 +713,25 @@ export function Composer({
                 )}
               </button>
             ))}
+            {terminal && (
+              <button
+                role="option"
+                aria-selected={slashIndex === commandMatches.length}
+                className={
+                  slashIndex === commandMatches.length ? "mention-row selected" : "mention-row"
+                }
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  pickTerminal();
+                }}
+                data-testid="slash-terminal-row"
+              >
+                <span className="mono mention-path">
+                  {slashToken.query.length > 0 ? `claude "/${slashToken.query}"` : "claude"}
+                </span>
+                <span className="mention-note">Open in terminal — your own session</span>
+              </button>
+            )}
           </div>
         )}
         {mentionToken !== null && mentionMatches.length > 0 && (
@@ -765,22 +800,22 @@ export function Composer({
           onKeyDown={(event) => {
             // The slash popover owns the keys while it is open (D-187), the
             // mention popover's exact grammar: Enter picks, never sends.
-            if (slashToken !== null && commandMatches.length > 0) {
+            if (slashToken !== null && slashRows > 0) {
               if (event.key === "ArrowDown") {
                 event.preventDefault();
-                setSlashIndex((index) => (index + 1) % commandMatches.length);
+                setSlashIndex((index) => (index + 1) % slashRows);
                 return;
               }
               if (event.key === "ArrowUp") {
                 event.preventDefault();
-                setSlashIndex(
-                  (index) => (index - 1 + commandMatches.length) % commandMatches.length
-                );
+                setSlashIndex((index) => (index - 1 + slashRows) % slashRows);
                 return;
               }
               if (event.key === "Enter" || event.key === "Tab") {
                 event.preventDefault();
-                pickSlashCommand(commandMatches[slashIndex]!.insert);
+                const chosen = commandMatches[slashIndex];
+                if (chosen) pickSlashCommand(chosen.insert);
+                else pickTerminal();
                 return;
               }
               if (event.key === "Escape") {

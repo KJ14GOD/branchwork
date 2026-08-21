@@ -354,6 +354,51 @@ describe("what a project declares is carried, and the record says which bytes (D
   );
 
   it(
+    "routes a terminal command to the person's own session: primed in the dock, never submitted (D-199)",
+    async () => {
+      await page.getByTestId("composer-input").click();
+      await page.getByTestId("composer-input").fill("/mcp");
+      const row = page.getByTestId("slash-terminal-row");
+      await row.waitFor({ timeout: 10_000 });
+      expect(await row.textContent()).toContain('claude "/mcp"');
+      await row.click();
+
+      // The dock rises with the command typed and waiting — the person fires
+      // their own session or does not; Novus submitted nothing. The buffer is
+      // read through the bridge's own scrollback, because xterm paints on
+      // canvas and offers the DOM nothing to read.
+      await page.getByTestId("terminal-dock").waitFor({ timeout: 20_000 });
+      await page.getByTestId("terminal-tab").first().waitFor({ timeout: 20_000 });
+      const readBuffer = () =>
+            page.evaluate(async () => {
+              const bridge = (window as { novus?: { terminal?: { scrollback?: (id: string) => Promise<{ ok: boolean; value?: string }> } } }).novus;
+              const tab = document.querySelector('[data-testid="terminal-tab"]');
+              const sessionId = tab?.getAttribute("data-session") ?? "";
+              if (!bridge?.terminal?.scrollback || sessionId === "") return "no-session";
+              const read = await bridge.terminal.scrollback(sessionId);
+              return read.ok ? (read.value ?? "") : `no-read:${JSON.stringify(read)}`;
+            });
+      let last = "";
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        last = await readBuffer();
+        if (last.includes('claude "/mcp"')) break;
+        await page.waitForTimeout(500);
+      }
+      expect(last, `scrollback tail: ${JSON.stringify(last.slice(-600))}`).toContain('claude "/mcp"');
+      // Consumed from the composer: a routed command is not a message.
+      expect(await page.getByTestId("composer-input").inputValue()).toBe("");
+      await page.screenshot({ path: join(evidenceDir, "215-terminal-primed-mcp.png") });
+      // The dock came up for this test; put it away so the next one meets the
+      // room it expected.
+      await page.getByTestId("terminal-toggle").click();
+      await page
+        .getByTestId("terminal-dock")
+        .waitFor({ state: "detached", timeout: 10_000 });
+    },
+    120_000
+  );
+
+  it(
     "offers the CLI's own commands too, captured from the session's announcement (D-188)",
     async () => {
       // The turns above already ran, so this machine has heard the harness

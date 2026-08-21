@@ -2795,3 +2795,17 @@ A label belongs to the **organization**, so a team shares one vocabulary rather 
 **Consequences.** `MachineMcpServerSchema` (env names only, laxer name grammar, same url admission), workspace/declared/workstream/running-event fields, `declared_machine_mcp`/`enabled_machine_mcp`, the two-key route, `machine-mcp.ts` (discover-redacted / resolve-full), compose merge, the **Global MCP servers** group with the consequence dialog, and the trace's own `Machine MCP servers carried:` line. The panel states the account-connector limit in words.
 
 **Revisit when.** The CLI grows a way to name account connectors in a config it accepts under strictness; or owner-and-admin diverging in practice earns the offer/accept flow; or per-server standing allows (D-119's deferred dial) arrive and should cover machine servers the same way.
+
+## D-199 — A terminal command routes to the person's own session, primed and never fired
+
+**Context.** The owner, on Conductor's embedded terminal answering `/mcp` with the full interactive dialog: "is that a possibility … the /menu will open into the terminal we alr built im assuming." The assumption was right: the dock (D-049) is a real PTY in the lane's worktree, and running `claude` there is already the whole Conductor experience — personal settings, account connectors, everything the pinned turn deliberately excludes.
+
+**Decision.** The composer's / popover gains one last row: `claude "/{query}"` · *Open in terminal — your own session*. Picking it consumes the /query (a routed command is not a message), raises the dock the shell owns, and **types** the command into the dock's own shell — primed, never submitted: the person presses Enter in their own session or does not, so Novus never fires a personal session on anyone's behalf. The row exists for every query, so a terminal-only surface like /mcp is never a dead end, and it is offered only where a dock can exist (the machine hosting the workspace). What happens in the dock stays what it always was (D-049): the person's own act, outside the turn record, its worktree leftovers caught by the settle machinery like any human edit.
+
+The prime waits for the shell to speak before typing — bytes fired into a still-initialising line editor are eaten (measured: zsh under bracketed-paste swallowed an early write whole) — and it types into the dock's *own* shell rather than racing its mount effect with a second one (also measured, as a duplicate session).
+
+**Alternatives.** Executing the primed command (rejected: firing a person's own credentialed session is theirs to do, and the unfired prompt is also what makes the affordance testable without spawning real sessions). Resuming the governed harness session interactively, Conductor's shape (rejected: untracked turns inside a recorded conversation would make the receipt lie). Listing the CLI's terminal-only commands as named rows (rejected: D-188's anti-drift rule — the generic row covers every name without curating any).
+
+**Consequences.** `terminal` prop on the composer; `onOpenTerminal` from the shell through the room; `prime`/`onPrimed` on the dock with the readiness wait; the tab carries its session id for the test to read scrollback through the bridge.
+
+**Revisit when.** The dock wants a "claude" tab kind of its own; or people ask for the primed command to auto-fire, at which point the consent question returns as itself.

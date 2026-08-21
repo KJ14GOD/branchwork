@@ -2230,6 +2230,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               onDetail={handleDetail}
               onCreated={handleCreated}
               terminalOpen={terminalOpen}
+              onOpenTerminal={() => setTerminalOpen(true)}
               openFiles={openFiles}
               activeFile={activeFile}
               onSelectFile={(key) =>
