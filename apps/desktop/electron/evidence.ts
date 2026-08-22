@@ -109,6 +109,18 @@ export async function dirtyEntries(git: GitRunner, cwd: string): Promise<StatusE
   return entries;
 }
 
+/** The subset of paths `git add` can still resolve: present in the worktree,
+ *  or tracked in the index. Everything else is an already-staged removal. */
+async function stillAddable(git: GitRunner, cwd: string, paths: string[]): Promise<string[]> {
+  if (paths.length === 0) return [];
+  const tracked = new Set(
+    (await git(cwd, ["ls-files", "-z", "--", ...paths])).split("\0").filter((entry) => entry !== "")
+  );
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  return paths.filter((path) => tracked.has(path) || existsSync(join(cwd, path)));
+}
+
 interface NumstatEntry {
   path: string;
   previousPath: string | null;
@@ -291,7 +303,15 @@ export async function captureCheckpoint(
 
   const states = new Map(safe.map((entry) => [entry.path, entry]));
   try {
-    await git(cwd, ["add", "--", ...safe.map((entry) => entry.path)]);
+    // A path the agent removed with `git rm` is already gone from both the
+    // worktree and the index — its deletion is staged, and naming it to
+    // `git add` matches nothing ("pathspec did not match any files"), which
+    // aborted the whole checkpoint and left the lane without a revision. Add
+    // only what git can still find: on disk, or tracked in the index (a plain
+    // worktree deletion stages fine from there). The rest is carried by the
+    // commit exactly as the agent staged it.
+    const addable = await stillAddable(git, cwd, safe.map((entry) => entry.path));
+    if (addable.length > 0) await git(cwd, ["add", "--", ...addable]);
     await git(cwd, [
       "-c",
       "user.name=Novus",

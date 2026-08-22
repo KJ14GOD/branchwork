@@ -150,6 +150,30 @@ describe("captureCheckpoint", () => {
     expect(message).toContain("Novus");
   });
 
+  it("checkpoints a turn whose agent removed a file with `git rm`, instead of failing on the pathspec", async () => {
+    // Owner-hit, 2026-08-22: "The work could not be checkpointed: fatal:
+    // pathspec 'components/RookieCard.tsx' did not match any files". The
+    // agent staged the removal itself, so at checkpoint time the path was in
+    // neither the worktree nor the index, `git add -- path` matched nothing,
+    // and the whole turn went unsaved — which then hid Publish for the lane.
+    write("components/RookieCard.tsx", "export const RookieCard = () => null;\n");
+    await commitAll("a component a later turn removes");
+    write("components/Card.tsx", "export const Card = () => null;\n");
+    await git(repo, ["rm", "-q", "--", "components/RookieCard.tsx"]);
+
+    const checkpoint = await captureCheckpoint(git, repo, {
+      branch: "novus/m-abc123",
+      summary: "Remove the rookie card"
+    });
+    expect(checkpoint.outcome).toBe("committed");
+    expect(checkpoint.error).toBeNull();
+    const byPath = new Map(checkpoint.files.map((file) => [file.path, file]));
+    expect(byPath.get("components/RookieCard.tsx")?.changeState).toBe("deleted");
+    expect(byPath.get("components/Card.tsx")?.changeState).toBe("added");
+    // The removal travelled in the commit exactly as the agent staged it.
+    expect(await git(repo, ["ls-files", "--", "components/RookieCard.tsx"])).toBe("");
+  });
+
   it("detects a rename instead of reporting a delete and an add", async () => {
     write("src/original.ts", Array.from({ length: 30 }, (_, index) => `export const value${index} = ${index};`).join("\n"));
     await commitAll("add a file worth renaming");
