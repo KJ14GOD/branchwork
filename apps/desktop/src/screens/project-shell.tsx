@@ -55,7 +55,8 @@ import {
   liveRunProcess,
   sessionActivity,
   sessionNeedsYou,
-  type BoardColumnId
+  type BoardColumnId,
+  standingDecision
 } from "../components/derive";
 import { HomeBoard } from "../components/home-board";
 import { PREVIEW_TAB_KEY, pullIdOfKey, pullTabKey, type OpenPreviewTab } from "../components/preview";
@@ -662,7 +663,7 @@ function MissionTree({
         >
           <button className="side-open-mission" onClick={onCompare} aria-current={decisionOpen}>
             <span className="side-name">Publish</span>
-            {detail.decisions.some((decision) => decision.supersededAt === null) && (
+            {standingDecision(detail) !== null && (
               <span className="side-decision-note"> · decision recorded</span>
             )}
           </button>
@@ -675,7 +676,7 @@ function MissionTree({
         >
           <button className="side-open-mission" onClick={onCompare} aria-current={decisionOpen}>
             <span className="side-name">Compare</span>
-            {detail.decisions.some((decision) => decision.supersededAt === null) && (
+            {standingDecision(detail) !== null && (
               <span className="side-decision-note"> · decision recorded</span>
             )}
           </button>
