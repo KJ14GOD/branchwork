@@ -353,10 +353,9 @@ describe("the missions a person has open", () => {
 
     await shot(page, "63-working-set-two-projects.png");
 
-    // ⌃⇥ walks the rail's projects, not the open rooms (D-212 as the owner
-    // corrected it): Beta one is the room on screen, so the selected project
-    // is Beta; one press selects Alpha — wrapping, since Alpha is first —
-    // while the room stays exactly where it was (D-077).
+    // ⌃⇥ moves you INTO the next project (D-212, as the owner locked it in):
+    // Beta one is on screen; one press lands in Alpha — wrapping, since Alpha
+    // is first — on the room last read there, which was Alpha one.
     const selectedProject = () =>
       page.locator('[data-testid="project-row"][aria-current="true"]').innerText();
     const activeLabel = () =>
@@ -368,18 +367,24 @@ describe("the missions a person has open", () => {
       .poll(() => projectGroup(page, alphaName).getByTestId("project-twisty").getAttribute("aria-expanded"))
       .toBe("false");
     await page.keyboard.press("Control+Tab");
+    await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Alpha one");
     await expect.poll(selectedProject, { timeout: 10_000 }).toContain(alphaName.slice(0, 12));
-    // Disclosed on arrival — a selection nobody can see is no selection.
     await expect
       .poll(() => projectGroup(page, alphaName).getByTestId("project-twisty").getAttribute("aria-expanded"))
       .toBe("true");
-    // And the room did not move.
-    expect(await activeLabel()).toContain("Beta one");
-    // ⌘1–9 now aim at the chosen project: ⌘2 opens Alpha's second mission.
+    // ⌘1–9 aim at the project you are in: ⌘2 is Alpha's second mission.
     await page.keyboard.press("Meta+2");
     await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Alpha two");
-    // Back the other way wraps from Alpha to Beta.
+    expect((await tabLabels(page)).length).toBe(3);
+
+    // A project with no room open gets its first mission opened: close Beta
+    // one's tab, then walk back to Beta and land in it anyway.
+    const betaTab = page.getByTestId("mission-tab").filter({ hasText: "Beta one" });
+    await betaTab.hover();
+    await betaTab.getByTestId("mission-tab-close").click();
+    await expect.poll(async () => (await tabLabels(page)).length, { timeout: 10_000 }).toBe(2);
     await page.keyboard.press("Control+Shift+Tab");
+    await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Beta one");
     await expect.poll(selectedProject, { timeout: 10_000 }).toContain(betaName.slice(0, 12));
     expect((await tabLabels(page)).length).toBe(3);
 

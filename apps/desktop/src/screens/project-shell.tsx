@@ -1088,9 +1088,14 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   // unable to aim anywhere but the open room's project.
   const currentProjectKey = railProject ?? active?.projectKey ?? null;
   const activeProjectKey = active?.projectKey ?? null;
+  /** The room last read in each project (D-212): where ⌃⇥ lands when the
+   *  project has rooms open, so moving between projects returns to where
+   *  you were in each rather than to an arbitrary tab. */
+  const lastRoomIn = useRef(new Map<string, string>());
   useEffect(() => {
     if (activeProjectKey !== null) setRailProject(activeProjectKey);
-  }, [activeProjectKey]);
+    if (active) lastRoomIn.current.set(active.projectKey, active.id);
+  }, [activeProjectKey, active]);
   const currentProject = currentProjectKey
     ? (projects.find((project) => project.key === currentProjectKey) ?? null)
     : null;
@@ -1267,16 +1272,28 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         setRailHidden(false);
         setSettingsOpen((previous) => !previous);
       } else if (matchesChord(event, keys.nextProject) || matchesChord(event, keys.previousProject)) {
-        // Along the rail's projects, wrapping (D-212): selected, and disclosed
-        // if it was folded — a selection nobody can see is no selection. The
-        // room never moves (D-077); ⌘1–9 now reach the chosen project.
+        // Along the rail's projects, wrapping (D-212), and *into* the one
+        // chosen: its last-read open room if it has one, else its first
+        // mission opened as a room, else — a project with no missions — the
+        // selection alone, disclosed. ⌘1–9 and ⌘T reach the chosen project
+        // either way.
         event.preventDefault();
         const direction = matchesChord(event, keys.nextProject) ? 1 : -1;
         const next = cycleKey(projects.map((project) => project.key), currentProjectKey, direction);
         if (next === null) return;
-        setRailProject(next);
         setExpanded((previous) => new Set(previous).add(next));
         setRailHidden(false);
+        const openHere = workingSetRef.current.tabs.filter((tab) => tab.projectKey === next);
+        const remembered = lastRoomIn.current.get(next);
+        const landing = openHere.find((tab) => tab.id === remembered) ?? openHere[0];
+        if (landing) {
+          setWorkingSet((set) => selectTab(set, landing.id));
+          setRailProject(next);
+          return;
+        }
+        const first = projects.find((project) => project.key === next)?.missions[0];
+        if (first) openMissionTab(next, first.missionId);
+        else setRailProject(next);
       } else if (/^[1-9]$/.test(event.key) && !event.shiftKey && !event.altKey) {
         if (!currentProject) return;
         const mission = currentProject.missions[Number(event.key) - 1];
