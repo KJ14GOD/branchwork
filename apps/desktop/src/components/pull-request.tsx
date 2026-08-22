@@ -13,6 +13,7 @@ import { agoLabel, clockTime, plural, shortSha } from "../format";
 import { ArtifactThumbRow } from "./artifact-row";
 import { Dialog } from "./dialog";
 import { GatedAction } from "./gated";
+import { HumanMark } from "./identity";
 import { Markdown } from "./markdown";
 
 /**
@@ -160,6 +161,18 @@ export function PullRequestPanel({
 }
 
 /** The tab's own quiet state word, session-tab style. */
+/** A person on the request page: their GitHub picture beside their login
+ *  (D-211) — the host's own convention, and the one thing that makes a
+ *  conversation scannable. Initials where no picture resolves. */
+function Person({ login }: { login: string }) {
+  return (
+    <span className="pull-person">
+      <HumanMark login={login} />
+      <span className="pull-person-name">{login}</span>
+    </span>
+  );
+}
+
 export function pullStateWord(pull: PullRequest): string {
   return pull.state === "draft"
     ? "draft"
@@ -264,7 +277,9 @@ export function PullRequestPage({
 
       <article className="pull-card" data-testid="pull-body">
         <div className="pull-card-head">
-          <span className="pull-card-author">{opener}</span>
+          <span className="pull-card-author">
+            <Person login={opener} />
+          </span>
           <span className="pull-card-meta">
             {agoLabel(pull.createdAt, now)}
             {" · "}
@@ -294,7 +309,7 @@ export function PullRequestPage({
               <li key={commit.sha} className="pull-commit">
                 <span className="pull-commit-message">{commit.message.split("\n")[0]}</span>
                 <span className="pull-commit-meta">
-                  {commit.author}
+                  <Person login={commit.author} />
                   {" · "}
                   <span className="mono">{shortSha(commit.sha)}</span>
                 </span>
@@ -1049,9 +1064,20 @@ function PullReview({
     <section className="pull-review" data-testid="pull-review">
       <h3 className="field-label">Review</h3>
       <p className="receipt-line" data-testid="pull-reviewers">
-        {pull.requestedReviewers.length === 0
-          ? "Nobody has been asked for review yet."
-          : `Review requested from ${pull.requestedReviewers.join(", ")}.`}
+        {pull.requestedReviewers.length === 0 ? (
+          "Nobody has been asked for review yet."
+        ) : (
+          <>
+            Review requested from{" "}
+            {pull.requestedReviewers.map((login, index) => (
+              <span key={login}>
+                {index > 0 ? ", " : ""}
+                <Person login={login} />
+              </span>
+            ))}
+            .
+          </>
+        )}
         {openThreads.length > 0 ? ` ${plural(openThreads.length, "comment")} open.` : ""}
         {openState && openThreads.length > 1 && (
           <>
@@ -1074,7 +1100,9 @@ function PullReview({
               data-state={thread.state}
             >
               <div className="pull-card-head">
-                <span className="pull-card-author">{thread.author}</span>
+                <span className="pull-card-author">
+                  <Person login={thread.author} />
+                </span>
                 {thread.path ? (
                   <span className="mono pull-thread-anchor">
                     {thread.path}

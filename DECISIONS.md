@@ -2959,3 +2959,15 @@ A downstream request is never the lane's own publication. It blocks no Publish a
 **Consequences.** `pull-request.tsx`: `PullRequestPage` fetches files/commits once, renders head, description sheet, commits block, threads as cards; `PullHeadline` gains `opener`/`commitCount` and prints the full sentence on the page, its shorter form on the receipt summary (which keeps the title line the page no longer duplicates). CSS: `.pull-head/.pull-title/.pull-sentence/.pull-state-word`, `.pull-card*`, `.pull-threads`, `.pull-commit*`. `pr.spec.ts` asserts the new sentence by its state word and the rendered description (no `## ` on the page), and captures the conversation as cards (evidence `216`); evidence `108`–`114`/`137` regenerated and reviewed — title, sentence, document, commits, readiness, thread card all checked by eye.
 
 **Revisit when.** A thread wants its diff hunk in the card; or the host's timeline (reviews, approvals, force-pushes) wants listing between description and conversation, which is the next block the host's page has and this one does not.
+
+## D-211 — People on the request page wear their picture
+
+**Context.** On the restructured page (D-210) the owner, immediately: "where my GitHub username is and where the reviewers' GitHub usernames are, there is no icon to represent — makes it so much easier to see frankly." GitHub puts a face beside every name on a request, and a conversation scans by faces before it scans by names.
+
+**Decision.** Every person the page names wears the D-105 mark — their GitHub picture at row size, initials where none resolves — beside their login: the opener on the description sheet's head, each review thread's author, each requested reviewer in the review sentence, each commit's author. The mark is the one identity mark the product already has (a human is a circle, D-105 fetches the host's own `{login}.png`), so reviewers and outside authors resolve exactly as participants do; nothing new is drawn and no colour is introduced.
+
+**Alternatives.** Marks only on threads (rejected: the owner named his own name on the description and the reviewers' line first). A generic person glyph (rejected: the point is recognition, which only the picture gives).
+
+**Consequences.** `Person` in `pull-request.tsx` (`HumanMark` + login), `.pull-person*` styles. Proven: `pr.spec.ts` green; evidence `216` re-reviewed with the reviewer's picture resolved beside her name on the review line and the thread head.
+
+**Revisit when.** A commit's author arrives as a git name rather than a login (initials show; mapping names to logins is the host's knowledge, not Novus's); or the description sheet wants the opener's picture in the sentence as well.

@@ -5616,6 +5616,24 @@ body.resizing {
   color: var(--text-3);
 }
 
+.pull-person {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  vertical-align: middle;
+}
+
+.pull-person-name {
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.pull-commit-meta .pull-person-name,
+.pull-thread.resolved .pull-person-name {
+  font-weight: 400;
+  color: inherit;
+}
+
 .pull-card-author {
   font: var(--type-row);
   font-weight: 500;
