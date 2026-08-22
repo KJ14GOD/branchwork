@@ -7,20 +7,23 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 /**
- * The harness's workers in a real window (D-107): a turn that spawns two of
- * them shows the Workers rollup inside its technical disclosure — states in
- * words — and choosing one opens its own view on the canvas, with Back to
- * chat returning to the conversation. Driven end to end through the fake
- * harness, whose worker lines are the real CLI's shapes through the real
- * parser, so what this spec proves is the production join.
+ * The ask dialog's own controls (D-201). Starting a mission is a question
+ * (D-077), and the question's foot is the real composer's — so what a person
+ * can decide before the first turn is decided here: which answer policy it
+ * runs under, and which files it carries.
+ *
+ * The profile is proven end to end, because it needs no native dialog: chosen
+ * in the ask, read back off the lane the mission created. Attaching is proven
+ * as far as a headless run honestly can — the control is there, and the file
+ * picker it opens is the operating system's own.
  */
 
 const desktopRoot = resolve(__dirname, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 const evidenceDir = join(desktopRoot, "e2e", "evidence");
-const CP_PORT = 4496;
+const CP_PORT = 4498;
 const CP_URL = `http://127.0.0.1:${CP_PORT}`;
-const DB_NAME = "novus_e2e_workers";
+const DB_NAME = "novus_e2e_ask";
 const DB_URL = `postgres://novus:novus@127.0.0.1:5433/${DB_NAME}`;
 
 let controlPlane: ChildProcess;
@@ -63,7 +66,7 @@ async function mintToken(): Promise<string> {
 
 beforeAll(async () => {
   mkdirSync(evidenceDir, { recursive: true });
-  const userDataDir = mkdtempSync(join(tmpdir(), "novus-workers-"));
+  const userDataDir = mkdtempSync(join(tmpdir(), "novus-ask-"));
 
   const pg = await import("pg");
   const admin = new pg.default.Pool({
@@ -92,10 +95,10 @@ beforeAll(async () => {
   );
   await waitForHealth();
 
-  const localRepoDir = mkdtempSync(join(tmpdir(), "novus-workers-repo-"));
+  const localRepoDir = mkdtempSync(join(tmpdir(), "novus-ask-repo-"));
   repoName = basename(localRepoDir);
   git(localRepoDir, ["init", "-b", "main"]);
-  writeFileSync(join(localRepoDir, "README.md"), "# workers fixture\n");
+  writeFileSync(join(localRepoDir, "README.md"), "# ask fixture\n");
   git(localRepoDir, ["add", "-A"]);
   git(localRepoDir, ["-c", "user.name=T", "-c", "user.email=t@l", "commit", "-m", "fixture"]);
   const headSha = git(localRepoDir, ["rev-parse", "HEAD"]);
@@ -131,21 +134,6 @@ beforeAll(async () => {
   await page.getByTestId("github-connected").waitFor({ timeout: 30_000 });
   await page.getByTestId("finish-setup").click();
   await page.getByTestId("project-shell").waitFor({ timeout: 30_000 });
-
-  const projectRow = page.getByTestId("project-row").filter({ hasText: repoName });
-  await projectRow.waitFor({ timeout: 30_000 });
-  await projectRow.hover();
-  await page.getByTestId("repo-new-mission").click();
-  await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
-  await page
-    .getByTestId("new-mission-dialog")
-    .getByTestId("composer-input")
-    .fill("delegate the research [fake-workers]");
-  await page.keyboard.press("Enter");
-  await page
-    .getByTestId("trace-outcome")
-    .filter({ hasText: "Turn completed" })
-    .waitFor({ timeout: 90_000 });
 }, 240_000);
 
 afterAll(async () => {
@@ -153,64 +141,56 @@ afterAll(async () => {
   controlPlane?.kill("SIGTERM");
 });
 
-describe("the harness's workers in the room (D-107)", () => {
+async function openAsk(): Promise<void> {
+  const projectRow = page.getByTestId("project-row").filter({ hasText: repoName });
+  await projectRow.waitFor({ timeout: 30_000 });
+  await projectRow.hover();
+  await page.getByTestId("repo-new-mission").click();
+  await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
+}
+
+describe("what can be decided before the first turn (D-201)", () => {
   it(
-    "shows workers as their own rows, steps in with Enter, and steps out with Esc",
+    "carries the chosen answer policy onto the lane it creates",
     async () => {
-      // Workers sit on the trace itself as quiet rows — not buried in the
-      // disclosure (D-108): purpose, last activity, state as a word.
-      const rows = page.getByTestId("worker-row");
-      await rows.first().waitFor({ timeout: 10_000 });
-      expect(await rows.count()).toBe(2);
-      const rollup = page.getByTestId("worker-rollup");
-      expect(await rollup.textContent()).toContain("Research the repository");
-      expect(await rollup.textContent()).toContain("done");
-      expect(await rollup.textContent()).toContain("failed");
-      await page.screenshot({ path: join(evidenceDir, "120-workers-rollup.png") });
-      // The turn as it happened (D-203): speech, the run of activity between
-      // speech where it occurred, the spawns where they were made — in stream
-      // order, the identity said once. The fake turn makes one of each.
-      const order = await page
-        .getByTestId("direction-trace")
-        .first()
-        .locator('[data-testid="msg-agent"], [data-testid="technical-activity"], [data-testid="worker-rollup"]')
-        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-testid")));
-      // The fake turn's own order — words, the Write it made, the two spawns,
-      // words again — and nothing pulled to the end of the turn.
-      expect(order).toEqual(["msg-agent", "technical-activity", "worker-rollup", "msg-agent"]);
-      expect(await page.getByTestId("harness-mark").count()).toBe(1);
-      await page.screenshot({ path: join(evidenceDir, "219-turn-in-stream-order.png") });
+      await openAsk();
+      const ask = page.getByTestId("new-mission-dialog");
 
-      // Enter steps in, the CLI way: focus the row, press Enter.
-      await rows.filter({ hasText: "Research the repository" }).focus();
+      // Both controls exist here now: attaching, and the policy chip. Before
+      // this slice the ask's foot was model, effort, and send alone.
+      await expect.poll(async () => ask.getByTestId("attach-image").count()).toBe(1);
+      const policyChip = ask.getByTestId("policy-chip");
+      await policyChip.waitFor({ timeout: 10_000 });
+      await page.screenshot({ path: join(evidenceDir, "218-ask-dialog-controls.png") });
+
+      // Choose Plan — the one profile whose effect is unmistakable — and let
+      // the words create the mission.
+      await policyChip.click();
+      await ask.getByTestId("policy-plan").click();
+      const goal = "survey the fixture under plan";
+      await ask.getByTestId("composer-input").fill(goal);
       await page.keyboard.press("Enter");
-      const inspector = page.getByTestId("worker-inspector");
-      await inspector.waitFor({ timeout: 10_000 });
-      expect(await inspector.textContent()).toContain("Research the repository");
-      expect(await page.getByTestId("worker-report").textContent()).toContain(
-        "Three call sites documented."
-      );
-      expect(await page.getByTestId("worker-step").count()).toBeGreaterThan(0);
-      await page.screenshot({ path: join(evidenceDir, "121-worker-inspector.png") });
+      await ask.waitFor({ state: "detached", timeout: 30_000 });
 
-      // Esc steps out: the conversation returns, transcript intact.
-      await page.keyboard.press("Escape");
-      await page.getByTestId("chat").waitFor({ timeout: 10_000 });
-      await page
-        .getByTestId("trace-outcome")
-        .filter({ hasText: "Turn completed" })
-        .waitFor({ timeout: 10_000 });
-
-      // The failed worker states its failure in its own view; the button
-      // works too, and so does Back to chat.
-      await page.getByTestId("worker-row").filter({ hasText: "Run API tests" }).click();
-      await page.getByTestId("worker-failure").waitFor({ timeout: 10_000 });
-      expect(await page.getByTestId("worker-failure").textContent()).toContain(
-        "The tests could not start."
-      );
-      await page.getByTestId("worker-back").click();
-      await page.getByTestId("chat").waitFor({ timeout: 10_000 });
+      // Read it back off the lane itself: the profile is the server's now, not
+      // a choice the dialog only remembered.
+      const profile = await page.evaluate(async (wanted) => {
+        const missions = await window.novus.missions.list();
+        if (!missions.ok) return `list failed: ${missions.message}`;
+        const mine = missions.value.find((mission) => mission.goal.includes(wanted.slice(0, 12)));
+        if (!mine) return "mission not found";
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          const detail = await window.novus.missions.get(mine.missionId);
+          if (detail.ok && detail.value.workstream) {
+            const held = detail.value.workstream.permissionProfile;
+            if (held === "plan") return held;
+          }
+          await new Promise((settle) => setTimeout(settle, 500));
+        }
+        return "never became plan";
+      }, goal);
+      expect(profile).toBe("plan");
     },
-    120_000
+    240_000
   );
 });

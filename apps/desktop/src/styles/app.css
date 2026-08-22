@@ -370,6 +370,40 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* A run of activity where it happened (D-203): one quiet line on the
+   harness body's own column, so the words above and below it read as one
+   speaker pausing to act. Text-3, because the run is apparatus beside the
+   words, never competing with them. */
+.activity-run {
+  padding-left: calc(20px + var(--s-2));
+}
+
+.activity-run > summary {
+  color: var(--text-3);
+}
+
+.activity-run > summary:hover {
+  color: var(--text-2);
+}
+
+.activity-summary {
+  font: var(--type-meta);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-run .tool-list {
+  margin-top: var(--s-1);
+}
+
+.tool-repeat {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  margin-left: var(--s-1);
+}
+
 /* Overlays sit on a dimmed room; the dim is the background token, not a new
    colour (DESIGN.md#tokens: color is semantic or absent). */
 /* Electron hit-tests window-drag regions before the DOM paints its order:
@@ -5774,6 +5808,12 @@ body.resizing {
 
 .ask-body {
   padding-top: var(--s-3);
+  /* The dialog's body scrolls, and a scroll box clips the chip menus that
+     open upward out of the composer's foot — the policy menu's rows landed
+     outside the dialog, on the scrim, unclickable (D-201). The ask holds one
+     composer and never needs to scroll, so it opts out of the clipping its
+     parent exists to provide. */
+  overflow: visible;
 }
 
 .ask-body .composer {

@@ -407,17 +407,21 @@ describe("the Mission Room", () => {
       .filter({ hasText: "Turn completed" })
       .waitFor({ timeout: 30_000 });
 
-    // Consecutive harness speech groups under ONE harness identity.
+    // One harness identity per turn (D-065) — said once, even though the
+    // speech now resumes after the activity between it (D-203): the mark is
+    // the speaker, not a paragraph decoration.
     expect(await first.page.getByTestId("harness-mark").count()).toBe(1);
-    expect(await first.page.getByTestId("msg-agent").count()).toBe(1);
-    expect(await first.page.getByTestId("msg-agent").textContent()).toContain("Done.");
+    expect((await first.page.getByTestId("msg-agent").allTextContents()).join(" ")).toContain("Done.");
 
-    // Tool calls are collapsed, not confetti; expanding shows them.
-    const technical = first.page.getByTestId("technical-activity");
+    // Tool calls are collapsed, not confetti — and they sit where they
+    // happened, between the words (D-203), not in one box at the end. The
+    // Write lives in whichever run the turn made it in; that run's summary
+    // names it, expanding shows the step, and nothing is visible before.
+    const technical = first.page.getByTestId("technical-activity").filter({ hasText: "Write" }).first();
     await technical.waitFor();
-    expect(await first.page.getByTestId("tool-line").isVisible().catch(() => false)).toBe(false);
+    expect(await first.page.getByTestId("tool-line").first().isVisible().catch(() => false)).toBe(false);
     await technical.locator("summary").click();
-    await first.page.getByTestId("tool-line").filter({ hasText: "Write" }).waitFor({ timeout: 10_000 });
+    await technical.getByTestId("tool-line").filter({ hasText: "Write" }).first().waitFor({ timeout: 10_000 });
     await technical.locator("summary").click();
 
     // Setup collapsed to one subordinate row, never centred debug fragments.

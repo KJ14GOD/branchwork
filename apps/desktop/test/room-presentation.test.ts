@@ -400,6 +400,10 @@ describe("approval presentation", () => {
     expect(line.name).toBe("Needs approval");
     expect(line.detail).toBe("Claude Code asks to write a file");
     expect(line.tone).toBe("warn");
+    // A blocked turn is still a live turn: Stop stays offered, because a turn
+    // that keeps asking must not become unstoppable between its questions
+    // (D-205 — the server settles the open question in the same stop).
+    expect(line.action).toEqual({ label: "Stop", kind: "stop" });
   });
 
   it("says which conversation asked once the lane holds more than one", () => {

@@ -1176,6 +1176,59 @@ describe("stopping a running harness, through the interface", () => {
       expect((await stopApp.page.getByTestId("state-line").textContent()) ?? "").toContain("Running");
       await stopApp.page.screenshot({ path: join(evidenceDir, "59-running-with-stop.png") });
 
+      // The composer wears the same verb in the send control's own position
+      // (D-206), and the swap is the behavior worth proving: text in the box
+      // means queue-and-steer, so the square must yield to send the moment
+      // there is anything to send, and return when there is not.
+      const square = stopApp.page.getByTestId("composer-stop");
+      await square.waitFor({ timeout: 30_000 });
+      expect(await stopApp.page.getByTestId("send").count()).toBe(0);
+      await stopApp.page.getByTestId("composer-input").fill("steer, do not stop");
+      await expect
+        .poll(async () => stopApp.page.getByTestId("composer-stop").count(), { timeout: 10_000 })
+        .toBe(0);
+      expect(await stopApp.page.getByTestId("send").count()).toBe(1);
+      await stopApp.page.getByTestId("composer-input").fill("");
+      await square.waitFor({ timeout: 10_000 });
+
+      // Magnified evidence. Window zoom is deliberately not used: it relayouts
+      // the room into a third of the width and the capture then holds only the
+      // top-left corner, with the composer off-frame entirely — measured, not
+      // assumed. A transform keeps one coordinate space instead: the real
+      // button, its real stylesheet and its real SVG, drawn larger in place, so
+      // the crop reads the glyph's own geometry rather than upscaled pixels.
+      // The button ships at 28px; this magnification exists for the image.
+      // Three, not four: the composer sits near the window's floor, and a
+      // fourfold button runs past it — the clip is clamped there and the
+      // glyph loses its bottom edge.
+      const MAGNIFY = 3;
+      await stopApp.page.addStyleTag({
+        content: `[data-testid="composer-stop"]{transform:scale(${MAGNIFY});position:relative;z-index:9;}`
+      });
+      await stopApp.page.waitForTimeout(300);
+      const box = await stopApp.page.getByTestId("composer-stop").boundingBox();
+      if (box) {
+        // `boundingBox` reports the *visual* box, transform included, so it is
+        // already the magnified button — expanding it again would crop a
+        // rectangle four times too large with the button off in one corner.
+        // The margin is the only arithmetic left.
+        const margin = 18;
+        await stopApp.page.screenshot({
+          path: join(evidenceDir, "216-composer-stop-square.png"),
+          scale: "device",
+          clip: {
+            x: box.x - margin,
+            y: box.y - margin,
+            width: box.width + margin * 2,
+            height: box.height + margin * 2
+          }
+        });
+      }
+      await stopApp.page.addStyleTag({
+        content: `[data-testid="composer-stop"]{transform:none;}`
+      });
+      await stopApp.page.waitForTimeout(200);
+
       await stop.click();
 
       // The outcome is the assertion. "Turn completed" here would mean the stop

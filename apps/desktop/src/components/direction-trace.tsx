@@ -68,12 +68,30 @@ function WorkerRows({
   );
 }
 
-function TechnicalActivity({ steps }: { steps: ToolStep[] }) {
+/**
+ * The steps between one thing the harness said and the next, where they
+ * happened (D-203, reversing D-108's single end-of-turn disclosure): the
+ * terminal's shape. Collapsed to one quiet line that names the run — `Read
+ * ×21 · Bash ×3 · Grep` — because twenty-one reads of one file are one fact,
+ * and expanding shows every step. The words that referred to these actions
+ * sit directly above and below, which is the whole point.
+ */
+function runSummary(steps: ToolStep[]): string {
+  const groups: { label: string; count: number }[] = [];
+  for (const entry of steps) {
+    const last = groups[groups.length - 1];
+    if (last && last.label === entry.label) last.count += 1;
+    else groups.push({ label: entry.label, count: 1 });
+  }
+  return groups.map((group) => (group.count > 1 ? `${group.label} ×${group.count}` : group.label)).join(" · ");
+}
+
+function ActivityRun({ steps }: { steps: ToolStep[] }) {
   return (
-    <details className="disclosure" data-testid="technical-activity">
+    <details className="disclosure activity-run" data-testid="technical-activity">
       <summary>
         <Chevron />
-        Technical activity
+        <span className="mono activity-summary">{runSummary(steps)}</span>
         <span className="disclosure-count">{plural(steps.length, "step")}</span>
       </summary>
       <ul className="tool-list">
@@ -181,21 +199,36 @@ function ChecksRow({
 
 function SegmentView({
   segment,
+  continued = false,
   onOpenChanges,
   onOpenVerification
 }: {
   segment: Segment;
+  /** True for harness speech that follows earlier speech in the same turn,
+   *  so the identity is stated once per turn rather than per paragraph. */
+  continued?: boolean;
   onOpenChanges: () => void;
   onOpenVerification: () => void;
 }) {
   switch (segment.kind) {
+    case "activity":
+      return <ActivityRun steps={segment.steps} />;
+    case "workers":
+      // Resolved by the block, which holds the workers' live state.
+      return null;
     case "harness":
       return (
-        <div className="harness-turn" data-testid="msg-agent">
-          <span className="harness-identity">
-            <HarnessMark />
-            <span className="harness-name">{HARNESS_NAME}</span>
-          </span>
+        <div className={continued ? "harness-turn harness-continued" : "harness-turn"} data-testid="msg-agent">
+          {/* One identity per turn (D-065), said once: speech that resumes
+              after a run of activity is the same speaker continuing, and a
+              repeated mark every few lines would be the chat-app clutter
+              signature element 2 refuses. */}
+          {!continued && (
+            <span className="harness-identity">
+              <HarnessMark />
+              <span className="harness-name">{HARNESS_NAME}</span>
+            </span>
+          )}
           <div className="harness-body">
             {/* The harness speaks markdown; showing its `##` and `**` raw made
                 every substantive reply read like source. Rendered through the
@@ -307,9 +340,16 @@ export function TraceView({
   // it did it, what it produced, how it ended. Grouped speech and compact
   // milestone rows — no stage chrome down the side (D-125, reversing D-124's
   // spine: agent work loops, and a fixed four-step timeline read as theater).
-  const speech = block.segments.filter(
-    (segment) => segment.kind === "harness" || segment.kind === "note"
+  // The turn as it happened (D-203): speech, the activity between speech, and
+  // the workers where they were spawned — one stream, in stream order.
+  const stream = block.segments.filter(
+    (segment) =>
+      segment.kind === "harness" ||
+      segment.kind === "note" ||
+      segment.kind === "activity" ||
+      segment.kind === "workers"
   );
+  let spoke = false;
   const checkpoints = block.segments.filter((segment) => segment.kind === "checkpoint");
   const checkRuns = block.segments.filter((segment) => segment.kind === "checks");
   const outcomes = block.segments.filter((segment) => segment.kind === "outcome");
@@ -484,23 +524,27 @@ export function TraceView({
         </div>
       )}
 
-      {speech.map((segment) => (
-        <SegmentView
-          key={segment.key}
-          segment={segment}
-          onOpenChanges={onOpenChanges}
-          onOpenVerification={onOpenVerification}
-        />
-      ))}
-
-      {/* Workers on the trace itself, one quiet line each — the CLI's shape,
-          graphically (D-108). The disclosure below stays the harness's own
-          steps. */}
-      {block.workers.length > 0 && (
-        <WorkerRows workers={block.workers} settled={block.settled} onOpenWorker={onOpenWorker} />
-      )}
-
-      {block.toolSteps.length > 0 && <TechnicalActivity steps={block.toolSteps} />}
+      {stream.map((segment) => {
+        if (segment.kind === "workers") {
+          const spawned = segment.ids
+            .map((id) => block.workers.find((worker) => worker.id === id))
+            .filter((worker): worker is WorkerView => worker !== undefined);
+          return spawned.length > 0 ? (
+            <WorkerRows key={segment.key} workers={spawned} settled={block.settled} onOpenWorker={onOpenWorker} />
+          ) : null;
+        }
+        const continued = segment.kind === "harness" && spoke;
+        if (segment.kind === "harness") spoke = true;
+        return (
+          <SegmentView
+            key={segment.key}
+            segment={segment}
+            continued={continued}
+            onOpenChanges={onOpenChanges}
+            onOpenVerification={onOpenVerification}
+          />
+        );
+      })}
 
       {checkpoints.map((segment) => (
         <SegmentView

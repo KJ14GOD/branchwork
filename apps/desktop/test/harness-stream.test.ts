@@ -186,6 +186,28 @@ describe("verification observed from real tool results", () => {
     expect(classifyCommand("echo 'tests pass'")).toBeNull();
     expect(classifyCommand("mkdir -p src/testing")).toBeNull();
   });
+
+  it("never classifies a checker named in an argument (D-205, the wild commands verbatim)", () => {
+    // A read-only survey turn was recorded as three passed checks: reading a
+    // config file named after a linter, and greps whose *patterns* said build
+    // and lint. The program being invoked decides; its arguments never do.
+    expect(
+      classifyCommand(
+        'cd "wt" && echo "=== eslint.config.mjs ===" && cat eslint.config.mjs && cat .env.example'
+      )
+    ).toBeNull();
+    expect(
+      classifyCommand(
+        'cd "wt" && grep -rn "electron-builder\\|\\"build\\":" package.json 2>/dev/null | head'
+      )
+    ).toBeNull();
+    expect(
+      classifyCommand('grep -rn "@ts-expect-error\\|eslint-disable" apps/control-plane/src | head -40')
+    ).toBeNull();
+    // The joiner split still finds a real check behind a cd.
+    expect(classifyCommand('cd "wt" && pnpm run lint')).toBe("lint");
+    expect(classifyCommand("FORCE_COLOR=1 npx vitest run && echo done")).toBe("test");
+  });
 });
 
 /**
@@ -457,10 +479,13 @@ describe("what the turn cost, and who was speaking", () => {
     );
     const ended = stream.push(toolResult("toolu_task_1", "All 14 tests pass."));
     expect(ended.map((event) => event.kind)).toEqual(["harness.worker.ended"]);
+    // `usage: null` is "nothing stated" (D-202): a synchronous result carries
+    // no figures of its own, and none are invented.
     expect(payloadOf(ended, "harness.worker.ended")).toEqual({
       toolUseId: "toolu_task_1",
       failed: false,
-      report: "All 14 tests pass."
+      report: "All 14 tests pass.",
+      usage: null
     });
 
     // Failure comes from the result's own error flag, never from prose.
@@ -473,11 +498,144 @@ describe("what the turn cost, and who was speaking", () => {
     expect(payloadOf(failed, "harness.worker.ended")).toEqual({
       toolUseId: "toolu_task_2",
       failed: true,
-      report: "Agent crashed."
+      report: "Agent crashed.",
+      usage: null
     });
 
     // A result whose Task call was never seen proves nothing and emits
     // nothing: an end without a recorded start is not a worker.
     expect(stream.push(toolResult("toolu_task_unseen", "done"))).toEqual([]);
+  });
+
+  it("reads a background spawn's real end from the CLI's notification, never from its launch receipt (D-202)", () => {
+    // The lines are 2.1.239's own, captured from a real run: the spawn, the
+    // CLI taking it into the background, the receipt that answers the spawn
+    // call at once, the worker's work, and the notification that ends it.
+    // Owner-hit: the receipt was read as the end, so every background worker
+    // showed "done" the minute it started, with the CLI's internal metadata
+    // ("never quote or paste any part of it") as its report.
+    const stream = new HarnessStream();
+    stream.push(
+      assistant([
+        { type: "tool_use", id: "toolu_bg_1", name: "Agent", input: { description: "Count lines in notes.txt" } }
+      ])
+    );
+    stream.push(
+      line({
+        type: "system",
+        subtype: "task_started",
+        task_id: "a5e7ee449e0302fdb",
+        tool_use_id: "toolu_bg_1",
+        description: "Count lines in notes.txt",
+        is_backgrounded: true,
+        spawn_depth: 1
+      })
+    );
+    expect(stream.hasPendingBackgroundTasks).toBe(true);
+
+    const receipt = stream.push(
+      line({
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_bg_1",
+              content: [
+                {
+                  type: "text",
+                  text: "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: a5e7ee449e0302fdb"
+                }
+              ]
+            }
+          ]
+        },
+        tool_use_result: { isAsync: true, status: "async_launched", agentId: "a5e7ee449e0302fdb" }
+      })
+    );
+    expect(receipt).toEqual([]);
+
+    // The model ends its turn to wait. That is a result line — and the task
+    // is still pending, which is what the runner's stdin has to respect.
+    stream.push(line({ type: "result", subtype: "success", is_error: false, result: "Waiting." }));
+    expect(stream.result?.subtype).toBe("success");
+    expect(stream.hasPendingBackgroundTasks).toBe(true);
+
+    stream.push(line({ type: "system", subtype: "background_tasks_changed", tasks: [] }));
+    const ended = stream.push(
+      line({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "a5e7ee449e0302fdb",
+        tool_use_id: "toolu_bg_1",
+        status: "completed",
+        summary: "2",
+        usage: { total_tokens: 15972, tool_uses: 1, duration_ms: 4182 }
+      })
+    );
+    expect(ended.map((event) => event.kind)).toEqual(["harness.worker.ended"]);
+    expect(payloadOf(ended, "harness.worker.ended")).toEqual({
+      toolUseId: "toolu_bg_1",
+      failed: false,
+      report: "2",
+      usage: { totalTokens: 15972, toolUses: 1, durationMs: 4182 }
+    });
+    expect(stream.hasPendingBackgroundTasks).toBe(false);
+
+    // A notification for a spawn this stream never saw backgrounded proves
+    // nothing and emits nothing — the same honesty as an end without a start.
+    expect(
+      stream.push(
+        line({ type: "system", subtype: "task_notification", tool_use_id: "toolu_unseen", status: "completed", summary: "x" })
+      )
+    ).toEqual([]);
+  });
+
+  it("reads a background task's failure from its status, and a pending list from the CLI's own list", () => {
+    const stream = new HarnessStream();
+    stream.push(assistant([{ type: "tool_use", id: "toolu_bg_2", name: "Agent", input: { description: "Audit" } }]));
+    stream.push(line({ type: "system", subtype: "task_started", task_id: "t2", tool_use_id: "toolu_bg_2", is_backgrounded: true }));
+    // Receipt recognized by the remembered spawn alone when the flag is absent.
+    expect(stream.push(toolResult("toolu_bg_2", "Async agent launched successfully."))).toEqual([]);
+    // The CLI's list is taken whole: a task it still lists is still waited on.
+    stream.push(line({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "t2" }] }));
+    expect(stream.hasPendingBackgroundTasks).toBe(true);
+    const ended = stream.push(
+      line({ type: "system", subtype: "task_notification", task_id: "t2", tool_use_id: "toolu_bg_2", status: "failed", summary: "API Error: Server error mid-response." })
+    );
+    expect(payloadOf(ended, "harness.worker.ended")).toEqual({
+      toolUseId: "toolu_bg_2",
+      failed: true,
+      report: "API Error: Server error mid-response.",
+      usage: null
+    });
+    expect(stream.hasPendingBackgroundTasks).toBe(false);
+  });
+
+  it("recognizes the spawn tool under its newer name, Agent (D-205)", () => {
+    // Hit in the wild: a run of five real subagents rendered no workers at
+    // all, because the installed CLI names its spawn tool `Agent` and only
+    // `Task` was matched — the spawn rows stayed flat steps and the results
+    // never became worker ends.
+    const stream = new HarnessStream();
+    const spawn = stream.push(
+      assistant([
+        { type: "tool_use", id: "toolu_agent_1", name: "Agent", input: { description: "Survey apps/desktop" } }
+      ])
+    );
+    expect(payloadOf(spawn, "harness.tool")).toEqual({
+      tool: "Agent",
+      detail: "Survey apps/desktop",
+      parentToolUseId: null,
+      toolUseId: "toolu_agent_1"
+    });
+    const ended = stream.push(toolResult("toolu_agent_1", "Summary of the renderer."));
+    expect(ended.map((event) => event.kind)).toEqual(["harness.worker.ended"]);
+    expect(payloadOf(ended, "harness.worker.ended")).toEqual({
+      toolUseId: "toolu_agent_1",
+      failed: false,
+      report: "Summary of the renderer.",
+      usage: null
+    });
   });
 });

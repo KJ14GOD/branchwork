@@ -3122,7 +3122,21 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
       .object({
         toolUseId: BOUNDED_LINE,
         failed: z.boolean(),
-        report: BOUNDED_TEXT.nullable().default(null)
+        report: BOUNDED_TEXT.nullable().default(null),
+        /** What the CLI itself stated this worker spent (D-202): a background
+         *  task's notification carries its own tokens, tool uses, and
+         *  duration. Null when nothing was stated — a synchronous spawn's
+         *  result says nothing of the kind, and Novus computes no figure the
+         *  vendor did not report (D-107's rule, unchanged). */
+        usage: z
+          .object({
+            totalTokens: z.number().int().nonnegative().nullable().default(null),
+            toolUses: z.number().int().nonnegative().nullable().default(null),
+            durationMs: z.number().int().nonnegative().nullable().default(null)
+          })
+          .strict()
+          .nullable()
+          .default(null)
       })
       .strict()
   }),

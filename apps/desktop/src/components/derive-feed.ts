@@ -60,6 +60,14 @@ const WORKSPACE_RUNTIME_KINDS = new Set([
   "workspace.command_requested",
   "workspace.stop_requested",
   "workspace.readiness",
+  // The machine publishing what the project declares — commands, skills,
+  // servers (D-043, D-118, D-119): the inspector's Overview is where that
+  // is read. Unhandled, it fell to "unknown kind is technical activity" and,
+  // arriving just after a direction, led the turn's stream as a stray run
+  // called "declared" (D-203). It is the runner's bookkeeping, not the turn's.
+  "workspace.declared",
+  "workspace.pushed",
+  "workspace.released",
   "process.started",
   "process.exited"
 ]);
@@ -68,6 +76,13 @@ type Tone = "neutral" | "warn" | "danger" | "ok";
 
 export type Segment =
   | { kind: "harness"; key: string; texts: string[] }
+  /** A run of tool activity, where it happened (D-203): the steps between
+   *  one thing the harness said and the next, in stream order. Consecutive
+   *  steps join one run; speech or a milestone ends it. */
+  | { kind: "activity"; key: string; steps: ToolStep[] }
+  /** The workers spawned at this point of the stream, by id — resolved
+   *  against the block's `workers`, which keeps every worker's live state. */
+  | { kind: "workers"; key: string; ids: string[] }
   | { kind: "checkpoint"; key: string; checkpoint: Checkpoint | null; sha: string | null }
   | { kind: "checks"; key: string; checks: VerificationCheck[] }
   | { kind: "note"; key: string; text: string; login: string | null; tone: Tone }
@@ -101,7 +116,14 @@ export interface WorkerView {
   /** What the worker said and did, in stream order. */
   steps: ToolStep[];
   /** The Task result, when it arrived. Null is "not stated", never "fine". */
-  ended: { failed: boolean; report: string | null; at: string | null } | null;
+  ended: {
+    failed: boolean;
+    report: string | null;
+    at: string | null;
+    /** What the CLI stated the worker spent (D-202), or null: a figure shown
+     *  only because the vendor reported it, never one Novus computed. */
+    usage: { totalTokens: number | null; toolUses: number | null; durationMs: number | null } | null;
+  } | null;
 }
 
 /**
@@ -150,8 +172,10 @@ export interface TraceBlock {
   segments: Segment[];
   /** Who rejected, superseded, or cancelled it, when someone did. */
   resolvedBy: string | null;
-  /** All of this direction's technical activity, in ONE disclosure — not one
-   *  per gap between harness messages. */
+  /** Every step of this direction's technical activity, flat, for counting
+   *  and for tests. Its *place* in the turn is the activity segments (D-203,
+   *  reversing D-108's one end-of-turn disclosure): a step renders where it
+   *  happened, between the words that referred to it. */
   toolSteps: ToolStep[];
   /** The harness's own workers this turn spawned, joined by the ids the
    *  stream stated (D-107). Inside the disclosure, never beside the speech. */
@@ -364,6 +388,43 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
     return block;
   };
 
+  /**
+   * Every worker spawned in this feed, by the id its own children carry.
+   *
+   * Kept beside the blocks rather than inside one, because a worker outlives
+   * the block it was spawned in: a direction applied mid-turn opens a new
+   * trace block, and the subagent running across that seam goes on reporting
+   * under the same spawn id. Looked up per block, its steps and its end
+   * silently became the *new* block's grouped activity — the open worker's own
+   * view stopped growing while the room around it moved (D-200, owner-hit).
+   */
+  const workersById = new Map<string, WorkerView>();
+
+  /**
+   * One step of activity, recorded flat and placed in the stream (D-203). A
+   * run of consecutive steps is one segment; the next thing the harness says
+   * ends the run, so speech is never fused across the actions it narrates.
+   */
+  const step = (block: TraceBlock, entry: ToolStep) => {
+    block.toolSteps.push(entry);
+    const last = block.segments[block.segments.length - 1];
+    if (last?.kind === "activity") {
+      last.steps.push(entry);
+      return;
+    }
+    block.segments.push({ kind: "activity", key: `activity-${block.key}-${block.segments.length}`, steps: [entry] });
+  };
+
+  /** A spawn, placed where it happened; consecutive spawns share one row group. */
+  const spawnRow = (block: TraceBlock, workerId: string) => {
+    const last = block.segments[block.segments.length - 1];
+    if (last?.kind === "workers") {
+      last.ids.push(workerId);
+      return;
+    }
+    block.segments.push({ kind: "workers", key: `workers-${block.key}-${block.segments.length}`, ids: [workerId] });
+  };
+
   const push = (block: TraceBlock, segment: Segment) => {
     const last = block.segments[block.segments.length - 1];
     if (segment.kind === "harness" && last?.kind === "harness") {
@@ -406,7 +467,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         });
       } else if (open) {
         // Lease bookkeeping is technical activity, not a moment in the room.
-        open.toolSteps.push({ label: humanizeKind(event.kind), detail: event.actor.login });
+        step(open, { label: humanizeKind(event.kind), detail: event.actor.login });
       }
       continue;
     }
@@ -433,9 +494,9 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
           // and the reply that leads stays the harness's own (D-065). Joined
           // to its worker when the spawn id was recorded (D-107); grouped
           // activity as before when it was not.
-          const worker = block.workers.find((candidate) => candidate.id === parent);
+          const worker = workersById.get(parent);
           if (worker) worker.steps.push({ label: "said", detail: body });
-          else block.toolSteps.push({ label: "said", detail: body, nested: true });
+          else step(block, { label: "said", detail: body, nested: true });
           break;
         }
         push(block, { kind: "harness", key: event.eventId, texts: [body] });
@@ -446,25 +507,37 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         const detail = text(event.payload.detail);
         const parent = text(event.payload.parentToolUseId);
         const own = text(event.payload.toolUseId);
-        if (label === "Task" && own && !parent) {
-          // The spawn itself. The Task row becomes the worker's own row in
+        if ((label === "Task" || label === "Agent") && own && !parent) {
+          // The spawn itself. The spawn row becomes the worker's own row in
           // the Workers rollup rather than a flat step — same disclosure,
-          // same facts, grouped where its children will land (D-107).
-          block.workers.push({ id: own, purpose: detail, at: event.occurredAt, steps: [], ended: null });
+          // same facts, grouped where its children will land (D-107). The
+          // CLI has named this tool both `Task` and `Agent` across versions
+          // (D-205); `harness-stream.ts` matches the same pair when it
+          // records the end.
+          const spawned: WorkerView = {
+            id: own,
+            purpose: detail,
+            at: event.occurredAt,
+            steps: [],
+            ended: null
+          };
+          block.workers.push(spawned);
+          workersById.set(own, spawned);
+          spawnRow(block, own);
           break;
         }
         if (parent) {
-          const worker = block.workers.find((candidate) => candidate.id === parent);
+          const worker = workersById.get(parent);
           if (worker) {
             worker.steps.push({ label, detail });
             break;
           }
           // A parent the log never explained: grouped activity, no identity
           // claimed (D-107).
-          block.toolSteps.push({ label, detail, nested: true });
+          step(block, { label, detail, nested: true });
           break;
         }
-        block.toolSteps.push({ label, detail });
+        step(block, { label, detail });
         break;
       }
       case "approval.policy": {
@@ -478,7 +551,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
           PERMISSION_PROFILES.find((option) => option.id === text(event.payload.profile))?.label ??
           text(event.payload.profile) ??
           "policy";
-        block.toolSteps.push({
+        step(block, {
           label: `${event.payload.decision === "denied" ? "refused" : "allowed"} by policy · ${tool}`,
           detail: summary ? `${summary} (${profileWord})` : profileWord
         });
@@ -486,15 +559,28 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       }
       case "harness.worker.ended": {
         const own = text(event.payload.toolUseId);
-        const worker = own ? block.workers.find((candidate) => candidate.id === own) : undefined;
+        const worker = own ? workersById.get(own) : undefined;
         // An end whose start was never recorded proves nothing and renders
         // nothing — the parser already refuses to emit one, but an old log
         // is read with the same honesty.
         if (worker) {
+          const stated = event.payload.usage as
+            | { totalTokens?: unknown; toolUses?: unknown; durationMs?: unknown }
+            | null
+            | undefined;
+          const figure = (value: unknown): number | null =>
+            typeof value === "number" && Number.isFinite(value) ? value : null;
           worker.ended = {
             failed: event.payload.failed === true,
             report: text(event.payload.report),
-            at: event.occurredAt
+            at: event.occurredAt,
+            usage: stated
+              ? {
+                  totalTokens: figure(stated.totalTokens),
+                  toolUses: figure(stated.toolUses),
+                  durationMs: figure(stated.durationMs)
+                }
+              : null
           };
         }
         break;
@@ -774,7 +860,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       default:
         // Anything the renderer does not know by name is technical activity,
         // never a mystery fragment in the middle of the room.
-        block.toolSteps.push({ label: humanizeKind(event.kind), detail: event.actor.login });
+        step(block, { label: humanizeKind(event.kind), detail: event.actor.login });
     }
   }
 

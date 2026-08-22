@@ -141,6 +141,22 @@ interface StreamLine {
    * on everything the harness itself says.
    */
   parent_tool_use_id?: string | null;
+  /**
+   * The background-task lifecycle (D-202, captured from 2.1.239): a spawn the
+   * CLI runs asynchronously announces `system/task_started` with the spawn's
+   * own `tool_use_id`, answers the spawn call at once with a launch receipt
+   * whose `tool_use_result.status` is `async_launched`, and states the real
+   * end later as `system/task_notification` — status, summary, usage — with
+   * the same `tool_use_id`. `background_tasks_changed` lists what is still
+   * pending, which is the fact the turn's stdin must wait on.
+   */
+  task_id?: unknown;
+  tool_use_id?: unknown;
+  is_backgrounded?: unknown;
+  status?: unknown;
+  summary?: unknown;
+  tasks?: unknown;
+  tool_use_result?: { status?: unknown; agentId?: unknown } | null;
   /** Present on the final `result` line: what the turn cost. */
   total_cost_usd?: unknown;
   duration_ms?: unknown;
@@ -183,18 +199,82 @@ interface ControlRequestBody {
  * command text plainly says what it is; anything ambiguous produces no check
  * at all, because a wrong category is worse than a missing one (PRODUCT.md
  * principle 3).
+ *
+ * Judged on the program actually being invoked in each command segment —
+ * never on substrings of arguments. Hit in the wild (D-205): a turn that ran
+ * `cat eslint.config.mjs` was recorded as a passed lint, and a `grep` whose
+ * *pattern* contained "build" as a passed build. Reading a file named after a
+ * checker is not running the checker.
  */
+const TOOL_CATEGORY: Record<string, CheckCategory> = {
+  vitest: "test",
+  jest: "test",
+  pytest: "test",
+  rspec: "test",
+  phpunit: "test",
+  tsc: "typecheck",
+  mypy: "typecheck",
+  pyright: "typecheck",
+  eslint: "lint",
+  ruff: "lint",
+  rubocop: "lint",
+  flake8: "lint"
+};
+
+/** A script alias in run position: `pnpm run lint:fix`, `make test`. Only the
+ *  leading word decides, so `build-notes.md` in an argument decides nothing. */
+function scriptCategory(name: string): CheckCategory | null {
+  if (/^tests?([:._-]|$)/.test(name)) return "test";
+  if (/^type-?check([:._-]|$)/.test(name)) return "typecheck";
+  if (/^lint([:._-]|$)/.test(name)) return "lint";
+  if (/^build([:._-]|$)/.test(name)) return "build";
+  return null;
+}
+
 export function classifyCommand(command: string): CheckCategory | null {
-  const text = command.toLowerCase();
-  if (/(^|[\s;&|])(vitest|jest|pytest|rspec|phpunit)\b/.test(text)) return "test";
-  if (/\bgo test\b/.test(text)) return "test";
-  if (/\bcargo test\b/.test(text)) return "test";
-  if (/\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b/.test(text)) return "test";
-  if (/(^|[\s;&|])(tsc|mypy|pyright)\b/.test(text)) return "typecheck";
-  if (/\btype-?check\b/.test(text)) return "typecheck";
-  if (/(^|[\s;&|])(eslint|ruff|rubocop|flake8|clippy)\b/.test(text)) return "lint";
-  if (/\blint\b/.test(text)) return "lint";
-  if (/\bbuild\b/.test(text)) return "build";
+  // Split at shell joiners so `cd x && pnpm test` is judged as `pnpm test`.
+  // Splitting inside a quoted argument is harmless here: the fragments it
+  // produces lead with words no rule maps.
+  for (const segment of command.toLowerCase().split(/&&|\|\||[;|]/)) {
+    const found = classifySegment(segment);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+function classifySegment(segment: string): CheckCategory | null {
+  const words = segment
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.replace(/^["'()]+|["')]+$/g, ""))
+    .filter((word) => word.length > 0);
+  // Step over what merely precedes the program: env assignments and runners.
+  let at = 0;
+  while (at < words.length) {
+    const word = words[at] ?? "";
+    if (/^[a-z_][a-z0-9_]*=/.test(word) || word === "env" || word === "time" || word === "npx" || word === "bunx") {
+      at += 1;
+      continue;
+    }
+    break;
+  }
+  const base = (token: string | undefined): string => token?.split("/").pop() ?? "";
+  const first = base(words[at]);
+  const second = words[at + 1] ?? "";
+  if (first === "") return null;
+  const direct = TOOL_CATEGORY[first];
+  if (direct) return direct;
+  if ((first === "python" || first === "python3") && second === "-m") {
+    return TOOL_CATEGORY[base(words[at + 2])] ?? null;
+  }
+  if (first === "go" && second === "test") return "test";
+  if (first === "cargo" && second === "test") return "test";
+  if (first === "cargo" && second === "clippy") return "lint";
+  if (first === "make") return scriptCategory(second);
+  if (first === "npm" || first === "pnpm" || first === "yarn" || first === "bun") {
+    const target = second === "run" || second === "exec" || second === "dlx" ? (words[at + 2] ?? "") : second;
+    return TOOL_CATEGORY[base(target)] ?? scriptCategory(base(target));
+  }
   return null;
 }
 
@@ -262,6 +342,12 @@ export class HarnessStream {
   private observedSessionId: string | null = null;
   private observedResumed = false;
   private observedResult: HarnessResult | null = null;
+  /** Spawn calls the CLI took into the background, by the spawn's own
+   *  tool-use id (D-202). Their launch receipt is not their end. */
+  private readonly backgrounded = new Set<string>();
+  /** Background tasks the CLI still lists as pending, by task id. While any
+   *  remain, a `result` line is a pause, not the turn's last word. */
+  private readonly pendingTasks = new Set<string>();
 
   constructor(options: HarnessStreamOptions = {}) {
     this.resumeSessionId = options.resumeSessionId ?? null;
@@ -283,6 +369,17 @@ export class HarnessStream {
   /** The CLI's own final verdict, which classification reads. */
   get result(): HarnessResult | null {
     return this.observedResult;
+  }
+
+  /**
+   * True while the CLI still lists a background task as pending (D-202). A
+   * `result` line arrives each time the model ends a turn, and with agents in
+   * the background the model ends one to *wait* — the CLI then wakes it with
+   * the notification and runs another. Closing stdin on that first result
+   * would leave the follow-up turn unable to answer a permission prompt.
+   */
+  get hasPendingBackgroundTasks(): boolean {
+    return this.pendingTasks.size > 0;
   }
 
   push(chunk: string): RunnerEvent[] {
@@ -445,6 +542,62 @@ export class HarnessStream {
   }
 
   private consumeSystem(parsed: StreamLine): RunnerEvent[] {
+    const taskId = typeof parsed.task_id === "string" ? parsed.task_id : null;
+    const toolUseId = typeof parsed.tool_use_id === "string" ? parsed.tool_use_id : null;
+    switch (parsed.subtype) {
+      case "task_started":
+        // A spawn the CLI took into the background (D-202). Remembered by the
+        // spawn's own id so its launch receipt — which arrives next, as the
+        // spawn call's tool_result — is read as "running", never as "done".
+        if (parsed.is_backgrounded === true && toolUseId) {
+          this.backgrounded.add(toolUseId);
+          if (taskId) this.pendingTasks.add(taskId);
+        }
+        return [];
+      case "background_tasks_changed": {
+        // The CLI's own list of what is still pending, taken whole: a task it
+        // no longer lists is no longer waited on, whatever else was missed.
+        this.pendingTasks.clear();
+        if (Array.isArray(parsed.tasks)) {
+          for (const task of parsed.tasks) {
+            const id = (task as { task_id?: unknown })?.task_id;
+            if (typeof id === "string") this.pendingTasks.add(id);
+          }
+        }
+        return [];
+      }
+      case "task_notification": {
+        // The worker's real end: the CLI's own status and the summary the
+        // agent handed back — stated, never inferred. Only for a spawn this
+        // stream saw backgrounded; an end with no recorded start is nothing.
+        if (taskId) this.pendingTasks.delete(taskId);
+        if (!toolUseId || !this.backgrounded.has(toolUseId)) return [];
+        this.backgrounded.delete(toolUseId);
+        const summary = typeof parsed.summary === "string" ? this.sanitize(parsed.summary) : "";
+        const usage = parsed.usage as
+          | { total_tokens?: unknown; tool_uses?: unknown; duration_ms?: unknown }
+          | undefined;
+        return [
+          {
+            kind: "harness.worker.ended",
+            payload: {
+              toolUseId: bound(toolUseId, MAX_LINE),
+              failed: parsed.status !== "completed",
+              report: summary ? bound(summary, MAX_TEXT) : null,
+              usage: usage
+                ? {
+                    totalTokens: count(usage.total_tokens),
+                    toolUses: count(usage.tool_uses),
+                    durationMs: count(usage.duration_ms)
+                  }
+                : null
+            }
+          }
+        ];
+      }
+      default:
+        break;
+    }
     if (parsed.subtype !== "init" || typeof parsed.session_id !== "string") return [];
     // The CLI enumerating its own commands (D-188): the one honest source for
     // what / can invoke, handed out before the dedupe below — a resumed
@@ -525,18 +678,33 @@ export class HarnessStream {
       if (block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
       const call = this.pending.get(block.tool_use_id);
       this.pending.delete(block.tool_use_id);
-      // A Task's result is a worker ending (D-107): the one lifecycle fact
-      // the harness exposes about its own subagents' completion. The result's
-      // error flag and the worker's handed-back report are recorded as
-      // stated — never inferred, never summarized.
-      if (call?.name === "Task") {
+      // A spawn call's result is a worker ending (D-107): the one lifecycle
+      // fact the harness exposes about its own subagents' completion. The
+      // result's error flag and the worker's handed-back report are recorded
+      // as stated — never inferred, never summarized. The CLI has named its
+      // spawn tool both `Task` and `Agent` across versions (D-205 — a run of
+      // five real subagents rendered no workers at all under the new name);
+      // `derive-feed.ts` matches the same pair on the reading side.
+      if (call?.name === "Task" || call?.name === "Agent") {
+        // The launch receipt of a background spawn (D-202): "Async agent
+        // launched successfully… agentId …" is the CLI's internal metadata,
+        // not the worker's report, and the worker is only beginning. Its
+        // end arrives as `system/task_notification`; nothing is said here.
+        const launched =
+          parsed.tool_use_result?.status === "async_launched" || this.backgrounded.has(block.tool_use_id);
+        if (launched) {
+          this.backgrounded.add(block.tool_use_id);
+          continue;
+        }
         const report = this.sanitize(textOfContent(block.content));
         events.push({
           kind: "harness.worker.ended",
           payload: {
             toolUseId: bound(block.tool_use_id, MAX_LINE),
             failed: block.is_error === true,
-            report: report ? bound(report, MAX_TEXT) : null
+            report: report ? bound(report, MAX_TEXT) : null,
+            // A synchronous spawn's result states no usage of its own.
+            usage: null
           }
         });
         continue;

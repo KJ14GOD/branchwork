@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { clockTime } from "../format";
 import { Markdown } from "./markdown";
 import { workerFiles, workerState, type WorkerView } from "./direction-trace";
+import type { ToolStep } from "./derive-feed";
 
 /**
  * One worker, stepped into (D-107, recomposed by D-108 on the owner's sight):
@@ -10,6 +11,18 @@ import { workerFiles, workerState, type WorkerView } from "./direction-trace";
  * at the position the reader left, the way the row was entered with Enter.
  * While the worker is live the room's ordinary poll keeps this current.
  */
+/** Consecutive identical steps as one entry with a count. Exported for the
+ *  test; the rule is the comment at its use. */
+export function collapseRepeats(steps: ToolStep[]): { step: ToolStep; count: number }[] {
+  const out: { step: ToolStep; count: number }[] = [];
+  for (const step of steps) {
+    const last = out[out.length - 1];
+    if (last && last.step.label === step.label && last.step.detail === step.detail) last.count += 1;
+    else out.push({ step, count: 1 });
+  }
+  return out;
+}
+
 export function WorkerInspector({
   worker,
   settled,
@@ -34,10 +47,21 @@ export function WorkerInspector({
     return () => window.removeEventListener("keydown", onKey);
   }, [onBack]);
 
+  // What the CLI stated the worker spent (D-202), in the facts line and only
+  // when stated: a figure here is the vendor's, never one Novus computed.
+  const usage = worker.ended?.usage ?? null;
+  const spent = usage
+    ? [
+        usage.totalTokens !== null ? `${usage.totalTokens.toLocaleString()} tokens` : null,
+        usage.toolUses !== null ? `${usage.toolUses} tool ${usage.toolUses === 1 ? "use" : "uses"}` : null,
+        usage.durationMs !== null ? `${Math.max(1, Math.round(usage.durationMs / 1000))}s` : null
+      ].filter(Boolean)
+    : [];
   const facts = [
     state,
     worker.at ? `started ${clockTime(worker.at)}` : null,
-    worker.ended?.at ? `ended ${clockTime(worker.ended.at)}` : null
+    worker.ended?.at ? `ended ${clockTime(worker.ended.at)}` : null,
+    ...spent
   ]
     .filter(Boolean)
     .join(" · ");
@@ -62,10 +86,19 @@ export function WorkerInspector({
 
       {worker.steps.length > 0 ? (
         <ul className="tool-list worker-timeline">
-          {worker.steps.map((step, index) => (
+          {/* Identical consecutive steps fold into one row with a count
+              (D-203): a file read twenty-one times in a row is one fact, and
+              twenty-one rows of it hid the steps around them. Only identical
+              rows fold — a different file is a different fact. */}
+          {collapseRepeats(worker.steps).map((entry, index) => (
             <li key={index} data-testid="worker-step">
-              <span className="mono tool-name">{step.label}</span>
-              {step.detail && <span className="tool-detail">{step.detail}</span>}
+              <span className="mono tool-name">{entry.step.label}</span>
+              {entry.step.detail && <span className="tool-detail">{entry.step.detail}</span>}
+              {entry.count > 1 && (
+                <span className="tool-repeat" data-testid="worker-step-repeat">
+                  ×{entry.count}
+                </span>
+              )}
             </li>
           ))}
         </ul>

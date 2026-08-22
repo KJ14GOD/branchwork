@@ -2742,7 +2742,7 @@ A label belongs to the **organization**, so a team shares one vocabulary rather 
 
 **Revisit when.** Labels want to filter the list rather than only decorate it; or an extension outside this section wants them, at which point "extension" stops being the right noun and the table needs a subject column.
 
-## D-196 — A key you can change, on the row that names it
+## D-204 — A key you can change, on the row that names it
 
 **Context.** D-177 recorded the Keyboard page's growth outright: "a rebinding UI (the Codex pencil-and-trash anatomy)". The owner asked for it by that line.
 
@@ -2811,3 +2811,101 @@ The prime waits for the shell to speak before typing — bytes fired into a stil
 **Revisit when.** The dock wants a "claude" tab kind of its own; or people ask for the primed command to auto-fire, at which point the consent question returns as itself.
 
 **Amended the same evening, owner-driven ("I want all my connectors there as well"), with the bridge probed live.** The revisit clause's question is now measured, against installed `claude 2.1.237`. A provider's **own** remote MCP endpoint added at user scope IS the road: `claude mcp add --transport http -s user notion https://mcp.notion.com/mcp`, one interactive `claude mcp login notion` (browser OAuth, refused off-TTY), and the stored token is **reused headless under the full pinned argv** — `connected`, 28 tools, inside `--strict-mcp-config`. Personal Notion therefore reaches governed turns through this decision's machinery unchanged. The account connectors' own endpoints turned out to be real, named URLs (`gmailmcp.googleapis.com/mcp/v1` and siblings, surfaced by `claude mcp list`) — but Google's authorization server **refuses dynamic client registration** ("Incompatible auth server"), so only claude.ai's pre-registered client may authenticate: Google-class connectors stay terminal-only (D-199) until Google opens client registration or Anthropic exposes brokered credentials. The wall is a vendor's client policy, located exactly; the pattern for every provider that speaks standard MCP OAuth is proven.
+
+## D-205 — The fan-out night: workers by their new name, Stop that never blinks, checks a `cat` can't mint
+
+**Context.** Owner-run WRK-01 probe, live, 2026-08-21 02:30–02:39: a five-subagent survey turn (`exe_218xq0…`, 289 tool events, six approval cards). Three failures surfaced at once, each verified afterward against the run's own event log rather than from the screenshot.
+
+**Decision.** Three fixes, one slice, because they are one story — the product misreading a modern fan-out turn.
+
+1. **Workers by their new name.** The run's five subagents were real (five spawn calls, 279 parented child events) and rendered as no workers at all: the installed CLI names its spawn tool `Agent`, and both ends of D-107 matched only `Task`. The stream parser's end-detection and the trace builder's spawn-detection now match the pair — `Task` for older CLIs, `Agent` for current ones. Nothing else about D-107 moves: one level of nesting, purpose and end only as stated.
+
+2. **Stop that never blinks.** The event log holds not one `execution.stop_requested` — the owner's presses never became requests, because Stop lived only in `agent_running`. Six approval cards meant the state line flipped to *Needs approval* (no action) again and again, a button vanishing mid-aim; `agent_starting` had no Stop either. Both now offer it. The server was always ready — every non-terminal execution state is stoppable, and a stop settles pending approvals in the same transaction — the interface just withheld the control.
+
+3. **Checks a `cat` can't mint.** The survey's "3 checks passed" were `cat eslint.config.mjs` (recorded as lint), a grep whose pattern contained `"build":` (recorded as build), and a grep for `eslint-disable` (lint again). `classifyCommand` matched checker names anywhere in the command text. It now judges each command segment by the program actually invoked — env assignments and runners stepped over, package-manager script position honored — and an argument, filename, or grep pattern decides nothing. The wild commands are tests verbatim.
+
+**Alternatives.** Treating any tool whose children carry its id as a spawn (rejected: guessing identity is what D-107 refused; the name pair is what the CLI actually ships). A global Stop divorced from the state line (deferred: one control in one place is the room's grammar; it now simply persists across the states a live turn passes through). Keeping worker shell commands as mission evidence but labeled (out of scope here: the classifier fix removes the false positives; the D-107 known gap — a worker's *real* check reading as the turn's — stands recorded).
+
+**Consequences.** `harness-stream.ts` (classifier rewrite, spawn-name pair), `derive-feed.ts` (spawn-name pair), `derive.ts` (Stop in `needs_approval` and `agent_starting`); tests carry the wild commands and the Agent-named worker end-to-end; DESIGN's *Needs approval* row states the standing Stop.
+
+**Revisit when.** The CLI renames the spawn tool again (the pair becomes a set); or steering grows a real "stop" verb distinct from a queued direction — the owner typed the word *stop* mid-turn and the product correctly, uselessly, steered it into the survey.
+
+## D-206 — The stop square lives where the eye already is
+
+**Context.** Owner, the morning after D-205, holding up Codex's composer: the circled stop square "is quite easy to understand — we don't have that." Novus's only Stop was a word on the state line, a control the eye is not on while typing.
+
+**Decision.** The composer's send control doubles as the turn's stop control, the pattern every agent product has taught: while the conversation on screen has a live turn and the box is empty, the accent circle carries a filled square and stops that turn; the moment there is text, it is the send arrow again, because a message typed mid-turn queues and steers (D-054's boundary rule) and must stay sendable. Scope is the conversation on screen only — its read-alongside turn by session, else the lane's write turn when this conversation is the one it runs for. Another chat's turn never gets a square here: that case already has the alongside offer, and a square that killed a different conversation would be a misfire. The state line's Stop stays; two positions, one verb, same server path.
+
+**Alternatives.** A separate stop button beside send (rejected: two circles at the composer's edge is a toolbar; the swap is the taught pattern). Replacing send entirely while running (rejected: it would amputate queue-and-steer, which is half the point of a running composer). Stopping whichever turn is live regardless of session (rejected on D-095's grounds — the square must never reach across conversations).
+
+**Consequences.** `composer.tsx` takes `onStop` and swaps the glyph; the room computes the on-screen turn (`composerStop`) and wires it through the same `missions.stop` the state line uses; DESIGN's Composer bullet states the swap. No new styles — the existing send circle, a `currentColor` square at 15 of 24 viewBox units, sized against Codex's on the owner's eye after 9 and 12 both read as a dot. The mid-turn stop spec grew the swap's assertions and the magnified evidence shot (`216-`); magnification is a temporary transform on the real button, because window zoom relayouts the room into a third of its width and captures the composer off-frame — measured during this slice, and worth knowing before the next glyph is photographed.
+
+**Revisit when.** Mid-turn steering grows a real cancel-current-step verb, at which point the square may deserve a long-press or menu; or sessions gain per-worker stops, which belong on the worker rows, not here.
+
+## D-200 — A worker outlives the block it was spawned in
+
+**Context.** Owner-reported, watching a fan-out: "the subagents which spawn — when I click inside of it, the stuff in there isn't updating; I see in the main that it is modifying and getting more stuff in it." A live-watch e2e written to reproduce it passed — the open inspector does grow, promptly, on the room's live signal — which located the fault elsewhere: not in the refresh, in the join.
+
+**Decision.** A worker is looked up by its spawn id across the whole feed, not inside the trace block that happens to be open. The feed groups a turn's activity by the direction that caused it, so **a direction applied mid-turn opens a new block** — steering a running turn does exactly this — while the subagent already working goes on reporting under the same spawn id. Looked up per block, everything after that seam missed the worker and fell through to the block's own anonymous grouped activity: the open worker view froze mid-run, its end never landed, and the room around it went on plainly moving. Same rule for the end as for the steps, since a Task result arriving after a steer is the ordinary case, not the exotic one.
+
+Nothing about D-107's honesty changes: activity whose parent joins to no recorded spawn is still grouped activity claiming nothing, an end without a recorded start still renders nothing, and a worker still appears only in the block it was spawned in.
+
+**Alternatives.** Re-parenting the worker into the newest block (rejected: the worker belongs to the turn that spawned it, and a row that migrates as you steer is a worse lie than a frozen one). Not splitting blocks on a mid-turn direction (rejected: the split is the trace's grammar — one direction, one thread). Refreshing harder (rejected: measured first; the refresh was never the problem).
+
+**Consequences.** `derive-feed.ts` keeps a `workersById` map beside the blocks and routes all four joins through it; `trace-presentation.test.ts` carries the seam case, which fails against the previous code; `e2e/worker-live.spec.ts` is new — it opens a worker *between* its own steps under a paced harness and asserts the view grows within a window tighter than the room's 30s fallback read, so "updates eventually" cannot pass for "updates live".
+
+**Revisit when.** Workers nest more than one level, at which point the map needs a parent chain rather than a flat id.
+
+## D-201 — What a mission is born with: its files and its answer policy
+
+**Context.** The owner, on the ask dialog: "when I do + here, why is there no permission showing up here or ability to add images." Both were absent by construction — an attachment uploads against a mission, and a profile is set on a lane, and the ask dialog is the thing that *creates* both. D-077's Create row was recorded as model, effort, and send alone.
+
+**Decision.** Both join the ask, and both are applied the moment their target exists, before the first turn is dispatched.
+
+**Attaching** becomes a two-phase act. The composer's `attach.upload` is now optional: where it is absent there is nothing to upload *to*, so the composer holds the chosen paths and hands them to `onSubmit` as `attachmentPaths` — named intentions, exactly as a pending transcript already was. The ask dialog creates the mission, uploads each held path against it, and passes the resulting ids into the first direction. A file that cannot be prepared is stated rather than swallowed, and it never costs the person their words: the turn goes with whatever did upload. Clipboard paste stays out — its bytes have no path to hold, and inventing a temporary file to manufacture one is a later slice, not a thing to fake here.
+
+**The answer policy** is chosen in the ask and applied to the lane the instant it exists, *before* the direction — because a profile is pinned at dispatch (D-115), so applying it after would leave the first turn running under a policy nobody chose. The creator is the mission's Mission Admin, so every profile is theirs, including the one whose warning must be acknowledged; the chip's own confirm dialog collects it and the acknowledgement travels verbatim as always. A refused profile stops the turn rather than starting it quietly under the default: the mission exists, the person lands in the room, and the reason is on screen.
+
+**Alternatives.** A staging area on the server so files could upload before a mission (rejected: new surface for a case the two-phase hold already answers). Applying the profile after the first direction (rejected: pinned at dispatch means the first turn would miss it). Creating the mission on the first attach (rejected: picking a file is not deciding to start work).
+
+**Consequences.** `composer.tsx`: `upload` and `paste` optional, held paths rendered as chips beside the uploaded ones, `attachmentPaths` on submit, both kinds counted against the same bound. `project-shell.tsx`: the ask holds a profile, wires attach, and orders creation → profile → uploads → direction. One CSS fix rides along: `.dialog-body` scrolls, and a scroll box clipped the chip menus opening upward out of the composer's foot — the policy menu's rows landed outside the dialog on the scrim, unclickable — so `.ask-body` opts out of that clipping. Found by the spec, not by eye. `e2e/ask-dialog.spec.ts` proves the profile end to end (chosen in the ask, read back off the lane) and that both controls are present; evidence `218-`.
+
+**Revisit when.** Clipboard paste in the ask earns its temporary file; or a second surface needs deferred attachments, at which point the hold belongs in a shared hook rather than in the composer's own state.
+
+## D-202 — A background agent ends when the CLI says so, and the pipe stays open until then
+
+**Context.** Owner, inside a worker view: "it starts and ends in the same minute… but back in main it's not done yet." The view showed *done · started 19:15 · ended 19:15*, and its "Report" read *Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it…)*. All eleven workers of the live run had that exact end in the event log. Also: "ctrl-f search doesn't work inside these subagents."
+
+**What the CLI actually does.** Captured from `claude 2.1.239` with the runner's own flags, twice. A spawn the CLI takes into the background announces `system/task_started` (with the spawn's `tool_use_id` and `is_backgrounded: true`), answers the spawn call *immediately* with a tool_result whose top-level `tool_use_result.status` is `async_launched` — the launch receipt — and states the real end later as `system/task_notification`: the same `tool_use_id`, a `status`, the agent's `summary`, and its own `usage` (tokens, tool uses, duration). `background_tasks_changed` lists what is still pending. Between receipt and notification the *model ends its turn to wait*, which is a `result` line; the CLI then wakes it with the notification, emits a fresh `system/init`, and runs a follow-up turn on the same process.
+
+**Decision.**
+
+1. **The receipt is not the end.** The parser remembers backgrounded spawns from `task_started` (and from the receipt's own `async_launched` status), says nothing on the receipt, and records `harness.worker.ended` from `task_notification` — `failed` from the status, the report from the summary, and the usage the CLI stated, which the contract now carries as an optional field on the ended event. D-107's per-worker-cost gap closes for background workers the only honest way: the vendor started stating it. A synchronous spawn's end is unchanged and states `usage: null`.
+
+2. **stdin waits for the last result, not the first.** The runner closed the CLI's stdin on the first `result` line, which with background agents is the *waiting* result. Measured: the CLI does not die on that close — it drains pending tasks and runs the follow-up — but the follow-up turn can no longer answer a permission prompt, because the pipe the answer travels on is gone. Stdin now closes on a result only when the CLI lists no pending background task. A stub that exits on stdin-close makes the hazard observable: against the old rule the follow-up turn and the worker's real end never arrive.
+
+3. **Find walks whichever canvas is showing.** ⌘F collected its ranges from the feed's scroller, and the worker view replaces the feed. The inspector's scroller has its own ref; find walks the one on screen.
+
+**Alternatives.** Reading the end from `task_updated` (rejected: it carries the status but not the summary or the tool_use_id; the notification is the complete statement). Ending the worker on the receipt and *re-opening* it on the notification (rejected: a state that goes done → working is a lie told twice). Keeping stdin open unconditionally and killing on the final result (rejected: D-109 reads the final verdict from the process's own exit; the close is what lets it exit).
+
+**Consequences.** `harness-stream.ts` (task lifecycle, `hasPendingBackgroundTasks`, receipt suppression), `execution.ts` (the close rule), contracts (`usage` on `harness.worker.ended`), `derive-feed.ts` / `worker-inspector.tsx` (stated usage on the facts line), `project-room.tsx` (find root). Tests: the captured lines verbatim in `harness-stream.test.ts`, the stdin hazard through the real spawn path in `execution-endings.test.ts` (fails against the old rule), the stated usage in `trace-presentation.test.ts`.
+
+**Revisit when.** The CLI nests background agents (spawn_depth > 1 arrived in the capture — one level is still what the join records); or `task_progress` earns a place as a worker's live status line, which the forwarded child events already say better while forwarding is on.
+
+## D-203 — The turn as it happened: activity where the words are
+
+**Context.** Owner, reading a real fan-out turn: the harness's interim narration (*"Let me verify the contrast math"*, *"Seven agents running. While they work…"*) arrived as one unbroken wall, and the actions each sentence referred to sat hundreds of steps away in a single *Technical activity · 454 steps* box at the end. "In how systems work those are all parts, and there are other stuff happening between them captured in technical activity." Inside a worker, the inverse: everything inline, twenty-one consecutive *Read ARCHITECTURE.md* rows hiding the steps around them.
+
+**Decision.** The trace renders the turn in stream order — one stream of speech, the activity between speech, and the workers where they were spawned — reversing D-108's one end-of-turn disclosure. Speech is fused only when it was consecutive on the wire; the moment an action intervenes, the wall becomes the separate moments it actually was. Each run of activity is one quiet line on the harness body's own column naming what the run was (*Read ×21 · Bash ×3*), collapsed, expanding to its steps. The harness's identity is said once per turn: speech that resumes after a run is the same speaker continuing, and a mark every few lines is the chat-app clutter signature element 2 refuses. Spawns sit where they were made; consecutive spawns share one row group. Inside a worker, consecutive identical steps fold into one row with a count — only identical ones, because a different file is a different fact.
+
+What does not change: the flat list of steps is still kept, for counting and for tests; the grouping rules of D-065 still hold for consecutive speech; nothing is rendered as a lone centred fragment; a worker's own steps still join the worker, never the turn.
+
+One honest limit, stated to the owner: the *duplicated content* — interim findings and a final report that restates them — is the model's own writing. The interface can put the actions back between the words; it cannot dedupe the words.
+
+**A stray found by the move.** `workspace.declared` — the runner publishing the project's command manifest — had no handler and fell to "unknown kind is technical activity". Arriving just after a direction is submitted, it led every turn's stream as a run called *declared*. Hidden at the end of the turn before, visible at its head now. It is the machine's bookkeeping, read on Overview, and joins the workspace-runtime kinds the trace skips, with `pushed` and `released` beside it.
+
+**Alternatives.** One disclosure per gap between messages (rejected by D-108 at the time as clutter; what is built is one *line* per gap, not one box, and a line that names its run reads as apparatus rather than chrome). Rendering every step inline unfolded (rejected: 897 tool lines in the owner's run; the terminal collapses them too). Re-showing the identity on every resumed paragraph (rejected: the speaker did not change).
+
+**Consequences.** `derive-feed.ts`: `activity` and `workers` segments placed in the stream by `step()` and `spawnRow()`, the skipped kinds widened. `direction-trace.tsx`: `ActivityRun` with a grouped summary, `continued` speech without the identity, workers resolved inline, the end-of-turn disclosure removed. `worker-inspector.tsx`: `collapseRepeats`. DESIGN's signature element 2 and the Technical-activity bullet rewritten. Tests: stream order and spawn placement in `trace-presentation.test.ts`; `slice.spec.ts` expands the run that holds the Write rather than a single end box; `workers.spec.ts` asserts the exact DOM order `msg-agent · technical-activity · worker-rollup · msg-agent` in a real window (evidence `219-`).
+
+**Revisit when.** A run wants its own timestamp or duration on the line; or a turn's checkpoints and checks want to join the stream at their own positions rather than the milestone rows beneath it.

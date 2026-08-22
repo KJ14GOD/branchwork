@@ -31,7 +31,7 @@ const git = (cwd: string, args: string[]): Promise<string> =>
     );
   });
 
-type StubEnding = "max-turns" | "silent-end" | "credit-balance" | "slow-success";
+type StubEnding = "max-turns" | "silent-end" | "credit-balance" | "slow-success" | "background-agent";
 
 /** A `claude` that ends the turn one specific way, then exits. */
 function installStub(ending: StubEnding): void {
@@ -48,6 +48,29 @@ process.stdin.on("data", () => {
   if (ENDING === "credit-balance") {
     process.stderr.write("Your credit balance is too low to run this request.\\n");
     process.exit(1);
+  }
+  if (ENDING === "background-agent") {
+    // 2.1.239's own shape (D-202): the model spawns an agent the CLI takes
+    // into the background, gets the launch receipt, and ends its turn to
+    // wait — a result line with the task still pending. The real CLI then
+    // delivers the notification and runs a follow-up turn on the same stdin.
+    // This stub makes the hazard observable: it exits the moment stdin
+    // closes, so closing on the waiting result loses the follow-up entirely.
+    out({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_bg", name: "Agent", input: { description: "Count lines" } }] } });
+    out({ type: "system", subtype: "task_started", task_id: "task_bg", tool_use_id: "toolu_bg", is_backgrounded: true });
+    out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_bg", content: "Async agent launched successfully." }] }, tool_use_result: { isAsync: true, status: "async_launched", agentId: "task_bg" } });
+    out({ type: "result", subtype: "success", is_error: false, result: "Waiting for the agent." });
+    let closed = false;
+    process.stdin.on("end", () => { closed = true; });
+    setTimeout(() => {
+      if (closed) process.exit(0); // the hazard: the follow-up never happens
+      out({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+      out({ type: "system", subtype: "task_notification", task_id: "task_bg", tool_use_id: "toolu_bg", status: "completed", summary: "2", usage: { total_tokens: 100, tool_uses: 1, duration_ms: 300 } });
+      out({ type: "assistant", message: { content: [{ type: "text", text: "notes.txt has 2 lines." }] } });
+      out({ type: "result", subtype: "success", is_error: false, result: "Done." });
+      process.stdin.on("end", () => process.exit(0));
+    }, 400);
+    return;
   }
   if (ENDING === "slow-success") {
     // A long quiet tool call: nothing on stdout for a while, then done.
@@ -152,6 +175,24 @@ describe("how a turn is allowed to end (D-109)", () => {
     // And the pulse died with the turn: waiting another stretch adds none.
     await new Promise((settle) => setTimeout(settle, 200));
     expect(events.filter((event) => event.kind === "execution.heartbeat").length).toBe(pulses);
+  }, 30_000);
+
+  it("keeps stdin open while an agent works in the background, so the follow-up turn arrives (D-202)", async () => {
+    installStub("background-agent");
+    const { events, result } = await run();
+    // The follow-up turn's words and the worker's real end both reached the
+    // room — which they cannot if stdin closed on the waiting result.
+    const texts = events.filter((event) => event.kind === "harness.text").map((event) => (event.payload as { text: string }).text);
+    expect(texts).toContain("notes.txt has 2 lines.");
+    const ended = events.find((event) => event.kind === "harness.worker.ended");
+    expect(ended?.payload).toEqual({
+      toolUseId: "toolu_bg",
+      failed: false,
+      report: "2",
+      usage: { totalTokens: 100, toolUses: 1, durationMs: 300 }
+    });
+    // And the turn still ended cleanly once nothing was pending.
+    expect(terminalOf(events, result).kind).toBe("execution.completed");
   }, 30_000);
 
   it("a billing refusal names money, not sign-in", async () => {

@@ -271,6 +271,10 @@ export function ProjectRoom({
   const [answering, setAnswering] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  /** The worker view's own scroller, so find walks whichever canvas is
+   *  showing (D-202): the inspector replaces the feed, and a find that only
+   *  knew the feed's scroller found nothing there. */
+  const inspectorScrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
   /** One of the turn's workers opened on the canvas (D-107). Room-local, like
    *  a disclosure: never a tab, never a rail row, never the working set's. */
@@ -484,8 +488,13 @@ export function ProjectRoom({
       setFindCount(0);
       return;
     }
-    const root = scrollRef.current;
-    if (!root) return;
+    // Whichever canvas is on screen: the conversation, or the worker a
+    // person stepped into (D-202).
+    const root = openWorker ? inspectorScrollRef.current : scrollRef.current;
+    if (!root) {
+      setFindCount(0);
+      return;
+    }
     const ranges: Range[] = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node: Node | null;
@@ -504,7 +513,7 @@ export function ProjectRoom({
     setFindCount(ranges.length);
     setFindIndex((current) => (ranges.length === 0 ? 0 : Math.min(current, ranges.length - 1)));
     if (ranges.length > 0) registry.set("novus-find", new Highlight(...ranges));
-  }, [findQuery, findOpen, detail]);
+  }, [findQuery, findOpen, detail, openWorker]);
 
   useEffect(() => {
     const registry = CSS.highlights;
@@ -994,6 +1003,22 @@ export function ProjectRoom({
             !["completed", "stopped", "failed", "interrupted"].includes(execution.state)
         ) ?? null)
       : null;
+  /**
+   * The live turn the composer's stop square means (D-206): the conversation
+   * on screen — its own read-alongside turn, or the lane's write turn when
+   * this conversation is the one it runs for. Another chat's turn is never
+   * stoppable from here: that case is the alongside offer's, and a square
+   * that killed a different conversation would be a misfire.
+   */
+  const composerStop = (() => {
+    if (!detail) return null;
+    if (readTurnOnScreen) return { sessionId: readTurnOnScreen.sessionId };
+    const writer = liveWriters[0] ?? null;
+    if (!writer) return null;
+    const writerSession = writer.sessionId ?? null;
+    if (multiSession && writerSession !== null && writerSession !== readingSessionId) return null;
+    return { sessionId: null };
+  })();
   /**
    * Sending while the workspace's turn belongs to another chat asks the baton
    * holder: queue, or run alongside read-only (D-095). Not offered on the
@@ -2119,7 +2144,7 @@ export function ProjectRoom({
         /* One worker, looked at closely (D-107): the canvas, not a tab — the
            conversation stays the stable parent and Back to chat returns to
            it at the position the reader left. */
-        <div className="feed-scroll">
+        <div className="feed-scroll" ref={inspectorScrollRef}>
           <div className="feed">
             <WorkerInspector
               worker={openWorkerView.worker}
@@ -2358,6 +2383,18 @@ export function ProjectRoom({
         placeholderOverride={sessionDraft ? "What should this session do?" : undefined}
         alongsideOffer={alongsideOffer}
         policy={isDraft ? null : policyControl}
+        onStop={
+          !isDraft && composerStop && detail
+            ? () =>
+                void runAction(
+                  novus().missions.stop(
+                    detail.mission.missionId,
+                    activeLaneId ?? undefined,
+                    composerStop.sessionId ?? undefined
+                  )
+                )
+            : null
+        }
         onSubmit={submit}
         attach={
           isDraft || !detail

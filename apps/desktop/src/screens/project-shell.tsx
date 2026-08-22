@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  DEFAULT_PERMISSION_PROFILE,
   type BranchInfo,
   type DirectionContextRef,
   type Effort,
@@ -7,13 +8,14 @@ import {
   type ModelId,
   type MissionDetailResponse,
   type Organization,
+  type PermissionProfile,
   type Session,
   type User,
   type Workstream
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { AddProjectDialog, type PickedRepository } from "../components/add-project-dialog";
-import { Composer } from "../components/composer";
+import { Composer, DONT_ASK_WARNING } from "../components/composer";
 import { Dialog } from "../components/dialog";
 import { GearGlyph, HumanMark, SignOutGlyph } from "../components/identity";
 import { SettingsDialog } from "../components/settings-dialog";
@@ -2437,6 +2439,11 @@ function NewMissionDialog({
   const [branches, setBranches] = useState<
     { kind: "idle" | "loading" } | { kind: "loaded"; value: BranchInfo[] } | { kind: "error"; message: string }
   >({ kind: "idle" });
+  /** The answer policy the first turn will run under (D-201). Held here rather
+   *  than set on a lane, because the lane does not exist until Enter: the
+   *  choice is applied the moment it does, before the turn is dispatched. */
+  const [profile, setProfile] = useState<PermissionProfile>(DEFAULT_PERMISSION_PROFILE);
+
   useEffect(() => {
     setBaseRef(null);
     setBasePicking(false);
@@ -2458,11 +2465,13 @@ function NewMissionDialog({
   const create = async ({
     body,
     model,
-    effort
+    effort,
+    attachmentPaths
   }: {
     body: string;
     model: ModelId;
     effort: Effort;
+    attachmentPaths?: string[];
   }): Promise<{ ok: boolean; message?: string }> => {
     // The chosen ref is resolved again at this moment (D-139): the pin is the
     // branch's tip when Enter was pressed, not when the menu was opened.
@@ -2481,16 +2490,55 @@ function NewMissionDialog({
       creationKey: crypto.randomUUID()
     });
     if (!created.ok) return { ok: false, message: created.message };
+    const missionId = created.value.mission.missionId;
+    const workstreamId = created.value.workstream.workstreamId;
+
+    // Both of these happen *before* the first direction, and that order is the
+    // whole point (D-201): a profile is pinned at dispatch (D-115), and an
+    // attachment has to exist before the turn that reads it is sent. The
+    // creator is this mission's Mission Admin, so both are theirs to set.
+    if (profile !== DEFAULT_PERMISSION_PROFILE) {
+      const set = await novus().missions.setPermissionProfile({
+        missionId,
+        workstreamId,
+        profile,
+        acknowledged: profile === "dont_ask" ? DONT_ASK_WARNING : null
+      });
+      // The mission exists either way. A refused profile is said out loud
+      // rather than swallowed, and nothing is started under a policy the
+      // person did not get: they land in the room and choose again.
+      if (!set.ok) {
+        onCreated(created.value.mission);
+        return { ok: false, message: set.message };
+      }
+    }
+
+    const attachmentIds: string[] = [];
+    let refused: string | null = null;
+    for (const path of attachmentPaths ?? []) {
+      const uploaded = await novus().missions.attachImage({ missionId, workstreamId, path });
+      if (uploaded.ok) attachmentIds.push(uploaded.value.artifactId);
+      else refused = uploaded.message;
+    }
+    // One file that could not be prepared does not cost the person their
+    // words: the turn goes with what did upload, and the room says what
+    // did not.
+    if (refused !== null && attachmentIds.length === 0 && (attachmentPaths?.length ?? 0) > 0) {
+      onCreated(created.value.mission);
+      return { ok: false, message: refused };
+    }
+
     // The words are the first direction; whether they run now or queue is the
     // server's decision, reported in the room this opens into.
     await novus().missions.direct({
-      missionId: created.value.mission.missionId,
+      missionId,
       body,
       model,
-      effort
+      effort,
+      ...(attachmentIds.length > 0 ? { attachmentIds } : {})
     });
     onCreated(created.value.mission);
-    return { ok: true };
+    return refused === null ? { ok: true } : { ok: true, message: refused };
   };
 
   return (
@@ -2598,6 +2646,31 @@ function NewMissionDialog({
           placeholderOverride="What should Claude Code work on?"
           onEmptySubmit={onClose}
           onSubmit={create}
+          /* No mission exists to upload to yet, so the composer holds what is
+             picked and `create` uploads it the instant one does (D-201).
+             Clipboard paste is deliberately absent: its bytes have no path to
+             hold, and a temporary file to invent one is a later slice. */
+          attach={{
+            pick: async () => {
+              const picked = await novus().missions.pickImage();
+              return picked.ok
+                ? { ok: true as const, path: picked.value }
+                : { ok: false as const, message: picked.message };
+            },
+            pathOf: (file: File) => novus().missions.pathForDroppedFile(file)
+          }}
+          /* The creator is this mission's Mission Admin, so every profile is
+             theirs to choose — including the one that needs the warning
+             acknowledged, which the chip's own dialog collects (D-115). */
+          policy={{
+            profile,
+            maySet: true,
+            maySetUnsupervised: true,
+            onSet: async (chosen) => {
+              setProfile(chosen);
+              return { ok: true };
+            }
+          }}
         />
       </div>
     </Dialog>

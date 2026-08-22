@@ -1089,6 +1089,11 @@ function primaryStateLine(
         detail: workingTitle
           ? `preparing the mission worktree for "${workingTitle}"`
           : "preparing the mission worktree",
+        // A stop that lands before the spawn prevents the turn — the runner
+        // remembers it (D-053) — so the control is honest here, and offering
+        // it from the first moment keeps Stop in one place through the
+        // starting → running flip instead of appearing mid-aim (D-205).
+        action: { label: "Stop", kind: "stop" },
         working: true
       };
     case "agent_running":
@@ -1162,7 +1167,13 @@ function primaryStateLine(
             }`
           : `${HARNESS_NAME} is waiting${
               workingTitle ? ` in "${workingTitle}"` : ""
-            } for a decision it cannot make itself`
+            } for a decision it cannot make itself`,
+        // A blocked turn is still a live turn, and the server's stop settles
+        // its open questions in the same transaction (executions.ts). Without
+        // this, a turn that kept asking could not be stopped at all: Stop
+        // existed only in `agent_running`, and every approval made it vanish
+        // mid-aim (D-205 — hit in the wild during a five-subagent fan-out).
+        action: { label: "Stop", kind: "stop" }
       };
     }
     case "paused":

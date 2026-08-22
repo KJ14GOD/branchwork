@@ -133,6 +133,50 @@ function trace(feedDetail: MissionDetailResponse) {
   return block;
 }
 
+describe("the turn as it happened (D-203)", () => {
+  it("keeps activity where it happened, so speech is never fused across the actions it narrates", () => {
+    // Owner-hit on a fan-out turn: every step was lifted into one end-of-turn
+    // disclosure, so a dozen messages that each arrived between actions fused
+    // into one wall, and "let me verify that" sat hundreds of steps from the
+    // verification it meant.
+    const block = trace(
+      detail([
+        { kind: "harness.text", payload: { text: "Let me check the gate." } },
+        { kind: "harness.tool", payload: { tool: "Read", detail: "scripts/gate.sh", toolUseId: "t1" } },
+        { kind: "harness.tool", payload: { tool: "Read", detail: "scripts/gate.sh", toolUseId: "t2" } },
+        { kind: "harness.tool", payload: { tool: "Bash", detail: "grep -c '^## D-' DECISIONS.md", toolUseId: "t3" } },
+        { kind: "harness.text", payload: { text: "Confirmed: an existence check." } },
+        { kind: "harness.text", payload: { text: "Moving on." } }
+      ])
+    );
+    expect(block.segments.map((segment) => segment.kind)).toEqual(["harness", "activity", "harness"]);
+    const [before, run, after] = block.segments;
+    expect(before.kind === "harness" && before.texts).toEqual(["Let me check the gate."]);
+    expect(run.kind === "activity" && run.steps.map((step) => step.label)).toEqual(["Read", "Read", "Bash"]);
+    // Two texts with nothing between them are still one utterance.
+    expect(after.kind === "harness" && after.texts).toEqual(["Confirmed: an existence check.", "Moving on."]);
+    // The flat list still counts everything, for the record.
+    expect(block.toolSteps).toHaveLength(3);
+  });
+
+  it("places a spawn where it happened, and groups consecutive spawns as one row group", () => {
+    const block = trace(
+      detail([
+        { kind: "harness.text", payload: { text: "Fanning out." } },
+        spawn("toolu_task_1", "Audit the control plane"),
+        spawn("toolu_task_2", "Audit the desktop"),
+        { kind: "harness.text", payload: { text: "Two agents running." } },
+        childTool("toolu_task_1", "Read", "src/main.ts")
+      ])
+    );
+    expect(block.segments.map((segment) => segment.kind)).toEqual(["harness", "workers", "harness"]);
+    const rows = block.segments[1];
+    expect(rows.kind === "workers" && rows.ids).toEqual(["toolu_task_1", "toolu_task_2"]);
+    // A worker's own step joins the worker, never the turn's stream.
+    expect(block.workers[0].steps).toHaveLength(1);
+  });
+});
+
 describe("the harness's workers, joined from what the stream stated (D-107)", () => {
   it("groups a worker's tagged steps under the Task call that spawned it", () => {
     const block = trace(
@@ -149,6 +193,65 @@ describe("the harness's workers, joined from what the stream stated (D-107)", ()
     // The harness's own step stays a flat step; the Task spawn row moved into
     // the worker and is not duplicated as a flat step.
     expect(block.toolSteps.map((step) => step.label)).toEqual(["Read"]);
+  });
+
+  it("keeps a worker joined across a direction applied mid-turn (D-200)", () => {
+    // Hit in the wild: steering a running turn applies a direction, which
+    // opens a *new* trace block, and the subagent still working reports under
+    // the same spawn id from then on. Looked up per block, its later steps and
+    // its end landed in the new block as anonymous grouped activity — so the
+    // worker view a person had open stopped growing while the room around it
+    // plainly moved.
+    const block = trace(
+      detail([
+        spawn("toolu_task_1", "Survey the repository"),
+        childTool("toolu_task_1", "Read", "src/one.ts"),
+        // Everything from here carries the second direction's cause.
+        { ...childTool("toolu_task_1", "Read", "src/two.ts"), cause: { directionId: "dir_2", leaseId: null } },
+        { ...childSaid("toolu_task_1", "Still reading."), cause: { directionId: "dir_2", leaseId: null } },
+        { ...ended("toolu_task_1", false, "Twelve files summarized."), cause: { directionId: "dir_2", leaseId: null } }
+      ])
+    );
+    // The worker stays where it was spawned, and it keeps growing there.
+    expect(block.workers).toHaveLength(1);
+    expect(block.workers[0].steps.map((step) => step.detail)).toEqual([
+      "src/one.ts",
+      "src/two.ts",
+      "Still reading."
+    ]);
+    expect(block.workers[0].ended?.report).toBe("Twelve files summarized.");
+    // And none of it leaked into the trace as unattributed activity.
+    expect(block.toolSteps).toEqual([]);
+  });
+
+  it("carries a background worker's stated usage into the view, and nothing where none was stated (D-202)", () => {
+    const block = trace(
+      detail([
+        spawn("toolu_bg_1", "Count lines"),
+        {
+          kind: "harness.worker.ended",
+          payload: { toolUseId: "toolu_bg_1", failed: false, report: "2", usage: { totalTokens: 15972, toolUses: 1, durationMs: 4182 } }
+        }
+      ])
+    );
+    expect(block.workers[0].ended?.usage).toEqual({ totalTokens: 15972, toolUses: 1, durationMs: 4182 });
+  });
+
+  it("recognizes a spawn under the CLI's newer tool name, Agent (D-205)", () => {
+    const block = trace(
+      detail([
+        {
+          kind: "harness.tool",
+          payload: { tool: "Agent", detail: "Survey the renderer", parentToolUseId: null, toolUseId: "toolu_agent_1" }
+        },
+        childTool("toolu_agent_1", "Read", "src/screens/project-room.tsx"),
+        ended("toolu_agent_1", false, "One screen owns the room.")
+      ])
+    );
+    expect(block.workers).toHaveLength(1);
+    expect(block.workers[0].purpose).toBe("Survey the renderer");
+    expect(block.workers[0].steps.map((step) => step.label)).toEqual(["Read"]);
+    expect(block.workers[0].ended?.report).toBe("One screen owns the room.");
   });
 
   it("keeps two concurrent workers distinguishable by their own ids", () => {
@@ -183,7 +286,9 @@ describe("the harness's workers, joined from what the stream stated (D-107)", ()
       ])
     );
     const [done, failed, live] = block.workers;
-    expect(done.ended).toEqual({ failed: false, report: "All 14 tests pass.", at: done.ended?.at });
+    // `usage: null` is "nothing stated" (D-202): a synchronous spawn's result
+    // carries no figures, and none are invented.
+    expect(done.ended).toEqual({ failed: false, report: "All 14 tests pass.", at: done.ended?.at, usage: null });
     expect(workerState(done, block.settled)).toBe("done");
     expect(workerState(failed, block.settled)).toBe("failed");
     // No end has been stated and the turn is live: the worker is working.

@@ -7,21 +7,26 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 /**
- * The harness's workers in a real window (D-107): a turn that spawns two of
- * them shows the Workers rollup inside its technical disclosure — states in
- * words — and choosing one opens its own view on the canvas, with Back to
- * chat returning to the conversation. Driven end to end through the fake
- * harness, whose worker lines are the real CLI's shapes through the real
- * parser, so what this spec proves is the production join.
+ * A worker watched while it is still working (D-107's "updating as the room's
+ * ordinary poll delivers new events" — owner-reported as untrue).
+ *
+ * The distinction this spec exists to hold: `workers.spec.ts` opens a worker
+ * whose turn is already over, where a frozen view and a live one look exactly
+ * alike. Here the harness is paced so the inspector is opened *between* a
+ * worker's own steps, and what is asserted is that the view grows on its own —
+ * no click, no reopening, no navigation.
  */
 
 const desktopRoot = resolve(__dirname, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 const evidenceDir = join(desktopRoot, "e2e", "evidence");
-const CP_PORT = 4496;
+const CP_PORT = 4497;
 const CP_URL = `http://127.0.0.1:${CP_PORT}`;
-const DB_NAME = "novus_e2e_workers";
+const DB_NAME = "novus_e2e_worker_live";
 const DB_URL = `postgres://novus:novus@127.0.0.1:5433/${DB_NAME}`;
+/** Slow enough to open a worker between its own lines, short enough that the
+ *  whole turn still fits in one test's patience. */
+const PACE_MS = 4_000;
 
 let controlPlane: ChildProcess;
 let app: ElectronApplication;
@@ -63,7 +68,7 @@ async function mintToken(): Promise<string> {
 
 beforeAll(async () => {
   mkdirSync(evidenceDir, { recursive: true });
-  const userDataDir = mkdtempSync(join(tmpdir(), "novus-workers-"));
+  const userDataDir = mkdtempSync(join(tmpdir(), "novus-worker-live-"));
 
   const pg = await import("pg");
   const admin = new pg.default.Pool({
@@ -92,10 +97,10 @@ beforeAll(async () => {
   );
   await waitForHealth();
 
-  const localRepoDir = mkdtempSync(join(tmpdir(), "novus-workers-repo-"));
+  const localRepoDir = mkdtempSync(join(tmpdir(), "novus-worker-live-repo-"));
   repoName = basename(localRepoDir);
   git(localRepoDir, ["init", "-b", "main"]);
-  writeFileSync(join(localRepoDir, "README.md"), "# workers fixture\n");
+  writeFileSync(join(localRepoDir, "README.md"), "# worker live fixture\n");
   git(localRepoDir, ["add", "-A"]);
   git(localRepoDir, ["-c", "user.name=T", "-c", "user.email=t@l", "commit", "-m", "fixture"]);
   const headSha = git(localRepoDir, ["rev-parse", "HEAD"]);
@@ -117,6 +122,7 @@ beforeAll(async () => {
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      NOVUS_FAKE_HARNESS_PACE_MS: String(PACE_MS),
       NOVUS_USER_DATA_DIR: userDataDir
     }
   });
@@ -142,10 +148,6 @@ beforeAll(async () => {
     .getByTestId("composer-input")
     .fill("delegate the research [fake-workers]");
   await page.keyboard.press("Enter");
-  await page
-    .getByTestId("trace-outcome")
-    .filter({ hasText: "Turn completed" })
-    .waitFor({ timeout: 90_000 });
 }, 240_000);
 
 afterAll(async () => {
@@ -153,64 +155,47 @@ afterAll(async () => {
   controlPlane?.kill("SIGTERM");
 });
 
-describe("the harness's workers in the room (D-107)", () => {
+describe("a worker watched while it works (D-107)", () => {
   it(
-    "shows workers as their own rows, steps in with Enter, and steps out with Esc",
+    "grows the open inspector as the worker's own steps arrive",
     async () => {
-      // Workers sit on the trace itself as quiet rows — not buried in the
-      // disclosure (D-108): purpose, last activity, state as a word.
-      const rows = page.getByTestId("worker-row");
-      await rows.first().waitFor({ timeout: 10_000 });
-      expect(await rows.count()).toBe(2);
-      const rollup = page.getByTestId("worker-rollup");
-      expect(await rollup.textContent()).toContain("Research the repository");
-      expect(await rollup.textContent()).toContain("done");
-      expect(await rollup.textContent()).toContain("failed");
-      await page.screenshot({ path: join(evidenceDir, "120-workers-rollup.png") });
-      // The turn as it happened (D-203): speech, the run of activity between
-      // speech where it occurred, the spawns where they were made — in stream
-      // order, the identity said once. The fake turn makes one of each.
-      const order = await page
-        .getByTestId("direction-trace")
-        .first()
-        .locator('[data-testid="msg-agent"], [data-testid="technical-activity"], [data-testid="worker-rollup"]')
-        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-testid")));
-      // The fake turn's own order — words, the Write it made, the two spawns,
-      // words again — and nothing pulled to the end of the turn.
-      expect(order).toEqual(["msg-agent", "technical-activity", "worker-rollup", "msg-agent"]);
-      expect(await page.getByTestId("harness-mark").count()).toBe(1);
-      await page.screenshot({ path: join(evidenceDir, "219-turn-in-stream-order.png") });
-
-      // Enter steps in, the CLI way: focus the row, press Enter.
-      await rows.filter({ hasText: "Research the repository" }).focus();
-      await page.keyboard.press("Enter");
+      // Opened as soon as the spawn row exists — which is before either
+      // worker has done anything, so an inspector that never updates shows an
+      // empty timeline for the rest of the turn.
+      const row = page.getByTestId("worker-row").filter({ hasText: "Research the repository" });
+      await row.first().waitFor({ timeout: 90_000 });
+      await row.first().click();
       const inspector = page.getByTestId("worker-inspector");
-      await inspector.waitFor({ timeout: 10_000 });
-      expect(await inspector.textContent()).toContain("Research the repository");
+      await inspector.waitFor({ timeout: 15_000 });
+
+      const steps = () => page.getByTestId("worker-step").count();
+      const before = await steps();
+
+      // Nothing is clicked, nothing is reopened: the only thing that happens
+      // between these two counts is time and the room's own reads.
+      //
+      // The window is deliberately tighter than the room's 30s fallback read.
+      // A worker that only grew on that timer would pass a generous poll while
+      // reading as frozen to a person watching it — "eventually" is not the
+      // claim D-107 makes. At this pace the next step is ~4s away, so this
+      // asserts the live signal is what delivers it.
+      await expect
+        .poll(steps, { timeout: 15_000, interval: 500 })
+        .toBeGreaterThan(before);
+
+      // And the end lands in the same open view — the report the worker
+      // handed back appears without the reader going anywhere.
+      await expect
+        .poll(async () => (await page.getByTestId("worker-report").count()) > 0, {
+          timeout: 90_000,
+          interval: 500
+        })
+        .toBe(true);
       expect(await page.getByTestId("worker-report").textContent()).toContain(
         "Three call sites documented."
       );
-      expect(await page.getByTestId("worker-step").count()).toBeGreaterThan(0);
-      await page.screenshot({ path: join(evidenceDir, "121-worker-inspector.png") });
-
-      // Esc steps out: the conversation returns, transcript intact.
-      await page.keyboard.press("Escape");
-      await page.getByTestId("chat").waitFor({ timeout: 10_000 });
-      await page
-        .getByTestId("trace-outcome")
-        .filter({ hasText: "Turn completed" })
-        .waitFor({ timeout: 10_000 });
-
-      // The failed worker states its failure in its own view; the button
-      // works too, and so does Back to chat.
-      await page.getByTestId("worker-row").filter({ hasText: "Run API tests" }).click();
-      await page.getByTestId("worker-failure").waitFor({ timeout: 10_000 });
-      expect(await page.getByTestId("worker-failure").textContent()).toContain(
-        "The tests could not start."
-      );
-      await page.getByTestId("worker-back").click();
-      await page.getByTestId("chat").waitFor({ timeout: 10_000 });
+      await page.screenshot({ path: join(evidenceDir, "217-worker-live-inspector.png") });
     },
-    120_000
+    240_000
   );
 });

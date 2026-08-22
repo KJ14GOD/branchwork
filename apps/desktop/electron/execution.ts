@@ -1157,7 +1157,15 @@ export function startTurn(request: TurnRequest): RunningTurn {
         // The CLI does not exit while stdin is open — it is waiting for another
         // turn. Its own final verdict is the signal that there is nothing left
         // to say, so that is where the pipe closes and the process ends.
-        if (stream.result !== null) spawned.stdin?.end();
+        //
+        // Unless agents are still working in the background (D-202): the model
+        // ends a turn to *wait* for them, which is a `result` line too, and
+        // the CLI wakes it with their notifications and runs another turn.
+        // Closing stdin on the waiting result would leave that follow-up
+        // turn unable to answer a permission prompt — the pipe the answer
+        // travels on would already be gone. So the close waits for the last
+        // result, the one with nothing pending behind it.
+        if (stream.result !== null && !stream.hasPendingBackgroundTasks) spawned.stdin?.end();
       });
 
       // stderr is Novus/system diagnostics. It is never the harness speaking,

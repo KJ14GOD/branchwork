@@ -133,6 +133,7 @@ export function Composer({
   mention,
   slashCommands,
   terminal,
+  onStop,
   onRemoveTranscript
 }: {
   /** Null until the server has said what this viewer may do. The composer
@@ -158,23 +159,44 @@ export function Composer({
   /** Enter on an empty box. The room does nothing; the ask-dialog closes,
    *  because an empty ask is a dismissal (D-077). */
   onEmptySubmit?: () => void;
+  /** Set while the conversation this composer addresses has a live turn
+   *  (D-206): with the box empty, the send control becomes the stop square —
+   *  the affordance every agent product has taught — and typing swaps it back
+   *  to send, because a message typed mid-turn queues and steers. Never set
+   *  for another chat's turn; stopping that from here would be a misfire. */
+  onStop?: (() => void) | null;
   onSubmit: (input: {
     body: string;
     model: ModelId;
     effort: Effort;
     alongside?: boolean;
     attachmentIds?: string[];
+    /** Files chosen but not uploaded, because there was no mission to upload
+     *  them to yet (D-201). The caller uploads them once there is one. */
+    attachmentPaths?: string[];
   }) => Promise<SubmitOutcome>;
   /** Attaching an image (D-150). Absent where the surface cannot attach —
    *  a composer with no mission behind it yet. The verbs are the room's; the
    *  composer only holds what came back. */
   attach?: {
     pick: () => Promise<{ ok: true; path: string | null } | { ok: false; message: string }>;
-    upload: (path: string) => Promise<
+    /**
+     * Uploads the file and hands back the artifact the direction will carry.
+     *
+     * Absent where there is nothing to upload *to* — the ask dialog creates
+     * the mission an attachment would belong to, so at the moment of picking
+     * no mission exists (D-201). The composer then holds the chosen paths and
+     * hands them to `onSubmit` as `attachmentPaths`, and whoever creates the
+     * mission uploads them the instant there is one.
+     */
+    upload?: (path: string) => Promise<
       { ok: true; attachment: PreparedAttachment } | { ok: false; message: string }
     >;
-    /** Whatever image the clipboard holds, or null when it holds none (D-152). */
-    paste: () => Promise<
+    /** Whatever image the clipboard holds, or null when it holds none (D-152).
+     *  Absent in the deferred case: the clipboard's bytes have no path to
+     *  hold, and inventing a temporary file to make one is work for a later
+     *  slice rather than a thing to fake here. */
+    paste?: () => Promise<
       { ok: true; attachment: PreparedAttachment | null } | { ok: false; message: string }
     >;
     /** The path behind a dropped file, resolved by the bridge (D-152). */
@@ -391,9 +413,14 @@ export function Composer({
    *  delays the words — and abandoning the composer leaves an unattached
    *  artifact the sweep fails, never a half-sent direction. */
   const [attachments, setAttachments] = useState<PreparedAttachment[]>([]);
+  /** Files chosen where no mission exists to upload them to yet (D-201): held
+   *  by path, shown as chips like any other, uploaded by whoever creates the
+   *  mission. Named intentions, exactly as a pending transcript is. */
+  const [heldPaths, setHeldPaths] = useState<string[]>([]);
   const [attaching, setAttaching] = useState(false);
 
-  const room = attachments.length < MAX_DIRECTION_ATTACHMENTS;
+  const carried = attachments.length + heldPaths.length;
+  const room = carried < MAX_DIRECTION_ATTACHMENTS;
 
   /**
    * Uploads a run of files one after another (D-152), stopping at the bound.
@@ -408,12 +435,19 @@ export function Composer({
     setError(null);
     setAttaching(true);
     try {
-      let held = attachments.length;
+      let held = carried;
       let refusedOne: string | null = null;
       for (const path of paths) {
         if (held >= MAX_DIRECTION_ATTACHMENTS) {
           refusedOne = `A direction may carry ${MAX_DIRECTION_ATTACHMENTS} files; the rest were not attached.`;
           break;
+        }
+        // Nothing to upload to yet: hold the path and let the caller upload it
+        // the moment the mission exists (D-201).
+        if (!attach.upload) {
+          held += 1;
+          setHeldPaths((current) => [...current, path].slice(0, MAX_DIRECTION_ATTACHMENTS));
+          continue;
         }
         const uploaded = await attach.upload(path);
         if (!uploaded.ok) {
@@ -446,7 +480,7 @@ export function Composer({
   /** Paste (D-152). Returns true when an image was taken, so the caller knows
    *  whether to let the ordinary text paste happen. */
   const pasteImage = async (): Promise<boolean> => {
-    if (!attach || attaching || !room) return false;
+    if (!attach?.paste || attaching || !room) return false;
     const pasted = await attach.paste();
     if (!pasted.ok) {
       setError(pasted.message);
@@ -472,7 +506,8 @@ export function Composer({
       model,
       effort,
       alongside,
-      attachmentIds: attachments.map((image) => image.artifactId)
+      attachmentIds: attachments.map((image) => image.artifactId),
+      attachmentPaths: heldPaths
     });
     setSending(false);
     if (!outcome.ok) {
@@ -483,6 +518,7 @@ export function Composer({
     }
     setTextValue("");
     setAttachments([]);
+    setHeldPaths([]);
     // The box returns to one row: a composer that stays tall after sending is
     // a blank canvas, which the room is not (DESIGN.md prohibited pattern 9).
     if (inputRef.current) inputRef.current.style.height = "";
@@ -596,6 +632,7 @@ export function Composer({
             (D-176): the selected tab already names the conversation, and the
             box stays the same box everywhere. */}
         {(attachments.length > 0 ||
+          heldPaths.length > 0 ||
           (pendingTranscripts?.length ?? 0) > 0 ||
           (pendingContext?.length ?? 0) > 0) && (
           <div className="composer-attachments" data-testid="composer-attachments">
@@ -683,6 +720,27 @@ export function Composer({
                       held.filter((candidate) => candidate.artifactId !== image.artifactId)
                     )
                   }
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {heldPaths.map((path, index) => (
+              <span
+                className="composer-attachment"
+                key={`held:${path}:${index}`}
+                data-testid="composer-held-file"
+              >
+                <FileBadge path={path} />
+                {/* The name alone: nothing is known about form, resizing, or
+                    conversion until the file is prepared, and a chip that
+                    guessed would be stating what nobody measured. */}
+                <span className="composer-attachment-name">{path.split("/").pop() ?? path}</span>
+                <button
+                  className="composer-attachment-remove"
+                  aria-label={`Remove ${path.split("/").pop() ?? path}`}
+                  disabled={sending}
+                  onClick={() => setHeldPaths((held) => held.filter((_, at) => at !== index))}
                 >
                   ×
                 </button>
@@ -866,7 +924,7 @@ export function Composer({
               disabled={!enabled || attaching || !room}
               onClick={() => void addImage()}
               title={
-                attachments.length >= MAX_DIRECTION_ATTACHMENTS
+                carried >= MAX_DIRECTION_ATTACHMENTS
                   ? `A direction may carry ${MAX_DIRECTION_ATTACHMENTS} files.`
                   : "Attach an image or PDF"
               }
@@ -1075,27 +1133,45 @@ export function Composer({
             </span>
           )}
 
-          <button
-            className="send-button"
-            onClick={() => void send()}
-            disabled={!enabled || sending || textValue.trim().length === 0}
-            aria-label="Send direction"
-            data-testid="send"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
+          {onStop && textValue.trim().length === 0 && !sending ? (
+            /* The running turn's own control, in the send position (D-206):
+               a filled square reads as stop everywhere, and it sits where the
+               eye already is instead of only on the state line. Typing swaps
+               it back to send — a message mid-turn queues and steers. */
+            <button
+              className="send-button"
+              onClick={() => onStop()}
+              aria-label="Stop the running turn"
+              title="Stop the running turn"
+              data-testid="composer-stop"
             >
-              <path d="M12 19V5M5 12l7-7 7 7" />
-            </svg>
-          </button>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+                <rect x="4.5" y="4.5" width="15" height="15" rx="2.5" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              className="send-button"
+              onClick={() => void send()}
+              disabled={!enabled || sending || textValue.trim().length === 0}
+              aria-label="Send direction"
+              data-testid="send"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 
