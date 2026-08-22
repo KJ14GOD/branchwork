@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   Decision,
   HostCheck,
@@ -9,10 +9,11 @@ import type {
 } from "@novus/contracts";
 import { DEFAULT_EFFORT, DEFAULT_MODEL } from "@novus/contracts";
 import { novus } from "../bridge";
-import { clockTime, plural, shortSha } from "../format";
+import { agoLabel, clockTime, plural, shortSha } from "../format";
 import { ArtifactThumbRow } from "./artifact-row";
 import { Dialog } from "./dialog";
 import { GatedAction } from "./gated";
+import { Markdown } from "./markdown";
 
 /**
  * Publishing a decision, and the page that operates the pull request it
@@ -192,6 +193,24 @@ export function PullRequestPage({
   const [busy, setBusy] = useState(false);
   const [section, setSection] = useState<"comments" | "checks" | "changes">("comments");
   const missionId = detail.mission.missionId;
+  // The request's commits and files, asked for once per request (D-210): the
+  // head sentence counts the commits and the Commits block lists them, the
+  // way the host's own page does, so neither waits on a disclosure.
+  const [files, setFiles] = useState<PullFilesResponse | null>(null);
+  const pullRequestId = pull?.pullRequestId ?? null;
+  useEffect(() => {
+    setFiles(null);
+    if (pullRequestId === null) return;
+    let stale = false;
+    void novus()
+      .pulls.files(pullRequestId)
+      .then((result) => {
+        if (!stale && result.ok) setFiles(result.value);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [pullRequestId]);
 
   const act = async (call: Act) => {
     setBusy(true);
@@ -216,27 +235,74 @@ export function PullRequestPage({
   const checksLabel =
     checks.length > 0 ? `Checks ${checksPassed}/${checks.length}` : "Checks";
 
+  const opener = pull.createdByLogin ?? pull.authorLogin ?? "somebody";
+  const commitCount = files?.commits.length ?? null;
+  const now = Date.now();
+
   return (
     <section className="pull-page" data-testid="pull-page">
-      <PullHeadline detail={detail} pull={pull} busy={busy} onAct={act} />
-      <p className="receipt-line" data-testid="pull-approach">
-        Publishes <strong>{chosen?.name ?? "the chosen approach"}</strong>
-        {chosen?.intent ? ` — ${chosen.intent}` : ""}
-      </p>
-      <p className="receipt-line mono" data-testid="pull-branches">
-        {pull.headRef} → {pull.baseRef}
-        {pull.headSha ? ` · ${shortSha(pull.headSha)}` : ""}
-      </p>
-      <pre className="prepared-body" data-testid="pull-body">
-        {pull.body}
-      </pre>
-      <p className="quiet">
-        {pull.downstreamOf
-          ? "The description as the host holds it — this is the review of the mission's work one hop on, not a receipt Novus sent."
-          : pull.adopted
-            ? "The description as the host holds it — this request was opened outside Novus, so no receipt travelled from here."
-            : "Exactly what was sent at publication — the receipt that travelled."}
-      </p>
+      {/* The page is the host's own anatomy in this room's voice (D-210,
+          reversing D-099's receipt dump on sight): the title as the title,
+          one sentence that says state, who, how many commits, into what from
+          what — the sentence every code host has taught — then the
+          description as a document, the commits, and the conversation as
+          cards. Words carry state; the only colour is the diff's. */}
+      <header className="pull-head" data-testid="pull-head">
+        <h2 className="pull-title" data-testid="pull-title">{pull.title}</h2>
+        <PullHeadline detail={detail} pull={pull} busy={busy} onAct={act} opener={opener} commitCount={commitCount} />
+        <p className="quiet" data-testid="pull-approach">
+          Publishes <strong>{chosen?.name ?? "the chosen approach"}</strong>
+          {chosen?.intent ? ` — ${chosen.intent}` : ""}
+          {pull.headSha ? (
+            <>
+              {" · "}
+              <span className="mono">{shortSha(pull.headSha)}</span>
+            </>
+          ) : null}
+        </p>
+      </header>
+
+      <article className="pull-card" data-testid="pull-body">
+        <div className="pull-card-head">
+          <span className="pull-card-author">{opener}</span>
+          <span className="pull-card-meta">
+            {agoLabel(pull.createdAt, now)}
+            {" · "}
+            {pull.downstreamOf
+              ? "the description as the host holds it — the mission's work reviewed one hop on"
+              : pull.adopted
+                ? "the description as the host holds it — opened outside Novus"
+                : "the receipt that travelled — exactly what was sent at publication"}
+          </span>
+        </div>
+        <div className="pull-card-body">
+          <Markdown source={pull.body} />
+        </div>
+      </article>
+
+      <section className="pull-commits" data-testid="pull-commits-block">
+        <h3 className="field-label">
+          Commits{commitCount !== null ? ` · ${commitCount}` : ""}
+        </h3>
+        {files === null ? (
+          <p className="quiet">Asking GitHub…</p>
+        ) : files.commits.length === 0 ? (
+          <p className="quiet">The host lists no commits for this request.</p>
+        ) : (
+          <ul className="pull-commit-list" data-testid="pull-commits">
+            {files.commits.map((commit) => (
+              <li key={commit.sha} className="pull-commit">
+                <span className="pull-commit-message">{commit.message.split("\n")[0]}</span>
+                <span className="pull-commit-meta">
+                  {commit.author}
+                  {" · "}
+                  <span className="mono">{shortSha(commit.sha)}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {/* A downstream request (D-209) is completed where it was opened —
           the reviewer's process, not this room's. The server refuses the
@@ -261,7 +327,10 @@ export function PullRequestPage({
           onClick={() => setSection("comments")}
           data-testid="pull-tab-comments"
         >
-          Comments
+          Conversation
+          {pull.reviewThreads.filter((thread) => thread.state === "open").length > 0
+            ? ` · ${pull.reviewThreads.filter((thread) => thread.state === "open").length}`
+            : ""}
         </button>
         <button
           role="tab"
@@ -342,12 +411,18 @@ function PullHeadline({
   detail,
   pull,
   busy,
-  onAct
+  onAct,
+  opener,
+  commitCount
 }: {
   detail: MissionDetailResponse;
   pull: PullRequest;
   busy: boolean;
   onAct: (call: Act) => Promise<boolean>;
+  /** Who opened it, as the sentence names them. Omitted on the summary. */
+  opener?: string;
+  /** How many commits the host lists — null until asked, omitted on the summary. */
+  commitCount?: number | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(pull.title);
@@ -405,17 +480,42 @@ function PullHeadline({
   }
   return (
     <>
-      <p className="receipt-line" data-testid="pull-headline">
-        <strong>PR #{pull.number}</strong>{" "}
-        {pull.state === "draft"
-          ? "is a draft on GitHub"
-          : pull.state === "ready"
-            ? "awaits review on GitHub"
-            : pull.state === "merged"
-              ? `was merged${pull.mergedBy ? ` by ${pull.mergedBy}` : ""} on GitHub${
-                  pull.mergedAt ? ` at ${clockTime(pull.mergedAt)}` : ""
-                }`
-              : "was closed on GitHub without merging"}
+      <p className="receipt-line pull-sentence" data-testid="pull-headline">
+        {/* The host's own sentence (D-210): state as a word, then who wants
+            to merge how many commits into what from what. A merged or closed
+            request says how it ended instead of what it wants. The summary
+            on the receipt (no opener given) keeps the shorter form. */}
+        <strong className="pull-state-word" data-testid="pull-state-word">
+          {pull.state === "draft" ? "Draft" : pull.state === "ready" ? "Open" : pull.state === "merged" ? "Merged" : "Closed"}
+        </strong>
+        {" · "}
+        <strong>PR #{pull.number}</strong>
+        {opener !== undefined && (pull.state === "draft" || pull.state === "ready") ? (
+          <>
+            {" · "}
+            {opener} wants to merge
+            {commitCount !== null && commitCount !== undefined ? ` ${plural(commitCount, "commit")}` : ""} into{" "}
+            <span className="mono">{pull.baseRef}</span> from <span className="mono">{pull.headRef}</span>
+          </>
+        ) : pull.state === "merged" ? (
+          <>
+            {" · "}
+            merged{pull.mergedBy ? ` by ${pull.mergedBy}` : ""}
+            {pull.mergedAt ? ` at ${clockTime(pull.mergedAt)}` : ""} into <span className="mono">{pull.baseRef}</span>{" "}
+            from <span className="mono">{pull.headRef}</span>
+          </>
+        ) : pull.state === "closed" ? (
+          <>
+            {" · "}
+            closed without merging · <span className="mono">{pull.headRef}</span>
+          </>
+        ) : (
+          <>
+            {" · "}
+            {pull.state === "draft" ? "a draft" : "awaiting review"} · <span className="mono">{pull.headRef}</span> →{" "}
+            <span className="mono">{pull.baseRef}</span>
+          </>
+        )}
         {/* Adopted from the host (D-208): opened outside Novus, by whoever the
             host says — named here, because a request with no decision behind
             it must not read as one Novus opened. */}
@@ -445,15 +545,17 @@ function PullHeadline({
           </>
         )}
       </p>
-      <p className="receipt-line" data-testid="pull-title">
-        {pull.title}
-        {pull.labels.length > 0 && (
-          <span className="quiet" data-testid="pull-labels">
-            {" "}
-            · {pull.labels.join(" · ")}
-          </span>
-        )}
-      </p>
+      {(opener === undefined || pull.labels.length > 0) && (
+        <p className="receipt-line" data-testid={opener === undefined ? "pull-title" : "pull-labels-line"}>
+          {opener === undefined ? pull.title : null}
+          {pull.labels.length > 0 && (
+            <span className="quiet" data-testid="pull-labels">
+              {opener === undefined ? " · " : ""}
+              {pull.labels.join(" · ")}
+            </span>
+          )}
+        </p>
+      )}
     </>
   );
 }
@@ -960,25 +1062,38 @@ function PullReview({
           </>
         )}
       </p>
+      {/* Each thread is a card (D-210, the host's shape): who, where in the
+          code, open or resolved, when — then the words as a document, then
+          the acts on its foot. A resolved thread stays, dimmed in words. */}
       {pull.reviewThreads.length > 0 && (
-        <ul className="tool-list" data-testid="pull-threads">
+        <ul className="pull-threads" data-testid="pull-threads">
           {pull.reviewThreads.map((thread, index) => (
-            <li key={thread.threadId ?? index}>
-              <span className="tool-name">
-                {thread.author}
+            <li
+              key={thread.threadId ?? index}
+              className={thread.state === "open" ? "pull-card pull-thread" : "pull-card pull-thread resolved"}
+              data-state={thread.state}
+            >
+              <div className="pull-card-head">
+                <span className="pull-card-author">{thread.author}</span>
                 {thread.path ? (
-                  <>
-                    {" "}
-                    · <span className="mono">{thread.path}</span>
-                    {thread.line !== null ? <span className="mono">:{thread.line}</span> : null}
-                  </>
-                ) : null}
-                {" · "}
-                {thread.state === "open" ? "open" : "resolved"}
-              </span>
-              <span className="tool-detail">{thread.body}</span>
+                  <span className="mono pull-thread-anchor">
+                    {thread.path}
+                    {thread.line !== null ? `:${thread.line}` : ""}
+                  </span>
+                ) : (
+                  <span className="pull-thread-anchor">on the conversation</span>
+                )}
+                <span className="pull-card-meta">
+                  {thread.state === "open" ? "open" : "resolved"}
+                  {" · "}
+                  {agoLabel(thread.postedAt, Date.now())}
+                </span>
+              </div>
+              <div className="pull-card-body">
+                <Markdown source={thread.body} />
+              </div>
               {openState && thread.state === "open" && (
-                <span className="inline-actions">
+                <span className="inline-actions pull-card-foot">
                   {thread.threadId && (
                     <GatedAction
                       capability="pr.manage"
@@ -1007,6 +1122,11 @@ function PullReview({
                   >
                     Send to chat
                   </button>
+                  {thread.url && (
+                    <a className="btn btn-text" href={thread.url} target="_blank" rel="noreferrer">
+                      Open on GitHub
+                    </a>
+                  )}
                 </span>
               )}
             </li>

@@ -5572,6 +5572,131 @@ body.resizing {
    toggle, file rows that disclose their diff, the split view's two columns,
    and the quiet per-line comment affordance. One border level per region;
    the diff reuses the room's own diff plane. */
+/* The request page's anatomy (D-210): the host's shape in the room's voice.
+   One surface-1 sheet per block — description, each review thread — with no
+   border (D-137's tone-separated surfaces), a head row of who / where / when
+   in meta, and the words as a document inside. Words carry state. */
+.pull-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  width: 100%;
+}
+
+.pull-title {
+  font: var(--type-title);
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+.pull-sentence {
+  color: var(--text-2);
+}
+
+.pull-state-word {
+  color: var(--text-1);
+}
+
+.pull-card {
+  width: 100%;
+  background: var(--surface-1);
+  border-radius: var(--r-button);
+  padding: var(--s-3) var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.pull-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.pull-card-author {
+  font: var(--type-row);
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.pull-thread-anchor {
+  color: var(--text-2);
+}
+
+.pull-card-meta {
+  margin-left: auto;
+}
+
+.pull-card-body {
+  color: var(--text-1);
+  user-select: text;
+}
+
+.pull-card-body .md {
+  font: var(--type-row);
+}
+
+.pull-thread.resolved .pull-card-body,
+.pull-thread.resolved .pull-card-author {
+  color: var(--text-3);
+}
+
+.pull-card-foot {
+  padding-top: var(--s-1);
+}
+
+.pull-threads {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  width: 100%;
+}
+
+.pull-commits {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.pull-commit-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.pull-commit {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+  border-top: 1px solid var(--edge);
+  font: var(--type-row);
+}
+
+.pull-commit:first-child {
+  border-top: 0;
+}
+
+.pull-commit-message {
+  color: var(--text-1);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pull-commit-meta {
+  flex: none;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
 .pull-section-head {
   display: flex;
   align-items: center;

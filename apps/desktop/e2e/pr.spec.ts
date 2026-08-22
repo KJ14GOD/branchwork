@@ -430,8 +430,13 @@ describe("shipping a decision through GitHub (D-099)", () => {
       await page.getByTestId("pull-tab").waitFor({ timeout: 20_000 });
       expect(await page.getByTestId("pull-tab").innerText()).toContain("draft");
       await page.getByTestId("pull-page").waitFor({ timeout: 30_000 });
-      expect(await page.getByTestId("pull-headline").innerText()).toContain("is a draft");
-      expect(await page.getByTestId("pull-branches").innerText()).toContain("→ main");
+      expect(await page.getByTestId("pull-state-word").innerText()).toBe("Draft");
+      expect(await page.getByTestId("pull-headline").innerText()).toContain("wants to merge");
+      expect(await page.getByTestId("pull-headline").innerText()).toContain("into main from");
+      // The description is a document, not a dump: the markdown heading is
+      // rendered, so its hashes are gone from the page.
+      expect(await page.getByTestId("pull-body").innerText()).not.toContain("## ");
+      expect(await page.getByTestId("pull-body").innerText()).toContain("Why this approach");
       // A draft offers no merge control — readiness precedes the verb — and
       // the sentence carries the never-silent rule (D-100).
       expect(await page.locator("button", { hasText: /^Merge/ }).count()).toBe(0);
@@ -526,6 +531,8 @@ describe("shipping a decision through GitHub (D-099)", () => {
         60_000
       );
       expect(await page.getByTestId("pull-threads").innerText()).toContain("Is the guard bounded?");
+      // The conversation as cards (D-210): who, where, state, then the words.
+      await shot("216-pull-conversation.png");
       expect(await page.getByTestId("pull-reviewers").innerText()).toContain("1 comment open");
 
       // Send to chat: the comment becomes a direction for the decided lane's
@@ -562,8 +569,8 @@ describe("shipping a decision through GitHub (D-099)", () => {
       await page.getByTestId("mark-ready").click();
       await until("ready to land", (value) => value.pullRequest?.state === "ready");
       await expect
-        .poll(async () => page.getByTestId("pull-headline").innerText(), { timeout: 30_000 })
-        .toContain("awaits review");
+        .poll(async () => page.getByTestId("pull-state-word").innerText(), { timeout: 30_000 })
+        .toBe("Open");
 
       // --- The readiness gate fills from the host's own story ---------------
       await hostActs("check", { number: pull.number, checkName: "ci", checkStatus: "passed", required: true });
@@ -630,8 +637,8 @@ describe("shipping a decision through GitHub (D-099)", () => {
       );
       expect(merged.state).toBe("decision_recorded");
       await expect
-        .poll(async () => page.getByTestId("pull-headline").innerText(), { timeout: 30_000 })
-        .toContain("was merged");
+        .poll(async () => page.getByTestId("pull-state-word").innerText(), { timeout: 30_000 })
+        .toBe("Merged");
       await shot("113-merged-from-novus.png");
       // The room's own sentence names how publication ended — read where the
       // header shows, on the lane's canvas, then come back to the tab.
@@ -710,8 +717,8 @@ describe("shipping a decision through GitHub (D-099)", () => {
       await expect.poll(async () => page.getByTestId("pull-tab").count(), { timeout: 20_000 }).toBe(2);
       await page.getByTestId("rail-pull").nth(1).click();
       await expect
-        .poll(async () => page.getByTestId("pull-headline").innerText(), { timeout: 30_000 })
-        .toContain("is a draft");
+        .poll(async () => page.getByTestId("pull-state-word").innerText(), { timeout: 30_000 })
+        .toBe("Draft");
       await shot("215-second-pull-request.png");
 
       // PR #2 goes the same road to its merge, so completion's tail below
@@ -732,8 +739,8 @@ describe("shipping a decision through GitHub (D-099)", () => {
         60_000
       );
       await expect
-        .poll(async () => page.getByTestId("pull-headline").innerText(), { timeout: 30_000 })
-        .toContain("was merged");
+        .poll(async () => page.getByTestId("pull-state-word").innerText(), { timeout: 30_000 })
+        .toBe("Merged");
 
       // --- Completion's tail: delete the branch, archive the mission --------
       await page.getByTestId("delete-branch").click();
