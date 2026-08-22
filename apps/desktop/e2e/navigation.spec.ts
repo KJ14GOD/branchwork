@@ -353,21 +353,34 @@ describe("the missions a person has open", () => {
 
     await shot(page, "63-working-set-two-projects.png");
 
-    // ⌃⇥ walks the open rooms in the person's own order and wraps (D-212):
-    // three tabs, Beta one active and last, so forward lands on the first.
+    // ⌃⇥ walks the rail's projects, not the open rooms (D-212 as the owner
+    // corrected it): Beta one is the room on screen, so the selected project
+    // is Beta; one press selects Alpha — wrapping, since Alpha is first —
+    // while the room stays exactly where it was (D-077).
+    const selectedProject = () =>
+      page.locator('[data-testid="project-row"][aria-current="true"]').innerText();
     const activeLabel = () =>
       page.locator('[data-testid="mission-tab"][data-active="true"]').innerText();
-    await expect.poll(activeLabel, { timeout: 20_000 }).toContain("Beta one");
+    await expect.poll(selectedProject, { timeout: 20_000 }).toContain(betaName.slice(0, 12));
+    // Fold Alpha first, so the press also has to disclose it.
+    await projectGroup(page, alphaName).getByTestId("project-twisty").click();
+    await expect
+      .poll(() => projectGroup(page, alphaName).getByTestId("project-twisty").getAttribute("aria-expanded"))
+      .toBe("false");
     await page.keyboard.press("Control+Tab");
-    await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Alpha one");
-    await page.keyboard.press("Control+Tab");
+    await expect.poll(selectedProject, { timeout: 10_000 }).toContain(alphaName.slice(0, 12));
+    // Disclosed on arrival — a selection nobody can see is no selection.
+    await expect
+      .poll(() => projectGroup(page, alphaName).getByTestId("project-twisty").getAttribute("aria-expanded"))
+      .toBe("true");
+    // And the room did not move.
+    expect(await activeLabel()).toContain("Beta one");
+    // ⌘1–9 now aim at the chosen project: ⌘2 opens Alpha's second mission.
+    await page.keyboard.press("Meta+2");
     await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Alpha two");
-    // And back the other way, across the wrap.
+    // Back the other way wraps from Alpha to Beta.
     await page.keyboard.press("Control+Shift+Tab");
-    await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Alpha one");
-    await page.keyboard.press("Control+Shift+Tab");
-    await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Beta one");
-    // Only the selection moved: the set is exactly what was open.
+    await expect.poll(selectedProject, { timeout: 10_000 }).toContain(betaName.slice(0, 12));
     expect((await tabLabels(page)).length).toBe(3);
 
     // The chord is on the Keyboard page like every other, labelled ⌃⇥ — the
@@ -376,7 +389,7 @@ describe("the missions a person has open", () => {
     await page.getByTestId("settings-dialog").waitFor({ timeout: 10_000 });
     await page.locator(".settings-nav-item").filter({ hasText: "Keyboard" }).click();
     const pane = page.getByTestId("settings-pane");
-    await expect.poll(() => pane.textContent(), { timeout: 10_000 }).toContain("next open mission");
+    await expect.poll(() => pane.textContent(), { timeout: 10_000 }).toContain("next project in the rail");
     expect(await pane.textContent()).toContain("⌃⇥");
     expect(await pane.textContent()).toContain("⌃⇧⇥");
     await shot(page, "201-settings-keyboard.png");

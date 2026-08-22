@@ -4,7 +4,6 @@ import {
   closeSession,
   closeTab,
   closeTabs,
-  cycleTab,
   decodeWorkingSet,
   emptyWorkingSet,
   encodeWorkingSet,
@@ -424,33 +423,3 @@ describe("opening a mission AT a place (D-120)", () => {
 });
 
 
-describe("walking the open rooms (D-212)", () => {
-  const mint = minter();
-
-  it("moves along the tabs in the person's order and wraps at both ends", () => {
-    let set = openMission(emptyWorkingSet, "msn_a", "local:one", mint);
-    set = openMission(set, "msn_b", "local:one", mint);
-    set = openMission(set, "msn_c", "local:one", mint);
-    // Opening selects, so the newest is active; forward from the end wraps.
-    expect(activeTab(set)?.missionId).toBe("msn_c");
-    set = cycleTab(set, 1);
-    expect(activeTab(set)?.missionId).toBe("msn_a");
-    set = cycleTab(set, 1);
-    expect(activeTab(set)?.missionId).toBe("msn_b");
-    // Backward from the first wraps to the last.
-    set = cycleTab(set, -1);
-    expect(activeTab(set)?.missionId).toBe("msn_a");
-    set = cycleTab(set, -1);
-    expect(activeTab(set)?.missionId).toBe("msn_c");
-  });
-
-  it("does nothing with nothing open, stays put with one, and lands on an end when none is active", () => {
-    expect(cycleTab(emptyWorkingSet, 1)).toBe(emptyWorkingSet);
-    const one = openMission(emptyWorkingSet, "msn_a", "local:one", mint);
-    expect(cycleTab(one, 1)).toBe(one);
-    let two = openMission(one, "msn_b", "local:one", mint);
-    two = { ...two, activeId: null };
-    expect(activeTab(cycleTab(two, 1))?.missionId).toBe("msn_a");
-    expect(activeTab(cycleTab(two, -1))?.missionId).toBe("msn_b");
-  });
-});

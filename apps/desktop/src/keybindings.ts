@@ -16,8 +16,8 @@ export type BindingAction =
   | "togglePanel"
   | "openSettings"
   | "find"
-  | "nextMission"
-  | "previousMission";
+  | "nextProject"
+  | "previousProject";
 
 /** One chord. ⌘ (or Ctrl elsewhere) is always implied — these are global
  *  chords, and a global binding without a modifier would eat plain typing. */
@@ -35,9 +35,10 @@ export const BINDING_ACTIONS: { action: BindingAction; does: string }[] = [
   { action: "togglePanel", does: "Show or hide the evidence panel" },
   { action: "find", does: "Find in the conversation" },
   { action: "openSettings", does: "Open the theme control" },
-  // Moving along the open rooms (D-212): the strip is a ring, Tab walks it.
-  { action: "nextMission", does: "Go to the next open mission" },
-  { action: "previousMission", does: "Go to the previous open mission" }
+  // Moving along the rail's projects (D-212): the rail is a ring, Tab walks
+  // it, and ⌘1–9 then reach the chosen project's missions.
+  { action: "nextProject", does: "Select the next project in the rail" },
+  { action: "previousProject", does: "Select the previous project in the rail" }
 ];
 
 const DEFAULTS: Record<BindingAction, Chord> = {
@@ -48,8 +49,8 @@ const DEFAULTS: Record<BindingAction, Chord> = {
   togglePanel: { key: "e", shift: false, alt: false },
   openSettings: { key: ",", shift: false, alt: false },
   find: { key: "f", shift: false, alt: false },
-  nextMission: { key: "tab", shift: false, alt: false },
-  previousMission: { key: "tab", shift: true, alt: false }
+  nextProject: { key: "tab", shift: false, alt: false },
+  previousProject: { key: "tab", shift: true, alt: false }
 };
 
 const STORAGE_KEY = "novus.keybindings";

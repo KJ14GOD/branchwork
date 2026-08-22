@@ -47,9 +47,9 @@ import {
   tabIsGone,
   writeWorkingSet,
   type OpenTab,
-  type WorkingSet,
-  cycleTab
+  type WorkingSet
 } from "../components/working-set";
+import { cycleKey } from "../components/rail-cycle";
 import {
   boardColumnOf,
   laneView,
@@ -1081,7 +1081,16 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   }, [restored, storageKey, workingSet]);
 
   const active = activeTabOf(workingSet);
-  const currentProjectKey = active?.projectKey ?? railProject;
+  // The selected project is the person's own choice (D-212): the rail's
+  // selection, which follows the room being read whenever *that* changes
+  // (the effect below) and otherwise stays where ⌃⇥ or a click put it. It
+  // used to be the active tab's project outright, which left ⌘1–9 and ⌘T
+  // unable to aim anywhere but the open room's project.
+  const currentProjectKey = railProject ?? active?.projectKey ?? null;
+  const activeProjectKey = active?.projectKey ?? null;
+  useEffect(() => {
+    if (activeProjectKey !== null) setRailProject(activeProjectKey);
+  }, [activeProjectKey]);
   const currentProject = currentProjectKey
     ? (projects.find((project) => project.key === currentProjectKey) ?? null)
     : null;
@@ -1257,13 +1266,17 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         // first when it was put away, so the block has somewhere to open.
         setRailHidden(false);
         setSettingsOpen((previous) => !previous);
-      } else if (matchesChord(event, keys.nextMission)) {
-        // Along the open rooms, in the person's own order, wrapping (D-212).
+      } else if (matchesChord(event, keys.nextProject) || matchesChord(event, keys.previousProject)) {
+        // Along the rail's projects, wrapping (D-212): selected, and disclosed
+        // if it was folded — a selection nobody can see is no selection. The
+        // room never moves (D-077); ⌘1–9 now reach the chosen project.
         event.preventDefault();
-        setWorkingSet((set) => cycleTab(set, 1));
-      } else if (matchesChord(event, keys.previousMission)) {
-        event.preventDefault();
-        setWorkingSet((set) => cycleTab(set, -1));
+        const direction = matchesChord(event, keys.nextProject) ? 1 : -1;
+        const next = cycleKey(projects.map((project) => project.key), currentProjectKey, direction);
+        if (next === null) return;
+        setRailProject(next);
+        setExpanded((previous) => new Set(previous).add(next));
+        setRailHidden(false);
       } else if (/^[1-9]$/.test(event.key) && !event.shiftKey && !event.altKey) {
         if (!currentProject) return;
         const mission = currentProject.missions[Number(event.key) - 1];
@@ -1275,7 +1288,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentProject, newMissionHere, openMissionTab, activeMissionId, keys]);
+  }, [currentProject, currentProjectKey, projects, newMissionHere, openMissionTab, activeMissionId, keys]);
 
   // A dialog about one mission's workspace must not survive a move to
   // another mission — nor a Changes scope that names one of its turns.

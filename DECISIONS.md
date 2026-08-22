@@ -2972,17 +2972,17 @@ A downstream request is never the lane's own publication. It blocks no Publish a
 
 **Revisit when.** A commit's author arrives as a git name rather than a login (initials show; mapping names to logins is the host's knowledge, not Novus's); or the description sheet wants the opener's picture in the sentence as well.
 
-## D-212 — The strip is a ring: ⌃⇥ walks the open missions
+## D-212 — The rail is a ring: ⌃⇥ selects the next project
 
-**Context.** The owner: "using control tab to navigate between different projects open super super useful imo for navigation." The working set (D-061) already holds the open rooms in the person's own order; `⌘1–9` reaches a *project's* missions by rail position, but nothing walked the strip itself.
+**Context.** The owner: "using control tab to navigate between different projects open super super useful imo for navigation." First read as walking the *open missions* and shipped that way (ed3eccc); corrected by the owner within the hour: "its to go between projects … we alr have command 1 to 9 if i wanna swap between [missions] … it doesnt have to be open … if its close it opens it." The layers are distinct and both already existed: `⌘1–9` reaches a project's missions by rail position, `⌘T` starts one there — what nothing did was move which *project* those aim at.
 
-**Decision.** Two rebindable chords in the D-204 registry: `⌃⇥` next open mission, `⌃⇧⇥` previous, cycling the working set's tabs in their own order and wrapping at both ends; with no tab active the first press lands on an end. One pure helper (`cycleTab`) carries the rule so it is tested without a window. The registry's chord model implies ⌘-or-Control, which is exactly right here — but a Tab chord is **only ever** the Control one, because `⌘⇥` is the platform's app switcher and never reaches the window, so the label says `⌃` rather than claiming a key it could not be.
+**Decision.** Two rebindable chords in the D-204 registry: `⌃⇥` selects the next project in the rail, `⌃⇧⇥` the previous, wrapping at both ends; with nothing selected the first press lands on an end. The chosen project is **disclosed** if it was folded, and the room on screen **never moves** (D-077's rule for the project row, kept). This required the selected project to become the person's own: it had been derived as the active tab's project outright, which left `⌘1–9` unable to aim anywhere but the open room's project; it is now the rail selection, which follows the room being read whenever *that* changes and otherwise stays where a keystroke or click put it. One pure helper (`cycleKey`) carries the ring; the mission-tab cycler the first reading shipped is removed rather than left beside it. A Tab chord is only ever the Control one — `⌘⇥` is the platform's app switcher and never reaches the window — so the label says `⌃`.
 
-**Alternatives.** `⌘⇧[` / `]` in the browser idiom (rejected: rebindable anyway, and `⌃⇥` is what the owner's hands already know). Walking the rail's project order instead of the strip (rejected: the strip is what is open; the rail is everything — `⌘1–9` already covers the rail).
+**Alternatives.** Keeping both cyclers on different chords (rejected: the owner named one want, and `⌘1–9` already covers rooms within a project). Walking only the projects with open rooms (rejected by the owner's own words: it need not be open).
 
-**Consequences.** `nextMission` / `previousMission` actions with the shared pencil-and-trash rows on the Keyboard page; the shell's handler gains two cases; `chordLabel` learns that Tab chords are Control chords. Evidence `201-` recaptured with the rows.
+**Consequences.** `nextProject` / `previousProject` on the Keyboard page; `currentProjectKey` derivation flipped with a following effect; `cycleKey` in its own module with its own test; `cycleTab` and its tests gone. Evidence `63-` and `201-` recaptured; the navigation suite re-run whole against the derivation change.
 
-**Revisit when.** Tabs want most-recent-first cycling (the editor-switcher idiom) rather than strip order — a second helper, same chord.
+**Revisit when.** The rail grows groupings (pinned, recent) that make "next" ambiguous.
 
 ## D-213 — Changes has a scope: what this prompt did, beside what the mission did
 
