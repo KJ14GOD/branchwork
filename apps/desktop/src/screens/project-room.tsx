@@ -145,6 +145,7 @@ export function ProjectRoom({
   onFindConsumed,
   selectedMissionId,
   onInspector,
+  onInspectTurnChanges,
   onSetup,
   onDetail,
   onCreated,
@@ -195,6 +196,9 @@ export function ProjectRoom({
   /** Opening the evidence panel is the shell's job — it owns the panel and the
    *  control that shows it. The room only ever asks for a section. */
   onInspector: (section: InspectorSection | null) => void;
+  /** Opens Changes narrowed to one turn's checkpoint (D-213) — the way in
+   *  from a turn's own CHECKPOINT row; every other way in is mission-wide. */
+  onInspectTurnChanges?: (checkpointId: string) => void;
   /** The setup dialog is the shell's too: the Run control opens the same one. */
   onSetup: () => void;
   onDetail: (detail: MissionDetailResponse) => void;
@@ -2189,7 +2193,11 @@ export function ProjectRoom({
                     controllerUserId={detail.control.holderUserId}
                     controllerLogin={detail.control.holderLogin}
                     viewerIsController={isController}
-                    onOpenChanges={() => onInspector("changes")}
+                    onOpenChanges={(checkpointId) =>
+                      checkpointId && onInspectTurnChanges
+                        ? onInspectTurnChanges(checkpointId)
+                        : onInspector("changes")
+                    }
                     onOpenVerification={() => onInspector("verification")}
                     onOpenWorker={openWorkerOn(block.key)}
                     onOpenImage={setOpenImage}

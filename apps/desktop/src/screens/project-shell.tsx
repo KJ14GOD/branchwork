@@ -784,6 +784,14 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** The docked evidence panel. Held here because its toggle lives in the top
    *  bar and because the panel outlives the mission selected beside it. */
   const [inspector, setInspector] = useState<InspectorSection | null>(null);
+  /** Changes narrowed to one turn's checkpoint (D-213): set when a turn's
+   *  CHECKPOINT row opened the section, cleared by "Whole mission", by any
+   *  other way into the section, and by leaving the mission. */
+  const [changesScope, setChangesScope] = useState<string | null>(null);
+  const openSection = (section: InspectorSection | null) => {
+    if (section !== "changes") setChangesScope(null);
+    setInspector(section);
+  };
   /** One artifact taking the active tab's canvas (D-122) — the worker-view
    *  shape: opened from the Evidence section, closed with Esc or Back. */
   const [openArtifact, setOpenArtifact] = useState<{ tabId: string; artifactId: string } | null>(
@@ -1262,9 +1270,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   }, [currentProject, newMissionHere, openMissionTab, activeMissionId, keys]);
 
   // A dialog about one mission's workspace must not survive a move to
-  // another mission.
+  // another mission — nor a Changes scope that names one of its turns.
   useEffect(() => {
     setSetupOpen(false);
+    setChangesScope(null);
   }, [active?.id]);
 
   const closeDialog = useCallback(() => {
@@ -2252,7 +2261,16 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               project={currentProject}
               details={details}
               selectedMissionId={active.missionId}
-              onInspector={setInspector}
+              onInspector={(section) => {
+                // Every ordinary way into Changes is the whole mission; only
+                // a turn's own row narrows it (below).
+                setChangesScope(null);
+                setInspector(section);
+              }}
+              onInspectTurnChanges={(checkpointId) => {
+                setChangesScope(checkpointId);
+                setInspector("changes");
+              }}
               onSetup={() => setSetupOpen(true)}
               onDetail={handleDetail}
               onCreated={handleCreated}
@@ -2392,7 +2410,9 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           width={panelWidth}
           detail={laneView(openDetail)}
           section={inspector}
-          onSection={setInspector}
+          onSection={openSection}
+          changesScope={changesScope}
+          onChangesScope={setChangesScope}
           hostedHere={currentProject?.onThisMachine === true}
           openPath={openFiles.find((entry) => entry.key === activeFile)?.path ?? null}
           onOpenFile={(path) => {

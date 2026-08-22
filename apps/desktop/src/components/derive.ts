@@ -349,6 +349,39 @@ export function viewerIsController(detail: MissionDetailResponse): boolean {
 }
 
 /**
+ * One turn's own footprint (D-213): the files its checkpoint committed, each
+ * with the diff of that turn and no other. Where `changedFiles` below answers
+ * "what has the mission changed", this answers "what did *that prompt* do" —
+ * the question a person asks while the mission-wide list keeps growing.
+ */
+export function checkpointFiles(detail: MissionDetailResponse, checkpointId: string): FileChange[] {
+  const checkpoint = detail.checkpoints.find((candidate) => candidate.checkpointId === checkpointId);
+  if (!checkpoint) return [];
+  return [...checkpoint.files].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * The prompt a checkpoint answered, for the scoped Changes header (D-213):
+ * the direction whose turn committed it, bounded to a line. Null when the
+ * turn's direction is not on the record — the header then names the
+ * checkpoint by its revision instead of inventing words.
+ */
+export function checkpointPrompt(
+  detail: MissionDetailResponse,
+  checkpointId: string
+): { words: string; at: string } | null {
+  const checkpoint = detail.checkpoints.find((candidate) => candidate.checkpointId === checkpointId);
+  if (!checkpoint) return null;
+  const execution = detail.executions.find((candidate) => candidate.executionId === checkpoint.executionId);
+  const direction = execution?.startingDirectionId
+    ? detail.directions.find((candidate) => candidate.directionId === execution.startingDirectionId)
+    : undefined;
+  if (!direction) return null;
+  const line = direction.body.replace(/\s+/g, " ").trim();
+  return { words: line.length > 72 ? `${line.slice(0, 71)}…` : line, at: checkpoint.createdAt };
+}
+
+/**
  * Every file the mission has changed, latest checkpoint wins per path. A file
  * touched three times is one row, not three.
  */

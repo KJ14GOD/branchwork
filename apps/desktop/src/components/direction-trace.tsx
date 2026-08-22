@@ -130,7 +130,15 @@ function Chevron() {
   );
 }
 
-function CheckpointRow({ segment, onOpenChanges }: { segment: Segment & { kind: "checkpoint" }; onOpenChanges: () => void }) {
+function CheckpointRow({
+  segment,
+  onOpenChanges
+}: {
+  segment: Segment & { kind: "checkpoint" };
+  /** Opens Changes for this turn's checkpoint when it has one (D-213), else
+   *  the mission-wide list. */
+  onOpenChanges: (checkpointId: string | null) => void;
+}) {
   const checkpoint = segment.checkpoint;
   return (
     <div className="milestone" data-testid="checkpoint-line">
@@ -165,7 +173,11 @@ function CheckpointRow({ segment, onOpenChanges }: { segment: Segment & { kind: 
         )}
       </span>
       {checkpoint && checkpoint.filesChanged > 0 && (
-        <button className="btn btn-text milestone-action" onClick={onOpenChanges} data-testid="trace-open-changes">
+        <button
+          className="btn btn-text milestone-action"
+          onClick={() => onOpenChanges(segment.checkpoint?.checkpointId ?? null)}
+          data-testid="trace-open-changes"
+        >
           Changes
         </button>
       )}
@@ -207,7 +219,7 @@ function SegmentView({
   /** True for harness speech that follows earlier speech in the same turn,
    *  so the identity is stated once per turn rather than per paragraph. */
   continued?: boolean;
-  onOpenChanges: () => void;
+  onOpenChanges: (checkpointId: string | null) => void;
   onOpenVerification: () => void;
 }) {
   switch (segment.kind) {
@@ -313,7 +325,7 @@ export function TraceView({
   controllerUserId: string | null;
   controllerLogin: string | null;
   viewerIsController: boolean;
-  onOpenChanges: () => void;
+  onOpenChanges: (checkpointId: string | null) => void;
   onOpenVerification: () => void;
   /** Opens one worker's own view on the canvas (D-107). */
   onOpenWorker?: (workerId: string) => void;

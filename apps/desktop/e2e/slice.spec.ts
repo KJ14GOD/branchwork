@@ -472,6 +472,21 @@ describe("the Mission Room", () => {
     await changeRows.first().click();
     await first.page.getByTestId("diff").waitFor({ timeout: 10_000 });
     await first.page.screenshot({ path: join(evidenceDir, "15-changes-diff.png") });
+    // The tab's way in is the whole mission: no scope line.
+    expect(await first.page.getByTestId("changes-scope").count()).toBe(0);
+
+    // A turn's own row narrows it (D-213): Changes from the CHECKPOINT row
+    // says which prompt's footprint it is showing, and offers the way back.
+    await first.page.getByTestId("trace-open-changes").first().click();
+    const scope = first.page.getByTestId("changes-scope");
+    await scope.waitFor({ timeout: 10_000 });
+    expect(await scope.textContent()).toContain("changed by this turn");
+    expect(await scope.textContent()).toContain("add a fake turn file");
+    await first.page.screenshot({ path: join(evidenceDir, "220-changes-scoped-to-a-turn.png") });
+    await first.page.getByTestId("changes-scope-clear").click();
+    await expect
+      .poll(async () => first.page.getByTestId("changes-scope").count(), { timeout: 10_000 })
+      .toBe(0);
 
     // Overview holds the machinery the header must never carry. The workspace
     // drawer opens on it already; clicking the tab again would fold it away.

@@ -2726,6 +2726,37 @@ body {
   margin-bottom: var(--s-2);
 }
 
+/* The scoped Changes header's prompt (D-213): the words that asked for this
+   turn, quoted, in the summary's own type — identity by words, never a
+   chip. */
+.changes-scope-prompt {
+  color: var(--text-1);
+}
+
+/* One line: the sentence truncates before the way back does, so "Whole
+   mission" always sits at the line's end and never wraps under a dangling
+   separator. */
+.changes-scope {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+}
+
+.changes-scope-words {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-scope-clear {
+  flex: none;
+  padding: 0;
+  min-height: 0;
+  font: inherit;
+}
+
 .inspector-actions {
   margin-top: var(--s-4);
 }

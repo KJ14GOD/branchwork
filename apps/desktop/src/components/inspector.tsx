@@ -16,6 +16,8 @@ import { Dialog } from "./dialog";
 import { clockTime, plural, shortSha } from "../format";
 import {
   changedFiles,
+  checkpointFiles,
+  checkpointPrompt,
   checkTallies,
   laneSessions,
   machineMcpRows,
@@ -1311,6 +1313,8 @@ export function Inspector({
   detail,
   section,
   onSection,
+  changesScope = null,
+  onChangesScope,
   openPath,
   onOpenFile,
   onAddContext,
@@ -1324,6 +1328,11 @@ export function Inspector({
   detail: MissionDetailResponse;
   section: InspectorSection;
   onSection: (section: InspectorSection) => void;
+  /** Changes narrowed to one turn's checkpoint (D-213) — set when the
+   *  section was opened from a turn's CHECKPOINT row, null for the mission-
+   *  wide list. Owned by the shell beside the section itself. */
+  changesScope?: string | null;
+  onChangesScope?: (checkpointId: string | null) => void;
   /** The file currently taking the room's canvas, so the tree can mark it. */
   openPath: string | null;
   onOpenFile: (path: string) => void;
@@ -1363,7 +1372,18 @@ export function Inspector({
   const [rerunning, setRerunning] = useState<string | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
 
-  const files = changedFiles(detail);
+  // The whole mission's files, latest checkpoint winning per path — or, when
+  // a turn's row opened this section, that turn's own files with that
+  // turn's own diffs (D-213). A scope whose checkpoint the detail no longer
+  // holds reads as the mission-wide list rather than as an empty one.
+  const scopedFiles = changesScope !== null ? checkpointFiles(detail, changesScope) : null;
+  const scoped = scopedFiles !== null && scopedFiles.length > 0;
+  const files = scoped ? scopedFiles : changedFiles(detail);
+  const scopePrompt = scoped && changesScope !== null ? checkpointPrompt(detail, changesScope) : null;
+  const scopeCheckpoint =
+    scoped && changesScope !== null
+      ? (detail.checkpoints.find((candidate) => candidate.checkpointId === changesScope) ?? null)
+      : null;
   const tallies = checkTallies(detail);
   const { mission, workstream } = detail;
   const [copiedPath, setCopiedPath] = useState(false);
@@ -1552,10 +1572,42 @@ export function Inspector({
                 </p>
               ) : (
                 <>
-                  <p className="inspector-summary">
-                    {plural(files.length, "file")} changed on{" "}
-                    <span className="mono">{workstream?.missionBranch ?? "the mission branch"}</span>
-                  </p>
+                  {scoped ? (
+                    /* One turn's footprint (D-213): the prompt that asked for
+                       it, its revision, and the way back to everything — a
+                       scope said in words above the rows, never a filter
+                       chip a reader has to notice. */
+                    <p className="inspector-summary changes-scope" data-testid="changes-scope">
+                      <span className="changes-scope-words" title={scopePrompt?.words}>
+                        {plural(files.length, "file")} changed by this turn
+                        {scopePrompt ? (
+                          <>
+                            {" — "}
+                            <span className="changes-scope-prompt">“{scopePrompt.words}”</span>
+                          </>
+                        ) : scopeCheckpoint?.sha ? (
+                          <>
+                            {" at "}
+                            <span className="mono">{shortSha(scopeCheckpoint.sha)}</span>
+                          </>
+                        ) : null}
+                      </span>
+                      {onChangesScope && (
+                        <button
+                          className="btn btn-text changes-scope-clear"
+                          onClick={() => onChangesScope(null)}
+                          data-testid="changes-scope-clear"
+                        >
+                          Whole mission
+                        </button>
+                      )}
+                    </p>
+                  ) : (
+                    <p className="inspector-summary">
+                      {plural(files.length, "file")} changed on{" "}
+                      <span className="mono">{workstream?.missionBranch ?? "the mission branch"}</span>
+                    </p>
+                  )}
                   {files.map((file) => (
                     <ChangeRow
                       key={file.changeId}

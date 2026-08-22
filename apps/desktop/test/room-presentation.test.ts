@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { MissionDetailResponseSchema, type MissionDetailResponse } from "@novus/contracts";
 import {
   activeExecution,
+  checkpointFiles,
+  checkpointPrompt,
   contestedAcrossSessions,
   controller,
   keptWorkspace,
@@ -227,6 +229,71 @@ function detail(overrides: Record<string, unknown> = {}): MissionDetailResponse 
     ...overrides
   });
 }
+
+describe("one turn's own footprint (D-213)", () => {
+  const file = (changeId: string, path: string, changeState: string, additions: number) => ({
+    changeId,
+    path,
+    previousPath: null,
+    changeState,
+    additions,
+    deletions: 0,
+    binary: false,
+    truncated: false
+  });
+  const checkpoint = (overrides: Record<string, unknown> = {}) => ({
+    checkpointId: "ckp_1",
+    executionId: "exe_1",
+    outcome: "committed",
+    sha: SHA,
+    parentSha: null,
+    branch: "novus/msn_one",
+    filesChanged: 2,
+    additions: 3,
+    deletions: 0,
+    withheldSecrets: 0,
+    uncommitted: false,
+    environment: "kartik-macbook",
+    error: null,
+    createdAt: T(5),
+    files: [file("chg_b", "src/b.ts", "added", 2), file("chg_a", "src/a.ts", "modified", 1)],
+    ...overrides
+  });
+
+  it("lists a checkpoint's own files, in path order, and names the prompt that asked for them", () => {
+    const fixture = detail({
+      directions: [direction({ directionId: "dir_1", state: "applied", body: "Add a health endpoint, and   keep it small" })],
+      executions: [execution({ startingDirectionId: "dir_1", state: "completed" })],
+      checkpoints: [checkpoint()]
+    });
+    expect(checkpointFiles(fixture, "ckp_1").map((file) => file.path)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(checkpointPrompt(fixture, "ckp_1")).toEqual({
+      words: "Add a health endpoint, and keep it small",
+      at: T(5)
+    });
+  });
+
+  it("answers nothing for a checkpoint the detail does not hold, and no words for a turn with no direction", () => {
+    const fixture = detail({
+      executions: [execution({ startingDirectionId: null, state: "completed" })],
+      checkpoints: [checkpoint()]
+    });
+    expect(checkpointFiles(fixture, "ckp_missing")).toEqual([]);
+    // The files are still the turn's; only the words are unknown.
+    expect(checkpointFiles(fixture, "ckp_1")).toHaveLength(2);
+    expect(checkpointPrompt(fixture, "ckp_1")).toBeNull();
+  });
+
+  it("bounds the words to a line", () => {
+    const long = "x".repeat(200);
+    const fixture = detail({
+      directions: [direction({ directionId: "dir_1", state: "applied", body: long })],
+      executions: [execution({ startingDirectionId: "dir_1", state: "completed" })],
+      checkpoints: [checkpoint()]
+    });
+    expect(checkpointPrompt(fixture, "ckp_1")?.words.length).toBe(72);
+  });
+});
 
 describe("who is in control", () => {
   it("names the participant holding the baton, and nobody when the lease is unheld", () => {
