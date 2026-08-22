@@ -25,6 +25,17 @@ export const PREVIEW_TAB_KEY = "::preview";
  *  selects another canvas. */
 export const PULL_TAB_KEY = "::pull";
 
+/** One tab per request (D-207): the key names which. */
+export function pullTabKey(pullRequestId: string): string {
+  return `${PULL_TAB_KEY}:${pullRequestId}`;
+}
+
+/** The request a selection key names, or null where the key is not a request's. */
+export function pullIdOfKey(key: string | null): string | null {
+  if (key === null || !key.startsWith(`${PULL_TAB_KEY}:`)) return null;
+  return key.slice(PULL_TAB_KEY.length + 1);
+}
+
 /** One open preview tab: an address in one lane's workspace, captured when it
  *  was opened, exactly as a file tab captures its lane (D-084, D-098). */
 export interface OpenPreviewTab {

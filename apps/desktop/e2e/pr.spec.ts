@@ -642,6 +642,99 @@ describe("shipping a decision through GitHub (D-099)", () => {
       await page.getByTestId("pull-tab").locator(".file-tab-open").click();
       await page.getByTestId("pull-page").waitFor({ timeout: 20_000 });
 
+      // --- The work goes on, and publishes again (D-207) --------------------
+      // A merged decision is fulfilled, not the end of the mission: the next
+      // checkpoint is decided anew and opens PR #2 on the same branch, with
+      // PR #1 kept in the rail as history.
+      await page.getByTestId("lane-tab").first().click();
+      const before = await until("the lane's checkpoint to be known", (value) =>
+        value.approaches[0]?.checkpointSha !== null
+      );
+      const mergedSha = before.approaches[0]!.checkpointSha!;
+      await direct("now the favicon");
+      await until(
+        "the second turn to checkpoint past the merged revision",
+        (value) => value.approaches[0]?.checkpointSha !== null && value.approaches[0]?.checkpointSha !== mergedSha,
+        120_000
+      );
+      // Outrun: the state is the work's own again, and the merged request is
+      // listed without being "the" request.
+      const outrun = await until(
+        "the fulfilled decision to read as history",
+        (value) => value.pullRequest === null && value.pullRequests.length === 1,
+        60_000
+      );
+      expect(outrun.state).not.toBe("decision_recorded");
+      await expect.poll(async () => page.getByTestId("rail-pull").count(), { timeout: 30_000 }).toBe(1);
+      expect(await page.getByTestId("rail-pull").innerText()).toContain("merged");
+
+      // Decide again — the column offers the choice once more — then push and open.
+      await page.getByTestId("rail-compare").click();
+      await columns.first().waitFor({ timeout: 30_000 });
+      await columns.nth(0).getByTestId("choose-approach").click();
+      await page.getByTestId("record-decision").waitFor({ timeout: 30_000 });
+      await page.getByTestId("decision-rationale").fill("The favicon is in, on top of what shipped.");
+      await page.getByTestId("record-decision-confirm").click();
+      const redecided = await until(
+        "the second decision to supersede the fulfilled one",
+        (value) =>
+          value.decisions.filter((entry) => entry.supersededAt !== null).length === 1 &&
+          value.decisions.some((entry) => entry.supersededAt === null && entry.checkpointSha !== mergedSha)
+      );
+      const second = redecided.decisions.find((entry) => entry.supersededAt === null)!;
+      await page.getByTestId("pull-publish").waitFor({ timeout: 30_000 });
+      await page.getByTestId("push-branch").click();
+      await until(
+        "the second push to land",
+        (value) =>
+          value.workstreams.find((lane) => lane.workstreamId === second.workstreamId)?.remoteHeadSha ===
+          second.checkpointSha,
+        120_000
+      );
+      await expect
+        .poll(async () => page.getByTestId("create-pull-request").isDisabled(), { timeout: 30_000 })
+        .toBe(false);
+      await page.getByTestId("create-pull-request").click();
+      const republished = await until(
+        "PR #2 to open",
+        (value) => value.pullRequests.length === 2 && value.pullRequest?.state === "draft"
+      );
+      expect(republished.pullRequest!.number).not.toBe(pull.number);
+      expect(republished.pullRequest!.headRef).toBe(pull.headRef);
+      expect(republished.pullRequests.map((entry) => entry.state)).toEqual(["merged", "draft"]);
+
+      // Both requests in the rail, each its own tab.
+      await expect.poll(async () => page.getByTestId("rail-pull").count(), { timeout: 30_000 }).toBe(2);
+      await page.getByTestId("open-pull-tab").click();
+      await page.getByTestId("rail-pull").first().click();
+      await expect.poll(async () => page.getByTestId("pull-tab").count(), { timeout: 20_000 }).toBe(2);
+      await page.getByTestId("rail-pull").nth(1).click();
+      await expect
+        .poll(async () => page.getByTestId("pull-headline").innerText(), { timeout: 30_000 })
+        .toContain("is a draft");
+      await shot("215-second-pull-request.png");
+
+      // PR #2 goes the same road to its merge, so completion's tail below
+      // closes the mission's last request rather than its first.
+      await page.getByTestId("mark-ready").click();
+      await until(
+        "PR #2 to be ready",
+        (value) => value.pullRequest?.state === "ready",
+        60_000
+      );
+      await page.getByTestId("merge-open").click();
+      await page.getByTestId("merge-confirm").waitFor({ timeout: 20_000 });
+      await page.getByTestId("merge-confirm").click();
+      await until(
+        "PR #2 to merge",
+        (value) =>
+          value.pullRequests.length === 2 && value.pullRequests.every((entry) => entry.state === "merged"),
+        60_000
+      );
+      await expect
+        .poll(async () => page.getByTestId("pull-headline").innerText(), { timeout: 30_000 })
+        .toContain("was merged");
+
       // --- Completion's tail: delete the branch, archive the mission --------
       await page.getByTestId("delete-branch").click();
       await page.getByTestId("delete-branch-confirm").click();

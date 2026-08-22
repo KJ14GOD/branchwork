@@ -40,7 +40,7 @@ export function PullRequestPanel({
   detail: MissionDetailResponse;
   decision: Decision;
   /** Opens the request's own tab on the working row (D-100). */
-  onOpenPull?: () => void;
+  onOpenPull?: (pullRequestId: string) => void;
 }) {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -52,7 +52,12 @@ export function PullRequestPanel({
     detail.workstreams.find((entry) => entry.workstreamId === decision.workstreamId) ??
     detail.workstream;
   const push = detail.branchPush;
-  const pull = detail.pullRequest;
+  // The decision's own request, if it has one — not whatever request the
+  // lane opened last (D-207): a fulfilled decision's merged request and a
+  // fresh decision's not-yet-opened one must never be confused.
+  const pull =
+    detail.pullRequests.find((entry) => entry.decisionId === decision.decisionId) ??
+    (detail.pullRequest?.decisionId === decision.decisionId ? detail.pullRequest : null);
 
   const act = async (call: Act) => {
     setBusy(true);
@@ -126,7 +131,11 @@ export function PullRequestPanel({
     <section className="pull-page" data-testid="pull-summary">
       <PullHeadline detail={detail} pull={pull} busy={busy} onAct={act} />
       {onOpenPull && (
-        <button className="btn btn-secondary" onClick={onOpenPull} data-testid="open-pull-tab">
+        <button
+          className="btn btn-secondary"
+          onClick={() => onOpenPull(pull.pullRequestId)}
+          data-testid="open-pull-tab"
+        >
           Open PR #{pull.number}
         </button>
       )}
@@ -158,16 +167,19 @@ export function pullStateWord(pull: PullRequest): string {
  */
 export function PullRequestPage({
   detail,
-  decision
+  decision,
+  pull
 }: {
   detail: MissionDetailResponse;
   decision: Decision;
+  /** The request this page is about. A mission holds as many as its work
+   *  earned (D-207), each with its own tab, so the page is told which. */
+  pull: PullRequest | null;
 }) {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [section, setSection] = useState<"comments" | "checks" | "changes">("comments");
   const missionId = detail.mission.missionId;
-  const pull = detail.pullRequest;
 
   const act = async (call: Act) => {
     setBusy(true);

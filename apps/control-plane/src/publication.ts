@@ -134,6 +134,13 @@ export async function pullRequestForLane(
   return row ? toPullRequest(row) : null;
 }
 
+/** Every request the mission has opened, oldest first — its publication
+ *  story as a list (D-207). */
+export async function pullRequestsForMission(db: Queryable, missionId: string): Promise<PullRequest[]> {
+  const result = await db.query(`${PR_SELECT} where p.mission_id = $1 order by p.created_at`, [missionId]);
+  return (result.rows as PullRequestRow[]).map(toPullRequest);
+}
+
 export async function pullRequestById(db: Queryable, pullRequestId: string): Promise<PullRequest | null> {
   const result = await db.query(`${PR_SELECT} where p.pr_id = $1`, [pullRequestId]);
   const row = result.rows[0] as PullRequestRow | undefined;

@@ -3549,6 +3549,12 @@ export const MissionDetailResponseSchema = z.object({
    *  one that is not closed per workstream; the detail carries the selected
    *  lane's. */
   pullRequest: PullRequestSchema.nullable().default(null),
+  /** Every pull request this mission has opened, in creation order (D-207):
+   *  a mission publishes as many times as its work earns — a decision is
+   *  fulfilled by its merge, and later checkpoints can be decided and
+   *  published again on the same branch. `pullRequest` above stays the one
+   *  the room is about right now. */
+  pullRequests: z.array(PullRequestSchema).max(200).default([]),
   /** Where the selected lane's branch stands on the remote — the push half
    *  of publishing (D-099). */
   branchPush: BranchPushSchema.nullable().default(null),

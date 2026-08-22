@@ -585,6 +585,114 @@ describe("publishing a decision (D-099)", () => {
     expect(again.statusCode).toBe(409);
   });
 
+  it("publishes again after a merge: a fulfilled decision is history, the next checkpoint decides anew, and PR #2 opens on the same branch (D-207)", async () => {
+    const lane = await githubMission();
+    await decide(lane);
+    await reportPushed(lane, lane.checkpointSha);
+    const first = await createPull(lane);
+    expect(first.statusCode).toBe(201);
+    const firstId = first.json().pullRequest.pullRequestId as string;
+    const firstNumber = first.json().pullRequest.number as number;
+    await harness.app.inject({ method: "POST", url: `/pull-requests/${firstId}/ready`, headers: bearer(kartik) });
+    const merged = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${firstId}/merge`,
+      headers: bearer(kartik),
+      payload: { method: "squash" }
+    });
+    expect(merged.statusCode).toBe(200);
+
+    // Merged with nothing after it: the decision still stands and the room
+    // keeps saying how publication ended.
+    let detail = await detailOf(lane);
+    expect(detail.state).toBe("decision_recorded");
+    expect(detail.pullRequest.state).toBe("merged");
+    expect(detail.pullRequests.map((pull: { number: number }) => pull.number)).toEqual([firstNumber]);
+
+    // The work goes on in the same mission: a second turn, a second checkpoint.
+    const submitted = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/direction`,
+      headers: bearer(kartik),
+      payload: { body: "Now the favicon", model: "claude-fable-5", effort: "high", workstreamId: lane.workstreamId }
+    });
+    expect(submitted.statusCode).toBe(200);
+    const row = await harness.db.query(
+      "select exe_id from executions where wst_id = $1 order by created_at desc limit 1",
+      [lane.workstreamId]
+    );
+    const secondSha = sha(`checkpoint-2:${lane.workstreamId}`);
+    const reported = await harness.app.inject({
+      method: "POST",
+      url: "/runner/events",
+      headers: runnerAuth(lane.credential),
+      payload: {
+        executionId: row.rows[0].exe_id,
+        events: [
+          { originSeq: 11, event: { kind: "execution.starting", payload: {} } },
+          {
+            originSeq: 12,
+            event: {
+              kind: "workspace.checkpoint",
+              payload: {
+                outcome: "committed",
+                sha: secondSha,
+                parentSha: lane.checkpointSha,
+                branch: lane.missionBranch,
+                withheldSecrets: 0,
+                uncommitted: false,
+                error: null,
+                files: [
+                  {
+                    path: "app/favicon.ico",
+                    previousPath: null,
+                    changeState: "added",
+                    additions: 1,
+                    deletions: 0,
+                    binary: true,
+                    diff: null,
+                    truncated: false
+                  }
+                ]
+              }
+            }
+          },
+          { originSeq: 13, event: { kind: "execution.completed", payload: {} } }
+        ]
+      }
+    });
+    expect(reported.statusCode).toBe(200);
+
+    // The fulfilled decision is outrun: the mission reads as its work again,
+    // the merged request is listed but is no longer "the" request.
+    detail = await detailOf(lane);
+    expect(detail.state).not.toBe("decision_recorded");
+    expect(detail.state).not.toBe("pull_request_open");
+    expect(detail.pullRequest).toBeNull();
+    expect(detail.pullRequests).toHaveLength(1);
+    expect(detail.preparedPullRequest).toBeNull();
+
+    // Deciding again supersedes the fulfilled decision and prepares PR #2;
+    // the remote-head guarantee holds for the new revision exactly as before.
+    await decide(lane);
+    detail = await detailOf(lane);
+    expect(detail.state).toBe("decision_recorded");
+    expect(detail.decisions.filter((entry: { supersededAt: string | null }) => entry.supersededAt !== null)).toHaveLength(1);
+    expect(detail.preparedPullRequest).not.toBeNull();
+    const stale = await createPull(lane);
+    expect(stale.statusCode).toBe(409);
+    await reportPushed(lane, secondSha);
+    const second = await createPull(lane);
+    expect(second.statusCode).toBe(201);
+    expect(second.json().pullRequest.number).not.toBe(firstNumber);
+    expect(second.json().pullRequest.headRef).toBe(lane.missionBranch);
+
+    detail = await detailOf(lane);
+    expect(detail.state).toBe("pull_request_open");
+    expect(detail.pullRequest.number).toBe(second.json().pullRequest.number);
+    expect(detail.pullRequests.map((pull: { state: string }) => pull.state)).toEqual(["merged", "draft"]);
+  });
+
   it("refuses a merge the host reports conflicted, whatever anyone acknowledges", async () => {
     const lane = await githubMission();
     await decide(lane);

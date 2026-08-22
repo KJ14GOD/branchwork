@@ -11,6 +11,7 @@ import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../form
 import { ArtifactThumbRow } from "./artifact-row";
 import { Dialog } from "./dialog";
 import { Markdown } from "./markdown";
+import { decisionPullRequest, standingDecision } from "./derive";
 import { PullRequestPanel } from "./pull-request";
 
 /**
@@ -45,7 +46,7 @@ export interface DecisionRoomProps {
   onRequestRevision: (input: { workstreamId: string; reason: string }) => void;
   onInspectPath: (path: string) => void;
   /** Opens the pull request's own tab (D-100); threaded to the receipt. */
-  onOpenPull: () => void;
+  onOpenPull: (pullRequestId: string) => void;
   onClose: () => void;
 }
 
@@ -59,7 +60,10 @@ export function DecisionRoom({
   onOpenPull,
   onClose
 }: DecisionRoomProps) {
-  const decision = detail.decisions.find((entry) => entry.supersededAt === null) ?? null;
+  // The decision the room is about (D-207): a fulfilled, outrun decision
+  // is history, and the columns offer choosing again.
+  const decision = standingDecision(detail);
+  const decisionPull = decision ? decisionPullRequest(detail, decision) : null;
   /** The receipt appears above where the person just was, so the surface
    *  carries them to it (D-141): when a decision lands while this room is
    *  open, scroll to its own top — once per decision, never on mount with
@@ -154,6 +158,11 @@ export function DecisionRoom({
             key={approach.workstreamId}
             approach={approach}
             chosen={decision?.workstreamId === approach.workstreamId}
+            chosenLabel={
+              decisionPull
+                ? `Chosen — PR #${decisionPull.number} · ${decisionPull.state}`
+                : "Chosen — not published yet"
+            }
             sole={compared.length === 1}
             mayDecide={mayDecide}
             busy={busy}
@@ -233,6 +242,7 @@ const GUTTER_ROWS = [
 function ApproachColumn({
   approach,
   chosen,
+  chosenLabel,
   sole,
   mayDecide,
   busy,
@@ -241,6 +251,9 @@ function ApproachColumn({
 }: {
   approach: ApproachSummary;
   chosen: boolean;
+  /** What the chosen column says in place of its actions: whether the
+   *  decision is published yet, and as what (D-207). */
+  chosenLabel: string;
   /** The only lane there is (D-140): "choose" would be absurd with nothing
    *  to choose against, so the action says what it does — accept. */
   sole: boolean;
@@ -348,7 +361,7 @@ function ApproachColumn({
       <footer className="approach-actions">
         {chosen ? (
           <span className="approach-chosen" data-testid="approach-chosen">
-            Chosen — not published yet
+            {chosenLabel}
           </span>
         ) : (
           <>
@@ -598,13 +611,15 @@ function DecisionReceipt({
   prepared,
   superseded
 }: {
-  onOpenPull: () => void;
+  onOpenPull: (pullRequestId: string) => void;
   detail: MissionDetailResponse;
   decision: Decision;
   approaches: ApproachSummary[];
   prepared: PreparedPullRequest | null;
   superseded: Decision[];
 }) {
+  // This decision's own request, never the lane's latest (D-207).
+  const decisionPull = decisionPullRequest(detail, decision);
   const chosen = approaches.find((approach) => approach.workstreamId === decision.workstreamId);
   const others = approaches.filter((approach) => approach.workstreamId !== decision.workstreamId);
   const [copied, setCopied] = useState(false);
@@ -697,7 +712,7 @@ function DecisionReceipt({
       {/* The tracked request, or the way to open one (D-099). The prepared
           projection below stays for the un-opened case; once a request
           exists, its own page carries the snapshot that was actually sent. */}
-      {detail.pullRequest === null && prepared && (
+      {decisionPull === null && prepared && (
         <section className="prepared-pr" data-testid="prepared-pr">
           <h3 className="field-label">Pull request, prepared</h3>
           <p className="quiet">
@@ -725,7 +740,7 @@ function DecisionReceipt({
           </button>
         </section>
       )}
-      {(detail.pullRequest !== null || prepared?.publishable) && (
+      {(decisionPull !== null || prepared?.publishable) && (
         <PullRequestPanel detail={detail} decision={decision} onOpenPull={onOpenPull} />
       )}
     </section>

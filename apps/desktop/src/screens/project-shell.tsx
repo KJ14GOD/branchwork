@@ -58,7 +58,7 @@ import {
   type BoardColumnId
 } from "../components/derive";
 import { HomeBoard } from "../components/home-board";
-import { PREVIEW_TAB_KEY, PULL_TAB_KEY, type OpenPreviewTab } from "../components/preview";
+import { PREVIEW_TAB_KEY, pullIdOfKey, pullTabKey, type OpenPreviewTab } from "../components/preview";
 import { deriveGoal, plural, truncateLabel } from "../format";
 import { ProjectRoom } from "./project-room";
 import { Inspector, type InspectorSection } from "../components/inspector";
@@ -367,7 +367,7 @@ function MissionTree({
   onCompare,
   onNewSession,
   focused,
-  pullSelected,
+  selectedPullId,
   onOpenPull,
   forkable,
   onFork
@@ -384,8 +384,9 @@ function MissionTree({
   onNewSession: () => void;
   /** The pull request's rail row (D-100): present once one exists, opening
    *  its tab on the working row. */
-  pullSelected: boolean;
-  onOpenPull: () => void;
+  /** Which request's tab is showing, if one is — its row is washed. */
+  selectedPullId: string | null;
+  onOpenPull: (pullRequestId: string) => void;
   /** Whether this lane can fork (a shared checkpoint exists, the role carries
    *  approach.create, and the mission is not terminal) — computed by the
    *  shell from the same detail the room reads (D-126). */
@@ -680,17 +681,25 @@ function MissionTree({
           </button>
         </div>
       )}
-      {detail.pullRequest && (
+      {/* Every request the mission opened, oldest first (D-207): a merged one
+          is the mission's history and stays listed beside the next. */}
+      {detail.pullRequests.map((pull) => (
         <div
-          className={`side-row side-compare${pullSelected ? " selected" : ""}`}
+          key={pull.pullRequestId}
+          className={`side-row side-compare${selectedPullId === pull.pullRequestId ? " selected" : ""}`}
           data-testid={focused ? "rail-pull" : undefined}
+          data-pull-number={pull.number}
         >
-          <button className="side-open-mission" onClick={onOpenPull} aria-current={pullSelected}>
-            <span className="side-name">PR #{detail.pullRequest.number}</span>
-            <span className="side-decision-note"> · {detail.pullRequest.state}</span>
+          <button
+            className="side-open-mission"
+            onClick={() => onOpenPull(pull.pullRequestId)}
+            aria-current={selectedPullId === pull.pullRequestId}
+          >
+            <span className="side-name">PR #{pull.number}</span>
+            <span className="side-decision-note"> · {pull.state}</span>
           </button>
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -804,7 +813,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** The pull request's own tab (D-100): opened by a person, per mission,
    *  ephemeral like the file tabs. Content derives from the detail's own
    *  pullRequest; this only remembers that the tab was opened. */
-  const [pullOpenByTab, setPullOpenByTab] = useState<Record<string, boolean>>({});
+  /** The pull requests open as tabs, per mission tab, in the order opened
+   *  (D-207): a mission publishes more than once, so each request is its
+   *  own tab rather than one boolean. */
+  const [pullOpenByTab, setPullOpenByTab] = useState<Record<string, string[]>>({});
   /** Which projects are showing their missions. Disclosure is the reader's
    *  choice and survives selection moving elsewhere. */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -1421,7 +1433,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const openFiles = active ? (filesByTab[active.id] ?? []) : [];
   const activeFile = active ? (activeFileByTab[active.id] ?? null) : null;
   const previewTab = active ? (previewByTab[active.id] ?? null) : null;
-  const pullTabOpen = active ? (pullOpenByTab[active.id] ?? false) : false;
+  const openPullIds = active ? (pullOpenByTab[active.id] ?? []) : [];
 
   const labelOf = useCallback(
     (tab: OpenTab): string => {
@@ -1492,21 +1504,27 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   }, []);
 
   /** Opens the pull request's own tab and selects it (D-100). */
-  const openPullTab = useCallback((tabId?: string) => {
+  const openPullTab = useCallback((pullRequestId: string, tabId?: string) => {
     const target = tabId ?? activeTabOf(workingSetRef.current)?.id;
     if (!target) return;
-    setPullOpenByTab((previous) => ({ ...previous, [target]: true }));
-    setActiveFileByTab((previous) => ({ ...previous, [target]: PULL_TAB_KEY }));
+    setPullOpenByTab((previous) => {
+      const held = previous[target] ?? [];
+      return held.includes(pullRequestId) ? previous : { ...previous, [target]: [...held, pullRequestId] };
+    });
+    setActiveFileByTab((previous) => ({ ...previous, [target]: pullTabKey(pullRequestId) }));
     setDecisionOpen(false);
     setSessionDraft(false);
   }, []);
 
-  const closePullTab = useCallback(() => {
+  const closePullTab = useCallback((pullRequestId: string) => {
     const current = activeTabOf(workingSetRef.current);
     if (!current) return;
-    setPullOpenByTab((previous) => ({ ...previous, [current.id]: false }));
+    setPullOpenByTab((previous) => ({
+      ...previous,
+      [current.id]: (previous[current.id] ?? []).filter((id) => id !== pullRequestId)
+    }));
     setActiveFileByTab((previous) =>
-      previous[current.id] === PULL_TAB_KEY ? { ...previous, [current.id]: null } : previous
+      previous[current.id] === pullTabKey(pullRequestId) ? { ...previous, [current.id]: null } : previous
     );
   }, []);
 
@@ -1827,10 +1845,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                                   setSessionDraft(true);
                                   setRailOpen(false);
                                 }}
-                                pullSelected={isActive && activeFile === PULL_TAB_KEY}
-                                onOpenPull={() => {
+                                selectedPullId={isActive ? pullIdOfKey(activeFile) : null}
+                                onOpenPull={(pullRequestId) => {
                                   focusTab();
-                                  openPullTab(tabId);
+                                  openPullTab(pullRequestId, tabId);
                                   setRailOpen(false);
                                 }}
                               />
@@ -2282,8 +2300,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               previewTab={previewTab}
               onClosePreview={closePreviewTab}
               onReopenPreview={reopenPreview}
-              pullTabOpen={pullTabOpen}
-              onOpenPull={() => openPullTab()}
+              openPullIds={openPullIds}
+              onOpenPull={(pullRequestId) => openPullTab(pullRequestId)}
               onClosePull={closePullTab}
               openArtifactId={openArtifact?.tabId === active.id ? openArtifact.artifactId : null}
               onCloseArtifact={() => setOpenArtifact(null)}

@@ -1,7 +1,9 @@
 import {
   TERMINAL_EXECUTION_STATES,
   type EnabledSkill,
+  type Decision,
   type Execution,
+  type PullRequest,
   type FileChange,
   type Mission,
   type MissionDetailResponse,
@@ -73,6 +75,38 @@ export function laneView(detail: MissionDetailResponse): MissionDetailResponse {
 /** The workspace's own live turn — the one *write* execution, at most one per
  *  workstream. A read turn answering alongside (D-095) holds nothing and is
  *  not the workspace's story: its liveness is its chat's own word (D-094). */
+/**
+ * The decision the mission is about right now (D-207). A recorded decision
+ * stands until it is superseded — or until it is *fulfilled*: its request
+ * merged and the lane moved past its checkpoint. From then on it is the
+ * mission's history, not its present: the columns offer choosing again, the
+ * receipt waits for the next decision, and the merged request stays listed
+ * in the rail. The server applies the same rule to the mission's state.
+ */
+export function standingDecision(detail: MissionDetailResponse): Decision | null {
+  const recorded = detail.decisions.find((entry) => entry.supersededAt === null) ?? null;
+  if (!recorded) return null;
+  const merged = detail.pullRequests.find(
+    (pull) => pull.decisionId === recorded.decisionId && pull.state === "merged"
+  );
+  if (!merged || merged.mergedAt === null) return recorded;
+  // Moved past: a checkpoint committed on the decision's lane after the
+  // merge — the same test the server applies to the mission's state.
+  const laneOf = new Map(detail.executions.map((execution) => [execution.executionId, execution.workstreamId]));
+  const outrun = detail.checkpoints.some(
+    (checkpoint) =>
+      checkpoint.sha !== null &&
+      laneOf.get(checkpoint.executionId) === recorded.workstreamId &&
+      checkpoint.createdAt > merged.mergedAt!
+  );
+  return outrun ? null : recorded;
+}
+
+/** The request a decision opened, if it did. */
+export function decisionPullRequest(detail: MissionDetailResponse, decision: Decision): PullRequest | null {
+  return detail.pullRequests.find((pull) => pull.decisionId === decision.decisionId) ?? null;
+}
+
 export function activeExecution(detail: MissionDetailResponse): Execution | null {
   const live = detail.executions.filter(
     (execution) =>

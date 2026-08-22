@@ -35,7 +35,7 @@ import {
 import { listSessions } from "./sessions.ts";
 import { listWorkstreams } from "./workstreams.ts";
 import { registeredRunner, runnerOnline } from "./runners.ts";
-import { branchPushFor, pullRequestForLane } from "./publication.ts";
+import { branchPushFor, pullRequestForLane, pullRequestsForMission } from "./publication.ts";
 import type { Db, Queryable } from "./db.ts";
 import { EVENT_SELECT, toMissionEvent, type EventRow } from "./events.ts";
 import { listDirections } from "./directions.ts";
@@ -714,7 +714,32 @@ export async function missionDetail(
   });
 
   const decisions = await listDecisions(db, access.missionId);
-  const current = decisions.find((decision) => decision.supersededAt === null) ?? null;
+  const pullRequests = await pullRequestsForMission(db, access.missionId);
+  // A decision is about one revision, and its merge fulfils it (D-207). Once
+  // the lane has moved past a fulfilled decision's checkpoint, that decision
+  // is the mission's history rather than its present: the state returns to
+  // the work's own, Publish offers again, and the next decision is recorded
+  // beside the old one rather than over it. A merged decision with nothing
+  // after it still stands, so the room keeps saying how publication ended.
+  const recorded = decisions.find((decision) => decision.supersededAt === null) ?? null;
+  const mergedPull =
+    recorded === null
+      ? null
+      : (pullRequests.find((pull) => pull.decisionId === recorded.decisionId && pull.state === "merged") ?? null);
+  // "Moved past" means a checkpoint committed after the merge — not merely a
+  // head that differs from the decided sha, which an update-branch merge
+  // commit before the merge already makes true without any new work.
+  const outrun =
+    recorded !== null &&
+    mergedPull !== null &&
+    mergedPull.mergedAt !== null &&
+    checkpointsForSha.some(
+      (checkpoint) =>
+        checkpoint.sha !== null &&
+        laneOfExecution.get(checkpoint.executionId) === recorded.workstreamId &&
+        checkpoint.createdAt > mergedPull.mergedAt!
+    );
+  const current = outrun ? null : recorded;
 
   // The mission's visual evidence (D-122): metadata only, with each artifact
   // carrying where it is currently used — and the checks and pull request
@@ -734,7 +759,17 @@ export async function missionDetail(
   const publishLane = current
     ? (workstreams.find((lane) => lane.workstreamId === current.workstreamId) ?? base.workstream)
     : base.workstream;
-  const pullRequest = publishLane ? await pullRequestForLane(db, publishLane.workstreamId) : null;
+  // What the room is about right now: the standing decision's own request
+  // where one exists, otherwise the lane's open-or-latest — so a fulfilled,
+  // outrun decision's merged request is no longer "the" request, only one of
+  // them (D-207).
+  const pullRequest = current
+    ? (pullRequests.find((pull) => pull.decisionId === current.decisionId) ??
+      (publishLane ? await pullRequestForLane(db, publishLane.workstreamId) : null))
+    : null;
+  for (const pull of pullRequests) {
+    pull.artifactIds = attachedByTarget.get(`pull_request:${pull.pullRequestId}`) ?? [];
+  }
   if (pullRequest) {
     pullRequest.artifactIds =
       attachedByTarget.get(`pull_request:${pullRequest.pullRequestId}`) ?? [];
@@ -832,6 +867,7 @@ export async function missionDetail(
     ),
     baseStatus: null,
     pullRequest,
+    pullRequests,
     branchPush,
     extensionLabels,
     extensionLabelAssignments,

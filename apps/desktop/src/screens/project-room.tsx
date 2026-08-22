@@ -35,7 +35,8 @@ import {
   usageSoFar,
   sessionView,
   slashCommandCompletions,
-  viewerIsController
+  viewerIsController,
+  standingDecision
 } from "../components/derive";
 import {
   ApprovalRow,
@@ -53,7 +54,7 @@ import { DecisionRoom } from "../components/decision-room";
 import { Dialog } from "../components/dialog";
 import { FileView } from "../components/file-view";
 import { PreviewSurface } from "../components/preview-surface";
-import { PREVIEW_TAB_KEY, PULL_TAB_KEY, type OpenPreviewTab } from "../components/preview";
+import { PREVIEW_TAB_KEY, pullIdOfKey, pullTabKey, type OpenPreviewTab } from "../components/preview";
 import { PullRequestPage, pullStateWord } from "../components/pull-request";
 import { ReceiptView } from "../components/receipt-view";
 
@@ -171,7 +172,7 @@ export function ProjectRoom({
   previewTab,
   onClosePreview,
   onReopenPreview,
-  pullTabOpen,
+  openPullIds,
   onOpenPull,
   onClosePull,
   openArtifactId,
@@ -256,9 +257,9 @@ export function ProjectRoom({
   onReopenPreview: (url: string) => void;
   /** The pull request's own tab (D-100): opened by a person from the rail
    *  or the receipt, selection riding `activeFile` under `PULL_TAB_KEY`. */
-  pullTabOpen: boolean;
-  onOpenPull: () => void;
-  onClosePull: () => void;
+  openPullIds: string[];
+  onOpenPull: (pullRequestId: string) => void;
+  onClosePull: (pullRequestId: string) => void;
   /** One artifact taking the canvas (D-122) — opened from the Evidence
    *  section, never a tab, closed with Esc or Back like a worker's view. */
   openArtifactId: string | null;
@@ -1272,9 +1273,23 @@ export function ProjectRoom({
    *  would be, and a tab to show it for. */
   const previewSelected = activeFile === PREVIEW_TAB_KEY && previewTab !== null;
   /** The pull request's tab, showing only while one exists to show. */
-  const pullTab = pullTabOpen && detail?.pullRequest ? detail.pullRequest : null;
-  const pullSelected = activeFile === PULL_TAB_KEY && pullTab !== null;
-  const currentDecision = detail?.decisions.find((entry) => entry.supersededAt === null) ?? null;
+  /** The requests open as tabs, in the order opened (D-207) — only those the
+   *  mission still lists. */
+  const pullTabs = detail
+    ? openPullIds.flatMap((id) => {
+        const pull = detail.pullRequests.find((entry) => entry.pullRequestId === id);
+        return pull ? [pull] : [];
+      })
+    : [];
+  const selectedPullId = pullIdOfKey(activeFile);
+  const selectedPull = pullTabs.find((pull) => pull.pullRequestId === selectedPullId) ?? null;
+  const pullSelected = selectedPull !== null;
+  const currentDecision = detail ? standingDecision(detail) : null;
+  /** The decision a request page is about is the request's own, which may be
+   *  a fulfilled one the mission has moved past (D-207). */
+  const selectedPullDecision = selectedPull
+    ? (detail?.decisions.find((entry) => entry.decisionId === selectedPull.decisionId) ?? currentDecision)
+    : null;
 
   return (
     <div className="room" data-testid="project-room">
@@ -1323,7 +1338,7 @@ export function ProjectRoom({
           the colours tie a lane's tab to its sessions and files. A mission
           with one approach, one conversation and nothing open shows no strip
           at all. */}
-      {(openFiles.length > 0 || decisionOpen || previewTab !== null || pullTab !== null || multiLane || sessionChrome) && (
+      {(openFiles.length > 0 || decisionOpen || previewTab !== null || pullTabs.length > 0 || multiLane || sessionChrome) && (
         <div
           className="tabbar"
           role="tablist"
@@ -1616,36 +1631,41 @@ export function ProjectRoom({
           )}
           {/* The pull request's own tab (D-100, the Conductor shape): opened
               only by a person, a closable sibling like Compare and Preview. */}
-          {pullTab !== null && (
-            <span
-              className={pullSelected ? "tab file-tab active" : "tab file-tab"}
-              data-testid="pull-tab"
-            >
-              <button
-                role="tab"
-                aria-selected={pullSelected}
-                className="file-tab-open"
-                onClick={() => {
-                  onSelectFile(PULL_TAB_KEY);
-                  onDecisionOpen(false);
-                  onSessionDraft(false);
-                }}
-                title={`PR #${pullTab.number} — ${pullTab.title}`}
+          {pullTabs.map((pullTab) => {
+            const selected = selectedPullId === pullTab.pullRequestId;
+            return (
+              <span
+                key={pullTab.pullRequestId}
+                className={selected ? "tab file-tab active" : "tab file-tab"}
+                data-testid="pull-tab"
+                data-pull-number={pullTab.number}
               >
-                <span className="file-tab-name">PR #{pullTab.number}</span>
-                <span className="session-needs session-state"> · {pullStateWord(pullTab)}</span>
-              </button>
-              <button
-                className="file-tab-close"
-                onClick={onClosePull}
-                aria-label="Close the pull request tab"
-                title="Close the tab — the pull request stays exactly as it is"
-                data-testid="pull-tab-close"
-              >
-                ×
-              </button>
-            </span>
-          )}
+                <button
+                  role="tab"
+                  aria-selected={selected}
+                  className="file-tab-open"
+                  onClick={() => {
+                    onSelectFile(pullTabKey(pullTab.pullRequestId));
+                    onDecisionOpen(false);
+                    onSessionDraft(false);
+                  }}
+                  title={`PR #${pullTab.number} — ${pullTab.title}`}
+                >
+                  <span className="file-tab-name">PR #{pullTab.number}</span>
+                  <span className="session-needs session-state"> · {pullStateWord(pullTab)}</span>
+                </button>
+                <button
+                  className="file-tab-close"
+                  onClick={() => onClosePull(pullTab.pullRequestId)}
+                  aria-label={`Close the PR #${pullTab.number} tab`}
+                  title="Close the tab — the pull request stays exactly as it is"
+                  data-testid="pull-tab-close"
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
           {openFiles.map((file) => {
             // Which lane's worktree this tab reads — its own fact, captured
             // when it was opened. The dot says so once approaches exist, and
@@ -2046,10 +2066,10 @@ export function ProjectRoom({
         // canvas kind is decided, without standing up a second, competing
         // PreviewSurface every time the tab is chosen.
         null
-      ) : pullSelected && detail && currentDecision ? (
+      ) : pullSelected && detail && selectedPullDecision ? (
         <div className="feed-scroll">
           <div className="feed">
-            <PullRequestPage detail={detail} decision={currentDecision} />
+            <PullRequestPage detail={detail} decision={selectedPullDecision} pull={selectedPull} />
           </div>
         </div>
       ) : detail && detail.receipt && (detail.state === "completed" || detail.state === "cancelled") ? (
