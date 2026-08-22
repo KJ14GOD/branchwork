@@ -777,20 +777,31 @@ describe("mission tabs and file tabs, told apart", () => {
     await page.getByTestId("file-view").waitFor({ timeout: 20_000 });
     expect(await page.getByTestId("file-tab").count()).toBe(1);
     expect((await tabLabels(page)).length).toBe(missionTabsBefore);
+    // A pin made here is this room's (D-215): the open file's own "Add to
+    // chat" pins it onto the composer. The inspector hands the pin to the
+    // shell as an ask, and the ask used to outlive its delivery — every room
+    // that mounted afterwards replayed it, so the pin reappeared in whatever
+    // mission was opened next. Owner-hit, across two missions.
+    await page.getByTestId("file-add-to-chat").click();
+    await page.getByTestId("composer-context").waitFor({ timeout: 10_000 });
     await page.getByTestId("inspector-close").click();
     await shot(page, "70-file-tabs-inside-a-mission-tab.png");
 
-    // Another mission is another room, and it has no files open.
+    // Another mission is another room, and it has no files open — and no
+    // pin it never made.
     await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha one" }).click();
     await page.getByTestId("state-line").waitFor({ timeout: 20_000 });
     await expect.poll(async () => page.getByTestId("file-tab").count(), { timeout: 20_000 }).toBe(0);
     expect(await page.locator(".tabbar").count()).toBe(0);
+    expect(await page.getByTestId("composer-context").count()).toBe(0);
 
     // Going back restores exactly what that mission had open, including which
     // canvas was showing.
     await page.getByTestId("mission-tab-open").filter({ hasText: RUNNING_GOAL.slice(0, 14) }).click();
     await expect.poll(async () => page.getByTestId("file-tab").count(), { timeout: 20_000 }).toBe(1);
     await page.getByTestId("file-view").waitFor({ timeout: 20_000 });
+    // The pin is where it was made — not lost, and not anywhere else.
+    await page.getByTestId("composer-context").waitFor({ timeout: 10_000 });
 
     // The rule for closing (see project-shell.tsx): a mission tab's file view is
     // local view state, so closing the tab discards it. Reopening the mission

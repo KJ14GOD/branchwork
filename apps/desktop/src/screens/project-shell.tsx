@@ -2288,6 +2288,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               key={active.id}
               forkAsk={forkAsk}
               contextAsk={contextAsk}
+              onContextConsumed={() => setContextAsk(null)}
               findAsk={findAsk}
               onFindConsumed={() => setFindAsk(0)}
               onForkConsumed={() => setForkAsk(0)}

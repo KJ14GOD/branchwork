@@ -15,6 +15,7 @@ import type {
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { matchesChord, useKeybindings } from "../keybindings";
+import { setPinsFor, usePins } from "../components/pins";
 import {
   Composer,
   profileLabel,
@@ -140,6 +141,7 @@ export function ProjectRoom({
   details,
   forkAsk = 0,
   contextAsk = null,
+  onContextConsumed,
   onForkConsumed,
   findAsk = 0,
   onFindConsumed,
@@ -184,6 +186,11 @@ export function ProjectRoom({
   /** A pinned reference asked for from the panel (D-182): nonced so every
    *  click lands once, deduped and capped here where the chips live. */
   contextAsk?: { ref: DirectionContextRef; n: number } | null;
+  /** Called once the ask above has been pinned (D-215): an ask the shell
+   *  keeps after delivery replays into the next room that mounts — the room
+   *  is keyed per mission — so a pin made in one mission reappeared in
+   *  whichever mission was opened next. Consumed, findAsk's own pattern. */
+  onContextConsumed?: () => void;
   /** The palette's ask to open the find bar (D-178) — consumed, forkAsk's own pattern. */
   findAsk?: number;
   onFindConsumed?: () => void;
@@ -300,7 +307,8 @@ export function ProjectRoom({
    *  edge and cleared once the direction lands. Held per conversation
    *  (D-215): a pin made in one chat is that chat's, and switching chats
    *  leaves it there. `pendingContext` below reads the current chat's. */
-  const [pendingByChat, setPendingByChat] = useState<Record<string, DirectionContextRef[]>>({});
+  // Held in `pins.ts` rather than here: this room unmounts on a mission
+  // switch, and state kept here went with it.
   /** A command waiting to be typed into the dock (D-199) — primed, never
    *  submitted: pressing Enter in one's own session stays one's own act. */
   const [dockPrime, setDockPrime] = useState<string | null>(null);
@@ -781,6 +789,9 @@ export function ProjectRoom({
       if (duplicate || previous.length >= MAX_DIRECTION_CONTEXT) return previous;
       return [...previous, ref];
     });
+    // Consumed on delivery, so a room mounting later — another mission's —
+    // finds no ask waiting to replay.
+    onContextConsumed?.();
   }, [contextAsk]);
   const approaches = detail?.approaches ?? [];
   /** Something to fork from: an approach only means anything beside a result
@@ -858,15 +869,10 @@ export function ProjectRoom({
   const chatKey = sessionDraft
     ? `${selectedMissionId}:draft`
     : `${selectedMissionId}:${readingSessionId ?? "lane"}`;
-  const pendingContext = pendingByChat[chatKey] ?? [];
+  const pendingContext = usePins(chatKey);
   const setPendingContext = (
     next: DirectionContextRef[] | ((previous: DirectionContextRef[]) => DirectionContextRef[])
-  ) =>
-    setPendingByChat((held) => {
-      const previous = held[chatKey] ?? [];
-      const value = typeof next === "function" ? next(previous) : next;
-      return { ...held, [chatKey]: value };
-    });
+  ) => setPinsFor(chatKey, next);
   const multiSession = sessions.length > 1;
   /** Where no conversation is selected in a lane that holds several, the
    *  canvas is the approach's own page — its brief and its conversations as
