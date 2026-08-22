@@ -693,6 +693,60 @@ describe("publishing a decision (D-099)", () => {
     expect(detail.pullRequests.map((pull: { state: string }) => pull.state)).toEqual(["merged", "draft"]);
   });
 
+  it("adopts a request opened on the lane's branch outside Novus, tracks its merge, and refuses to publish a revision that already shipped (D-208)", async () => {
+    const lane = await githubMission();
+    // The branch reaches the host by a push (the remote-head guarantee),
+    // and then somebody opens a request on it with gh — not Novus.
+    await reportPushed(lane, lane.checkpointSha);
+    provider.fakeBranchTip("9001", lane.missionBranch, lane.checkpointSha);
+    const outside = await provider.fakeExternalPull("9001", {
+      headRef: lane.missionBranch,
+      title: "Favicon, opened with gh",
+      author: "kartik"
+    });
+
+    // The sweep finds it and the mission lists it: no decision, the host's
+    // author, marked adopted — and the adoption is on the record.
+    await sweepPullRequestsOnce(harness.db, provider);
+    let detail = await detailOf(lane);
+    expect(detail.pullRequests).toHaveLength(1);
+    const adopted = detail.pullRequests[0];
+    expect(adopted.number).toBe(outside.number);
+    expect(adopted.adopted).toBe(true);
+    expect(adopted.decisionId).toBeNull();
+    expect(adopted.createdBy).toBeNull();
+    expect(adopted.authorLogin).toBe("kartik");
+    expect(adopted.title).toBe("Favicon, opened with gh");
+    expect(adopted.state).toBe("draft");
+    const recorded = await harness.db.query(
+      "select payload, actor_kind from events where mission_id = $1 and kind = 'pr.adopted'",
+      [lane.missionId]
+    );
+    expect(recorded.rowCount).toBe(1);
+    expect(recorded.rows[0].actor_kind).toBe("external");
+    expect(recorded.rows[0].payload.number).toBe(outside.number);
+
+    // Sweeping again adopts nothing twice.
+    await sweepPullRequestsOnce(harness.db, provider);
+    detail = await detailOf(lane);
+    expect(detail.pullRequests).toHaveLength(1);
+
+    // The host merges it; the adopted row follows, like any tracked request.
+    provider.fakeMerge("9001", outside.number, "kartik");
+    await sweepPullRequestsOnce(harness.db, provider);
+    detail = await detailOf(lane);
+    expect(detail.pullRequests[0].state).toBe("merged");
+    expect(detail.pullRequests[0].mergedBy).toBe("kartik");
+
+    // Deciding the very revision that shipped, then asking Novus to publish
+    // it, is answered by name rather than by the host's "no commits" refusal.
+    await decide(lane);
+    const refused = await createPull(lane);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error.code).toBe("already_merged");
+    expect(refused.json().error.message).toContain(`PR #${outside.number}`);
+  });
+
   it("refuses a merge the host reports conflicted, whatever anyone acknowledges", async () => {
     const lane = await githubMission();
     await decide(lane);

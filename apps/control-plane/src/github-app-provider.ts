@@ -18,7 +18,8 @@ import {
   UnknownPullRequestError,
   UnknownRepositoryError,
   type HostPullRequest,
-  type RepositoryProvider
+  type RepositoryProvider,
+  type HostPullRequestListing
 } from "./repo-provider.ts";
 
 const API = "https://api.github.com";
@@ -351,6 +352,31 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     }
     if (!created.ok) throw new ProviderTransientError(`pull request creation failed (${created.status})`);
     return this.toHostPull((await created.json()) as Parameters<typeof this.toHostPull>[0]);
+  }
+
+  async listPullRequestsForHead(providerRepoId: string, headRef: string): Promise<HostPullRequestListing[]> {
+    const repo = await this.cachedRepo(providerRepoId);
+    const owner = repo.fullName.split("/")[0] ?? "";
+    const response = await this.rest(
+      `/repos/${repo.fullName}/pulls?state=all&per_page=20&sort=created&direction=desc&head=${encodeURIComponent(`${owner}:${headRef}`)}`
+    );
+    if (response.status === 404) throw new UnknownRepositoryError();
+    if (!response.ok) throw new ProviderTransientError(`pull request listing failed (${response.status})`);
+    const raw = (await response.json()) as (Parameters<typeof this.toHostPull>[0] & {
+      title?: string;
+      body?: string | null;
+      base?: { ref?: string };
+      head?: { ref?: string; sha?: string };
+      user?: { login?: string } | null;
+    })[];
+    return raw.map((entry) => ({
+      ...this.toHostPull(entry),
+      title: entry.title ?? `PR #${entry.number}`,
+      body: entry.body ?? "",
+      headRef: entry.head?.ref ?? headRef,
+      baseRef: entry.base?.ref ?? repo.defaultBranch,
+      authorLogin: entry.user?.login ?? null
+    }));
   }
 
   async getPullRequest(providerRepoId: string, number: number): Promise<HostPullRequest> {

@@ -728,6 +728,21 @@ alter table workstreams add column if not exists remote_head_sha text
 alter table pull_requests add column if not exists labels jsonb not null default '[]'::jsonb;
 alter table pull_requests add column if not exists readiness jsonb;
 
+-- Adoption (D-208): a request opened on the lane's branch outside Novus — by
+-- the agent with `gh`, or by a person on the host — is discovered by the
+-- sweep and tracked from then on, so the mission's publication story is what
+-- the host holds, not only what Novus opened. An adopted row has no decision
+-- and no Novus creator; it carries the host's author and the moment it was
+-- adopted. Both columns lose NOT NULL only for that case; Novus's own opens
+-- still write both.
+alter table pull_requests alter column dec_id drop not null;
+alter table pull_requests alter column created_by drop not null;
+alter table pull_requests add column if not exists adopted_at timestamptz;
+alter table pull_requests add column if not exists host_author text;
+-- One row per host request per mission: adoption is idempotent.
+create unique index if not exists pull_requests_one_per_host_number
+  on pull_requests (mission_id, provider_number);
+
 -- The person's own OAuth access token (D-101): held here alone so a comment
 -- from Novus can be authored as them on the host. Never served to a client,
 -- a runner, or an event; refreshed at sign-in; null until a person signs in

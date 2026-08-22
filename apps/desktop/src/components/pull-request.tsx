@@ -70,13 +70,23 @@ export function PullRequestPanel({
 
   const pushed = lane?.remoteHeadSha ?? null;
   const decidedServed = pushed !== null && pushed === decision.checkpointSha;
+  // The decided revision may already be on the base branch through a request
+  // adopted from the host (D-208): say which, and offer nothing to open.
+  const shippedAs =
+    decision.checkpointSha === null
+      ? null
+      : (detail.pullRequests.find(
+          (entry) => entry.state === "merged" && entry.headSha === decision.checkpointSha
+        ) ?? null);
 
   if (!pull) {
     return (
       <section className="pull-publish" data-testid="pull-publish">
         <h3 className="field-label">Publish</h3>
         <p className="receipt-line" data-testid="push-state">
-          {push?.state === "pending"
+          {shippedAs
+            ? `This revision is already on ${shippedAs.baseRef} — it merged as PR #${shippedAs.number}${shippedAs.adopted ? ", opened outside Novus" : ""}. Nothing is left to publish until the lane checkpoints again.`
+            : push?.state === "pending"
             ? "Pushing the branch to GitHub…"
             : push?.state === "failed"
               ? `The push failed: ${push.failureReason ?? "no reason was reported"}`
@@ -105,7 +115,7 @@ export function PullRequestPanel({
             holderLogin={detail.control.holderLogin}
             onClick={() => void act(() => novus().pulls.create({ missionId, workstreamId }))}
             variant="secondary"
-            disabled={busy || !decidedServed}
+            disabled={busy || !decidedServed || shippedAs !== null}
             disabledReason="The draft opens once GitHub serves the decided revision — push the branch first."
             testid="create-pull-request"
           >
@@ -218,7 +228,11 @@ export function PullRequestPage({
       <pre className="prepared-body" data-testid="pull-body">
         {pull.body}
       </pre>
-      <p className="quiet">Exactly what was sent at publication — the receipt that travelled.</p>
+      <p className="quiet">
+        {pull.adopted
+          ? "The description as the host holds it — this request was opened outside Novus, so no receipt travelled from here."
+          : "Exactly what was sent at publication — the receipt that travelled."}
+      </p>
 
       <Completion detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} missionId={missionId} />
 
@@ -385,6 +399,15 @@ function PullHeadline({
                   pull.mergedAt ? ` at ${clockTime(pull.mergedAt)}` : ""
                 }`
               : "was closed on GitHub without merging"}
+        {/* Adopted from the host (D-208): opened outside Novus, by whoever the
+            host says — named here, because a request with no decision behind
+            it must not read as one Novus opened. */}
+        {pull.adopted && (
+          <span data-testid="pull-adopted">
+            {" — opened outside Novus"}
+            {pull.authorLogin ? ` by ${pull.authorLogin}` : ""}
+          </span>
+        )}
         {" · "}
         <a href={pull.url} target="_blank" rel="noreferrer" data-testid="pull-url">
           Open on GitHub

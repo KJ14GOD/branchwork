@@ -253,6 +253,13 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
         );
       case "already_open":
         return deps.sendError(reply, 409, "already_open", `PR #${outcome.number} is already open for this approach.`);
+      case "already_merged":
+        return deps.sendError(
+          reply,
+          409,
+          "already_merged",
+          `This revision is already on the base branch — it merged as PR #${outcome.number}. There is nothing left to publish until the lane checkpoints again.`
+        );
       case "host_already_open":
         return deps.sendError(reply, 409, "already_open", outcome.message);
       case "no_repository":

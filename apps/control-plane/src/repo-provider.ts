@@ -59,6 +59,8 @@ export class MergeRefusedError extends Error {}
  *  the test-only driver routes turn. */
 interface FakePull extends HostPullRequest {
   headRef: string;
+  baseRef: string;
+  authorLogin: string;
   title: string;
   body: string;
   labels: string[];
@@ -88,6 +90,16 @@ export interface HostPullRequest {
   mergedAt: string | null;
   closedAt: string | null;
   headSha: string | null;
+}
+
+/** A request as the host lists it for a branch (D-208): the host's story
+ *  plus what adoption needs to snapshot — title, body, refs, author. */
+export interface HostPullRequestListing extends HostPullRequest {
+  title: string;
+  body: string;
+  headRef: string;
+  baseRef: string;
+  authorLogin: string | null;
 }
 
 export interface RepositoryProvider {
@@ -125,6 +137,9 @@ export interface RepositoryProvider {
   /** The host's current story for one request — state, mergeability, review
    *  threads — for poll ingestion. */
   getPullRequest(providerRepoId: string, number: number): Promise<HostPullRequest>;
+  /** Every request the host holds for one head branch, any state, newest
+   *  first and bounded — what the sweep adopts from (D-208). */
+  listPullRequestsForHead(providerRepoId: string, headRef: string): Promise<HostPullRequestListing[]>;
   requestReviewers(providerRepoId: string, number: number, reviewers: string[]): Promise<void>;
   /** Marks a draft ready for review. A person's act, relayed. */
   markPullRequestReady(providerRepoId: string, number: number): Promise<void>;
@@ -193,6 +208,10 @@ export class UnconfiguredRepositoryProvider implements RepositoryProvider {
   async createPullRequest(): Promise<HostPullRequest> {
     throw new ProviderUnconfiguredError();
   }
+  async listPullRequestsForHead(): Promise<HostPullRequestListing[]> {
+    return [];
+  }
+
   async getPullRequest(): Promise<HostPullRequest> {
     throw new ProviderUnconfiguredError();
   }
@@ -408,6 +427,8 @@ export class FakeRepositoryProvider implements RepositoryProvider {
       closedAt: null,
       headSha: this.branches.get(providerRepoId)?.get(input.headRef) ?? null,
       headRef: input.headRef,
+      baseRef: input.baseRef,
+      authorLogin: "novus",
       title: input.title,
       body: input.body,
       labels: [],
@@ -437,6 +458,38 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     };
     pulls.set(number, created);
     return { ...created };
+  }
+
+  async listPullRequestsForHead(providerRepoId: string, headRef: string): Promise<HostPullRequestListing[]> {
+    return [...this.repoPulls(providerRepoId).values()]
+      .filter((pull) => pull.headRef === headRef)
+      .sort((left, right) => right.number - left.number)
+      .slice(0, 20)
+      .map((pull) => ({ ...pull, reviewThreads: pull.reviewThreads.map((thread) => ({ ...thread })) }));
+  }
+
+  /** A request somebody opened on the host outside Novus — the agent with
+   *  `gh`, a person in the browser — for the adoption sweep to find (D-208). */
+  async fakeExternalPull(
+    providerRepoId: string,
+    input: { headRef: string; baseRef?: string; title: string; body?: string; author: string; state?: "draft" | "ready" }
+  ): Promise<HostPullRequestListing> {
+    const created = await this.createPullRequest(providerRepoId, {
+      title: input.title,
+      body: input.body ?? "Opened outside Novus.",
+      headRef: input.headRef,
+      baseRef: input.baseRef ?? "main"
+    });
+    const pull = this.pull(providerRepoId, created.number);
+    pull.authorLogin = input.author;
+    if (input.state === "ready") pull.state = "ready";
+    return { ...pull };
+  }
+
+  /** Moves a branch tip, as a push from anywhere would (D-208). */
+  fakeBranchTip(providerRepoId: string, branch: string, sha: string): void {
+    if (!this.branches.has(providerRepoId)) this.branches.set(providerRepoId, new Map());
+    this.branches.get(providerRepoId)!.set(branch, sha);
   }
 
   async getPullRequest(providerRepoId: string, number: number): Promise<HostPullRequest> {

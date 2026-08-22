@@ -11,7 +11,8 @@ import {
   PullRequestExistsError,
   UnknownRepositoryError,
   type HostPullRequest,
-  type RepositoryProvider
+  type RepositoryProvider,
+  type HostPullRequestListing
 } from "./repo-provider.ts";
 
 /**
@@ -37,7 +38,7 @@ export interface PullRequestRow {
   pr_id: string;
   mission_id: string;
   wst_id: string;
-  dec_id: string;
+  dec_id: string | null;
   provider_number: number;
   url: string;
   state: string;
@@ -51,8 +52,10 @@ export interface PullRequestRow {
   review_threads: unknown;
   labels?: unknown;
   readiness?: unknown;
-  created_by: string;
-  created_by_login?: string;
+  created_by: string | null;
+  created_by_login?: string | null;
+  adopted_at?: Date | null;
+  host_author?: string | null;
   merged_by: string | null;
   merged_at: Date | null;
   closed_at: Date | null;
@@ -101,7 +104,9 @@ export function toPullRequest(row: PullRequestRow): PullRequest {
     // detail (D-122); the tracked row itself never stores the relationship.
     artifactIds: [],
     createdBy: row.created_by,
-    createdByLogin: row.created_by_login ?? "unknown",
+    createdByLogin: row.created_by ? (row.created_by_login ?? "unknown") : null,
+    adopted: row.adopted_at !== null && row.adopted_at !== undefined,
+    authorLogin: row.host_author ?? null,
     mergedBy: row.merged_by,
     mergedAt: row.merged_at ? row.merged_at.toISOString() : null,
     closedAt: row.closed_at ? row.closed_at.toISOString() : null,
@@ -112,7 +117,7 @@ export function toPullRequest(row: PullRequestRow): PullRequest {
 
 const PR_SELECT = `select p.*, u.login as created_by_login
      from pull_requests p
-     join users u on u.user_id = p.created_by`;
+     left join users u on u.user_id = p.created_by`;
 
 /**
  * The lane's pull request, for the room: the open one where one is open,
@@ -357,6 +362,7 @@ export type OpenDraftOutcome =
   | { kind: "branch_never_pushed" }
   | { kind: "branch_stale" }
   | { kind: "already_open"; number: number }
+  | { kind: "already_merged"; number: number }
   | { kind: "host_already_open"; message: string }
   | { kind: "no_repository" }
   | { kind: "unknown_repository"; message: string }
@@ -390,6 +396,18 @@ export async function openDraft(
   const existing = await pullRequestForLane(db, scope.workstreamId);
   if (existing && (existing.state === "draft" || existing.state === "ready")) {
     return { kind: "already_open", number: existing.number };
+  }
+  // The decided revision may already be on main through a request Novus
+  // adopted rather than opened (D-208): the host would refuse a request
+  // with no commits in it, and the honest answer names the one that shipped.
+  const shipped = await db.query(
+    `select provider_number from pull_requests
+      where wst_id = $1 and state = 'merged' and head_sha = $2
+      order by created_at desc limit 1`,
+    [scope.workstreamId, decision.checkpointSha]
+  );
+  if (shipped.rowCount && shipped.rowCount > 0) {
+    return { kind: "already_merged", number: Number(shipped.rows[0].provider_number) };
   }
 
   const laneRepo = await laneRepository(db, scope.workstreamId);
@@ -819,9 +837,116 @@ export const SYNC_SELECT = `select p.pr_id, p.org_id, p.mission_id, p.wst_id, p.
        join repositories repo on repo.repo_id = w.repo_id`;
 
 export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider): Promise<void> {
+  await adoptPullRequestsOnce(db, provider);
   const open = await db.query(`${SYNC_SELECT} where p.state in ('draft', 'ready')`);
   for (const row of open.rows as SyncRow[]) {
     await syncPullRow(db, provider, row);
+  }
+}
+
+/**
+ * Adoption (D-208): a request opened on a lane's branch outside Novus — the
+ * agent with `gh`, a person on the host — becomes a tracked row the first
+ * time the sweep sees it, in whatever state the host holds it, so the
+ * mission's publication story is the host's and not only Novus's own. Only
+ * lanes whose branch has been pushed are asked about: a branch the host has
+ * never seen cannot carry a request. Idempotent by (mission, host number).
+ */
+export async function adoptPullRequestsOnce(db: Db, provider: RepositoryProvider): Promise<void> {
+  const lanes = await db.query(
+    `select w.wst_id, m.org_id, w.mission_id, w.mission_branch, repo.provider_repo_id
+       from workstreams w
+       join missions m on m.mission_id = w.mission_id
+       join repositories repo on repo.repo_id = w.repo_id
+      where repo.provider = 'github'
+        and w.remote_head_sha is not null
+        and m.closed_outcome is null`
+  );
+  for (const lane of lanes.rows as {
+    wst_id: string;
+    org_id: string;
+    mission_id: string;
+    mission_branch: string;
+    provider_repo_id: string;
+  }[]) {
+    let listed: HostPullRequestListing[];
+    try {
+      listed = await provider.listPullRequestsForHead(lane.provider_repo_id, lane.mission_branch);
+    } catch {
+      // The host being unreachable is not news; the next pass asks again.
+      continue;
+    }
+    if (listed.length === 0) continue;
+    const known = await db.query(
+      "select provider_number from pull_requests where mission_id = $1",
+      [lane.mission_id]
+    );
+    const knownNumbers = new Set((known.rows as { provider_number: number }[]).map((row) => Number(row.provider_number)));
+    for (const host of listed) {
+      if (knownNumbers.has(host.number)) continue;
+      await withMission(db, lane.mission_id, async (client) => {
+        // The one-open-per-lane rule stands: an open request the host holds
+        // while Novus holds its own open one is left for the sweep to find
+        // again once one of them resolves, never a second open row.
+        if (host.state === "draft" || host.state === "ready") {
+          const openHere = await client.query(
+            "select 1 from pull_requests where wst_id = $1 and state in ('draft', 'ready')",
+            [lane.wst_id]
+          );
+          if (openHere.rowCount && openHere.rowCount > 0) return;
+        }
+        const pullRequestId = newPullRequestId();
+        const inserted = await client.query(
+          `insert into pull_requests (pr_id, org_id, mission_id, wst_id, dec_id, provider_number, url,
+                                      state, mergeable, title, body, base_ref, head_ref, head_sha,
+                                      requested_reviewers, review_threads, created_by, merged_by,
+                                      merged_at, closed_at, adopted_at, host_author, last_synced_at)
+           values ($1, $2, $3, $4, null, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                   $14::jsonb, $15::jsonb, null, $16, $17, $18, now(), $19, now())
+           on conflict do nothing`,
+          [
+            pullRequestId,
+            lane.org_id,
+            lane.mission_id,
+            lane.wst_id,
+            host.number,
+            host.url,
+            host.state,
+            host.mergeable,
+            host.title.trim() === "" ? `PR #${host.number}` : host.title.slice(0, 300),
+            host.body.trim() === "" ? "(no description on the host)" : host.body.slice(0, 20_000),
+            host.baseRef,
+            host.headRef,
+            host.headSha,
+            JSON.stringify(host.requestedReviewers.slice(0, 15)),
+            JSON.stringify(host.reviewThreads.slice(0, 50)),
+            host.mergedBy,
+            host.mergedAt,
+            host.closedAt,
+            host.authorLogin
+          ]
+        );
+        if (!inserted.rowCount) return;
+        await recordEvent(client, {
+          orgId: lane.org_id,
+          missionId: lane.mission_id,
+          workstreamId: lane.wst_id,
+          kind: "pr.adopted",
+          actorKind: "external",
+          actorId: "github",
+          actorLogin: host.authorLogin,
+          payload: {
+            pullRequestId,
+            number: host.number,
+            url: host.url,
+            state: host.state,
+            headRef: host.headRef,
+            author: host.authorLogin,
+            mergedBy: host.mergedBy
+          }
+        });
+      });
+    }
   }
 }
 

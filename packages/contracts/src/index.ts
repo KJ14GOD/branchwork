@@ -1672,7 +1672,9 @@ export const PullRequestSchema = z.object({
   workstreamId: z.string().startsWith("wst_"),
   /** The decision this publishes. A pull request without one cannot exist:
    *  publishing is what a decision becomes, never a shortcut around one. */
-  decisionId: z.string().startsWith("dec_"),
+  /** The decision this publishes — null for a request adopted from the host
+   *  (D-208), which no decision opened. */
+  decisionId: z.string().startsWith("dec_").nullable(),
   number: z.number().int().positive(),
   url: z.string().max(600),
   state: PullRequestStateSchema,
@@ -1697,8 +1699,12 @@ export const PullRequestSchema = z.object({
    *  PR page; the exact ids are preserved on the tracked record, and nothing
    *  becomes publicly reachable because a pull request exists. */
   artifactIds: z.array(z.string().startsWith("art_")).max(20).default([]),
-  createdBy: z.string().startsWith("usr_"),
-  createdByLogin: z.string().min(1),
+  createdBy: z.string().startsWith("usr_").nullable(),
+  createdByLogin: z.string().min(1).nullable(),
+  /** Opened on the host outside Novus and adopted by the sweep (D-208);
+   *  `authorLogin` is who the host says opened it. */
+  adopted: z.boolean().default(false),
+  authorLogin: z.string().max(120).nullable().default(null),
   /** Who merged it on the host, as the host reports them. */
   mergedBy: z.string().max(120).nullable(),
   mergedAt: z.string().datetime().nullable(),
