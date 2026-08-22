@@ -2997,3 +2997,15 @@ The scope is owned by the shell beside the section itself. Every other way into 
 **Consequences.** `derive.ts`: `checkpointFiles`, `checkpointPrompt`. `inspector.tsx`: `changesScope` / `onChangesScope`, the scoped header. `project-shell.tsx`: the scope beside the section, cleared by every other way in and by leaving the mission; `project-room.tsx` and `direction-trace.tsx` carry the checkpoint id from the row. `room-presentation.test.ts` (+3: path order and the prompt, the missing checkpoint and the wordless turn, the bound), `slice.spec.ts` (the tab's way in shows no scope; the row's way in names the prompt and clears; evidence `220-`).
 
 **Revisit when.** A fan-out turn's checkpoint wants its workers' footprints told apart; or the scoped header wants a turn picker, at which point it becomes the Changes section's own navigation rather than a sentence.
+
+## D-214 — The pin sits on the row
+
+**Context.** Owner, on the scoped Changes list: "add to chat gotta be same line, and maybe not this big text — some nice icon." Under D-182 every changed-file row carried a full-width *Add to chat* text button beneath it, so eighteen files were thirty-six rows, and the verb — a quiet one — was the loudest thing in the list.
+
+**Decision.** One line per file. The row stays the toggle for its diff; the pin — a stroke pushpin on the same 16-grid as every other glyph, `--text-3` — sits at the row's end and is quiet until the row is hovered or the pin itself is focused, the rail's `+` idiom, so a long list wears no controls at rest and every row has one at hand. Hover and selection wash the whole line, so the toggle and the pin read as one row. The structure changes with it: a button cannot hold a button, so the line is a flex container of the two, not a text button under a row. Nothing about the verb changes — the pin still adds the file to the next message, and the turn's record still carries it.
+
+**Alternatives.** Always-visible pin (rejected: eighteen rows, eighteen icons — the rail already decided this). The word kept but smaller (rejected: the word at any size is a second line; the ask was the line). Spreading the pin to the verification ledger and the file view now (deferred: the ledger's row already holds its verbs inline beside *Run again*, and the file view's is a header action — neither has the second-line problem; when either is touched the pin is the mark to use).
+
+**Consequences.** `inspector.tsx`: `PinGlyph`, `.change-line` / `.change-pin`; DESIGN's Diff bullet; `slice.spec.ts` captures the hovered row magnified (evidence `221-`); `sessions.spec.ts`'s D-182 case still pins through the same test id.
+
+**Revisit when.** The pin wants a pressed state on the row after pinning (today the composer's chip is the receipt); or the ledger and file view get the mark.

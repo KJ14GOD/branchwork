@@ -158,6 +158,26 @@ function UnifiedDiff({ diff }: { diff: string }) {
   );
 }
 
+/** The pin (D-182's verb, D-214's mark): a reference held onto the next
+ *  message. Stroke-only, currentColor, the 16-grid every other glyph sits on. */
+function PinGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9.5 2.5l4 4-2 .5-2.5 2.5.5 3-1.5 1.5L5 11l-3 3 3-3-3-3 1.5-1.5 3 .5L9 4.5z" />
+    </svg>
+  );
+}
+
 function ChangeRow({
   file,
   expanded,
@@ -174,31 +194,38 @@ function ChangeRow({
 }) {
   return (
     <div className="change-item">
-      <button
-        className={expanded ? "change-row selected" : "change-row"}
-        onClick={onToggle}
-        aria-expanded={expanded}
-        data-testid="change-row"
-      >
-        <span className="mono change-path" title={file.path}>
-          {file.previousPath ? `${file.previousPath} → ${file.path}` : file.path}
-        </span>
-        <span className="change-state">{file.changeState}</span>
-        <span className="change-counts mono">
-          <span className="count-add">+{file.additions}</span>
-          <span className="count-del">−{file.deletions}</span>
-        </span>
-      </button>
-      {onAddContext && (
+      {/* One line per file (D-214): the row is the toggle, and the pin sits at
+          its end — a control the rail's `+` already taught, quiet until the
+          row is hovered or the pin is focused. A sibling of the toggle rather
+          than a child, because a button inside a button is not HTML. */}
+      <div className={expanded ? "change-line selected" : "change-line"}>
         <button
-          className="btn btn-text change-add-to-chat"
-          onClick={onAddContext}
-          title={`Pin ${file.path} onto your next message`}
-          data-testid="change-add-to-chat"
+          className="change-row"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          data-testid="change-row"
         >
-          Add to chat
+          <span className="mono change-path" title={file.path}>
+            {file.previousPath ? `${file.previousPath} → ${file.path}` : file.path}
+          </span>
+          <span className="change-state">{file.changeState}</span>
+          <span className="change-counts mono">
+            <span className="count-add">+{file.additions}</span>
+            <span className="count-del">−{file.deletions}</span>
+          </span>
         </button>
-      )}
+        {onAddContext && (
+          <button
+            className="change-pin"
+            onClick={onAddContext}
+            aria-label={`Add ${file.path} to chat`}
+            title="Add to chat — pins this file onto your next message"
+            data-testid="change-add-to-chat"
+          >
+            <PinGlyph />
+          </button>
+        )}
+      </div>
       {expanded && (
         <div className="change-diff">
           {file.binary ? (

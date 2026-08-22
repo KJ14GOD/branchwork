@@ -2822,12 +2822,30 @@ body {
   color: var(--text-2);
 }
 
-/* Changes: compact rows, tabular counts, the diff one click away. */
+/* Changes: compact rows, tabular counts, the diff one click away. The line
+   holds the toggle and, at its end, the pin (D-214); hover and selection
+   wash the whole line so the two read as one row. */
+.change-line {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  border-radius: var(--r-control);
+}
+
+.change-line:hover {
+  background: var(--hover);
+}
+
+.change-line.selected {
+  background: var(--selected);
+}
+
 .change-row {
   display: flex;
   align-items: center;
   gap: var(--s-3);
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   min-height: 32px;
   padding: 0 var(--s-2);
   border: none;
@@ -2839,12 +2857,34 @@ body {
   text-align: left;
 }
 
-.change-row:hover {
-  background: var(--hover);
+/* The pin: quiet until the line is hovered or the pin itself is focused —
+   the rail's `+` idiom — so eighteen rows do not wear eighteen controls. */
+.change-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  margin-right: var(--s-1);
+  padding: 0;
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--m-press) var(--ease);
 }
 
-.change-row.selected {
-  background: var(--selected);
+.change-line:hover .change-pin,
+.change-line.selected .change-pin,
+.change-pin:focus-visible {
+  opacity: 1;
+}
+
+.change-pin:hover {
+  color: var(--text-1);
 }
 
 .change-path {

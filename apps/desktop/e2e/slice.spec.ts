@@ -483,6 +483,20 @@ describe("the Mission Room", () => {
     expect(await scope.textContent()).toContain("changed by this turn");
     expect(await scope.textContent()).toContain("add a fake turn file");
     await first.page.screenshot({ path: join(evidenceDir, "220-changes-scoped-to-a-turn.png") });
+    // The row is one line, the pin at its end on hover (D-214): captured
+    // hovered, magnified, because a 14px glyph is judged at its own size.
+    await first.page.getByTestId("change-row").first().hover();
+    await first.page.addStyleTag({ content: `[data-testid="inspector-changes"]{zoom:1.5}` });
+    await first.page.waitForTimeout(250);
+    const line = await first.page.locator(".change-line").first().boundingBox();
+    if (line) {
+      await first.page.screenshot({
+        path: join(evidenceDir, "221-change-row-pin.png"),
+        clip: { x: line.x - 8, y: line.y - 40, width: line.width + 16, height: line.height + 56 }
+      });
+    }
+    await first.page.addStyleTag({ content: `[data-testid="inspector-changes"]{zoom:1}` });
+    await first.page.waitForTimeout(150);
     await first.page.getByTestId("changes-scope-clear").click();
     await expect
       .poll(async () => first.page.getByTestId("changes-scope").count(), { timeout: 10_000 })
