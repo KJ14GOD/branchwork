@@ -35,8 +35,7 @@ import {
   usageSoFar,
   sessionView,
   slashCommandCompletions,
-  viewerIsController,
-  standingDecision
+  viewerIsController
 } from "../components/derive";
 import {
   ApprovalRow,
@@ -1284,11 +1283,10 @@ export function ProjectRoom({
   const selectedPullId = pullIdOfKey(activeFile);
   const selectedPull = pullTabs.find((pull) => pull.pullRequestId === selectedPullId) ?? null;
   const pullSelected = selectedPull !== null;
-  const currentDecision = detail ? standingDecision(detail) : null;
   /** The decision a request page is about is the request's own, which may be
    *  a fulfilled one the mission has moved past (D-207). */
   const selectedPullDecision = selectedPull
-    ? (detail?.decisions.find((entry) => entry.decisionId === selectedPull.decisionId) ?? currentDecision)
+    ? (detail?.decisions.find((entry) => entry.decisionId === selectedPull.decisionId) ?? null)
     : null;
 
   return (
@@ -2066,7 +2064,7 @@ export function ProjectRoom({
         // canvas kind is decided, without standing up a second, competing
         // PreviewSurface every time the tab is chosen.
         null
-      ) : pullSelected && detail && selectedPullDecision ? (
+      ) : pullSelected && detail ? (
         <div className="feed-scroll">
           <div className="feed">
             <PullRequestPage detail={detail} decision={selectedPullDecision} pull={selectedPull} />

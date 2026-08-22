@@ -181,7 +181,9 @@ export function PullRequestPage({
   pull
 }: {
   detail: MissionDetailResponse;
-  decision: Decision;
+  /** The decision that opened it — null for a request adopted from the host
+   *  (D-208), which no decision opened and whose page still has to render. */
+  decision: Decision | null;
   /** The request this page is about. A mission holds as many as its work
    *  earned (D-207), each with its own tab, so the page is told which. */
   pull: PullRequest | null;
@@ -457,7 +459,7 @@ function ReadinessLedger({
 }: {
   detail: MissionDetailResponse;
   pull: PullRequest;
-  decision: Decision;
+  decision: Decision | null;
   busy: boolean;
   onAct: (call: Act) => Promise<boolean>;
 }) {
@@ -554,7 +556,7 @@ function ReadinessLedger({
                 : "no evidence recorded"}
             </span>
           </li>
-          {decision.acceptedRisks && (
+          {decision?.acceptedRisks && (
             <li data-testid="readiness-risks">
               <span className="tool-name">Accepted risk</span>
               <span className="tool-detail">{decision.acceptedRisks}</span>
@@ -867,7 +869,7 @@ function PullReview({
 }: {
   detail: MissionDetailResponse;
   pull: PullRequest;
-  decision: Decision;
+  decision: Decision | null;
   busy: boolean;
   onAct: (call: Act) => Promise<boolean>;
   setNote: (note: string | null) => void;
@@ -885,7 +887,7 @@ function PullReview({
     void onAct(async () => {
       const result = await novus().missions.direct({
         missionId: detail.mission.missionId,
-        workstreamId: decision.workstreamId,
+        workstreamId: decision?.workstreamId ?? pull.workstreamId,
         body,
         model: DEFAULT_MODEL,
         effort: DEFAULT_EFFORT
@@ -1100,7 +1102,7 @@ function Completion({
 }: {
   detail: MissionDetailResponse;
   pull: PullRequest;
-  decision: Decision;
+  decision: Decision | null;
   busy: boolean;
   onAct: (call: Act) => Promise<boolean>;
   missionId: string;
