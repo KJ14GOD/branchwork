@@ -742,6 +742,10 @@ alter table pull_requests add column if not exists host_author text;
 -- One row per host request per mission: adoption is idempotent.
 create unique index if not exists pull_requests_one_per_host_number
   on pull_requests (mission_id, provider_number);
+-- A request adopted because it carries the mission's merged work onward
+-- (D-209): the mission's own request whose base branch this one's head is.
+-- Null for the mission's own requests and for adoptions on the lane's branch.
+alter table pull_requests add column if not exists downstream_of text references pull_requests(pr_id);
 
 -- The person's own OAuth access token (D-101): held here alone so a comment
 -- from Novus can be authored as them on the host. Never served to a client,

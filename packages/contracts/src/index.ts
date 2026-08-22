@@ -1705,6 +1705,11 @@ export const PullRequestSchema = z.object({
    *  `authorLogin` is who the host says opened it. */
   adopted: z.boolean().default(false),
   authorLogin: z.string().max(120).nullable().default(null),
+  /** The mission's own request this one carries onward (D-209): adopted
+   *  because its head is the branch that request merged into — the review
+   *  of the mission's work one hop downstream, followed until the work
+   *  reaches the repository's default branch. Null otherwise. */
+  downstreamOf: z.string().startsWith("pr_").nullable().default(null),
   /** Who merged it on the host, as the host reports them. */
   mergedBy: z.string().max(120).nullable(),
   mergedAt: z.string().datetime().nullable(),

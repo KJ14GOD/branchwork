@@ -7,6 +7,7 @@ process.env.NOVUS_GITHUB_WEBHOOK_SECRET = "novus-test-webhook-secret";
 import type { ReportableRunnerEvent } from "@novus/contracts";
 import { FakeRepositoryProvider } from "../src/repo-provider.ts";
 import { sweepPullRequestsOnce } from "../src/pull-requests.ts";
+import type { PullRequest, ReviewThread } from "@novus/contracts";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
 
 /**
@@ -54,7 +55,7 @@ afterAll(async () => {
 
 /** A GitHub-backed mission with a runner, one committed checkpoint, and a
  *  completed turn — everything a decision needs to exist. */
-async function githubMission(): Promise<Lane> {
+async function githubMission(baseRef = "main"): Promise<Lane> {
   const created = await harness.app.inject({
     method: "POST",
     url: "/missions",
@@ -64,8 +65,8 @@ async function githubMission(): Promise<Lane> {
       successCriteria: "The change is on a reviewable pull request",
       provider: "github",
       providerRepoId: "9001",
-      baseRef: "main",
-      baseSha: sha("demo-app@main"),
+      baseRef,
+      baseSha: sha(`demo-app@${baseRef}`),
       creationKey: randomUUID()
     }
   });
@@ -745,6 +746,105 @@ describe("publishing a decision (D-099)", () => {
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error.code).toBe("already_merged");
     expect(refused.json().error.message).toContain(`PR #${outside.number}`);
+  });
+
+  it("follows the mission's merged work onward: a request from the base it merged into is adopted as downstream, with its review (D-209)", async () => {
+    // The owner's own case: the mission was based on ppo_branch, published
+    // and merged there — and then ppo_branch went to main on a request a
+    // reviewer opened on GitHub. Novus tracked only what it opened, so the
+    // reviewer's comments on the mission's work were invisible in the room.
+    const lane = await githubMission("ppo_branch");
+    await decide(lane);
+    await reportPushed(lane, lane.checkpointSha);
+    const own = await createPull(lane);
+    expect(own.statusCode).toBe(201);
+    const ownNumber = own.json().pullRequest.number as number;
+    const ownId = own.json().pullRequest.pullRequestId as string;
+    provider.fakeMerge("9001", ownNumber, "kartik");
+    await sweepPullRequestsOnce(harness.db, provider);
+    expect((await detailOf(lane)).pullRequests[0].state).toBe("merged");
+
+    // Nothing downstream yet: the sweep asks the host and adopts nothing.
+    await sweepPullRequestsOnce(harness.db, provider);
+    expect((await detailOf(lane)).pullRequests).toHaveLength(1);
+
+    // The reviewer's request: ppo_branch → main, opened on the host, with
+    // their comment on it.
+    const review = await provider.fakeExternalPull("9001", {
+      headRef: "ppo_branch",
+      baseRef: "main",
+      title: "PPO: merge to main",
+      author: "phd-reviewer",
+      state: "ready"
+    });
+    provider.fakeComment("9001", review.number, {
+      author: "phd-reviewer",
+      body: "Normalize advantages across the batch, not per rollout.",
+      path: "train.py"
+    });
+
+    await sweepPullRequestsOnce(harness.db, provider);
+    let detail = await detailOf(lane);
+    expect(detail.pullRequests).toHaveLength(2);
+    const downstream = (detail.pullRequests as PullRequest[]).find((pull) => pull.number === review.number);
+    expect(downstream?.adopted).toBe(true);
+    expect(downstream?.downstreamOf).toBe(ownId);
+    expect(downstream?.decisionId).toBeNull();
+    expect(downstream?.authorLogin).toBe("phd-reviewer");
+    expect(downstream?.headRef).toBe("ppo_branch");
+    expect(downstream?.baseRef).toBe("main");
+    // The reviewer's words reached the room.
+    expect(downstream?.reviewThreads.map((thread: ReviewThread) => thread.body)).toContain(
+      "Normalize advantages across the batch, not per rollout."
+    );
+    const recorded = await harness.db.query(
+      "select payload from events where mission_id = $1 and kind = 'pr.adopted' order by seq",
+      [lane.missionId]
+    );
+    expect(recorded.rows.at(-1)?.payload.downstreamOf).toBe(ownId);
+
+    // The downstream request is review of the work, not the lane's own
+    // publication: the mission's own request stays the one the room is
+    // about, and the lane is not "publishing" again just because the
+    // reviewer's request is open.
+    expect(detail.pullRequest?.number).toBe(ownNumber);
+    expect(detail.state).toBe("decision_recorded");
+
+    // Completing it is the reviewer's act on the host, not this room's: the
+    // verbs are refused in words, server-side (rule 13), while review itself
+    // — a comment from here — goes through.
+    const downstreamId = downstream?.pullRequestId as string;
+    const merge = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${downstreamId}/merge`,
+      headers: bearer(kartik),
+      payload: { method: "merge", acknowledged: [] }
+    });
+    expect(merge.statusCode).toBe(409);
+    expect(merge.json().error.code).toBe("downstream");
+    const comment = await harness.app.inject({
+      method: "POST",
+      url: `/pull-requests/${downstreamId}/comment`,
+      headers: bearer(kartik),
+      payload: { body: "On it — batching the normalization." }
+    });
+    expect(comment.statusCode).toBe(200);
+
+    // The chain ends at the default branch: once the reviewer merges to
+    // main, nothing is asked about main — a later request off main would
+    // contain the work without being about it.
+    provider.fakeMerge("9001", review.number, "phd-reviewer");
+    await sweepPullRequestsOnce(harness.db, provider);
+    const unrelated = await provider.fakeExternalPull("9001", {
+      headRef: "main",
+      baseRef: "release",
+      title: "Cut a release",
+      author: "someone-else"
+    });
+    await sweepPullRequestsOnce(harness.db, provider);
+    detail = await detailOf(lane);
+    expect((detail.pullRequests as PullRequest[]).map((pull) => pull.number)).not.toContain(unrelated.number);
+    expect((detail.pullRequests as PullRequest[]).find((pull) => pull.number === review.number)?.state).toBe("merged");
   });
 
   it("refuses a merge the host reports conflicted, whatever anyone acknowledges", async () => {

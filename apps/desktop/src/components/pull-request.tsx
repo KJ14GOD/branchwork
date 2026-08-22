@@ -231,12 +231,27 @@ export function PullRequestPage({
         {pull.body}
       </pre>
       <p className="quiet">
-        {pull.adopted
-          ? "The description as the host holds it — this request was opened outside Novus, so no receipt travelled from here."
-          : "Exactly what was sent at publication — the receipt that travelled."}
+        {pull.downstreamOf
+          ? "The description as the host holds it — this is the review of the mission's work one hop on, not a receipt Novus sent."
+          : pull.adopted
+            ? "The description as the host holds it — this request was opened outside Novus, so no receipt travelled from here."
+            : "Exactly what was sent at publication — the receipt that travelled."}
       </p>
 
-      <Completion detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} missionId={missionId} />
+      {/* A downstream request (D-209) is completed where it was opened —
+          the reviewer's process, not this room's. The server refuses the
+          completion verbs on it; the page says so instead of offering them.
+          Review — comments, resolving — stays, because that is the point. */}
+      {pull.downstreamOf ? (
+        <section className="pull-completion" data-testid="pull-completion-downstream">
+          <h3 className="field-label">Completion</h3>
+          <p className="quiet">
+            Reviewed and merged on GitHub by whoever opened it. What happens there arrives here.
+          </p>
+        </section>
+      ) : (
+        <Completion detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} missionId={missionId} />
+      )}
 
       <div className="segment" role="tablist" aria-label="Pull request sections">
         <button
@@ -406,8 +421,15 @@ function PullHeadline({
             it must not read as one Novus opened. */}
         {pull.adopted && (
           <span data-testid="pull-adopted">
-            {" — opened outside Novus"}
-            {pull.authorLogin ? ` by ${pull.authorLogin}` : ""}
+            {pull.downstreamOf
+              ? /* Downstream (D-209): the mission's work went into this
+                   request's head branch, and this is its review one hop on.
+                   Named as lineage, because "opened outside Novus" alone
+                   would read as an accident rather than as the point. */
+                ` — carries this mission's work from ${pull.headRef} into ${pull.baseRef}, opened${
+                  pull.authorLogin ? ` by ${pull.authorLogin}` : ""
+                } on GitHub`
+              : ` — opened outside Novus${pull.authorLogin ? ` by ${pull.authorLogin}` : ""}`}
           </span>
         )}
         {" · "}

@@ -1,5 +1,6 @@
 import type { BranchPush, MergeReadiness, PullRequest, ReviewThread } from "@novus/contracts";
 import { MergeReadinessSchema, ReviewThreadSchema } from "@novus/contracts";
+import type pg from "pg";
 import { withMission, withTransaction, type Db, type Queryable } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newPullRequestId } from "./ids.ts";
@@ -56,6 +57,7 @@ export interface PullRequestRow {
   created_by_login?: string | null;
   adopted_at?: Date | null;
   host_author?: string | null;
+  downstream_of?: string | null;
   merged_by: string | null;
   merged_at: Date | null;
   closed_at: Date | null;
@@ -107,6 +109,7 @@ export function toPullRequest(row: PullRequestRow): PullRequest {
     createdByLogin: row.created_by ? (row.created_by_login ?? "unknown") : null,
     adopted: row.adopted_at !== null && row.adopted_at !== undefined,
     authorLogin: row.host_author ?? null,
+    downstreamOf: row.downstream_of ?? null,
     mergedBy: row.merged_by,
     mergedAt: row.merged_at ? row.merged_at.toISOString() : null,
     closedAt: row.closed_at ? row.closed_at.toISOString() : null,
@@ -128,9 +131,12 @@ export async function pullRequestForLane(
   db: Queryable,
   workstreamId: string
 ): Promise<PullRequest | null> {
+  // A downstream request (D-209) is review of the lane's work elsewhere,
+  // not the lane's own publication: it never becomes "the lane's request",
+  // so an open one blocks no Publish and becomes no decision's receipt.
   const result = await db.query(
     `${PR_SELECT}
-      where p.wst_id = $1
+      where p.wst_id = $1 and p.downstream_of is null
       order by (p.state in ('draft', 'ready')) desc, p.created_at desc
       limit 1`,
     [workstreamId]
@@ -191,13 +197,16 @@ export interface PullContext {
   providerKind: string;
   number: number;
   state: string;
+  /** Adopted because it carries the mission's work onward (D-209): review
+   *  of the work where it was opened, never the lane's own publication. */
+  downstream: boolean;
 }
 
 /** The tracked request with its lane's repository — everything a stewarding
  *  verb needs to name the request to the host and the record. */
 export async function loadPullContext(db: Queryable, pullRequestId: string): Promise<PullContext | null> {
   const result = await db.query(
-    `select p.pr_id, p.mission_id, p.wst_id, p.org_id, p.provider_number, p.state,
+    `select p.pr_id, p.mission_id, p.wst_id, p.org_id, p.provider_number, p.state, p.downstream_of,
             repo.provider_repo_id, repo.provider as provider_kind
        from pull_requests p
        join workstreams w on w.wst_id = p.wst_id
@@ -215,7 +224,8 @@ export async function loadPullContext(db: Queryable, pullRequestId: string): Pro
     providerRepoId: row.provider_repo_id as string,
     providerKind: row.provider_kind as string,
     number: row.provider_number as number,
-    state: row.state as string
+    state: row.state as string,
+    downstream: row.downstream_of !== null && row.downstream_of !== undefined
   };
 }
 
@@ -838,6 +848,7 @@ export const SYNC_SELECT = `select p.pr_id, p.org_id, p.mission_id, p.wst_id, p.
 
 export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider): Promise<void> {
   await adoptPullRequestsOnce(db, provider);
+  await adoptDownstreamOnce(db, provider);
   const open = await db.query(`${SYNC_SELECT} where p.state in ('draft', 'ready')`);
   for (const row of open.rows as SyncRow[]) {
     await syncPullRow(db, provider, row);
@@ -895,56 +906,141 @@ export async function adoptPullRequestsOnce(db: Db, provider: RepositoryProvider
           );
           if (openHere.rowCount && openHere.rowCount > 0) return;
         }
-        const pullRequestId = newPullRequestId();
-        const inserted = await client.query(
-          `insert into pull_requests (pr_id, org_id, mission_id, wst_id, dec_id, provider_number, url,
-                                      state, mergeable, title, body, base_ref, head_ref, head_sha,
-                                      requested_reviewers, review_threads, created_by, merged_by,
-                                      merged_at, closed_at, adopted_at, host_author, last_synced_at)
-           values ($1, $2, $3, $4, null, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                   $14::jsonb, $15::jsonb, null, $16, $17, $18, now(), $19, now())
-           on conflict do nothing`,
-          [
-            pullRequestId,
-            lane.org_id,
-            lane.mission_id,
-            lane.wst_id,
-            host.number,
-            host.url,
-            host.state,
-            host.mergeable,
-            host.title.trim() === "" ? `PR #${host.number}` : host.title.slice(0, 300),
-            host.body.trim() === "" ? "(no description on the host)" : host.body.slice(0, 20_000),
-            host.baseRef,
-            host.headRef,
-            host.headSha,
-            JSON.stringify(host.requestedReviewers.slice(0, 15)),
-            JSON.stringify(host.reviewThreads.slice(0, 50)),
-            host.mergedBy,
-            host.mergedAt,
-            host.closedAt,
-            host.authorLogin
-          ]
+        await insertAdopted(client, lane, host, null);
+      });
+    }
+  }
+}
+
+/** One adopted row and its record, shared by the lane pass and the
+ *  downstream pass (D-208, D-209). `downstreamOf` names the mission's own
+ *  request this one carries onward, or null for a request on the lane's
+ *  branch. Idempotent on (mission, host number). */
+async function insertAdopted(
+  client: pg.PoolClient,
+  lane: { org_id: string; mission_id: string; wst_id: string },
+  host: HostPullRequestListing,
+  downstreamOf: string | null
+): Promise<void> {
+  const pullRequestId = newPullRequestId();
+  const inserted = await client.query(
+    `insert into pull_requests (pr_id, org_id, mission_id, wst_id, dec_id, provider_number, url,
+                                state, mergeable, title, body, base_ref, head_ref, head_sha,
+                                requested_reviewers, review_threads, created_by, merged_by,
+                                merged_at, closed_at, adopted_at, host_author, downstream_of, last_synced_at)
+     values ($1, $2, $3, $4, null, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+             $14::jsonb, $15::jsonb, null, $16, $17, $18, now(), $19, $20, now())
+     on conflict do nothing`,
+    [
+      pullRequestId,
+      lane.org_id,
+      lane.mission_id,
+      lane.wst_id,
+      host.number,
+      host.url,
+      host.state,
+      host.mergeable,
+      host.title.trim() === "" ? `PR #${host.number}` : host.title.slice(0, 300),
+      host.body.trim() === "" ? "(no description on the host)" : host.body.slice(0, 20_000),
+      host.baseRef,
+      host.headRef,
+      host.headSha,
+      JSON.stringify(host.requestedReviewers.slice(0, 15)),
+      JSON.stringify(host.reviewThreads.slice(0, 50)),
+      host.mergedBy,
+      host.mergedAt,
+      host.closedAt,
+      host.authorLogin,
+      downstreamOf
+    ]
+  );
+  if (!inserted.rowCount) return;
+  await recordEvent(client, {
+    orgId: lane.org_id,
+    missionId: lane.mission_id,
+    workstreamId: lane.wst_id,
+    kind: "pr.adopted",
+    actorKind: "external",
+    actorId: "github",
+    actorLogin: host.authorLogin,
+    payload: {
+      pullRequestId,
+      number: host.number,
+      url: host.url,
+      state: host.state,
+      headRef: host.headRef,
+      baseRef: host.baseRef,
+      author: host.authorLogin,
+      mergedBy: host.mergedBy,
+      downstreamOf
+    }
+  });
+}
+
+/**
+ * Downstream adoption (D-209): the mission's work, followed onward.
+ *
+ * A mission's request merged into some branch — a feature branch, a release
+ * branch — is not the end of the work's story when that branch itself goes
+ * to review: the request from there is *about this mission's commits*, and
+ * the review it draws is review of this mission's work. So for every merged
+ * request of an open mission whose base is not the repository's default
+ * branch, the sweep asks the host which requests have that base as their
+ * head, and adopts them as downstream of the request they carry. One hop per
+ * pass, and a hop's own merge is the next pass's source, so a chain through
+ * two branches is followed in two passes. The chain ends where the work
+ * reaches the default branch: a request merged there has nowhere further to
+ * carry it, and everything off the default branch thereafter would
+ * "contain" the work without being about it.
+ *
+ * Nothing here is the lane's publication. A downstream request blocks no
+ * Publish and answers for no decision; it is adopted open or merged alike,
+ * because a merged one is exactly what says the work shipped.
+ */
+export async function adoptDownstreamOnce(db: Db, provider: RepositoryProvider): Promise<void> {
+  const merged = await db.query(
+    `select p.pr_id, p.base_ref, p.mission_id, p.wst_id, m.org_id,
+            repo.provider_repo_id, repo.default_branch
+       from pull_requests p
+       join missions m on m.mission_id = p.mission_id
+       join workstreams w on w.wst_id = p.wst_id
+       join repositories repo on repo.repo_id = w.repo_id
+      where repo.provider = 'github'
+        and p.state = 'merged'
+        and p.base_ref <> repo.default_branch
+        and m.closed_outcome is null
+      order by p.created_at`
+  );
+  for (const source of merged.rows as {
+    pr_id: string;
+    base_ref: string;
+    mission_id: string;
+    wst_id: string;
+    org_id: string;
+    provider_repo_id: string;
+    default_branch: string;
+  }[]) {
+    let listed: HostPullRequestListing[];
+    try {
+      listed = await provider.listPullRequestsForHead(source.provider_repo_id, source.base_ref);
+    } catch {
+      continue; // the host being unreachable is not news; the next pass asks again
+    }
+    if (listed.length === 0) continue;
+    const known = await db.query(
+      "select provider_number from pull_requests where mission_id = $1",
+      [source.mission_id]
+    );
+    const knownNumbers = new Set((known.rows as { provider_number: number }[]).map((row) => Number(row.provider_number)));
+    for (const host of listed) {
+      if (knownNumbers.has(host.number)) continue;
+      await withMission(db, source.mission_id, async (client) => {
+        await insertAdopted(
+          client,
+          { org_id: source.org_id, mission_id: source.mission_id, wst_id: source.wst_id },
+          host,
+          source.pr_id
         );
-        if (!inserted.rowCount) return;
-        await recordEvent(client, {
-          orgId: lane.org_id,
-          missionId: lane.mission_id,
-          workstreamId: lane.wst_id,
-          kind: "pr.adopted",
-          actorKind: "external",
-          actorId: "github",
-          actorLogin: host.authorLogin,
-          payload: {
-            pullRequestId,
-            number: host.number,
-            url: host.url,
-            state: host.state,
-            headRef: host.headRef,
-            author: host.authorLogin,
-            mergedBy: host.mergedBy
-          }
-        });
       });
     }
   }

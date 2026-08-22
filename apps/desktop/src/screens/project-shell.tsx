@@ -697,7 +697,13 @@ function MissionTree({
             aria-current={selectedPullId === pull.pullRequestId}
           >
             <span className="side-name">PR #{pull.number}</span>
-            <span className="side-decision-note"> · {pull.state}</span>
+            <span className="side-decision-note">
+              {/* A downstream request (D-209) carries the mission's merged
+                  work onward — the rail says so in words, beside the state,
+                  so a row nobody here opened reads as the work's own story
+                  rather than as a stranger's request. */}
+              {pull.downstreamOf ? ` · ${pull.headRef} → ${pull.baseRef} · ${pull.state}` : ` · ${pull.state}`}
+            </span>
           </button>
         </div>
       ))}

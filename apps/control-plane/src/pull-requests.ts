@@ -23,6 +23,8 @@ import {
   resolveThread,
   sendComment,
   syncPullRow,
+  adoptPullRequestsOnce,
+  adoptDownstreamOnce,
   updateBranch,
   SYNC_SELECT,
   type PullContext,
@@ -93,7 +95,7 @@ async function stewardingAct(
   deps: RouteDeps,
   request: FastifyRequest,
   reply: FastifyReply,
-  gate: { openOnly?: boolean; resolvedOnly?: boolean }
+  gate: { openOnly?: boolean; resolvedOnly?: boolean; reviewOnly?: boolean }
 ): Promise<StewardingContext | null> {
   const ctx = await deps.requireAuth(request, reply);
   if (!ctx) return null;
@@ -113,6 +115,20 @@ async function stewardingAct(
     return null;
   }
   requireCapability(access, "pr.manage");
+  // A downstream request (D-209) is somebody else's process: the mission's
+  // work is *in* it, but opening, readying, merging, closing, or deleting
+  // it is the reviewer's call on the host, not this room's. Review acts —
+  // a comment, resolving a thread — are exactly what the room is for and
+  // pass. Enforced here, so hiding the buttons is not the enforcement.
+  if (pull.downstream && !gate.reviewOnly) {
+    await deps.sendError(
+      reply,
+      409,
+      "downstream",
+      "This request carries the mission's work onward; it is reviewed and merged where it was opened, not from here."
+    );
+    return null;
+  }
   if (gate.openOnly && (pull.state === "merged" || pull.state === "closed")) {
     await deps.sendError(reply, 409, "resolved", "This pull request is already resolved on GitHub.");
     return null;
@@ -433,7 +449,7 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
     if (!body.success) {
       return deps.sendError(reply, 422, "invalid_comment", body.error.issues[0]?.message ?? "Say something.");
     }
-    const acted = await stewardingAct(deps, request, reply, { openOnly: true });
+    const acted = await stewardingAct(deps, request, reply, { openOnly: true, reviewOnly: true });
     if (!acted) return;
     try {
       await sendComment(deps.db, deps.provider, acted.pull, acted.by, {
@@ -448,7 +464,7 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
   });
 
   app.post("/pull-requests/:pullRequestId/resolve-thread", async (request, reply) => {
-    const acted = await stewardingAct(deps, request, reply, { openOnly: true });
+    const acted = await stewardingAct(deps, request, reply, { openOnly: true, reviewOnly: true });
     if (!acted) return;
     const body = z.object({ threadId: z.string().min(1).max(200) }).safeParse(request.body);
     if (!body.success) return deps.sendError(reply, 400, "bad_thread", "Malformed thread id.");
@@ -609,12 +625,24 @@ export function registerWebhookRoutes(app: FastifyInstance, deps: RouteDeps): vo
       const repoId = payload.repository?.id;
       const number = payload.pull_request?.number ?? payload.issue?.number;
       if (repoId === undefined || number === undefined) return reply.code(204).send();
-      const found = await deps.db.query(
-        `${SYNC_SELECT} where repo.provider_repo_id = $1 and p.provider_number = $2`,
-        [String(repoId), number]
-      );
-      const row = found.rows[0] as SyncRow | undefined;
-      // A request Novus does not track is not Novus's news.
+      const lookup = () =>
+        deps.db.query(
+          `${SYNC_SELECT} where repo.provider_repo_id = $1 and p.provider_number = $2`,
+          [String(repoId), number]
+        );
+      let row = (await lookup()).rows[0] as SyncRow | undefined;
+      if (!row) {
+        // A request Novus holds no row for may still be Novus's news: one
+        // opened by hand on a lane's branch (D-208), or one carrying a
+        // mission's merged work onward (D-209). The host's own event is the
+        // earliest moment to find out, so both adoption passes run here
+        // rather than waiting for the sweep — a reviewer's first comment on
+        // the downstream request then lands in the room, not on a timer.
+        await adoptPullRequestsOnce(deps.db, deps.provider);
+        await adoptDownstreamOnce(deps.db, deps.provider);
+        row = (await lookup()).rows[0] as SyncRow | undefined;
+      }
+      // A request that is nobody's work here is not Novus's news.
       if (!row) return reply.code(204).send();
       await syncPullRow(deps.db, deps.provider, row);
       return reply.code(202).send({ ok: true });
