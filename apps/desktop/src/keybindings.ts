@@ -15,7 +15,9 @@ export type BindingAction =
   | "toggleDock"
   | "togglePanel"
   | "openSettings"
-  | "find";
+  | "find"
+  | "nextMission"
+  | "previousMission";
 
 /** One chord. ⌘ (or Ctrl elsewhere) is always implied — these are global
  *  chords, and a global binding without a modifier would eat plain typing. */
@@ -32,7 +34,10 @@ export const BINDING_ACTIONS: { action: BindingAction; does: string }[] = [
   { action: "toggleDock", does: "Show or hide the terminal dock" },
   { action: "togglePanel", does: "Show or hide the evidence panel" },
   { action: "find", does: "Find in the conversation" },
-  { action: "openSettings", does: "Open the theme control" }
+  { action: "openSettings", does: "Open the theme control" },
+  // Moving along the open rooms (D-212): the strip is a ring, Tab walks it.
+  { action: "nextMission", does: "Go to the next open mission" },
+  { action: "previousMission", does: "Go to the previous open mission" }
 ];
 
 const DEFAULTS: Record<BindingAction, Chord> = {
@@ -42,7 +47,9 @@ const DEFAULTS: Record<BindingAction, Chord> = {
   toggleDock: { key: "j", shift: false, alt: false },
   togglePanel: { key: "e", shift: false, alt: false },
   openSettings: { key: ",", shift: false, alt: false },
-  find: { key: "f", shift: false, alt: false }
+  find: { key: "f", shift: false, alt: false },
+  nextMission: { key: "tab", shift: false, alt: false },
+  previousMission: { key: "tab", shift: true, alt: false }
 };
 
 const STORAGE_KEY = "novus.keybindings";
@@ -164,9 +171,14 @@ function prettyKey(key: string): string {
   if (key === "arrowdown") return "↓";
   if (key === "arrowleft") return "←";
   if (key === "arrowright") return "→";
+  if (key === "tab") return "⇥";
   return key.length === 1 ? key.toUpperCase() : key;
 }
 
 export function chordLabel(chord: Chord): string {
-  return `⌘${chord.alt ? "⌥" : ""}${chord.shift ? "⇧" : ""}${prettyKey(chord.key)}`;
+  // ⌘⇥ is the platform's app switcher and never reaches the window, so a Tab
+  // chord is only ever the Control one — and says so rather than claiming a
+  // key it could not be (D-212).
+  const modifier = chord.key === "tab" ? "⌃" : "⌘";
+  return `${modifier}${chord.alt ? "⌥" : ""}${chord.shift ? "⇧" : ""}${prettyKey(chord.key)}`;
 }

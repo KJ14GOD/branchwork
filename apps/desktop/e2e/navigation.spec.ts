@@ -352,6 +352,36 @@ describe("the missions a person has open", () => {
     expect(await page.getByTestId("room-tab").count()).toBe(0);
 
     await shot(page, "63-working-set-two-projects.png");
+
+    // ⌃⇥ walks the open rooms in the person's own order and wraps (D-212):
+    // three tabs, Beta one active and last, so forward lands on the first.
+    const activeLabel = () =>
+      page.locator('[data-testid="mission-tab"][data-active="true"]').innerText();
+    await expect.poll(activeLabel, { timeout: 20_000 }).toContain("Beta one");
+    await page.keyboard.press("Control+Tab");
+    await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Alpha one");
+    await page.keyboard.press("Control+Tab");
+    await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Alpha two");
+    // And back the other way, across the wrap.
+    await page.keyboard.press("Control+Shift+Tab");
+    await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Alpha one");
+    await page.keyboard.press("Control+Shift+Tab");
+    await expect.poll(activeLabel, { timeout: 10_000 }).toContain("Beta one");
+    // Only the selection moved: the set is exactly what was open.
+    expect((await tabLabels(page)).length).toBe(3);
+
+    // The chord is on the Keyboard page like every other, labelled ⌃⇥ — the
+    // one modifier a Tab chord can honestly be, since ⌘⇥ is the platform's.
+    await page.getByTestId("open-settings").click();
+    await page.getByTestId("settings-dialog").waitFor({ timeout: 10_000 });
+    await page.locator(".settings-nav-item").filter({ hasText: "Keyboard" }).click();
+    const pane = page.getByTestId("settings-pane");
+    await expect.poll(() => pane.textContent(), { timeout: 10_000 }).toContain("next open mission");
+    expect(await pane.textContent()).toContain("⌃⇥");
+    expect(await pane.textContent()).toContain("⌃⇧⇥");
+    await shot(page, "201-settings-keyboard.png");
+    await page.keyboard.press("Escape");
+    await page.getByTestId("settings-dialog").waitFor({ state: "detached", timeout: 10_000 });
   }, 180_000);
 
   it("closes a tab without stopping the mission, which keeps running and keeps its state in the rail", async () => {

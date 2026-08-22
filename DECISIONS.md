@@ -2972,6 +2972,18 @@ A downstream request is never the lane's own publication. It blocks no Publish a
 
 **Revisit when.** A commit's author arrives as a git name rather than a login (initials show; mapping names to logins is the host's knowledge, not Novus's); or the description sheet wants the opener's picture in the sentence as well.
 
+## D-212 — The strip is a ring: ⌃⇥ walks the open missions
+
+**Context.** The owner: "using control tab to navigate between different projects open super super useful imo for navigation." The working set (D-061) already holds the open rooms in the person's own order; `⌘1–9` reaches a *project's* missions by rail position, but nothing walked the strip itself.
+
+**Decision.** Two rebindable chords in the D-204 registry: `⌃⇥` next open mission, `⌃⇧⇥` previous, cycling the working set's tabs in their own order and wrapping at both ends; with no tab active the first press lands on an end. One pure helper (`cycleTab`) carries the rule so it is tested without a window. The registry's chord model implies ⌘-or-Control, which is exactly right here — but a Tab chord is **only ever** the Control one, because `⌘⇥` is the platform's app switcher and never reaches the window, so the label says `⌃` rather than claiming a key it could not be.
+
+**Alternatives.** `⌘⇧[` / `]` in the browser idiom (rejected: rebindable anyway, and `⌃⇥` is what the owner's hands already know). Walking the rail's project order instead of the strip (rejected: the strip is what is open; the rail is everything — `⌘1–9` already covers the rail).
+
+**Consequences.** `nextMission` / `previousMission` actions with the shared pencil-and-trash rows on the Keyboard page; the shell's handler gains two cases; `chordLabel` learns that Tab chords are Control chords. Evidence `201-` recaptured with the rows.
+
+**Revisit when.** Tabs want most-recent-first cycling (the editor-switcher idiom) rather than strip order — a second helper, same chord.
+
 ## D-213 — Changes has a scope: what this prompt did, beside what the mission did
 
 **Context.** The owner: "it shows 22 files changed, which is good — I want that — however if I am doing a bunch of code changes the Changes section shows all changes. I also want somewhere, either in the mission or in Changes, to see what was done in that prompt run." The mission-wide list is the right default and stays; what was missing was the per-turn view of the same facts.

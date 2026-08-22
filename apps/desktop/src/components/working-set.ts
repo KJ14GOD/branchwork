@@ -141,6 +141,27 @@ export function selectTab(set: WorkingSet, id: string): WorkingSet {
  * tab does, because the composer's target must come back as it was left —
  * never silently reset to the first lane (D-080).
  */
+/**
+ * The next or previous open room, in the person's own tab order, wrapping
+ * at the ends (D-212). With nothing open, or one tab, nothing moves — and
+ * when no tab is active the first press lands on the first (or last) one,
+ * because the strip is a ring and the ring has a first bead.
+ */
+export function cycleTab(set: WorkingSet, direction: 1 | -1): WorkingSet {
+  if (set.tabs.length === 0) return set;
+  const current = set.tabs.findIndex((tab) => tab.id === set.activeId);
+  const count = set.tabs.length;
+  const next =
+    current === -1
+      ? direction === 1
+        ? 0
+        : count - 1
+      : (current + direction + count) % count;
+  const target = set.tabs[next];
+  if (!target || target.id === set.activeId) return set;
+  return selectTab(set, target.id);
+}
+
 export function selectLane(set: WorkingSet, tabId: string, workstreamId: string | null): WorkingSet {
   const tab = set.tabs.find((entry) => entry.id === tabId);
   if (!tab || tab.workstreamId === workstreamId) return set;

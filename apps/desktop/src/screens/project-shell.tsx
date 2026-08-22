@@ -47,7 +47,8 @@ import {
   tabIsGone,
   writeWorkingSet,
   type OpenTab,
-  type WorkingSet
+  type WorkingSet,
+  cycleTab
 } from "../components/working-set";
 import {
   boardColumnOf,
@@ -1256,6 +1257,13 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         // first when it was put away, so the block has somewhere to open.
         setRailHidden(false);
         setSettingsOpen((previous) => !previous);
+      } else if (matchesChord(event, keys.nextMission)) {
+        // Along the open rooms, in the person's own order, wrapping (D-212).
+        event.preventDefault();
+        setWorkingSet((set) => cycleTab(set, 1));
+      } else if (matchesChord(event, keys.previousMission)) {
+        event.preventDefault();
+        setWorkingSet((set) => cycleTab(set, -1));
       } else if (/^[1-9]$/.test(event.key) && !event.shiftKey && !event.altKey) {
         if (!currentProject) return;
         const mission = currentProject.missions[Number(event.key) - 1];
