@@ -97,6 +97,21 @@ export interface SubmitOutcome {
   message?: string;
 }
 
+/**
+ * What each conversation's box holds while the app runs (D-215): the words
+ * typed, the files attached, the paths held. Keyed by the conversation, so
+ * switching chats swaps the box's contents rather than carrying them along —
+ * a draft belongs to the conversation it was started in, and is there again
+ * on return. In memory only: a relaunch starts every box empty, as it always
+ * did, and an uploaded attachment a person never sent is simply unsent.
+ */
+interface Scratch {
+  text: string;
+  attachments: PreparedAttachment[];
+  heldPaths: string[];
+}
+const scratchByKey = new Map<string, Scratch>();
+
 const MODEL_IDS = CLAUDE_MODELS.map((model) => model.id);
 
 function isModelId(value: string | null): value is ModelId {
@@ -134,6 +149,7 @@ export function Composer({
   slashCommands,
   terminal,
   onStop,
+  scratchKey,
   onRemoveTranscript
 }: {
   /** Null until the server has said what this viewer may do. The composer
@@ -165,6 +181,12 @@ export function Composer({
    *  to send, because a message typed mid-turn queues and steers. Never set
    *  for another chat's turn; stopping that from here would be a misfire. */
   onStop?: (() => void) | null;
+  /** Which conversation this box belongs to (D-215). The box's words, files,
+   *  and held paths are remembered under it while the app runs, so a switch
+   *  to another chat leaves them here and a return finds them. Absent where
+   *  the box belongs to nothing yet — the ask dialog — which remembers
+   *  nothing. */
+  scratchKey?: string;
   onSubmit: (input: {
     body: string;
     model: ModelId;
@@ -231,7 +253,8 @@ export function Composer({
   terminal?: (query: string) => void;
   onRemoveTranscript?: (sessionId: string) => void;
 }) {
-  const [textValue, setTextValue] = useState("");
+  const scratch = scratchKey !== undefined ? scratchByKey.get(scratchKey) : undefined;
+  const [textValue, setTextValue] = useState(scratch?.text ?? "");
   const [model, setModel] = useState<ModelId>(() => {
     const stored = localStorage.getItem("novus-model");
     return isModelId(stored) ? stored : DEFAULT_MODEL;
@@ -412,11 +435,18 @@ export function Composer({
    *  exist in the store the moment they are added, so a slow upload never
    *  delays the words — and abandoning the composer leaves an unattached
    *  artifact the sweep fails, never a half-sent direction. */
-  const [attachments, setAttachments] = useState<PreparedAttachment[]>([]);
+  const [attachments, setAttachments] = useState<PreparedAttachment[]>(scratch?.attachments ?? []);
   /** Files chosen where no mission exists to upload them to yet (D-201): held
    *  by path, shown as chips like any other, uploaded by whoever creates the
    *  mission. Named intentions, exactly as a pending transcript is. */
-  const [heldPaths, setHeldPaths] = useState<string[]>([]);
+  const [heldPaths, setHeldPaths] = useState<string[]>(scratch?.heldPaths ?? []);
+  // Written back on every change rather than on unmount, because a remount
+  // keyed by conversation is exactly when unmount's own state is gone.
+  useEffect(() => {
+    if (scratchKey === undefined) return;
+    if (textValue === "" && attachments.length === 0 && heldPaths.length === 0) scratchByKey.delete(scratchKey);
+    else scratchByKey.set(scratchKey, { text: textValue, attachments, heldPaths });
+  }, [scratchKey, textValue, attachments, heldPaths]);
   const [attaching, setAttaching] = useState(false);
 
   const carried = attachments.length + heldPaths.length;

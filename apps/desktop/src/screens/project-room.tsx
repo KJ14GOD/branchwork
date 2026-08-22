@@ -297,8 +297,10 @@ export function ProjectRoom({
   const [continueFrom, setContinueFrom] = useState<string[]>([]);
   /** Pinned references the next send carries (D-182): worktree files and
    *  checks picked from the inspector, worn as chips on the composer's top
-   *  edge and cleared once the direction lands. */
-  const [pendingContext, setPendingContext] = useState<DirectionContextRef[]>([]);
+   *  edge and cleared once the direction lands. Held per conversation
+   *  (D-215): a pin made in one chat is that chat's, and switching chats
+   *  leaves it there. `pendingContext` below reads the current chat's. */
+  const [pendingByChat, setPendingByChat] = useState<Record<string, DirectionContextRef[]>>({});
   /** A command waiting to be typed into the dock (D-199) — primed, never
    *  submitted: pressing Enter in one's own session stays one's own act. */
   const [dockPrime, setDockPrime] = useState<string | null>(null);
@@ -850,6 +852,21 @@ export function ProjectRoom({
       ? activeSessionId
       : null;
   const readingSessionId = selectedSessionId ?? firstSessionId;
+  /** Which conversation the box belongs to (D-215): the chat on screen, the
+   *  new-session draft surface, or the lane itself while it has no chats.
+   *  Keys the composer's own scratch and the pinned references alike. */
+  const chatKey = sessionDraft
+    ? `${selectedMissionId}:draft`
+    : `${selectedMissionId}:${readingSessionId ?? "lane"}`;
+  const pendingContext = pendingByChat[chatKey] ?? [];
+  const setPendingContext = (
+    next: DirectionContextRef[] | ((previous: DirectionContextRef[]) => DirectionContextRef[])
+  ) =>
+    setPendingByChat((held) => {
+      const previous = held[chatKey] ?? [];
+      const value = typeof next === "function" ? next(previous) : next;
+      return { ...held, [chatKey]: value };
+    });
   const multiSession = sessions.length > 1;
   /** Where no conversation is selected in a lane that holds several, the
    *  canvas is the approach's own page — its brief and its conversations as
@@ -2396,7 +2413,11 @@ export function ProjectRoom({
           theirs; the reversal is the preview's alone. */}
       {detail?.state !== "completed" && detail?.state !== "cancelled" && !previewSelected && (
       <Composer
-        key={selectedMissionId ?? "draft"}
+        /* Keyed by conversation (D-215): a chat switch swaps the box for that
+           chat's own — its words, files, and pins — rather than carrying one
+           box across every conversation in the mission. */
+        key={isDraft ? "draft" : chatKey}
+        scratchKey={isDraft ? undefined : chatKey}
         /* A draft has no mission yet, so no server capabilities exist to read:
            creating one is an org act (PRODUCT.md#roles-and-capabilities) and
            the creator becomes its Mission Admin. */

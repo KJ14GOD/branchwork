@@ -548,6 +548,33 @@ describe("shared sessions inside one approach", () => {
     const pinned = await page.getByTestId("composer-context").innerText();
     await shot("206-pinned-file-on-the-composer.png");
 
+    // The pin is this conversation's (D-215): switch to the sibling chat and
+    // the box there is empty; come back and the pin is where it was left.
+    // The rail rows are the two chats, in creation order; the active tab
+    // says which is on screen.
+    const rows = page.getByTestId("rail-session-row");
+    await expect.poll(() => rows.count(), { timeout: 30_000 }).toBe(2);
+    const here = await page.locator('[data-testid="session-tab"].active').innerText();
+    const other = (await rows.nth(0).innerText()).includes(here.trim().slice(0, 12)) ? 1 : 0;
+    await rows.nth(other).click();
+    await expect
+      .poll(async () => page.locator('[data-testid="session-tab"].active').innerText(), { timeout: 20_000 })
+      .not.toContain(here.trim().slice(0, 12));
+    expect(await page.getByTestId("composer-context").count()).toBe(0);
+    await page.getByTestId("composer-input").fill("a draft left in the sibling");
+    await rows.nth(other === 1 ? 0 : 1).click();
+    await page.getByTestId("composer-context").waitFor({ timeout: 20_000 });
+    expect(await page.getByTestId("composer-context").innerText()).toBe(pinned);
+    // And the words typed in the sibling stayed in the sibling.
+    expect(await page.getByTestId("composer-input").inputValue()).toBe("");
+    await rows.nth(other).click();
+    await expect
+      .poll(async () => page.getByTestId("composer-input").inputValue(), { timeout: 20_000 })
+      .toBe("a draft left in the sibling");
+    await page.getByTestId("composer-input").fill("");
+    await rows.nth(other === 1 ? 0 : 1).click();
+    await page.getByTestId("composer-context").waitFor({ timeout: 20_000 });
+
     await compose("look closely at the pinned file");
     await approvePending();
     const settled = await until(

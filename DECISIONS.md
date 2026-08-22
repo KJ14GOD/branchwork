@@ -3009,3 +3009,15 @@ The scope is owned by the shell beside the section itself. Every other way into 
 **Consequences.** `inspector.tsx`: `PinGlyph`, `.change-line` / `.change-pin`; DESIGN's Diff bullet; `slice.spec.ts` captures the hovered row magnified (evidence `221-`); `sessions.spec.ts`'s D-182 case still pins through the same test id.
 
 **Revisit when.** The pin wants a pressed state on the row after pinning (today the composer's chip is the receipt); or the ledger and file view get the mark.
+
+## D-215 — A draft belongs to its conversation
+
+**Context.** Owner: "when the icon adds to chat it adds to chat, but if I go to another chat it still shows it added — it should only be in that chat." True, and wider than the pin: the pinned references were one room-level list, and the composer itself was keyed per mission, so a chat switch carried the box — words, attachments, pins — into whichever conversation came next.
+
+**Decision.** The box belongs to the conversation it was started in. Pinned references are held per chat; the composer is keyed per chat and remembers each chat's words, attached files, and held paths in a scratch while the app runs, so a switch swaps the box for that chat's own and a return finds it as it was left. The new-session draft surface is its own conversation for this purpose, and a lane with no chats yet is its own. Nothing is persisted: a relaunch starts every box empty, as it always did, and an attachment uploaded and never sent is simply unsent.
+
+**Alternatives.** Clearing the box on every switch (rejected: losing a half-written message because you glanced at a sibling chat is the punishment the pin bug merely hinted at). Persisting drafts to disk (deferred: a draft that survives a relaunch is a feature with its own questions — whose, for how long — not a fix for this). Keeping pins room-wide but showing which chat each was made in (rejected: a pin is an intention for *this* next message; labelling it for another chat is explaining a mistake instead of not making it).
+
+**Consequences.** `composer.tsx`: a `scratchKey` and the in-memory scratch; `project-room.tsx`: pins keyed by chat, the composer keyed by chat. `sessions.spec.ts`'s D-182 case now also proves the switch — pin in one chat, nothing in the sibling, a draft typed there stays there, the pin is waiting on return — and fails against the previous code at the first of those.
+
+**Revisit when.** Drafts want to survive a relaunch, or a pin wants to travel deliberately — a "move to that chat" act, never an accident.
