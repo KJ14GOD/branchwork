@@ -3023,3 +3023,15 @@ The scope is owned by the shell beside the section itself. Every other way into 
 **Amended the same evening, owner-hit across two missions.** The first fix keyed pins per conversation and still leaked — in both directions — because the room is keyed per *mission* and unmounts on a mission switch. Going out: the inspector hands a pin to the shell as an ask (`contextAsk`), and the shell kept the ask after delivery, so every room that mounted afterwards replayed it — the pin reappeared in whatever mission was opened next. The ask is consumed on delivery now (`onContextConsumed`, findAsk's own pattern). Coming back: pins kept as the room's own state died with the instance, so the pin was gone on return. They live in `pins.ts` now, a store outside any component, keyed by the same conversation key as the composer's scratch. `navigation.spec.ts` proves both legs across two real missions — pinned here, absent there, waiting on return — and fails against the first fix.
 
 **Revisit when.** Drafts want to survive a relaunch, or a pin wants to travel deliberately — a "move to that chat" act, never an accident.
+
+## D-216 — A built-in's answer is a printout, not prose
+
+**Context.** The owner ran `/usage` through a governed turn and got a wall: "is it possible for slash commands like these to be displayed nicer." The pixels said why. Headless, a built-in returns the CLI's own text — line-broken sections, literal underscores in `America/Los_Angeles` — and the room rendered it as markdown (D-145): paragraphs collapsed into run-on sentences, and the underscores opened an italic run across two lines.
+
+**Decision.** A turn whose direction invoked one of the harness's own built-in commands — by name, against the list this machine captured from the session's own announcement (D-188) — renders its speech **preformatted**: the `md-pre` block the renderer already owns, wrapped at the measure rather than scrolled, because a usage report is read, not copied. Everything else stays markdown: a project command is a prompt template whose answer is the model's prose, and a skill invocation is prose too. The judgement lives in the feed projection (`printout` on the trace block), where it is tested without a window.
+
+**Alternatives.** Parsing `/usage` into a panel of its own (rejected: D-188's anti-drift rule — the CLI's report shape is the CLI's to change, and a parser is a mirror that rots). Escaping underscores and preserving breaks inside the markdown path (rejected: it would change how every reply renders to fix one kind). Detecting printouts by content heuristics (rejected: the direction already says what kind of answer to expect; guessing from the text is how false captions get made).
+
+**Consequences.** `TraceBlock.printout`; `SegmentView` takes it and renders `<pre class="md-pre mono harness-printout">`; one wrap rule in the stylesheet. `trace-presentation` pins the judgement (built-in yes, project command no, words no); `skills.spec` drives `/compact` through the menu in a real window and finds the printout.
+
+**Revisit when.** Built-ins start returning structured output (json) headless, at which point a real panel earns itself.

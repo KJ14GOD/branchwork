@@ -183,6 +183,12 @@ export interface TraceBlock {
   /** Whether a terminal execution event has arrived, so a worker without a
    *  stated end stops reading as `working` once the turn itself is over. */
   settled: boolean;
+  /** True when the direction invoked one of the harness's own built-in
+   *  commands (D-216): what comes back is a printout — the CLI's own text,
+   *  newlines and underscores meant literally — not prose, so it is shown
+   *  preformatted rather than read as markdown. A project command is a
+   *  prompt template and its answer is prose; only the built-ins print. */
+  printout: boolean;
 }
 
 export interface ControlBlock {
@@ -365,6 +371,15 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
     checkQueue.set(check.executionId, queue);
   }
 
+  // The built-ins this machine announced (D-188): a direction that is one of
+  // them, by name, gets its answer back as a printout (D-216).
+  const builtins = new Set(detail.workspace?.globalSlashCommands ?? []);
+  const invokesBuiltin = (body: string | null): boolean => {
+    if (body === null || !body.startsWith("/")) return false;
+    const name = body.slice(1).split(/\s/, 1)[0] ?? "";
+    return builtins.has(name);
+  };
+
   const newTrace = (direction: Direction | null, event: MissionEvent | null): TraceBlock => {
     const block: TraceBlock = {
       kind: "trace",
@@ -380,7 +395,8 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       resolvedBy: null,
       toolSteps: [],
       workers: [],
-      settled: false
+      settled: false,
+      printout: invokesBuiltin(direction?.body ?? null)
     };
     blocks.push(block);
     if (direction) traces.set(direction.directionId, block);

@@ -212,6 +212,7 @@ function ChecksRow({
 function SegmentView({
   segment,
   continued = false,
+  printout = false,
   onOpenChanges,
   onOpenVerification
 }: {
@@ -219,6 +220,9 @@ function SegmentView({
   /** True for harness speech that follows earlier speech in the same turn,
    *  so the identity is stated once per turn rather than per paragraph. */
   continued?: boolean;
+  /** True when the turn answered a built-in command (D-216): speech is the
+   *  CLI's own printout and renders preformatted. */
+  printout?: boolean;
   onOpenChanges: (checkpointId: string | null) => void;
   onOpenVerification: () => void;
 }) {
@@ -245,10 +249,17 @@ function SegmentView({
             {/* The harness speaks markdown; showing its `##` and `**` raw made
                 every substantive reply read like source. Rendered through the
                 same element-only Markdown as a file preview (D-048), because a
-                reply is repository-adjacent content by the same argument. */}
-            {segment.texts.map((paragraph, index) => (
-              <Markdown key={index} source={paragraph} />
-            ))}
+                reply is repository-adjacent content by the same argument. A
+                built-in command's answer is the one exception (D-216): it is
+                the CLI's own printout, and markdown ate its line breaks and
+                read its underscores as emphasis — so it is shown as it came. */}
+            {printout ? (
+              <pre className="md-pre mono harness-printout" data-testid="harness-printout">
+                {segment.texts.join("\n")}
+              </pre>
+            ) : (
+              segment.texts.map((paragraph, index) => <Markdown key={index} source={paragraph} />)
+            )}
           </div>
         </div>
       );
@@ -552,6 +563,7 @@ export function TraceView({
             key={segment.key}
             segment={segment}
             continued={continued}
+            printout={block.printout}
             onOpenChanges={onOpenChanges}
             onOpenVerification={onOpenVerification}
           />

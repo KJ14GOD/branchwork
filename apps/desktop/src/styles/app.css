@@ -7321,3 +7321,11 @@ span.trace-attachment-transcript:hover {
 .label-swatch.label-blue { background: var(--term-bright-blue); }
 .label-swatch.label-magenta { background: var(--term-bright-magenta); }
 .label-swatch.label-grey { background: var(--text-2); }
+
+/* A built-in command's answer (D-216): the CLI's own printout, kept as it
+   came — wrapped at the measure rather than scrolled, because a usage report
+   is read, not copied. */
+.harness-printout {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

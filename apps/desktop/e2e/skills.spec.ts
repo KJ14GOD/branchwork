@@ -412,7 +412,20 @@ describe("what a project declares is carried, and the record says which bytes (D
       expect(offered.join(" ")).toContain("/review");
       expect(offered.join(" ")).not.toContain("doctor");
       await page.screenshot({ path: join(evidenceDir, "211-global-commands-in-menu.png") });
-      await page.keyboard.press("Escape");
+
+      // A built-in's answer is a printout (D-216): pick /compact, send it, and
+      // the reply renders preformatted rather than as markdown — the same
+      // text that, read as prose, lost its line breaks and italicised its
+      // underscores.
+      await page.getByTestId("slash-row").filter({ hasText: "compact" }).click();
+      await expect
+        .poll(async () => page.getByTestId("composer-input").inputValue())
+        .toContain("/compact");
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      await page.keyboard.press("Enter");
+      await page.getByTestId("harness-printout").first().waitFor({ timeout: 90_000 });
+      expect(await page.getByTestId("harness-printout").first().textContent()).toContain("/compact");
+      await page.screenshot({ path: join(evidenceDir, "216-builtin-printout.png") });
       await page.getByTestId("composer-input").fill("");
     },
     120_000

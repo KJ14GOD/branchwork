@@ -444,6 +444,38 @@ describe("project skills in the room (D-118)", () => {
   });
 });
 
+describe("a built-in command's answer is a printout (D-216)", () => {
+  const withBuiltins = (body: string): MissionDetailResponse => {
+    const base = detail([]);
+    return MissionDetailResponseSchema.parse({
+      ...base,
+      directions: [{ ...base.directions[0]!, body }],
+      workspace: {
+        workspaceId: "wsp_one",
+        workstreamId: "wst_one",
+        location: "local",
+        readiness: "ready",
+        portRangeStart: null,
+        portRangeEnd: null,
+        setupError: null,
+        configuredAt: null,
+        declared: [],
+        declaredAt: null,
+        globalSlashCommands: ["usage", "compact"]
+      }
+    });
+  };
+
+  it("marks a turn that invoked one of the harness's own commands, and nothing else", () => {
+    expect(trace(withBuiltins("/usage")).printout).toBe(true);
+    expect(trace(withBuiltins("/usage --verbose")).printout).toBe(true);
+    // A project command is a prompt template; its answer is prose.
+    expect(trace(withBuiltins("/novus-project-skills:relnotes now")).printout).toBe(false);
+    // Words are words.
+    expect(trace(withBuiltins("usage looks high, check it")).printout).toBe(false);
+  });
+});
+
 describe("permission profiles in the room (D-115)", () => {
   it("puts the profile on the turn's machinery line, and says nothing for manual", () => {
     const profiled = trace(
