@@ -116,12 +116,14 @@ describe("the key mapping for computer_key (D-218)", () => {
   it("maps named keys, aliases, letters, and digits — and refuses the unknown", async () => {
     const { keyMember } = await import("../electron/computer-use-native");
     const nut = {
-      Key: { Enter: "K_Enter", Tab: "K_Tab", Escape: "K_Esc", LeftCmd: "K_Cmd", A: "K_A", Num3: "K_3" }
+      Key: { Enter: "K_Enter", Tab: "K_Tab", Escape: "K_Esc", LeftSuper: "K_Meta", A: "K_A", Num3: "K_3" }
     } as unknown as import("../electron/computer-use-native").NutJs;
     expect(keyMember(nut, "enter")).toBe("K_Enter");
     expect(keyMember(nut, "Return")).toBe("K_Enter"); // aliased to Enter
-    expect(keyMember(nut, "cmd")).toBe("K_Cmd");
-    expect(keyMember(nut, "command")).toBe("K_Cmd");
+    // Command aliases to LeftSuper ("meta"), the flag libnut accepts — not
+    // LeftCmd ("cmd"), which it rejects.
+    expect(keyMember(nut, "cmd")).toBe("K_Meta");
+    expect(keyMember(nut, "command")).toBe("K_Meta");
     expect(keyMember(nut, "a")).toBe("K_A");
     expect(keyMember(nut, "3")).toBe("K_3");
     // A key the map does not carry, or nonsense: null (refused upstream).
@@ -149,15 +151,16 @@ describe("key-combo ordering for the native backend (D-218 amended)", () => {
   it("puts the main key first and modifiers as trailing flags — nut-js's own order", async () => {
     const { orderedCombo } = await import("../electron/computer-use-native");
     const nut = {
-      Key: { Space: "Space", LeftCmd: "LeftCmd", LeftShift: "LeftShift", Tab: "Tab", C: "C", Z: "Z", Enter: "Enter" }
+      Key: { Space: "Space", LeftSuper: "LeftSuper", LeftShift: "LeftShift", Tab: "Tab", C: "C", Z: "Z", Enter: "Enter" }
     } as unknown as import("../electron/computer-use-native").NutJs;
-    // The exact bug: cmd+space must resolve to [Space, LeftCmd], never
-    // [LeftCmd, Space] (which made Space a bad modifier flag).
-    expect(orderedCombo(nut, "cmd+space")).toEqual(["Space", "LeftCmd"]);
-    expect(orderedCombo(nut, "space+cmd")).toEqual(["Space", "LeftCmd"]);
-    expect(orderedCombo(nut, "cmd+tab")).toEqual(["Tab", "LeftCmd"]);
-    expect(orderedCombo(nut, "cmd+c")).toEqual(["C", "LeftCmd"]);
-    expect(orderedCombo(nut, "cmd+shift+z")).toEqual(["Z", "LeftCmd", "LeftShift"]);
+    // Two bugs, both fixed: the main key comes first (so Space is not read as a
+    // modifier), AND Command resolves to LeftSuper ("meta"), never LeftCmd
+    // ("cmd"), which libnut rejects.
+    expect(orderedCombo(nut, "cmd+space")).toEqual(["Space", "LeftSuper"]);
+    expect(orderedCombo(nut, "space+cmd")).toEqual(["Space", "LeftSuper"]);
+    expect(orderedCombo(nut, "cmd+tab")).toEqual(["Tab", "LeftSuper"]);
+    expect(orderedCombo(nut, "cmd+c")).toEqual(["C", "LeftSuper"]);
+    expect(orderedCombo(nut, "cmd+shift+z")).toEqual(["Z", "LeftSuper", "LeftShift"]);
     // A plain key: just itself.
     expect(orderedCombo(nut, "enter")).toEqual(["Enter"]);
     // Nonsense: null (refused).

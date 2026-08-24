@@ -83,8 +83,13 @@ const KEY_ALIASES: Record<string, string> = {
   down: "Down",
   left: "Left",
   right: "Right",
-  cmd: "LeftCmd",
-  command: "LeftCmd",
+  // macOS Command is libnut's "meta" modifier flag, which nut-js exposes as
+  // LeftSuper. LeftCmd maps to "cmd", which libnut's native layer rejects with
+  // "Invalid key flag specified" — the real cause of the ⌘-combo failures
+  // (D-218 amended 2026-08-24). The valid flags are control / meta / shift /
+  // alt, so every modifier below resolves to one of those.
+  cmd: "LeftSuper",
+  command: "LeftSuper",
   ctrl: "LeftControl",
   control: "LeftControl",
   alt: "LeftAlt",
