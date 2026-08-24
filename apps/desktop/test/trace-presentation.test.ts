@@ -420,6 +420,27 @@ describe("project skills in the room (D-118)", () => {
     });
   });
 
+  it("names the accounts a turn carried, stripping the claude.ai prefix (D-217)", () => {
+    const block = trace(
+      detail([
+        {
+          kind: "execution.running",
+          payload: {
+            harness: "claude-code",
+            model: "claude-fable-5",
+            effort: "high",
+            connectors: ["claude.ai Gmail", "claude.ai Google Drive"]
+          }
+        }
+      ])
+    );
+    const notes = block.segments.filter((segment) => segment.kind === "note");
+    // No runner owner on this fixture, so no "— {who}'s" suffix; the accounts
+    // themselves read by their service names.
+    expect(notes.some((note) => note.text === "Accounts carried: Gmail, Google Drive")).toBe(true);
+    expect(notes.find((note) => note.text.startsWith("Accounts carried"))?.tone).toBe("neutral");
+  });
+
   it("names a dropped skill with its reason, in the warn tone — a dead grant is news", () => {
     const block = trace(
       detail([

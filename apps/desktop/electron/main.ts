@@ -14,6 +14,9 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openableExtensionOf, openRefusalFor } from "./artifact-open";
 import { createNotifier, type NotificationPrefs, type Notifier } from "./notifications";
+import { discoverConnectors, setConnectorLent } from "./connectors";
+import { computerUseEnabled, setComputerUseEnabled } from "./computer-use";
+import { accessibilityTrusted, requestAccessibility } from "./computer-use-native";
 import {
   AttachmentRefused,
   prepareAttachment,
@@ -39,6 +42,7 @@ import {
   EXTENSION_LABEL_NAME_MAX,
   ExtensionLabelColorSchema,
   ExtensionSourceSchema,
+  LendConnectorInputSchema,
   MAX_LABELS_PER_EXTENSION,
   SkillNameSchema,
   EnabledSkillsSchema,
@@ -707,6 +711,53 @@ function registerIpc(): void {
 
   ipcMain.handle("novus:system:version", async () => {
     return ok({ app: app.getVersion(), electron: process.versions.electron });
+  });
+
+  // Lent accounts (D-217): the machine's own claude.ai connectors, enumerated
+  // by the CLI and cached, plus the person's own On/Off. Both machine-local.
+  ipcMain.handle("novus:connectors:list", async () => {
+    return ok(await discoverConnectors(app.getPath("userData")));
+  });
+  ipcMain.handle("novus:connectors:setLent", async (_event, raw: unknown) => {
+    const parsed = LendConnectorInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed connector." };
+    return ok(setConnectorLent(app.getPath("userData"), parsed.data.name, parsed.data.lent));
+  });
+
+  // Raw computer use opt-in (D-218): machine-local, off by default. The agent
+  // never reads or writes this — it is the owner's own switch.
+  ipcMain.handle("novus:computer:enabled", async () => {
+    return ok({ enabled: computerUseEnabled(app.getPath("userData")) });
+  });
+  ipcMain.handle("novus:computer:set-enabled", async (_event, raw: unknown) => {
+    const parsed = z.object({ enabled: z.boolean() }).safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    setComputerUseEnabled(app.getPath("userData"), parsed.data.enabled);
+    // Turning it off is a live cut-off too: the driver re-reads the opt-in on
+    // every act, so any turn's next computer action is refused at once.
+    return ok({ enabled: parsed.data.enabled });
+  });
+
+  // Cut off the agent's computer use for a lane mid-turn (D-218): stops the
+  // next act and takes the cursor down, without ending the turn. A person's
+  // own act; it only stops, so it grants nothing.
+  ipcMain.handle("novus:computer:stop", async (_event, raw: unknown) => {
+    const parsed = z.object({ workstreamId: z.string().startsWith("wst_") }).safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    return call(async () => {
+      runner?.stopComputerUse(parsed.data.workstreamId);
+      return null;
+    });
+  });
+
+  // Accessibility status for the computer-use card (D-218): whether this Mac
+  // has granted Novus synthetic-input permission, and a prompt that opens
+  // System Settings. Only the owner can flip the OS switch.
+  ipcMain.handle("novus:computer:accessibility", async () => {
+    return ok({ trusted: accessibilityTrusted() });
+  });
+  ipcMain.handle("novus:computer:request-accessibility", async () => {
+    return ok({ trusted: requestAccessibility() });
   });
 
   ipcMain.handle("novus:artifacts:open-local", async (_event, raw: unknown) => {
@@ -1955,6 +2006,18 @@ function registerIpc(): void {
 
   ipcMain.handle("novus:preview:status", async () => {
     return call(async () => embeddedPreviewStatus());
+  });
+
+  // Cut off the agent's browsing for a lane mid-turn (D-218). A person's own
+  // act on their own machine's preview; it only *stops* the agent, so it
+  // grants nothing and needs no capability — a stray lane id is a no-op.
+  ipcMain.handle("novus:preview:stop-browsing", async (_event, raw: unknown) => {
+    const parsed = z.object({ workstreamId: z.string().startsWith("wst_") }).safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    return call(async () => {
+      runner?.stopBrowsing(parsed.data.workstreamId);
+      return null;
+    });
   });
 
   onEmbeddedPreviewStatus((status) => window?.webContents.send("novus:preview-status", status));

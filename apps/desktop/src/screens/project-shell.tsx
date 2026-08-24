@@ -2285,6 +2285,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         </header>
           {active && currentProject ? (
             <ProjectRoom
+              viewerLogin={user.login}
               key={active.id}
               forkAsk={forkAsk}
               contextAsk={contextAsk}

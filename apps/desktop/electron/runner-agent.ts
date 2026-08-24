@@ -41,9 +41,30 @@ import {
   DECLARE_RUN_TOOL_NAME,
   PUSH_TOOL_FULL_NAME,
   PUSH_TOOL_NAME,
+  isBrowserToolFullName,
+  browserSessionState,
+  grantBrowserSession,
+  revokeBrowserSession,
+  isComputerToolFullName,
+  computerSessionState,
+  grantComputerSession,
+  revokeComputerSession,
   mintToolGrant,
-  registerCaptureTurn
+  registerCaptureTurn,
+  type BrowserTool,
+  type ComputerTool
 } from "./artifact-mcp";
+import { computerUseEnabled, fenceRefusal, type DesktopDriver } from "./computer-use";
+import { createNativeDesktopDriver, desktopContext } from "./computer-use-native";
+import { showAgentCursor, hideAgentCursor } from "./agent-cursor";
+import {
+  navigatePreview,
+  clickPreview,
+  typePreview,
+  pressPreviewKey,
+  readPreview,
+  setPreviewAgentDriving
+} from "./workspace-preview";
 import {
   loadWorkspaceSettings,
   writeWorkspaceSettings,
@@ -56,6 +77,7 @@ import { SCREENSHOT_CLAIM } from "./artifact-policy";
 import { ATTACHMENT_DIR, redact } from "./secret-policy";
 import { processLogsFor } from "./workspace";
 import { startTurn, type RunningTurn, type TurnResult } from "./execution";
+import { resolveConnectors } from "./connectors";
 import { EventOutbox } from "./outbox";
 import {
   createWorkspaceRuntime,
@@ -116,6 +138,18 @@ export interface RunnerAgent {
   /** Starts recording the named lane's live preview (D-123). Stop, cancel,
    *  and status are the recorder module's own, machine-wide verbs. */
   startRecording(missionId: string, workstreamId: string): Promise<void>;
+  /**
+   * Cuts off the agent's browsing for a lane mid-turn (D-218): revokes the
+   * turn's browser session so the next browser tool call is refused, without
+   * ending the turn. Sticky for the turn; a no-op when nothing is browsing.
+   */
+  stopBrowsing(workstreamId: string): void;
+  /**
+   * Cuts off the agent's computer use for a lane mid-turn (D-218): revokes the
+   * turn's computer-use session so the next act is refused, and takes the
+   * cursor down, without ending the turn.
+   */
+  stopComputerUse(workstreamId: string): void;
   /**
    * Kills in-flight turns, records the interruption as an explicit outcome,
    * and flushes the outbox before resolving. Safe to call twice.
@@ -522,6 +556,20 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     captureScreenshot: capturePersonScreenshot,
     syncMovedBase,
     startRecording: startPersonRecording,
+    stopBrowsing: (workstreamId) => {
+      // The active write turn for this lane owns the browser session. Revoke
+      // it and clear the room's indicator; a turn not browsing is unaffected.
+      for (const turn of active.values()) {
+        if (turn.workstreamId === workstreamId) revokeBrowserSession(turn.executionId);
+      }
+      setPreviewAgentDriving(workstreamId, false);
+    },
+    stopComputerUse: (workstreamId) => {
+      for (const turn of active.values()) {
+        if (turn.workstreamId === workstreamId) revokeComputerSession(turn.executionId);
+      }
+      hideAgentCursor();
+    },
     shutdown
   };
 
@@ -2038,6 +2086,120 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
               "\nDeclaring runs nothing — a person starts it from the Run control.",
             isError: false
           };
+        }, async (tool: BrowserTool, browserArgs: Record<string, unknown>) => {
+          // The fenced-browser driver (D-218): the agent's hands on the
+          // preview. Grant-checked at the endpoint before this runs; here we
+          // only translate the tool to the preview's own guarded verb, which
+          // refuses in words when no page is showing. Every act marks the
+          // preview agent-driven so the room shows it and offers the cut-off.
+          const wst = args.workstreamId;
+          const arg = (key: string): string =>
+            typeof browserArgs[key] === "string" ? (browserArgs[key] as string) : "";
+          const num = (key: string): number =>
+            typeof browserArgs[key] === "number" ? (browserArgs[key] as number) : NaN;
+          setPreviewAgentDriving(wst, true);
+          switch (tool) {
+            case "browser_navigate": {
+              const outcome = await navigatePreview(wst, arg("url"));
+              return outcome.ok
+                ? { text: `Navigated to ${outcome.url}.`, isError: false }
+                : { text: outcome.refusal, isError: true };
+            }
+            case "browser_click": {
+              const outcome = await clickPreview(wst, num("x"), num("y"));
+              return outcome.ok
+                ? { text: `Clicked at ${Math.round(num("x"))}, ${Math.round(num("y"))}.`, isError: false }
+                : { text: outcome.refusal, isError: true };
+            }
+            case "browser_type": {
+              const outcome = typePreview(wst, arg("text"));
+              return outcome.ok
+                ? { text: `Typed ${[...arg("text")].length} characters.`, isError: false }
+                : { text: outcome.refusal, isError: true };
+            }
+            case "browser_press": {
+              const outcome = pressPreviewKey(wst, arg("key"));
+              return outcome.ok
+                ? { text: `Pressed ${arg("key")}.`, isError: false }
+                : { text: outcome.refusal, isError: true };
+            }
+            case "browser_read": {
+              const outcome = await readPreview(wst);
+              return outcome.ok
+                ? { text: `${outcome.title} — ${outcome.url}\n\n${outcome.text}`, isError: false }
+                : { text: outcome.refusal, isError: true };
+            }
+            default:
+              return { text: `No such browser action: ${tool}`, isError: true };
+          }
+        }, async (tool: ComputerTool, computerArgs: Record<string, unknown>) => {
+          // Raw computer use (D-218): the whole Mac. Every layer is checked
+          // here, at the moment of the act, after the router's own opt-in and
+          // session gate — because the fence depends on where Novus's windows
+          // are right now, and the backend may not exist at all.
+          //
+          //  1. Opt-in, re-checked live: the router checked it, and it is
+          //     re-read here so turning it off mid-turn refuses the next act.
+          //  2. The structural fence: an act on Novus's own window is refused.
+          //  3. The native backend: absent means eyes but no hands — the
+          //     screenshot works, acting refuses in words. This is the seam
+          //     the slice stops at (D-218).
+          if (!computerUseEnabled(userData)) {
+            return { text: "Raw computer use was turned off. The owner turns it on in Novus settings.", isError: true };
+          }
+          const num = (key: string): number =>
+            typeof computerArgs[key] === "number" ? (computerArgs[key] as number) : NaN;
+          const str = (key: string): string =>
+            typeof computerArgs[key] === "string" ? (computerArgs[key] as string) : "";
+          const driver: DesktopDriver = createNativeDesktopDriver();
+
+          try {
+            if (tool === "computer_screenshot") {
+              const shot = await driver.screenshot();
+              return {
+                text: `Screenshot taken: ${shot.width}×${shot.height}. The screen may contain sensitive information.`,
+                isError: false
+              };
+            }
+            const context = desktopContext();
+            const action =
+              tool === "computer_type"
+                ? ({ kind: "type" } as const)
+                : tool === "computer_key"
+                  ? ({ kind: "key", combo: str("key") } as const)
+                  : ({ kind: "point", x: num("x"), y: num("y") } as const);
+            const refusal = fenceRefusal(action, context);
+            if (refusal !== null) return { text: refusal, isError: true };
+            // No early bail on availability: the driver self-refuses with the
+            // precise reason (backend absent, or Accessibility not granted),
+            // caught below — so the agent is told exactly what to fix.
+            switch (tool) {
+              case "computer_move":
+                showAgentCursor(num("x"), num("y"));
+                await driver.moveTo(num("x"), num("y"));
+                return { text: `Moved to ${Math.round(num("x"))}, ${Math.round(num("y"))}.`, isError: false };
+              case "computer_click": {
+                const button = str("button") === "right" ? "right" : "left";
+                showAgentCursor(num("x"), num("y"));
+                await driver.click(num("x"), num("y"), button);
+                return { text: `Clicked ${button} at ${Math.round(num("x"))}, ${Math.round(num("y"))}.`, isError: false };
+              }
+              case "computer_type":
+                await driver.type(str("text"));
+                return { text: `Typed ${[...str("text")].length} characters.`, isError: false };
+              case "computer_key":
+                await driver.key(str("key"));
+                return { text: `Pressed ${str("key")}.`, isError: false };
+              case "computer_scroll":
+                showAgentCursor(num("x"), num("y"));
+                await driver.scroll(num("x"), num("y"), num("dx"), num("dy"));
+                return { text: `Scrolled at ${Math.round(num("x"))}, ${Math.round(num("y"))}.`, isError: false };
+              default:
+                return { text: `No such computer action: ${tool}`, isError: true };
+            }
+          } catch (error) {
+            return { text: `Computer action failed: ${error instanceof Error ? error.message : "unknown error"}`, isError: true };
+          }
         });
         releaseCapture = endpoint.release;
         novusCapture = { url: endpoint.url, token: endpoint.token };
@@ -2055,6 +2217,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     // afterwards and never gets a checkpoint from one.
     if (stopRequested.has(args.executionId)) {
       releaseCapture?.();
+      setPreviewAgentDriving(args.workstreamId, false);
+      hideAgentCursor();
       openExecutions.delete(args.executionId);
       report(args.workstreamId, args.executionId, {
         kind: "execution.stopped",
@@ -2092,12 +2256,39 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       },
       mcpServers: args.mcpServers,
       machineMcpServers: args.machineMcpServers,
+      // The owner's own lent accounts (D-217): resolved from this machine's
+      // own files at spawn, never pinned by the control plane — lending is a
+      // person's standing machine-local choice, not a mission setting. A read
+      // turn lends nothing.
+      ...(args.access === "read"
+        ? { connectors: [], deniedConnectors: [] }
+        : resolveConnectors(userData)),
       novusCapture,
       onToolAllowed: (toolName) => {
         if (toolName === CAPTURE_TOOL_FULL_NAME) mintToolGrant(args.executionId, CAPTURE_TOOL_NAME);
         if (toolName === PUSH_TOOL_FULL_NAME) mintToolGrant(args.executionId, PUSH_TOOL_NAME);
         if (toolName === DECLARE_RUN_TOOL_FULL_NAME) mintToolGrant(args.executionId, DECLARE_RUN_TOOL_NAME);
+        // A person allowed the turn's first browse (D-218): the session stands
+        // for the rest of the turn, and the room shows the preview is being
+        // driven so the cut-off is one click away.
+        if (isBrowserToolFullName(toolName)) {
+          grantBrowserSession(args.executionId);
+          setPreviewAgentDriving(args.workstreamId, true);
+        }
+        // A person allowed the turn's first computer act (D-218): the session
+        // stands for the turn. No preview to mark; the cursor overlay appears
+        // on the first move/click.
+        if (isComputerToolFullName(toolName)) grantComputerSession(args.executionId);
       },
+      // The router reads this to decide a browser tool without a card: granted
+      // (a person already said yes this turn) auto-allows, revoked (a person
+      // cut it off) denies, absent asks (D-218).
+      browserSession: () => browserSessionState(args.executionId),
+      // Raw computer use's own gates (D-218): the machine-local opt-in, and the
+      // per-turn session — read live so the opt-in and a cut-off both bite at
+      // once.
+      computerUseEnabled: () => computerUseEnabled(userData),
+      computerSession: () => computerSessionState(args.executionId),
       siblingScopes: () =>
         [...active.values()]
           .filter(
@@ -2130,6 +2321,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       active.delete(args.executionId);
       // The endpoint token and any unspent grant die with the turn.
       releaseCapture?.();
+      setPreviewAgentDriving(args.workstreamId, false);
+      hideAgentCursor();
     }
     if (stopped) return; // shutdown owns the terminal event
 

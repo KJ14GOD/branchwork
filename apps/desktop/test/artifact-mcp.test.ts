@@ -6,9 +6,15 @@ import {
   DECLARE_RUN_TOOL_NAME,
   PUSH_TOOL_FULL_NAME,
   PUSH_TOOL_NAME,
+  grantBrowserSession,
+  revokeBrowserSession,
+  grantComputerSession,
+  revokeComputerSession,
   mintToolGrant,
   registerCaptureTurn,
-  resetCaptureEndpoint
+  resetCaptureEndpoint,
+  type BrowserTool,
+  type ComputerTool
 } from "../electron/artifact-mcp";
 
 /**
@@ -52,7 +58,18 @@ describe("the capture endpoint (D-123)", () => {
     expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
       "capture_screenshot",
       "push_branch",
-      "declare_run_command"
+      "declare_run_command",
+      "browser_navigate",
+      "browser_click",
+      "browser_type",
+      "browser_press",
+      "browser_read",
+      "computer_screenshot",
+      "computer_move",
+      "computer_click",
+      "computer_type",
+      "computer_key",
+      "computer_scroll"
     ]);
     turn.release();
   });
@@ -239,6 +256,98 @@ describe("the capture endpoint (D-123)", () => {
     });
     expect(replay.body.result?.isError).toBe(true);
     expect(seen).toHaveLength(1);
+    turn.release();
+  });
+});
+
+
+describe("the fenced browser's turn session (D-218)", () => {
+  it("refuses a browser action with no session, drives once granted, refuses again once revoked", async () => {
+    const drives: string[] = [];
+    const browser = async (tool: BrowserTool) => {
+      drives.push(tool);
+      return { text: `did ${tool}`, isError: false };
+    };
+    const turn = await registerCaptureTurn(
+      "exe_browse",
+      async () => ({ text: "shot", isError: false }),
+      async () => ({ text: "pushed", isError: false }),
+      declareStub,
+      browser
+    );
+
+    // No session: refused, and the driver was never touched.
+    const before = await rpc(turn.url, turn.token, "tools/call", { name: "browser_click", arguments: { x: 1, y: 2 } });
+    expect(before.body.result?.isError).toBe(true);
+    expect(drives).toEqual([]);
+
+    // Granted (as the router does on a person's first allow): it drives, and
+    // a second action rides the same session — one approval, many actions.
+    grantBrowserSession("exe_browse");
+    const clicked = await rpc(turn.url, turn.token, "tools/call", { name: "browser_click", arguments: { x: 1, y: 2 } });
+    expect(clicked.body.result?.isError).toBe(false);
+    const typed = await rpc(turn.url, turn.token, "tools/call", { name: "browser_type", arguments: { text: "hi" } });
+    expect(typed.body.result?.isError).toBe(false);
+    expect(drives).toEqual(["browser_click", "browser_type"]);
+
+    // Revoked (a person's mid-turn cut-off): refused again, sticky.
+    revokeBrowserSession("exe_browse");
+    const after = await rpc(turn.url, turn.token, "tools/call", { name: "browser_click", arguments: { x: 3, y: 4 } });
+    expect(after.body.result?.isError).toBe(true);
+    // A re-grant cannot undo a cut-off within the turn.
+    grantBrowserSession("exe_browse");
+    const stillOff = await rpc(turn.url, turn.token, "tools/call", { name: "browser_click", arguments: { x: 5, y: 6 } });
+    expect(stillOff.body.result?.isError).toBe(true);
+    expect(drives).toEqual(["browser_click", "browser_type"]);
+
+    turn.release();
+  });
+});
+
+
+describe("raw computer use's turn session (D-218)", () => {
+  it("shares the browser's session shape but is a separate grant — one never opens the other", async () => {
+    const browserCalls: string[] = [];
+    const computerCalls: string[] = [];
+    const turn = await registerCaptureTurn(
+      "exe_mac",
+      async () => ({ text: "shot", isError: false }),
+      async () => ({ text: "pushed", isError: false }),
+      declareStub,
+      async (tool: BrowserTool) => {
+        browserCalls.push(tool);
+        return { text: "browsed", isError: false };
+      },
+      async (tool: ComputerTool) => {
+        computerCalls.push(tool);
+        return { text: `did ${tool}`, isError: false };
+      }
+    );
+
+    // No computer session: refused, driver untouched.
+    const before = await rpc(turn.url, turn.token, "tools/call", { name: "computer_click", arguments: { x: 1, y: 2 } });
+    expect(before.body.result?.isError).toBe(true);
+    expect(computerCalls).toEqual([]);
+
+    // A BROWSER grant does not open the Mac — separate sessions.
+    grantBrowserSession("exe_mac");
+    const stillOff = await rpc(turn.url, turn.token, "tools/call", { name: "computer_click", arguments: { x: 1, y: 2 } });
+    expect(stillOff.body.result?.isError).toBe(true);
+    expect(computerCalls).toEqual([]);
+
+    // The computer grant drives, and covers several acts on one approval.
+    grantComputerSession("exe_mac");
+    expect((await rpc(turn.url, turn.token, "tools/call", { name: "computer_screenshot", arguments: {} })).body.result?.isError).toBe(false);
+    expect((await rpc(turn.url, turn.token, "tools/call", { name: "computer_click", arguments: { x: 1, y: 2 } })).body.result?.isError).toBe(false);
+    expect(computerCalls).toEqual(["computer_screenshot", "computer_click"]);
+
+    // A cut-off is sticky for the turn, and cannot be re-opened.
+    revokeComputerSession("exe_mac");
+    expect((await rpc(turn.url, turn.token, "tools/call", { name: "computer_click", arguments: { x: 3, y: 4 } })).body.result?.isError).toBe(true);
+    grantComputerSession("exe_mac");
+    expect((await rpc(turn.url, turn.token, "tools/call", { name: "computer_click", arguments: { x: 5, y: 6 } })).body.result?.isError).toBe(true);
+    expect(computerCalls).toEqual(["computer_screenshot", "computer_click"]);
+
     turn.release();
   });
 });

@@ -435,6 +435,131 @@ describe("a profiled turn (D-115)", () => {
     });
   });
 
+  it("a lent account's tool reaches the room even under dont_ask (D-217): spending someone's own inbox is never a standing answer", async () => {
+    // The connector's tool wears its prefix; the turn carries it as lent, so
+    // the ladder must not let dont_ask answer it — it falls to a person.
+    const asked = await runFakeTurn(
+      {
+        direction: "[fake-ask:mcp__claude_ai_Gmail__send_email] mail the team",
+        permissionProfile: "dont_ask",
+        connectors: ["claude.ai Gmail"],
+        fakeApproval: true
+      },
+      (event, _stop, respond) => {
+        if (event.kind === "approval.requested") {
+          respond((event.payload as { requestId: string }).requestId, "deny");
+        }
+      }
+    );
+    expect(asked.events.some((event) => event.kind === "approval.requested")).toBe(true);
+    expect(asked.events.some((event) => event.kind === "approval.policy")).toBe(false);
+
+    // A non-lent connector's tool under dont_ask is answered by policy like
+    // any other MCP tool — the rule is specific to what was lent.
+    const other = await runFakeTurn({
+      direction: "[fake-ask:mcp__docs__echo] look it up",
+      permissionProfile: "dont_ask",
+      connectors: ["claude.ai Gmail"],
+      fakeApproval: true
+    });
+    expect(other.events.some((event) => event.kind === "approval.requested")).toBe(false);
+    expect(payloadOf(other.events, "approval.policy")).toMatchObject({ toolName: "mcp__docs__echo" });
+  });
+
+  it("names the accounts a turn carried on execution.running (D-217), and a read turn carries none", async () => {
+    const write = await runFakeTurn({ connectors: ["claude.ai Gmail", "claude.ai Google Drive"] });
+    expect((payloadOf(write.events, "execution.running") as { connectors: string[] }).connectors).toEqual([
+      "claude.ai Gmail",
+      "claude.ai Google Drive"
+    ]);
+    const read = await runFakeTurn({ access: "read", connectors: ["claude.ai Gmail"] });
+    expect((payloadOf(read.events, "execution.running") as { connectors: string[] }).connectors).toEqual([]);
+  });
+
+  it("raw computer use is refused outright when the Mac has not opted in — never even asked (D-218)", async () => {
+    const off = await runFakeTurn(
+      {
+        direction: "[fake-ask:mcp__novus__computer_click] click somewhere",
+        computerUseEnabled: () => false,
+        computerSession: () => null,
+        fakeApproval: true
+      }
+    );
+    // No card reaches the room: the machine has not consented to hands at all.
+    expect(off.events.some((event) => event.kind === "approval.requested")).toBe(false);
+  });
+
+  it("with the Mac opted in, computer use follows the browser's session ladder (D-218)", async () => {
+    // Opted in but not yet granted: the first act is a person's question.
+    const asked = await runFakeTurn(
+      {
+        direction: "[fake-ask:mcp__novus__computer_click] click somewhere",
+        computerUseEnabled: () => true,
+        computerSession: () => null,
+        fakeApproval: true
+      },
+      (event, _stop, respond) => {
+        if (event.kind === "approval.requested") {
+          respond((event.payload as { requestId: string }).requestId, "deny");
+        }
+      }
+    );
+    expect(asked.events.some((event) => event.kind === "approval.requested")).toBe(true);
+
+    // Granted this turn: silent allow, no card.
+    const granted = await runFakeTurn({
+      direction: "[fake-ask:mcp__novus__computer_click] click again",
+      computerUseEnabled: () => true,
+      computerSession: () => "granted",
+      fakeApproval: true
+    });
+    expect(granted.events.some((event) => event.kind === "approval.requested")).toBe(false);
+
+    // Revoked: denied without a card.
+    const revoked = await runFakeTurn({
+      direction: "[fake-ask:mcp__novus__computer_click] click yet again",
+      computerUseEnabled: () => true,
+      computerSession: () => "revoked",
+      fakeApproval: true
+    });
+    expect(revoked.events.some((event) => event.kind === "approval.requested")).toBe(false);
+  });
+
+  it("a granted browser session auto-allows without a card, revoked denies, absent asks (D-218)", async () => {
+    // Granted this turn: the person already said yes to browsing, so a browser
+    // tool is allowed silently — no card in the room.
+    const granted = await runFakeTurn({
+      direction: "[fake-ask:mcp__novus__browser_click] click the toggle",
+      browserSession: () => "granted",
+      fakeApproval: true
+    });
+    expect(granted.events.some((event) => event.kind === "approval.requested")).toBe(false);
+
+    // Revoked this turn: a person cut it off, so the next action is denied —
+    // still no card, because the answer is already known.
+    const revoked = await runFakeTurn({
+      direction: "[fake-ask:mcp__novus__browser_click] click again",
+      browserSession: () => "revoked",
+      fakeApproval: true
+    });
+    expect(revoked.events.some((event) => event.kind === "approval.requested")).toBe(false);
+
+    // Not yet granted: the first browse of the turn is a person's question.
+    const asked = await runFakeTurn(
+      {
+        direction: "[fake-ask:mcp__novus__browser_click] click the toggle",
+        browserSession: () => null,
+        fakeApproval: true
+      },
+      (event, _stop, respond) => {
+        if (event.kind === "approval.requested") {
+          respond((event.payload as { requestId: string }).requestId, "deny");
+        }
+      }
+    );
+    expect(asked.events.some((event) => event.kind === "approval.requested")).toBe(true);
+  });
+
   it("dont_ask answers a shell command too — and the grant is still recorded", async () => {
     const { events, result } = await runFakeTurn({
       direction: "[fake-ask:Bash] run the script",

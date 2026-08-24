@@ -113,7 +113,9 @@ export function openEmbeddedPreview(workstreamId: string, target: PreviewTarget)
       processId: target.processId,
       processName: target.processName,
       phase: "loading",
-      detail: null
+      detail: null,
+      agentDriving: false,
+      agentPoint: null
     }
   };
   announce();
@@ -251,6 +253,156 @@ export function closeEmbeddedPreview(): void {
   current = null;
   if (preview.contents !== null && !preview.contents.isDestroyed()) preview.contents.close();
   announce();
+}
+
+/**
+ * The agent's hands on the preview (D-218). The renderer never names a
+ * target; the only page these can touch is the one this module already
+ * validated and adopted, and every one is refused in words when no page is
+ * showing — the same gate `capturePreviewImage` uses. The endpoint behind
+ * these is grant-checked (D-218's turn grant) before any of them is called.
+ *
+ * These drive the *fenced* browser: the page keeps its own isolated process
+ * and can reach nothing but the approved loopback origin, so driving it grants
+ * the agent no reach it did not already have — it is the agent's own dev
+ * server. Raw computer use, which can reach the whole machine, is a separate,
+ * guardrailed surface (D-218) and lives nowhere near this module.
+ */
+
+/** Marks the preview as agent-driven (D-218), so the room shows it and offers
+ *  the cut-off, and remembers where the agent last acted for the cursor dot.
+ *  A null point clears the dot without changing the driving state. */
+export function setPreviewAgentDriving(
+  workstreamId: string,
+  driving: boolean,
+  point: { x: number; y: number } | null = null
+): void {
+  if (current === null || current.status.workstreamId !== workstreamId) return;
+  current.status = {
+    ...current.status,
+    agentDriving: driving,
+    agentPoint: driving ? (point ?? current.status.agentPoint) : null
+  };
+  announce();
+}
+
+/** The one validity gate every drive verb shares: this exact lane's preview,
+ *  a live loaded page, and a living guest process. */
+function drivable(
+  workstreamId: string
+): { contents: Electron.WebContents; origin: string } | { refusal: string } {
+  if (current === null || current.status.workstreamId !== workstreamId) {
+    return { refusal: "No preview is open for this lane. Open the app's preview first." };
+  }
+  if (current.status.phase !== "ready" || current.contents === null || current.contents.isDestroyed()) {
+    return { refusal: "The preview has no loaded page to act on." };
+  }
+  return { contents: current.contents, origin: current.status.origin };
+}
+
+/** Navigate the fenced page within its approved origin (D-218). A path or a
+ *  same-origin URL only — anything else is refused, the open gate's own rule. */
+export async function navigatePreview(
+  workstreamId: string,
+  to: string
+): Promise<{ ok: true; url: string } | { ok: false; refusal: string }> {
+  const gate = drivable(workstreamId);
+  if ("refusal" in gate) return { ok: false, refusal: gate.refusal };
+  let destination: string;
+  try {
+    destination = new URL(to, `${gate.origin}/`).toString();
+  } catch {
+    return { ok: false, refusal: `Not a navigable address: ${to.slice(0, 200)}` };
+  }
+  if (!previewNavigationAllowed(gate.origin, destination)) {
+    return {
+      ok: false,
+      refusal: `The preview stays on ${gate.origin}. It cannot navigate to ${destination.slice(0, 200)}.`
+    };
+  }
+  await gate.contents.loadURL(destination);
+  return { ok: true, url: destination };
+}
+
+/** Click at a point in the page's own CSS pixels (D-218). */
+export async function clickPreview(
+  workstreamId: string,
+  x: number,
+  y: number
+): Promise<{ ok: true } | { ok: false; refusal: string }> {
+  const gate = drivable(workstreamId);
+  if ("refusal" in gate) return { ok: false, refusal: gate.refusal };
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+    return { ok: false, refusal: "A click needs a point inside the page." };
+  }
+  const at = { x: Math.round(x), y: Math.round(y) };
+  gate.contents.sendInputEvent({ type: "mouseMove", x: at.x, y: at.y });
+  gate.contents.sendInputEvent({ type: "mouseDown", x: at.x, y: at.y, button: "left", clickCount: 1 });
+  gate.contents.sendInputEvent({ type: "mouseUp", x: at.x, y: at.y, button: "left", clickCount: 1 });
+  setPreviewAgentDriving(workstreamId, true, at);
+  return { ok: true };
+}
+
+/** Type text into whatever the page has focused (D-218). */
+export function typePreview(
+  workstreamId: string,
+  text: string
+): { ok: true } | { ok: false; refusal: string } {
+  const gate = drivable(workstreamId);
+  if ("refusal" in gate) return { ok: false, refusal: gate.refusal };
+  for (const character of [...text].slice(0, 10_000)) {
+    gate.contents.sendInputEvent({ type: "char", keyCode: character });
+  }
+  return { ok: true };
+}
+
+/** A named key — Enter, Tab, Backspace, an arrow (D-218). */
+const NAMED_KEYS: Record<string, string> = {
+  enter: "Return",
+  return: "Return",
+  tab: "Tab",
+  backspace: "Backspace",
+  delete: "Delete",
+  escape: "Escape",
+  up: "Up",
+  down: "Down",
+  left: "Left",
+  right: "Right"
+};
+
+export function pressPreviewKey(
+  workstreamId: string,
+  key: string
+): { ok: true } | { ok: false; refusal: string } {
+  const gate = drivable(workstreamId);
+  if ("refusal" in gate) return { ok: false, refusal: gate.refusal };
+  const keyCode = NAMED_KEYS[key.toLowerCase().trim()];
+  if (keyCode === undefined) {
+    return { ok: false, refusal: `Not a key this preview presses: ${key.slice(0, 40)}` };
+  }
+  gate.contents.sendInputEvent({ type: "keyDown", keyCode });
+  gate.contents.sendInputEvent({ type: "keyUp", keyCode });
+  return { ok: true };
+}
+
+/** A bounded text snapshot of the page, so the agent can read what it is
+ *  looking at without a screenshot (D-218). The page is the agent's own dev
+ *  server; its text is not evidence and is not stored. */
+export async function readPreview(
+  workstreamId: string
+): Promise<{ ok: true; title: string; url: string; text: string } | { ok: false; refusal: string }> {
+  const gate = drivable(workstreamId);
+  if ("refusal" in gate) return { ok: false, refusal: gate.refusal };
+  const snapshot = (await gate.contents.executeJavaScript(
+    `({ title: document.title, url: location.href, text: (document.body && document.body.innerText || "").slice(0, 8000) })`,
+    true
+  )) as { title?: unknown; url?: unknown; text?: unknown };
+  return {
+    ok: true,
+    title: typeof snapshot.title === "string" ? snapshot.title.slice(0, 300) : "",
+    url: typeof snapshot.url === "string" ? snapshot.url.slice(0, 300) : gate.origin,
+    text: typeof snapshot.text === "string" ? snapshot.text : ""
+  };
 }
 
 /**

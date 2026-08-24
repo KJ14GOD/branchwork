@@ -783,6 +783,22 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
             tone: "warn"
           });
         }
+        // The owner's own accounts this turn carried (D-217), named apart with
+        // whose they are — an account acts as its lender, and that is the fact
+        // a reader most needs.
+        const connectorsCarried = namesOf(event.payload.connectors).map((name) =>
+          name.replace(/^claude\.ai /, "")
+        );
+        if (connectorsCarried.length > 0) {
+          const owner = detail.runner?.ownerLogin;
+          push(block, {
+            kind: "note",
+            key: `${event.eventId}-connectors`,
+            text: `Accounts carried: ${connectorsCarried.join(", ")}${owner ? ` — ${owner}'s` : ""}`,
+            login: null,
+            tone: "neutral"
+          });
+        }
         break;
       }
       case "harness.session": {

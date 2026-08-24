@@ -465,7 +465,9 @@ export const MachineMcpNameSchema = z
   .min(1)
   .max(80)
   .regex(/^[^\/\\\u0000-\u001f]+$/, "a server name carries no separators or control characters")
-  .refine((name) => !name.startsWith(".") && name !== "novus", {
+  .refine((name) => !name.startsWith(".") && name !== "novus" && !impersonatesConnector(name), {
+    // `novus` is the first-party endpoint (D-123); a `claude.ai` spelling is
+    // an account connector's, which only the CLI itself may wear (D-217).
     message: "that name is reserved"
   });
 
@@ -507,6 +509,76 @@ export type EnabledMachineMcpServer = z.infer<typeof EnabledMachineMcpServerSche
 export const EnabledMachineMcpServersSchema = z
   .array(EnabledMachineMcpServerSchema)
   .max(MAX_MACHINE_MCP_SERVERS);
+
+// --- Lent accounts (D-217) --------------------------------------------------
+// The CLI's own claude.ai account connectors — Gmail, Calendar, Drive,
+// Notion — live in no file a runner can read; the CLI injects them from the
+// signed-in account, and D-198 stated them uncarryable on that ground. D-217
+// measured the road: `--setting-sources ""` alone keeps every agent-writable
+// file out, so `--strict-mcp-config` can be omitted for exactly the turns a
+// person LENDS an account to, with every connector they did not lend removed
+// by `--disallowedTools`. Lending is the person's standing choice on their
+// own machine; it crosses the wire only as the list a turn actually carried.
+
+export const MAX_CONNECTORS = 24;
+
+/** An account connector's name as the CLI states it — `claude.ai Gmail`.
+ *  The prefix is the CLI's own and is what tells a connector from a server
+ *  somebody declared; a project or machine server may never wear it. */
+export const ConnectorNameSchema = z
+  .string()
+  .min(11)
+  .max(80)
+  .regex(/^claude\.ai [^\/\\\u0000-\u001f]+$/, "an account connector is named by the CLI: `claude.ai {service}`");
+export type ConnectorName = z.infer<typeof ConnectorNameSchema>;
+
+/** The id the CLI derives a connector's tool names from — every character
+ *  outside [A-Za-z0-9] becomes `_` — so `claude.ai Google Drive` answers as
+ *  `mcp__claude_ai_Google_Drive__{tool}`. Measured on 2.1.241 (D-217). */
+export function connectorToolId(name: string): string {
+  return name.replace(/[^A-Za-z0-9]/g, "_");
+}
+
+/** The prefix every one of a connector's tools carries. */
+export function connectorToolPrefix(name: string): string {
+  return `mcp__${connectorToolId(name)}__`;
+}
+
+/** A server name that would wear a connector's prefix, in either spelling
+ *  the CLI's sanitization maps onto it. Refused at discovery for project and
+ *  machine servers, the `novus` reservation's pattern (D-123). */
+export function impersonatesConnector(name: string): boolean {
+  return /^claude[._]ai(\b|_|$)/i.test(name);
+}
+
+/** What a machine reports about one of its account connectors: its name,
+ *  where it reaches, whether the CLI could connect, and whether its owner
+ *  lent it. Never a credential — the CLI holds those. */
+export const ConnectorSchema = z
+  .object({
+    name: ConnectorNameSchema,
+    url: z.string().max(400).nullable().default(null),
+    state: z.enum(["connected", "needs_auth", "failed", "unknown"]),
+    lent: z.boolean()
+  })
+  .strict();
+export type Connector = z.infer<typeof ConnectorSchema>;
+
+/** The machine's answer to "what could I lend?" — read from `claude mcp
+ *  list` on this machine, or nothing at all when the CLI is not here. */
+export const ConnectorsResponseSchema = z
+  .object({
+    /** False when Claude Code is not installed, so the page can say so. */
+    installed: z.boolean(),
+    connectors: z.array(ConnectorSchema).max(MAX_CONNECTORS)
+  })
+  .strict();
+export type ConnectorsResponse = z.infer<typeof ConnectorsResponseSchema>;
+
+export const LendConnectorInputSchema = z
+  .object({ name: ConnectorNameSchema, lent: z.boolean() })
+  .strict();
+export type LendConnectorInput = z.infer<typeof LendConnectorInputSchema>;
 
 export const WorkstreamSchema = z.object({
   workstreamId: z.string().startsWith("wst_"),
@@ -1777,7 +1849,12 @@ export const ApprovalRequestSchema = z.object({
   respondedByLogin: z.string().nullable(),
   respondedAt: z.string().datetime().nullable(),
   /** Why it ended the way it did, in words. */
-  resolution: z.string().nullable()
+  resolution: z.string().nullable(),
+  /** When this question would spend a lent account (D-217), whose it is: the
+   *  runner owner's login and the service. Only they may answer, so the card
+   *  renders their name where the baton would otherwise decide. Null for
+   *  every ordinary tool. */
+  lender: z.object({ login: z.string().min(1), service: z.string().min(1) }).nullable().default(null)
 });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
@@ -2608,7 +2685,13 @@ export const PreviewStatusSchema = z.object({
   phase: PreviewPhaseSchema,
   /** The phase in words where there are any — a load error's description, or
    *  how the process ended. Sanitized like all process reporting. */
-  detail: z.string().max(400).nullable()
+  detail: z.string().max(400).nullable(),
+  /** True while a coding agent holds this turn's browser grant and is driving
+   *  the page (D-218): the room shows it, and a person can cut it off. */
+  agentDriving: z.boolean().default(false),
+  /** Where the agent last acted, in the page's own CSS pixels — the cursor
+   *  dot the person watches (D-218). Null when it has not acted or is idle. */
+  agentPoint: z.object({ x: z.number(), y: z.number() }).nullable().default(null)
 });
 export type PreviewStatus = z.infer<typeof PreviewStatusSchema>;
 
@@ -3086,7 +3169,12 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
         machineMcpServersDropped: z
           .array(z.object({ name: MachineMcpNameSchema, reason: BOUNDED_LINE }).strict())
           .max(MAX_MACHINE_MCP_SERVERS)
-          .default([])
+          .default([]),
+        /** The owner's own accounts this turn carried (D-217): the lent
+         *  connectors the CLI injected under an argv with strictness
+         *  omitted. Named apart because whose inbox it is matters to a
+         *  reader, and because the respond route consults exactly this. */
+        connectors: z.array(ConnectorNameSchema).max(MAX_CONNECTORS).default([])
       })
       .strict()
   }),
@@ -3740,6 +3828,24 @@ export interface NovusBridge {
     /** The build a person is running, for the settings About page (D-174). */
     version(): Promise<IpcResult<{ app: string; electron: string }>>;
   };
+  /** Lent accounts (D-217): the machine's own claude.ai connectors, and the
+   *  person's own On/Off per connector — the first-run Lend page and the
+   *  settings Agents card read and write these, machine-locally. */
+  connectors: {
+    list(): Promise<IpcResult<ConnectorsResponse>>;
+    setLent(name: string, lent: boolean): Promise<IpcResult<ConnectorsResponse>>;
+  };
+  /** Raw computer use (D-218): the machine-local opt-in that lets agents
+   *  operate this Mac, off by default, and the mid-turn cut-off. */
+  computerUse: {
+    enabled(): Promise<IpcResult<{ enabled: boolean }>>;
+    setEnabled(enabled: boolean): Promise<IpcResult<{ enabled: boolean }>>;
+    stop(workstreamId: string): Promise<IpcResult<null>>;
+    /** macOS Accessibility permission — the OS gate on synthetic input.
+     *  `accessibility` reads it; `requestAccessibility` opens System Settings. */
+    accessibility(): Promise<IpcResult<{ trusted: boolean }>>;
+    requestAccessibility(): Promise<IpcResult<{ trusted: boolean }>>;
+  };
   /** Native notifications (D-180): a turn ending, or the harness asking —
    *  only while the window is elsewhere, each its own machine-local switch. */
   notifications: {
@@ -4239,6 +4345,9 @@ export interface NovusBridge {
       close(): Promise<IpcResult<null>>;
       /** The current embedded preview, if one exists. */
       status(): Promise<IpcResult<PreviewStatus | null>>;
+      /** Cut off the agent's browsing for a lane mid-turn (D-218): stops the
+       *  agent's next browser action without ending the turn. */
+      stopBrowsing(workstreamId: string): Promise<IpcResult<null>>;
       onStatus(listener: (status: PreviewStatus | null) => void): () => void;
     };
     /**

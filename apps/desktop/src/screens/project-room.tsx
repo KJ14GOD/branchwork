@@ -137,6 +137,7 @@ function offlineOr(code: string, message: string): string {
  * the header (DESIGN.md prohibited pattern 12).
  */
 export function ProjectRoom({
+  viewerLogin,
   project,
   details,
   forkAsk = 0,
@@ -197,6 +198,10 @@ export function ProjectRoom({
   /** Resets the ask once the dialog opened — the counter is a message, not
    *  state to keep (D-142 batch). */
   onForkConsumed: () => void;
+  /** The signed-in person's login (D-217): a lent account's question
+   *  is its owner's to answer, and the card renders their name where the
+   *  baton would otherwise decide. */
+  viewerLogin: string;
   project: Project;
   details: Record<string, MissionDetailResponse>;
   selectedMissionId: string | null;
@@ -2239,6 +2244,7 @@ export function ProjectRoom({
                             <ApprovalRow
                               key={approval.approvalId}
                               approval={approval}
+                              viewerLogin={viewerLogin}
                               capabilities={detail.capabilities}
                               controllerLogin={detail.control.holderLogin}
                               busy={answering === approval.approvalId}

@@ -15,6 +15,7 @@ import {
   type BindingAction
 } from "../keybindings";
 import { HumanMark } from "./identity";
+import { ConnectorRows, useConnectors } from "./connectors";
 
 /**
  * Settings as a place (D-174, re-dressed on sight to the Codex anatomy the
@@ -215,6 +216,9 @@ export function SettingsDialog({
   >(null);
   const [version, setVersion] = useState<{ app: string; electron: string } | null>(null);
   const [notif, setNotif] = useState<{ turns: boolean; needsYou: boolean } | null>(null);
+  const { data: connectors, setLent } = useConnectors();
+  const [computerUse, setComputerUse] = useState<boolean | null>(null);
+  const [accessibility, setAccessibility] = useState<boolean | null>(null);
   const bindings = useKeybindings();
   /** The action whose next chord is being recorded, if any. */
   const [recording, setRecording] = useState<BindingAction | null>(null);
@@ -225,6 +229,8 @@ export function SettingsDialog({
     void novus().repos.localList().then((result) => setRepos(result.ok ? result.value : []));
     void novus().system.version().then((result) => setVersion(result.ok ? result.value : null));
     void novus().notifications.get().then((result) => setNotif(result.ok ? result.value : null));
+    void novus().computerUse.enabled().then((result) => setComputerUse(result.ok ? result.value.enabled : false));
+    void novus().computerUse.accessibility().then((result) => setAccessibility(result.ok ? result.value.trusted : false));
   }, []);
 
   useEffect(() => {
@@ -305,12 +311,18 @@ export function SettingsDialog({
       ...FIXED_KEYS.map((entry) => ({ page: "keyboard" as Page, title: entry.keys, description: entry.does })),
       { page: "agents", title: "Claude Code", description: probe?.claudeCode.installed ? `${probe.claudeCode.version ?? "installed"}${probe.claudeCode.account ? ` · ${probe.claudeCode.account}` : ""}` : "not found on this machine" },
       { page: "agents", title: "Codex", description: probe?.codex.installed ? `${probe.codex.version ?? "installed"}${probe.codex.account ? ` · ${probe.codex.account}` : ""}` : "not found on this machine" },
+      { page: "agents", title: "Let agents control this Mac", description: computerUse ? "on — agents may operate your screen" : "off — the safe default" },
+      ...(connectors?.connectors ?? []).map((c) => ({
+        page: "agents" as Page,
+        title: c.name.replace(/^claude\.ai /, ""),
+        description: c.lent ? "lent to this machine's turns" : "your own account — off"
+      })),
       ...(repos ?? []).map((repo) => ({ page: "machine" as Page, title: repo.name, description: repo.onThisMachine ? repo.defaultBranch : "on another machine" })),
       { page: "about", title: "Novus", description: version?.app ?? "" },
       { page: "about", title: "Electron", description: version?.electron ?? "" }
     ];
     return rows;
-  }, [user, probe, repos, version, bindings]);
+  }, [user, probe, repos, version, bindings, connectors, computerUse]);
 
   const needle = query.trim().toLowerCase();
   const hits = needle.length === 0
@@ -516,7 +528,72 @@ export function SettingsDialog({
                 trailing={agentTrailing(probe?.codex)}
               />
             </Card>
-            <p className="settings-hint">The same probe the setup room runs — facts, never configuration on the agents' behalf.</p>
+            {connectors !== null && connectors.connectors.length > 0 && (
+              <Card heading="Lend your accounts">
+                <ConnectorRows connectors={connectors.connectors} onSetLent={setLent} />
+              </Card>
+            )}
+            <Card heading="Raw computer use">
+              <CardRow
+                title="Let agents control this Mac"
+                description="Off by default. When on, an agent can move the mouse and type anywhere on your screen — never on Novus itself, only when you approve it for a turn, and you can stop it. It cannot turn this on; only you can."
+                trailing={
+                  computerUse === null ? (
+                    <span className="settings-card-value">…</span>
+                  ) : (
+                    <div className="settings-theme" role="group" aria-label="Let agents control this Mac">
+                      {[true, false].map((value) => (
+                        <button
+                          key={String(value)}
+                          className={computerUse === value ? "segment-tab active" : "segment-tab"}
+                          aria-pressed={computerUse === value}
+                          onClick={() => {
+                            setComputerUse(value);
+                            void novus().computerUse.setEnabled(value);
+                          }}
+                          data-testid={`computer-use-${value ? "on" : "off"}`}
+                        >
+                          {value ? "On" : "Off"}
+                        </button>
+                      ))}
+                    </div>
+                  )
+                }
+              />
+              {computerUse === true && accessibility === false && (
+                <CardRow
+                  title="Accessibility permission"
+                  description="macOS must let Novus control the mouse and keyboard. Grant it, then it takes effect — the agent still only acts when you approve it."
+                  trailing={
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        void novus().computerUse.requestAccessibility();
+                        // The grant lands when the person flips the OS switch;
+                        // re-read shortly after so the row clears itself.
+                        window.setTimeout(() => {
+                          void novus().computerUse.accessibility().then((result) => setAccessibility(result.ok ? result.value.trusted : false));
+                        }, 1200);
+                      }}
+                      data-testid="computer-use-accessibility"
+                    >
+                      Grant access
+                    </button>
+                  }
+                />
+              )}
+              {computerUse === true && accessibility === true && (
+                <CardRow
+                  title="Accessibility permission"
+                  description="Granted — the agent can operate this Mac when you approve it."
+                  trailing={<span className="settings-card-value">granted</span>}
+                />
+              )}
+            </Card>
+            <p className="settings-hint">
+              A lent account acts only on the turns this Mac runs, only when you approve, and only you
+              can answer its questions. Claude Code's own connectors — nothing is stored here.
+            </p>
           </>
         ) : page === "machine" ? (
           <>

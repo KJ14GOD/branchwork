@@ -139,6 +139,28 @@ async function startExecution(lane: Lane): Promise<string> {
 
 let nextSeq = 0;
 
+/** The runner reporting the accounts a turn carried (D-217), so a later
+ *  connector question is answerable by its lender. Runs the turn's own
+ *  running event with the lent list — the same the respond route reads. */
+async function reportRunningWithConnectors(
+  lane: Lane,
+  executionId: string,
+  connectors: string[]
+): Promise<void> {
+  nextSeq += 1;
+  const response = await report(lane.credential, executionId, [
+    {
+      originSeq: nextSeq,
+      event: {
+        kind: "execution.running",
+        payload: { harness: "claude-code", model: "claude-fable-5", effort: "high", connectors }
+      }
+    }
+  ]);
+  expect(response.statusCode).toBe(200);
+}
+
+
 /** The runner reporting the question the harness is blocked on. */
 async function askApproval(
   lane: Lane,
@@ -430,6 +452,56 @@ describe("who may answer", () => {
     // Never 403: an approval id must not be a way to confirm a mission exists.
     expect(refused.statusCode).toBe(404);
     expect((await approvalRow(approvalId)).state).toBe("pending");
+  });
+});
+
+describe("a lent account's question is its owner's alone (D-217)", () => {
+  it("lets the lending owner answer without the baton, and refuses everyone else", async () => {
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+    // The turn carried the owner's own Gmail; the question is for its tool.
+    await reportRunningWithConnectors(lane, executionId, ["claude.ai Gmail"]);
+    const approvalId = await askApproval(lane, executionId, {
+      toolName: "mcp__claude_ai_Gmail__send_email",
+      summary: "send a message to the team"
+    });
+
+    // Hand the baton to an operator: the owner (the lender) no longer holds
+    // it. For an ordinary tool that would end their right to answer.
+    const maya = await addParticipant(lane.missionId, "lend-maya", "operator");
+    await handControlTo(lane, maya, executionId);
+    expect((await detail(maya, lane.missionId)).control.holderUserId).toBe(maya.userId);
+
+    // The baton holder is refused — it is not their account to spend — with
+    // the lender named.
+    const refused = await respond(maya, approvalId, "approve");
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error.code).toBe("lender_only");
+    expect(refused.json().error.message).toContain(owner.login);
+    expect((await approvalRow(approvalId)).state).toBe("pending");
+
+    // The lender answers though they hold no baton at all.
+    const allowed = await respond(owner, approvalId, "approve");
+    expect(allowed.statusCode).toBe(200);
+    const row = await approvalRow(approvalId);
+    expect(row.state).toBe("approved");
+    expect(row.responded_by).toBe(owner.userId);
+    // The account-owner's answer still becomes a runner command.
+    expect((await commandsFor(lane.credential)).some((c) => c.kind === "respond_approval")).toBe(true);
+  });
+
+  it("leaves an ordinary tool's question to the baton exactly as before, even on a turn that lent an account", async () => {
+    const lane = await createLane();
+    const executionId = await startExecution(lane);
+    await reportRunningWithConnectors(lane, executionId, ["claude.ai Gmail"]);
+    // A Write is not the lent account's tool, so the ordinary baton rule holds.
+    const approvalId = await askApproval(lane, executionId, { toolName: "Write" });
+    const contributor = await addParticipant(lane.missionId, "lend-contributor");
+    const refused = await respond(contributor, approvalId, "approve");
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error.message).toBe("Only the controller can do that.");
+    // The controller (owner) answers it, baton rule intact.
+    expect((await respond(owner, approvalId, "approve")).statusCode).toBe(200);
   });
 });
 

@@ -37,7 +37,13 @@ import {
   MissionStateSchema,
   PullRequestSchema,
   RunnerCommandKindSchema,
-  RequestReviewInputSchema
+  RequestReviewInputSchema,
+  ConnectorNameSchema,
+  ConnectorSchema,
+  connectorToolId,
+  connectorToolPrefix,
+  impersonatesConnector,
+  MachineMcpServerSchema
 } from "../src/index.js";
 
 describe("contracts", () => {
@@ -673,5 +679,51 @@ describe("the tracked pull request (D-099)", () => {
     expect(
       RequestReviewInputSchema.safeParse({ pullRequestId: "pr_a", reviewers: ["maya"] }).success
     ).toBe(true);
+  });
+});
+
+
+describe("lent accounts (D-217)", () => {
+  it("recognizes only the CLI's own `claude.ai {service}` spelling as a connector", () => {
+    expect(ConnectorNameSchema.safeParse("claude.ai Gmail").success).toBe(true);
+    expect(ConnectorNameSchema.safeParse("claude.ai Google Drive").success).toBe(true);
+    // A project or machine server name is not a connector.
+    expect(ConnectorNameSchema.safeParse("notion").success).toBe(false);
+    expect(ConnectorNameSchema.safeParse("gmail").success).toBe(false);
+  });
+
+  it("derives the CLI's own tool prefix, so the un-lent can be disallowed and the lent recognized", () => {
+    expect(connectorToolId("claude.ai Google Drive")).toBe("claude_ai_Google_Drive");
+    expect(connectorToolPrefix("claude.ai Gmail")).toBe("mcp__claude_ai_Gmail__");
+  });
+
+  it("refuses a server that would wear a connector's prefix, in either spelling", () => {
+    expect(impersonatesConnector("claude.ai Gmail")).toBe(true);
+    expect(impersonatesConnector("claude_ai_Gmail")).toBe(true);
+    expect(impersonatesConnector("Claude.AI Evil")).toBe(true);
+    expect(impersonatesConnector("notion")).toBe(false);
+    // A machine server may not be named to impersonate one.
+    expect(
+      MachineMcpServerSchema.safeParse({
+        name: "claude_ai_Gmail",
+        transport: "stdio",
+        command: "node",
+        digest: "a".repeat(64)
+      }).success
+    ).toBe(false);
+  });
+
+  it("carries a connector's state and whether its owner lent it, never a credential", () => {
+    const parsed = ConnectorSchema.safeParse({
+      name: "claude.ai Gmail",
+      url: "https://gmailmcp.googleapis.com/mcp/v1",
+      state: "connected",
+      lent: true
+    });
+    expect(parsed.success).toBe(true);
+    // No field carries a token — the schema is strict, so an extra one fails.
+    expect(
+      ConnectorSchema.safeParse({ name: "claude.ai Gmail", state: "connected", lent: false, token: "x" }).success
+    ).toBe(false);
   });
 });

@@ -30,6 +30,25 @@ export const PUSH_TOOL_FULL_NAME = `mcp__novus__${PUSH_TOOL_NAME}`;
 export const DECLARE_RUN_TOOL_NAME = "declare_run_command";
 export const DECLARE_RUN_TOOL_FULL_NAME = `mcp__novus__${DECLARE_RUN_TOOL_NAME}`;
 
+/** The fenced-browser tools (D-218): the agent's hands on the preview. Unlike
+ *  the one-shot tools above, these share a per-turn **session** grant — one
+ *  approval covers the turn's browsing, and a person can cut it off mid-turn.
+ *  They act only on the approved loopback page, so they grant no reach the
+ *  agent's own shell did not already have. */
+export const BROWSER_TOOLS = ["browser_navigate", "browser_click", "browser_type", "browser_press", "browser_read"] as const;
+export type BrowserTool = (typeof BROWSER_TOOLS)[number];
+export const isBrowserToolFullName = (name: string): boolean =>
+  BROWSER_TOOLS.some((tool) => name === `mcp__novus__${tool}`);
+
+/** The raw computer-use tools (D-218): the agent's hands on the whole Mac, as
+ *  opposed to the fenced browser. Their own per-turn session, distinct from
+ *  the browser's — allowing one never allows the other — and gated further by
+ *  the machine-local opt-in and the structural fence, applied in the driver. */
+export const COMPUTER_TOOLS = ["computer_screenshot", "computer_move", "computer_click", "computer_type", "computer_key", "computer_scroll"] as const;
+export type ComputerTool = (typeof COMPUTER_TOOLS)[number];
+export const isComputerToolFullName = (name: string): boolean =>
+  COMPUTER_TOOLS.some((tool) => name === `mcp__novus__${tool}`);
+
 /** How long an allow stands before the tool call must have arrived. The CLI
  *  invokes the tool immediately after the permission answer; minutes covers a
  *  slow machine without leaving a standing capability lying around. */
@@ -48,6 +67,13 @@ interface RegisteredTurn {
    *  because the schema is Novus's own and an agent cannot be expected to
    *  guess an undocumented format. Same grant discipline as capture. */
   declareRun: (input: unknown) => Promise<{ text: string; isError: boolean }>;
+  /** Drives the fenced preview (D-218): navigate, click, type, press, read.
+   *  Behind the per-turn session grant rather than a one-shot. */
+  browser: (tool: BrowserTool, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean }>;
+  /** Operates the whole Mac (D-218): the driver applies the opt-in, the
+   *  structural fence, and the native backend. Behind its own per-turn
+   *  session, separate from the browser's. */
+  computer: (tool: ComputerTool, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean }>;
 }
 
 interface ToolGrant {
@@ -58,6 +84,45 @@ const turns = new Map<string, RegisteredTurn>();
 /** One grant per (execution, tool): an allow for capture spends nothing of
  *  push, and each is one-shot. */
 const grants = new Map<string, ToolGrant>();
+/** The browser session per execution (D-218): `granted` after a person allows
+ *  the first browse this turn, `revoked` after a person cuts it off — sticky
+ *  for the turn, so a cut-off cannot be undone by the agent asking again. */
+const browserSessions = new Map<string, "granted" | "revoked">();
+
+/** A person allowed the turn's first browse: the session stands until the
+ *  turn ends or a person revokes it. A cut-off already in force wins — the
+ *  agent cannot re-open browsing it was denied. */
+export function grantBrowserSession(executionId: string): void {
+  if (browserSessions.get(executionId) === "revoked") return;
+  browserSessions.set(executionId, "granted");
+}
+
+/** A person's mid-turn cut-off (D-218): sticky for the rest of the turn. */
+export function revokeBrowserSession(executionId: string): void {
+  browserSessions.set(executionId, "revoked");
+}
+
+/** What the router reads to decide ask / allow / deny for a browser tool. */
+export function browserSessionState(executionId: string): "granted" | "revoked" | null {
+  return browserSessions.get(executionId) ?? null;
+}
+
+/** The raw computer-use session per execution (D-218), the browser session's
+ *  twin — separate so a browser approval never grants the Mac and vice versa. */
+const computerSessions = new Map<string, "granted" | "revoked">();
+
+export function grantComputerSession(executionId: string): void {
+  if (computerSessions.get(executionId) === "revoked") return;
+  computerSessions.set(executionId, "granted");
+}
+
+export function revokeComputerSession(executionId: string): void {
+  computerSessions.set(executionId, "revoked");
+}
+
+export function computerSessionState(executionId: string): "granted" | "revoked" | null {
+  return computerSessions.get(executionId) ?? null;
+}
 let server: Server | null = null;
 let port: number | null = null;
 
@@ -222,6 +287,109 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
               required: ["name", "command"],
               additionalProperties: false
             }
+          },
+          {
+            name: "browser_navigate",
+            description:
+              "Navigate this mission's live preview to a path on its own app (e.g. \"/settings\"). Stays on the app's own origin; it is not a web browser. One approval covers all browsing this turn, and a person can stop it at any time.",
+            inputSchema: {
+              type: "object",
+              properties: { url: { type: "string", description: "A path like \"/settings\" or a same-origin URL." } },
+              required: ["url"],
+              additionalProperties: false
+            }
+          },
+          {
+            name: "browser_click",
+            description:
+              "Click a point in the live preview, in the page's own CSS pixels (top-left is 0,0). Take a screenshot first to see where things are.",
+            inputSchema: {
+              type: "object",
+              properties: { x: { type: "number" }, y: { type: "number" } },
+              required: ["x", "y"],
+              additionalProperties: false
+            }
+          },
+          {
+            name: "browser_type",
+            description: "Type text into whatever the live preview currently has focused (click a field first).",
+            inputSchema: {
+              type: "object",
+              properties: { text: { type: "string" } },
+              required: ["text"],
+              additionalProperties: false
+            }
+          },
+          {
+            name: "browser_press",
+            description: "Press a named key in the live preview: enter, tab, backspace, delete, escape, up, down, left, right.",
+            inputSchema: {
+              type: "object",
+              properties: { key: { type: "string" } },
+              required: ["key"],
+              additionalProperties: false
+            }
+          },
+          {
+            name: "browser_read",
+            description: "Read the live preview's current page as text (title, url, and visible text) — a screenshot without the pixels.",
+            inputSchema: { type: "object", properties: {}, additionalProperties: false }
+          },
+          {
+            name: "computer_screenshot",
+            description:
+              "Take a screenshot of the whole Mac's screen to see where things are, in screen pixels (top-left is 0,0). Raw computer use is off unless the machine's owner has turned it on, one approval covers the turn, a person can stop it, and Novus's own window can never be acted on. The screen may contain sensitive information.",
+            inputSchema: { type: "object", properties: {}, additionalProperties: false }
+          },
+          {
+            name: "computer_move",
+            description: "Move the mouse to a point on the Mac's screen, in screen pixels.",
+            inputSchema: {
+              type: "object",
+              properties: { x: { type: "number" }, y: { type: "number" } },
+              required: ["x", "y"],
+              additionalProperties: false
+            }
+          },
+          {
+            name: "computer_click",
+            description: "Click at a point on the Mac's screen. Never on Novus's own window — that is refused.",
+            inputSchema: {
+              type: "object",
+              properties: { x: { type: "number" }, y: { type: "number" }, button: { type: "string", enum: ["left", "right"] } },
+              required: ["x", "y"],
+              additionalProperties: false
+            }
+          },
+          {
+            name: "computer_type",
+            description: "Type text on the Mac, into whatever has focus. Refused while Novus is the frontmost app.",
+            inputSchema: {
+              type: "object",
+              properties: { text: { type: "string" } },
+              required: ["text"],
+              additionalProperties: false
+            }
+          },
+          {
+            name: "computer_key",
+            description: "Press a named key on the Mac: enter, tab, escape, backspace, delete, up, down, left, right, or a combo like 'cmd+c'.",
+            inputSchema: {
+              type: "object",
+              properties: { key: { type: "string" } },
+              required: ["key"],
+              additionalProperties: false
+            }
+          },
+          {
+            name: "computer_scroll",
+            description: "Scroll at a point on the Mac's screen by dx, dy pixels.",
+            inputSchema: {
+              type: "object",
+              properties: { x: { type: "number" }, y: { type: "number" }, dx: { type: "number" }, dy: { type: "number" } },
+              required: ["x", "y", "dx", "dy"],
+              additionalProperties: false
+            }
           }
         ]
       })
@@ -230,6 +398,76 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   }
   if (message.method === "tools/call") {
     const params = (message.params ?? {}) as { name?: string; arguments?: unknown };
+
+    // Raw computer use (D-218) shares its own per-turn session, verified here
+    // like the browser's; the driver applies the opt-in, the fence, and the
+    // native backend besides.
+    if (params.name && (COMPUTER_TOOLS as readonly string[]).includes(params.name)) {
+      if (computerSessions.get(turn.executionId) !== "granted") {
+        json(
+          response,
+          200,
+          result(id, {
+            content: [
+              {
+                type: "text",
+                text: "Computer use is not open for this turn — a person either has not approved it or has stopped it."
+              }
+            ],
+            isError: true
+          })
+        );
+        return;
+      }
+      const outcome = await turn
+        .computer(params.name as ComputerTool, (params.arguments ?? {}) as Record<string, unknown>)
+        .catch((error: unknown) => ({
+          text: `Computer action failed: ${error instanceof Error ? error.message : "unknown error"}`,
+          isError: true
+        }));
+      json(
+        response,
+        200,
+        result(id, { content: [{ type: "text", text: outcome.text }], isError: outcome.isError })
+      );
+      return;
+    }
+
+    // The browser tools (D-218) share a per-turn session grant rather than a
+    // one-shot: the endpoint verifies the session still stands — a person's
+    // mid-turn cut-off refuses the next call even after the router allowed the
+    // last — and the driver applies every preview-validity check besides.
+    if (params.name && (BROWSER_TOOLS as readonly string[]).includes(params.name)) {
+      if (browserSessions.get(turn.executionId) !== "granted") {
+        json(
+          response,
+          200,
+          result(id, {
+            content: [
+              {
+                type: "text",
+                text: "Browsing is not open for this turn — a person either has not approved it or has stopped it."
+              }
+            ],
+            isError: true
+          })
+        );
+        return;
+      }
+      const outcome = await turn
+        .browser(params.name as BrowserTool, (params.arguments ?? {}) as Record<string, unknown>)
+        .catch((error: unknown) => ({
+          text: `Browser action failed: ${error instanceof Error ? error.message : "unknown error"}`,
+          isError: true
+        }));
+      json(
+        response,
+        200,
+        result(id, { content: [{ type: "text", text: outcome.text }], isError: outcome.isError })
+      );
+      return;
+    }
+
     const tool =
       params.name === CAPTURE_TOOL_NAME
         ? { name: CAPTURE_TOOL_NAME, run: turn.capture, verb: "Capture" }
@@ -309,11 +547,19 @@ export async function registerCaptureTurn(
   executionId: string,
   capture: RegisteredTurn["capture"],
   push: RegisteredTurn["push"],
-  declareRun: RegisteredTurn["declareRun"]
+  declareRun: RegisteredTurn["declareRun"],
+  browser: RegisteredTurn["browser"] = async () => ({
+    text: "This turn has no browser driver.",
+    isError: true
+  }),
+  computer: RegisteredTurn["computer"] = async () => ({
+    text: "This turn has no computer driver.",
+    isError: true
+  })
 ): Promise<{ url: string; token: string; release: () => void }> {
   const listeningPort = await ensureServer();
   const token = randomBytes(24).toString("base64url");
-  turns.set(token, { executionId, capture, push, declareRun });
+  turns.set(token, { executionId, capture, push, declareRun, browser, computer });
   return {
     url: `http://127.0.0.1:${listeningPort}/mcp`,
     token,
@@ -322,6 +568,8 @@ export async function registerCaptureTurn(
       grants.delete(grantKey(executionId, CAPTURE_TOOL_NAME));
       grants.delete(grantKey(executionId, PUSH_TOOL_NAME));
       grants.delete(grantKey(executionId, DECLARE_RUN_TOOL_NAME));
+      browserSessions.delete(executionId);
+      computerSessions.delete(executionId);
     }
   };
 }
@@ -330,6 +578,8 @@ export async function registerCaptureTurn(
 export function resetCaptureEndpoint(): void {
   turns.clear();
   grants.clear();
+  browserSessions.clear();
+  computerSessions.clear();
   server?.close();
   server = null;
   port = null;

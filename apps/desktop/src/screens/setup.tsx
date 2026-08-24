@@ -3,6 +3,7 @@ import { siClaudecode, siGithub } from "simple-icons";
 import codexIcon from "../assets/codex-icon.png";
 import type { HarnessProbe, IpcAuthStatus, SetupProbeResponse } from "@novus/contracts";
 import { novus } from "../bridge";
+import { ConnectorRows, useConnectors } from "../components/connectors";
 import { applyTheme, themePreference, THEME_CHOICES, type ThemePreference } from "../theme";
 
 function Glyph({ path, title }: { path: string; title: string }) {
@@ -52,6 +53,10 @@ export function SetupSurface({
   const connected = auth.state === "signed_in";
   const [probe, setProbe] = useState<SetupProbeResponse | null>(null);
   const [theme, setTheme] = useState<ThemePreference>(themePreference());
+  // Two steps: connect, then — only when there is something to lend — the
+  // accounts page (D-217). A person can always skip straight to the room.
+  const [step, setStep] = useState<"connect" | "lend">("connect");
+  const { data: connectors, setLent } = useConnectors();
 
   useEffect(() => {
     novus().setup.probe().then((result) => {
@@ -66,6 +71,20 @@ export function SetupSurface({
 
   const claude = harnessStatus(probe?.claudeCode ?? null);
   const codex = harnessStatus(probe?.codex ?? null);
+  // The lend page is offered only when the CLI is here and holds at least one
+  // account — an empty page would be a control over nothing (prohibited
+  // pattern 11).
+  const hasAccounts = (connectors?.connectors.length ?? 0) > 0;
+
+  if (step === "lend") {
+    return (
+      <LendSurface
+        connectors={connectors?.connectors ?? []}
+        onSetLent={setLent}
+        onFinished={onFinished}
+      />
+    );
+  }
 
   return (
     <main className="content">
@@ -155,14 +174,59 @@ export function SetupSurface({
 
         {/* The door is always on the page (D-148): a person should see where
             this ends from the moment it starts. It unlocks when GitHub is
-            connected; it never appears out of nowhere. */}
+            connected; it never appears out of nowhere. When the person's own
+            accounts are lendable, the door leads to that page first (D-217);
+            otherwise it finishes. */}
         <div className="setup-finish">
           <button
             className="btn btn-primary"
-            onClick={onFinished}
+            onClick={() => (hasAccounts ? setStep("lend") : onFinished())}
             disabled={!connected}
             data-testid="finish-setup"
           >
+            {hasAccounts ? "Next" : "Finish setup"}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+/**
+ * Lend your accounts (D-217): the second first-run page, shown only when
+ * Claude Code on this Mac holds account connectors. Each is off until the
+ * person lends it; lending is their own standing choice, and the same rows
+ * live on Settings → Agents afterward. Minimalist by the owner's direction —
+ * one card, one On/Off per row, a way past.
+ */
+function LendSurface({
+  connectors,
+  onSetLent,
+  onFinished
+}: {
+  connectors: import("@novus/contracts").Connector[];
+  onSetLent: (name: string, lent: boolean) => void;
+  onFinished: () => void;
+}) {
+  return (
+    <main className="content">
+      <div className="setup-drag" />
+      <section className="setup" data-testid="setup-lend">
+        <h1>Lend your accounts</h1>
+        <p className="setup-sub">
+          Let the agent use your own Claude connectors on the turns this Mac runs. Each stays yours —
+          it only ever acts when you approve, and only you can answer. Change these any time in Settings.
+        </p>
+
+        <div className="settings-card">
+          <ConnectorRows connectors={connectors} onSetLent={onSetLent} />
+        </div>
+
+        <div className="setup-finish">
+          <button className="btn btn-text" onClick={onFinished} data-testid="lend-skip">
+            Skip for now
+          </button>
+          <button className="btn btn-primary" onClick={onFinished} data-testid="lend-finish">
             Finish setup
           </button>
         </div>

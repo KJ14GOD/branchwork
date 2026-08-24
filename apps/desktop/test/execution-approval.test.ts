@@ -440,6 +440,82 @@ describe("the permission policy Novus pins", () => {
     expect(projectInstructionsFile(worktree)).toBeNull();
   });
 
+  it("composes the computer-use directive with the project's own instructions, never both flags (D-218)", async () => {
+    // A project CLAUDE.md AND the opt-in together is the exact case that broke
+    // live: the CLI refuses `--append-system-prompt` and its `-file` sibling at
+    // once. So with both present, only the inline flag rides — carrying the
+    // project's instructions and the directive in one string.
+    writeFileSync(join(repo, "CLAUDE.md"), "# House rules\n\nAlways use tabs.\n");
+    await git(repo, ["add", "-A"]);
+    await git(repo, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "rules"]);
+    await git(repo, ["branch", "-f", MISSION_BRANCH, "HEAD"]);
+
+    installStub("approval");
+    const on = begin({ computerUseEnabled: () => true });
+    await waitFor("the approval to arrive", () => on.turn.pendingApprovals().length > 0);
+    on.turn.respondApproval("stub-request-1", "approve", null);
+    await on.finished;
+    const withDirective = argv();
+    // Exactly one flag — the inline one — never both.
+    expect(withDirective).not.toContain("--append-system-prompt-file");
+    const at = withDirective.indexOf("--append-system-prompt");
+    expect(at).toBeGreaterThan(-1);
+    // The one string carries the project's instructions AND the directive.
+    expect(withDirective[at + 1]).toContain("Always use tabs.");
+    expect(withDirective[at + 1]).toContain("never act on Novus itself");
+
+    rmSync(argvLogPath, { force: true });
+    installStub("approval");
+    const off = begin({ computerUseEnabled: () => false });
+    await waitFor("the approval to arrive", () => off.turn.pendingApprovals().length > 0);
+    off.turn.respondApproval("stub-request-1", "approve", null);
+    await off.finished;
+    // Opted out: the project file rides its own flag, no inline directive.
+    const offArgs = argv();
+    expect(offArgs).not.toContain("--append-system-prompt");
+    expect(offArgs).toContain("--append-system-prompt-file");
+  }, 40_000);
+
+  it("lends accounts by dropping strict and disallowing the un-lent (D-217)", async () => {
+    installStub("approval");
+    const running = begin({
+      connectors: ["claude.ai Gmail"],
+      deniedConnectors: ["claude.ai Google Drive", "claude.ai Google Calendar"]
+    });
+    await waitFor("the approval to arrive", () => running.turn.pendingApprovals().length > 0);
+    running.turn.respondApproval("stub-request-1", "approve", null);
+    await running.finished;
+    const args = argv();
+    // Strict is gone — the CLI injects its account connectors — but the
+    // setting-source pin that actually keeps agent-writable files out stays.
+    expect(args).not.toContain("--strict-mcp-config");
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
+    // Every connector the person did not lend is stripped from the tool list.
+    const disallowAt = args.indexOf("--disallowedTools");
+    expect(disallowAt).toBeGreaterThan(-1);
+    const disallowed = args.slice(disallowAt + 1, disallowAt + 3);
+    expect(disallowed).toEqual([
+      "mcp__claude_ai_Google_Drive__*",
+      "mcp__claude_ai_Google_Calendar__*"
+    ]);
+    // And the lent one is never disallowed.
+    expect(args).not.toContain("mcp__claude_ai_Gmail__*");
+  }, 40_000);
+
+  it("keeps strict and disallows nothing when no account is lent (D-217): the argv is unchanged", async () => {
+    installStub("approval");
+    const running = begin({ connectors: [], deniedConnectors: ["claude.ai Gmail"] });
+    await waitFor("the approval to arrive", () => running.turn.pendingApprovals().length > 0);
+    running.turn.respondApproval("stub-request-1", "approve", null);
+    await running.finished;
+    const args = argv();
+    expect(args).not.toContain("--disallowedTools");
+    // Nothing composed, nothing carried: no --mcp-config, no --strict either,
+    // exactly as before this decision.
+    expect(args).not.toContain("--strict-mcp-config");
+    expect(args).not.toContain("--mcp-config");
+  }, 40_000);
+
   it("still passes --resume, so approval routing did not cost session continuity", async () => {
     installStub("approval");
     const running = begin({ resumeSessionId: "stub-session-1" });

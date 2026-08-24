@@ -1,8 +1,9 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
+  connectorToolPrefix,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_PERMISSION_PROFILE,
@@ -10,11 +11,13 @@ import {
   ModelIdSchema,
   pathInScope,
   type ApprovalDecision,
+  type ConnectorName,
   type EnabledMachineMcpServer,
   type EnabledMcpServer,
   type PermissionProfile,
   type RunnerEvent
 } from "@novus/contracts";
+import { isBrowserToolFullName, isComputerToolFullName } from "./artifact-mcp";
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
 import { composeSkillsPlugin, removeComposedSkills, type ComposedSkills } from "./skills";
 import { resolveMachineMcp } from "./machine-mcp";
@@ -227,6 +230,18 @@ const SHELL_TOOLS = new Set(["Bash"]);
  *  policy. */
 const isMcpTool = (toolName: string): boolean => toolName.startsWith("mcp__");
 
+/** The Novus-authored computer-use guardrail directive (D-218, layer 1),
+ *  composed into `--append-system-prompt` only when this Mac has opted into
+ *  raw computer use. The last and weakest line — the structural fence, opt-in,
+ *  grant, and cut-off are what hold — never a file the agent can rewrite. */
+const COMPUTER_USE_DIRECTIVE =
+  "You can operate this Mac with the computer_* tools. You must never act on Novus itself — " +
+  "the application showing you these approval prompts — or on any window or process Novus is running; " +
+  "actions that land on Novus are refused. Never try to change or re-enable your own permissions. " +
+  "If you are unsure whether something on screen belongs to Novus, do not click it. " +
+  "If Novus is the front window you cannot type into it — press cmd+space (Spotlight) or cmd+tab " +
+  "to switch to another app first, then work there.";
+
 /** Serializes checkpoint capture per worktree (D-097): parallel scoped turns
  *  share one git index, and two captures interleaving `add` and `commit`
  *  would stage each other's files. The lock is the whole capture, status to
@@ -337,6 +352,27 @@ export interface TurnRequest {
   /** The machine's own servers the owner enabled (D-198), pinned at dispatch;
    *  resolved from this machine's own file, values never having travelled. */
   machineMcpServers?: readonly EnabledMachineMcpServer[] | null;
+  /** The owner's own accounts lent to this turn (D-217): when non-empty the
+   *  argv omits `--strict-mcp-config` and disallows every connector the CLI
+   *  would inject that is not here. A lent connector's tool call always
+   *  reaches the room — even under `dont_ask` — because spending someone's
+   *  own account is theirs to answer. Read-alongside turns carry none. */
+  connectors?: readonly ConnectorName[] | null;
+  /** The connectors present on this machine that were NOT lent (D-217):
+   *  each is stripped from the model's tool list with `--disallowedTools`,
+   *  because strict is off whenever anything is lent and the CLI would
+   *  otherwise inject them all. Resolved beside `connectors` at spawn. */
+  deniedConnectors?: readonly ConnectorName[] | null;
+  /** The turn's browser-session state (D-218), read live at each browser tool
+   *  call: `granted` auto-allows without a card (one approval covers the
+   *  turn), `revoked` denies (a person cut it off mid-turn), null asks. */
+  browserSession?: (() => "granted" | "revoked" | null) | null;
+  /** Whether this Mac's owner has turned on raw computer use (D-218). When
+   *  false, a computer tool is refused outright — never even asked, because
+   *  the machine has not consented to hands at all. */
+  computerUseEnabled?: (() => boolean) | null;
+  /** The turn's computer-use session (D-218), the browser session's twin. */
+  computerSession?: (() => "granted" | "revoked" | null) | null;
   /** Novus's own capture endpoint for this turn (D-123): composed into the
    *  strict config as the `novus` server so the agent can *ask* for a
    *  screenshot. Asking is all it grants — the tool call routes through this
@@ -474,6 +510,12 @@ export function startTurn(request: TurnRequest): RunningTurn {
   const scope = request.scope ?? null;
   /** The lane's answer policy, pinned at dispatch (D-115); absent is manual. */
   const profile = request.permissionProfile ?? DEFAULT_PERMISSION_PROFILE;
+  /** The tool prefixes of the accounts this turn's owner lent (D-217). A
+   *  call under any of them spends that person's own account, so it reaches
+   *  the room under every profile — `dont_ask` included. */
+  const lentPrefixes = (request.connectors ?? []).map(connectorToolPrefix);
+  const isLentConnectorTool = (toolName: string): boolean =>
+    lentPrefixes.some((prefix) => toolName.startsWith(prefix));
   /** Requests the scope policy already answered (D-097): their card must not
    *  reach the room, and the prompt boundary the stream declares for them is
    *  not real — nothing is pending. */
@@ -684,17 +726,89 @@ export function startTurn(request: TurnRequest): RunningTurn {
         });
         return;
       }
+      // Raw computer use (D-218): the whole Mac, and the most guarded surface.
+      // The machine-local opt-in comes first — a Mac that has not consented to
+      // hands refuses outright, never even asked. Then the same session ladder
+      // the browser uses, and the driver applies the structural fence besides.
+      if (isComputerToolFullName(message.toolName)) {
+        if (!(request.computerUseEnabled?.() ?? false)) {
+          policyDecided.add(message.requestId);
+          writeControl({
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: message.requestId,
+              response: {
+                behavior: "deny",
+                message: "Raw computer use is off for this Mac. Its owner turns it on in Novus settings; the agent cannot."
+              }
+            }
+          });
+          return;
+        }
+        const computer = request.computerSession?.() ?? null;
+        if (computer === "granted" || computer === "revoked") {
+          policyDecided.add(message.requestId);
+          writeControl({
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: message.requestId,
+              response:
+                computer === "granted"
+                  ? { behavior: "allow" }
+                  : { behavior: "deny", message: "A person stopped the agent's computer use for this turn." }
+            }
+          });
+          return;
+        }
+        // null: fall through to the ask ladder; an allow mints the session.
+      }
+      // The fenced browser (D-218): one approval covers the turn's browsing,
+      // and a person can cut it off mid-turn. `granted` means a person already
+      // said yes this turn — allow without a card; `revoked` means they stopped
+      // it — deny in words; absent falls through to the ordinary ask (a card
+      // under manual, the profile's own answer under dont_ask), whose allow
+      // mints the session so the rest of the turn's browsing is silent.
+      if (isBrowserToolFullName(message.toolName)) {
+        const browser = request.browserSession?.() ?? null;
+        if (browser === "granted" || browser === "revoked") {
+          // The turn's one browsing approval already answers this: no card
+          // reaches the room, and the prompt-pending boundary the stream will
+          // declare for it is not real (the D-097 suppression).
+          policyDecided.add(message.requestId);
+          writeControl({
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: message.requestId,
+              response:
+                browser === "granted"
+                  ? { behavior: "allow" }
+                  : { behavior: "deny", message: "A person stopped the agent's browsing for this turn." }
+            }
+          });
+          return;
+        }
+        // null: fall through to the ask/answer ladder below, whose allow mints
+        // the session so the rest of the turn's browsing is silent.
+      }
       // The profile's standing allows (D-115), each one recorded: dont_ask
       // answers everything; auto answers everything but a shell command,
       // which declares its targets nowhere (D-097's reason); accept_edits
       // answers the path-naming edit tools alone.
+      // A lent account's tool is its lender's to answer, always (D-217): no
+      // profile — not even `dont_ask` — spends someone's own inbox on their
+      // behalf, so it falls straight through to the room like every other
+      // thing a person alone may allow.
       if (
-        profile === "dont_ask" ||
-        // `auto` answers neither a shell nor an MCP tool (D-119): both act
-        // through effects the request does not declare, so they stay human
-        // questions under every profile but `dont_ask`.
-        (profile === "auto" && !SHELL_TOOLS.has(message.toolName) && !isMcpTool(message.toolName)) ||
-        (profile === "accept_edits" && PATH_SCOPED_TOOLS.has(message.toolName))
+        !isLentConnectorTool(message.toolName) &&
+        (profile === "dont_ask" ||
+          // `auto` answers neither a shell nor an MCP tool (D-119): both act
+          // through effects the request does not declare, so they stay human
+          // questions under every profile but `dont_ask`.
+          (profile === "auto" && !SHELL_TOOLS.has(message.toolName) && !isMcpTool(message.toolName)) ||
+          (profile === "accept_edits" && PATH_SCOPED_TOOLS.has(message.toolName)))
       ) {
         decideByProfile(message, "allowed");
         return;
@@ -872,7 +986,9 @@ export function startTurn(request: TurnRequest): RunningTurn {
         mcpServers: composedMcp.carried,
         mcpServersDropped: composedMcp.dropped,
         machineMcpServers: composedMcp.machineCarried,
-        machineMcpServersDropped: composedMcp.machineDropped
+        machineMcpServersDropped: composedMcp.machineDropped,
+        // The owner's own accounts this turn carried (D-217), read turns none.
+        connectors: readOnly ? [] : [...(request.connectors ?? [])]
       }
     });
 
@@ -1004,14 +1120,66 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // Read per attempt rather than once: a turn that edits the project's
     // instructions is describing how the *next* turn should work.
     const instructionsFile = projectInstructionsFile(worktreePath);
-    const instructions = instructionsFile ? ["--append-system-prompt-file", instructionsFile] : [];
+    // The computer-use directive (D-218, guardrail layer 1) — added only when
+    // this Mac has opted into raw computer use, and stated for what it is: the
+    // last and weakest line, because instructions are not authority (D-062).
+    // The structural fence, the opt-in, the grant, and the cut-off are what
+    // actually hold; this only tells a well-behaved model where the wall is.
+    const wantsComputerDirective = request.computerUseEnabled?.() ?? false;
+    // The CLI refuses `--append-system-prompt` and `--append-system-prompt-file`
+    // together, so the two are never both passed: when the directive is needed
+    // it is composed *inline* with the project's own instructions (bounded, read
+    // here) into a single `--append-system-prompt`; otherwise the project file
+    // rides `--append-system-prompt-file` as before, and a turn with neither
+    // passes no flag at all.
+    let instructions: string[] = [];
+    if (wantsComputerDirective) {
+      let projectText = "";
+      if (instructionsFile !== null) {
+        try {
+          projectText = readFileSync(instructionsFile, "utf8");
+        } catch {
+          projectText = "";
+        }
+      }
+      const combined = projectText ? `${projectText}\n\n${COMPUTER_USE_DIRECTIVE}` : COMPUTER_USE_DIRECTIVE;
+      instructions = ["--append-system-prompt", combined];
+    } else if (instructionsFile !== null) {
+      instructions = ["--append-system-prompt-file", instructionsFile];
+    }
     // The composed skills directory (D-118): Novus's own staging, holding the
     // person-approved bytes and nothing else. Absent when nothing was enabled
     // or everything enabled was dropped — then no flag is passed at all.
     const skills = composedSkills?.dir ? ["--plugin-dir", composedSkills.dir] : [];
     // The strict MCP config (D-119): only the approved servers exist to the
     // CLI — `--strict-mcp-config` is what keeps every other source out.
-    const mcp = composedMcp?.file ? ["--mcp-config", composedMcp.file, "--strict-mcp-config"] : [];
+    //
+    // Lent accounts (D-217) are the one relaxation. When the owner lent at
+    // least one connector, strict is omitted — `--setting-sources ""` alone
+    // is the measured wall against agent-writable files (D-217's probe) — so
+    // the CLI injects its account connectors, and every connector it would
+    // inject that was NOT lent is stripped from the model's tool list with
+    // `--disallowedTools`. The composed config still carries exactly the
+    // reviewed project and machine servers plus the `novus` endpoint; the
+    // connectors ride alongside, not through it.
+    const lent = request.connectors ?? [];
+    const denied = (request.deniedConnectors ?? []).filter((name) => !lent.includes(name));
+    // Strict only ever rides a composed config, and only when nothing is
+    // lent — lending is the whole reason to drop it. The disallow list hides
+    // the un-lent connectors and is needed whenever anything is lent, config
+    // or not.
+    const disallow =
+      lent.length > 0 && denied.length > 0
+        ? ["--disallowedTools", ...denied.map((name) => `${connectorToolPrefix(name)}*`)]
+        : [];
+    const mcp = composedMcp?.file
+      ? [
+          "--mcp-config",
+          composedMcp.file,
+          ...(lent.length === 0 ? ["--strict-mcp-config"] : []),
+          ...disallow
+        ]
+      : [...disallow];
 
     return new Promise<ProcessOutcome>((resolve) => {
       const args = [
@@ -1349,6 +1517,97 @@ export function startTurn(request: TurnRequest): RunningTurn {
             })}\n`
           )) {
             emit(event);
+          }
+        }
+        // A browser ask, once allowed, is followed by a sequence of browser
+        // tool calls the direction encodes (D-218) — the first is the one
+        // just approved, and the rest ride the turn's session grant, proving
+        // one approval covers many actions. Encoded as
+        // `[browser:navigate /x][browser:click 10 20][browser:type hello]`.
+        if (allowed && askTool.startsWith("mcp__novus__browser_") && request.novusCapture) {
+          const steps = [...request.direction.matchAll(/\[browser:(\w+)([^\]]*)\]/g)];
+          for (const step of steps) {
+            const verb = step[1] ?? "";
+            const trimmed = (step[2] ?? "").trim();
+            const args: Record<string, unknown> =
+              verb === "navigate"
+                ? { url: trimmed }
+                : verb === "click"
+                  ? { x: Number(trimmed.split(/\s+/)[0]), y: Number(trimmed.split(/\s+/)[1]) }
+                  : verb === "type"
+                    ? { text: trimmed }
+                    : verb === "press"
+                      ? { key: trimmed }
+                      : {};
+            const called = await fetch(request.novusCapture.url, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${request.novusCapture.token}`
+              },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "tools/call",
+                params: { name: `browser_${verb}`, arguments: args }
+              })
+            })
+              .then(
+                (response) =>
+                  response.json() as Promise<{ result?: { content?: { text?: string }[]; isError?: boolean } }>
+              )
+              .catch((error: unknown) => ({
+                result: { content: [{ text: `Browser action failed: ${messageOf(error)}` }], isError: true }
+              }));
+            const said = called.result?.content?.[0]?.text ?? "The browser endpoint said nothing.";
+            for (const event of stream.push(
+              `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: said }] } })}\n`
+            )) {
+              emit(event);
+            }
+          }
+        }
+        // A computer-use ask, once allowed, drives the encoded sequence
+        // (D-218): `[computer:screenshot][computer:click 3000 2000]`.
+        if (allowed && askTool.startsWith("mcp__novus__computer_") && request.novusCapture) {
+          const steps = [...request.direction.matchAll(/\[computer:(\w+)([^\]]*)\]/g)];
+          for (const step of steps) {
+            const verb = step[1] ?? "";
+            const parts = (step[2] ?? "").trim().split(/\s+/).filter(Boolean);
+            const args: Record<string, unknown> =
+              verb === "click" || verb === "move"
+                ? { x: Number(parts[0]), y: Number(parts[1]) }
+                : verb === "type"
+                  ? { text: (step[2] ?? "").trim() }
+                  : verb === "key"
+                    ? { key: (step[2] ?? "").trim() }
+                    : {};
+            const called = await fetch(request.novusCapture.url, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${request.novusCapture.token}`
+              },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "tools/call",
+                params: { name: `computer_${verb}`, arguments: args }
+              })
+            })
+              .then(
+                (response) =>
+                  response.json() as Promise<{ result?: { content?: { text?: string }[]; isError?: boolean } }>
+              )
+              .catch((error: unknown) => ({
+                result: { content: [{ text: `Computer action failed: ${messageOf(error)}` }], isError: true }
+              }));
+            const said = called.result?.content?.[0]?.text ?? "The computer endpoint said nothing.";
+            for (const event of stream.push(
+              `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: said }] } })}\n`
+            )) {
+              emit(event);
+            }
           }
         }
       }

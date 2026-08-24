@@ -4468,6 +4468,28 @@ body {
   background: var(--preview-canvas);
 }
 
+/* The agent has the page's controls (D-218): named in the head in the accent
+   the room uses for a live actor, with the cut-off beside it. */
+.agent-driving-word {
+  font: var(--type-meta);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* Where the agent last acted: a ring in the page's own pixels, so a person
+   watching sees the hand as well as the result. Points only, never a trail;
+   it does not loop (prohibited pattern 14). */
+.agent-cursor {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: var(--elev-1);
+}
+
 .preview-panel {
   display: flex;
   flex-direction: column;
@@ -4746,6 +4768,13 @@ body {
   font: var(--type-meta);
   color: var(--text-3);
   white-space: nowrap;
+}
+
+/* Whose account a lent-connector question would spend (D-217): warn-toned,
+   like the tool itself, because it names who — and only who — may answer. */
+.approval-lender {
+  font: var(--type-meta);
+  color: var(--warn);
 }
 
 .approval-actions {

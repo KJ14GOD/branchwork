@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
+  ConnectorNameSchema,
+  connectorToolPrefix,
   MAX_APPROVAL_SUMMARY,
   RespondApprovalInputSchema,
   type ApprovalRequest,
@@ -214,29 +216,78 @@ async function resumeIfNothingPending(client: pg.PoolClient, executionId: string
  *  the record has to be able to answer who allowed what. */
 export async function listApprovals(db: Queryable, missionId: string): Promise<ApprovalRequest[]> {
   const result = await db.query(
-    `select a.*, u.login as responded_by_login
+    `select a.*, u.login as responded_by_login,
+            e.connectors as exe_connectors, owner.login as owner_login
        from approval_requests a
        left join users u on u.user_id = a.responded_by
+       left join executions e on e.exe_id = a.exe_id
+       left join runners r on r.runner_id = e.runner_id
+       left join users owner on owner.user_id = r.owner_user_id
       where a.mission_id = $1
       order by a.requested_at, a.apr_id
       limit 200`,
     [missionId]
   );
-  return result.rows.map((row) => ({
-    approvalId: row.apr_id as string,
-    executionId: row.exe_id as string,
-    workstreamId: row.wst_id as string,
-    harnessRequestId: row.harness_request_id as string,
-    toolUseId: (row.tool_use_id as string | null) ?? null,
-    toolName: row.tool_name as string,
-    displayName: row.display_name as string,
-    summary: row.summary as string,
-    state: row.state as ApprovalRequest["state"],
-    requestedAt: (row.requested_at as Date).toISOString(),
-    respondedByLogin: (row.responded_by_login as string | null) ?? null,
-    respondedAt: row.responded_at ? (row.responded_at as Date).toISOString() : null,
-    resolution: (row.resolution as string | null) ?? null
-  }));
+  return result.rows.map((row) => {
+    // A pending question under a lent account's tool prefix (D-217) is its
+    // lender's alone; the card renders their name where the baton would.
+    const toolName = row.tool_name as string;
+    const ownerLogin = (row.owner_login as string | null) ?? null;
+    let lender: ApprovalRequest["lender"] = null;
+    if (ownerLogin !== null) {
+      const carried = ConnectorNameSchema.array().catch([]).parse(row.exe_connectors ?? []);
+      const name = carried.find((connector) => toolName.startsWith(connectorToolPrefix(connector)));
+      if (name !== undefined) lender = { login: ownerLogin, service: name.replace(/^claude\.ai /, "") };
+    }
+    return {
+      approvalId: row.apr_id as string,
+      executionId: row.exe_id as string,
+      workstreamId: row.wst_id as string,
+      harnessRequestId: row.harness_request_id as string,
+      toolUseId: (row.tool_use_id as string | null) ?? null,
+      toolName,
+      displayName: row.display_name as string,
+      summary: row.summary as string,
+      state: row.state as ApprovalRequest["state"],
+      requestedAt: (row.requested_at as Date).toISOString(),
+      respondedByLogin: (row.responded_by_login as string | null) ?? null,
+      respondedAt: row.responded_at ? (row.responded_at as Date).toISOString() : null,
+      resolution: (row.resolution as string | null) ?? null,
+      lender
+    };
+  });
+}
+
+/**
+ * Whose account a question would spend, if any (D-217): the execution's
+ * recorded `connectors` are the lent accounts it carried, and a tool name
+ * under one of their prefixes belongs to the runner owner who lent it. Null
+ * for every other tool — the ordinary baton rule then applies.
+ */
+async function lenderOf(
+  db: Queryable,
+  executionId: string,
+  toolName: string
+): Promise<{ userId: string; login: string; service: string } | null> {
+  const row = (
+    await db.query(
+      `select e.connectors, r.owner_user_id, u.login
+         from executions e
+         join runners r on r.runner_id = e.runner_id
+         join users u on u.user_id = r.owner_user_id
+        where e.exe_id = $1`,
+      [executionId]
+    )
+  ).rows[0];
+  if (!row) return null;
+  const carried = ConnectorNameSchema.array().catch([]).parse(row.connectors ?? []);
+  const name = carried.find((connector) => toolName.startsWith(connectorToolPrefix(connector)));
+  if (name === undefined) return null;
+  return {
+    userId: row.owner_user_id as string,
+    login: row.login as string,
+    service: name.replace(/^claude\.ai /, "")
+  };
 }
 
 export function registerApprovalRoutes(app: FastifyInstance, deps: RouteDeps): void {
@@ -253,7 +304,7 @@ export function registerApprovalRoutes(app: FastifyInstance, deps: RouteDeps): v
     // then resolved the same way every other command resolves it. An approval
     // id is not a capability: a non-participant is told it does not exist.
     const found = await deps.db.query(
-      "select mission_id, exe_id, wst_id, state from approval_requests where apr_id = $1",
+      "select mission_id, exe_id, wst_id, state, tool_name from approval_requests where apr_id = $1",
       [params.data.approvalId]
     );
     const approval = found.rows[0];
@@ -269,13 +320,33 @@ export function registerApprovalRoutes(app: FastifyInstance, deps: RouteDeps): v
       approval.wst_id as string
     );
     if (!access) return deps.sendError(reply, 404, "not_found", "No such approval.");
-    // Lease-held only. A Mission Admin who is not the controller is refused
-    // here — they may revoke control and answer, which is visible and logged,
-    // but they may not reach around the baton (PRODUCT.md#roles-and-capabilities).
-    requireCapability(access, "approval.respond");
+    // A lent account's question is its lender's alone (D-217): the execution
+    // recorded which of the machine owner's own connectors it carried, and a
+    // tool wearing one of their prefixes is spending that person's own
+    // account. The baton is not the key here — the account is theirs, not
+    // the lane's workspace — and nobody else's answer, controller or Admin,
+    // is accepted.
+    const lender = await lenderOf(deps.db, approval.exe_id as string, approval.tool_name as string);
+    if (lender !== null) {
+      if (lender.userId !== ctx.userId) {
+        return deps.sendError(
+          reply,
+          403,
+          "lender_only",
+          `That is ${lender.login}'s own ${lender.service} — only they can answer.`
+        );
+      }
+    } else {
+      // Lease-held only. A Mission Admin who is not the controller is refused
+      // here — they may revoke control and answer, which is visible and
+      // logged, but they may not reach around the baton
+      // (PRODUCT.md#roles-and-capabilities).
+      requireCapability(access, "approval.respond");
+    }
 
     const approved = body.data.decision === "approve";
     const reason = body.data.reason?.trim() || null;
+    const answerer = lender !== null ? "its owner" : "the controller";
 
     const outcome = await withMission(deps.db, access.missionId, async (client) => {
       // The same per-mission ordering point every other command takes, so two
@@ -294,7 +365,7 @@ export function registerApprovalRoutes(app: FastifyInstance, deps: RouteDeps): v
           params.data.approvalId,
           approved ? "approved" : "denied",
           ctx.userId,
-          reason ?? (approved ? "Approved by the controller." : "Denied by the controller.")
+          reason ?? (approved ? `Approved by ${answerer}.` : `Denied by ${answerer}.`)
         ]
       );
       const row = settled.rows[0];

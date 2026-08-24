@@ -643,6 +643,13 @@ async function applySideEffects(
       return;
     case "execution.running":
       await setExecutionState(client, execution.exe_id, "running", { started: true });
+      // The accounts this turn carried (D-217), kept on the row: a lent
+      // account's question is its lender's alone to answer, and the respond
+      // route reads this list rather than guessing from a tool's prefix.
+      await client.query("update executions set connectors = $2::jsonb where exe_id = $1", [
+        execution.exe_id,
+        JSON.stringify(event.payload.connectors)
+      ]);
       return;
     case "harness.session": {
       await client.query(

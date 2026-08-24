@@ -618,6 +618,7 @@ export function TraceView({
  */
 export function ApprovalRow({
   approval,
+  viewerLogin,
   capabilities,
   controllerLogin,
   busy,
@@ -627,6 +628,9 @@ export function ApprovalRow({
   onRequestControl
 }: {
   approval: ApprovalRequest;
+  /** The signed-in person, so a lent account's question renders its buttons
+   *  to its owner and its owner alone (D-217). */
+  viewerLogin: string;
   capabilities: MissionDetailResponse["capabilities"];
   controllerLogin: string | null;
   busy: boolean;
@@ -638,7 +642,12 @@ export function ApprovalRow({
   onRespond: (decision: "approve" | "deny") => void;
   onRequestControl: (() => void) | null;
 }) {
-  const mayAnswer = capabilities.includes("approval.respond");
+  // A lent account's question is its owner's alone (D-217): the baton does not
+  // decide it, the lender does. Everyone else — controller included — is told
+  // whose account it is, because that is the honest answer to "why can't I
+  // answer this".
+  const lender = approval.lender;
+  const mayAnswer = lender ? lender.login === viewerLogin : capabilities.includes("approval.respond");
   return (
     <div className="approval" data-testid="approval" data-approval-id={approval.approvalId}>
       <div className="approval-ask">
@@ -648,6 +657,13 @@ export function ApprovalRow({
         <span className="approval-summary" data-testid="approval-summary">
           {approval.summary}
         </span>
+        {lender && (
+          <span className="approval-lender" data-testid="approval-lender">
+            {lender.login === viewerLogin
+              ? `your own ${lender.service} — only you can answer`
+              : `${lender.login}'s own ${lender.service} — only they can answer`}
+          </span>
+        )}
         {askedIn && (
           <span className="approval-asked" data-testid="approval-asked-in">
             asked in &quot;{askedIn}&quot;
@@ -674,6 +690,12 @@ export function ApprovalRow({
           </button>
           {/* Said plainly, because "Approve" on its own reads like a policy. */}
           <span className="approval-note">This one act only — nothing is remembered.</span>
+        </div>
+      ) : lender ? (
+        <div className="approval-actions" data-testid="approval-lender-only">
+          <span className="approval-note">
+            Only {lender.login} can answer — it spends their own {lender.service}, not the lane.
+          </span>
         </div>
       ) : (
         <div className="approval-actions" data-testid="approval-denied-to-viewer">

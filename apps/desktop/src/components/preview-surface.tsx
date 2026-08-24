@@ -254,6 +254,23 @@ export function PreviewSurface({
           {view.word}
         </span>
         <span className="head-spacer" />
+        {/* The agent has the page's controls (D-218): the room says so, and
+            the cut-off is one click away — it stops the agent's next action
+            without ending the turn. */}
+        {status?.agentDriving && (
+          <>
+            <span className="agent-driving-word" data-testid="agent-driving">
+              Agent is browsing
+            </span>
+            <button
+              className="btn btn-secondary"
+              onClick={() => status && void novus().workspace.preview.stopBrowsing(status.workstreamId)}
+              data-testid="agent-stop-browsing"
+            >
+              Stop
+            </button>
+          </>
+        )}
         {captured && (
           <span className="file-meta" data-testid="preview-captured">
             {captured}
@@ -352,6 +369,14 @@ export function PreviewSurface({
             src={status.url}
             partition={`preview:${status.workstreamId}`}
             data-testid="preview-webview"
+          />
+        )}
+        {status?.agentDriving && status.agentPoint && (
+          <span
+            className="agent-cursor"
+            style={{ left: `${status.agentPoint.x}px`, top: `${status.agentPoint.y}px` }}
+            aria-hidden="true"
+            data-testid="agent-cursor"
           />
         )}
         {view.panel && (

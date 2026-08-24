@@ -31,6 +31,17 @@ const novus: NovusBridge = {
   system: {
     version: () => ipcRenderer.invoke("novus:system:version")
   },
+  connectors: {
+    list: () => ipcRenderer.invoke("novus:connectors:list"),
+    setLent: (name, lent) => ipcRenderer.invoke("novus:connectors:setLent", { name, lent })
+  },
+  computerUse: {
+    enabled: () => ipcRenderer.invoke("novus:computer:enabled"),
+    setEnabled: (enabled) => ipcRenderer.invoke("novus:computer:set-enabled", { enabled }),
+    stop: (workstreamId) => ipcRenderer.invoke("novus:computer:stop", { workstreamId }),
+    accessibility: () => ipcRenderer.invoke("novus:computer:accessibility"),
+    requestAccessibility: () => ipcRenderer.invoke("novus:computer:request-accessibility")
+  },
   notifications: {
     get: () => ipcRenderer.invoke("novus:notifications:get"),
     set: (prefs) => ipcRenderer.invoke("novus:notifications:set", prefs),
@@ -227,6 +238,7 @@ const novus: NovusBridge = {
       reload: () => ipcRenderer.invoke("novus:preview:reload"),
       close: () => ipcRenderer.invoke("novus:preview:close"),
       status: () => ipcRenderer.invoke("novus:preview:status"),
+      stopBrowsing: (workstreamId) => ipcRenderer.invoke("novus:preview:stop-browsing", { workstreamId }),
       onStatus: (listener) => {
         const wrapped = (_event: unknown, status: Parameters<typeof listener>[0]) => listener(status);
         ipcRenderer.on("novus:preview-status", wrapped);

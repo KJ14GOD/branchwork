@@ -1121,3 +1121,9 @@ create index if not exists extension_label_assignments_by_scope
 -- `mcp.set` — their machine, and new tool surface, on one signature.
 alter table workspaces add column if not exists declared_machine_mcp jsonb not null default '[]'::jsonb;
 alter table workstreams add column if not exists enabled_machine_mcp jsonb not null default '[]'::jsonb;
+
+-- Lent accounts (D-217): the owner's own claude.ai connectors a turn carried,
+-- recorded from the runner's own `execution.running` so the respond route can
+-- tell a lent account's question — answerable by its lender alone — from
+-- every other tool's. Names only; the credential never leaves the CLI.
+alter table executions add column if not exists connectors jsonb not null default '[]'::jsonb;
