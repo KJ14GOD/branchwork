@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { BrowserWindow, desktopCapturer, screen, systemPreferences } from "electron";
 import { handsAvailable, type DesktopContext, type DesktopDriver } from "./computer-use";
 
@@ -68,72 +70,90 @@ export interface NutJs {
   Key: Record<string, unknown>;
 }
 
-/** The named keys and modifiers the agent may press, mapped to nut-js's own
- *  `Key` members. A combo like "cmd+c" is split on "+". */
-const KEY_ALIASES: Record<string, string> = {
-  enter: "Enter",
-  "return": "Enter",
-  tab: "Tab",
-  escape: "Escape",
-  esc: "Escape",
-  backspace: "Backspace",
-  delete: "Delete",
-  space: "Space",
-  up: "Up",
-  down: "Down",
-  left: "Left",
-  right: "Right",
-  // macOS Command is libnut's "meta" modifier flag, which nut-js exposes as
-  // LeftSuper. LeftCmd maps to "cmd", which libnut's native layer rejects with
-  // "Invalid key flag specified" — the real cause of the ⌘-combo failures
-  // (D-218 amended 2026-08-24). The valid flags are control / meta / shift /
-  // alt, so every modifier below resolves to one of those.
-  cmd: "LeftSuper",
-  command: "LeftSuper",
-  ctrl: "LeftControl",
-  control: "LeftControl",
-  alt: "LeftAlt",
-  option: "LeftAlt",
-  shift: "LeftShift"
+/** How each modifier is spelled in AppleScript's `using {…}` clause. */
+const APPLE_MODIFIERS: Record<string, string> = {
+  cmd: "command down",
+  command: "command down",
+  ctrl: "control down",
+  control: "control down",
+  alt: "option down",
+  option: "option down",
+  shift: "shift down"
 };
 
-export function keyMember(nut: NutJs, token: string): unknown | null {
-  const t = token.trim().toLowerCase();
-  const aliased = KEY_ALIASES[t];
-  if (aliased && aliased in nut.Key) return nut.Key[aliased];
-  // A single letter or digit maps to its own Key member (A–Z, Num0–Num9).
-  if (/^[a-z]$/.test(t) && t.toUpperCase() in nut.Key) return nut.Key[t.toUpperCase()];
-  if (/^[0-9]$/.test(t) && `Num${t}` in nut.Key) return nut.Key[`Num${t}`];
-  return null;
-}
-
-/** The modifier tokens, by their spoken names — everything else in a combo is
- *  the main key. */
-const MODIFIER_TOKENS = new Set(["cmd", "command", "ctrl", "control", "alt", "option", "shift"]);
+/** macOS virtual key codes for the named keys the agent may press; anything
+ *  else that is a single character is typed with `keystroke`. */
+const KEY_CODES: Record<string, number> = {
+  space: 49,
+  enter: 36,
+  return: 36,
+  tab: 48,
+  escape: 53,
+  esc: 53,
+  backspace: 51,
+  delete: 51,
+  forwarddelete: 117,
+  up: 126,
+  down: 125,
+  left: 123,
+  right: 124,
+  home: 115,
+  end: 119,
+  pageup: 116,
+  pagedown: 121
+};
 
 /**
- * A key combo resolved into nut-js's own argument order: the main key first,
- * then the modifiers as trailing flags (D-218 amended). `"cmd+space"` becomes
- * `[Space, LeftCmd]`, not `[LeftCmd, Space]` — the bug that made libnut read
- * Space as a modifier flag and throw. Null when any token is not a key.
+ * Builds the AppleScript that presses one key combo through System Events —
+ * the reliable macOS path (D-218 amended 2026-08-24). nut-js's own modifier
+ * mechanism is broken under Electron: it rejects the Command flag with
+ * "Invalid key flag specified" (proven live), while `keystroke` / `key code …
+ * using {command down}` sets the modifier the way the OS expects and actually
+ * triggers system shortcuts like ⌘-space. Returns null when the combo names no
+ * key. Only Accessibility permission is needed, which the app already holds.
  */
-export function orderedCombo(nut: NutJs, name: string): unknown[] | null {
+export function appleScriptForKey(name: string): string | null {
   const tokens = name
     .split("+")
     .map((token) => token.trim().toLowerCase())
     .filter(Boolean);
-  const mods: unknown[] = [];
-  const mains: unknown[] = [];
+  const mods: string[] = [];
+  let main: string | null = null;
   for (const token of tokens) {
-    const key = keyMember(nut, token);
-    if (key === null) return null;
-    (MODIFIER_TOKENS.has(token) ? mods : mains).push(key);
+    const modifier = APPLE_MODIFIERS[token];
+    if (modifier !== undefined) mods.push(modifier);
+    else if (main === null) main = token;
+    else return null; // two non-modifiers is not a combo we send
   }
-  // The last non-modifier is the key being pressed; a combo that is only
-  // modifiers (rare) presses those alone.
-  const main = mains[mains.length - 1];
-  if (main === undefined) return mods.length > 0 ? mods : null;
-  return [main, ...mods];
+  if (main === null) return null;
+  let action: string;
+  if (KEY_CODES[main] !== undefined) action = `key code ${KEY_CODES[main]}`;
+  else if ([...main].length === 1) action = `keystroke ${JSON.stringify(main)}`;
+  else return null;
+  const using = mods.length > 0 ? ` using {${mods.join(", ")}}` : "";
+  return `tell application "System Events" to ${action}${using}`;
+}
+
+/** Escapes text for an AppleScript double-quoted string. */
+function appleScriptString(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+const runOsa = promisify(execFile);
+
+/** Presses a key combo via AppleScript. Throws if the combo names no key. */
+async function osaKey(name: string): Promise<void> {
+  const script = appleScriptForKey(name);
+  if (script === null) throw new Error(`Not a key this Mac presses: ${name.slice(0, 40)}`);
+  await runOsa("osascript", ["-e", script]);
+}
+
+/** Types text via AppleScript's keystroke — no modifier flags involved. */
+async function osaType(text: string): Promise<void> {
+  await runOsa("osascript", [
+    "-e",
+    `tell application "System Events" to keystroke "${appleScriptString(text)}"`
+  ]);
 }
 
 /**
@@ -159,17 +179,11 @@ function loadInputBackend(): InputBackend | null {
       await nut.mouse.setPosition(new nut.Point(x, y));
       await (button === "right" ? nut.mouse.rightClick() : nut.mouse.leftClick());
     },
-    type: async (text) => void (await nut.keyboard.type(text)),
-    key: async (name) => {
-      const ordered = orderedCombo(nut, name);
-      if (ordered === null) throw new Error(`Not a key this Mac presses: ${name.slice(0, 40)}`);
-      // nut-js/libnut takes `pressKey(mainKey, ...modifiers)` — the key first,
-      // the modifiers as trailing flags. Passing a modifier first makes the
-      // real key be read as a modifier flag ("Invalid key flag specified");
-      // orderedCombo puts the main key first (D-218 amended 2026-08-24).
-      await nut.keyboard.pressKey(...ordered);
-      await nut.keyboard.releaseKey(...ordered);
-    },
+    // Keyboard goes through AppleScript, not nut-js: nut-js's modifier-flag
+    // mechanism is broken under Electron (D-218 amended). Mouse stays on
+    // nut-js, which has no such problem.
+    type: (text) => osaType(text),
+    key: (name) => osaKey(name),
     scroll: async (_x, _y, dx, dy) => {
       if (dy > 0) await nut.mouse.scrollDown(dy);
       else if (dy < 0) await nut.mouse.scrollUp(-dy);

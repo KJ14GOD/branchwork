@@ -109,26 +109,37 @@ describe("when the agent actually has hands (D-218)", () => {
   });
 });
 
-describe("the key mapping for computer_key (D-218)", () => {
-  // keyMember only reads nut.Key, so a fake Key map exercises the aliasing,
-  // letters, and digits without the native module. It imports the electron-
-  // scoped module, which touches no Electron at load.
-  it("maps named keys, aliases, letters, and digits — and refuses the unknown", async () => {
-    const { keyMember } = await import("../electron/computer-use-native");
-    const nut = {
-      Key: { Enter: "K_Enter", Tab: "K_Tab", Escape: "K_Esc", LeftSuper: "K_Meta", A: "K_A", Num3: "K_3" }
-    } as unknown as import("../electron/computer-use-native").NutJs;
-    expect(keyMember(nut, "enter")).toBe("K_Enter");
-    expect(keyMember(nut, "Return")).toBe("K_Enter"); // aliased to Enter
-    // Command aliases to LeftSuper ("meta"), the flag libnut accepts — not
-    // LeftCmd ("cmd"), which it rejects.
-    expect(keyMember(nut, "cmd")).toBe("K_Meta");
-    expect(keyMember(nut, "command")).toBe("K_Meta");
-    expect(keyMember(nut, "a")).toBe("K_A");
-    expect(keyMember(nut, "3")).toBe("K_3");
-    // A key the map does not carry, or nonsense: null (refused upstream).
-    expect(keyMember(nut, "f13")).toBeNull();
-    expect(keyMember(nut, "")).toBeNull();
+describe("the AppleScript a key combo compiles to (D-218 amended)", () => {
+  // Keyboard input goes through AppleScript's System Events, because nut-js's
+  // modifier-flag mechanism is broken under Electron (proven live). This is
+  // the pure compiler for that script — no osascript is run here.
+  it("compiles combos with the right modifiers, key codes, and keystrokes", async () => {
+    const { appleScriptForKey } = await import("../electron/computer-use-native");
+    // ⌘-space is a key code (space=49) with the command modifier — exactly the
+    // form proven to open Spotlight.
+    expect(appleScriptForKey("cmd+space")).toBe(
+      'tell application "System Events" to key code 49 using {command down}'
+    );
+    // Modifier order in the combo does not matter.
+    expect(appleScriptForKey("space+cmd")).toBe(
+      'tell application "System Events" to key code 49 using {command down}'
+    );
+    // A letter key uses keystroke; multiple modifiers stack.
+    expect(appleScriptForKey("cmd+shift+c")).toBe(
+      'tell application "System Events" to keystroke "c" using {command down, shift down}'
+    );
+    // A plain named key, no modifiers.
+    expect(appleScriptForKey("enter")).toBe('tell application "System Events" to key code 36');
+    // A plain letter.
+    expect(appleScriptForKey("a")).toBe('tell application "System Events" to keystroke "a"');
+    // ⌘-tab.
+    expect(appleScriptForKey("cmd+tab")).toBe(
+      'tell application "System Events" to key code 48 using {command down}'
+    );
+    // Nonsense or only-modifiers: null (refused upstream).
+    expect(appleScriptForKey("f19")).toBeNull();
+    expect(appleScriptForKey("cmd")).toBeNull();
+    expect(appleScriptForKey("")).toBeNull();
   });
 });
 
@@ -144,26 +155,5 @@ describe("the escape-shortcut check (D-218 amended)", () => {
     expect(isEscapeShortcut("cmd+space+shift")).toBe(false);
     expect(isEscapeShortcut("space")).toBe(false);
     expect(isEscapeShortcut("enter")).toBe(false);
-  });
-});
-
-describe("key-combo ordering for the native backend (D-218 amended)", () => {
-  it("puts the main key first and modifiers as trailing flags — nut-js's own order", async () => {
-    const { orderedCombo } = await import("../electron/computer-use-native");
-    const nut = {
-      Key: { Space: "Space", LeftSuper: "LeftSuper", LeftShift: "LeftShift", Tab: "Tab", C: "C", Z: "Z", Enter: "Enter" }
-    } as unknown as import("../electron/computer-use-native").NutJs;
-    // Two bugs, both fixed: the main key comes first (so Space is not read as a
-    // modifier), AND Command resolves to LeftSuper ("meta"), never LeftCmd
-    // ("cmd"), which libnut rejects.
-    expect(orderedCombo(nut, "cmd+space")).toEqual(["Space", "LeftSuper"]);
-    expect(orderedCombo(nut, "space+cmd")).toEqual(["Space", "LeftSuper"]);
-    expect(orderedCombo(nut, "cmd+tab")).toEqual(["Tab", "LeftSuper"]);
-    expect(orderedCombo(nut, "cmd+c")).toEqual(["C", "LeftSuper"]);
-    expect(orderedCombo(nut, "cmd+shift+z")).toEqual(["Z", "LeftSuper", "LeftShift"]);
-    // A plain key: just itself.
-    expect(orderedCombo(nut, "enter")).toEqual(["Enter"]);
-    // Nonsense: null (refused).
-    expect(orderedCombo(nut, "f13")).toBeNull();
   });
 });
