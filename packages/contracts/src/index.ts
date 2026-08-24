@@ -3845,6 +3845,11 @@ export interface NovusBridge {
      *  `accessibility` reads it; `requestAccessibility` opens System Settings. */
     accessibility(): Promise<IpcResult<{ trusted: boolean }>>;
     requestAccessibility(): Promise<IpcResult<{ trusted: boolean }>>;
+    /** macOS Screen Recording permission — what the screenshot needs, separate
+     *  from Accessibility. `screenRecording` reads it; `openScreenRecording`
+     *  opens the settings pane. */
+    screenRecording(): Promise<IpcResult<{ granted: boolean }>>;
+    openScreenRecording(): Promise<IpcResult<null>>;
   };
   /** Native notifications (D-180): a turn ending, or the harness asking —
    *  only while the window is elsewhere, each its own machine-local switch. */

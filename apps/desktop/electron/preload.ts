@@ -40,7 +40,9 @@ const novus: NovusBridge = {
     setEnabled: (enabled) => ipcRenderer.invoke("novus:computer:set-enabled", { enabled }),
     stop: (workstreamId) => ipcRenderer.invoke("novus:computer:stop", { workstreamId }),
     accessibility: () => ipcRenderer.invoke("novus:computer:accessibility"),
-    requestAccessibility: () => ipcRenderer.invoke("novus:computer:request-accessibility")
+    requestAccessibility: () => ipcRenderer.invoke("novus:computer:request-accessibility"),
+    screenRecording: () => ipcRenderer.invoke("novus:computer:screen-recording"),
+    openScreenRecording: () => ipcRenderer.invoke("novus:computer:open-screen-recording")
   },
   notifications: {
     get: () => ipcRenderer.invoke("novus:notifications:get"),

@@ -144,3 +144,23 @@ describe("the escape-shortcut check (D-218 amended)", () => {
     expect(isEscapeShortcut("enter")).toBe(false);
   });
 });
+
+describe("key-combo ordering for the native backend (D-218 amended)", () => {
+  it("puts the main key first and modifiers as trailing flags — nut-js's own order", async () => {
+    const { orderedCombo } = await import("../electron/computer-use-native");
+    const nut = {
+      Key: { Space: "Space", LeftCmd: "LeftCmd", LeftShift: "LeftShift", Tab: "Tab", C: "C", Z: "Z", Enter: "Enter" }
+    } as unknown as import("../electron/computer-use-native").NutJs;
+    // The exact bug: cmd+space must resolve to [Space, LeftCmd], never
+    // [LeftCmd, Space] (which made Space a bad modifier flag).
+    expect(orderedCombo(nut, "cmd+space")).toEqual(["Space", "LeftCmd"]);
+    expect(orderedCombo(nut, "space+cmd")).toEqual(["Space", "LeftCmd"]);
+    expect(orderedCombo(nut, "cmd+tab")).toEqual(["Tab", "LeftCmd"]);
+    expect(orderedCombo(nut, "cmd+c")).toEqual(["C", "LeftCmd"]);
+    expect(orderedCombo(nut, "cmd+shift+z")).toEqual(["Z", "LeftCmd", "LeftShift"]);
+    // A plain key: just itself.
+    expect(orderedCombo(nut, "enter")).toEqual(["Enter"]);
+    // Nonsense: null (refused).
+    expect(orderedCombo(nut, "f13")).toBeNull();
+  });
+});

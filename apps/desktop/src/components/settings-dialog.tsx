@@ -219,6 +219,7 @@ export function SettingsDialog({
   const { data: connectors, setLent } = useConnectors();
   const [computerUse, setComputerUse] = useState<boolean | null>(null);
   const [accessibility, setAccessibility] = useState<boolean | null>(null);
+  const [screenRec, setScreenRec] = useState<boolean | null>(null);
   const bindings = useKeybindings();
   /** The action whose next chord is being recorded, if any. */
   const [recording, setRecording] = useState<BindingAction | null>(null);
@@ -231,6 +232,7 @@ export function SettingsDialog({
     void novus().notifications.get().then((result) => setNotif(result.ok ? result.value : null));
     void novus().computerUse.enabled().then((result) => setComputerUse(result.ok ? result.value.enabled : false));
     void novus().computerUse.accessibility().then((result) => setAccessibility(result.ok ? result.value.trusted : false));
+    void novus().computerUse.screenRecording().then((result) => setScreenRec(result.ok ? result.value.granted : false));
   }, []);
 
   useEffect(() => {
@@ -586,6 +588,33 @@ export function SettingsDialog({
                 <CardRow
                   title="Accessibility permission"
                   description="Granted — the agent can operate this Mac when you approve it."
+                  trailing={<span className="settings-card-value">granted</span>}
+                />
+              )}
+              {computerUse === true && screenRec === false && (
+                <CardRow
+                  title="Screen recording permission"
+                  description="Needed only for the agent's screenshots (so it can see the screen) — separate from Accessibility. Grant it to Novus, then restart the app."
+                  trailing={
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        void novus().computerUse.openScreenRecording();
+                        window.setTimeout(() => {
+                          void novus().computerUse.screenRecording().then((result) => setScreenRec(result.ok ? result.value.granted : false));
+                        }, 1500);
+                      }}
+                      data-testid="computer-use-screen-recording"
+                    >
+                      Open settings
+                    </button>
+                  }
+                />
+              )}
+              {computerUse === true && screenRec === true && (
+                <CardRow
+                  title="Screen recording permission"
+                  description="Granted — the agent can take screenshots to see the screen."
                   trailing={<span className="settings-card-value">granted</span>}
                 />
               )}

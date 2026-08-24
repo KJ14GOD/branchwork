@@ -16,7 +16,7 @@ import { openableExtensionOf, openRefusalFor } from "./artifact-open";
 import { createNotifier, type NotificationPrefs, type Notifier } from "./notifications";
 import { discoverConnectors, setConnectorLent } from "./connectors";
 import { computerUseEnabled, setComputerUseEnabled } from "./computer-use";
-import { accessibilityTrusted, requestAccessibility } from "./computer-use-native";
+import { accessibilityTrusted, requestAccessibility, screenRecordingGranted } from "./computer-use-native";
 import {
   AttachmentRefused,
   prepareAttachment,
@@ -758,6 +758,18 @@ function registerIpc(): void {
   });
   ipcMain.handle("novus:computer:request-accessibility", async () => {
     return ok({ trusted: requestAccessibility() });
+  });
+
+  // macOS Screen Recording permission — what computer_screenshot needs
+  // (separate from Accessibility). Read it, and open the right settings pane.
+  ipcMain.handle("novus:computer:screen-recording", async () => {
+    return ok({ granted: screenRecordingGranted() });
+  });
+  ipcMain.handle("novus:computer:open-screen-recording", async () => {
+    if (process.platform === "darwin") {
+      await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+    }
+    return ok(null);
   });
 
   ipcMain.handle("novus:artifacts:open-local", async (_event, raw: unknown) => {

@@ -102,6 +102,35 @@ export function keyMember(nut: NutJs, token: string): unknown | null {
   return null;
 }
 
+/** The modifier tokens, by their spoken names — everything else in a combo is
+ *  the main key. */
+const MODIFIER_TOKENS = new Set(["cmd", "command", "ctrl", "control", "alt", "option", "shift"]);
+
+/**
+ * A key combo resolved into nut-js's own argument order: the main key first,
+ * then the modifiers as trailing flags (D-218 amended). `"cmd+space"` becomes
+ * `[Space, LeftCmd]`, not `[LeftCmd, Space]` — the bug that made libnut read
+ * Space as a modifier flag and throw. Null when any token is not a key.
+ */
+export function orderedCombo(nut: NutJs, name: string): unknown[] | null {
+  const tokens = name
+    .split("+")
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+  const mods: unknown[] = [];
+  const mains: unknown[] = [];
+  for (const token of tokens) {
+    const key = keyMember(nut, token);
+    if (key === null) return null;
+    (MODIFIER_TOKENS.has(token) ? mods : mains).push(key);
+  }
+  // The last non-modifier is the key being pressed; a combo that is only
+  // modifiers (rare) presses those alone.
+  const main = mains[mains.length - 1];
+  if (main === undefined) return mods.length > 0 ? mods : null;
+  return [main, ...mods];
+}
+
 /**
  * Loads the optional native input backend and adapts it. Returns null when the
  * dependency is absent or cannot load under Electron's ABI (a rebuild may be
@@ -127,14 +156,14 @@ function loadInputBackend(): InputBackend | null {
     },
     type: async (text) => void (await nut.keyboard.type(text)),
     key: async (name) => {
-      const keys = name
-        .split("+")
-        .map((token) => keyMember(nut, token))
-        .filter((key): key is unknown => key !== null);
-      if (keys.length === 0) throw new Error(`Not a key this Mac presses: ${name.slice(0, 40)}`);
-      await nut.keyboard.pressKey(...keys);
-      // Release in reverse, the modifier-last order a combo expects.
-      await nut.keyboard.releaseKey(...[...keys].reverse());
+      const ordered = orderedCombo(nut, name);
+      if (ordered === null) throw new Error(`Not a key this Mac presses: ${name.slice(0, 40)}`);
+      // nut-js/libnut takes `pressKey(mainKey, ...modifiers)` — the key first,
+      // the modifiers as trailing flags. Passing a modifier first makes the
+      // real key be read as a modifier flag ("Invalid key flag specified");
+      // orderedCombo puts the main key first (D-218 amended 2026-08-24).
+      await nut.keyboard.pressKey(...ordered);
+      await nut.keyboard.releaseKey(...ordered);
     },
     scroll: async (_x, _y, dx, dy) => {
       if (dy > 0) await nut.mouse.scrollDown(dy);
@@ -164,6 +193,18 @@ export function requestAccessibility(): boolean {
   if (process.platform !== "darwin") return false;
   try {
     return systemPreferences.isTrustedAccessibilityClient(true);
+  } catch {
+    return false;
+  }
+}
+
+/** macOS Screen Recording permission — the OS gate on capturing the screen,
+ *  separate from Accessibility (which gates input). `computer_screenshot`
+ *  needs this; the input tools do not. Non-macOS reports "granted" (no gate). */
+export function screenRecordingGranted(): boolean {
+  if (process.platform !== "darwin") return true;
+  try {
+    return systemPreferences.getMediaAccessStatus("screen") === "granted";
   } catch {
     return false;
   }
