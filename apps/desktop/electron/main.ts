@@ -221,7 +221,8 @@ function startRunner(): void {
     api,
     controlPlaneUrl,
     getToken: () => store.load(),
-    notify: (note) => notifier?.notify(note)
+    notify: (note) => notifier?.notify(note),
+    onAgentScreenshot: (view) => window?.webContents.send("novus:agent-screenshot", view)
   });
 }
 

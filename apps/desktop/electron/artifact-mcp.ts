@@ -73,7 +73,7 @@ interface RegisteredTurn {
   /** Operates the whole Mac (D-218): the driver applies the opt-in, the
    *  structural fence, and the native backend. Behind its own per-turn
    *  session, separate from the browser's. */
-  computer: (tool: ComputerTool, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean }>;
+  computer: (tool: ComputerTool, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean; image?: string }>;
 }
 
 interface ToolGrant {
@@ -423,13 +423,19 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
         .computer(params.name as ComputerTool, (params.arguments ?? {}) as Record<string, unknown>)
         .catch((error: unknown) => ({
           text: `Computer action failed: ${error instanceof Error ? error.message : "unknown error"}`,
-          isError: true
+          isError: true as boolean,
+          image: undefined as string | undefined
         }));
-      json(
-        response,
-        200,
-        result(id, { content: [{ type: "text", text: outcome.text }], isError: outcome.isError })
-      );
+      // A screenshot returns the actual pixels as an MCP image block so the
+      // agent can SEE the screen and decide where to act — without it, the
+      // agent is blind and can only send blind keystrokes (D-218 amended).
+      const content = outcome.image
+        ? [
+            { type: "image", data: outcome.image, mimeType: "image/png" },
+            { type: "text", text: outcome.text }
+          ]
+        : [{ type: "text", text: outcome.text }];
+      json(response, 200, result(id, { content, isError: outcome.isError }));
       return;
     }
 

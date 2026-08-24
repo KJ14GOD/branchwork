@@ -195,6 +195,10 @@ export interface RunnerAgentDeps {
     kind: "turn_completed" | "turn_failed" | "needs_you";
     missionId: string;
   }) => void;
+  /** The pixels the agent just looked at during raw computer use (D-218), so
+   *  the room can show what it sees. Host-local and ephemeral — never stored,
+   *  never crosses the control plane. Absent in tests. */
+  onAgentScreenshot?: (view: { missionId: string; executionId: string; dataUrl: string }) => void;
 }
 
 interface ElectronAppShape {
@@ -2156,9 +2160,18 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           try {
             if (tool === "computer_screenshot") {
               const shot = await driver.screenshot();
+              // Show the room what the agent sees (D-218): host-local, ephemeral.
+              deps.onAgentScreenshot?.({
+                missionId: args.missionId,
+                executionId: args.executionId,
+                dataUrl: shot.dataUrl
+              });
+              // Hand the pixels to the agent as an image (base64, no data: URL
+              // prefix) so it can see the screen, and note the size in words.
               return {
-                text: `Screenshot taken: ${shot.width}×${shot.height}. The screen may contain sensitive information.`,
-                isError: false
+                text: `Screenshot of the ${shot.width}×${shot.height} screen. The screen may contain sensitive information.`,
+                isError: false,
+                image: shot.dataUrl.replace(/^data:image\/png;base64,/, "")
               };
             }
             const context = desktopContext();

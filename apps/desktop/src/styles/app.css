@@ -6675,6 +6675,97 @@ span.trace-attachment-transcript:hover {
 
 /* It covers the room rather than opening anywhere — nothing navigated, so
    Escape or a click on the ground puts it back exactly where it was. */
+/* What the agent sees, while it drives this Mac (D-218). A live, ephemeral
+   card at the tail of the feed: the newest frame large, the earlier ones a
+   thin strip, each opening full-size. Nothing here is persisted; the frames
+   are pushed over IPC and dropped when the mission on screen changes. */
+.agent-view {
+  margin: var(--s-3) 0;
+  padding: var(--s-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-button);
+  background: var(--surface-1);
+}
+
+.agent-view-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+}
+
+/* The one sanctioned loop (the .breath class in the markup) rides this dot,
+   so a person can tell the view is live and updating, not a still. */
+.agent-view-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.agent-view-label {
+  font: var(--type-micro);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.agent-view-count {
+  margin-left: auto;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.agent-view-frame {
+  display: block;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  overflow: hidden;
+  background: var(--surface-2);
+  cursor: zoom-in;
+}
+
+.agent-view-frame:hover {
+  border-color: var(--edge-hover);
+}
+
+.agent-view-image {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+}
+
+.agent-view-strip {
+  display: flex;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+  overflow-x: auto;
+  padding-bottom: var(--s-1);
+}
+
+.agent-view-thumb {
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  overflow: hidden;
+  background: var(--surface-2);
+  cursor: zoom-in;
+}
+
+.agent-view-thumb:hover {
+  border-color: var(--edge-hover);
+}
+
+.agent-view-thumb img {
+  display: block;
+  height: 48px;
+  width: auto;
+}
+
 .lightbox {
   position: fixed;
   inset: 0;

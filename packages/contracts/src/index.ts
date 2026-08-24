@@ -3850,6 +3850,12 @@ export interface NovusBridge {
      *  opens the settings pane. */
     screenRecording(): Promise<IpcResult<{ granted: boolean }>>;
     openScreenRecording(): Promise<IpcResult<null>>;
+    /** The pixels the agent just looked at during a turn (D-218), pushed to the
+     *  room so a person sees what it sees. Host-local and ephemeral — the frame
+     *  never leaves this Mac and is not persisted. */
+    onScreenshot(
+      listener: (view: { missionId: string; executionId: string; dataUrl: string }) => void
+    ): () => void;
   };
   /** Native notifications (D-180): a turn ending, or the harness asking —
    *  only while the window is elsewhere, each its own machine-local switch. */

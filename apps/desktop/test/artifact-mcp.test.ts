@@ -37,7 +37,7 @@ async function rpc(
   token: string | null,
   method: string,
   params: unknown = {}
-): Promise<{ status: number; body: { result?: { content?: { text?: string }[]; isError?: boolean; tools?: { name: string }[] }; error?: unknown } }> {
+): Promise<{ status: number; body: { result?: { content?: { type?: string; text?: string; data?: string; mimeType?: string }[]; isError?: boolean; tools?: { name: string }[] }; error?: unknown } }> {
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -347,6 +347,38 @@ describe("raw computer use's turn session (D-218)", () => {
     grantComputerSession("exe_mac");
     expect((await rpc(turn.url, turn.token, "tools/call", { name: "computer_click", arguments: { x: 5, y: 6 } })).body.result?.isError).toBe(true);
     expect(computerCalls).toEqual(["computer_screenshot", "computer_click"]);
+
+    turn.release();
+  });
+
+  it("hands a screenshot's pixels to the agent as an image block, so it is not blind", async () => {
+    const turn = await registerCaptureTurn(
+      "exe_eyes",
+      async () => ({ text: "shot", isError: false }),
+      async () => ({ text: "pushed", isError: false }),
+      declareStub,
+      undefined,
+      async (tool: ComputerTool) =>
+        tool === "computer_screenshot"
+          ? { text: "Screenshot of the 1440x900 screen.", isError: false, image: "QUJD" }
+          : { text: `did ${tool}`, isError: false }
+    );
+    grantComputerSession("exe_eyes");
+
+    const shot = await rpc(turn.url, turn.token, "tools/call", { name: "computer_screenshot", arguments: {} });
+    expect(shot.body.result?.isError).toBe(false);
+    const blocks = shot.body.result?.content ?? [];
+    // Image first, so a model reading the first block sees the screen; the
+    // sentence rides second. Without this the agent got only the words and
+    // clicked blind (D-218 amended).
+    expect(blocks[0]?.type).toBe("image");
+    expect(blocks[0]?.data).toBe("QUJD");
+    expect(blocks[0]?.mimeType).toBe("image/png");
+    expect(blocks[1]?.type).toBe("text");
+
+    // A non-screenshot action carries no image — only its word.
+    const click = await rpc(turn.url, turn.token, "tools/call", { name: "computer_click", arguments: { x: 1, y: 2 } });
+    expect((click.body.result?.content ?? []).some((b) => b.type === "image")).toBe(false);
 
     turn.release();
   });

@@ -42,7 +42,13 @@ const novus: NovusBridge = {
     accessibility: () => ipcRenderer.invoke("novus:computer:accessibility"),
     requestAccessibility: () => ipcRenderer.invoke("novus:computer:request-accessibility"),
     screenRecording: () => ipcRenderer.invoke("novus:computer:screen-recording"),
-    openScreenRecording: () => ipcRenderer.invoke("novus:computer:open-screen-recording")
+    openScreenRecording: () => ipcRenderer.invoke("novus:computer:open-screen-recording"),
+    onScreenshot: (listener) => {
+      const wrapped = (_event: unknown, view: { missionId: string; executionId: string; dataUrl: string }) =>
+        listener(view);
+      ipcRenderer.on("novus:agent-screenshot", wrapped);
+      return () => ipcRenderer.removeListener("novus:agent-screenshot", wrapped);
+    }
   },
   notifications: {
     get: () => ipcRenderer.invoke("novus:notifications:get"),

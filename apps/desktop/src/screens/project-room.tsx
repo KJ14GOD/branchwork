@@ -428,6 +428,41 @@ export function ProjectRoom({
    *  one of the things it covers. */
   const [openImage, setOpenImage] = useState<{ artifactId: string; label: string; mimeType?: string } | null>(null);
 
+  // What the agent sees, while it drives this Mac (D-218). The runner pushes
+  // each screenshot the running turn takes; we keep this mission's frames,
+  // newest last, host-local and ephemeral — never from persisted detail, and
+  // dropped when the mission on screen changes. `zoomFrame` holds the one a
+  // click has opened full-size. A separate lightbox from `openImage`: these
+  // are live data URLs, not artifacts, so there is nothing to open or reveal.
+  const [agentFrames, setAgentFrames] = useState<{ dataUrl: string; seq: number }[]>([]);
+  const [zoomFrame, setZoomFrame] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAgentFrames([]); // a new mission is on screen; forget the last one's frames
+    let seq = 0;
+    return novus().computerUse.onScreenshot((view) => {
+      if (view.missionId !== selectedMissionId) return;
+      seq += 1;
+      const at = seq;
+      // Keep the last dozen, so a long turn does not grow the feed without
+      // bound; the newest is what the frame shows, the rest are the strip.
+      setAgentFrames((prev) => [...prev.slice(-11), { dataUrl: view.dataUrl, seq: at }]);
+    });
+  }, [selectedMissionId]);
+
+  // Escape closes the zoomed frame, in capture like the image lightbox does,
+  // so it answers before the room's other Escape handlers.
+  useEffect(() => {
+    if (!zoomFrame) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setZoomFrame(null);
+    };
+    window.addEventListener("keydown", close, true);
+    return () => window.removeEventListener("keydown", close, true);
+  }, [zoomFrame]);
+
   // Escape closes the image (D-152). Registered in the capture phase so it
   // answers before the room's other Escape handlers do: while a picture is
   // covering the surface, Escape means "put it back" and nothing else.
@@ -2264,6 +2299,52 @@ export function ProjectRoom({
                 )
               )}
 
+              {/* What the agent sees, while it drives this Mac (D-218). Live and
+                  ephemeral: the newest frame large, the rest a strip, each
+                  opening full-size. It sits at the tail because that is where
+                  the running turn is — beside the words it is narrating. */}
+              {agentFrames.length > 0 &&
+                (() => {
+                  const latest = agentFrames[agentFrames.length - 1];
+                  if (!latest) return null;
+                  const earlier = agentFrames.slice(0, -1).reverse();
+                  return (
+                    <section className="agent-view" data-testid="agent-view" aria-label="What the agent sees">
+                      <div className="agent-view-head">
+                        <span className="agent-view-dot breath" aria-hidden="true" />
+                        <span className="agent-view-label">Agent&rsquo;s view</span>
+                        {agentFrames.length > 1 && (
+                          <span className="agent-view-count">{agentFrames.length} frames</span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="agent-view-frame"
+                        onClick={() => setZoomFrame(latest.dataUrl)}
+                        title="Open full size"
+                        data-testid="agent-view-latest"
+                      >
+                        <img className="agent-view-image" src={latest.dataUrl} alt="What the agent currently sees" />
+                      </button>
+                      {earlier.length > 0 && (
+                        <div className="agent-view-strip" data-testid="agent-view-strip">
+                          {earlier.map((frame) => (
+                            <button
+                              type="button"
+                              key={frame.seq}
+                              className="agent-view-thumb"
+                              onClick={() => setZoomFrame(frame.dataUrl)}
+                              title="Open full size"
+                            >
+                              <img src={frame.dataUrl} alt="" aria-hidden="true" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  );
+                })()}
+
               {detail.control.openRequests
                 .filter((request) => request.state === "open")
                 .map((request) => (
@@ -2606,6 +2687,27 @@ export function ProjectRoom({
             onClick={(event) => event.stopPropagation()}
           />
           )}
+        </div>
+      )}
+
+      {/* The agent's-view frame, opened full-size (D-218). Its own lightbox,
+          not the artifact one: a live data URL has nothing to reveal in
+          Finder, so it is only the picture over the ground. */}
+      {zoomFrame && (
+        <div
+          className="lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label="What the agent sees, full size"
+          data-testid="agent-view-zoom"
+          onClick={() => setZoomFrame(null)}
+        >
+          <img
+            className="lightbox-image"
+            src={zoomFrame}
+            alt="What the agent sees"
+            onClick={(event) => event.stopPropagation()}
+          />
         </div>
       )}
 
