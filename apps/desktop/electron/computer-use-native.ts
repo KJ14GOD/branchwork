@@ -220,17 +220,27 @@ export function screenRecordingGranted(): boolean {
 async function captureScreen(): Promise<{ dataUrl: string; width: number; height: number }> {
   const primary = screen.getPrimaryDisplay();
   const { width, height } = primary.size;
-  const sources = await desktopCapturer.getSources({
-    types: ["screen"],
-    thumbnailSize: { width, height }
-  });
-  const source = sources[0];
-  if (!source || source.thumbnail.isEmpty()) {
+  // desktopCapturer occasionally returns an empty frame under load or right
+  // after the app takes focus — a transient, not a permission problem. Retry a
+  // few times before giving up (D-218 amended: this "flapping" was reported as
+  // a permission error because an empty frame threw that message).
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width, height } });
+    const source = sources[0];
+    if (source && !source.thumbnail.isEmpty()) {
+      return { dataUrl: source.thumbnail.toDataURL(), width, height };
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  // Only after real retries do we decide why. If the OS says the permission is
+  // missing, say that; otherwise it is a transient empty capture, not a grant
+  // problem — the honest distinction the old code collapsed.
+  if (process.platform === "darwin" && systemPreferences.getMediaAccessStatus("screen") !== "granted") {
     throw new Error(
-      "The screen could not be captured. On macOS this needs Screen Recording permission for Novus."
+      "Screen Recording permission is not granted for Novus. Turn it on in System Settings → Privacy & Security → Screen Recording, then restart the app."
     );
   }
-  return { dataUrl: source.thumbnail.toDataURL(), width, height };
+  throw new Error("The screen capture came back empty this time (a transient failure). Try the screenshot again.");
 }
 
 export function createNativeDesktopDriver(): DesktopDriver {
