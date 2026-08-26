@@ -46,6 +46,7 @@ import {
  *   POST   /control/offers/:offerId/withdraw
  *   POST   /control/offers/:offerId/accept
  *   POST   /control/offers/:offerId/decline
+ *   POST   /missions/:missionId/control/release
  *   POST   /missions/:missionId/control/revoke
  *
  * No other module registers a path under /invitations or /control.
@@ -964,6 +965,82 @@ export function registerAuthorityRoutes(app: FastifyInstance, deps: RouteDeps): 
         missionId: standing.missionId,
         workstreamId: offer.wst_id,
         offerId: offer.offer_id as string
+      });
+    });
+    return { ok: true };
+  });
+
+  // --- Release --------------------------------------------------------------
+
+  /**
+   * The controller hands the baton back with no recipient (D-219): the lease
+   * moves `held → released` and the lane is unheld until claimed — exactly the
+   * standing expiry leaves (PRODUCT.md#control), chosen instead of suffered.
+   * Open requests stay open; the request route already fulfils a re-request
+   * against an unheld lease immediately. A live handoff offer is refused, not
+   * silently failed: naming a recipient and walking away are different acts,
+   * and the offer must be withdrawn first.
+   */
+  app.post("/missions/:missionId/control/release", async (request, reply) => {
+    const ctx = await requireAuth(request, reply);
+    if (!ctx) return;
+    const params = MissionParams.safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, "bad_id", "Malformed mission id.");
+    const standing = await missionAccess(db, ctx, params.data.missionId);
+    if (!standing) return notFound(reply);
+    requireCapability(standing, "control.release");
+    const workstreamId = requireWorkstream(standing);
+
+    await withTransaction(db, async (client) => {
+      await lockMission(client, standing.missionId);
+      // Re-read under the lock: the capability check above ran against state
+      // that may have moved, and only the live holder may let go.
+      const lease = await currentLease(client, workstreamId);
+      if (!lease || lease.holderUserId !== ctx.userId) {
+        throw new AuthorizationError("not_controller", "Only the controller can release control.", 409);
+      }
+      const offerLive = await client.query(
+        "select 1 from handoff_offers where wst_id = $1 and state in ('open', 'accepted', 'waiting_for_boundary') limit 1",
+        [workstreamId]
+      );
+      if ((offerLive.rowCount ?? 0) > 0) {
+        throw new AuthorizationError(
+          "offer_live",
+          "A handoff offer is live on this workstream. Withdraw it before releasing control.",
+          409
+        );
+      }
+      // Compare-and-swap from `held` alone: a lease already `releasing` is
+      // mid-handoff and belongs to that machinery.
+      const released = await client.query(
+        `update control_leases set state = 'released', ended_at = now()
+          where lease_id = $1 and state = 'held' returning lease_id`,
+        [lease.leaseId]
+      );
+      if (released.rowCount === 0) {
+        throw new AuthorizationError("lease_moved", "Control moved before it could be released.", 409);
+      }
+      // Is the harness sitting on a question nobody can now answer? Same
+      // honesty as expiry (D-034): releasing removes authority, never work,
+      // and the record has to explain why the mission suddenly needs someone.
+      const waiting = await client.query(
+        `select 1 from approval_requests a
+           join executions e on e.exe_id = a.exe_id
+          where a.wst_id = $1 and a.state = 'pending'
+            and e.state not in ('completed', 'stopped', 'interrupted', 'failed')
+          limit 1`,
+        [workstreamId]
+      );
+      await recordEvent(client, {
+        orgId: standing.orgId,
+        missionId: standing.missionId,
+        workstreamId,
+        kind: "control.released",
+        actorKind: "user",
+        actorId: ctx.userId,
+        actorLogin: ctx.login,
+        causeLeaseId: lease.leaseId,
+        payload: { holderLogin: ctx.login, approvalWaiting: (waiting.rowCount ?? 0) > 0 }
       });
     });
     return { ok: true };

@@ -811,3 +811,65 @@ describe("two-client reconstruction", () => {
     ]);
   });
 });
+
+describe("releasing control (D-219)", () => {
+  it("lets the controller hand the baton back, and a request then claims the unheld lane", async () => {
+    const { missionId, workstreamId } = await room("Handing the baton back", [{ who: maya }]);
+
+    const released = await post(kartik, `/missions/${missionId}/control/release`);
+    expect(released.statusCode).toBe(200);
+    expect(OkResponseSchema.parse(released.json())).toEqual({ ok: true });
+
+    // The lane is unheld — released, not expired and not revoked — and the
+    // record says who let go and that no approval was left waiting.
+    const control = (await detail(maya, missionId)).control;
+    expect(control.holderUserId).toBeNull();
+    const lease = await h.db.query(
+      "select state from control_leases where wst_id = $1 order by created_at desc limit 1",
+      [workstreamId]
+    );
+    expect(lease.rows[0].state).toBe("released");
+    const events = await h.db.query(
+      "select actor_login, payload from events where mission_id = $1 and kind = 'control.released'",
+      [missionId]
+    );
+    expect(events.rows).toHaveLength(1);
+    expect(events.rows[0].actor_login).toBe("kartik");
+    expect(events.rows[0].payload).toMatchObject({ holderLogin: "kartik", approvalWaiting: false });
+
+    // The hand-back's second step: a request against the unheld lease is a
+    // claim and fulfills immediately (PRODUCT.md#control).
+    const claimed = await post(maya, `/missions/${missionId}/control/request`);
+    expect(claimed.statusCode).toBe(200);
+    expect((await detail(maya, missionId)).control.holderUserId).toBe(maya.userId);
+  });
+
+  it("refuses release from anyone but the controller, and from a lane already unheld", async () => {
+    const { missionId } = await room("Only the holder lets go", [{ who: maya }]);
+
+    const byPeer = await post(maya, `/missions/${missionId}/control/release`);
+    expect(byPeer.statusCode).toBe(403);
+    expect((await detail(maya, missionId)).control.holderUserId).toBe(kartik.userId);
+
+    await post(kartik, `/missions/${missionId}/control/release`);
+    // A second release finds no lease to let go of: the capability lapsed
+    // with the lease, so the refusal is the capability's, not a 500.
+    const twice = await post(kartik, `/missions/${missionId}/control/release`);
+    expect(twice.statusCode).toBe(403);
+  });
+
+  it("refuses release while a handoff offer is live and names the fix", async () => {
+    const { missionId } = await room("Withdraw before walking away", [{ who: maya }]);
+    await post(kartik, `/missions/${missionId}/control/offer`, { toUserId: maya.userId });
+
+    const refused = await post(kartik, `/missions/${missionId}/control/release`);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error.code).toBe("offer_live");
+
+    const offer = (await detail(kartik, missionId)).control.liveOffer;
+    await post(kartik, `/control/offers/${offer.offerId}/withdraw`);
+    const released = await post(kartik, `/missions/${missionId}/control/release`);
+    expect(released.statusCode).toBe(200);
+    expect((await detail(kartik, missionId)).control.holderUserId).toBeNull();
+  });
+});

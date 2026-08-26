@@ -1,0 +1,51 @@
+# A deployed control plane and its PostgreSQL (D-221). From the repository root:
+#
+#   docker compose -f apps/control-plane/deploy/docker-compose.yml up --build
+#
+# This serves plain HTTP on ${NOVUS_CP_PORT:-4460}. For anything beyond a
+# trusted network, terminate TLS in front (Caddy, nginx, or a cloud load
+# balancer) and set NOVUS_CP_PUBLIC_URL to the https URL clients and GitHub
+# see — the OAuth callback and webhook URLs derive from it
+# (ARCHITECTURE.md#deployment).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: novus
+      POSTGRES_PASSWORD: ${NOVUS_PG_PASSWORD:-novus}
+      POSTGRES_DB: novus
+    volumes:
+      - novus-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U novus"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  control-plane:
+    build:
+      context: ../../..
+      dockerfile: apps/control-plane/deploy/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NOVUS_DATABASE_URL: postgres://novus:${NOVUS_PG_PASSWORD:-novus}@postgres:5432/novus
+      NOVUS_CP_PORT: ${NOVUS_CP_PORT:-4460}
+      NOVUS_CP_PUBLIC_URL: ${NOVUS_CP_PUBLIC_URL:-http://127.0.0.1:4460}
+      NOVUS_GITHUB_CLIENT_ID: ${NOVUS_GITHUB_CLIENT_ID:-}
+      NOVUS_GITHUB_CLIENT_SECRET: ${NOVUS_GITHUB_CLIENT_SECRET:-}
+      NOVUS_GHAPP_ID: ${NOVUS_GHAPP_ID:-}
+      NOVUS_GHAPP_PEM_B64: ${NOVUS_GHAPP_PEM_B64:-}
+      NOVUS_GITHUB_WEBHOOK_SECRET: ${NOVUS_GITHUB_WEBHOOK_SECRET:-}
+      NOVUS_ARTIFACT_STORE: ${NOVUS_ARTIFACT_STORE:-local}
+      NOVUS_ARTIFACT_DIR: /data/artifacts
+    volumes:
+      - novus-artifacts:/data/artifacts
+    ports:
+      - "${NOVUS_CP_PORT:-4460}:${NOVUS_CP_PORT:-4460}"
+
+volumes:
+  novus-pgdata:
+  novus-artifacts:

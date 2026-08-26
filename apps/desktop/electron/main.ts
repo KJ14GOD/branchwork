@@ -10,7 +10,7 @@ import {
   shell,
   type WebContents
 } from "electron";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openableExtensionOf, openRefusalFor } from "./artifact-open";
 import { createNotifier, type NotificationPrefs, type Notifier } from "./notifications";
@@ -154,7 +154,25 @@ if (process.env.NOVUS_USER_DATA_DIR && !app.isPackaged) {
   app.setPath("userData", process.env.NOVUS_USER_DATA_DIR);
 }
 
-const controlPlaneUrl = process.env.NOVUS_CP_URL ?? "http://127.0.0.1:4460";
+/**
+ * Which control plane this client speaks to (D-222). A Finder launch carries
+ * no environment, so a packaged app reads the deployment's address from one
+ * plain file a person writes once — `{userData}/control-plane.url`, holding a
+ * single http(s) URL. NOVUS_CP_URL still wins where an environment exists,
+ * and the loopback default still serves the local-first deployment.
+ */
+function configuredControlPlaneUrl(): string | null {
+  try {
+    const raw = readFileSync(join(app.getPath("userData"), "control-plane.url"), "utf8").trim();
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return raw.replace(/\/+$/, "");
+  } catch {
+    return null; // Absent or unreadable: the default stands.
+  }
+}
+const controlPlaneUrl =
+  process.env.NOVUS_CP_URL ?? configuredControlPlaneUrl() ?? "http://127.0.0.1:4460";
 const store = new SessionStore();
 const api = new ControlPlaneClient(controlPlaneUrl, () => store.load());
 
@@ -1289,6 +1307,47 @@ function registerIpc(): void {
     });
   });
 
+  /**
+   * Saves the receipt outside Novus (D-220). The renderer already holds the
+   * deterministic markdown projection of the stored snapshot; this side owns
+   * only the OS save dialog and the write — no network, no recomputation.
+   * The size bound mirrors the snapshot's own: a receipt is the record's
+   * summary, and a megabyte of "summary" is a bug, not an export.
+   */
+  ipcMain.handle("novus:missions:export-receipt", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({ missionId: z.string().startsWith("msn_"), markdown: z.string().min(1).max(1_000_000) })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, code: "invalid_export", message: "Nothing to export." };
+    }
+    const fileName = `receipt-${parsed.data.missionId}.md`;
+    try {
+      // Test seam: the e2e cannot drive a native dialog, so a declared
+      // directory stands in for the person's choice — same write, same result.
+      const e2eDir = process.env.NOVUS_E2E_EXPORT_DIR;
+      if (e2eDir) {
+        const target = join(e2eDir, fileName);
+        writeFileSync(target, parsed.data.markdown, "utf8");
+        return { ok: true, value: { path: target } };
+      }
+      const chosen = await dialog.showSaveDialog({
+        title: "Export receipt",
+        defaultPath: join(app.getPath("downloads"), fileName),
+        filters: [{ name: "Markdown", extensions: ["md"] }]
+      });
+      if (chosen.canceled || !chosen.filePath) return { ok: true, value: null };
+      writeFileSync(chosen.filePath, parsed.data.markdown, "utf8");
+      return { ok: true, value: { path: chosen.filePath } };
+    } catch (error) {
+      return {
+        ok: false,
+        code: "export_failed",
+        message: error instanceof Error ? error.message : "The receipt could not be written."
+      };
+    }
+  });
+
   ipcMain.handle("novus:missions:set-enabled-mcp", async (_event, raw: unknown) => {
     // Asking is all this is (AGENTS.md rule 13): the server judges mcp.set —
     // Mission Admin's alone — and the published-manifest match (D-119).
@@ -1729,6 +1788,7 @@ function registerIpc(): void {
     "novus:control:decline-offer",
     controlVerb(z.string().startsWith("hof_"), (id) => api.declineOffer(id))
   );
+  ipcMain.handle("novus:control:release", controlVerb(MissionIdSchema, (id) => api.releaseControl(id)));
   ipcMain.handle("novus:control:revoke", controlVerb(MissionIdSchema, (id) => api.revokeControl(id)));
 
   // --- Invitations ----------------------------------------------------------

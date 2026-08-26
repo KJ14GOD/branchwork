@@ -1,6 +1,9 @@
+import { useState } from "react";
 import type { MissionDetailResponse, ReceiptSnapshot } from "@novus/contracts";
 import { ReceiptArtifactRow } from "./artifact-row";
 import { roleLabel } from "./identity";
+import { renderReceipt } from "./receipt-export";
+import { novus } from "../bridge";
 import { shortSha } from "../format";
 
 /**
@@ -24,6 +27,17 @@ export function ReceiptView({
     receipt.outcome === "completed"
       ? `Completed by ${receipt.closedByLogin}`
       : `Cancelled by ${receipt.closedByLogin}`;
+  // The one word this document says about the export: where it went, or why
+  // it did not. A cancelled dialog says nothing — a cancel is an answer.
+  const [exportWord, setExportWord] = useState<string | null>(null);
+  const exportReceipt = async () => {
+    const result = await novus().missions.exportReceipt({
+      missionId: detail.mission.missionId,
+      markdown: renderReceipt(receipt, detail.mission.missionId)
+    });
+    if (!result.ok) setExportWord(result.message);
+    else if (result.value) setExportWord(`Saved to ${result.value.path}`);
+  };
   return (
     <div className="receipt" data-testid="receipt-view">
       <p className="receipt-head">
@@ -33,7 +47,19 @@ export function ReceiptView({
           day: "numeric",
           year: "numeric"
         })}
+        <button
+          className="btn btn-text receipt-export"
+          onClick={() => void exportReceipt()}
+          data-testid="export-receipt"
+        >
+          Export
+        </button>
       </p>
+      {exportWord && (
+        <p className="receipt-quiet" data-testid="export-receipt-word">
+          {exportWord}
+        </p>
+      )}
       {receipt.reason && <p className="receipt-reason">“{receipt.reason}”</p>}
       <p className="receipt-criteria">{detail.mission.successCriteria}</p>
 

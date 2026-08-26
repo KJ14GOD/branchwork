@@ -964,6 +964,9 @@ export class ControlPlaneClient {
   declineOffer(offerId: string): Promise<void> {
     return this.controlPost(`/control/offers/${encodeURIComponent(offerId)}/decline`);
   }
+  releaseControl(missionId: string): Promise<void> {
+    return this.controlPost(`/missions/${encodeURIComponent(missionId)}/control/release`);
+  }
   revokeControl(missionId: string): Promise<void> {
     return this.controlPost(`/missions/${encodeURIComponent(missionId)}/control/revoke`);
   }

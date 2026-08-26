@@ -1028,6 +1028,11 @@ export const CapabilitySchema = z.enum([
   "control.request",
   "control.offer",
   "control.accept",
+  /** The controller hands the baton back with no recipient (D-219): the
+   *  lease moves `held → released` and the lane is unheld until claimed —
+   *  the same standing a lapsed lease leaves, chosen instead of suffered.
+   *  Lease-granted only, like `control.offer`. */
+  "control.release",
   "control.revoke"
 ]);
 export type Capability = z.infer<typeof CapabilitySchema>;
@@ -4139,6 +4144,11 @@ export interface NovusBridge {
      *  running/waiting refusals, and completion's own gates (a standing
      *  decision, no open pull request). */
     close(missionId: string, input: CloseMissionInput): Promise<IpcResult<null>>;
+    /** Saves the receipt outside Novus (D-220): the renderer's deterministic
+     *  markdown projection of the stored snapshot, written where the person
+     *  chooses through the OS save dialog. Resolves `{ path }` on save, null
+     *  when they cancel — a cancel is an answer, not an error. */
+    exportReceipt(input: { missionId: string; markdown: string }): Promise<IpcResult<{ path: string } | null>>;
     /** Takes it back out, into the ordinary list it left. */
     restore(missionId: string): Promise<IpcResult<null>>;
     respondApproval(input: {
@@ -4273,6 +4283,7 @@ export interface NovusBridge {
     withdrawOffer(offerId: string): Promise<IpcResult<null>>;
     acceptOffer(offerId: string): Promise<IpcResult<null>>;
     declineOffer(offerId: string): Promise<IpcResult<null>>;
+    release(missionId: string): Promise<IpcResult<null>>;
     revoke(missionId: string): Promise<IpcResult<null>>;
   };
   invites: {

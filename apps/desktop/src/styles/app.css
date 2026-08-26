@@ -6215,6 +6215,11 @@ body.resizing {
   color: var(--text-1);
 }
 
+/* The document's one action (D-220), quiet at the head sentence's end. */
+.receipt-export {
+  margin-left: var(--s-3);
+}
+
 .receipt-reason,
 .receipt-rationale {
   font: var(--type-body);

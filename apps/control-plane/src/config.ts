@@ -2,6 +2,14 @@ import { randomBytes } from "node:crypto";
 
 export interface Config {
   port: number;
+  /**
+   * The interface the server binds (D-221). Loopback by default — the
+   * local-first deployment serves one machine and must not be reachable from
+   * the network by accident. A deployed control plane sets NOVUS_CP_HOST
+   * (typically 0.0.0.0 behind a TLS-terminating reverse proxy) deliberately,
+   * together with the https NOVUS_CP_PUBLIC_URL its clients and GitHub see.
+   */
+  host: string;
   publicBaseUrl: string;
   databaseUrl: string;
   githubClientId: string;
@@ -47,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const port = Number(env.NOVUS_CP_PORT ?? 4460);
   return {
     port,
+    host: env.NOVUS_CP_HOST ?? "127.0.0.1",
     publicBaseUrl: env.NOVUS_CP_PUBLIC_URL ?? `http://127.0.0.1:${port}`,
     databaseUrl: env.NOVUS_DATABASE_URL ?? "postgres://novus:novus@127.0.0.1:5433/novus",
     githubClientId: env.NOVUS_GITHUB_CLIENT_ID ?? "",

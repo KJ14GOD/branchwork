@@ -129,7 +129,10 @@ const LEASE_CAPABILITIES: Capability[] = [
   // turn to stop and the machine never answered — declaring it dead is the
   // same authority, one step later.
   "force_interrupt",
-  "control.offer"
+  "control.offer",
+  // Handing the baton back with no recipient (D-219) is the controller's own
+  // act on their own lease, so it lives here and in no role list.
+  "control.release"
 ];
 
 export interface MissionAccess {

@@ -8,7 +8,29 @@
     "typecheck": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "start": "electron .",
     "test": "vitest run --config vitest.config.ts",
-    "e2e": "vitest run --config e2e/vitest.config.ts"
+    "e2e": "vitest run --config e2e/vitest.config.ts",
+    "package": "electron-builder --mac dmg"
+  },
+  "build": {
+    "appId": "app.novus.desktop",
+    "productName": "Novus",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist-electron/**",
+      "dist-renderer/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**"
+    ],
+    "mac": {
+      "target": "dmg",
+      "identity": null,
+      "category": "public.app-category.developer-tools"
+    },
+    "npmRebuild": false
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",
@@ -26,6 +48,7 @@
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.7.0",
     "electron": "^37.2.0",
+    "electron-builder": "^26.15.3",
     "pg": "^8.22.0",
     "playwright": "^1.54.0",
     "react": "^19.1.0",

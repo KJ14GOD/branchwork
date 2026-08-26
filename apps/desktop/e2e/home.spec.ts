@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
@@ -26,6 +26,7 @@ const DB_URL = `postgres://novus:novus@127.0.0.1:5433/${DB_NAME}`;
 let controlPlane: ChildProcess;
 let app: ElectronApplication;
 let page: Page;
+let exportDir: string;
 let repoName: string;
 
 const git = (cwd: string, args: string[]): string =>
@@ -74,6 +75,7 @@ async function createMission(goal: string): Promise<void> {
 beforeAll(async () => {
   mkdirSync(evidenceDir, { recursive: true });
   const userDataDir = mkdtempSync(join(tmpdir(), "novus-home-"));
+  exportDir = mkdtempSync(join(tmpdir(), "novus-home-export-"));
 
   const pg = await import("pg");
   const admin = new pg.default.Pool({
@@ -130,6 +132,9 @@ beforeAll(async () => {
       // Every fake turn stops at its permission question, so a blocked
       // mission is a stable fixture rather than a race.
       NOVUS_FAKE_HARNESS_APPROVAL: "1",
+      // Stands in for the export dialog's answer (D-220): a native save
+      // dialog cannot be driven from here, the write path is the same.
+      NOVUS_E2E_EXPORT_DIR: exportDir,
       NOVUS_USER_DATA_DIR: userDataDir
     }
   });
@@ -263,6 +268,20 @@ describe("the Home board (D-120)", () => {
       );
       expect(await page.getByTestId("close-ended").textContent()).toContain("receipt saved");
       await page.screenshot({ path: join(evidenceDir, "129-cancelled-receipt.png") });
+
+      // The receipt leaves Novus (D-220): Export writes the deterministic
+      // markdown projection where the person chose, and the document says so.
+      await page.getByTestId("export-receipt").click();
+      await page.getByTestId("export-receipt-word").waitFor({ timeout: 15_000 });
+      const exportWord = (await page.getByTestId("export-receipt-word").textContent()) ?? "";
+      expect(exportWord).toContain("Saved to ");
+      const exportedPath = exportWord.replace("Saved to ", "").trim();
+      const exported = readFileSync(exportedPath, "utf8");
+      expect(exported).toContain("# Receipt ·");
+      expect(exported).toContain("Cancelled by spike-user");
+      expect(exported).toContain("> The endpoint shipped by hand instead.");
+      expect(exported).toContain("## Remains uncertain");
+      await page.screenshot({ path: join(evidenceDir, "229-receipt-exported.png") });
 
       // The board files it under Complete — the fifth column the terminal
       // lifecycle finally earns — while the blocked mission stays Needs you.

@@ -4,6 +4,7 @@ node_modules/
 dist/
 dist-electron/
 dist-renderer/
+release/
 *.tsbuildinfo
 tmp/
 .novus-artifacts/

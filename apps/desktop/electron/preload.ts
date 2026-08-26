@@ -157,6 +157,7 @@ const novus: NovusBridge = {
       ),
     archive: (missionId) => ipcRenderer.invoke("novus:missions:archive", missionId),
     close: (missionId, input) => ipcRenderer.invoke("novus:missions:close", { missionId, input }),
+    exportReceipt: (input) => ipcRenderer.invoke("novus:missions:export-receipt", input),
     restore: (missionId) => ipcRenderer.invoke("novus:missions:restore", missionId),
     respondApproval: (input) => ipcRenderer.invoke("novus:missions:respond-approval", input)
   },
@@ -208,6 +209,7 @@ const novus: NovusBridge = {
     withdrawOffer: (offerId) => ipcRenderer.invoke("novus:control:withdraw-offer", offerId),
     acceptOffer: (offerId) => ipcRenderer.invoke("novus:control:accept-offer", offerId),
     declineOffer: (offerId) => ipcRenderer.invoke("novus:control:decline-offer", offerId),
+    release: (missionId) => ipcRenderer.invoke("novus:control:release", missionId),
     revoke: (missionId) => ipcRenderer.invoke("novus:control:revoke", missionId)
   },
   invites: {

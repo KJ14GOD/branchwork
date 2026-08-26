@@ -536,6 +536,44 @@ describe("two people, one mission", () => {
 
     await capture(kartik, "27-reconstructed-after-relaunch");
 
+    // --- The baton goes back (D-219): release, then claim ---------------------
+    // Maya reopened as the controller, so her state line carries the quiet
+    // Release control action beside "You have the baton". She clicks it — the
+    // real interface, not the bridge — and the lane is unheld until claimed.
+    await maya.page.getByTestId("project-room").first().waitFor({ timeout: 20_000 });
+    const releaseAction = maya.page.getByTestId("release-control");
+    await releaseAction.waitFor({ timeout: 15_000 });
+    await snap(maya, "227-release-control-on-the-state-line");
+    await releaseAction.click();
+
+    const unheld = await until(
+      kartik,
+      missionId,
+      (value) => value.control.holderUserId === null,
+      "the baton to come back unheld"
+    );
+    expect(unheld.events.some((event) => event.kind === "control.released")).toBe(true);
+
+    // Maya's lease authority ended the moment she let go.
+    const mayaAfterRelease = await detail(maya, missionId);
+    expect(mayaAfterRelease.capabilities).not.toContain("control.offer");
+    expect(mayaAfterRelease.capabilities).not.toContain("direction.apply");
+
+    // The unheld lane is claimable: Kartik's request fulfills immediately,
+    // completing the two-step return of the baton (PRODUCT.md#control).
+    await kartik.page.evaluate(async (id) => {
+      const result = await window.novus.control.request(id);
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+    }, missionId);
+    const reclaimed = await until(
+      maya,
+      missionId,
+      (value) => value.control.holderLogin === "kartik",
+      "Kartik to claim the released baton"
+    );
+    expect(reclaimed.events.some((event) => event.kind === "control.granted")).toBe(true);
+    await capture(kartik, "228-baton-handed-back-and-claimed");
+
     await kartik.app.close();
     await maya.app.close();
   });

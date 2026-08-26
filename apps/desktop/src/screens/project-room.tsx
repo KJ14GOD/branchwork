@@ -1940,6 +1940,21 @@ export function ProjectRoom({
                 : ""}
             </span>
           </span>
+          {/* Not in a terminal room: a receipt's every action is read-only
+              (DESIGN.md#state-presentation), and a baton over finished work
+              is not one to hand back. */}
+          {detail && isController && !detail.receipt && (
+            <GatedAction
+              capability="control.release"
+              capabilities={detail.capabilities}
+              denialReason="Only the controller can release control."
+              onClick={() => void runAction(novus().control.release(detail.mission.missionId))}
+              variant="text"
+              testid="release-control"
+            >
+              Release control
+            </GatedAction>
+          )}
           {detail && !isController && (
             <GatedAction
               capability="control.request"
