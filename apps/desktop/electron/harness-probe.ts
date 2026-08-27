@@ -11,19 +11,19 @@ import type { SetupProbeResponse, HarnessProbe } from "@novus/contracts";
  * org-provisioned credentials regardless (D-013).
  */
 
-const PROBE_PATH = [
-  process.env.PATH ?? "",
-  join(homedir(), ".local", "bin"),
-  "/opt/homebrew/bin",
-  "/usr/local/bin"
-].join(":");
+/** Computed per call, never at module load (D-222 amended twice): startup
+ *  folds the login shell's PATH into process.env after modules import, so a
+ *  load-time snapshot would freeze the bare Finder PATH and miss every
+ *  version-manager install — exactly the staleness the fold-in exists to fix. */
+const probePath = (): string =>
+  [process.env.PATH ?? "", join(homedir(), ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"].join(":");
 
 function cliVersion(binary: string): Promise<string | null> {
   return new Promise((resolve) => {
     execFile(
       binary,
       ["--version"],
-      { timeout: 5000, env: { ...process.env, PATH: PROBE_PATH } },
+      { timeout: 5000, env: { ...process.env, PATH: probePath() } },
       (error, stdout) => resolve(error ? null : stdout.trim().split("\n")[0] ?? null)
     );
   });

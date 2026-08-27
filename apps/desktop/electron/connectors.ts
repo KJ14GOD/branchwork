@@ -88,13 +88,12 @@ function readCache(userDataPath: string): Cache {
   }
 }
 
-/** Where the CLI binary is likely to be, matching the harness probe (D-029). */
-const PROBE_PATH = [
-  process.env.PATH ?? "",
-  join(homedir(), ".local", "bin"),
-  "/opt/homebrew/bin",
-  "/usr/local/bin"
-].join(":");
+/** Where the CLI binary is likely to be, matching the harness probe (D-029).
+ *  Computed per call, never at module load (D-222 amended twice): startup
+ *  folds the login shell's PATH in after modules import, so a load-time
+ *  snapshot would freeze the bare Finder PATH. */
+const probePath = (): string =>
+  [process.env.PATH ?? "", join(homedir(), ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"].join(":");
 
 /** One `claude mcp list` line: `{name}: {url}[ (T)] - {glyph} {status}`. The
  *  name is everything before the first `: ` — a service name can hold spaces
@@ -164,7 +163,7 @@ export function discoverConnectors(
     execFile(
       "claude",
       ["mcp", "list"],
-      { timeout: 12_000, env: { ...env, PATH: PROBE_PATH } },
+      { timeout: 12_000, env: { ...env, PATH: probePath() } },
       (error, stdout) => {
         if (error && !stdout) return resolve({ installed: false, connectors: [] });
         const present: Cache = [];
