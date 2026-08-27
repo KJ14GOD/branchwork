@@ -35,8 +35,10 @@ import {
   FakeRepositoryProvider,
   MergeRefusedError,
   ProviderTransientError,
+  RepoTokenMissingError,
   UnknownPullRequestError
 } from "./repo-provider.ts";
+import { repoActorOf } from "./auth.ts";
 import type { RouteDeps } from "./routes.ts";
 
 /**
@@ -77,6 +79,9 @@ async function hostErrorReply(deps: RouteDeps, reply: FastifyReply, error: unkno
   }
   if (error instanceof UnknownPullRequestError) {
     return deps.sendError(reply, 404, "unknown_pull_request", error.message);
+  }
+  if (error instanceof RepoTokenMissingError) {
+    return deps.sendError(reply, 403, "repo_token_missing", error.message);
   }
   if (error instanceof ProviderTransientError) {
     return deps.sendError(reply, 502, "provider_unavailable", error.message);
@@ -431,7 +436,7 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
     const access = await missionAccess(deps.db, ctx, pull.missionId, pull.workstreamId);
     if (!access) return deps.sendError(reply, 404, "not_found", "No such pull request in your organization.");
     try {
-      return await deps.provider.listPullFiles(pull.providerRepoId, pull.number);
+      return await deps.provider.listPullFiles(await repoActorOf(deps.db, ctx.userId), pull.providerRepoId, pull.number);
     } catch (error) {
       return hostErrorReply(deps, reply, error);
     }

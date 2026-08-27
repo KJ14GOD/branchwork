@@ -10,11 +10,13 @@ import { standingDecision } from "./approaches.ts";
 import {
   MergeRefusedError,
   PullRequestExistsError,
+  RepoTokenMissingError,
   UnknownRepositoryError,
   type HostPullRequest,
   type RepositoryProvider,
   type HostPullRequestListing
 } from "./repo-provider.ts";
+import { repoActorOf } from "./auth.ts";
 
 /**
  * OWNER: the publication domain (D-099, D-100) — what a decision becomes.
@@ -425,7 +427,9 @@ export async function openDraft(
 
   let opened: HostPullRequest;
   try {
-    opened = await provider.createPullRequest(laneRepo.providerRepoId, {
+    // The acting person's own token opens it, so GitHub shows them as the
+    // author (D-223, reversing D-100's App authorship).
+    opened = await provider.createPullRequest(await repoActorOf(db, by.userId), laneRepo.providerRepoId, {
       title: prepared.title,
       body: prepared.body,
       headRef: prepared.headRef,
@@ -496,7 +500,7 @@ export async function requestReviewers(
   by: Steward,
   reviewers: string[]
 ): Promise<void> {
-  await provider.requestReviewers(pull.providerRepoId, pull.number, reviewers);
+  await provider.requestReviewers(await repoActorOf(db, by.userId), pull.providerRepoId, pull.number, reviewers);
   await withTransaction(db, async (client) => {
     await client.query(
       `update pull_requests
@@ -533,7 +537,7 @@ export async function markReady(
   pull: PullContext,
   by: Steward
 ): Promise<void> {
-  await provider.markPullRequestReady(pull.providerRepoId, pull.number);
+  await provider.markPullRequestReady(await repoActorOf(db, by.userId), pull.providerRepoId, pull.number);
   await withTransaction(db, async (client) => {
     await client.query(`update pull_requests set state = 'ready' where pr_id = $1 and state = 'draft'`, [
       pull.pullRequestId
@@ -578,7 +582,8 @@ export async function mergePull(
   if (pull.state === "draft") return { kind: "still_a_draft" };
 
   // Fresh readiness at the moment of asking, never a stale row.
-  const readiness = await provider.getMergeReadiness(pull.providerRepoId, pull.number);
+  const actor = await repoActorOf(db, by.userId);
+  const readiness = await provider.getMergeReadiness(actor, pull.providerRepoId, pull.number);
   if (!readiness.allowedMergeMethods.includes(input.method)) {
     return { kind: "method_not_allowed", allowed: [...readiness.allowedMergeMethods] };
   }
@@ -604,14 +609,14 @@ export async function mergePull(
 
   let merged: { sha: string | null };
   try {
-    merged = await provider.mergePullRequest(pull.providerRepoId, pull.number, input.method);
+    merged = await provider.mergePullRequest(actor, pull.providerRepoId, pull.number, input.method);
   } catch (error) {
     if (error instanceof MergeRefusedError) return { kind: "host_refuses", reason: error.message };
     throw error;
   }
 
   // The host performed it; ingest the host's own account immediately.
-  const host = await provider.getPullRequest(pull.providerRepoId, pull.number).catch(() => null);
+  const host = await provider.getPullRequest(actor, pull.providerRepoId, pull.number).catch(() => null);
   await withMission(db, pull.missionId, async (client) => {
     await client.query(
       `update pull_requests
@@ -653,7 +658,7 @@ export async function updateBranch(
   pull: PullContext,
   by: Steward
 ): Promise<void> {
-  await provider.updatePullRequestBranch(pull.providerRepoId, pull.number);
+  await provider.updatePullRequestBranch(await repoActorOf(db, by.userId), pull.providerRepoId, pull.number);
   await recordAct(db, pull, by, "pr.branch_updated", {});
 }
 
@@ -664,7 +669,7 @@ export async function closePull(
   pull: PullContext,
   by: Steward
 ): Promise<void> {
-  await provider.closePullRequest(pull.providerRepoId, pull.number);
+  await provider.closePullRequest(await repoActorOf(db, by.userId), pull.providerRepoId, pull.number);
   await withMission(db, pull.missionId, async (client) => {
     await client.query(
       `update pull_requests set state = 'closed', closed_at = now(), last_synced_at = now() where pr_id = $1`,
@@ -692,15 +697,17 @@ export async function deleteBranch(
   by: Steward,
   headRef: string
 ): Promise<void> {
-  await provider.deleteBranchRef(pull.providerRepoId, headRef);
+  await provider.deleteBranchRef(await repoActorOf(db, by.userId), pull.providerRepoId, headRef);
   await recordAct(db, pull, by, "pr.branch_deleted", { branch: headRef });
 }
 
 /**
- * Sends a comment to the host as the person where their token is held
- * (D-101), as the App with in-body attribution otherwise. The token never
- * leaves this process: read here, handed to the provider call, never stored
- * anywhere new and never logged.
+ * Sends a comment to the host as the person — their own token performs the
+ * call, so GitHub shows them as the author (D-101, made the rule by D-223:
+ * the App fallback is gone, and a person with no stored token is refused by
+ * name rather than voiced by a bot). The token never leaves this process:
+ * read here, handed to the provider call, never stored anywhere new and
+ * never logged.
  */
 export async function sendComment(
   db: Db,
@@ -709,24 +716,20 @@ export async function sendComment(
   by: Steward,
   input: { body: string; path?: string; line?: number }
 ): Promise<void> {
-  const tokenRow = await db.query("select github_token from users where user_id = $1", [by.userId]);
-  const userToken = (tokenRow.rows[0]?.github_token as string | null | undefined) ?? null;
-  const asUser = userToken ? { token: userToken, login: by.login } : undefined;
-  await provider.createPullComment(
-    pull.providerRepoId,
-    pull.number,
-    {
-      body: asUser ? input.body : `**${by.login} via Novus:** ${input.body}`,
-      ...(input.path !== undefined ? { path: input.path } : {}),
-      ...(input.line !== undefined ? { line: input.line } : {})
-    },
-    asUser
-  );
+  const actor = await repoActorOf(db, by.userId);
+  // No token, no comment (D-223): refused by name here — before any provider
+  // — so the fake and the live host answer a token-less person identically.
+  if (!actor.token) throw new RepoTokenMissingError();
+  await provider.createPullComment(actor, pull.providerRepoId, pull.number, {
+    body: input.body,
+    ...(input.path !== undefined ? { path: input.path } : {}),
+    ...(input.line !== undefined ? { line: input.line } : {})
+  });
   await recordAct(db, pull, by, "pr.comment_sent", {
     path: input.path ?? null,
     line: input.line ?? null,
-    // Whether the host saw the person or the App as the author (D-101).
-    authoredAs: asUser ? "user" : "app"
+    // The host saw the person as the author; the App never speaks (D-223).
+    authoredAs: "user"
   });
 }
 
@@ -739,7 +742,7 @@ export async function resolveThread(
   by: Steward,
   threadId: string
 ): Promise<void> {
-  await provider.resolveReviewThread(pull.providerRepoId, threadId);
+  await provider.resolveReviewThread(await repoActorOf(db, by.userId), pull.providerRepoId, threadId);
   await withTransaction(db, async (client) => {
     await client.query(
       `update pull_requests
@@ -779,7 +782,7 @@ export async function editMetadata(
   by: Steward,
   input: { title?: string; body?: string; labels?: string[] }
 ): Promise<void> {
-  await provider.setPullRequestMetadata(pull.providerRepoId, pull.number, {
+  await provider.setPullRequestMetadata(await repoActorOf(db, by.userId), pull.providerRepoId, pull.number, {
     ...(input.title !== undefined ? { title: input.title } : {}),
     ...(input.body !== undefined ? { body: input.body } : {}),
     ...(input.labels !== undefined ? { labels: input.labels } : {})
@@ -838,11 +841,17 @@ export interface SyncRow {
   mergeable: string;
   review_threads: unknown;
   provider_repo_id: string;
+  /** Whose token reads this row from the host (D-223): the pull's creator —
+   *  null for an adopted request opened outside Novus, which falls back to
+   *  the mission's creator, the person whose lane adoption ran under. */
+  created_by: string | null;
+  mission_created_by: string;
 }
 
 export const SYNC_SELECT = `select p.pr_id, p.org_id, p.mission_id, p.wst_id, p.provider_number, p.state, p.mergeable,
-            p.review_threads, repo.provider_repo_id
+            p.review_threads, p.created_by, m.created_by as mission_created_by, repo.provider_repo_id
        from pull_requests p
+       join missions m on m.mission_id = p.mission_id
        join workstreams w on w.wst_id = p.wst_id
        join repositories repo on repo.repo_id = w.repo_id`;
 
@@ -865,7 +874,7 @@ export async function sweepPullRequestsOnce(db: Db, provider: RepositoryProvider
  */
 export async function adoptPullRequestsOnce(db: Db, provider: RepositoryProvider): Promise<void> {
   const lanes = await db.query(
-    `select w.wst_id, m.org_id, w.mission_id, w.mission_branch, repo.provider_repo_id
+    `select w.wst_id, m.org_id, w.mission_id, w.mission_branch, m.created_by, repo.provider_repo_id
        from workstreams w
        join missions m on m.mission_id = w.mission_id
        join repositories repo on repo.repo_id = w.repo_id
@@ -878,11 +887,16 @@ export async function adoptPullRequestsOnce(db: Db, provider: RepositoryProvider
     org_id: string;
     mission_id: string;
     mission_branch: string;
+    created_by: string;
     provider_repo_id: string;
   }[]) {
     let listed: HostPullRequestListing[];
     try {
-      listed = await provider.listPullRequestsForHead(lane.provider_repo_id, lane.mission_branch);
+      // The mission creator's token asks about their own lane (D-223); no
+      // token means the lane waits for their next sign-in.
+      const actor = await repoActorOf(db, lane.created_by);
+      if (!actor.token) continue;
+      listed = await provider.listPullRequestsForHead(actor, lane.provider_repo_id, lane.mission_branch);
     } catch {
       // The host being unreachable is not news; the next pass asks again.
       continue;
@@ -999,7 +1013,7 @@ async function insertAdopted(
  */
 export async function adoptDownstreamOnce(db: Db, provider: RepositoryProvider): Promise<void> {
   const merged = await db.query(
-    `select p.pr_id, p.base_ref, p.mission_id, p.wst_id, m.org_id,
+    `select p.pr_id, p.base_ref, p.mission_id, p.wst_id, m.org_id, p.created_by,
             repo.provider_repo_id, repo.default_branch
        from pull_requests p
        join missions m on m.mission_id = p.mission_id
@@ -1017,12 +1031,15 @@ export async function adoptDownstreamOnce(db: Db, provider: RepositoryProvider):
     mission_id: string;
     wst_id: string;
     org_id: string;
+    created_by: string;
     provider_repo_id: string;
     default_branch: string;
   }[]) {
     let listed: HostPullRequestListing[];
     try {
-      listed = await provider.listPullRequestsForHead(source.provider_repo_id, source.base_ref);
+      const actor = await repoActorOf(db, source.created_by);
+      if (!actor.token) continue;
+      listed = await provider.listPullRequestsForHead(actor, source.provider_repo_id, source.base_ref);
     } catch {
       continue; // the host being unreachable is not news; the next pass asks again
     }
@@ -1051,12 +1068,19 @@ export async function adoptDownstreamOnce(db: Db, provider: RepositoryProvider):
 export async function syncPullRow(db: Db, provider: RepositoryProvider, row: SyncRow): Promise<void> {
   let host: HostPullRequest;
   let readiness: MergeReadiness | null = null;
+  // The pull creator's token reads their own request (D-223); an adopted row
+  // has no Novus creator, so the mission creator's reads it — the person
+  // whose lane adoption ran under. A person whose token is gone leaves the
+  // row visibly unsynced until they sign in again — never read with an
+  // unrelated credential.
+  const actor = await repoActorOf(db, row.created_by ?? row.mission_created_by);
+  if (!actor.token) return;
   try {
-    host = await provider.getPullRequest(row.provider_repo_id, row.provider_number);
+    host = await provider.getPullRequest(actor, row.provider_repo_id, row.provider_number);
     // The gate rides the same poll (D-100). Its absence is survivable —
     // the row keeps its last answer and the surface says when it synced.
     readiness = await provider
-      .getMergeReadiness(row.provider_repo_id, row.provider_number)
+      .getMergeReadiness(actor, row.provider_repo_id, row.provider_number)
       .catch(() => null);
   } catch {
     // The host being unreachable is not news to record; the next pass asks

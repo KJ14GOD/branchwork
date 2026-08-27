@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
-import { FakeRepositoryProvider } from "../src/repo-provider.ts";
+import { FakeRepositoryProvider, type RepoActor } from "../src/repo-provider.ts";
 import type { CloneCredential, CloneCredentialMinter } from "../src/repo-clone.ts";
 
 /**
@@ -14,7 +14,7 @@ import type { CloneCredential, CloneCredentialMinter } from "../src/repo-clone.t
  * where the answer is not allowed to appear.
  *
  * They are deterministic evidence for those paths and nothing more. A real
- * GitHub App minting a real installation token against a real repository is a
+ * The live provider handing a real user token against a real repository is a
  * separate claim, and it is not made here (AGENTS.md rule 11).
  */
 
@@ -24,7 +24,7 @@ const TOKEN = "ghs_only_a_runner_should_ever_see_this";
  *  adapter adds: minting a credential for a single repository. */
 class MintingProvider extends FakeRepositoryProvider implements CloneCredentialMinter {
   readonly minted: string[] = [];
-  async mintCloneCredential(providerRepoId: string): Promise<CloneCredential> {
+  async mintCloneCredential(_actor: RepoActor, providerRepoId: string): Promise<CloneCredential> {
     this.minted.push(providerRepoId);
     return {
       remoteUrl: `https://github.com/novus/repo-${providerRepoId}.git`,

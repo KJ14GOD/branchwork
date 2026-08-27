@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GithubAppRepositoryProvider } from "../../control-plane/src/github-app-provider.ts";
+import { GithubUserRepositoryProvider } from "../../control-plane/src/github-user-provider.ts";
 import { cloneGitExec } from "../electron/workspace-clone";
 import { pushMissionBranch } from "../electron/workspace-push";
 
@@ -13,17 +13,18 @@ import { pushMissionBranch } from "../electron/workspace-push";
  *
  *   NOVUS_LIVE_PR=1 pnpm --filter @novus/desktop exec vitest run test/live-pr-adapter.test.ts
  *
- * Requires `NOVUS_GHAPP_ID` and `NOVUS_GHAPP_PEM_B64` in the environment (the
- * control plane's own .env), the app installation covering the target
- * repository, and the installation re-approved with `pull_requests: write`.
- * The target defaults to a scratch repository and must never be a real one:
- * the test pushes a branch and opens a draft pull request there.
+ * Requires `NOVUS_LIVE_USER_TOKEN` in the environment — the person's own
+ * repo-scoped token (`gh auth token` works), which is the only credential the
+ * provider has since D-223. The target defaults to a scratch repository and
+ * must never be a real one: the test pushes a branch and opens a draft pull
+ * request there.
  *
- * What this proves that the fake cannot: the App JWT → installation token →
- * per-repository credential chain against api.github.com; a real clone and a
- * real push through the fd-3 helper; a real draft opening; reviewers really
- * requested; mark-ready really un-drafting (the GraphQL call). What it
- * deliberately does not do: merge anything — no verb for that exists to call.
+ * What this proves that the fake cannot: the person's own token against
+ * api.github.com end to end; a real clone and a real push through the fd-3
+ * helper under that token; a real draft opening authored by the person;
+ * reviewers really requested; mark-ready really un-drafting (the GraphQL
+ * call). What it deliberately does not do: merge anything — no verb for that
+ * exists to call.
  */
 
 const LIVE = process.env.NOVUS_LIVE_PR === "1";
@@ -38,26 +39,25 @@ describe.skipIf(!LIVE)("the live GitHub adapter publishes a decision (D-099)", (
   it(
     "clones, pushes the decided revision, opens a draft, requests review, and marks it ready — against real GitHub",
     async () => {
-      const appId = process.env.NOVUS_GHAPP_ID ?? "";
-      const pem = Buffer.from(process.env.NOVUS_GHAPP_PEM_B64 ?? "", "base64").toString("utf8");
-      expect(appId, "NOVUS_GHAPP_ID must be set").not.toBe("");
-      expect(pem, "NOVUS_GHAPP_PEM_B64 must be set").not.toBe("");
-      const provider = new GithubAppRepositoryProvider(appId, pem);
+      const token = process.env.NOVUS_LIVE_USER_TOKEN ?? "";
+      expect(token, "NOVUS_LIVE_USER_TOKEN must be set").not.toBe("");
+      const provider = new GithubUserRepositoryProvider();
+      const actor = { token, login: null };
 
-      // The installation must actually cover the scratch repository.
-      const repos = await provider.listRepositories("live");
+      // The person's own reach must cover the scratch repository.
+      const repos = await provider.listRepositories(actor);
       const target = repos.find((repo) => repo.name === TARGET);
       expect(target, `${TARGET} must be visible to the installation`).toBeTruthy();
       const providerRepoId = target!.providerRepoId;
 
-      const base = await provider.resolveBase(providerRepoId);
+      const base = await provider.resolveBase(actor, providerRepoId);
       expect(base.sha).toMatch(/^[0-9a-f]{40}$/);
 
       // A real clone through the minted read credential, exactly the runner's
       // own path.
       const root = mkdtempSync(join(tmpdir(), "novus-live-pr-"));
       try {
-        const readCredential = await provider.mintCloneCredential(providerRepoId);
+        const readCredential = await provider.mintCloneCredential(actor, providerRepoId);
         const checkout = join(root, "checkout");
         const cloned = await cloneGitExec(
           null,
@@ -86,7 +86,7 @@ describe.skipIf(!LIVE)("the live GitHub adapter publishes a decision (D-099)", (
         const decided = git(checkout, ["rev-parse", branch]);
 
         // The push half: the desktop's own module, a write-scoped credential.
-        const writeCredential = await provider.mintPushCredential(providerRepoId);
+        const writeCredential = await provider.mintPushCredential(actor, providerRepoId);
         const pushed = await pushMissionBranch({
           repositoryPath: checkout,
           branch,
@@ -96,7 +96,7 @@ describe.skipIf(!LIVE)("the live GitHub adapter publishes a decision (D-099)", (
         expect(pushed.sha).toBe(decided);
 
         // The draft opens on real GitHub, from the pushed branch.
-        const opened = await provider.createPullRequest(providerRepoId, {
+        const opened = await provider.createPullRequest(actor, providerRepoId, {
           title: "Novus live proof: a decision publishes as a draft",
           body: "Opened by the opt-in live D-099 proof. Novus opens only drafts, and never merges — merging happens on GitHub, by humans.",
           headRef: branch,
@@ -108,16 +108,16 @@ describe.skipIf(!LIVE)("the live GitHub adapter publishes a decision (D-099)", (
         console.warn(`[live-pr] opened ${opened.url}`);
 
         // Reviewers, really requested.
-        await provider.requestReviewers(providerRepoId, opened.number, ["KJ14GOD"]);
-        const afterAsk = await provider.getPullRequest(providerRepoId, opened.number);
+        await provider.requestReviewers(actor, providerRepoId, opened.number, ["KJ14GOD"]);
+        const afterAsk = await provider.getPullRequest(actor, providerRepoId, opened.number);
         expect(afterAsk.requestedReviewers).toContain("KJ14GOD");
 
         // Ready, really un-drafted — the GraphQL call.
-        await provider.markPullRequestReady(providerRepoId, opened.number);
+        await provider.markPullRequestReady(actor, providerRepoId, opened.number);
         const deadline = Date.now() + 30_000;
         let state = "draft";
         while (Date.now() < deadline) {
-          const current = await provider.getPullRequest(providerRepoId, opened.number);
+          const current = await provider.getPullRequest(actor, providerRepoId, opened.number);
           state = current.state;
           if (state === "ready") break;
           await new Promise((settle) => setTimeout(settle, 1_000));
@@ -126,7 +126,7 @@ describe.skipIf(!LIVE)("the live GitHub adapter publishes a decision (D-099)", (
 
         // The gate, read from the real host (D-100): the repository's own
         // allowed methods, and whatever checks and reviews it actually has.
-        const readiness = await provider.getMergeReadiness(providerRepoId, opened.number);
+        const readiness = await provider.getMergeReadiness(actor, providerRepoId, opened.number);
         expect(readiness.allowedMergeMethods.length).toBeGreaterThan(0);
         expect(readiness.syncedAt).toBeTruthy();
 
@@ -135,14 +135,14 @@ describe.skipIf(!LIVE)("the live GitHub adapter publishes a decision (D-099)", (
         const method = readiness.allowedMergeMethods.includes("squash")
           ? ("squash" as const)
           : readiness.allowedMergeMethods[0]!;
-        const mergedResult = await provider.mergePullRequest(providerRepoId, opened.number, method);
+        const mergedResult = await provider.mergePullRequest(actor, providerRepoId, opened.number, method);
         expect(mergedResult.sha).toMatch(/^[0-9a-f]{40}$/);
-        const afterMerge = await provider.getPullRequest(providerRepoId, opened.number);
+        const afterMerge = await provider.getPullRequest(actor, providerRepoId, opened.number);
         expect(afterMerge.state).toBe("merged");
         console.warn(`[live-pr] merged ${opened.url} via ${method} → ${mergedResult.sha}`);
 
         // And the branch deletion, the explicitly separate act.
-        await provider.deleteBranchRef(providerRepoId, branch);
+        await provider.deleteBranchRef(actor, providerRepoId, branch);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

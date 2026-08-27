@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GithubAppRepositoryProvider } from "../src/github-app-provider.ts";
+import { GithubUserRepositoryProvider } from "../src/github-user-provider.ts";
+import type { RepoActor } from "../src/repo-provider.ts";
 import { sweepPullRequestsOnce } from "../src/pull-requests.ts";
 import { newDecisionId, newPullRequestId } from "../src/ids.ts";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
@@ -18,10 +19,11 @@ import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts
  *
  *   NOVUS_LIVE_INGEST=1 pnpm --filter @novus/control-plane exec vitest run test/live-ingest.test.ts
  *
- * Requires NOVUS_GHAPP_ID / NOVUS_GHAPP_PEM_B64 (the App), and `gh` signed in
- * as the human whose comment and merge this ingests. Identity auth stays the
- * deterministic fake; the repository provider is the real one — exactly the
- * split ARCHITECTURE.md draws (App = machine access, the human is `gh`'s).
+ * Requires NOVUS_LIVE_USER_TOKEN (the person's own repo-scoped token — `gh
+ * auth token` works) and `gh` signed in as the human whose comment and merge
+ * this ingests. Identity auth stays the deterministic fake; the repository
+ * provider is the real one, acting with the person's own token exactly as
+ * D-223 has every provider call act.
  *
  * What this proves that the fake cannot: the poll against api.github.com —
  * GraphQL review threads with the host's own ids and resolution state, live
@@ -36,7 +38,8 @@ const TARGET = process.env.NOVUS_LIVE_PR_REPO ?? "KJ14GOD/novus-live-pr-scratch"
 
 let harness: Harness;
 let kartik: SignedIn;
-let provider: GithubAppRepositoryProvider;
+let provider: GithubUserRepositoryProvider;
+let actor: RepoActor;
 let scratchDir: string | null = null;
 
 const git = (cwd: string, args: string[]): string =>
@@ -48,10 +51,15 @@ const gh = (args: string[]): string =>
 
 beforeAll(async () => {
   if (!LIVE) return;
-  const pem = Buffer.from(process.env.NOVUS_GHAPP_PEM_B64 ?? "", "base64").toString("utf8");
-  provider = new GithubAppRepositoryProvider(process.env.NOVUS_GHAPP_ID ?? "", pem);
+  const token = process.env.NOVUS_LIVE_USER_TOKEN ?? "";
+  provider = new GithubUserRepositoryProvider();
+  actor = { token, login: null };
   harness = await createHarness("novus_test_live_ingest", provider);
   kartik = await harness.signIn("kartik");
+  // The sweep reads each row with its creator's stored token (D-223); the
+  // fake sign-in stored a fake one, so store the real token where the sweep
+  // will look — exactly where a real sign-in puts it.
+  await harness.db.query("update users set github_token = $2 where user_id = $1", [kartik.userId, token]);
 }, 120_000);
 
 afterAll(async () => {
@@ -64,11 +72,12 @@ describe.skipIf(!LIVE)("the poll ingests a real human's acts on a real pull requ
     "a comment and a merge made on GitHub land in PostgreSQL as external-actor events",
     async () => {
       // --- A mission on the real repository: the server cuts a real branch --
-      const repos = await provider.listRepositories();
+      expect(actor.token, "NOVUS_LIVE_USER_TOKEN must carry the person's token").toBeTruthy();
+      const repos = await provider.listRepositories(actor);
       const target = repos.find((repo) => repo.name === TARGET);
       expect(target, `${TARGET} must be visible to the installation`).toBeTruthy();
       const providerRepoId = target!.providerRepoId;
-      const base = await provider.resolveBase(providerRepoId);
+      const base = await provider.resolveBase(actor, providerRepoId);
 
       const created = await harness.app.inject({
         method: "POST",
@@ -121,13 +130,13 @@ describe.skipIf(!LIVE)("the poll ingests a real human's acts on a real pull requ
       const headSha = git(checkout, ["rev-parse", missionBranch]);
 
       // The draft opens through the product's own provider verb.
-      const opened = await provider.createPullRequest(providerRepoId, {
+      const opened = await provider.createPullRequest(actor, providerRepoId, {
         title: "Live ingestion probe",
         body: "Opened by the opt-in reverse-direction proof. A human will comment and merge on GitHub; Novus ingests.",
         headRef: missionBranch,
         baseRef: base.ref
       });
-      await provider.markPullRequestReady(providerRepoId, opened.number);
+      await provider.markPullRequestReady(actor, providerRepoId, opened.number);
 
       // The rows the sweep joins, seeded the way the create route writes them.
       const decisionId = newDecisionId();
@@ -163,14 +172,11 @@ describe.skipIf(!LIVE)("the poll ingests a real human's acts on a real pull requ
       // route uses, and the real host shows *them* — not the App — as the
       // author. The token is gh's, supplied at run time, never stored.
       const human = gh(["api", "user", "--jq", ".login"]);
-      const userToken = process.env.NOVUS_LIVE_USER_TOKEN ?? "";
-      expect(userToken, "NOVUS_LIVE_USER_TOKEN must carry the person's token").not.toBe("");
-      await provider.createPullComment(
-        providerRepoId,
-        opened.number,
-        { body: "Attributed live probe: this comment should wear my own name.", path: "live-ingest.txt", line: 1 },
-        { token: userToken, login: human }
-      );
+      await provider.createPullComment({ token: actor.token, login: human }, providerRepoId, opened.number, {
+        body: "Attributed live probe: this comment should wear my own name.",
+        path: "live-ingest.txt",
+        line: 1
+      });
       const authored = gh([
         "api",
         `repos/${TARGET}/pulls/${opened.number}/comments`,

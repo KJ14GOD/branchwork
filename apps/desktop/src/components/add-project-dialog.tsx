@@ -133,14 +133,16 @@ export function AddProjectDialog({
     void loadLocal();
   }, [loadGithub, loadLocal]);
 
-  // The search field takes focus the moment the dialog opens.
-  useEffect(() => {
-    searchRef.current?.focus();
-  }, []);
-
   // Esc closes and focus is trapped (DESIGN.md#keyboard: every dialog), and
   // focus returns to the opener on close — quietly (D-106), because closing
   // with Esc is a dismissal, not keyboard navigation.
+  // Declared before the search-focus effect on purpose: effects run in
+  // declaration order, so `document.activeElement` here is still the
+  // opener. Captured after the search field took focus, the "opener"
+  // would be the dialog's own input — an element that unmounts with the
+  // dialog — and closing with Esc would strand focus instead of quietly
+  // returning it (owner-hit: an Esc from the search box left a focus
+  // ring floating on Add project).
   useEffect(() => {
     const opener = document.activeElement;
     const onKey = (event: KeyboardEvent) => {
@@ -172,6 +174,11 @@ export function AddProjectDialog({
       focusQuietly(opener);
     };
   }, [onClose]);
+
+  // The search field takes focus the moment the dialog opens.
+  useEffect(() => {
+    searchRef.current?.focus();
+  }, []);
 
   const rows = useMemo<Row[]>(() => {
     const all =
@@ -346,10 +353,12 @@ export function AddProjectDialog({
                 {load.code === "offline"
                   ? "Can't reach Novus"
                   : load.code === "repo_unconfigured"
-                    ? "GitHub App not installed"
-                    : load.code === "forbidden" || load.code === "repo_forbidden"
-                      ? "Not enough repository permission"
-                      : "Repositories are unavailable"}
+                    ? "GitHub access isn't configured"
+                    : load.code === "repo_token_missing"
+                      ? "GitHub needs a fresh sign-in"
+                      : load.code === "forbidden" || load.code === "repo_forbidden"
+                        ? "Not enough repository permission"
+                        : "Repositories are unavailable"}
               </p>
               <p className="dialog-state-body">{load.message}</p>
               <button

@@ -1,4 +1,3 @@
-import { createSign } from "node:crypto";
 import type { BranchInfo, BaseStatus,
   AvailableRepository,
   BaseRevision,
@@ -8,15 +7,17 @@ import type { BranchInfo, BaseStatus,
   PullFilesResponse,
   ReviewThread
 } from "@novus/contracts";
-import type { CloneCredential, CloneCredentialMinter } from "./repo-clone.ts";
+import type { CloneCredential, CloneCredentialMinter, PushCredentialMinter } from "./repo-clone.ts";
 import {
   BranchConflictError,
   MergeRefusedError,
   ProviderTransientError,
   PullRequestExistsError,
+  RepoTokenMissingError,
   UnknownBaseError,
   UnknownPullRequestError,
   UnknownRepositoryError,
+  type RepoActor,
   type HostPullRequest,
   type RepositoryProvider,
   type HostPullRequestListing
@@ -31,143 +32,49 @@ interface CachedRepo {
 }
 
 /**
- * The live repository provider: a GitHub App installation (D-031/D-032).
- * App JWT → installation token (cached, refreshed before expiry) → REST.
- * Identity OAuth is never used here. Same interface and idempotency
- * semantics the fake enforces; V0 binds to the app's first installation.
+ * The live repository provider (D-223, replacing the D-031/D-032 GitHub App
+ * adapter): every call is performed with the acting person's own OAuth token,
+ * so GitHub answers with exactly that person's reach — owned, collaborator,
+ * and organization repositories alike — and enforces their authorization on
+ * every act. The server holds no GitHub credential of its own; a call with no
+ * token, or a token GitHub rejects, refuses by name rather than falling back
+ * to anything shared.
  */
-export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCredentialMinter {
-  readonly kind = "github" as const; // the union widened (D-099); the label stops lying
-  private token: { value: string; expiresAt: number } | null = null;
-  private installation: number | null = null;
+export class GithubUserRepositoryProvider
+  implements RepositoryProvider, CloneCredentialMinter, PushCredentialMinter
+{
+  readonly kind = "github" as const;
   private repoCache = new Map<string, CachedRepo>();
+  /** api.github.com in production; a local stub in the deterministic test. */
+  private readonly apiBase: string;
 
-  private readonly appId: string;
-  private readonly pem: string;
-
-  constructor(appId: string, pem: string) {
-    this.appId = appId;
-    this.pem = pem;
+  constructor(apiBase: string = API) {
+    this.apiBase = apiBase;
   }
 
-  private appJwt(): string {
-    const now = Math.floor(Date.now() / 1000);
-    const encode = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString("base64url");
-    const unsigned = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ iat: now - 30, exp: now + 300, iss: this.appId })}`;
-    const signature = createSign("RSA-SHA256").update(unsigned).sign(this.pem).toString("base64url");
-    return `${unsigned}.${signature}`;
-  }
-
-  private appHeaders(): Record<string, string> {
-    return { authorization: `Bearer ${this.appJwt()}`, accept: "application/vnd.github+json" };
-  }
-
-  /** V0 binds to the app's first installation; remembered so minting a
-   *  per-repository token is one request rather than two. */
-  private async installationId(): Promise<number> {
-    if (this.installation !== null) return this.installation;
-    const installations = await fetch(`${API}/app/installations?per_page=1`, { headers: this.appHeaders() });
-    if (!installations.ok) throw new ProviderTransientError(`installation lookup failed (${installations.status})`);
-    const list = (await installations.json()) as { id: number }[];
-    const installation = list[0];
-    if (!installation) throw new ProviderTransientError("the GitHub App has no installation yet");
-    this.installation = installation.id;
-    return installation.id;
-  }
-
-  private async installationToken(): Promise<string> {
-    if (this.token && this.token.expiresAt > Date.now() + 60_000) return this.token.value;
-    const minted = await fetch(`${API}/app/installations/${await this.installationId()}/access_tokens`, {
-      method: "POST",
-      headers: this.appHeaders()
-    });
-    if (!minted.ok) throw new ProviderTransientError(`installation token failed (${minted.status})`);
-    const body = (await minted.json()) as { token: string; expires_at: string };
-    this.token = { value: body.token, expiresAt: Date.parse(body.expires_at) };
-    return body.token;
-  }
-
-  /**
-   * A credential for **one** repository, read-only, ~1h, minted fresh for the
-   * operation that asked and never cached
-   * (ARCHITECTURE.md#secret-placement). The control-plane-wide installation
-   * token above is deliberately not what a runner receives: a runner sees one
-   * repository, exactly as it sees one mission.
-   *
-   * Read, not write: nothing on the runner pushes today — a checkpoint is a
-   * local commit — so this is the narrowest permission that does the job.
-   */
-  async mintCloneCredential(providerRepoId: string): Promise<CloneCredential> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const numericId = Number(repo.providerRepoId);
-    if (!Number.isSafeInteger(numericId)) throw new UnknownRepositoryError();
-    const minted = await fetch(`${API}/app/installations/${await this.installationId()}/access_tokens`, {
-      method: "POST",
-      headers: { ...this.appHeaders(), "content-type": "application/json" },
-      body: JSON.stringify({
-        repository_ids: [numericId],
-        permissions: { contents: "read", metadata: "read" }
-      })
-    });
-    if (minted.status === 404) throw new UnknownRepositoryError();
-    if (!minted.ok) throw new ProviderTransientError(`repository credential failed (${minted.status})`);
-    const body = (await minted.json()) as { token: string; expires_at: string };
-    return {
-      // Plain: the token goes to the runner separately and is injected per
-      // operation, never baked into a remote that would persist in a config.
-      remoteUrl: `https://github.com/${repo.fullName}.git`,
-      username: "x-access-token",
-      token: body.token,
-      expiresAt: body.expires_at
-    };
-  }
-
-  /**
-   * The push credential (D-099): one repository, `contents: write`, minted
-   * fresh for the one push that asked and never cached. A second,
-   * deliberately separate mint rather than a widening of the clone
-   * credential — reading a repository and writing to one are different
-   * grants, and every operation gets the narrowest one that does its job.
-   */
-  async mintPushCredential(providerRepoId: string): Promise<CloneCredential> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const numericId = Number(repo.providerRepoId);
-    if (!Number.isSafeInteger(numericId)) throw new UnknownRepositoryError();
-    const minted = await fetch(`${API}/app/installations/${await this.installationId()}/access_tokens`, {
-      method: "POST",
-      headers: { ...this.appHeaders(), "content-type": "application/json" },
-      body: JSON.stringify({
-        repository_ids: [numericId],
-        permissions: { contents: "write", metadata: "read" }
-      })
-    });
-    if (minted.status === 404) throw new UnknownRepositoryError();
-    if (!minted.ok) throw new ProviderTransientError(`push credential failed (${minted.status})`);
-    const body = (await minted.json()) as { token: string; expires_at: string };
-    return {
-      remoteUrl: `https://github.com/${repo.fullName}.git`,
-      username: "x-access-token",
-      token: body.token,
-      expiresAt: body.expires_at
-    };
-  }
-
-  private async rest(path: string, init: RequestInit = {}): Promise<Response> {
-    const token = await this.installationToken();
-    return fetch(`${API}${path}`, {
+  /** One authenticated request: the actor's token or a named refusal. A 401
+   *  is the token dying (revoked, expired), which no retry cures — the same
+   *  named refusal as holding no token at all. */
+  private async authed(actor: RepoActor, path: string, init: RequestInit = {}): Promise<Response> {
+    if (!actor.token) throw new RepoTokenMissingError();
+    const response = await fetch(`${this.apiBase}${path}`, {
       ...init,
       headers: {
         ...(init.headers as Record<string, string> | undefined),
-        authorization: `Bearer ${token}`,
+        authorization: `Bearer ${actor.token}`,
         accept: "application/vnd.github+json"
       }
     });
+    if (response.status === 401) {
+      throw new RepoTokenMissingError("GitHub no longer accepts the stored sign-in. Sign out of Novus and back in.");
+    }
+    return response;
   }
 
-  private async cachedRepo(providerRepoId: string): Promise<CachedRepo> {
+  private async cachedRepo(actor: RepoActor, providerRepoId: string): Promise<CachedRepo> {
     const hit = this.repoCache.get(providerRepoId);
     if (hit) return hit;
-    const response = await this.rest(`/repositories/${encodeURIComponent(providerRepoId)}`);
+    const response = await this.authed(actor, `/repositories/${encodeURIComponent(providerRepoId)}`);
     if (response.status === 404) throw new UnknownRepositoryError();
     if (!response.ok) throw new ProviderTransientError(`repository lookup failed (${response.status})`);
     const repo = (await response.json()) as { id: number; full_name: string; default_branch: string };
@@ -176,49 +83,81 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     return cached;
   }
 
-  async listRepositories(): Promise<AvailableRepository[]> {
+  /**
+   * The clone credential is the owner's own token (D-223): the same
+   * credential their own `git` would present, handed to the runner they
+   * enrolled, spent per operation and never stored. Unlike the retired App
+   * mint it cannot be narrowed to one repository — the trade D-223 names —
+   * so `expiresAt` bounds the *handout*, not the token's own life: the
+   * runner must use it promptly and come back for another.
+   */
+  async mintCloneCredential(actor: RepoActor, providerRepoId: string): Promise<CloneCredential> {
+    if (!actor.token) throw new RepoTokenMissingError();
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    return {
+      remoteUrl: `https://github.com/${repo.fullName}.git`,
+      username: "x-access-token",
+      token: actor.token,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString()
+    };
+  }
+
+  /** The push credential (D-099) is the same handout: with a user token
+   *  there is no separate narrower grant to mint, so read and write differ
+   *  only in what GitHub lets this person do to this repository. */
+  async mintPushCredential(actor: RepoActor, providerRepoId: string): Promise<CloneCredential> {
+    return this.mintCloneCredential(actor, providerRepoId);
+  }
+
+  async listRepositories(actor: RepoActor): Promise<AvailableRepository[]> {
+    // The person's whole reach (D-223): owned, collaborator, and org-member
+    // repositories — exactly what their own `git` could clone — freshest
+    // push first (D-139), from the host's own ordering.
     const repos: AvailableRepository[] = [];
     for (let page = 1; page <= 10; page += 1) {
-      const response = await this.rest(`/installation/repositories?per_page=100&page=${page}`);
+      const response = await this.authed(
+        actor,
+        `/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&direction=desc&per_page=100&page=${page}`
+      );
       if (!response.ok) throw new ProviderTransientError(`repository listing failed (${response.status})`);
       const body = (await response.json()) as {
-        repositories: { id: number; full_name: string; default_branch: string; pushed_at?: string | null }[];
-        total_count: number;
-      };
-      for (const repo of body.repositories) {
+        id: number;
+        full_name: string;
+        default_branch: string;
+        pushed_at?: string | null;
+      }[];
+      for (const repo of body) {
         const cached = { providerRepoId: String(repo.id), fullName: repo.full_name, defaultBranch: repo.default_branch };
         this.repoCache.set(cached.providerRepoId, cached);
         repos.push({
           providerRepoId: cached.providerRepoId,
           name: cached.fullName,
           defaultBranch: cached.defaultBranch,
-          // Freshest-first listing (D-139); the host's own timestamp or nothing.
           pushedAt: repo.pushed_at ?? null
         });
       }
-      if (repos.length >= body.total_count) break;
+      // A short page is the last page; /user/repos carries no total_count.
+      if (body.length < 100) break;
     }
     return repos;
   }
 
-  async resolveBase(providerRepoId: string, ref?: string): Promise<BaseRevision> {
-    const repo = await this.cachedRepo(providerRepoId);
+  async resolveBase(actor: RepoActor, providerRepoId: string, ref?: string): Promise<BaseRevision> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
     const target = ref ?? repo.defaultBranch;
-    const response = await this.rest(
-      `/repos/${repo.fullName}/branches/${encodeURIComponent(target)}`
-    );
+    const response = await this.authed(actor, `/repos/${repo.fullName}/branches/${encodeURIComponent(target)}`);
     if (response.status === 404) throw new UnknownRepositoryError();
     if (!response.ok) throw new ProviderTransientError(`base resolution failed (${response.status})`);
     const branch = (await response.json()) as { commit: { sha: string } };
     return { ref: target, sha: branch.commit.sha };
   }
 
-  async listBranches(providerRepoId: string): Promise<BranchInfo[]> {
-    const repo = await this.cachedRepo(providerRepoId);
+  async listBranches(actor: RepoActor, providerRepoId: string): Promise<BranchInfo[]> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
     // One page of 100 is the cap, stated rather than silently paged: a
     // repository with more branches shows its first hundred by name and the
     // default is always present because the host sorts it in.
-    const response = await this.rest(`/repos/${repo.fullName}/branches?per_page=100`);
+    const response = await this.authed(actor, `/repos/${repo.fullName}/branches?per_page=100`);
     if (response.status === 404) throw new UnknownRepositoryError();
     if (!response.ok) throw new ProviderTransientError(`branch listing failed (${response.status})`);
     const body = (await response.json()) as { name: string; commit: { sha: string } }[];
@@ -229,16 +168,16 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     }));
     rows.sort((a, b) => (a.isDefault !== b.isDefault ? (a.isDefault ? -1 : 1) : a.name.localeCompare(b.name)));
     if (!rows.some((row) => row.isDefault)) {
-      const base = await this.resolveBase(providerRepoId);
+      const base = await this.resolveBase(actor, providerRepoId);
       rows.unshift({ name: base.ref, sha: base.sha, isDefault: true });
     }
     return rows;
   }
 
-  async baseStatus(providerRepoId: string, ref: string, pinnedSha: string): Promise<BaseStatus> {
-    const repo = await this.cachedRepo(providerRepoId);
+  async baseStatus(actor: RepoActor, providerRepoId: string, ref: string, pinnedSha: string): Promise<BaseStatus> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
     const checkedAt = new Date().toISOString();
-    const head = await this.rest(`/repos/${repo.fullName}/branches/${encodeURIComponent(ref)}`);
+    const head = await this.authed(actor, `/repos/${repo.fullName}/branches/${encodeURIComponent(ref)}`);
     if (head.status === 404) return { state: "missing", aheadBy: null, checkedAt };
     if (!head.ok) throw new ProviderTransientError(`base check failed (${head.status})`);
     const tip = ((await head.json()) as { commit: { sha: string } }).commit.sha;
@@ -246,7 +185,8 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     // The host's own ancestry answer: comparing pin...tip says "ahead" when
     // the pin is an ancestor (the branch moved forward over it), anything
     // else means the pinned commit is no longer in the branch's history.
-    const compare = await this.rest(
+    const compare = await this.authed(
+      actor,
       `/repos/${repo.fullName}/compare/${encodeURIComponent(pinnedSha)}...${encodeURIComponent(tip)}`
     );
     if (compare.status === 404) return { state: "rewritten", aheadBy: null, checkedAt };
@@ -256,9 +196,14 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     return { state: "rewritten", aheadBy: null, checkedAt };
   }
 
-  async ensureBranch(providerRepoId: string, branch: string, fromSha: string): Promise<{ alreadyExisted: boolean }> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const create = await this.rest(`/repos/${repo.fullName}/git/refs`, {
+  async ensureBranch(
+    actor: RepoActor,
+    providerRepoId: string,
+    branch: string,
+    fromSha: string
+  ): Promise<{ alreadyExisted: boolean }> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    const create = await this.authed(actor, `/repos/${repo.fullName}/git/refs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: fromSha })
@@ -267,7 +212,7 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
 
     const body = (await create.json().catch(() => ({}))) as { message?: string };
     if (create.status === 422 && /already exists/i.test(body.message ?? "")) {
-      const existing = await this.rest(`/repos/${repo.fullName}/git/ref/heads/${encodeURIComponent(branch)}`);
+      const existing = await this.authed(actor, `/repos/${repo.fullName}/git/ref/heads/${encodeURIComponent(branch)}`);
       if (existing.ok) {
         const ref = (await existing.json()) as { object: { sha: string } };
         if (ref.object.sha === fromSha) return { alreadyExisted: true };
@@ -279,9 +224,10 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
   }
 
   // --- Pull requests (D-099) -------------------------------------------------
-  // The write half is draft-create, reviewer-request, and mark-ready; there
-  // is no merge call here and never will be. Read is one GET per open
-  // request, for the poll that keeps the mission's story current.
+  // The write half is draft-create, reviewer-request, and mark-ready. Read is
+  // one GET per open request, for the poll that keeps the mission's story
+  // current. Every act is the actor's own: GitHub shows the person, not an
+  // app, as the author (D-223).
 
   private toHostPull(raw: {
     number: number;
@@ -327,11 +273,12 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
   }
 
   async createPullRequest(
+    actor: RepoActor,
     providerRepoId: string,
     input: { title: string; body: string; headRef: string; baseRef: string }
   ): Promise<HostPullRequest> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const created = await this.rest(`/repos/${repo.fullName}/pulls`, {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    const created = await this.authed(actor, `/repos/${repo.fullName}/pulls`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -354,10 +301,15 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     return this.toHostPull((await created.json()) as Parameters<typeof this.toHostPull>[0]);
   }
 
-  async listPullRequestsForHead(providerRepoId: string, headRef: string): Promise<HostPullRequestListing[]> {
-    const repo = await this.cachedRepo(providerRepoId);
+  async listPullRequestsForHead(
+    actor: RepoActor,
+    providerRepoId: string,
+    headRef: string
+  ): Promise<HostPullRequestListing[]> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
     const owner = repo.fullName.split("/")[0] ?? "";
-    const response = await this.rest(
+    const response = await this.authed(
+      actor,
       `/repos/${repo.fullName}/pulls?state=all&per_page=20&sort=created&direction=desc&head=${encodeURIComponent(`${owner}:${headRef}`)}`
     );
     if (response.status === 404) throw new UnknownRepositoryError();
@@ -379,9 +331,9 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     }));
   }
 
-  async getPullRequest(providerRepoId: string, number: number): Promise<HostPullRequest> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}`);
+  async getPullRequest(actor: RepoActor, providerRepoId: string, number: number): Promise<HostPullRequest> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    const response = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}`);
     if (response.status === 404) throw new UnknownPullRequestError();
     if (!response.ok) throw new ProviderTransientError(`pull request lookup failed (${response.status})`);
     const raw = (await response.json()) as Parameters<typeof this.toHostPull>[0] & { node_id?: string };
@@ -392,6 +344,7 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     if (raw.node_id) {
       try {
         const data = (await this.graphql(
+          actor,
           `query($id: ID!) { node(id: $id) { ... on PullRequest { reviewThreads(first: 50) { nodes {
              id isResolved comments(first: 1) { nodes { author { login } body path line url createdAt } } } } } } }`,
           { id: raw.node_id }
@@ -440,11 +393,10 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     return pull;
   }
 
-  private async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
-    const token = await this.installationToken();
-    const response = await fetch(`${API}/graphql`, {
+  private async graphql(actor: RepoActor, query: string, variables: Record<string, unknown>): Promise<unknown> {
+    const response = await this.authed(actor, `/graphql`, {
       method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ query, variables })
     });
     if (!response.ok) throw new ProviderTransientError(`GraphQL failed (${response.status})`);
@@ -457,9 +409,9 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
 
   // --- The gate and the completion verbs (D-100) -----------------------------
 
-  async getMergeReadiness(providerRepoId: string, number: number): Promise<MergeReadiness> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const pullResponse = await this.rest(`/repos/${repo.fullName}/pulls/${number}`);
+  async getMergeReadiness(actor: RepoActor, providerRepoId: string, number: number): Promise<MergeReadiness> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    const pullResponse = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}`);
     if (pullResponse.status === 404) throw new UnknownPullRequestError();
     if (!pullResponse.ok) throw new ProviderTransientError(`pull request lookup failed (${pullResponse.status})`);
     const pull = (await pullResponse.json()) as {
@@ -468,10 +420,11 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     };
 
     // Which contexts branch protection requires. Degrades to "none required"
-    // where the App cannot read protection — the merge call itself remains
+    // where the person cannot read protection — the merge call itself remains
     // the authority on what the host refuses.
     let required = new Set<string>();
-    const protection = await this.rest(
+    const protection = await this.authed(
+      actor,
       `/repos/${repo.fullName}/branches/${encodeURIComponent(pull.base.ref)}/protection/required_status_checks`
     );
     if (protection.ok) {
@@ -480,7 +433,7 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     }
 
     const checks: HostCheck[] = [];
-    const runs = await this.rest(`/repos/${repo.fullName}/commits/${pull.head.sha}/check-runs?per_page=50`);
+    const runs = await this.authed(actor, `/repos/${repo.fullName}/commits/${pull.head.sha}/check-runs?per_page=50`);
     if (runs.ok) {
       const body = (await runs.json()) as {
         check_runs?: { name: string; status: string; conclusion: string | null; html_url?: string | null }[];
@@ -503,7 +456,7 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
         });
       }
     }
-    const statuses = await this.rest(`/repos/${repo.fullName}/commits/${pull.head.sha}/status`);
+    const statuses = await this.authed(actor, `/repos/${repo.fullName}/commits/${pull.head.sha}/status`);
     if (statuses.ok) {
       const body = (await statuses.json()) as {
         statuses?: { context: string; state: string; target_url?: string | null }[];
@@ -522,7 +475,7 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     // The latest review per person is their standing answer.
     let approvals = 0;
     let changesRequested = 0;
-    const reviews = await this.rest(`/repos/${repo.fullName}/pulls/${number}/reviews?per_page=100`);
+    const reviews = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}/reviews?per_page=100`);
     if (reviews.ok) {
       const list = (await reviews.json()) as { user?: { login?: string }; state?: string }[];
       const latest = new Map<string, string>();
@@ -540,7 +493,8 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
 
     let behindBy: number | null = null;
     let aheadBy: number | null = null;
-    const compare = await this.rest(
+    const compare = await this.authed(
+      actor,
       `/repos/${repo.fullName}/compare/${encodeURIComponent(pull.base.ref)}...${encodeURIComponent(pull.head.ref)}`
     );
     if (compare.ok) {
@@ -551,7 +505,7 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
 
     // The repository's own allowed methods, read fresh — never assumed.
     const allowed: MergeMethod[] = [];
-    const repoResponse = await this.rest(`/repositories/${encodeURIComponent(providerRepoId)}`);
+    const repoResponse = await this.authed(actor, `/repositories/${encodeURIComponent(providerRepoId)}`);
     if (repoResponse.ok) {
       const body = (await repoResponse.json()) as {
         allow_merge_commit?: boolean;
@@ -578,12 +532,13 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
   }
 
   async mergePullRequest(
+    actor: RepoActor,
     providerRepoId: string,
     number: number,
     method: MergeMethod
   ): Promise<{ sha: string | null }> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}/merge`, {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    const response = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}/merge`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ merge_method: method })
@@ -601,9 +556,9 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     return { sha: body.sha ?? null };
   }
 
-  async updatePullRequestBranch(providerRepoId: string, number: number): Promise<void> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}/update-branch`, {
+  async updatePullRequestBranch(actor: RepoActor, providerRepoId: string, number: number): Promise<void> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    const response = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}/update-branch`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({})
@@ -618,9 +573,9 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     }
   }
 
-  async closePullRequest(providerRepoId: string, number: number): Promise<void> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}`, {
+  async closePullRequest(actor: RepoActor, providerRepoId: string, number: number): Promise<void> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    const response = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ state: "closed" })
@@ -629,21 +584,20 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     if (!response.ok) throw new ProviderTransientError(`close failed (${response.status})`);
   }
 
-  async deleteBranchRef(providerRepoId: string, branch: string): Promise<void> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const response = await this.rest(
-      `/repos/${repo.fullName}/git/refs/heads/${encodeURIComponent(branch)}`,
-      { method: "DELETE" }
-    );
+  async deleteBranchRef(actor: RepoActor, providerRepoId: string, branch: string): Promise<void> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    const response = await this.authed(actor, `/repos/${repo.fullName}/git/refs/heads/${encodeURIComponent(branch)}`, {
+      method: "DELETE"
+    });
     if (response.status === 404 || response.status === 422) throw new UnknownBaseError();
     if (!response.ok && response.status !== 204) {
       throw new ProviderTransientError(`branch deletion failed (${response.status})`);
     }
   }
 
-  async listPullFiles(providerRepoId: string, number: number): Promise<PullFilesResponse> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const filesResponse = await this.rest(`/repos/${repo.fullName}/pulls/${number}/files?per_page=100`);
+  async listPullFiles(actor: RepoActor, providerRepoId: string, number: number): Promise<PullFilesResponse> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    const filesResponse = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}/files?per_page=100`);
     if (filesResponse.status === 404) throw new UnknownPullRequestError();
     if (!filesResponse.ok) throw new ProviderTransientError(`file listing failed (${filesResponse.status})`);
     const rawFiles = (await filesResponse.json()) as {
@@ -667,7 +621,7 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
       deletions: file.deletions,
       patch: file.patch?.slice(0, 12_000) ?? null
     }));
-    const commitsResponse = await this.rest(`/repos/${repo.fullName}/pulls/${number}/commits?per_page=100`);
+    const commitsResponse = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}/commits?per_page=100`);
     const commits = commitsResponse.ok
       ? ((await commitsResponse.json()) as {
           sha: string;
@@ -685,31 +639,20 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
   }
 
   async createPullComment(
+    actor: RepoActor,
     providerRepoId: string,
     number: number,
-    input: { body: string; path?: string; line?: number },
-    asUser?: { token: string; login: string }
+    input: { body: string; path?: string; line?: number }
   ): Promise<void> {
-    const repo = await this.cachedRepo(providerRepoId);
-    // The author is whoever's token performs the call (D-101): the person's
-    // own where one is held, the App's otherwise.
-    const authed = async (path: string, init: RequestInit): Promise<Response> => {
-      if (!asUser) return this.rest(path, init);
-      return fetch(`${API}${path}`, {
-        ...init,
-        headers: {
-          ...(init.headers as Record<string, string> | undefined),
-          authorization: `Bearer ${asUser.token}`,
-          accept: "application/vnd.github+json"
-        }
-      });
-    };
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    // The author is the actor whose token performs the call (D-101; the app
+    // fallback is gone since D-223 — no token, no comment).
     if (input.path !== undefined && input.line !== undefined) {
-      const pullResponse = await this.rest(`/repos/${repo.fullName}/pulls/${number}`);
+      const pullResponse = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}`);
       if (pullResponse.status === 404) throw new UnknownPullRequestError();
       if (!pullResponse.ok) throw new ProviderTransientError(`pull request lookup failed (${pullResponse.status})`);
       const pull = (await pullResponse.json()) as { head: { sha: string } };
-      const response = await authed(`/repos/${repo.fullName}/pulls/${number}/comments`, {
+      const response = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}/comments`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -730,7 +673,7 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
       if (!response.ok) throw new ProviderTransientError(`comment failed (${response.status})`);
       return;
     }
-    const response = await authed(`/repos/${repo.fullName}/issues/${number}/comments`, {
+    const response = await this.authed(actor, `/repos/${repo.fullName}/issues/${number}/comments`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ body: input.body })
@@ -741,22 +684,24 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     }
   }
 
-  async resolveReviewThread(providerRepoId: string, threadId: string): Promise<void> {
+  async resolveReviewThread(actor: RepoActor, providerRepoId: string, threadId: string): Promise<void> {
     void providerRepoId; // resolution is by the host's own global thread id
     await this.graphql(
+      actor,
       `mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { isResolved } } }`,
       { id: threadId }
     );
   }
 
   async setPullRequestMetadata(
+    actor: RepoActor,
     providerRepoId: string,
     number: number,
     input: { title?: string; body?: string; labels?: string[] }
   ): Promise<void> {
-    const repo = await this.cachedRepo(providerRepoId);
+    const repo = await this.cachedRepo(actor, providerRepoId);
     if (input.title !== undefined || input.body !== undefined) {
-      const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}`, {
+      const response = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -768,7 +713,7 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
       if (!response.ok) throw new ProviderTransientError(`metadata update failed (${response.status})`);
     }
     if (input.labels !== undefined) {
-      const response = await this.rest(`/repos/${repo.fullName}/issues/${number}/labels`, {
+      const response = await this.authed(actor, `/repos/${repo.fullName}/issues/${number}/labels`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ labels: input.labels })
@@ -778,9 +723,9 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     }
   }
 
-  async requestReviewers(providerRepoId: string, number: number, reviewers: string[]): Promise<void> {
-    const repo = await this.cachedRepo(providerRepoId);
-    const response = await this.rest(`/repos/${repo.fullName}/pulls/${number}/requested_reviewers`, {
+  async requestReviewers(actor: RepoActor, providerRepoId: string, number: number, reviewers: string[]): Promise<void> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    const response = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}/requested_reviewers`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ reviewers })
@@ -794,30 +739,17 @@ export class GithubAppRepositoryProvider implements RepositoryProvider, CloneCre
     if (!response.ok) throw new ProviderTransientError(`reviewer request failed (${response.status})`);
   }
 
-  async markPullRequestReady(providerRepoId: string, number: number): Promise<void> {
-    const repo = await this.cachedRepo(providerRepoId);
-    // REST cannot un-draft a pull request; this is the codebase's first and
-    // only GraphQL call, recorded as such in D-099.
-    const lookup = await this.rest(`/repos/${repo.fullName}/pulls/${number}`);
+  async markPullRequestReady(actor: RepoActor, providerRepoId: string, number: number): Promise<void> {
+    const repo = await this.cachedRepo(actor, providerRepoId);
+    // REST cannot un-draft a pull request; GraphQL is the one way (D-099).
+    const lookup = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}`);
     if (lookup.status === 404) throw new UnknownPullRequestError();
     if (!lookup.ok) throw new ProviderTransientError(`pull request lookup failed (${lookup.status})`);
     const nodeId = ((await lookup.json()) as { node_id: string }).node_id;
-    const token = await this.installationToken();
-    const response = await fetch(`${API}/graphql`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        query: "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }",
-        variables: { id: nodeId }
-      })
-    });
-    if (!response.ok) throw new ProviderTransientError(`mark ready failed (${response.status})`);
-    const body = (await response.json()) as { errors?: { message: string }[] };
-    if (body.errors?.length) {
-      throw new ProviderTransientError(`mark ready was refused: ${body.errors[0]?.message.slice(0, 200)}`);
-    }
+    await this.graphql(
+      actor,
+      "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }",
+      { id: nodeId }
+    );
   }
 }

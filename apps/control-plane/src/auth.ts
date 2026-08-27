@@ -205,6 +205,20 @@ export async function authenticate(db: Db, bearerToken: string): Promise<AuthedC
   };
 }
 
+/**
+ * The acting person's repository credential, read at the moment of the call
+ * and never stored anywhere new (D-101's pattern, made the rule by D-223).
+ * A person with no stored token gets a null-token actor; the provider then
+ * refuses by name, and the cure is a fresh sign-in.
+ */
+export async function repoActorOf(db: Db, userId: string): Promise<{ token: string | null; login: string | null }> {
+  const row = await db.query("select login, github_token from users where user_id = $1", [userId]);
+  return {
+    token: (row.rows[0]?.github_token as string | null | undefined) ?? null,
+    login: (row.rows[0]?.login as string | null | undefined) ?? null
+  };
+}
+
 export async function revokeSession(db: Db, sessionId: string): Promise<void> {
   await db.query("update sessions set revoked_at = now() where session_id = $1", [sessionId]);
 }

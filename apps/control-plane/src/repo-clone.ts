@@ -1,18 +1,19 @@
 import { z } from "zod";
 import type { Db } from "./db.ts";
 import { laneRepository } from "./workstreams.ts";
-import { ProviderTransientError, UnknownRepositoryError } from "./repo-provider.ts";
+import { ProviderTransientError, RepoTokenMissingError, UnknownRepositoryError, type RepoActor } from "./repo-provider.ts";
 
 /**
  * OWNER: the credential a runner needs to put a GitHub repository on the
  * machine it runs on.
  *
  * ARCHITECTURE.md#secret-placement already says where this token lives: the
- * repository access token is "issued per workspace, held by the **runner
- * supervisor**". The host desktop *is* the runner supervisor (D-032, D-035), so
- * a repository-scoped installation token handed to an authenticated runner is
- * the sanctioned shape rather than a new one. This is not cloud execution: it
- * is the existing local runner working on a repository it fetched.
+ * repository access token is handed per operation, held by the **runner
+ * supervisor**. The host desktop *is* the runner supervisor (D-032, D-035),
+ * and since D-223 the credential is the runner owner's own OAuth token — the
+ * same one their own `git` would present — handed to the authenticated runner
+ * they enrolled. This is not cloud execution: it is the existing local runner
+ * working on a repository it fetched.
  *
  * Three properties this module exists to keep:
  *
@@ -46,7 +47,7 @@ export interface CloneCredential {
  * have no repository to fetch, and must refuse by name rather than pretend.
  */
 export interface CloneCredentialMinter {
-  mintCloneCredential(providerRepoId: string): Promise<CloneCredential>;
+  mintCloneCredential(actor: RepoActor, providerRepoId: string): Promise<CloneCredential>;
 }
 
 export function canMintCloneCredential(provider: unknown): provider is CloneCredentialMinter {
@@ -61,7 +62,7 @@ export function canMintCloneCredential(provider: unknown): provider is CloneCred
  * one.
  */
 export interface PushCredentialMinter {
-  mintPushCredential(providerRepoId: string): Promise<CloneCredential>;
+  mintPushCredential(actor: RepoActor, providerRepoId: string): Promise<CloneCredential>;
 }
 
 export function canMintPushCredential(provider: unknown): provider is PushCredentialMinter {
@@ -77,7 +78,8 @@ export function canMintPushCredential(provider: unknown): provider is PushCreden
 export async function issuePushCredential(
   db: Db,
   provider: unknown,
-  args: { orgId: string; workstreamId: string }
+  args: { orgId: string; workstreamId: string },
+  actor: RepoActor
 ): Promise<CloneCredential> {
   const lane = await laneRepository(db, args.workstreamId);
   // Another organization's lane is indistinguishable from a missing one:
@@ -100,8 +102,11 @@ export async function issuePushCredential(
     );
   }
   try {
-    return await provider.mintPushCredential(lane.providerRepoId);
+    return await provider.mintPushCredential(actor, lane.providerRepoId);
   } catch (error) {
+    if (error instanceof RepoTokenMissingError) {
+      throw new CloneCredentialError(403, "repo_token_missing", error.message);
+    }
     if (error instanceof UnknownRepositoryError) {
       throw new CloneCredentialError(404, "unknown_repository", error.message);
     }
@@ -134,7 +139,10 @@ export class CloneCredentialError extends Error {
 export async function issueCloneCredential(
   db: Db,
   provider: unknown,
-  args: { orgId: string; workstreamId: string }
+  args: { orgId: string; workstreamId: string },
+  // The runner owner's own credential performs the fetch (D-223): the person
+  // who enrolled the machine, whose git this already is.
+  actor: RepoActor
 ): Promise<CloneCredential> {
   const lane = await laneRepository(db, args.workstreamId);
   // Another organization's lane is indistinguishable from a missing one:
@@ -160,8 +168,11 @@ export async function issueCloneCredential(
   }
 
   try {
-    return await provider.mintCloneCredential(lane.providerRepoId);
+    return await provider.mintCloneCredential(actor, lane.providerRepoId);
   } catch (error) {
+    if (error instanceof RepoTokenMissingError) {
+      throw new CloneCredentialError(403, "repo_token_missing", error.message);
+    }
     if (error instanceof UnknownRepositoryError) {
       throw new CloneCredentialError(404, "unknown_repository", error.message);
     }

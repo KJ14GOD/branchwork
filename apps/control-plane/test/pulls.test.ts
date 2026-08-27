@@ -911,23 +911,23 @@ describe("publishing a decision (D-099)", () => {
     expect(sent.body).toBe("Bounded at fifty, see the schema.");
     expect(sent.state).toBe("open");
 
-    // Without a held token — a person from before the scope existed — the
-    // App authors it, attributed in the body, exactly the D-100 fallback.
+    // Without a held token there is no app to fall back to (D-223): the send
+    // is refused by name, nothing reaches the host, and the cure is a fresh
+    // sign-in — never a bot speaking the person's words.
     await harness.db.query("update users set github_token = null where user_id = $1", [kartik.userId]);
-    const fallback = await harness.app.inject({
+    const refused = await harness.app.inject({
       method: "POST",
       url: `/pull-requests/${pullId}/comment`,
       headers: bearer(kartik),
       payload: { body: "And bounded at twenty above." }
     });
-    expect(fallback.statusCode).toBe(200);
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error.code).toBe("repo_token_missing");
     await sweepPullRequestsOnce(harness.db, provider);
     detail = await detailOf(lane);
-    const appAuthored = detail.pullRequest.reviewThreads.find((thread: { body: string }) =>
-      thread.body.includes("bounded at twenty")
-    );
-    expect(appAuthored.author).toBe("app/novus");
-    expect(appAuthored.body).toContain("kartik via Novus:");
+    expect(
+      detail.pullRequest.reviewThreads.some((thread: { body: string }) => thread.body.includes("bounded at twenty"))
+    ).toBe(false);
     await harness.db.query("update users set github_token = $2 where user_id = $1", [
       kartik.userId,
       "gho_fake_kartik"

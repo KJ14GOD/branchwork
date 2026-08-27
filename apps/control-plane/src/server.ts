@@ -12,6 +12,7 @@ import {
   claimFlow,
   completeFlow,
   exchangeGithubCode,
+  repoActorOf,
   revokeSession,
   startFlow,
   type AuthedContext
@@ -49,11 +50,11 @@ import { registerWorkspaceRoutes } from "./workspace.ts";
 import type { RouteDeps } from "./routes.ts";
 import {
   ProviderUnconfiguredError,
+  RepoTokenMissingError,
   UnknownRepositoryError,
   selectRepositoryProvider,
   type RepositoryProvider
 } from "./repo-provider.ts";
-import { registerGithubAppSetup } from "./github-app.ts";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -102,12 +103,13 @@ export function buildServer(
     if (error instanceof ProviderUnconfiguredError) {
       return sendError(reply, 503, "repo_unconfigured", error.message);
     }
+    if (error instanceof RepoTokenMissingError) {
+      return sendError(reply, 403, "repo_token_missing", error.message);
+    }
     return sendError(reply, 500, "server_error", "Something went wrong.");
   });
 
   app.get("/health", async () => ({ ok: true }));
-
-  registerGithubAppSetup(app, config);
 
   app.post("/auth/github/start", async (request, reply) => {
     if (!config.fakeGithub && !config.githubClientId) {
@@ -192,7 +194,9 @@ export function buildServer(
     const ctx = await requireAuth(request, reply);
     if (!ctx) return;
     try {
-      return { repositories: await provider.listRepositories(ctx.orgId) };
+      // The caller's own reach (D-223), under their own token.
+      const actor = await repoActorOf(db, ctx.userId);
+      return { repositories: await provider.listRepositories(actor, ctx.orgId) };
     } catch (error) {
       if (error instanceof ProviderUnconfiguredError) {
         return sendError(reply, 503, "repo_unconfigured", error.message);
@@ -208,7 +212,8 @@ export function buildServer(
     const query = z.object({ ref: z.string().min(1).optional() }).safeParse(request.query);
     if (!params.success || !query.success) return sendError(reply, 400, "bad_request", "Malformed request.");
     try {
-      return await provider.resolveBase(params.data.providerRepoId, query.data.ref);
+      const actor = await repoActorOf(db, ctx.userId);
+      return await provider.resolveBase(actor, params.data.providerRepoId, query.data.ref);
     } catch (error) {
       if (error instanceof ProviderUnconfiguredError) {
         return sendError(reply, 503, "repo_unconfigured", error.message);
@@ -226,7 +231,8 @@ export function buildServer(
     const params = z.object({ providerRepoId: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, "bad_request", "Malformed request.");
     try {
-      return { branches: await provider.listBranches(params.data.providerRepoId) };
+      const actor = await repoActorOf(db, ctx.userId);
+      return { branches: await provider.listBranches(actor, params.data.providerRepoId) };
     } catch (error) {
       if (error instanceof ProviderUnconfiguredError) {
         return sendError(reply, 503, "repo_unconfigured", error.message);

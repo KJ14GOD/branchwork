@@ -627,7 +627,7 @@ describe("the runner on a repository it fetched", () => {
     // The case that actually produces `fatal: invalid reference`: the
     // repository IS here — a first mission cloned it — and a later mission's
     // branch is not, because its fetch failed. A refusing remote is the
-    // ordinary transient cause: an expired installation token, a rate limit, a
+    // ordinary transient cause: an expired credential, a rate limit, a
     // branch the provider has not propagated yet. `ensureCheckout` then backs
     // off and returns silently, and discovery used to fall through to
     // announcing anyway — and publishing builds the worktree, so `git worktree

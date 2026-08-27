@@ -12,12 +12,30 @@ import type { Config } from "./config.ts";
 import type { CloneCredential } from "./repo-clone.ts";
 
 /**
- * The repository-provider boundary (D-025, D-031). Repository authorization is
- * distinct from user identity: nothing here ever sees or uses an OAuth user
- * token. The live implementation will be a GitHub App installation; until that
- * exists, the boundary is exercised by a deterministic fake and refuses
- * honestly when unconfigured.
+ * The repository-provider boundary (D-025, D-031, reversed in part by D-223).
+ * Repository access is the acting person's own GitHub access: every method
+ * names the actor whose OAuth token performs the call. The live
+ * implementation is the user-token adapter; the boundary is also exercised by
+ * a deterministic fake and refuses honestly when unconfigured.
  */
+
+/** Whose GitHub credential performs a provider call (D-223): the acting
+ *  person's own OAuth token, read at the moment of the call and never stored
+ *  anywhere new, plus their login for hosts that model authorship. Null token
+ *  means the caller holds none — the live provider then refuses by name
+ *  rather than falling back to any shared credential. */
+export interface RepoActor {
+  token: string | null;
+  login: string | null;
+}
+
+/** No usable user token stands behind the call (D-223): none is stored, or
+ *  GitHub answered 401 for the one that was. The cure is a fresh sign-in. */
+export class RepoTokenMissingError extends Error {
+  constructor(message = "GitHub access needs a fresh sign-in. Sign out of Novus and back in to grant it.") {
+    super(message);
+  }
+}
 
 export class ProviderUnconfiguredError extends Error {
   constructor() {
@@ -108,19 +126,19 @@ export interface RepositoryProvider {
    *  branch on it now either — repository rows carry the provider that
    *  matters — but a label must not lie. */
   readonly kind: "fake" | "github" | "unconfigured";
-  listRepositories(orgId: string): Promise<AvailableRepository[]>;
+  listRepositories(actor: RepoActor, orgId: string): Promise<AvailableRepository[]>;
   /** Resolves a ref (default branch when omitted) to its exact current SHA. */
-  resolveBase(providerRepoId: string, ref?: string): Promise<BaseRevision>;
+  resolveBase(actor: RepoActor, providerRepoId: string, ref?: string): Promise<BaseRevision>;
   /** The repository's branches for the base picker (D-139): name, current
    *  tip, default flag. Default first, then by name; capped, never paged. */
-  listBranches(providerRepoId: string): Promise<BranchInfo[]>;
+  listBranches(actor: RepoActor, providerRepoId: string): Promise<BranchInfo[]>;
   /** Where a pinned base stands against its branch right now (D-139):
    *  current, moved (with a count when the host gives one), rewritten, or
    *  missing. Providers answer from the host; they never guess. */
-  baseStatus(providerRepoId: string, ref: string, pinnedSha: string): Promise<BaseStatus>;
+  baseStatus(actor: RepoActor, providerRepoId: string, ref: string, pinnedSha: string): Promise<BaseStatus>;
   /** Idempotent: succeeds if the branch already exists at `fromSha`;
    *  BranchConflictError if it exists at a different commit. */
-  ensureBranch(providerRepoId: string, branch: string, fromSha: string): Promise<{ alreadyExisted: boolean }>;
+  ensureBranch(actor: RepoActor, providerRepoId: string, branch: string, fromSha: string): Promise<{ alreadyExisted: boolean }>;
   /**
    * Opens a pull request — always as a draft, which is the only way Novus
    * opens one: readiness is a person's own later claim (D-099).
@@ -131,24 +149,25 @@ export interface RepositoryProvider {
    * by humans, and ingestion records who.
    */
   createPullRequest(
+    actor: RepoActor,
     providerRepoId: string,
     input: { title: string; body: string; headRef: string; baseRef: string }
   ): Promise<HostPullRequest>;
   /** The host's current story for one request — state, mergeability, review
    *  threads — for poll ingestion. */
-  getPullRequest(providerRepoId: string, number: number): Promise<HostPullRequest>;
+  getPullRequest(actor: RepoActor, providerRepoId: string, number: number): Promise<HostPullRequest>;
   /** Every request the host holds for one head branch, any state, newest
    *  first and bounded — what the sweep adopts from (D-208). */
-  listPullRequestsForHead(providerRepoId: string, headRef: string): Promise<HostPullRequestListing[]>;
-  requestReviewers(providerRepoId: string, number: number, reviewers: string[]): Promise<void>;
+  listPullRequestsForHead(actor: RepoActor, providerRepoId: string, headRef: string): Promise<HostPullRequestListing[]>;
+  requestReviewers(actor: RepoActor, providerRepoId: string, number: number, reviewers: string[]): Promise<void>;
   /** Marks a draft ready for review. A person's act, relayed. */
-  markPullRequestReady(providerRepoId: string, number: number): Promise<void>;
+  markPullRequestReady(actor: RepoActor, providerRepoId: string, number: number): Promise<void>;
   /**
    * The aggregated gate (D-100): the host's checks with their required flags,
    * the review decision, how far the branch is behind its base, and the
    * repository's own allowed merge methods — read, never assumed.
    */
-  getMergeReadiness(providerRepoId: string, number: number): Promise<MergeReadiness>;
+  getMergeReadiness(actor: RepoActor, providerRepoId: string, number: number): Promise<MergeReadiness>;
   /**
    * Performs the merge a person explicitly asked for (D-100). The host does
    * the merging and stays the source of truth; a host that cannot — draft,
@@ -156,32 +175,34 @@ export interface RepositoryProvider {
    * in its own words. Novus never calls this on its own account.
    */
   mergePullRequest(
+    actor: RepoActor,
     providerRepoId: string,
     number: number,
     method: MergeMethod
   ): Promise<{ sha: string | null }>;
   /** Brings the branch up to date with its base, host-side. */
-  updatePullRequestBranch(providerRepoId: string, number: number): Promise<void>;
+  updatePullRequestBranch(actor: RepoActor, providerRepoId: string, number: number): Promise<void>;
   /** Closes without merging. */
-  closePullRequest(providerRepoId: string, number: number): Promise<void>;
+  closePullRequest(actor: RepoActor, providerRepoId: string, number: number): Promise<void>;
   /** Deletes one branch ref. The route above this gates it to a resolved
    *  request; the provider just does what it is told. */
-  deleteBranchRef(providerRepoId: string, branch: string): Promise<void>;
+  deleteBranchRef(actor: RepoActor, providerRepoId: string, branch: string): Promise<void>;
   /** The request's changed files with bounded patches, and its commits. */
-  listPullFiles(providerRepoId: string, number: number): Promise<PullFilesResponse>;
+  listPullFiles(actor: RepoActor, providerRepoId: string, number: number): Promise<PullFilesResponse>;
   /** One comment — inline when a path anchors it, conversation otherwise.
-   *  With `asUser`, the host sees the person as the author (their own OAuth
-   *  token performs the call, D-101); without, the App authors it. */
+   *  The actor's own token performs the call, so the host sees the person as
+   *  the author (D-101, made the rule by D-223 — there is no app fallback). */
   createPullComment(
+    actor: RepoActor,
     providerRepoId: string,
     number: number,
-    input: { body: string; path?: string; line?: number },
-    asUser?: { token: string; login: string }
+    input: { body: string; path?: string; line?: number }
   ): Promise<void>;
   /** Resolves one review thread by the host's own thread id. */
-  resolveReviewThread(providerRepoId: string, threadId: string): Promise<void>;
+  resolveReviewThread(actor: RepoActor, providerRepoId: string, threadId: string): Promise<void>;
   /** Title, description, labels — patched on the host. */
   setPullRequestMetadata(
+    actor: RepoActor,
     providerRepoId: string,
     number: number,
     input: { title?: string; body?: string; labels?: string[] }
@@ -320,7 +341,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     }));
   }
 
-  async resolveBase(providerRepoId: string, ref?: string): Promise<BaseRevision> {
+  async resolveBase(_actor: RepoActor, providerRepoId: string, ref?: string): Promise<BaseRevision> {
     const repo = this.repo(providerRepoId);
     const target = ref ?? repo.defaultBranch;
     if (target === repo.defaultBranch) return { ref: target, sha: repo.headSha };
@@ -329,7 +350,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     return { ref: target, sha: cut };
   }
 
-  async listBranches(providerRepoId: string): Promise<BranchInfo[]> {
+  async listBranches(_actor: RepoActor, providerRepoId: string): Promise<BranchInfo[]> {
     const repo = this.repo(providerRepoId);
     const cut = [...(this.branches.get(providerRepoId) ?? new Map<string, string>()).entries()]
       .filter(([name]) => name !== repo.defaultBranch)
@@ -338,7 +359,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     return [{ name: repo.defaultBranch, sha: repo.headSha, isDefault: true }, ...cut];
   }
 
-  async baseStatus(providerRepoId: string, ref: string, pinnedSha: string): Promise<BaseStatus> {
+  async baseStatus(_actor: RepoActor, providerRepoId: string, ref: string, pinnedSha: string): Promise<BaseStatus> {
     const repo = this.repo(providerRepoId);
     const tip = ref === repo.defaultBranch ? repo.headSha : this.branches.get(providerRepoId)?.get(ref);
     const checkedAt = new Date().toISOString();
@@ -349,7 +370,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     return { state: "moved", aheadBy: null, checkedAt };
   }
 
-  async ensureBranch(providerRepoId: string, branch: string, fromSha: string): Promise<{ alreadyExisted: boolean }> {
+  async ensureBranch(_actor: RepoActor, providerRepoId: string, branch: string, fromSha: string): Promise<{ alreadyExisted: boolean }> {
     const repo = this.repo(providerRepoId);
     const repoBranches = this.branches.get(providerRepoId) ?? new Map<string, string>();
     this.branches.set(providerRepoId, repoBranches);
@@ -401,6 +422,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
   }
 
   async createPullRequest(
+    _actor: RepoActor,
     providerRepoId: string,
     input: { title: string; body: string; headRef: string; baseRef: string }
   ): Promise<HostPullRequest> {
@@ -460,7 +482,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     return { ...created };
   }
 
-  async listPullRequestsForHead(providerRepoId: string, headRef: string): Promise<HostPullRequestListing[]> {
+  async listPullRequestsForHead(_actor: RepoActor, providerRepoId: string, headRef: string): Promise<HostPullRequestListing[]> {
     return [...this.repoPulls(providerRepoId).values()]
       .filter((pull) => pull.headRef === headRef)
       .sort((left, right) => right.number - left.number)
@@ -474,7 +496,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     providerRepoId: string,
     input: { headRef: string; baseRef?: string; title: string; body?: string; author: string; state?: "draft" | "ready" }
   ): Promise<HostPullRequestListing> {
-    const created = await this.createPullRequest(providerRepoId, {
+    const created = await this.createPullRequest({ token: null, login: input.author }, providerRepoId, {
       title: input.title,
       body: input.body ?? "Opened outside Novus.",
       headRef: input.headRef,
@@ -492,7 +514,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     this.branches.get(providerRepoId)!.set(branch, sha);
   }
 
-  async getPullRequest(providerRepoId: string, number: number): Promise<HostPullRequest> {
+  async getPullRequest(_actor: RepoActor, providerRepoId: string, number: number): Promise<HostPullRequest> {
     const pull = this.pull(providerRepoId, number);
     // Mergeability settles on read, the way GitHub computes it lazily: clean
     // unless the test marked a conflict.
@@ -502,21 +524,21 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     return { ...pull, reviewThreads: pull.reviewThreads.map((thread) => ({ ...thread })) };
   }
 
-  async requestReviewers(providerRepoId: string, number: number, reviewers: string[]): Promise<void> {
+  async requestReviewers(_actor: RepoActor, providerRepoId: string, number: number, reviewers: string[]): Promise<void> {
     const pull = this.pull(providerRepoId, number);
     for (const reviewer of reviewers) {
       if (!pull.requestedReviewers.includes(reviewer)) pull.requestedReviewers.push(reviewer);
     }
   }
 
-  async markPullRequestReady(providerRepoId: string, number: number): Promise<void> {
+  async markPullRequestReady(_actor: RepoActor, providerRepoId: string, number: number): Promise<void> {
     const pull = this.pull(providerRepoId, number);
     if (pull.state === "draft") pull.state = "ready";
   }
 
   // --- The gate and the completion verbs (D-100) -----------------------------
 
-  async getMergeReadiness(providerRepoId: string, number: number): Promise<MergeReadiness> {
+  async getMergeReadiness(_actor: RepoActor, providerRepoId: string, number: number): Promise<MergeReadiness> {
     const pull = this.pull(providerRepoId, number);
     return {
       checks: pull.checks.map((check) => ({ ...check })),
@@ -532,6 +554,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
   }
 
   async mergePullRequest(
+    _actor: RepoActor,
     providerRepoId: string,
     number: number,
     method: MergeMethod
@@ -559,25 +582,25 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     return { sha };
   }
 
-  async updatePullRequestBranch(providerRepoId: string, number: number): Promise<void> {
+  async updatePullRequestBranch(_actor: RepoActor, providerRepoId: string, number: number): Promise<void> {
     const pull = this.pull(providerRepoId, number);
     pull.behindBy = 0;
   }
 
-  async closePullRequest(providerRepoId: string, number: number): Promise<void> {
+  async closePullRequest(_actor: RepoActor, providerRepoId: string, number: number): Promise<void> {
     const pull = this.pull(providerRepoId, number);
     if (pull.state === "merged") throw new MergeRefusedError("This pull request is already merged.");
     pull.state = "closed";
     pull.closedAt = new Date().toISOString();
   }
 
-  async deleteBranchRef(providerRepoId: string, branch: string): Promise<void> {
+  async deleteBranchRef(_actor: RepoActor, providerRepoId: string, branch: string): Promise<void> {
     const repoBranches = this.branches.get(providerRepoId);
     if (!repoBranches?.has(branch)) throw new UnknownBaseError();
     repoBranches.delete(branch);
   }
 
-  async listPullFiles(providerRepoId: string, number: number): Promise<PullFilesResponse> {
+  async listPullFiles(_actor: RepoActor, providerRepoId: string, number: number): Promise<PullFilesResponse> {
     const pull = this.pull(providerRepoId, number);
     return {
       files: pull.files.map((file) => ({ ...file })),
@@ -586,17 +609,17 @@ export class FakeRepositoryProvider implements RepositoryProvider {
   }
 
   async createPullComment(
+    actor: RepoActor,
     providerRepoId: string,
     number: number,
-    input: { body: string; path?: string; line?: number },
-    asUser?: { token: string; login: string }
+    input: { body: string; path?: string; line?: number }
   ): Promise<void> {
     const pull = this.pull(providerRepoId, number);
     pull.reviewThreads.push({
       threadId: `thr_${this.nextThread}`,
       // The fake host reads the author off the token's identity, exactly as
-      // the live host would (D-101).
-      author: asUser?.login ?? "app/novus",
+      // the live host would (D-101; there is no app author since D-223).
+      author: actor.login ?? "unknown",
       body: input.body,
       path: input.path ?? null,
       line: input.line ?? null,
@@ -607,7 +630,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     this.nextThread += 1;
   }
 
-  async resolveReviewThread(providerRepoId: string, threadId: string): Promise<void> {
+  async resolveReviewThread(_actor: RepoActor, providerRepoId: string, threadId: string): Promise<void> {
     for (const pull of this.repoPulls(providerRepoId).values()) {
       const thread = pull.reviewThreads.find((candidate) => candidate.threadId === threadId);
       if (thread) {
@@ -619,6 +642,7 @@ export class FakeRepositoryProvider implements RepositoryProvider {
   }
 
   async setPullRequestMetadata(
+    _actor: RepoActor,
     providerRepoId: string,
     number: number,
     input: { title?: string; body?: string; labels?: string[] }
@@ -736,11 +760,14 @@ export function selectRepositoryProvider(config: Config, env: NodeJS.ProcessEnv 
     const extra = Number(env.NOVUS_FAKE_REPO_COUNT ?? 0);
     return new FakeRepositoryProvider(Number.isFinite(extra) && extra > 0 ? Math.min(extra, 500) : 0);
   }
-  if (config.githubAppId && config.githubAppPem) {
-    return new GithubAppRepositoryProvider(config.githubAppId, config.githubAppPem);
+  // The live adapter needs no server-held GitHub credential (D-223): tokens
+  // arrive per call from the acting person. OAuth being configured is what
+  // makes tokens exist at all, so it is the honest "configured" signal.
+  if (config.githubClientId) {
+    return new GithubUserRepositoryProvider();
   }
   return new UnconfiguredRepositoryProvider();
 }
 
 // Placed after the classes it selects among to avoid a cycle at type level.
-import { GithubAppRepositoryProvider } from "./github-app-provider.ts";
+import { GithubUserRepositoryProvider } from "./github-user-provider.ts";

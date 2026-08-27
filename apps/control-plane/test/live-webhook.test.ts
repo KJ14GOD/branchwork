@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GithubAppRepositoryProvider } from "../src/github-app-provider.ts";
+import { GithubUserRepositoryProvider } from "../src/github-user-provider.ts";
+import type { RepoActor } from "../src/repo-provider.ts";
 import { newDecisionId, newPullRequestId } from "../src/ids.ts";
 import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts";
 
@@ -18,8 +19,9 @@ import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts
  *
  *   NOVUS_LIVE_WEBHOOK=1 pnpm --filter @novus/control-plane exec vitest run test/live-webhook.test.ts
  *
- * Requires the App credentials in the environment, `gh` signed in as the
- * human who merges, and `cloudflared` on PATH. The webhook secret is minted
+ * Requires NOVUS_LIVE_USER_TOKEN (the person's own repo-scoped token — `gh
+ * auth token` works, D-223), `gh` signed in as the human who merges, and
+ * `cloudflared` on PATH. The webhook secret is minted
  * for this run alone, registered on a repository-level hook, and the hook is
  * deleted afterwards.
  */
@@ -31,7 +33,8 @@ process.env.NOVUS_GITHUB_WEBHOOK_SECRET = SECRET;
 
 let harness: Harness;
 let kartik: SignedIn;
-let provider: GithubAppRepositoryProvider;
+let provider: GithubUserRepositoryProvider;
+let actor: RepoActor;
 let tunnel: ChildProcess | null = null;
 let hookId: number | null = null;
 let scratchDir: string | null = null;
@@ -45,10 +48,13 @@ const gh = (args: string[]): string =>
 
 beforeAll(async () => {
   if (!LIVE) return;
-  const pem = Buffer.from(process.env.NOVUS_GHAPP_PEM_B64 ?? "", "base64").toString("utf8");
-  provider = new GithubAppRepositoryProvider(process.env.NOVUS_GHAPP_ID ?? "", pem);
+  const token = process.env.NOVUS_LIVE_USER_TOKEN ?? "";
+  provider = new GithubUserRepositoryProvider();
+  actor = { token, login: null };
   harness = await createHarness("novus_test_live_webhook", provider);
   kartik = await harness.signIn("kartik");
+  // The webhook's sync reads the row with its creator's stored token (D-223).
+  await harness.db.query("update users set github_token = $2 where user_id = $1", [kartik.userId, token]);
 }, 120_000);
 
 afterAll(async () => {
@@ -139,11 +145,12 @@ describe.skipIf(!LIVE)("GitHub delivers, the receiver verifies, PostgreSQL moves
 
       // --- A tracked request to be knocked about: same scaffolding as the
       // live ingestion proof. --------------------------------------------------
-      const repos = await provider.listRepositories();
+      expect(actor.token, "NOVUS_LIVE_USER_TOKEN must carry the person's token").toBeTruthy();
+      const repos = await provider.listRepositories(actor);
       const target = repos.find((repo) => repo.name === TARGET);
       expect(target).toBeTruthy();
       const providerRepoId = target!.providerRepoId;
-      const base = await provider.resolveBase(providerRepoId);
+      const base = await provider.resolveBase(actor, providerRepoId);
       const created = await harness.app.inject({
         method: "POST",
         url: "/missions",
@@ -179,13 +186,13 @@ describe.skipIf(!LIVE)("GitHub delivers, the receiver verifies, PostgreSQL moves
       git(checkout, ["-c", "user.name=Live webhook probe", "-c", "user.email=novus@invalid", "commit", "-m", "The revision"]);
       git(checkout, ["push", "origin", missionBranch]);
       const headSha = git(checkout, ["rev-parse", missionBranch]);
-      const opened = await provider.createPullRequest(providerRepoId, {
+      const opened = await provider.createPullRequest(actor, providerRepoId, {
         title: "Live webhook probe",
         body: "GitHub will deliver the merge to a tunnel; no poll runs.",
         headRef: missionBranch,
         baseRef: base.ref
       });
-      await provider.markPullRequestReady(providerRepoId, opened.number);
+      await provider.markPullRequestReady(actor, providerRepoId, opened.number);
       const decisionId = newDecisionId();
       const pullRequestId = newPullRequestId();
       await harness.db.query(

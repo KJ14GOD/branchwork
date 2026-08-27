@@ -16,6 +16,7 @@ import {
   recordApprovalRequest,
   settlePendingApprovals
 } from "./approvals.ts";
+import { repoActorOf } from "./auth.ts";
 import { completeTransferAtBoundary } from "./authority.ts";
 import { workstreamAccess } from "./authz.ts";
 import type { Db } from "./db.ts";
@@ -74,6 +75,9 @@ const CommandParamsSchema = z.object({ commandId: z.string().startsWith("cmd_") 
 export interface RunnerContext {
   runnerId: string;
   label: string;
+  /** Who enrolled this machine (D-223): the person whose GitHub credential
+   *  performs its clones and pushes, because the machine is theirs. */
+  ownerUserId: string;
   orgId: string;
   missionId: string;
   workstreamId: string;
@@ -95,6 +99,7 @@ export const environmentOf = (ctx: RunnerContext) => `local runner (${ctx.label}
 async function loadRunner(db: Db, credential: string): Promise<RunnerContext | null> {
   const result = await db.query(
     `select r.runner_id, r.label, r.org_id, r.mission_id, r.wst_id, r.revoked_at, r.expires_at,
+            r.owner_user_id,
             w.mission_branch, w.base_sha, w.harness_session_id,
             repo.provider, repo.provider_repo_id
        from runners r
@@ -115,6 +120,7 @@ async function loadRunner(db: Db, credential: string): Promise<RunnerContext | n
   return {
     runnerId: row.runner_id as string,
     label: row.label as string,
+    ownerUserId: row.owner_user_id as string,
     orgId: row.org_id as string,
     missionId: row.mission_id as string,
     workstreamId: row.wst_id as string,
@@ -1209,10 +1215,14 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
       return deps.sendError(reply, 404, "not_found", "No such workstream for this runner.");
     }
     try {
-      return await issueCloneCredential(deps.db, deps.provider, {
-        orgId: ctx.orgId,
-        workstreamId: ctx.workstreamId
-      });
+      // The owner's own token, read at the moment of the call (D-223).
+      const actor = await repoActorOf(deps.db, ctx.ownerUserId);
+      return await issueCloneCredential(
+        deps.db,
+        deps.provider,
+        { orgId: ctx.orgId, workstreamId: ctx.workstreamId },
+        actor
+      );
     } catch (error) {
       if (error instanceof CloneCredentialError) {
         return deps.sendError(reply, error.status, error.code, error.message);
@@ -1235,10 +1245,13 @@ export function registerRunnerRoutes(app: FastifyInstance, deps: RouteDeps): voi
       return deps.sendError(reply, 404, "not_found", "No such workstream for this runner.");
     }
     try {
-      return await issuePushCredential(deps.db, deps.provider, {
-        orgId: ctx.orgId,
-        workstreamId: ctx.workstreamId
-      });
+      const actor = await repoActorOf(deps.db, ctx.ownerUserId);
+      return await issuePushCredential(
+        deps.db,
+        deps.provider,
+        { orgId: ctx.orgId, workstreamId: ctx.workstreamId },
+        actor
+      );
     } catch (error) {
       if (error instanceof CloneCredentialError) {
         return deps.sendError(reply, error.status, error.code, error.message);

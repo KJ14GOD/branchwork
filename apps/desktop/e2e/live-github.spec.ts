@@ -30,9 +30,10 @@ declare global {
  *   NOVUS_LIVE_REPO=owner/name \
  *   pnpm --filter @novus/desktop exec vitest run --config e2e/vitest.config.ts e2e/live-github.spec.ts
  *
- * `NOVUS_LIVE_REPO` must be a repository the Novus GitHub App is installed on
- * and that you do not mind Novus pushing a mission branch to. The control plane
- * it talks to must have `NOVUS_GHAPP_ID` and `NOVUS_GHAPP_PEM_B64` configured;
+ * `NOVUS_LIVE_REPO` must be a repository the borrowed profile's own GitHub
+ * account can reach (D-223: repository access is the person's own token) and
+ * that you do not mind Novus pushing a mission branch to. The control plane it
+ * talks to must have OAuth configured (`NOVUS_GITHUB_CLIENT_ID`/`_SECRET`);
  * this spec deliberately does **not** set `NOVUS_FAKE_GITHUB`, because a fake
  * provider here would prove nothing.
  *
@@ -178,8 +179,8 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
     await row.first().click();
 
     // Picking a repository asks a question, not a place (D-077, D-078): the
-    // small ask dialog with the real composer, here wired through the real
-    // GitHub App behind the control plane.
+    // small ask dialog with the real composer, here wired through the person's
+    // own GitHub token behind the control plane (D-223).
     const ask = page.getByTestId("new-mission-dialog");
     await ask.waitFor({ timeout: 60_000 });
     await ask.getByTestId("composer-input").fill("read the README and say what this project is");
@@ -215,8 +216,8 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
         }, REPO)
       );
 
-    // The base is an exact commit resolved through the real GitHub App, not a
-    // branch name Novus hopes still means the same thing later.
+    // The base is an exact commit resolved through the person's own real
+    // GitHub access, not a branch name Novus hopes still means the same later.
     const baseSha = await page.evaluate(async (mission) => {
       const result = await window.novus.missions.get(mission);
       if (!result.ok) throw new Error(result.message);
@@ -374,14 +375,16 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
     for (const path of configs) {
       const body = readFileSync(path, "utf8");
       expect(body).not.toContain("x-access-token");
-      expect(body).not.toMatch(/ghs_[A-Za-z0-9]/);
+      expect(body).not.toMatch(/gh[so]_[A-Za-z0-9]/);
     }
 
-    // Nothing anywhere in this machine's Novus state carries an installation
-    // token, including the outbox, the enrolment file, and the process record.
+    // Nothing anywhere in this machine's Novus state carries a repository
+    // credential (since D-223 the person's own gho_ token; ghs_ covers the
+    // retired mint), including the outbox, the enrolment file, and the
+    // process record.
     for (const path of filesUnder(userDataDir)) {
       const body = readFileSync(path, "latin1");
-      expect(body, `${path} holds an installation token`).not.toMatch(/ghs_[A-Za-z0-9]{20}/);
+      expect(body, `${path} holds a repository credential`).not.toMatch(/gh[so]_[A-Za-z0-9]{20}/);
     }
 
     // Nor does anything the control plane recorded.
@@ -393,7 +396,7 @@ describe.skipIf(!LIVE)("a real GitHub repository, worked on this machine", () =>
     );
     await pool.end();
     for (const row of [...events.rows, ...rows.rows]) {
-      expect(String(row.body)).not.toMatch(/ghs_[A-Za-z0-9]{20}/);
+      expect(String(row.body)).not.toMatch(/gh[so]_[A-Za-z0-9]{20}/);
       expect(String(row.body)).not.toContain("x-access-token");
     }
 

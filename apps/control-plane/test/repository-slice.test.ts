@@ -7,7 +7,8 @@ import { buildServer } from "../src/server.ts";
 import {
   BranchConflictError,
   FakeRepositoryProvider,
-  UnconfiguredRepositoryProvider
+  UnconfiguredRepositoryProvider,
+  type RepoActor
 } from "../src/repo-provider.ts";
 
 // Deterministic tests for the repository/workstream slice against a real
@@ -214,7 +215,9 @@ describe("idempotent creation", () => {
     // Exactly one branch exists in the provider: ensuring it again at the same
     // sha reports alreadyExisted, proving the second POST created nothing.
     const branch = workstreams.rows[0];
-    await expect(provider.ensureBranch("9001", branch.mission_branch, branch.base_sha)).resolves.toEqual({
+    await expect(
+      provider.ensureBranch({ token: null, login: null }, "9001", branch.mission_branch, branch.base_sha)
+    ).resolves.toEqual({
       alreadyExisted: true
     });
 
@@ -245,7 +248,7 @@ describe("idempotent creation", () => {
     ]);
     expect(workstreams.rowCount).toBe(1);
     await expect(
-      provider.ensureBranch("9001", workstreams.rows[0].mission_branch, workstreams.rows[0].base_sha)
+      provider.ensureBranch({ token: null, login: null }, "9001", workstreams.rows[0].mission_branch, workstreams.rows[0].base_sha)
     ).resolves.toEqual({ alreadyExisted: true });
     expect(await eventKinds(missionId)).toEqual([
       "mission.created",
@@ -347,7 +350,7 @@ describe("branch conflict", () => {
     override async resolveBase(): Promise<BaseRevision> {
       return { ref: "main", sha: "a".repeat(40) };
     }
-    override async ensureBranch(_repo: string, branch: string): Promise<{ alreadyExisted: boolean }> {
+    override async ensureBranch(_actor: RepoActor, _repo: string, branch: string): Promise<{ alreadyExisted: boolean }> {
       throw new BranchConflictError(branch);
     }
   }

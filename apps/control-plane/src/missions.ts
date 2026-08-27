@@ -12,7 +12,7 @@ import { withTransaction } from "./db.ts";
 import { recordEvent, recordEventAtSeq } from "./events.ts";
 import { newLeaseId, newMissionId, newRepoId, newWorkstreamId } from "./ids.ts";
 import { insertSession } from "./sessions.ts";
-import type { AuthedContext } from "./auth.ts";
+import { repoActorOf, type AuthedContext } from "./auth.ts";
 import { missionAccess } from "./authz.ts";
 import { missionDetail, observeMission } from "./mission-detail.ts";
 import { toWorkstream } from "./workstreams.ts";
@@ -177,7 +177,7 @@ export async function createMission(
       defaultBranch: registered.rows[0].default_branch
     };
   } else {
-    const listed = await provider.listRepositories(ctx.orgId);
+    const listed = await provider.listRepositories(await repoActorOf(db, ctx.userId), ctx.orgId);
     const found = listed.find((repo) => repo.providerRepoId === input.providerRepoId);
     if (!found) throw new MissionCreationError("unknown_repository", "That repository isn't available.");
     available = found;
@@ -337,7 +337,7 @@ async function createMissionTx(
 export async function attemptBranchCreation(
   db: Db,
   provider: RepositoryProvider,
-  _ctx: AuthedContext,
+  ctx: AuthedContext,
   missionId: string,
   /** Which lane's branch to drive. A mission may hold several (D-074); absent
    *  means the one it started with, which is every mission that never forked. */
@@ -377,7 +377,12 @@ export async function attemptBranchCreation(
   // propagate rather than record a false 'failed' for a branch that exists.
   let outcome: { ok: true } | { ok: false; message: string };
   try {
-    await provider.ensureBranch(row.provider_repo_id, row.mission_branch, row.base_sha);
+    await provider.ensureBranch(
+      await repoActorOf(db, ctx.userId),
+      row.provider_repo_id,
+      row.mission_branch,
+      row.base_sha
+    );
     outcome = { ok: true };
   } catch (error) {
     outcome = {
@@ -814,6 +819,7 @@ const BASE_STATUS_TTL_MS = 60_000;
 
 function cachedBaseStatus(
   provider: RepositoryProvider,
+  actor: { token: string | null; login: string | null },
   providerRepoId: string,
   ref: string,
   pinnedSha: string
@@ -824,7 +830,7 @@ function cachedBaseStatus(
   if ((!hit || hit.expires < now) && !baseStatusInFlight.has(key)) {
     baseStatusInFlight.add(key);
     void provider
-      .baseStatus(providerRepoId, ref, pinnedSha)
+      .baseStatus(actor, providerRepoId, ref, pinnedSha)
       .then((value) => baseStatusCache.set(key, { value, expires: Date.now() + BASE_STATUS_TTL_MS }))
       .catch(() =>
         // The provider could not answer; "unknown" is the recorded fact, and
@@ -860,6 +866,7 @@ export async function getMission(
   if (provider && repository?.provider === "github" && detail.workstream) {
     detail.baseStatus = cachedBaseStatus(
       provider,
+      await repoActorOf(db, ctx.userId),
       repository.providerRepoId,
       detail.workstream.baseRef,
       detail.workstream.baseSha
