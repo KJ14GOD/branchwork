@@ -1,6 +1,11 @@
 # A deployed control plane and its PostgreSQL (D-221). From the repository root:
 #
-#   docker compose -f apps/control-plane/deploy/docker-compose.yml up --build
+#   docker compose --env-file .env -f apps/control-plane/deploy/docker-compose.yml up --build
+#
+# --env-file matters: compose substitutes ${...} from the directory holding
+# THIS file, not your working directory, so without it the repository root's
+# .env — the GitHub OAuth credentials — never reaches the container and
+# sign-in reports itself unconfigured while /health looks fine.
 #
 # This serves plain HTTP on ${NOVUS_CP_PORT:-4460}. For anything beyond a
 # trusted network, terminate TLS in front (Caddy, nginx, or a cloud load
