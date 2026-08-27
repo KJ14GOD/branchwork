@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceSettings } from "@novus/contracts";
@@ -138,6 +139,65 @@ const EXTRA_UNIX_PATH = (home: string): string[] => [
   "/usr/sbin",
   "/sbin"
 ];
+
+/**
+ * The login shell's PATH, for a Finder launch (D-222, owner-hit): an app
+ * opened from the dock inherits launchd's bare PATH, so a CLI installed by a
+ * version manager — nvm put `codex` under ~/.nvm/versions/... on the owner's
+ * Mac — is unfindable by the probe and unspawnable by a turn, while a
+ * terminal `pnpm dev` finds everything. The interactive flag matters: nvm
+ * initializes in .zshrc, which a plain login shell never reads. The marker
+ * fences the value from whatever noise the person's rc files print.
+ */
+const LOGIN_PATH_MARKER = "__NOVUS_LOGIN_PATH__";
+
+/** Extracts the PATH a marker-fenced shell run printed, or null when the
+ *  markers never arrived (a hung or failed shell). The LAST fenced pair wins,
+ *  so an rc file echoing the command itself cannot spoof the value. */
+export function pathFromShellOutput(output: string, marker = LOGIN_PATH_MARKER): string | null {
+  const pieces = output.split(marker);
+  if (pieces.length < 3) return null;
+  const value = pieces[pieces.length - 2] ?? "";
+  return value.includes("/") ? value : null;
+}
+
+/** The current PATH plus the login shell's entries it lacked, order kept,
+ *  nothing removed: inherited entries stay first so an explicitly exported
+ *  override keeps winning over the profile's default. */
+export function mergedPath(current: string, loginPath: string, separator = ":"): string {
+  const seen = new Set(current.split(separator).filter((entry) => entry !== ""));
+  const added = loginPath.split(separator).filter((entry) => entry !== "" && !seen.has(entry));
+  return added.length === 0 ? current : [current, ...added].join(separator);
+}
+
+/**
+ * Resolves the login shell's PATH once at startup and folds it into this
+ * process's own, so everything downstream — the harness probe, novusPath,
+ * every spawn — simply inherits a complete one. Failure is silent by design:
+ * a terminal launch already has the right PATH, and a broken rc file must
+ * not stop the app from opening.
+ */
+export async function amendPathFromLoginShell(
+  environment: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): Promise<"amended" | "already-complete" | "unavailable"> {
+  if (platform === "win32") return "already-complete";
+  const shell = environment.SHELL && environment.SHELL !== "" ? environment.SHELL : "/bin/zsh";
+  const printed = await new Promise<string | null>((resolve) => {
+    execFile(
+      shell,
+      ["-ilc", `printf '%s%s%s' '${LOGIN_PATH_MARKER}' "$PATH" '${LOGIN_PATH_MARKER}'`],
+      { timeout: 4000 },
+      (error, stdout) => resolve(error ? null : stdout)
+    );
+  });
+  const loginPath = printed === null ? null : pathFromShellOutput(printed);
+  if (loginPath === null) return "unavailable";
+  const merged = mergedPath(environment.PATH ?? "", loginPath);
+  if (merged === (environment.PATH ?? "")) return "already-complete";
+  environment.PATH = merged;
+  return "amended";
+}
 
 export type ProcessEnvironment = Record<string, string>;
 

@@ -7,7 +7,7 @@ import {
   novusPath,
   projectEnv,
   proxyCredentials,
-  terminalEnv
+  terminalEnv, pathFromShellOutput, mergedPath 
 } from "../electron/workspace-env";
 
 /**
@@ -228,5 +228,30 @@ describe("the credential inside a forwarded proxy", () => {
     expect(proxyCredentials({ HTTPS_PROXY: "http://proxy.example.invalid:3128" })).toEqual([]);
     expect(proxyCredentials({ HTTPS_PROXY: "not a url at all" })).toEqual([]);
     expect(proxyCredentials({})).toEqual([]);
+  });
+});
+
+describe("the login shell's PATH, folded in at launch (D-222)", () => {
+  it("extracts the marker-fenced PATH, letting rc-file noise and echoed commands pass by", () => {
+    const marker = "__NOVUS_LOGIN_PATH__";
+    expect(pathFromShellOutput(`${marker}/usr/bin:/opt/homebrew/bin${marker}`, marker)).toBe(
+      "/usr/bin:/opt/homebrew/bin"
+    );
+    // An rc file that prints the command itself puts extra markers FIRST;
+    // the last fenced pair is the printf's own.
+    expect(
+      pathFromShellOutput(`echo ${marker}$PATH${marker}\nbanner\n${marker}/real/bin${marker}`, marker)
+    ).toBe("/real/bin");
+    expect(pathFromShellOutput("no markers at all", marker)).toBeNull();
+    expect(pathFromShellOutput(`${marker}not a path${marker}`, marker)).toBeNull();
+  });
+
+  it("merges only the entries the current PATH lacks, inherited order first", () => {
+    expect(mergedPath("/usr/bin:/bin", "/Users/k/.nvm/versions/node/v24/bin:/usr/bin")).toBe(
+      "/usr/bin:/bin:/Users/k/.nvm/versions/node/v24/bin"
+    );
+    // Nothing new: the string is returned untouched, not rebuilt.
+    expect(mergedPath("/usr/bin:/bin", "/usr/bin")).toBe("/usr/bin:/bin");
+    expect(mergedPath("/usr/bin", "")).toBe("/usr/bin");
   });
 });

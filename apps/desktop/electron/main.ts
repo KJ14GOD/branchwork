@@ -58,6 +58,7 @@ import {
   RespondApprovalInputSchema,
   SaveWorkspaceSettingsInputSchema,
   SessionScopeSchema,
+  SecretNameSchema,
   SupplySecretInputSchema,
   TerminalRenameInputSchema,
   TerminalResizeInputSchema,
@@ -75,6 +76,7 @@ import { ApiError, ControlPlaneClient } from "./api-client";
 import { avatarFor } from "./avatars";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
+import { amendPathFromLoginShell } from "./workspace-env";
 import {
   listLocalBranches,
   localBaseStatus,
@@ -97,6 +99,8 @@ import {
   onTerminalOutput,
   openPreview,
   openTerminal,
+  addLocalSecretName,
+  deleteLocalWorkspaceFile,
   prepareLocalFiles,
   processLogsFor,
   readFile,
@@ -108,6 +112,7 @@ import {
   shutdownTerminals,
   supplySecret,
   terminalScrollback,
+  writeLocalWorkspaceFile,
   writeFile,
   writeTerminal,
   worktreeFor,
@@ -116,7 +121,12 @@ import {
 import { OpenRefused, applicationIcon, installedApplications, openWith } from "./workspace-open";
 import { resolvePreviewTarget } from "./preview-policy";
 import {
+  browsePreview,
+  browsePreviewHistory,
   closeEmbeddedPreview,
+  closeEmbeddedPreviewTab,
+  newEmbeddedPreviewTab,
+  selectEmbeddedPreviewTab,
   embeddedPreviewStatus,
   noteProcessChunk,
   onEmbeddedPreviewStatus,
@@ -1917,6 +1927,74 @@ function registerIpc(): void {
     });
   });
 
+  // A person's own local file (D-226): typed contents into a gitignored path
+  // — the `.env` that exists nowhere on this machine yet. Local, like every
+  // supply act: contents never cross to the control plane and are never read
+  // back. The write module refuses tracked paths in words.
+  ipcMain.handle("novus:workspace:write-local-file", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: MissionIdSchema,
+        workstreamId: z.string().startsWith("wst_").optional(),
+        path: z.string().min(1).max(300),
+        content: z.string().max(1_048_576)
+      })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed file." };
+    return call(async () => {
+      const target = await targetFor(parsed.data.missionId, parsed.data.workstreamId);
+      const outcome = await writeLocalWorkspaceFile(target, parsed.data.path, parsed.data.content);
+      if (!outcome.done) throw new ApiError("file_refused", outcome.refusedBecause, 409);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:workspace:delete-local-file", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: MissionIdSchema,
+        workstreamId: z.string().startsWith("wst_").optional(),
+        path: z.string().min(1).max(300)
+      })
+      .safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed path." };
+    return call(async () => {
+      const target = await targetFor(parsed.data.missionId, parsed.data.workstreamId);
+      const outcome = await deleteLocalWorkspaceFile(target, parsed.data.path);
+      if (!outcome.done) throw new ApiError("file_refused", outcome.refusedBecause, 409);
+      return null;
+    });
+  });
+
+  // Declaring a secret *name* from the dialog (D-226): written into the
+  // machine-local settings layer, so a friend's repository needs no commit
+  // for this Mac to know it wants a key. The value still only travels
+  // through supply-secret.
+  ipcMain.handle("novus:workspace:add-secret-name", async (_event, raw: unknown) => {
+    const parsed = z
+      .object({
+        missionId: MissionIdSchema,
+        workstreamId: z.string().startsWith("wst_").optional(),
+        name: SecretNameSchema
+      })
+      .safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        code: "invalid_input",
+        message: "A secret name is an environment variable name: letters, digits, underscores."
+      };
+    }
+    const result = await call(async () =>
+      addLocalSecretName(
+        await targetFor(parsed.data.missionId, parsed.data.workstreamId),
+        parsed.data.name
+      )
+    );
+    if (result.ok) runner?.republish(parsed.data.missionId);
+    return result;
+  });
+
   ipcMain.handle("novus:workspace:command", async (_event, raw: unknown) => {
     const parsed = z
       .object({ missionId: MissionIdSchema })
@@ -2066,6 +2144,58 @@ function registerIpc(): void {
   ipcMain.handle("novus:preview:reload", async () => {
     return call(async () => {
       reloadEmbeddedPreview();
+      return null;
+    });
+  });
+
+  // The person's own browsing (D-224): the address bar and the history
+  // controls. Local acts on this machine's one surface; the address policy
+  // (http/https, credential-free) is decided in the main process.
+  ipcMain.handle("novus:preview:navigate", async (_event, raw: unknown) => {
+    const parsed = z.object({ url: z.string().max(2000) }).safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed address." };
+    const result = browsePreview(parsed.data.url);
+    if (!result.ok) return { ok: false, code: "preview_refused", message: result.refusal };
+    return { ok: true, value: null };
+  });
+
+  // The surface's own tabs (D-225): registered here first, so the attach
+  // gate admits an element only for a tab the main process already holds.
+  ipcMain.handle("novus:preview:new-tab", async (_event, raw: unknown) => {
+    const parsed = z.object({ url: z.string().max(2000).optional() }).safeParse(raw ?? {});
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed address." };
+    const result = newEmbeddedPreviewTab(parsed.data.url);
+    if (!result.ok) return { ok: false, code: "preview_refused", message: result.refusal };
+    return { ok: true, value: null };
+  });
+
+  ipcMain.handle("novus:preview:select-tab", async (_event, raw: unknown) => {
+    const parsed = z.object({ tabId: z.string().max(40) }).safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    return call(async () => {
+      selectEmbeddedPreviewTab(parsed.data.tabId);
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:preview:close-tab", async (_event, raw: unknown) => {
+    const parsed = z.object({ tabId: z.string().max(40) }).safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    const result = closeEmbeddedPreviewTab(parsed.data.tabId);
+    if (!result.ok) return { ok: false, code: "preview_refused", message: result.refusal };
+    return { ok: true, value: null };
+  });
+
+  ipcMain.handle("novus:preview:back", async () => {
+    return call(async () => {
+      browsePreviewHistory("back");
+      return null;
+    });
+  });
+
+  ipcMain.handle("novus:preview:forward", async () => {
+    return call(async () => {
+      browsePreviewHistory("forward");
       return null;
     });
   });
@@ -2323,6 +2453,14 @@ app.on("will-quit", () => {
 });
 
 app.whenReady().then(async () => {
+  // A Finder launch inherits launchd's bare PATH (D-222, owner-hit: Codex
+  // "not found" and turns unable to spawn an nvm-installed CLI). Fold the
+  // login shell's PATH in before anything probes or spawns.
+  try {
+    await amendPathFromLoginShell();
+  } catch (error) {
+    console.warn("[novus] could not resolve the login shell's PATH:", error);
+  }
   protocol.handle("novus-artifact", serveArtifactBytes);
   // The recorder (D-123): a hidden Novus-owned page that encodes the preview's
   // frames. Everything privileged stays here — the page can name no source,
