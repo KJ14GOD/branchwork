@@ -4,12 +4,14 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
   writeFileSync
 } from "node:fs";
-import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { PreparedFile } from "@novus/contracts";
 import { isSecretPath } from "./evidence";
 import { ignoredByGit, type GitExec } from "./workspace-git";
@@ -181,6 +183,79 @@ const DONE: LocalFileOutcome = { done: true, refusedBecause: null };
 /** A typed-in local file is configuration; a megabyte of it is something else. */
 const MAX_WRITE_BYTES = 1024 * 1024;
 
+/**
+ * Where this repository WOULD accept that file (D-226, owner-asked: "shouldn't
+ * it read the .gitignore and tell you the exact path"). A refusal that only
+ * says no leaves the person guessing while the answer sits in the worktree's
+ * own `.gitignore` files — so scan them for lines naming the file, turn each
+ * concrete line into a candidate path, and let git itself confirm which ones
+ * it ignores. Bounded on every axis: directories walked, files read, lines
+ * considered, suggestions returned — this decorates a refusal, it must never
+ * become a traversal.
+ */
+export async function ignoredPathSuggestions(
+  git: GitExec,
+  worktree: string,
+  typedPath: string
+): Promise<string[]> {
+  const name = basename(typedPath);
+  if (name === "") return [];
+  const root = realOrSelf(worktree);
+
+  // Every .gitignore in the tree, shallow and bounded, never inside .git or
+  // dependency output.
+  const ignoreFiles: string[] = [];
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
+  let visited = 0;
+  while (queue.length > 0 && ignoreFiles.length < 20 && visited < 200) {
+    const next = queue.shift();
+    if (next === undefined) break;
+    visited += 1;
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = readdirSync(next.dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name === ".git" || entry.name === "node_modules") continue;
+      const at = join(next.dir, entry.name);
+      if (entry.isFile() && entry.name === ".gitignore") ignoreFiles.push(at);
+      else if (entry.isDirectory() && next.depth < 3) queue.push({ dir: at, depth: next.depth + 1 });
+    }
+  }
+
+  // Concrete candidate paths from lines that name the file. Globs and
+  // negations are git's own semantics to interpret — a candidate is only
+  // suggested once git confirms it, so a wrong guess costs nothing.
+  const candidates = new Set<string>();
+  for (const file of ignoreFiles) {
+    let lines: string[];
+    try {
+      lines = readFileSync(file, "utf8").split("\n").slice(0, 200);
+    } catch {
+      continue;
+    }
+    const base = dirname(file);
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (line === "" || line.startsWith("#") || line.startsWith("!")) continue;
+      if (!line.includes(name)) continue;
+      if (/[*?\[\]]/.test(line)) continue; // no concrete path to offer
+      const candidate = relative(root, join(base, line.replace(/^\//, "").replace(/\/$/, "")));
+      if (candidate !== "" && !candidate.startsWith("..")) candidates.add(candidate);
+    }
+  }
+  candidates.delete(typedPath);
+
+  const confirmed: string[] = [];
+  for (const candidate of candidates) {
+    if (confirmed.length >= 3) break;
+    if ((await ignoredByGit(git, worktree, candidate)) === "ignored") confirmed.push(candidate);
+  }
+  return confirmed.sort();
+}
+
 export interface LocalWriteInput {
   git: GitExec;
   worktree: string;
@@ -221,8 +296,12 @@ export async function writeLocalFile(input: LocalWriteInput): Promise<LocalFileO
     return refuseOutcome("git could not answer whether that path is ignored just now — try again");
   }
   if (writeAnswer !== "ignored") {
+    // The .gitignore knows where yes is; a refusal should say so (D-226).
+    const suggestions = await ignoredPathSuggestions(input.git, input.worktree, input.path);
     return refuseOutcome(
-      "git does not ignore that path — a tracked file changes through the mission's own work, not a supplied copy"
+      suggestions.length > 0
+        ? `git does not ignore that path — this repository ignores ${suggestions.map((path) => `\`${path}\``).join(", ")}; write it there`
+        : "git does not ignore that path — a tracked file changes through the mission's own work, not a supplied copy"
     );
   }
 

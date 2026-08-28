@@ -286,3 +286,49 @@ describe("git failing to answer is never read as an answer (D-226 hardening)", (
     expect(outcome.refusedBecause).toContain("could not answer");
   });
 });
+
+describe("a refusal names where the repository would say yes (D-226, owner-asked)", () => {
+  beforeEach(async () => {
+    await git(worktree, ["init", "-b", "main"]);
+  });
+
+  it("suggests the path the root .gitignore actually ignores", async () => {
+    // The owner's exact live case: the person types `.env` at the root, but
+    // this repository ignores it somewhere else.
+    writeFileSync(join(worktree, ".gitignore"), "referral-intake/.env\n");
+    mkdirSync(join(worktree, "referral-intake"), { recursive: true });
+    await git(worktree, ["add", ".gitignore"]);
+    await git(worktree, ["commit", "-m", "ignore the intake env"]);
+
+    const outcome = await writeLocalFile({ git: gitExec, worktree, path: ".env", content: "A=1\n" });
+    expect(outcome.done).toBe(false);
+    expect(outcome.refusedBecause).toContain("this repository ignores `referral-intake/.env`");
+    expect(outcome.refusedBecause).toContain("write it there");
+    // And writing where it points succeeds.
+    const followed = await writeLocalFile({
+      git: gitExec,
+      worktree,
+      path: "referral-intake/.env",
+      content: "A=1\n"
+    });
+    expect(followed.done).toBe(true);
+  });
+
+  it("finds a nested .gitignore's answer too, and stays quiet when there is none", async () => {
+    mkdirSync(join(worktree, "app"), { recursive: true });
+    writeFileSync(join(worktree, "app", ".gitignore"), "# local only\n.env\n");
+    await git(worktree, ["add", "app/.gitignore"]);
+    await git(worktree, ["commit", "-m", "app ignores its env"]);
+
+    const outcome = await writeLocalFile({ git: gitExec, worktree, path: ".env", content: "A=1\n" });
+    expect(outcome.done).toBe(false);
+    expect(outcome.refusedBecause).toContain("app/.env");
+
+    // A file no .gitignore mentions keeps the plain refusal — no invented
+    // suggestions.
+    const plain = await writeLocalFile({ git: gitExec, worktree, path: "notes.txt", content: "x\n" });
+    expect(plain.done).toBe(false);
+    expect(plain.refusedBecause).toContain("mission's own work");
+    expect(plain.refusedBecause).not.toContain("write it there");
+  });
+});
