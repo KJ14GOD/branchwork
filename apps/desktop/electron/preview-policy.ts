@@ -57,19 +57,57 @@ export function resolvePreviewTarget(rawUrl: string, logs: ProcessLog[]): Previe
 }
 
 /**
- * Whether the embedded top frame may go to `candidate`: the same loopback
- * application the preview was opened on, and nothing else. Scheme and port
- * have to agree — `http://localhost:3000` and `http://localhost:9999` are
- * different applications, and `https://evil.example` is not a preview — while
- * the loopback hostname spellings are one machine (D-157): an app opened on
- * `localhost` that redirects itself to `127.0.0.1` is still itself. Runs
- * through the same parser as the open gate so whitespace and credential
- * smuggling are refused here identically.
+ * Whether `candidate` is on the approved origin: the same loopback
+ * application the preview was opened on. Scheme and port have to agree —
+ * `http://localhost:3000` and `http://localhost:9999` are different
+ * applications — while the loopback hostname spellings are one machine
+ * (D-157): an app opened on `localhost` that redirects itself to `127.0.0.1`
+ * is still itself. Runs through the same parser as the open gate so
+ * whitespace and credential smuggling are refused here identically.
+ *
+ * Since D-224 this no longer fences the person's own browsing — the top
+ * frame may leave (`browserNavigationAllowed` decides how far). What stays
+ * bound to this answer: the agent's drive verbs, and evidence capture —
+ * both act only on the lane's own app.
  */
 export function previewNavigationAllowed(approvedOrigin: string, candidate: string): boolean {
   const parsed = parseLoopbackHttpUrl(candidate);
   if (parsed === null) return false;
   return parsed.origin === approvedOrigin || sameLoopbackAddress(approvedOrigin, parsed.toString());
+}
+
+/**
+ * Where the person's own browsing may take the top frame (D-224): any
+ * credential-free `http`/`https` address, and nothing else. The web is
+ * allowed; the platform is not — `file:`, `javascript:`, `about:`, smuggled
+ * credentials, and control characters are refused exactly as the open gate
+ * refuses them, because a browser chrome is not a reason to hand the guest
+ * a scheme with local reach.
+ */
+export function browserNavigationAllowed(candidate: string): boolean {
+  if (/[\s\u0000-\u001f\u007f]/.test(candidate)) return false;
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  return url.username === "" && url.password === "";
+}
+
+/**
+ * What the address bar's typing resolves to (D-224): a person types
+ * `github.com/kj16` and means `https://github.com/kj16`, so a missing scheme
+ * gets `https://` — never a search, never a guess beyond that. Returns the
+ * normalized address, or null where nothing navigable was typed.
+ */
+export function resolveBrowseAddress(typed: string): string | null {
+  const trimmed = typed.trim();
+  if (trimmed === "") return null;
+  const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed) ? trimmed : `https://${trimmed}`;
+  if (!browserNavigationAllowed(candidate)) return null;
+  return new URL(candidate).toString();
 }
 
 /**

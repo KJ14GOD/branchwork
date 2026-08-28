@@ -2679,10 +2679,34 @@ export type PreviewPhase = z.infer<typeof PreviewPhaseSchema>;
 
 export const PreviewStatusSchema = z.object({
   workstreamId: z.string().startsWith("wst_"),
-  /** The validated address the view is showing, rebuilt from parsed parts. */
+  /** The validated address the view opened on, rebuilt from parsed parts. */
   url: LoopbackUrl,
-  /** The approved origin; the top frame can navigate nowhere else. */
+  /** The approved origin — still the surface's identity: opening requires it,
+   *  the agent's driving is confined to it, and evidence binds to it. A
+   *  person may browse the surface elsewhere (D-224). */
   origin: z.string().max(300),
+  /** Where the top frame actually is right now (D-224): the person's own
+   *  browsing can take it off the approved origin, and the address bar says
+   *  so rather than pretending. */
+  currentUrl: z.string().max(2000).default(""),
+  /** Whether the page's own history can step back / forward (D-224). */
+  canGoBack: z.boolean().default(false),
+  canGoForward: z.boolean().default(false),
+  /** Every open tab of the surface (D-225), in order. `src` is the address
+   *  the tab's element attaches with — its registration, never where the
+   *  page has since been browsed (that is `currentUrl`). */
+  tabs: z
+    .array(
+      z.object({
+        tabId: z.string().max(40),
+        src: z.string().max(2000),
+        title: z.string().max(300),
+        currentUrl: z.string().max(2000)
+      })
+    )
+    .default([]),
+  /** Which tab the standing fields above describe (D-225). */
+  activeTabId: z.string().max(40).default(""),
   /** The live run process that reported this address — the preview's identity
    *  is that process's, and it opens for no other reason (D-045, D-098). */
   processId: z.string().startsWith("prc_"),
@@ -4341,6 +4365,23 @@ export interface NovusBridge {
       IpcResult<SecretState>
     >;
     forgetSecret(input: { missionId: string; workstreamId?: string; name: string }): Promise<IpcResult<SecretState>>;
+    /** Declares a secret variable name from the dialog (D-226), written into
+     *  the machine-local settings layer — no commit to a friend's repository
+     *  needed. The value still travels only through supplySecret. */
+    addSecretName(input: { missionId: string; workstreamId?: string; name: string }): Promise<IpcResult<SecretState>>;
+    /** Writes a person-typed gitignored file into the workspace (D-226) — the
+     *  `.env` that exists nowhere on this machine yet. Tracked paths are
+     *  refused in words; contents stay on this machine and are never read
+     *  back across this bridge. */
+    writeLocalFile(input: {
+      missionId: string;
+      workstreamId?: string;
+      path: string;
+      content: string;
+    }): Promise<IpcResult<null>>;
+    /** Removes a person-supplied gitignored file (D-226). Tracked paths are
+     *  refused in words. */
+    deleteLocalFile(input: { missionId: string; workstreamId?: string; path: string }): Promise<IpcResult<null>>;
     /** Opens a loopback preview in the operating system's browser. No shell
      *  command is involved and nothing but loopback http/https is accepted. */
     openPreview(input: { missionId: string; workstreamId?: string; url: string }): Promise<IpcResult<null>>;
@@ -4349,8 +4390,10 @@ export interface NovusBridge {
      * page it shows is served by a process on this machine, so there is no
      * control-plane route and nothing for a remote participant to reach. The
      * main process validates the address against the workstream's own live
-     * processes, owns the view, and confines its navigation to the approved
-     * origin; the renderer only reserves the rectangle and reads the status.
+     * processes and owns the view; a person may then browse the surface to
+     * any credential-free http(s) address (D-224), while the agent's driving
+     * and evidence capture stay bound to the approved origin. The renderer
+     * only reserves the rectangle and reads the status.
      */
     preview: {
       /** Shows the embedded view for an address a live run process of this
@@ -4363,6 +4406,21 @@ export interface NovusBridge {
       }): Promise<IpcResult<PreviewStatus>>;
       /** Reloads the page. The process is not touched. */
       reload(): Promise<IpcResult<null>>;
+      /** Navigates the surface to an address the person typed (D-224): any
+       *  credential-free http(s) address, scheme optional in the typing.
+       *  Anything else is refused in words. */
+      navigate(input: { url: string }): Promise<IpcResult<null>>;
+      /** Steps the page's own history (D-224). No-ops where there is none. */
+      back(): Promise<IpcResult<null>>;
+      forward(): Promise<IpcResult<null>>;
+      /** Opens another tab of the surface (D-225): on the app itself with no
+       *  address, or anywhere the browse policy allows with one. */
+      newTab(input?: { url?: string }): Promise<IpcResult<null>>;
+      /** Puts a tab on the canvas (D-225). */
+      selectTab(input: { tabId: string }): Promise<IpcResult<null>>;
+      /** Closes one tab and its page (D-225); the last tab is the surface
+       *  itself and refuses in words. */
+      closeTab(input: { tabId: string }): Promise<IpcResult<null>>;
       /** Discards the view. The process is never stopped by this. */
       close(): Promise<IpcResult<null>>;
       /** The current embedded preview, if one exists. */

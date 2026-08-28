@@ -113,6 +113,26 @@ function SecretRows({ missionId, workstreamId }: { missionId: string; workstream
     else setError(result.message);
   };
 
+  // Declaring a name is a machine-local act (D-226): written into
+  // settings.local.toml, so a friend's repository needs no commit for this
+  // machine to know it wants a key. The value still travels only through
+  // the supply flow above it.
+  const [newName, setNewName] = useState("");
+  const addName = async () => {
+    setError(null);
+    const result = await novus().workspace.addSecretName({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      name: newName.trim()
+    });
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    setNewName("");
+    setState(result.value);
+  };
+
   if (state === null) return <p className="quiet">Reading what this machine holds…</p>;
 
   if (!state.encryptionAvailable) {
@@ -124,16 +144,13 @@ function SecretRows({ missionId, workstreamId }: { missionId: string; workstream
     );
   }
 
-  if (state.names.length === 0 && state.orphaned.length === 0) {
-    return (
-      <p className="quiet" data-testid="secrets-empty">
-        None — this project named no secret variables.
-      </p>
-    );
-  }
-
   return (
     <>
+      {state.names.length === 0 && state.orphaned.length === 0 && (
+        <p className="quiet" data-testid="secrets-empty">
+          None — this project named no secret variables.
+        </p>
+      )}
       <ul className="file-list" data-testid="secret-list">
         {state.names.map((entry) => (
           <li className="file-row" key={entry.name} data-testid="secret-row" data-name={entry.name}>
@@ -204,6 +221,27 @@ function SecretRows({ missionId, workstreamId }: { missionId: string; workstream
           </li>
         ))}
       </ul>
+      <div className="inline-actions">
+        <input
+          className="input mono"
+          value={newName}
+          placeholder="ANTHROPIC_API_KEY"
+          aria-label="New secret variable name"
+          onChange={(event) => setNewName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && newName.trim() !== "") void addName();
+          }}
+          data-testid="secret-add-name"
+        />
+        <button
+          className="btn btn-secondary"
+          disabled={newName.trim() === ""}
+          onClick={() => void addName()}
+          data-testid="secret-add"
+        >
+          Add variable
+        </button>
+      </div>
       {error && (
         <p className="inline-error" role="alert" data-testid="secret-error">
           {error}
@@ -332,6 +370,45 @@ export function WorkspaceSetupDialog({
         ? { kind: "copied" }
         : { kind: "refused", because: outcome?.refusedBecause ?? "the machine did not say why" }
     }));
+  };
+
+  // A person's own local file (D-226): typed contents into a gitignored path
+  // — the `.env` a fresh checkout has nowhere. The main process refuses a
+  // tracked path in words; contents go one way and are never read back.
+  const [newFile, setNewFile] = useState({ path: "", content: "" });
+  const [newFileError, setNewFileError] = useState<string | null>(null);
+  const [writingFile, setWritingFile] = useState(false);
+  const writeNewFile = async () => {
+    if (writingFile) return;
+    setWritingFile(true);
+    setNewFileError(null);
+    const result = await novus().workspace.writeLocalFile({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      path: newFile.path.trim(),
+      content: newFile.content
+    });
+    setWritingFile(false);
+    if (!result.ok) {
+      setNewFileError(result.message);
+      return;
+    }
+    setNewFile({ path: "", content: "" });
+    await read();
+  };
+
+  const removeLocalFile = async (path: string) => {
+    setNewFileError(null);
+    const result = await novus().workspace.deleteLocalFile({
+      missionId,
+      ...(workstreamId ? { workstreamId } : {}),
+      path
+    });
+    if (!result.ok) {
+      setNewFileError(result.message);
+      return;
+    }
+    await read();
   };
 
   const proposal = load.kind === "read" ? load.proposal : null;
@@ -540,10 +617,50 @@ export function WorkspaceSetupDialog({
                         onAsk={() => setFiles((prev) => ({ ...prev, [file.path]: { kind: "confirming" } }))}
                         onCancel={() => setFiles((prev) => ({ ...prev, [file.path]: { kind: "idle" } }))}
                         onConfirm={() => void supply(file.path)}
+                        onRemove={
+                          file.presentInWorkspace && file.gitIgnored
+                            ? () => void removeLocalFile(file.path)
+                            : undefined
+                        }
                       />
                     ))}
                   </ul>
                 )}
+                {/* Writing one this machine does not have anywhere (D-226):
+                    the .env case. Git must already ignore the path; a tracked
+                    path is refused in words by the main process. */}
+                <div className="setup-new-file" data-testid="setup-new-file">
+                  <input
+                    className="input mono"
+                    value={newFile.path}
+                    placeholder=".env"
+                    aria-label="New local file path"
+                    onChange={(event) => setNewFile((prev) => ({ ...prev, path: event.target.value }))}
+                    data-testid="new-file-path"
+                  />
+                  <textarea
+                    className="input mono setup-new-file-content"
+                    value={newFile.content}
+                    placeholder="ANTHROPIC_API_KEY=sk-ant-…"
+                    aria-label="New local file contents"
+                    rows={3}
+                    onChange={(event) => setNewFile((prev) => ({ ...prev, content: event.target.value }))}
+                    data-testid="new-file-content"
+                  />
+                  <button
+                    className="btn btn-secondary"
+                    disabled={writingFile || newFile.path.trim() === ""}
+                    onClick={() => void writeNewFile()}
+                    data-testid="new-file-write"
+                  >
+                    Write file
+                  </button>
+                  {newFileError && (
+                    <p className="inline-error" role="alert" data-testid="new-file-error">
+                      {newFileError}
+                    </p>
+                  )}
+                </div>
               </section>
 
               <section className="setup-section" data-testid="setup-secrets">
@@ -722,7 +839,8 @@ function LocalFileRow({
   state,
   onAsk,
   onCancel,
-  onConfirm
+  onConfirm,
+  onRemove
 }: {
   path: string;
   availableInSource: boolean;
@@ -732,6 +850,9 @@ function LocalFileRow({
   onAsk: () => void;
   onCancel: () => void;
   onConfirm: () => void;
+  /** Present only for a gitignored file the workspace holds (D-226) — the
+   *  only kind a person may remove with their own hands. */
+  onRemove?: () => void;
 }) {
   const facts = [
     availableInSource ? "in the source checkout" : "not in the source checkout",
@@ -749,7 +870,7 @@ function LocalFileRow({
           Copy into the workspace
         </button>
       )}
-      {state.kind === "idle" && !copyable && (
+      {state.kind === "idle" && !copyable && onRemove === undefined && (
         <span className="file-outcome" data-testid="file-blocked">
           {presentInWorkspace
             ? "Nothing to do"
@@ -757,6 +878,11 @@ function LocalFileRow({
               ? "Not on this machine to copy"
               : "Only a Git-ignored file may be copied"}
         </span>
+      )}
+      {state.kind === "idle" && onRemove !== undefined && (
+        <button className="btn btn-text file-action" onClick={onRemove} data-testid="file-remove">
+          Remove from the workspace
+        </button>
       )}
       {state.kind === "confirming" && (
         <span className="file-confirm" data-testid="file-confirm">

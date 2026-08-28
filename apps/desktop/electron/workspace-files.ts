@@ -1,8 +1,18 @@
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import type { PreparedFile } from "@novus/contracts";
 import { isSecretPath } from "./evidence";
-import { isIgnoredByGit, type GitExec } from "./workspace-git";
+import { ignoredByGit, type GitExec } from "./workspace-git";
 
 /**
  * Supplying a workspace with the files a worktree cannot have
@@ -125,7 +135,11 @@ async function prepareOne(
   if (!stats.isFile()) return refuse("that path is not an ordinary file");
   if (stats.size > MAX_FILE_BYTES) return refuse("that file is too large to be workspace configuration");
 
-  if (!(await isIgnoredByGit(git, sourceRepo, requested))) {
+  const supplyAnswer = await ignoredByGit(git, sourceRepo, requested);
+  if (supplyAnswer === "unanswerable") {
+    return refuse("git could not answer whether that file is ignored just now — try again");
+  }
+  if (supplyAnswer !== "ignored") {
     return refuse("git does not ignore that file, so it is not this machine's to supply");
   }
 
@@ -156,6 +170,118 @@ async function prepareOne(
   }
 
   return { path: requested, copied: true, refusedBecause: null };
+}
+
+/** What a person's own file act came to: done, or refused in words. */
+export type LocalFileOutcome = { done: true; refusedBecause: null } | { done: false; refusedBecause: string };
+
+const refuseOutcome = (because: string): LocalFileOutcome => ({ done: false, refusedBecause: because });
+const DONE: LocalFileOutcome = { done: true, refusedBecause: null };
+
+/** A typed-in local file is configuration; a megabyte of it is something else. */
+const MAX_WRITE_BYTES = 1024 * 1024;
+
+export interface LocalWriteInput {
+  git: GitExec;
+  worktree: string;
+  path: string;
+  content: string;
+}
+
+/**
+ * Writes a person-typed local file into the workspace (D-226) — the `.env`
+ * case: the project needs an ignored file that exists nowhere on this machine
+ * yet, so there is nothing to copy and the person supplies the contents
+ * directly. The same boundary as the copy path, from the other side:
+ *
+ *  - only a path git *confirms* is ignored — a tracked file changes through
+ *    the mission's own attributed work, never through a person's silent hand,
+ *    and an un-ignored path would land in the next diff as nobody's change;
+ *  - the same shape, containment, and never-copy rules as `prepareLocalFiles`;
+ *  - written 0600 always: a person-typed local file is presumed sensitive;
+ *  - overwriting is allowed — it is the person's own supplied file, and
+ *    editing a key they mistyped must not require a delete first — but never
+ *    through a symlink and never onto a directory.
+ *
+ * Contents never leave this process and are never echoed back (D-041).
+ */
+export async function writeLocalFile(input: LocalWriteInput): Promise<LocalFileOutcome> {
+  const shape = shapeProblem(input.path);
+  if (shape !== null) return refuseOutcome(shape);
+  if (Buffer.byteLength(input.content, "utf8") > MAX_WRITE_BYTES) {
+    return refuseOutcome("that is too large to be workspace configuration");
+  }
+
+  const worktreeRoot = realOrSelf(input.worktree);
+  const to = resolve(worktreeRoot, input.path);
+  if (!isInside(worktreeRoot, to)) return refuseOutcome("that path resolves outside the workspace");
+
+  const writeAnswer = await ignoredByGit(input.git, input.worktree, input.path);
+  if (writeAnswer === "unanswerable") {
+    return refuseOutcome("git could not answer whether that path is ignored just now — try again");
+  }
+  if (writeAnswer !== "ignored") {
+    return refuseOutcome(
+      "git does not ignore that path — a tracked file changes through the mission's own work, not a supplied copy"
+    );
+  }
+
+  if (symlinkAt(to)) return refuseOutcome("that path is a symlink, and Novus writes only real files");
+  if (existsSync(to) && statSync(to).isDirectory()) {
+    return refuseOutcome("that path is a directory");
+  }
+
+  try {
+    mkdirSync(dirname(to), { recursive: true });
+    writeFileSync(to, input.content, { mode: 0o600 });
+  } catch (error) {
+    return refuseOutcome(`that file could not be written (${messageOf(error)})`);
+  }
+  // An overwrite keeps whatever mode the file had; narrow it regardless — the
+  // person-typed contents are presumed sensitive whatever the old copy was.
+  if (!applyMode(to, 0o600)) {
+    try {
+      rmSync(to, { force: true });
+    } catch {
+      /* the refusal below is still the truth */
+    }
+    return refuseOutcome("this filesystem cannot restrict that file's permissions, so Novus did not leave it there");
+  }
+  return DONE;
+}
+
+/**
+ * Deletes a person-supplied local file from the workspace (D-226). The same
+ * ignored-only rule as writing: git tracking a path means deleting it is the
+ * mission's work to record, not a person's silent act.
+ */
+export async function deleteLocalFile(
+  git: GitExec,
+  worktree: string,
+  path: string
+): Promise<LocalFileOutcome> {
+  const shape = shapeProblem(path);
+  if (shape !== null) return refuseOutcome(shape);
+
+  const worktreeRoot = realOrSelf(worktree);
+  const at = resolve(worktreeRoot, path);
+  if (!isInside(worktreeRoot, at)) return refuseOutcome("that path resolves outside the workspace");
+  if (symlinkAt(at)) return refuseOutcome("that path is a symlink, and Novus removes only real files");
+  if (!existsSync(at)) return refuseOutcome("the workspace has no such file");
+  if (statSync(at).isDirectory()) return refuseOutcome("that path is a directory");
+  const removeAnswer = await ignoredByGit(git, worktree, path);
+  if (removeAnswer === "unanswerable") {
+    return refuseOutcome("git could not answer whether that file is ignored just now — try again");
+  }
+  if (removeAnswer !== "ignored") {
+    return refuseOutcome("git does not ignore that file, so removing it is the mission's own work to record");
+  }
+  try {
+    rmSync(at);
+  } catch (error) {
+    return refuseOutcome(`that file could not be removed (${messageOf(error)})`);
+  }
+  return DONE;
 }
 
 /** Everything wrong with a path that can be decided without touching a disk. */

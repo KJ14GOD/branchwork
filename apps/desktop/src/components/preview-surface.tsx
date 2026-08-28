@@ -61,6 +61,30 @@ function RecordGlyph() {
   );
 }
 
+function BackGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10 3.2 5.2 8l4.8 4.8" />
+    </svg>
+  );
+}
+
+function ForwardGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 3.2 10.8 8 6 12.8" />
+    </svg>
+  );
+}
+
+function PlusGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <path d="M8 3.2v9.6M3.2 8h9.6" />
+    </svg>
+  );
+}
+
 function ReloadGlyph() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -104,6 +128,9 @@ export function PreviewSurface({
   const [status, setStatus] = useState<PreviewStatus | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  /** What the address bar holds while a person edits it (D-224); null shows
+   *  where the page actually is. */
+  const [addressDraft, setAddressDraft] = useState<string | null>(null);
   /** The last capture's quiet confirmation; clears itself. */
   const [captured, setCaptured] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -159,6 +186,36 @@ export function PreviewSurface({
   };
 
   const reload = () => void novus().workspace.preview.reload();
+
+  // Tabs are the person's own pages of this surface (D-225): registered in
+  // the main process first, so the elements below may attach at all.
+  const newTab = async () => {
+    setNote(null);
+    const result = await novus().workspace.preview.newTab();
+    if (!result.ok) setNote(result.message);
+  };
+
+  /** A tab says what it is: its page's title, or its host while untitled. */
+  const tabLabel = (tab: { title: string; currentUrl: string }): string => {
+    if (tab.title !== "") return tab.title;
+    try {
+      return new URL(tab.currentUrl).host;
+    } catch {
+      return tab.currentUrl;
+    }
+  };
+
+  // The person's own browsing (D-224): the address bar submits, the main
+  // process decides — http/https only, credential-free, scheme optional.
+  const navigate = async (typed: string) => {
+    setNote(null);
+    const result = await novus().workspace.preview.navigate({ url: typed });
+    if (result.ok) {
+      setAddressDraft(null);
+    } else {
+      setNote(result.message);
+    }
+  };
 
   // Capturing (D-122): the renderer names the lane and nothing else; the main
   // process judges the preview, reads the revision, and stores the evidence.
@@ -246,14 +303,61 @@ export function PreviewSurface({
   return (
     <section className="preview-surface" aria-label="App preview" data-testid="preview-surface">
       <header className="preview-head">
-        <span className="file-chip mono" title={status?.url ?? url}>
-          {status?.origin ?? url}
-        </span>
-        {/* The process's own word, the runtime vocabulary — never the page's. */}
+        {/* The person may browse (D-224): the page's own history, and the
+            origin chip grown editable — same chip anatomy, now an address. */}
+        <button
+          className="icon-button"
+          onClick={() => void novus().workspace.preview.back()}
+          disabled={!status?.canGoBack}
+          title="Back"
+          aria-label="Back"
+          data-testid="preview-back"
+        >
+          <BackGlyph />
+        </button>
+        <button
+          className="icon-button"
+          onClick={() => void novus().workspace.preview.forward()}
+          disabled={!status?.canGoForward}
+          title="Forward"
+          aria-label="Forward"
+          data-testid="preview-forward"
+        >
+          <ForwardGlyph />
+        </button>
+        <form
+          className="preview-address"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (addressDraft !== null) void navigate(addressDraft);
+          }}
+        >
+          <input
+            className="preview-address-input mono"
+            value={addressDraft ?? status?.currentUrl ?? url}
+            onChange={(event) => setAddressDraft(event.target.value)}
+            onFocus={(event) => {
+              setAddressDraft(event.target.value);
+              event.target.select();
+            }}
+            onBlur={() => setAddressDraft(null)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setAddressDraft(null);
+                event.currentTarget.blur();
+              }
+            }}
+            spellCheck={false}
+            aria-label="Address"
+            data-testid="preview-address"
+          />
+        </form>
+        {/* The process's own word, the runtime vocabulary — never the page's.
+            The address bar takes the slack, so everything after it sits at
+            the head's tail. */}
         <span className="file-meta" data-testid="preview-word">
           {view.word}
         </span>
-        <span className="head-spacer" />
         {/* The agent has the page's controls (D-218): the room says so, and
             the cut-off is one click away — it stops the agent's next action
             without ending the turn. */}
@@ -335,6 +439,15 @@ export function PreviewSurface({
         )}
         <button
           className="icon-button"
+          onClick={() => void newTab()}
+          title="New tab"
+          aria-label="New tab"
+          data-testid="preview-new-tab"
+        >
+          <PlusGlyph />
+        </button>
+        <button
+          className="icon-button"
           onClick={reload}
           title="Reload"
           aria-label="Reload"
@@ -360,17 +473,68 @@ export function PreviewSurface({
           </button>
         </p>
       )}
+      {/* The surface's own pages (D-225): a strip only once there are two —
+          one page needs no furniture. Every tab stays alive off screen. */}
+      {status && status.tabs.length > 1 && (
+        <div className="preview-tabs" data-testid="preview-tabs">
+          {status.tabs.map((tab) => (
+            <span
+              key={tab.tabId}
+              className={`preview-tab${tab.tabId === status.activeTabId ? " selected" : ""}`}
+            >
+              <button
+                className="preview-tab-name mono"
+                onClick={() => void novus().workspace.preview.selectTab({ tabId: tab.tabId })}
+                title={tab.currentUrl}
+                data-testid="preview-tab-select"
+              >
+                {tabLabel(tab)}
+              </button>
+              <button
+                className="preview-tab-close"
+                onClick={async () => {
+                  const result = await novus().workspace.preview.closeTab({ tabId: tab.tabId });
+                  if (!result.ok) setNote(result.message);
+                }}
+                aria-label="Close tab"
+                data-testid="preview-tab-close"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       {/* The page, in the room's own stacking order (D-163). While it is on
           screen it fills this element; in every other state the words do. */}
       <div className="preview-body" ref={bodyRef} data-testid="preview-body" data-phase={status?.phase ?? "none"}>
-        {status && (status.phase === "loading" || status.phase === "ready") && (
-          <webview
-            className="preview-webview"
-            src={status.url}
-            partition={`preview:${status.workstreamId}`}
-            data-testid="preview-webview"
-          />
-        )}
+        {status &&
+          status.phase !== "stopped" &&
+          status.tabs.map((tab) => (
+            <webview
+              key={tab.tabId}
+              // Every tab's page stays alive off screen (the D-170 rule per
+              // tab): the inactive ones — and every one while a state panel
+              // has the rectangle — keep their compositor surface at
+              // opacity 0 rather than unmounting, so switching back is
+              // instant and a capture photographs a live render.
+              className={`preview-webview${
+                tab.tabId === status.activeTabId && !view.panel ? "" : " off-canvas"
+              }`}
+              src={tab.src}
+              partition={`preview:${status.workstreamId}`}
+              // Without this the guest's new-window requests are blocked
+              // before the main process's window-open handler is ever asked,
+              // so every target="_blank" link clicks dead (D-224). The
+              // handler denies every window; a navigable address loads in
+              // place. React drops `true` for an attribute it does not know,
+              // so the value must be the string — while React's own webview
+              // typing says boolean.
+              allowpopups={"true" as unknown as boolean}
+              data-testid="preview-webview"
+              data-tab={tab.tabId}
+            />
+          ))}
         {status?.agentDriving && status.agentPoint && (
           <span
             className="agent-cursor"

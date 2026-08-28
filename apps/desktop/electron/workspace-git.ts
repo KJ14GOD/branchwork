@@ -52,9 +52,28 @@ export const gitExec: GitExec = (cwd, args) =>
   });
 
 /** `true` only when git positively confirms the path is ignored in `cwd`. */
+/** What `git check-ignore` actually said (D-226 hardening): exit 0 is
+ *  "ignored", exit 1 is "not ignored", and anything else — a held lock, a
+ *  racing operation, a failed spawn — is git failing to answer at all, which
+ *  must never be read as either answer. One beat and one more ask covers the
+ *  transient case before the caller says so in words. */
+export type IgnoreAnswer = "ignored" | "not-ignored" | "unanswerable";
+
+export async function ignoredByGit(git: GitExec, cwd: string, path: string): Promise<IgnoreAnswer> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const outcome = await git(cwd, ["check-ignore", "-q", "--", path]);
+    if (outcome.code === 0) return "ignored";
+    if (outcome.code === 1) return "not-ignored";
+    if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return "unanswerable";
+}
+
+/** The boolean face, for callers where "unanswerable" safely reads as "not
+ *  ignored" (a listing flag, a skip). The gates that refuse in a person's
+ *  face use `ignoredByGit` and name the difference. */
 export async function isIgnoredByGit(git: GitExec, cwd: string, path: string): Promise<boolean> {
-  const outcome = await git(cwd, ["check-ignore", "-q", "--", path]);
-  return outcome.code === 0;
+  return (await ignoredByGit(git, cwd, path)) === "ignored";
 }
 
 /** The revision a workspace is on, or null when the branch has no commit yet. */

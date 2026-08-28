@@ -22,9 +22,12 @@ declare global {
  * declared readiness signal answers, open the preview inside Novus, click
  * and type **in the running app**, stop the app and read that the preview
  * says so plainly, run it again, and get the preview back on the same
- * workstream. What an attacker does is here too: the bridge is asked
- * directly for addresses nothing reported, addresses with smuggled
- * credentials, and foreign origins, and refuses each in words.
+ * workstream. Browsing is here too (D-224): a person follows a link off the
+ * app — a second loopback server standing in for the web — reads the truth
+ * in the address bar, is refused evidence capture away from the app, and
+ * comes back with Back. What an attacker does is here as well: the bridge is
+ * asked directly for addresses nothing reported and addresses with smuggled
+ * credentials, and local-reach schemes typed into the bar load nothing.
  *
  * Screenshots are supporting evidence. The assertions are the test.
  */
@@ -88,6 +91,9 @@ async function launch(dataDir: string): Promise<{ app: ElectronApplication; page
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      // No connectors: this machine's own claude.ai accounts must not add a
+      // lend step (D-217) to a spec about the preview.
+      NOVUS_FAKE_CONNECTORS: "[]",
       NOVUS_USER_DATA_DIR: dataDir
     }
   });
@@ -204,25 +210,36 @@ beforeAll(async () => {
     [
       'import { createServer } from "node:http";',
       "const port = Number(process.env.NOVUS_PORT ?? 4600);",
-      "const page = `<!doctype html><html><body>",
+      "// A second server on its own port stands in for the web (D-224): a",
+      "// different port is a different application, which the app's own",
+      "// origin never covered.",
+      "const elsewhere = createServer((req, res) => {",
+      '  res.setHeader("content-type", "text/html");',
+      "  res.end('<h1 id=\"elsewhere\">ELSEWHERE</h1>');",
+      "});",
+      'elsewhere.listen(0, "127.0.0.1", () => {',
+      '  const awayUrl = "http://127.0.0.1:" + elsewhere.address().port + "/";',
+      "  const page = `<!doctype html><html><body>",
       '<h1 id="title">Fixture app</h1>',
       "<button id=\"btn\" onclick=\"document.getElementById('out').textContent='CLICKED'\">Press</button>",
       '<input id="field">',
       '<div id="out"></div>',
       '<a id="deeper" href="/other">other page</a>',
-      '<a id="external" href="https://example.com/">external</a>',
+      "<a id=\"away\" href=\"${awayUrl}\">away</a>",
+      "<a id=\"blank\" href=\"${awayUrl}\" target=\"_blank\">away, new tab</a>",
       "<script>document.getElementById('field').addEventListener('input',(e)=>{document.getElementById('out').textContent='TYPED:'+e.target.value});</script>",
       "</body></html>`;",
-      "createServer((req, res) => {",
-      '  if (req.url === "/other") {',
+      "  createServer((req, res) => {",
+      '    if (req.url === "/other") {',
+      '      res.setHeader("content-type", "text/html");',
+      "      res.end('<h1 id=\"other\">OTHER</h1><a id=\"away2\" href=\"' + awayUrl + '\">away</a>');",
+      "      return;",
+      "    }",
       '    res.setHeader("content-type", "text/html");',
-      '    res.end(\'<h1 id="other">OTHER</h1>\');',
-      "    return;",
-      "  }",
-      '  res.setHeader("content-type", "text/html");',
-      "  res.end(page);",
-      '}).listen(port, "127.0.0.1", () => {',
-      '  console.log("serving on http://localhost:" + port);',
+      "    res.end(page);",
+      '  }).listen(port, "127.0.0.1", () => {',
+      '    console.log("serving on http://localhost:" + port);',
+      "  });",
       "});"
     ].join("\n")
   );
@@ -382,25 +399,135 @@ describe("the preview surface (D-098)", () => {
         .toBe("OTHER");
       const originUrl = embedded.url();
 
-      // --- And navigation anywhere else is refused in the main process ------
-      await embedded.evaluate(() => {
-        const link = document.createElement("a");
-        link.id = "evil";
-        link.href = "https://example.com/";
-        link.textContent = "leave";
-        document.body.appendChild(link);
-      });
-      // `noWaitAfter`, because the click schedules a navigation the main
-      // process refuses — there is nothing to wait for, which is the point.
-      await embedded.click("#evil", { noWaitAfter: true });
-      await new Promise((settle) => setTimeout(settle, 1_000));
-      expect(embedded.url()).toBe(originUrl);
-      // window.open to a foreign origin opens nothing either.
-      await embedded.evaluate(() => window.open("https://example.com/", "_blank"));
-      await new Promise((settle) => setTimeout(settle, 500));
-      expect(
-        app.windows().filter((candidate) => candidate.url().startsWith("https://")).length
-      ).toBe(0);
+      // --- Browsing beyond the app is the person's own act (D-224) ----------
+      // The link leads off the app's origin — to the second loopback server
+      // standing in for the web — and it simply works now.
+      await embedded.click("#away2");
+      await expect
+        .poll(async () => embedded.locator("#elsewhere").textContent().catch(() => ""), {
+          timeout: 10_000
+        })
+        .toBe("ELSEWHERE");
+      const awayUrl = embedded.url();
+      expect(awayUrl).not.toBe(originUrl);
+      // The address bar tells the truth about where the page is…
+      await expect
+        .poll(async () => page.getByTestId("preview-address").inputValue(), { timeout: 10_000 })
+        .toBe(awayUrl);
+      await shot(page, "108-preview-browsed-away.png");
+      // …and evidence stays the lane's own app: a capture here is refused.
+      await page.getByTestId("preview-capture").click();
+      await expect
+        .poll(async () => page.locator(".preview-note").textContent().catch(() => ""), {
+          timeout: 10_000
+        })
+        .toContain("Evidence captures only");
+
+      // window.open opens no second window — the handler denies every window
+      // and loads a navigable address in place; the preview stays one page
+      // deep.
+      const windowsBefore = app.windows().length;
+      await embedded.evaluate((target) => window.open(target, "_blank"), originUrl);
+      await expect
+        .poll(async () => embedded.locator("#other").textContent().catch(() => ""), {
+          timeout: 10_000
+        })
+        .toBe("OTHER");
+      expect(app.windows().length).toBe(windowsBefore);
+
+      // Back steps the page's own history — to the away page, then home.
+      await page.getByTestId("preview-back").click();
+      await expect
+        .poll(async () => embedded.locator("#elsewhere").textContent().catch(() => ""), {
+          timeout: 10_000
+        })
+        .toBe("ELSEWHERE");
+      await page.getByTestId("preview-back").click();
+      await expect
+        .poll(async () => embedded.locator("#other").textContent().catch(() => ""), {
+          timeout: 10_000
+        })
+        .toBe("OTHER");
+
+      // The platform stays refused: a local-reach scheme typed into the bar
+      // loads nothing and says why.
+      const barBefore = embedded.url();
+      await page.getByTestId("preview-address").fill("file:///etc/passwd");
+      await page.getByTestId("preview-address").press("Enter");
+      await expect
+        .poll(async () => page.locator(".preview-note").textContent().catch(() => ""), {
+          timeout: 10_000
+        })
+        .toContain("Not a navigable address");
+      expect(embedded.url()).toBe(barBefore);
+
+      // And the bar is also the way home: typing the app's own address works.
+      await page.getByTestId("preview-address").fill(new URL("/", originUrl).toString());
+      await page.getByTestId("preview-address").press("Enter");
+      await expect
+        .poll(async () => embedded.locator("#title").textContent().catch(() => ""), {
+          timeout: 10_000
+        })
+        .toBe("Fixture app");
+
+      // A target="_blank" link — the shape most real external links take —
+      // navigates in place: the handler denies the window and loads the
+      // address in the one surface (D-224).
+      const windowsBeforeBlank = app.windows().length;
+      await embedded.click("#blank");
+      await expect
+        .poll(async () => embedded.locator("#elsewhere").textContent().catch(() => ""), {
+          timeout: 10_000
+        })
+        .toBe("ELSEWHERE");
+      expect(app.windows().length).toBe(windowsBeforeBlank);
+      await page.getByTestId("preview-back").click();
+      await expect
+        .poll(async () => embedded.locator("#title").textContent().catch(() => ""), {
+          timeout: 10_000
+        })
+        .toBe("Fixture app");
+
+      // --- Tabs are the person's own pages of the surface (D-225) -----------
+      // A new tab opens on the app itself, becomes active, and the strip
+      // appears only now that there are two.
+      await page.getByTestId("preview-new-tab").click();
+      await page.getByTestId("preview-tabs").waitFor({ timeout: 10_000 });
+      expect(await page.getByTestId("preview-tab-select").count()).toBe(2);
+
+      // The new tab is its own guest page: browse it away through the bar,
+      // and the first tab's page does not move.
+      await page.getByTestId("preview-address").fill(awayUrl);
+      await page.getByTestId("preview-address").press("Enter");
+      const second = await (async () => {
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+          const found = app
+            .windows()
+            .find((candidate) => candidate !== page && candidate !== embedded && candidate.url().startsWith("http"));
+          if (found) return found;
+          await new Promise((settle) => setTimeout(settle, 200));
+        }
+        throw new Error("the second tab's guest page never attached");
+      })();
+      await expect
+        .poll(async () => second.locator("#elsewhere").textContent().catch(() => ""), {
+          timeout: 10_000
+        })
+        .toBe("ELSEWHERE");
+      expect(await embedded.locator("#title").textContent()).toBe("Fixture app");
+      await shot(page, "109-preview-two-tabs.png");
+
+      // Switching back puts the first page on the canvas and the bar tells
+      // its address again; closing the second empties the strip.
+      await page.getByTestId("preview-tab-select").first().click();
+      await expect
+        .poll(async () => page.getByTestId("preview-address").inputValue(), { timeout: 10_000 })
+        .toBe(embedded.url());
+      await page.getByTestId("preview-tab-close").nth(1).click();
+      await expect
+        .poll(async () => page.getByTestId("preview-tabs").count(), { timeout: 10_000 })
+        .toBe(0);
 
       // --- The room around it still works: terminal dock and evidence panel -
       await page.getByTestId("panel-toggle").click();

@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PreparedFile } from "@novus/contracts";
-import { prepareLocalFiles } from "../electron/workspace-files";
+import { deleteLocalFile, prepareLocalFiles, writeLocalFile } from "../electron/workspace-files";
 import { gitExec } from "../electron/workspace-git";
 
 /**
@@ -187,5 +187,102 @@ describe("what leaves this process", () => {
     for (const result of results) {
       expect(Object.keys(result).sort()).toEqual(["copied", "path", "refusedBecause"]);
     }
+  });
+});
+
+describe("what a person may write and remove with their own hands (D-226)", () => {
+  // The production worktree is a git worktree carrying the project's own
+  // .gitignore; these tests make the temp worktree one too, because the
+  // ignored-only rule is asked of git in the worktree itself.
+  beforeEach(async () => {
+    await git(worktree, ["init", "-b", "main"]);
+    writeFileSync(join(worktree, ".gitignore"), ".env\n*.pem\n");
+    writeFileSync(join(worktree, "tracked.md"), "# tracked\n");
+    await git(worktree, ["add", "-A"]);
+    await git(worktree, ["-c", "user.name=Test", "-c", "user.email=test@local", "commit", "-m", "w"]);
+  });
+
+  it("writes a gitignored file at 0600, and a second supply replaces it", async () => {
+    const first = await writeLocalFile({ git: gitExec, worktree, path: ".env", content: "KEY=one\n" });
+    expect(first).toEqual({ done: true, refusedBecause: null });
+    const at = join(worktree, ".env");
+    expect(readFileSync(at, "utf8")).toBe("KEY=one\n");
+    expect(statSync(at).mode & 0o777).toBe(0o600);
+
+    const second = await writeLocalFile({ git: gitExec, worktree, path: ".env", content: "KEY=two\n" });
+    expect(second.done).toBe(true);
+    expect(readFileSync(at, "utf8")).toBe("KEY=two\n");
+  });
+
+  it("refuses a path git does not ignore — a tracked file changes through the mission's own work", async () => {
+    for (const path of ["tracked.md", "brand-new.ts"]) {
+      const outcome = await writeLocalFile({ git: gitExec, worktree, path, content: "x" });
+      expect(outcome.done, path).toBe(false);
+      expect(outcome.refusedBecause).toMatch(/does not ignore/);
+      expect(readFileSync(join(worktree, "tracked.md"), "utf8")).toBe("# tracked\n");
+      expect(existsSync(join(worktree, "brand-new.ts"))).toBe(false);
+    }
+  });
+
+  it("refuses escapes, absolutes, and oversized contents", async () => {
+    for (const path of ["../outside.env", "/etc/evil"]) {
+      const outcome = await writeLocalFile({ git: gitExec, worktree, path, content: "x" });
+      expect(outcome.done, path).toBe(false);
+    }
+    const big = await writeLocalFile({ git: gitExec, worktree, path: ".env", content: "x".repeat(1024 * 1024 + 1) });
+    expect(big.done).toBe(false);
+    expect(big.refusedBecause).toMatch(/too large/);
+  });
+
+  it("removes a supplied ignored file, and refuses a tracked one in words", async () => {
+    await writeLocalFile({ git: gitExec, worktree, path: ".env", content: "KEY=x\n" });
+    const removed = await deleteLocalFile(gitExec, worktree, ".env");
+    expect(removed).toEqual({ done: true, refusedBecause: null });
+    expect(existsSync(join(worktree, ".env"))).toBe(false);
+
+    const refused = await deleteLocalFile(gitExec, worktree, "tracked.md");
+    expect(refused.done).toBe(false);
+    expect(refused.refusedBecause).toMatch(/mission's own work/);
+    expect(existsSync(join(worktree, "tracked.md"))).toBe(true);
+  });
+});
+
+describe("git failing to answer is never read as an answer (D-226 hardening)", () => {
+  const flaky = (codes: number[]) => {
+    const remaining = [...codes];
+    return async (_cwd: string, _args: string[]) => ({
+      code: remaining.shift() ?? 0,
+      stdout: "",
+      stderr: "fatal: index.lock exists"
+    });
+  };
+
+  it("a transient git error retries once and then succeeds", async () => {
+    writeFileSync(join(worktree, ".env"), "A=1\n", { mode: 0o600 });
+    // First ask: git itself fails (128). Second: the honest answer (ignored).
+    const outcome = await deleteLocalFile(flaky([128, 0]), worktree, ".env");
+    expect(outcome.done).toBe(true);
+    expect(existsSync(join(worktree, ".env"))).toBe(false);
+  });
+
+  it("a persistent git failure refuses in its own words — never as \"not ignored\"", async () => {
+    writeFileSync(join(worktree, ".env"), "A=1\n", { mode: 0o600 });
+    const outcome = await deleteLocalFile(flaky([128, 128]), worktree, ".env");
+    expect(outcome.done).toBe(false);
+    expect(outcome.refusedBecause).toContain("could not answer");
+    // The lying message this hardening exists to prevent:
+    expect(outcome.refusedBecause).not.toContain("does not ignore");
+    expect(existsSync(join(worktree, ".env"))).toBe(true);
+  });
+
+  it("the write gate refuses the same honest way", async () => {
+    const outcome = await writeLocalFile({
+      git: flaky([128, 128]),
+      worktree,
+      path: ".env",
+      content: "A=1\n"
+    });
+    expect(outcome.done).toBe(false);
+    expect(outcome.refusedBecause).toContain("could not answer");
   });
 });

@@ -226,11 +226,23 @@ describe("a person's own hands on the workspace (D-226)", () => {
 
       // --- And the person can take the file back out ------------------------
       await page.getByTestId("file-remove").click();
-      await expect
-        .poll(async () => page.getByTestId("local-file").filter({ hasText: ".env" }).count(), {
-          timeout: 20_000
-        })
-        .toBe(0);
+      try {
+        await expect
+          .poll(async () => page.getByTestId("local-file").filter({ hasText: ".env" }).count(), {
+            timeout: 20_000
+          })
+          .toBe(0);
+      } catch (error) {
+        // The row staying has exactly one honest explanation on screen: the
+        // refusal. Surface it instead of a bare count mismatch.
+        const said = await page
+          .getByTestId("new-file-error")
+          .textContent()
+          .catch(() => null);
+        throw new Error(`the .env row never left; the dialog says: ${said ?? "(no refusal shown)"}`, {
+          cause: error
+        });
+      }
     },
     240_000
   );

@@ -4444,6 +4444,36 @@ body {
   padding: var(--s-2) var(--s-5);
 }
 
+/* The address bar (D-224): the origin chip grown editable — the file-chip's
+   own anatomy, taking the head's slack so the actions keep the tail. No
+   omnibox ornament: no favicon, no padlock, no progress. */
+.preview-address {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.preview-address-input {
+  width: 100%;
+  min-width: 0;
+  font: var(--type-meta);
+  font-family: var(--font-mono);
+  color: var(--text-1);
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  padding: var(--s-1) var(--s-2);
+  text-overflow: ellipsis;
+}
+
+/* A text field already has an edge; focus brightens it, the .input rule's
+   own convention. */
+.preview-address-input:focus-visible,
+.preview-address-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .preview-note {
   flex: none;
   padding: 0 var(--s-6) var(--s-2);
@@ -4456,8 +4486,84 @@ body {
   background: var(--surface-1);
 }
 
-/* The page's element (D-163): its own process, the room's own stacking
-   order — everything above it in the DOM is simply above it. */
+/* A person's own local file (D-226): path, contents, one verb — a quiet
+   composer at the foot of the files section, not a second dialog. */
+.setup-new-file {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.setup-new-file .input {
+  width: 100%;
+}
+
+.setup-new-file-content {
+  resize: vertical;
+  min-height: 60px;
+}
+
+/* The tab strip (D-225): present only past one tab. The tabs are quiet text
+   chips — the selected one takes the wash, the same selection language as
+   everywhere else; no favicons, no drag, no overflow theatre. */
+.preview-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+  padding: 0 var(--s-5) var(--s-2);
+  overflow-x: auto;
+}
+
+.preview-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  border-radius: var(--r-control);
+  padding: var(--s-1) var(--s-2);
+  max-width: 220px;
+}
+
+.preview-tab.selected {
+  background: var(--selected);
+}
+
+.preview-tab-name {
+  font: var(--type-meta);
+  font-family: var(--font-mono);
+  color: var(--text-3);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-tab.selected .preview-tab-name {
+  color: var(--text-1);
+}
+
+.preview-tab-close {
+  font: var(--type-meta);
+  color: var(--text-3);
+  background: none;
+  border: none;
+  padding: 0 var(--s-1);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.preview-tab-close:hover {
+  color: var(--text-1);
+}
+
+/* The pages' elements (D-163, one per tab since D-225): each its own
+   process, the room's own stacking order — everything above one in the DOM
+   is simply above it. */
 .preview-webview {
   position: absolute;
   inset: 0;
@@ -4466,6 +4572,15 @@ body {
   /* The browser's default canvas under a transparently-composited guest:
      a page that wants dark paints over it, exactly as it would in Chrome. */
   background: var(--preview-canvas);
+}
+
+/* An inactive tab's page (D-225): painted but unseen — the D-170 rule per
+   tab, keeping its compositor surface alive so switching back is instant
+   and a capture never photographs an empty guest. */
+.preview-webview.off-canvas {
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
 }
 
 /* The agent has the page's controls (D-218): named in the head in the accent

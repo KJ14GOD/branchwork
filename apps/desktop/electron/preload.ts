@@ -238,6 +238,9 @@ const novus: NovusBridge = {
     secrets: (missionId, workstreamId) =>
       ipcRenderer.invoke("novus:workspace:secrets", workstreamId ? { missionId, workstreamId } : missionId),
     supplySecret: (input) => ipcRenderer.invoke("novus:workspace:supply-secret", input),
+    writeLocalFile: (input) => ipcRenderer.invoke("novus:workspace:write-local-file", input),
+    deleteLocalFile: (input) => ipcRenderer.invoke("novus:workspace:delete-local-file", input),
+    addSecretName: (input) => ipcRenderer.invoke("novus:workspace:add-secret-name", input),
     forgetSecret: (input) => ipcRenderer.invoke("novus:workspace:forget-secret", input),
     openPreview: (input) => ipcRenderer.invoke("novus:workspace:open-preview", input),
     // The embedded preview surface (D-098). The renderer reserves a rectangle
@@ -246,6 +249,12 @@ const novus: NovusBridge = {
     preview: {
       open: (input) => ipcRenderer.invoke("novus:preview:open", input),
       reload: () => ipcRenderer.invoke("novus:preview:reload"),
+      navigate: (input) => ipcRenderer.invoke("novus:preview:navigate", input),
+      back: () => ipcRenderer.invoke("novus:preview:back"),
+      forward: () => ipcRenderer.invoke("novus:preview:forward"),
+      newTab: (input) => ipcRenderer.invoke("novus:preview:new-tab", input ?? {}),
+      selectTab: (input) => ipcRenderer.invoke("novus:preview:select-tab", input),
+      closeTab: (input) => ipcRenderer.invoke("novus:preview:close-tab", input),
       close: () => ipcRenderer.invoke("novus:preview:close"),
       status: () => ipcRenderer.invoke("novus:preview:status"),
       stopBrowsing: (workstreamId) => ipcRenderer.invoke("novus:preview:stop-browsing", { workstreamId }),

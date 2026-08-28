@@ -18,7 +18,8 @@ import {
   type TerminalKind,
   type TerminalSession,
   type WorkspaceProposal,
-  type WorkspaceSettings
+  type WorkspaceSettings,
+  WorkspaceSettingsSchema
 } from "@novus/contracts";
 import { ApiError } from "./api-client";
 import { createSanitizer } from "./evidence";
@@ -29,7 +30,12 @@ import { discoverGlobalSkills, discoverProjectCommands, discoverProjectSkills } 
 import { discoverMachineMcp } from "./machine-mcp";
 import { discoverProjectMcp } from "./mcp";
 import { loadWorkspaceSettings, WorkspaceConfigError, writeWorkspaceSettings } from "./workspace-config";
-import { prepareLocalFiles as copyLocalFiles } from "./workspace-files";
+import {
+  deleteLocalFile as removeLocalFile,
+  prepareLocalFiles as copyLocalFiles,
+  writeLocalFile as putLocalFile,
+  type LocalFileOutcome
+} from "./workspace-files";
 import { gitExec, type GitExec } from "./workspace-git";
 import { inspectProject } from "./workspace-inspect";
 import { createPortAllocator, type PortAllocator, type PortRange } from "./workspace-ports";
@@ -516,6 +522,98 @@ export async function prepareLocalFiles(
       worktree: resolved.worktree,
       paths
     });
+  });
+}
+
+/** The machine-local settings layer as it stands, defaults where absent —
+ *  the file a person's own additions (D-226) are written into: gitignored,
+ *  0600, layered over the shared file on this machine only. */
+function localSettingsLayer(worktree: string): WorkspaceSettings {
+  return loadWorkspaceSettings(worktree).local ?? WorkspaceSettingsSchema.parse({});
+}
+
+/**
+ * Writes a person-typed gitignored file into the workspace (D-226) — the
+ * `.env` that exists nowhere on this machine yet. The path rules live in
+ * `workspace-files.ts`; on success the path is also remembered in the
+ * machine-local settings' `localFiles`, so the setup dialog lists it —
+ * best-effort, because the file itself already landed.
+ */
+export async function writeLocalWorkspaceFile(
+  target: WorkspaceTarget,
+  path: string,
+  content: string,
+  host?: WorkspaceHost
+): Promise<LocalFileOutcome> {
+  return named(async () => {
+    const resolved = await resolve(target, host);
+    const outcome = await putLocalFile({ git: resolved.git, worktree: resolved.worktree, path, content });
+    if (outcome.done) {
+      try {
+        const local = localSettingsLayer(resolved.worktree);
+        if (!local.localFiles.includes(path)) {
+          await writeWorkspaceSettings(resolved.git, resolved.worktree, "local", {
+            ...local,
+            localFiles: [...local.localFiles, path]
+          });
+        }
+      } catch (error) {
+        console.warn("[workspace] could not record the supplied file:", error);
+      }
+    }
+    return outcome;
+  });
+}
+
+/** Removes a person-supplied gitignored file (D-226), and its machine-local
+ *  listing with it. A tracked path refuses in words. */
+export async function deleteLocalWorkspaceFile(
+  target: WorkspaceTarget,
+  path: string,
+  host?: WorkspaceHost
+): Promise<LocalFileOutcome> {
+  return named(async () => {
+    const resolved = await resolve(target, host);
+    const outcome = await removeLocalFile(resolved.git, resolved.worktree, path);
+    if (outcome.done) {
+      try {
+        const local = localSettingsLayer(resolved.worktree);
+        if (local.localFiles.includes(path)) {
+          await writeWorkspaceSettings(resolved.git, resolved.worktree, "local", {
+            ...local,
+            localFiles: local.localFiles.filter((candidate) => candidate !== path)
+          });
+        }
+      } catch (error) {
+        console.warn("[workspace] could not unlist the removed file:", error);
+      }
+    }
+    return outcome;
+  });
+}
+
+/**
+ * Declares a secret variable name from the dialog (D-226), written into the
+ * machine-local settings layer — a friend's repository does not need a commit
+ * for this Mac to know it wants a key. The value still travels only through
+ * `supplySecret`, and the shared file is never touched.
+ */
+export async function addLocalSecretName(
+  target: WorkspaceTarget,
+  name: string,
+  host?: WorkspaceHost
+): Promise<SecretState> {
+  return named(async () => {
+    const resolved = await resolve(target, host);
+    const load = loadWorkspaceSettings(resolved.worktree);
+    if (!load.effective.secretNames.includes(name)) {
+      const local = load.local ?? WorkspaceSettingsSchema.parse({});
+      await writeWorkspaceSettings(resolved.git, resolved.worktree, "local", {
+        ...local,
+        secretNames: [...local.secretNames, name]
+      });
+    }
+    return secretState(resolved.secrets, resolved.worktree, target.localId);
   });
 }
 
