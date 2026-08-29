@@ -73,21 +73,64 @@ export const CLAUDE_MODELS = [
 
 /** Written literally so the type stays a union of exact ids; a contract test
  *  asserts it never drifts from CLAUDE_MODELS. */
+/**
+ * The Codex allowlist (D-230). Each id is a real `-m` value; the list ships
+ * from the vendor's current lineup and is stamped by the opt-in live-codex
+ * turn — the one thing a deterministic build cannot verify is a vendor's
+ * model list, so the probe is the verification, recorded in PROGRESS.
+ */
+export const CODEX_MODELS = [
+  { id: "gpt-5.1-codex", label: "GPT-5.1 Codex" },
+  { id: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini" },
+  { id: "gpt-5.1", label: "GPT-5.1" }
+] as const;
+
+/** Which harness a model belongs to (D-230): the model chip is the harness
+ *  picker, so the harness is derived, never a second control that must agree. */
+export const HARNESSES = [
+  { id: "claude-code", label: "Claude Code" },
+  { id: "codex", label: "Codex" }
+] as const;
+export const HarnessIdSchema = z.enum(["claude-code", "codex"]);
+export type HarnessId = z.infer<typeof HarnessIdSchema>;
+
+/** One allowlist across harnesses; a value outside it never reaches a CLI. */
 export const ModelIdSchema = z.enum([
   "claude-fable-5",
   "claude-opus-5",
   "claude-opus-4-8",
   "claude-opus-4-7",
   "claude-sonnet-5",
-  "claude-haiku-4-5-20251001"
+  "claude-haiku-4-5-20251001",
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-mini",
+  "gpt-5.1"
 ]);
 export type ModelId = z.infer<typeof ModelIdSchema>;
+
+export function harnessOf(model: string): HarnessId {
+  return (CODEX_MODELS as readonly { id: string }[]).some((entry) => entry.id === model)
+    ? "codex"
+    : "claude-code";
+}
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export const EffortSchema = z.enum(EFFORTS);
 export type Effort = (typeof EFFORTS)[number];
 
+/** Novus effort → Codex reasoning effort (D-230). Codex advertises no
+ *  `max`; the ceiling maps to its highest honest value rather than a string
+ *  the vendor never defined. */
+export const CODEX_EFFORT: Record<Effort, string> = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  max: "xhigh"
+};
+
 export const DEFAULT_MODEL: ModelId = "claude-fable-5";
+export const DEFAULT_CODEX_MODEL: ModelId = "gpt-5.1-codex";
 export const DEFAULT_EFFORT: Effort = "high";
 
 /** The one honest claim a screenshot makes, said wherever one is shown

@@ -25,7 +25,8 @@ import {
   type SequencedRunnerEvent,
   attachmentForm,
   RunCommandSchema,
-  WorkspaceSettingsSchema
+  WorkspaceSettingsSchema,
+  harnessOf
 } from "@novus/contracts";
 import { z } from "zod";
 import { ApiError, type ControlPlaneClient } from "./api-client";
@@ -2251,6 +2252,9 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       worktreeRoot,
       missionBranch: args.missionBranch,
       direction: args.direction,
+      // The harness rides the model (D-230): derived here exactly as the
+      // control plane derives it, so the two can never disagree.
+      harness: harnessOf(args.model),
       model: args.model,
       effort: args.effort,
       resumeSessionId: args.resumeSessionId,

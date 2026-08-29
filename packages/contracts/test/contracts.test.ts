@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   ADMIN_ONLY_PERMISSION_PROFILES,
   CLAUDE_MODELS,
+  CODEX_MODELS,
+  harnessOf,
   CapabilitySchema,
   CreateMissionInputSchema,
   DEFAULT_EFFORT,
@@ -185,7 +187,15 @@ describe("the model allowlist", () => {
   // renderer, the IPC boundary, and the execution adapter must all read the
   // same list, or a menu entry becomes a flag the CLI rejects.
   it("keeps the labelled list and the validated enum identical and in order", () => {
-    expect(ModelIdSchema.options).toEqual(CLAUDE_MODELS.map((model) => model.id));
+    expect(ModelIdSchema.options).toEqual([
+      ...CLAUDE_MODELS.map((model) => model.id),
+      ...CODEX_MODELS.map((model) => model.id)
+    ]);
+    // The harness rides the model (D-230): every codex id derives codex,
+    // every claude id derives claude-code, and an unknown string is claude —
+    // the safe default, because a fallback model is a claude model.
+    for (const model of CODEX_MODELS) expect(harnessOf(model.id)).toBe("codex");
+    for (const model of CLAUDE_MODELS) expect(harnessOf(model.id)).toBe("claude-code");
   });
 
   it("refuses a model id that is not on the list", () => {

@@ -18,12 +18,24 @@ import {
   type PermissionProfile,
   type RunnerEvent
 } from "@novus/contracts";
+import { CODEX_EFFORT, DEFAULT_CODEX_MODEL, harnessOf, type Effort, type HarnessId } from "@novus/contracts";
 import { isBrowserToolFullName, isComputerToolFullName } from "./artifact-mcp";
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
 import { composeSkillsPlugin, removeComposedSkills, type ComposedSkills } from "./skills";
 import { resolveMachineMcp } from "./machine-mcp";
 import { composeMcpConfig, removeComposedMcp, type ComposedMcp } from "./mcp";
-import { HarnessStream, type HarnessApprovalRequest, type HarnessControlMessage } from "./harness-stream";
+import { HarnessStream, type HarnessApprovalRequest, type HarnessControlMessage, type HarnessResult } from "./harness-stream";
+import {
+  CodexStream,
+  approvalResponseLine,
+  initializeLine,
+  initializedLine,
+  nextRpcId,
+  threadResumeLine,
+  threadStartLine,
+  turnInterruptLine,
+  turnStartLine
+} from "./codex-stream";
 import { harnessEnv } from "./workspace-env";
 import { redact } from "./secret-policy";
 
@@ -281,6 +293,9 @@ export interface TurnRequest {
   worktreeRoot: string;
   missionBranch: string;
   direction: string;
+  /** Which harness runs this turn (D-230). Derived from the model everywhere
+   *  upstream; absent means Claude Code, every pre-adapter caller unchanged. */
+  harness?: HarnessId;
   model: string;
   effort: string;
   /** The session this workstream continues, or null for a fresh one. */
@@ -618,6 +633,39 @@ export function startTurn(request: TurnRequest): RunningTurn {
     }
   };
 
+  /**
+   * The wire dialect (D-230): how a decision, an unsupported reply, and an
+   * interrupt are said on the active harness's own protocol. The ladder above
+   * never changes with the harness — only these three sentences do. Claude's
+   * shapes are the default; a codex attempt swaps them in for its duration.
+   */
+  const wire = {
+    decision: (requestId: string, allow: boolean, message?: string): boolean =>
+      writeControl({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: requestId,
+          response: allow ? { behavior: "allow" } : { behavior: "deny", message: message ?? DENIED }
+        }
+      }),
+    unsupported: (requestId: string, subtype: string): boolean =>
+      writeControl({
+        type: "control_response",
+        response: {
+          subtype: "error",
+          request_id: requestId,
+          error: `Novus does not implement the ${subtype} control request.`
+        }
+      }),
+    interrupt: (): boolean =>
+      writeControl({
+        type: "control_request",
+        request_id: randomUUID(),
+        request: { subtype: "interrupt", cancel_queued: true }
+      })
+  };
+
   /** Every leftover question, settled, so nothing is left pending for ever. */
   const cancelPending = (reason: string): void => {
     if (pending.size === 0) return;
@@ -653,17 +701,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         summary: message.summary
       }
     });
-    writeControl({
-      type: "control_response",
-      response: {
-        subtype: "success",
-        request_id: message.requestId,
-        response:
-          decision === "allowed"
-            ? { behavior: "allow" }
-            : { behavior: "deny", message: reason ?? DENIED }
-      }
-    });
+    wire.decision(message.requestId, decision === "allowed", reason ?? DENIED);
     // The allow is on the record above before anything is minted from it
     // (D-123): a policy-decided capture is a person's standing instruction
     // answering, and the grant is that answer's receipt.
@@ -690,14 +728,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
       // The reason travels back on the harness's own channel, so the model
       // knows why and can say so in its reply.
       if (readOnly) {
-        writeControl({
-          type: "control_response",
-          response: {
-            subtype: "success",
-            request_id: message.requestId,
-            response: { behavior: "deny", message: READ_ONLY_DENIED }
-          }
-        });
+        wire.decision(message.requestId, false, READ_ONLY_DENIED);
         return;
       }
       // Plan: nothing changes the workspace, and the denial carries the
@@ -714,17 +745,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
       const verdict = scopeVerdictFor(message);
       if (verdict !== null) {
         policyDecided.add(message.requestId);
-        writeControl({
-          type: "control_response",
-          response: {
-            subtype: "success",
-            request_id: message.requestId,
-            response:
-              verdict === "allow"
-                ? { behavior: "allow" }
-                : { behavior: "deny", message: SCOPE_DENIED }
-          }
-        });
+        wire.decision(message.requestId, verdict === "allow", SCOPE_DENIED);
         return;
       }
       // Raw computer use (D-218): the whole Mac, and the most guarded surface.
@@ -734,33 +755,21 @@ export function startTurn(request: TurnRequest): RunningTurn {
       if (isComputerToolFullName(message.toolName)) {
         if (!(request.computerUseEnabled?.() ?? false)) {
           policyDecided.add(message.requestId);
-          writeControl({
-            type: "control_response",
-            response: {
-              subtype: "success",
-              request_id: message.requestId,
-              response: {
-                behavior: "deny",
-                message: "Raw computer use is off for this Mac. Its owner turns it on in Novus settings; the agent cannot."
-              }
-            }
-          });
+          wire.decision(
+            message.requestId,
+            false,
+            "Raw computer use is off for this Mac. Its owner turns it on in Novus settings; the agent cannot."
+          );
           return;
         }
         const computer = request.computerSession?.() ?? null;
         if (computer === "granted" || computer === "revoked") {
           policyDecided.add(message.requestId);
-          writeControl({
-            type: "control_response",
-            response: {
-              subtype: "success",
-              request_id: message.requestId,
-              response:
-                computer === "granted"
-                  ? { behavior: "allow" }
-                  : { behavior: "deny", message: "A person stopped the agent's computer use for this turn." }
-            }
-          });
+          wire.decision(
+            message.requestId,
+            computer === "granted",
+            "A person stopped the agent's computer use for this turn."
+          );
           return;
         }
         // null: fall through to the ask ladder; an allow mints the session.
@@ -778,17 +787,11 @@ export function startTurn(request: TurnRequest): RunningTurn {
           // reaches the room, and the prompt-pending boundary the stream will
           // declare for it is not real (the D-097 suppression).
           policyDecided.add(message.requestId);
-          writeControl({
-            type: "control_response",
-            response: {
-              subtype: "success",
-              request_id: message.requestId,
-              response:
-                browser === "granted"
-                  ? { behavior: "allow" }
-                  : { behavior: "deny", message: "A person stopped the agent's browsing for this turn." }
-            }
-          });
+          wire.decision(
+            message.requestId,
+            browser === "granted",
+            "A person stopped the agent's browsing for this turn."
+          );
           return;
         }
         // null: fall through to the ask/answer ladder below, whose allow mints
@@ -818,14 +821,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
       return;
     }
     if (message.kind === "unsupported") {
-      writeControl({
-        type: "control_response",
-        response: {
-          subtype: "error",
-          request_id: message.requestId,
-          error: `Novus does not implement the ${message.subtype} control request.`
-        }
-      });
+      wire.unsupported(message.requestId, message.subtype);
     }
     // An acknowledgement is the CLI answering our interrupt. Nothing to do:
     // the turn ends because the harness ends it, and the escalation timer is
@@ -847,14 +843,11 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // rule into local settings, or to switch the session to acceptEdits — is
     // read by the parser and discarded, because taking it would turn one
     // person's single approval into a standing grant nobody gave (D-056).
-    const response =
-      decision === "approve"
-        ? { behavior: "allow" }
-        : { behavior: "deny", message: bounded(sanitize(reason?.trim() || DENIED), MAX_REASON) };
-    return writeControl({
-      type: "control_response",
-      response: { subtype: "success", request_id: requestId, response }
-    });
+    return wire.decision(
+      requestId,
+      decision === "approve",
+      bounded(sanitize(reason?.trim() || DENIED), MAX_REASON)
+    );
   };
 
   /** The bounded fallback: signal the process group, then insist. */
@@ -879,11 +872,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // Ask first. The harness's own interrupt ends the turn without destroying
     // the process or the session, so a stopped mission is still resumable —
     // which the process-group kill this replaces could never be (D-053, D-056).
-    const asked = writeControl({
-      type: "control_request",
-      request_id: randomUUID(),
-      request: { subtype: "interrupt", cancel_queued: true }
-    });
+    const asked = wire.interrupt();
     if (!asked) {
       if (running) forceStop(running);
       return;
@@ -941,10 +930,20 @@ export function startTurn(request: TurnRequest): RunningTurn {
     }
 
     // The allowlist in the contracts package is the only list of models and
-    // efforts; anything else falls back rather than reaching the CLI.
+    // efforts; anything else falls back rather than reaching a CLI. The
+    // harness rides the model (D-230): a model outside the requested
+    // harness's own list falls back to that harness's default, so a mixed-up
+    // pair can never spawn the wrong binary with the right-looking flag.
+    const harness: HarnessId = request.harness ?? "claude-code";
     const chosenModel = ModelIdSchema.safeParse(request.model);
     const chosenEffort = EffortSchema.safeParse(request.effort);
-    const model: string = chosenModel.success ? chosenModel.data : DEFAULT_MODEL;
+    const parsedModel = chosenModel.success ? chosenModel.data : null;
+    const model: string =
+      parsedModel !== null && harnessOf(parsedModel) === harness
+        ? parsedModel
+        : harness === "codex"
+          ? DEFAULT_CODEX_MODEL
+          : DEFAULT_MODEL;
     const effort: string = chosenEffort.success ? chosenEffort.data : DEFAULT_EFFORT;
 
     // The enabled skills, composed once per turn from the pinned list (D-118):
@@ -955,41 +954,52 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // Everything the project declares and everything the operator's own
     // directory holds (D-193): discovered fresh at spawn, composed, and named
     // on the record with the digest that ran.
-    composedSkills = composeSkillsPlugin(
-      worktreePath,
-      join(request.worktreeRoot, ".skills-staging", request.executionId)
-    );
+    // Skill and MCP composition is Claude's dialect (D-230): the plugin
+    // directory and the strict config are `claude` flags. A codex turn
+    // composes neither and its record states the absence rather than faking
+    // carriage — Codex reads the worktree's own AGENTS.md natively.
+    composedSkills =
+      harness === "codex"
+        ? null
+        : composeSkillsPlugin(
+            worktreePath,
+            join(request.worktreeRoot, ".skills-staging", request.executionId)
+          );
     // The enabled MCP servers, under the same rule (D-119): re-derived from
     // the worktree, digest-checked against the approval, written into a
     // strict config only Novus authors — carrying, when the runner provided
     // one, the `novus` capture endpoint (D-123). A read turn carries no
     // endpoint: it may look and speak, never capture.
-    composedMcp = composeMcpConfig(
-      worktreePath,
-      request.mcpServers ?? [],
-      join(request.worktreeRoot, ".mcp-staging", `${request.executionId}.json`),
-      readOnly ? null : request.novusCapture ?? null,
-      resolveMachineMcp(request.machineMcpServers ?? [])
-    );
+    composedMcp =
+      harness === "codex"
+        ? null
+        : composeMcpConfig(
+            worktreePath,
+            request.mcpServers ?? [],
+            join(request.worktreeRoot, ".mcp-staging", `${request.executionId}.json`),
+            readOnly ? null : request.novusCapture ?? null,
+            resolveMachineMcp(request.machineMcpServers ?? [])
+          );
     emit({
       kind: "execution.running",
       payload: {
-        harness: "claude-code",
+        harness,
         model,
         effort,
         permissionProfile: profile,
-        skills: composedSkills.carried,
-        skillsDropped: composedSkills.dropped,
-        slashCommands: composedSkills.carriedCommands,
-        slashCommandsDropped: composedSkills.droppedCommands,
-        globalSkills: composedSkills.carriedGlobals,
-        globalSkillsDropped: composedSkills.droppedGlobals,
-        mcpServers: composedMcp.carried,
-        mcpServersDropped: composedMcp.dropped,
-        machineMcpServers: composedMcp.machineCarried,
-        machineMcpServersDropped: composedMcp.machineDropped,
-        // The owner's own accounts this turn carried (D-217), read turns none.
-        connectors: readOnly ? [] : [...(request.connectors ?? [])]
+        skills: composedSkills?.carried ?? [],
+        skillsDropped: composedSkills?.dropped ?? [],
+        slashCommands: composedSkills?.carriedCommands ?? [],
+        slashCommandsDropped: composedSkills?.droppedCommands ?? [],
+        globalSkills: composedSkills?.carriedGlobals ?? [],
+        globalSkillsDropped: composedSkills?.droppedGlobals ?? [],
+        mcpServers: composedMcp?.carried ?? [],
+        mcpServersDropped: composedMcp?.dropped ?? [],
+        machineMcpServers: composedMcp?.machineCarried ?? [],
+        machineMcpServersDropped: composedMcp?.machineDropped ?? [],
+        // The owner's own accounts this turn carried (D-217): read turns and
+        // codex turns none — lending is composed through Claude's flags.
+        connectors: readOnly || harness === "codex" ? [] : [...(request.connectors ?? [])]
       }
     });
 
@@ -1006,37 +1016,58 @@ export function startTurn(request: TurnRequest): RunningTurn {
     pulse.unref?.();
 
     let resumeSessionId = request.resumeSessionId;
-    let optional = true;
-    let stream = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
-    let outcome = await attempt(worktreePath, model, effort, stream, resumeSessionId, optional);
-    cancelPending("The harness process ended before this was answered.");
+    // The two dialects converge on this shape: what the post-attempt half —
+    // events flush, boundary, checkpoint, classification — actually reads.
+    let stream: {
+      end(): RunnerEvent[];
+      readonly sessionId: string | null;
+      readonly resumed: boolean;
+      readonly result: HarnessResult | null;
+    };
+    let outcome: ProcessOutcome;
 
-    // An older CLI that does not know an optional flag refused before it did
-    // anything, so there is nothing to undo: drop the niceties and run the turn
-    // it was actually asked for. The pinned permission flags are never in this
-    // set, so this can never quietly become an unsupervised run.
-    if (stopReason === null && refusedOptionalFlag(outcome)) {
-      optional = false;
-      stream = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
-      outcome = await attempt(worktreePath, model, effort, stream, resumeSessionId, optional);
+    // The deterministic fake is one dialect-less double for "a harness"
+    // (D-230): it drives the shared pipeline whatever the harness choice, so
+    // every governed path stays provable without either vendor's binary.
+    if (harness === "codex" && !request.fakeHarness) {
+      const codexStream = new CodexStream({ resumeThreadId: resumeSessionId, sanitize, onControl: handleControl });
+      stream = codexStream;
+      outcome = await attemptCodex(worktreePath, model, effort, codexStream, resumeSessionId);
       cancelPending("The harness process ended before this was answered.");
-    }
+    } else {
+      let optional = true;
+      let claude = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
+      outcome = await attempt(worktreePath, model, effort, claude, resumeSessionId, optional);
+      cancelPending("The harness process ended before this was answered.");
 
-    // A session the CLI no longer holds must not silently become a fresh
-    // conversation presented as continuous: retry once, openly fresh. A CLI
-    // that refused a flag is excluded — the second spawn would refuse the same
-    // flag, and the reason is not the session.
-    if (
-      resumeSessionId !== null &&
-      stopReason === null &&
-      stream.sessionId === null &&
-      !UNSUPPORTED_FLAG.test(outcome.stderr) &&
-      (outcome.spawnError !== null || outcome.code !== 0)
-    ) {
-      resumeSessionId = null;
-      stream = new HarnessStream({ resumeSessionId: null, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
-      outcome = await attempt(worktreePath, model, effort, stream, null, optional);
-      cancelPending("The harness process ended before this was answered.");
+      // An older CLI that does not know an optional flag refused before it did
+      // anything, so there is nothing to undo: drop the niceties and run the turn
+      // it was actually asked for. The pinned permission flags are never in this
+      // set, so this can never quietly become an unsupervised run.
+      if (stopReason === null && refusedOptionalFlag(outcome)) {
+        optional = false;
+        claude = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
+        outcome = await attempt(worktreePath, model, effort, claude, resumeSessionId, optional);
+        cancelPending("The harness process ended before this was answered.");
+      }
+
+      // A session the CLI no longer holds must not silently become a fresh
+      // conversation presented as continuous: retry once, openly fresh. A CLI
+      // that refused a flag is excluded — the second spawn would refuse the same
+      // flag, and the reason is not the session.
+      if (
+        resumeSessionId !== null &&
+        stopReason === null &&
+        claude.sessionId === null &&
+        !UNSUPPORTED_FLAG.test(outcome.stderr) &&
+        (outcome.spawnError !== null || outcome.code !== 0)
+      ) {
+        resumeSessionId = null;
+        claude = new HarnessStream({ resumeSessionId: null, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
+        outcome = await attempt(worktreePath, model, effort, claude, null, optional);
+        cancelPending("The harness process ended before this was answered.");
+      }
+      stream = claude;
     }
 
     for (const event of stream.end()) emit(event);
@@ -1701,9 +1732,162 @@ export function startTurn(request: TurnRequest): RunningTurn {
     }
   }
 
+  /**
+   * One Codex app-server process, from spawn to exit (D-230). JSON-RPC over
+   * stdio: initialize → thread/start (or thread/resume, falling back to an
+   * openly fresh start when the server no longer holds the thread) →
+   * turn/start, then notifications until turn/completed, whereupon stdin
+   * closes and the server exits. The wire's decision/unsupported/interrupt
+   * writers are swapped to this dialect for the attempt's duration; the
+   * ladder answering them never changes.
+   */
+  function attemptCodex(
+    worktreePath: string,
+    model: string,
+    effort: string,
+    stream: CodexStream,
+    resumeThreadId: string | null
+  ): Promise<ProcessOutcome> {
+    const codexEffort = CODEX_EFFORT[(EffortSchema.safeParse(effort).success ? effort : DEFAULT_EFFORT) as Effort];
+    return new Promise<ProcessOutcome>((resolve) => {
+      let settled = false;
+      const settle = (outcome: ProcessOutcome): void => {
+        if (settled) return;
+        settled = true;
+        child = null;
+        resolve(outcome);
+      };
+
+      let spawned: ChildProcess;
+      try {
+        spawned = crossSpawn("codex", ["app-server"], {
+          cwd: worktreePath,
+          env: harnessEnv(),
+          stdio: ["pipe", "pipe", "pipe"],
+          detached: true
+        });
+      } catch (error) {
+        settle({ code: null, signal: null, stderr: "", spawnError: messageOf(error) });
+        return;
+      }
+      child = spawned;
+      spawned.stdin?.on("error", () => undefined);
+
+      const writeRpc = (line: object): boolean => {
+        const stdin = spawned.stdin;
+        if (!stdin || stdin.destroyed || stdin.writableEnded) return false;
+        try {
+          stdin.write(`${JSON.stringify(line)}\n`);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      let threadId: string | null = null;
+      // This dialect's three sentences (D-230). A decline carries no words on
+      // Codex's wire — the reason stays on Novus's own record, which is where
+      // it was durable anyway.
+      wire.decision = (requestId, allow) =>
+        writeRpc(approvalResponseLine(requestId, stream.approvalKindOf(requestId) ?? "command", allow));
+      wire.unsupported = (requestId) =>
+        writeRpc({
+          jsonrpc: "2.0",
+          id: /^\d+$/.test(requestId) ? Number(requestId) : requestId,
+          error: { code: -32601, message: "Novus does not implement this request." }
+        });
+      wire.interrupt = () => (threadId === null ? false : writeRpc(turnInterruptLine(nextRpcId(), threadId)));
+
+      const initId = nextRpcId();
+      const openId = nextRpcId();
+      const freshId = nextRpcId();
+      const turnId = nextRpcId();
+      const startTurnNow = (): void => {
+        if (threadId === null) return;
+        writeRpc(turnStartLine(turnId, threadId, { direction: request.direction, model, effort: codexEffort }));
+        if (stopReason !== null) stop(stopReason);
+      };
+      const sequence = (id: string | number, result: unknown, error: { message?: string } | null): void => {
+        if (id === initId) {
+          writeRpc(initializedLine);
+          writeRpc(
+            resumeThreadId === null
+              ? threadStartLine(openId, {
+                  cwd: worktreePath,
+                  model,
+                  effort: codexEffort,
+                  readOnly,
+                  instructions: null
+                })
+              : threadResumeLine(openId, resumeThreadId, { cwd: worktreePath, model, readOnly })
+          );
+          return;
+        }
+        if (id === openId) {
+          if (error !== null && resumeThreadId !== null) {
+            // The server no longer holds the thread: retry once, openly
+            // fresh — the session event's `resumed: false` says so.
+            writeRpc(
+              threadStartLine(freshId, { cwd: worktreePath, model, effort: codexEffort, readOnly, instructions: null })
+            );
+            return;
+          }
+          if (error !== null) {
+            stderrText += `thread open failed: ${error.message ?? "unknown"}\n`;
+            spawned.stdin?.end();
+            return;
+          }
+          threadId = stream.sessionId;
+          startTurnNow();
+          return;
+        }
+        if (id === freshId) {
+          if (error !== null) {
+            stderrText += `thread start failed: ${error.message ?? "unknown"}\n`;
+            spawned.stdin?.end();
+            return;
+          }
+          threadId = stream.sessionId;
+          startTurnNow();
+          return;
+        }
+        if (id === turnId && error !== null) {
+          stderrText += `turn start failed: ${error.message ?? "unknown"}\n`;
+          spawned.stdin?.end();
+        }
+      };
+      stream.attachRpcResponder(sequence);
+
+      writeRpc(initializeLine(initId));
+      if (stopReason !== null) stop(stopReason);
+
+      spawned.on("error", (error) => {
+        settle({ code: null, signal: null, stderr: stderrText, spawnError: messageOf(error) });
+      });
+
+      spawned.stdout?.on("data", (chunk: Buffer) => {
+        for (const event of stream.push(chunk.toString())) emit(event);
+        // The turn's own final verdict is the signal there is nothing left to
+        // say: close stdin and the server exits (the claude rule, this wire).
+        if (stream.result !== null) spawned.stdin?.end();
+      });
+
+      let stderrText = "";
+      spawned.stderr?.on("data", (chunk: Buffer) => {
+        if (stderrText.length < MAX_STDERR) {
+          stderrText += chunk.toString().slice(0, MAX_STDERR - stderrText.length);
+        }
+      });
+
+      spawned.on("close", (code, signal) => {
+        settle({ code, signal, stderr: stderrText, spawnError: null });
+      });
+    });
+  }
+
   function classify(
     outcome: ProcessOutcome,
-    stream: HarnessStream,
+    stream: { readonly sessionId: string | null; readonly result: HarnessResult | null },
     checkpointFailed: string | null
   ): TerminalEvent {
     if (stopReason !== null) {

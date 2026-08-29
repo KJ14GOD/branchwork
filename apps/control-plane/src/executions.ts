@@ -13,7 +13,8 @@ import {
   TERMINAL_EXECUTION_STATES,
   type EnabledMcpServer,
   type FileDiffResponse,
-  type PermissionProfile
+  type PermissionProfile,
+  harnessOf
 } from "@novus/contracts";
 import { z } from "zod";
 import type pg from "pg";
@@ -401,7 +402,7 @@ export async function dispatchDirection(
       await client.query(
         `insert into executions (exe_id, org_id, mission_id, wst_id, session_id, harness, model, effort,
                                  runner_id, starting_direction_id, state, started_by, permission_profile)
-         values ($1, $2, $3, $4, $5, 'claude-code', $6, $7, $8, $9, 'requested', $10, $11)`,
+         values ($1, $2, $3, $4, $5, $12, $6, $7, $8, $9, 'requested', $10, $11)`,
         [
           executionId,
           access.orgId,
@@ -413,7 +414,8 @@ export async function dispatchDirection(
           runnerId,
           args.directionId,
           actor.userId,
-          permissionProfile
+          permissionProfile,
+          harnessOf(args.model)
         ]
       );
       await client.query("release savepoint start_execution");
@@ -491,7 +493,7 @@ export async function dispatchDirection(
       actorLogin: actor.login,
       causeDirectionId: args.directionId,
       causeLeaseId: access.leaseId,
-      payload: { harness: "claude-code", model: args.model, effort: args.effort, sessionId }
+      payload: { harness: harnessOf(args.model), model: args.model, effort: args.effort, sessionId }
     });
     return { executionId, commandId, deferred: null };
   });
@@ -555,7 +557,7 @@ export async function dispatchAlongside(
       await client.query(
         `insert into executions (exe_id, org_id, mission_id, wst_id, session_id, harness, model, effort,
                                  runner_id, starting_direction_id, state, started_by, access)
-         values ($1, $2, $3, $4, $5, 'claude-code', $6, $7, $8, $9, 'requested', $10, 'read')`,
+         values ($1, $2, $3, $4, $5, $11, $6, $7, $8, $9, 'requested', $10, 'read')`,
         [
           executionId,
           access.orgId,
@@ -566,7 +568,8 @@ export async function dispatchAlongside(
           args.effort,
           runnerId,
           args.directionId,
-          actor.userId
+          actor.userId,
+          harnessOf(args.model)
         ]
       );
       await client.query("release savepoint start_read_execution");
@@ -610,7 +613,7 @@ export async function dispatchAlongside(
       causeDirectionId: args.directionId,
       causeLeaseId: access.leaseId,
       payload: {
-        harness: "claude-code",
+        harness: harnessOf(args.model),
         model: args.model,
         effort: args.effort,
         sessionId,

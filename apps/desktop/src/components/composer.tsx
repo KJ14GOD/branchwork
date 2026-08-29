@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   CLAUDE_MODELS,
+  CODEX_MODELS,
+  harnessOf,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
   EFFORTS,
@@ -112,7 +114,7 @@ interface Scratch {
 }
 const scratchByKey = new Map<string, Scratch>();
 
-const MODEL_IDS = CLAUDE_MODELS.map((model) => model.id);
+const MODEL_IDS = [...CLAUDE_MODELS, ...CODEX_MODELS].map((model) => model.id);
 
 function isModelId(value: string | null): value is ModelId {
   return value !== null && (MODEL_IDS as readonly string[]).includes(value);
@@ -973,8 +975,12 @@ export function Composer({
               onClick={() => setOpenMenu(openMenu === "model" ? null : "model")}
               data-testid="model-chip"
             >
-              <ClaudeGlyph className="chip-glyph" />
-              {CLAUDE_MODELS.find((option) => option.id === model)?.label ?? model}
+              {harnessOf(model) === "codex" ? (
+                <img className="chip-glyph chip-glyph-bitmap" src={codexIcon} alt="" />
+              ) : (
+                <ClaudeGlyph className="chip-glyph" />
+              )}
+              {[...CLAUDE_MODELS, ...CODEX_MODELS].find((option) => option.id === model)?.label ?? model}
             </button>
             {openMenu === "model" && (
               <div className="chip-menu" role="menu" data-testid="model-menu">
@@ -994,13 +1000,26 @@ export function Composer({
                     {option.id === model && <span className="chip-menu-note">current</span>}
                   </button>
                 ))}
-                {/* A harness that does not exist here renders disabled with a
-                    plain note — never as a live option. */}
-                <button className="chip-menu-row" role="menuitem" disabled data-testid="codex-option">
-                  <img className="chip-glyph chip-glyph-bitmap" src={codexIcon} alt="" />
-                  Codex
-                  <span className="chip-menu-note">arrives later</span>
-                </button>
+                {/* Codex (D-230): the model chip is the harness picker —
+                    choosing a Codex model chooses Codex, the harness derived
+                    from it everywhere so no second control must agree. */}
+                {CODEX_MODELS.map((option) => (
+                  <button
+                    key={option.id}
+                    className="chip-menu-row"
+                    role="menuitem"
+                    data-testid="codex-option"
+                    onClick={() => {
+                      setModel(option.id);
+                      localStorage.setItem("novus-model", option.id);
+                      setOpenMenu(null);
+                    }}
+                  >
+                    <img className="chip-glyph chip-glyph-bitmap" src={codexIcon} alt="" />
+                    {option.label}
+                    {option.id === model && <span className="chip-menu-note">current</span>}
+                  </button>
+                ))}
               </div>
             )}
           </span>
