@@ -104,6 +104,7 @@ import {
   prepareLocalFiles,
   processLogsFor,
   readFile,
+  fileDiff as workspaceFileDiff,
   renameTerminal,
   repositoryLabel,
   resizeTerminal,
@@ -1876,6 +1877,7 @@ function registerIpc(): void {
       workstreamId: workstream.workstreamId,
       localId: repository.providerRepoId,
       missionBranch: workstream.missionBranch,
+      baseSha: workstream.baseSha,
       // `name` is `owner/name` for a GitHub repository and the folder's own
       // name for one on this Mac; both end in what the project is called.
       repositoryLabel: repositoryLabel(repository.name)
@@ -2093,6 +2095,14 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed path." };
     return call(async () =>
       readFile(await targetFor(parsed.data.missionId, parsed.data.workstreamId), parsed.data.path)
+    );
+  });
+
+  ipcMain.handle("novus:workspace:file-diff", async (_event, raw: unknown) => {
+    const parsed = ReadWorkspaceFileInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed path." };
+    return call(async () =>
+      workspaceFileDiff(await targetFor(parsed.data.missionId, parsed.data.workstreamId), parsed.data.path)
     );
   });
 

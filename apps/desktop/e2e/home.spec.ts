@@ -129,6 +129,7 @@ beforeAll(async () => {
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      NOVUS_FAKE_CONNECTORS: "[]",
       // Every fake turn stops at its permission question, so a blocked
       // mission is a stable fixture rather than a race.
       NOVUS_FAKE_HARNESS_APPROVAL: "1",

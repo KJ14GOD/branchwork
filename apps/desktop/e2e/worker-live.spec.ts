@@ -122,6 +122,7 @@ beforeAll(async () => {
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      NOVUS_FAKE_CONNECTORS: "[]",
       NOVUS_FAKE_HARNESS_PACE_MS: String(PACE_MS),
       NOVUS_USER_DATA_DIR: userDataDir
     }

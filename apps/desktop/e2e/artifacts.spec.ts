@@ -218,6 +218,7 @@ beforeAll(async () => {
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      NOVUS_FAKE_CONNECTORS: "[]",
       // Every scripted turn asks before it acts, so both the person capture
       // and the agent-requested capture ride the real approval machinery.
       NOVUS_FAKE_HARNESS_APPROVAL: "1",
@@ -719,6 +720,7 @@ describe("durable visual evidence (D-122, D-123)", () => {
           NOVUS_CP_URL: CP_URL,
           NOVUS_AUTH_AUTOVISIT: "1",
           NOVUS_FAKE_HARNESS: "1",
+          NOVUS_FAKE_CONNECTORS: "[]",
           NOVUS_FAKE_HARNESS_APPROVAL: "1",
           NOVUS_USER_DATA_DIR: userDataDir
         }

@@ -37,6 +37,7 @@ import {
   type LocalFileOutcome
 } from "./workspace-files";
 import { gitExec, type GitExec } from "./workspace-git";
+import { fileLineDiff, type FileLineDiff } from "./workspace-diff";
 import { inspectProject } from "./workspace-inspect";
 import { createPortAllocator, type PortAllocator, type PortRange } from "./workspace-ports";
 import { emptySecretStore, fileSecretStore, type SecretStore } from "./workspace-secrets";
@@ -73,6 +74,10 @@ import { listWorkspaceTree, readWorkspaceFile, writeWorkspaceFile } from "./work
 export interface WorkspaceTarget {
   missionId: string;
   workstreamId: string;
+  /** The lane's pinned base commit (D-227): what the file-view wash diffs
+   *  against, so it shows the mission's whole delta rather than only what is
+   *  uncommitted right now. Optional — a caller without it gets HEAD. */
+  baseSha?: string | undefined;
   /** The registered local repository this workstream came from. */
   localId: string;
   missionBranch: string;
@@ -827,6 +832,18 @@ export async function readFile(
   host?: WorkspaceHost
 ): Promise<WorkspaceFile> {
   return withMaskedPaths(target, host, (resolved) => readWorkspaceFile(resolved.worktree, path));
+}
+
+/** The mission's changes on one open file (D-227), from the machine that
+ *  holds the checkout — enrichment for the file view's in-place wash. */
+export async function fileDiff(
+  target: WorkspaceTarget,
+  path: string,
+  host?: WorkspaceHost
+): Promise<FileLineDiff> {
+  return withMaskedPaths(target, host, (resolved) =>
+    fileLineDiff(resolved.host.git ?? gitExec, resolved.worktree, target.baseSha ?? null, path)
+  );
 }
 
 export async function writeFile(

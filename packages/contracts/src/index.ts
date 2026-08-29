@@ -2855,6 +2855,18 @@ export const ListWorkspaceFilesInputSchema = z.object({
 });
 
 /** What a file holds, for showing. Bounded: this opens a pane, not a stream. */
+/** The mission's changes laid onto one open file (D-227): the green wash and
+ *  the removal seams the file view paints in place. Machine-local enrichment;
+ *  `changed: false` simply shows the file. */
+export const FileLineDiffSchema = z.object({
+  changed: z.boolean(),
+  /** 1-indexed lines of the file as it stands that the mission added or rewrote. */
+  washed: z.array(z.number().int().positive()).max(20_000),
+  /** 1-indexed lines after which content was removed (0 = before the first). */
+  deletions: z.array(z.number().int().nonnegative()).max(20_000)
+});
+export type FileLineDiff = z.infer<typeof FileLineDiffSchema>;
+
 export const WorkspaceFileSchema = z.object({
   path: WorkspacePathSchema,
   /** Null when the file is not text — a pane cannot honestly show one. */
@@ -4455,6 +4467,8 @@ export interface NovusBridge {
       limit?: number;
     }): Promise<IpcResult<string[]>>;
     readFile(input: { missionId: string; workstreamId?: string; path: string }): Promise<IpcResult<WorkspaceFile>>;
+    /** The mission's own changes on one file, for the in-place wash (D-227). */
+    fileDiff(input: { missionId: string; workstreamId?: string; path: string }): Promise<IpcResult<FileLineDiff>>;
     writeFile(input: { missionId: string; workstreamId?: string; path: string; text: string }): Promise<IpcResult<null>>;
   };
   /**

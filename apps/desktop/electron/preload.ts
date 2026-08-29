@@ -269,6 +269,7 @@ const novus: NovusBridge = {
     listFiles: (input) => ipcRenderer.invoke("novus:workspace:list-files", input),
     searchFiles: (input) => ipcRenderer.invoke("novus:workspace:search-files", input),
     readFile: (input) => ipcRenderer.invoke("novus:workspace:read-file", input),
+    fileDiff: (input) => ipcRenderer.invoke("novus:workspace:file-diff", input),
     writeFile: (input) => ipcRenderer.invoke("novus:workspace:write-file", input)
   },
   // Local only, by construction: every verb here reaches this machine's own

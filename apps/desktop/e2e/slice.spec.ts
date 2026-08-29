@@ -98,6 +98,7 @@ async function launchApp(options: { dataDir?: string; identity?: string } = {}):
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      NOVUS_FAKE_CONNECTORS: "[]",
       NOVUS_USER_DATA_DIR: options.dataDir ?? userDataDir,
       ...(options.identity ? { NOVUS_FAKE_IDENTITY: options.identity } : {})
     }

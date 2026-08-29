@@ -192,6 +192,7 @@ beforeAll(async () => {
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      NOVUS_FAKE_CONNECTORS: "[]",
       NOVUS_FAKE_HARNESS_APPROVAL: "1",
       // Pace the scripted turn so the "Agent is browsing" banner is observable
       // while the actions run, rather than gone before the poll.

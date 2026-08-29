@@ -181,6 +181,7 @@ beforeAll(async () => {
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      NOVUS_FAKE_CONNECTORS: "[]",
       // Paced slowly enough that both turns are mid-flight together for
       // several of the room's two-second polls, so the window genuinely
       // paints them running side by side. No approval mode: enforcement is

@@ -104,6 +104,7 @@ async function launch(dataDir: string, paceMs?: number): Promise<{ app: Electron
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      NOVUS_FAKE_CONNECTORS: "[]",
       NOVUS_USER_DATA_DIR: dataDir,
       ...(paceMs ? { NOVUS_FAKE_HARNESS_PACE_MS: String(paceMs) } : {})
     }
@@ -894,5 +895,89 @@ describe("the strip at three window widths", () => {
     expect(await shellOverflow()).toBeLessThanOrEqual(0);
 
     await resizeWindow(app, 1440, 900);
+  }, 180_000);
+
+  it("an open changed file wears its change, and a clicked identifier lights its uses (D-227)", async () => {
+    await closeEveryTab(page);
+    await openProject(page, alphaName);
+    // The idle mission, deliberately: the running one queues new directions
+    // behind its live turn (D-083), and a queued write never lands.
+    await projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: "Alpha one" }).click();
+    await page.getByTestId("state-line").waitFor({ timeout: 20_000 });
+
+    // A turn writes a code file the base never held: every line of it is the
+    // mission's own doing, so every line takes the wash.
+    await page
+      .getByTestId("composer-input")
+      .fill("washprobe here and washprobe again [fake-write:src/probe.ts]");
+    await page.keyboard.press("Enter");
+    // Sync on THIS direction's own turn, not on any earlier outcome.
+    await page.getByTestId("chat").getByText("Working on: washprobe", { exact: false }).waitFor({ timeout: 90_000 });
+    await page
+      .getByTestId("trace-outcome")
+      .filter({ hasText: "Turn completed" })
+      .last()
+      .waitFor({ timeout: 90_000 });
+
+    if ((await page.getByTestId("inspector").count()) === 0) {
+      await page.getByTestId("panel-toggle").click();
+    }
+    await page.getByTestId("inspector-tab-files").click();
+    await page.getByTestId("file-tree").waitFor({ timeout: 30_000 });
+    // The filter searches the whole worktree live (D-185's search), so a file
+    // a turn just wrote is findable regardless of what the tree had cached.
+    await page.getByTestId("tree-filter").fill("probe");
+    await page.getByTestId("tree-row").filter({ hasText: "probe.ts" }).first().click();
+    await page.getByTestId("file-source-view").waitFor({ timeout: 20_000 });
+
+    // The wash: a brand-new file is added lines end to end.
+    await expect
+      .poll(async () => page.locator(".code-line.line-added").count(), { timeout: 20_000 })
+      .toBeGreaterThan(0);
+
+    // The click: aim at the word's own pixels — an element-center click can
+    // land on a neighbouring token, and caretRangeFromPoint answers for
+    // whatever is actually under the point.
+    const point = await page.evaluate(() => {
+      const body = document.querySelector(".code-body");
+      if (!body) return null;
+      const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const at = (node.textContent ?? "").indexOf("washprobe");
+        if (at !== -1) {
+          const range = new Range();
+          range.setStart(node, at);
+          range.setEnd(node, at + "washprobe".length);
+          const rect = range.getBoundingClientRect();
+          return { x: rect.left + 4, y: rect.top + rect.height / 2 };
+        }
+      }
+      return null;
+    });
+    expect(point).not.toBeNull();
+    await page.mouse.click(point!.x, point!.y);
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const marks = CSS.highlights.get("novus-ident");
+          if (!marks) return 0;
+          let count = 0;
+          marks.forEach(() => {
+            count += 1;
+          });
+          return count;
+        })
+      )
+      .toBe(2);
+    await shot(page, "230-file-wears-its-change.png");
+
+    // Escape puts the file back to plain reading.
+    await page.keyboard.press("Escape");
+    await expect
+      .poll(async () => page.evaluate(() => CSS.highlights.has("novus-ident")))
+      .toBe(false);
+    // Escape composes: it cleared the highlight AND meant what it always
+    // means to the room (the panel closed with it) — nothing left to tidy.
   }, 180_000);
 });

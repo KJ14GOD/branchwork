@@ -140,6 +140,7 @@ async function launch(
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      NOVUS_FAKE_CONNECTORS: "[]",
       NOVUS_USER_DATA_DIR: dataDir,
       ...(paceMs ? { NOVUS_FAKE_HARNESS_PACE_MS: String(paceMs) } : {}),
       ...(identity ? { NOVUS_FAKE_IDENTITY: identity } : {})

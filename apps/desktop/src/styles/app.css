@@ -1672,6 +1672,13 @@ body {
 
 /* Found words wear the warn amber — the one hue in the room that exists to
    pull an eye — the current match at full strength. */
+/* A clicked identifier and every use of it in the open file (D-227): the
+   hover wash, not the find amber — orientation, never an alarm. */
+::highlight(novus-ident) {
+  background-color: color-mix(in srgb, var(--text-3) 24%, transparent);
+  color: var(--text-1);
+}
+
 ::highlight(novus-find) {
   background-color: color-mix(in srgb, var(--warn) 35%, transparent);
   color: var(--text-1);
@@ -2951,6 +2958,29 @@ body {
    with a 2px inset edge — the muted --ok/--danger family read brown here
    and is back to being checks' and counts' alone. Identification of what
    changed, never judgment of it. */
+/* The mission's changes worn by an open file (D-227): the Changes surface's
+   own family, laid onto the file view's lines — added or rewritten lines take
+   the wash and its inset edge; a removed run leaves a thin seam above the
+   line that follows it. */
+.code-line.line-added {
+  background: color-mix(in srgb, var(--diff-add) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--diff-add);
+}
+
+.code-line.line-removed-above {
+  box-shadow: inset 0 2px 0 var(--diff-del);
+}
+
+.code-line.line-added.line-removed-above {
+  box-shadow:
+    inset 2px 0 0 var(--diff-add),
+    inset 0 2px 0 var(--diff-del);
+}
+
+.code-gutter .gutter-added {
+  color: var(--diff-add);
+}
+
 .diff-add {
   background: color-mix(in srgb, var(--diff-add) 16%, transparent);
   box-shadow: inset 2px 0 0 var(--diff-add);

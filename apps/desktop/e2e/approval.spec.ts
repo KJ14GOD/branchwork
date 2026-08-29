@@ -69,6 +69,7 @@ async function launch(login: string, userDataDir: string): Promise<Client> {
       NOVUS_CP_URL: CP_URL,
       NOVUS_AUTH_AUTOVISIT: "1",
       NOVUS_FAKE_HARNESS: "1",
+      NOVUS_FAKE_CONNECTORS: "[]",
       // The fake asks a permission question in the shape the real CLI sends it.
       NOVUS_FAKE_HARNESS_APPROVAL: "1",
       NOVUS_FAKE_IDENTITY: login,
