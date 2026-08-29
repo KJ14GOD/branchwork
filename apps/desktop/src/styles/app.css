@@ -3757,6 +3757,33 @@ body {
    and the only edge in it is the one that separates it from the room. Chrome in
    a different colour above a shell reads as a window inside a window, which is
    what it looked like. */
+/* Split panes (D-228): the main file first, pinned files beside it — two
+   columns from the second pane, two rows from the third, at most four. The
+   hairline between panes is the grid's own gap over the edge token. */
+.file-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 1px;
+  background: var(--edge);
+}
+
+.file-grid > .file-view {
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.file-grid[data-panes="2"] {
+  grid-template-columns: 1fr 1fr;
+}
+
+.file-grid[data-panes="3"],
+.file-grid[data-panes="4"] {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
 .terminal-dock {
   flex: none;
   position: relative;
@@ -3767,6 +3794,20 @@ body {
   background: var(--term-bg);
   border-top: 1px solid var(--edge);
 }
+
+/* The right dock (D-228): a full-height column against the room's right edge
+   — the inspector's own posture — instead of a bottom band. */
+.terminal-dock.dock-right {
+  width: 40%;
+  min-width: 320px;
+  max-width: 50%;
+  min-height: 0;
+  max-height: none;
+  height: auto;
+  border-top: none;
+  border-left: 1px solid var(--edge);
+}
+
 
 /* The drag edge. Two pointer-target rows tall, and invisible until reached. */
 .terminal-grip {

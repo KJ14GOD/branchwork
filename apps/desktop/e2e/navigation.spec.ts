@@ -980,4 +980,39 @@ describe("the strip at three window widths", () => {
     // Escape composes: it cleared the highlight AND meant what it always
     // means to the room (the panel closed with it) — nothing left to tidy.
   }, 180_000);
+
+  it("a file splits beside the canvas, tabs keep driving the main pane, and the pane closes (D-228)", async () => {
+    // The previous test left Alpha one open with src/probe.ts written (and a
+    // file possibly on the canvas, where the state line does not render).
+    await page.getByTestId("panel-toggle").waitFor({ timeout: 20_000 });
+    if ((await page.getByTestId("inspector").count()) === 0) {
+      await page.getByTestId("panel-toggle").click();
+    }
+    await page.getByTestId("inspector-tab-files").click();
+    await page.getByTestId("file-tree").waitFor({ timeout: 30_000 });
+    await page.getByTestId("tree-filter").fill("probe");
+    await page.getByTestId("tree-row").filter({ hasText: "probe.ts" }).first().click();
+    await page.getByTestId("file-source-view").waitFor({ timeout: 20_000 });
+
+    // Split pins the file beside the canvas; the grid holds two panes.
+    await page.getByTestId("file-split").click();
+    await expect.poll(async () => page.getByTestId("file-grid").getAttribute("data-panes")).toBe("2");
+    expect(await page.getByTestId("file-view").count()).toBe(2);
+
+    // Opening another file drives the MAIN pane; the pinned pane stays put.
+    await page.getByTestId("tree-filter").fill("README");
+    await page.getByTestId("tree-row").filter({ hasText: "README.md" }).first().click();
+    await expect.poll(async () => page.getByTestId("file-view").count(), { timeout: 20_000 }).toBe(2);
+    const paths = await page.getByTestId("file-view").evaluateAll((views) =>
+      views.map((view) => view.getAttribute("data-path"))
+    );
+    expect(paths).toContain("README.md");
+    expect(paths).toContain("src/probe.ts");
+    await page.getByTestId("inspector-close").click();
+    await shot(page, "231-two-files-side-by-side.png");
+
+    // The pane's own × takes it back to one canvas.
+    await page.getByTestId("pane-close").click();
+    await expect.poll(async () => page.getByTestId("file-view").count()).toBe(1);
+  }, 180_000);
 });

@@ -704,6 +704,18 @@ describe("the terminal, through the interface", () => {
     const reopened = await untilPane(page, "the scrollback to return", printed("SURVIVES"));
     expect(reopened).toContain(printed("SURVIVES"));
     await shot(page, "48-terminal-survives-hiding.png");
+
+    // The dock moves to the room's right edge and back (D-228): the same
+    // dock, the inspector's posture, chosen from its own head.
+    await page.getByTestId("terminal-side-toggle").click();
+    await expect
+      .poll(async () => page.getByTestId("terminal-dock").getAttribute("data-side"), { timeout: 10_000 })
+      .toBe("right");
+    await shot(page, "231b-terminal-docked-right.png");
+    await page.getByTestId("terminal-side-toggle").click();
+    await expect
+      .poll(async () => page.getByTestId("terminal-dock").getAttribute("data-side"), { timeout: 10_000 })
+      .toBe("bottom");
   }, 180_000);
 
   it("refuses the terminal to a participant whose machine does not host the workspace", async () => {

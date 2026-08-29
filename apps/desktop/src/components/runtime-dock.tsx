@@ -218,7 +218,9 @@ export function RuntimeDock({
   missionId,
   workstreamId,
   prime,
-  onPrimed
+  onPrimed,
+  side = "bottom",
+  onToggleSide
 }: {
   missionId: string;
   /** The lane whose worktree the shell opens in — the room's active approach.
@@ -230,6 +232,11 @@ export function RuntimeDock({
    *  Null asks for nothing. */
   prime?: string | null;
   onPrimed?: () => void;
+  /** Where the dock stands (D-228): the room's bottom edge, or its right as a
+   *  full-height column — the inspector's own posture. */
+  side?: "bottom" | "right";
+  /** Moves the dock to the other edge; absent hides the control. */
+  onToggleSide?: () => void;
 }) {
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -483,19 +490,22 @@ export function RuntimeDock({
 
   return (
     <section
-      className="terminal-dock"
-      style={{ height: `${heightVh}vh` }}
+      className={side === "right" ? "terminal-dock dock-right" : "terminal-dock"}
+      style={side === "right" ? undefined : { height: `${heightVh}vh` }}
       aria-label="Runtime"
       data-testid="terminal-dock"
+      data-side={side}
     >
-      <div
-        className="terminal-grip"
-        onPointerDown={onGrab}
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Resize the terminal"
-        data-testid="terminal-grip"
-      />
+      {side === "bottom" && (
+        <div
+          className="terminal-grip"
+          onPointerDown={onGrab}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize the terminal"
+          data-testid="terminal-grip"
+        />
+      )}
 
       {/* One row: the sessions and a `+`. The dock closes from the same toggle
           that opened it, and a tab is named from the repository rather than by
@@ -555,6 +565,16 @@ export function RuntimeDock({
         </div>
 
         <span className="terminal-head-spacer" />
+        {onToggleSide && (
+          <button
+            className="btn btn-text terminal-side-toggle"
+            onClick={onToggleSide}
+            title={side === "right" ? "Dock the terminal at the bottom" : "Dock the terminal on the right"}
+            data-testid="terminal-side-toggle"
+          >
+            {side === "right" ? "Dock bottom" : "Dock right"}
+          </button>
+        )}
       </div>
 
       {error && (

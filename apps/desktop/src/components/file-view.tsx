@@ -185,7 +185,9 @@ export function FileView({
   missionId,
   workstreamId,
   path,
-  onAddContext
+  onAddContext,
+  onSplit,
+  onClosePane
 }: {
   missionId: string;
   /** The lane whose worktree holds the file — the room's active approach (D-080). */
@@ -193,6 +195,12 @@ export function FileView({
   path: string;
   /** Pins this file onto the composer's next send (D-182). */
   onAddContext?: () => void;
+  /** Splits this file to the side (D-228): present only while the grid has
+   *  room, absent at the four-pane cap. */
+  onSplit?: () => void;
+  /** Closes this split pane (D-228) — the main pane never carries it, because
+   *  closing the main pane is the tab strip's own ✕. */
+  onClosePane?: () => void;
 }) {
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   // The mission's changes on this file (D-227) — enrichment fetched beside
@@ -275,6 +283,16 @@ export function FileView({
         )}
         <span className="head-spacer" />
 
+        {onSplit && (
+          <button className="btn btn-text" onClick={onSplit} data-testid="file-split" title="Open this file in a pane beside the canvas">
+            Split
+          </button>
+        )}
+        {onClosePane && (
+          <button className="icon-button" onClick={onClosePane} aria-label="Close this pane" data-testid="pane-close">
+            ×
+          </button>
+        )}
         {onAddContext && (
           <button
             className="btn btn-text"

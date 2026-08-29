@@ -435,6 +435,22 @@ export function ProjectRoom({
   // click has opened full-size. A separate lightbox from `openImage`: these
   // are live data URLs, not artifacts, so there is nothing to open or reveal.
   const [agentFrames, setAgentFrames] = useState<{ dataUrl: string; seq: number }[]>([]);
+
+  // Split panes (D-228): up to three file keys pinned beside the main canvas,
+  // session-local — the tab strip stays the one open-set, tabs keep driving
+  // the main pane, and a pinned pane simply stays put beside it. Pruned when
+  // its tab closes; forgotten when the mission on screen changes.
+  const [splitKeys, setSplitKeys] = useState<string[]>([]);
+  useEffect(() => {
+    setSplitKeys([]);
+  }, [selectedMissionId]);
+  useEffect(() => {
+    setSplitKeys((current) => current.filter((key) => openFiles.some((file) => file.key === key)));
+  }, [openFiles]);
+
+  // Where the terminal docks (D-228): the room's bottom, or its right edge as
+  // a full-height column — the inspector's own posture.
+  const [dockSide, setDockSide] = useState<"bottom" | "right">("bottom");
   const [zoomFrame, setZoomFrame] = useState<string | null>(null);
 
   useEffect(() => {
@@ -2125,20 +2141,51 @@ export function ProjectRoom({
         // The pane reads the worktree the tab was opened from — the tab's own
         // lane, never whichever lane the room happens to be reading — so the
         // dot on the tab and the bytes on screen cannot disagree (D-084).
-        <FileView
-          key={activeFileEntry.key}
-          missionId={selectedMissionId}
-          workstreamId={activeFileEntry.workstreamId ?? undefined}
-          path={activeFileEntry.path}
-          onAddContext={() =>
+        // Split panes (D-228) sit beside it in one grid: the main pane first,
+        // then each pinned file, two columns from the second pane and two
+        // rows from the third — at most four, refused by the control simply
+        // not rendering past the cap.
+        (() => {
+          // The same file may stand in two panes — splitting what is on
+          // canvas answers immediately with a twin, and opening another file
+          // then swaps only the main pane.
+          const paneEntries = [
+            activeFileEntry,
+            ...splitKeys
+              .map((key) => openFiles.find((file) => file.key === key))
+              .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
+          ].slice(0, 4);
+          const addContext = (path: string) => () =>
             setPendingContext((previous) =>
-              previous.some((held) => held.kind === "file" && held.path === activeFileEntry.path) ||
+              previous.some((held) => held.kind === "file" && held.path === path) ||
               previous.length >= MAX_DIRECTION_CONTEXT
                 ? previous
-                : [...previous, { kind: "file", path: activeFileEntry.path }]
-            )
-          }
-        />
+                : [...previous, { kind: "file", path }]
+            );
+          return (
+            <div className="file-grid" data-panes={paneEntries.length} data-testid="file-grid">
+              {paneEntries.map((entry, at) => (
+                <FileView
+                  key={`pane-${at}-${entry.key}`}
+                  missionId={selectedMissionId}
+                  workstreamId={entry.workstreamId ?? undefined}
+                  path={entry.path}
+                  onAddContext={addContext(entry.path)}
+                  onSplit={
+                    at === 0 && paneEntries.length < 4
+                      ? () => setSplitKeys((current) => [...current, entry.key].slice(0, 3))
+                      : undefined
+                  }
+                  onClosePane={
+                    at > 0
+                      ? () => setSplitKeys((current) => current.filter((_, index) => index !== at - 1))
+                      : undefined
+                  }
+                />
+              ))}
+            </div>
+          );
+        })()
       ) : previewSelected && previewTab !== null && selectedMissionId !== null ? (
         // The pixels live in the persistently-mounted instance rendered
         // above this switch, not here (D-170): this branch's only job left
@@ -2729,17 +2776,34 @@ export function ProjectRoom({
       {/* The bottom dock. It shares the room's width and shortens the trace
           rather than replacing it; below the single-column threshold it takes
           the room (DESIGN.md#component-behavior). */}
-      {terminalOpen && executionAvailable && selectedMissionId !== null && (
+      {terminalOpen && executionAvailable && selectedMissionId !== null && dockSide === "bottom" && (
         <RuntimeDock
           key={activeLaneId ?? "default"}
           missionId={selectedMissionId}
           workstreamId={activeLaneId ?? undefined}
           prime={dockPrime}
           onPrimed={() => setDockPrime(null)}
+          side="bottom"
+          onToggleSide={() => setDockSide("right")}
         />
       )}
 
       </div>
+
+      {/* The right dock (D-228): the terminal as a full-height column against
+          the room's right edge — the inspector's own posture — chosen from
+          the dock's own head and undone the same way. */}
+      {terminalOpen && executionAvailable && selectedMissionId !== null && dockSide === "right" && (
+        <RuntimeDock
+          key={`${activeLaneId ?? "default"}-right`}
+          missionId={selectedMissionId}
+          workstreamId={activeLaneId ?? undefined}
+          prime={dockPrime}
+          onPrimed={() => setDockPrime(null)}
+          side="right"
+          onToggleSide={() => setDockSide("bottom")}
+        />
+      )}
 
     </div>
   );
