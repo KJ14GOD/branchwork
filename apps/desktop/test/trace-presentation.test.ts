@@ -339,7 +339,7 @@ describe("the harness's workers, joined from what the stream stated (D-107)", ()
 });
 
 describe("project skills in the room (D-118)", () => {
-  it("states what the turn carried as apparatus, and says nothing when nothing was", () => {
+  it("carries skills silently — the event and Extensions are the record, not the stream (D-193 amended)", () => {
     const carried = trace(
       detail([
         {
@@ -354,12 +354,9 @@ describe("project skills in the room (D-118)", () => {
         }
       ])
     );
-    const notes = carried.segments.filter((segment) => segment.kind === "note");
-    expect(notes).toHaveLength(1);
-    expect(notes[0]).toMatchObject({
-      text: "Project skills carried: zephyr-codes, release-notes",
-      tone: "neutral"
-    });
+    // The happy path says nothing in the stream (owner-called noise): what a
+    // turn was handed is on the event and readable in Extensions.
+    expect(carried.segments.filter((segment) => segment.kind === "note")).toHaveLength(0);
 
     const none = trace(
       detail([
@@ -372,7 +369,7 @@ describe("project skills in the room (D-118)", () => {
     expect(none.segments.filter((segment) => segment.kind === "note")).toHaveLength(0);
   });
 
-  it("states carried and dropped slash commands the same way (D-187)", () => {
+  it("stays loud only for what could NOT be carried (D-187, D-193 amended)", () => {
     const block = trace(
       detail([
         {
@@ -388,15 +385,14 @@ describe("project skills in the room (D-118)", () => {
       ])
     );
     const notes = block.segments.filter((segment) => segment.kind === "note");
-    expect(notes).toHaveLength(2);
-    expect(notes[0]).toMatchObject({ text: "Slash commands carried: relnotes", tone: "neutral" });
-    expect(notes[1]).toMatchObject({
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({
       text: 'Slash command not carried — "deploy": changed since it was enabled',
       tone: "warn"
     });
   });
 
-  it("states carried and dropped MCP servers the same way (D-119)", () => {
+  it("drops of MCP servers stay warn rows while carriage stays silent (D-119, D-193 amended)", () => {
     const block = trace(
       detail([
         {
@@ -412,9 +408,8 @@ describe("project skills in the room (D-118)", () => {
       ])
     );
     const notes = block.segments.filter((segment) => segment.kind === "note");
-    expect(notes).toHaveLength(2);
-    expect(notes[0]).toMatchObject({ text: "MCP servers carried: docs", tone: "neutral" });
-    expect(notes[1]).toMatchObject({
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({
       text: 'MCP server not carried — "search": changed since it was enabled',
       tone: "warn"
     });

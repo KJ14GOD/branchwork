@@ -225,18 +225,20 @@ describe("what a project declares is carried, and the record says which bytes (D
       await page.getByTestId("global-skill-row").filter({ hasText: "unslop" }).waitFor({ timeout: 20_000 });
       await page.screenshot({ path: join(evidenceDir, "124-project-skills-in-overview.png") });
 
-      // The next turn carries everything declared, and the record names each
-      // with the digest that ran.
+      // The next turn carries everything declared; the record is the event
+      // and Extensions, and the stream stays quiet about the happy path
+      // (D-193 amended 2026-08-29 — the stated-carried rows were owner-called
+      // noise). The turn completing with no carried note IS the assertion.
       await page.getByTestId("composer-input").fill("now use the codeword skill");
       await page.keyboard.press("Enter");
       await page
-        .getByTestId("trace-note")
-        .filter({ hasText: "Project skills carried: zephyr-codes" })
+        .getByTestId("trace-outcome")
+        .filter({ hasText: "Turn completed" })
+        .last()
         .waitFor({ timeout: 90_000 });
-      await page
-        .getByTestId("trace-note")
-        .filter({ hasText: "Machine skills carried: unslop" })
-        .waitFor({ timeout: 90_000 });
+      expect(
+        await page.getByTestId("trace-note").filter({ hasText: "skills carried" }).count()
+      ).toBe(0);
       await page.screenshot({ path: join(evidenceDir, "125-skill-carried-on-the-turn.png") });
     },
     180_000
@@ -329,9 +331,15 @@ describe("what a project declares is carried, and the record says which bytes (D
       await page.getByTestId("composer-input").fill("now use linear");
       await page.keyboard.press("Enter");
       await page
-        .getByTestId("trace-note")
-        .filter({ hasText: "Machine MCP servers carried: linear" })
+        .getByTestId("trace-outcome")
+        .filter({ hasText: "Turn completed" })
+        .last()
         .waitFor({ timeout: 90_000 });
+      // Carriage is silent in the stream (D-193 amended); the pinned config
+      // asserted above and the event are the record.
+      expect(
+        await page.getByTestId("trace-note").filter({ hasText: "servers carried" }).count()
+      ).toBe(0);
       await page.screenshot({ path: join(evidenceDir, "214-machine-mcp-carried.png") });
     },
     180_000

@@ -639,21 +639,12 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         let base = model ? (effort ? `${model} · effort ${effort}` : model) : null;
         if (base && profileWord) base = `${base} · ${profileWord}`;
         block.machinery = base ? (readOnly ? `${base} · read-only` : base) : block.machinery;
-        // What the turn was handed (D-118): the enabled skills it actually
-        // carries, stated as apparatus — and any it could not carry, each with
-        // the reason, in the warn tone, because a standing enablement that no
-        // longer names real bytes is news a person acts on. Nothing carried
-        // and nothing dropped says nothing, like every default.
-        const carried = namesOf(event.payload.skills);
-        if (carried.length > 0) {
-          push(block, {
-            kind: "note",
-            key: `${event.eventId}-skills`,
-            text: `Project skills carried: ${carried.join(", ")}`,
-            login: null,
-            tone: "neutral"
-          });
-        }
+        // What the turn was handed rides the event and reads in Extensions
+        // (D-193, amended 2026-08-29 — owner-called noise): the stream no
+        // longer restates the happy path. Only what could NOT be carried
+        // speaks here, each drop with its reason in the warn tone, because a
+        // standing enablement that no longer names real bytes is news a
+        // person acts on.
         const droppedSkills = Array.isArray(event.payload.skillsDropped)
           ? event.payload.skillsDropped
           : [];
@@ -671,16 +662,6 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
           });
         }
         // The slash commands, same grammar (D-187).
-        const commandsCarried = namesOf(event.payload.slashCommands);
-        if (commandsCarried.length > 0) {
-          push(block, {
-            kind: "note",
-            key: `${event.eventId}-slash-commands`,
-            text: `Slash commands carried: ${commandsCarried.join(", ")}`,
-            login: null,
-            tone: "neutral"
-          });
-        }
         const commandsDropped = Array.isArray(event.payload.slashCommandsDropped)
           ? event.payload.slashCommandsDropped
           : [];
@@ -700,16 +681,6 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         // The machine's own skills, same grammar (D-191) — named apart from
         // the project's, because where a skill came from is the fact a reader
         // of somebody else's turn most needs.
-        const globalsCarried = namesOf(event.payload.globalSkills);
-        if (globalsCarried.length > 0) {
-          push(block, {
-            kind: "note",
-            key: `${event.eventId}-global-skills`,
-            text: `Machine skills carried: ${globalsCarried.join(", ")}`,
-            login: null,
-            tone: "neutral"
-          });
-        }
         const globalsDropped = Array.isArray(event.payload.globalSkillsDropped)
           ? event.payload.globalSkillsDropped
           : [];
@@ -724,19 +695,6 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
             }`,
             login: null,
             tone: "warn"
-          });
-        }
-        // The MCP servers, same grammar (D-119).
-        const mcpCarried = Array.isArray(event.payload.mcpServers)
-          ? event.payload.mcpServers.filter((name): name is string => typeof name === "string")
-          : [];
-        if (mcpCarried.length > 0) {
-          push(block, {
-            kind: "note",
-            key: `${event.eventId}-mcp`,
-            text: `MCP servers carried: ${mcpCarried.join(", ")}`,
-            login: null,
-            tone: "neutral"
           });
         }
         const mcpDropped = Array.isArray(event.payload.mcpServersDropped)
@@ -757,16 +715,6 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         }
         // The machine's own servers (D-198), named apart: whose machine a
         // tool acts as is the fact a reader most needs.
-        const machineCarried = namesOf(event.payload.machineMcpServers);
-        if (machineCarried.length > 0) {
-          push(block, {
-            kind: "note",
-            key: `${event.eventId}-machine-mcp`,
-            text: `Machine MCP servers carried: ${machineCarried.join(", ")}`,
-            login: null,
-            tone: "neutral"
-          });
-        }
         const machineDropped = Array.isArray(event.payload.machineMcpServersDropped)
           ? event.payload.machineMcpServersDropped
           : [];
@@ -802,15 +750,11 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         break;
       }
       case "harness.session": {
-        const resumed = event.payload.resumed === true;
-        if (!resumed) break;
-        push(block, {
-          kind: "note",
-          key: event.eventId,
-          text: `${HARNESS_NAME} resumed its earlier session`,
-          login: null,
-          tone: "neutral"
-        });
+        // Continuity is apparatus, not speech (D-193 amended): one quiet word
+        // on the machinery line instead of a sentence standing in the stream.
+        if (event.payload.resumed === true) {
+          block.machinery = block.machinery ? `${block.machinery} · resumed` : "resumed";
+        }
         break;
       }
       case "workspace.checkpoint": {
