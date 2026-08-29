@@ -1,4 +1,5 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
@@ -1216,7 +1217,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
 
       let spawned: ChildProcess;
       try {
-        spawned = spawn("claude", args, {
+        // cross-spawn, not node's own (D-229): on Windows the npm-installed
+        // `claude` is a .cmd shim CreateProcess cannot start directly, and a
+        // bare spawn ENOENTs before the harness ever runs a turn.
+        spawned = crossSpawn("claude", args, {
           cwd: worktreePath,
           // The harness environment, not this process's (D-041): the user's own
           // local Claude Code login still works, and nothing a project declared

@@ -16,9 +16,16 @@ if (existsSync(envFile)) {
   }
 }
 
-execSync("docker start novus-pg 2>/dev/null || docker run -d --name novus-pg -e POSTGRES_PASSWORD=novus -e POSTGRES_USER=novus -e POSTGRES_DB=novus -p 5433:5432 postgres:16", {
-  stdio: "inherit", shell: "/bin/bash"
-});
+// Start (or first create) the dev database — two plain commands instead of a
+// bash one-liner, so Windows' cmd.exe runs this file the same (D-229).
+try {
+  execSync("docker start novus-pg", { stdio: "ignore" });
+} catch {
+  execSync(
+    "docker run -d --name novus-pg -e POSTGRES_PASSWORD=novus -e POSTGRES_USER=novus -e POSTGRES_DB=novus -p 5433:5432 postgres:16",
+    { stdio: "inherit" }
+  );
+}
 
 const controlPlane = spawn(
   process.execPath,
@@ -27,6 +34,8 @@ const controlPlane = spawn(
 );
 
 const desktop = spawn("pnpm", ["--filter", "@novus/desktop", "start"], {
+  // On Windows pnpm is a .cmd shim; a shell is what starts those (D-229).
+  shell: process.platform === "win32",
   stdio: "inherit",
   env: process.env,
   cwd: root

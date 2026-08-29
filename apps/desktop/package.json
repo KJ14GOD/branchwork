@@ -9,7 +9,8 @@
     "start": "electron .",
     "test": "vitest run --config vitest.config.ts",
     "e2e": "vitest run --config e2e/vitest.config.ts",
-    "package": "electron-builder --mac dmg"
+    "package": "electron-builder --mac dmg",
+    "package:win": "electron-builder --win nsis"
   },
   "build": {
     "appId": "app.novus.desktop",
@@ -30,18 +31,25 @@
       "identity": null,
       "category": "public.app-category.developer-tools"
     },
-    "npmRebuild": false
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",
     "@novus/contracts": "workspace:*",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
+    "cross-spawn": "^7.0.6",
     "simple-icons": "^16.27.1",
     "smol-toml": "^1.7.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.20.3",
     "@types/react": "^19.1.0",

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -160,11 +160,21 @@ export function discoverConnectors(
     return Promise.resolve({ installed: true, connectors: withLent(fake, readPrefs(userDataPath)) });
   }
   return new Promise((resolve) => {
-    execFile(
-      "claude",
-      ["mcp", "list"],
-      { timeout: 12_000, env: { ...env, PATH: probePath() } },
-      (error, stdout) => {
+    // cross-spawn, not execFile (D-229): the Windows npm shim is a .cmd file.
+    const child = crossSpawn("claude", ["mcp", "list"], { env: { ...env, PATH: probePath() } });
+    let stdout = "";
+    const timer = setTimeout(() => child.kill(), 12_000);
+    child.stdout?.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve({ installed: false, connectors: [] });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      {
+        const error = code === 0 ? null : new Error(`exit ${code}`);
         if (error && !stdout) return resolve({ installed: false, connectors: [] });
         const present: Cache = [];
         for (const line of stdout.split("\n")) {
@@ -179,7 +189,7 @@ export function discoverConnectors(
         }
         resolve({ installed: true, connectors: withLent(present, readPrefs(userDataPath)) });
       }
-    );
+    });
   });
 }
 

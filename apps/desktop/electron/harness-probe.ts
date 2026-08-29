@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -20,12 +21,23 @@ const probePath = (): string =>
 
 function cliVersion(binary: string): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(
-      binary,
-      ["--version"],
-      { timeout: 5000, env: { ...process.env, PATH: probePath() } },
-      (error, stdout) => resolve(error ? null : stdout.trim().split("\n")[0] ?? null)
-    );
+    // cross-spawn, not execFile (D-229): on Windows the npm-installed CLI is
+    // a .cmd shim CreateProcess cannot start directly, so a bare execFile
+    // reports "not found" about a binary that is right there.
+    const child = crossSpawn(binary, ["--version"], { env: { ...process.env, PATH: probePath() } });
+    let out = "";
+    const timer = setTimeout(() => child.kill(), 5000);
+    child.stdout?.on("data", (chunk) => {
+      out += String(chunk);
+    });
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve(code === 0 ? (out.trim().split("\n")[0] ?? null) : null);
+    });
   });
 }
 
