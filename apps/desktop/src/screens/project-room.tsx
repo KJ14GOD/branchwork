@@ -451,6 +451,10 @@ export function ProjectRoom({
   // Where the terminal docks (D-228): the room's bottom, or its right edge as
   // a full-height column — the inspector's own posture.
   const [dockSide, setDockSide] = useState<"bottom" | "right">("bottom");
+
+  // Which pane a dragged file tab is over (D-228 amended): the accent ring
+  // says where the drop would land before the hand commits.
+  const [dropPane, setDropPane] = useState<number | null>(null);
   const [zoomFrame, setZoomFrame] = useState<string | null>(null);
 
   useEffect(() => {
@@ -2162,26 +2166,63 @@ export function ProjectRoom({
                 ? previous
                 : [...previous, { kind: "file", path }]
             );
+          // A dropped tab moves a file INTO a pane (D-228 amended, owner-hit:
+          // Split twinned when what was wanted was arranging what is already
+          // open): dropping on a pinned pane replaces its content; dropping
+          // on the main pane pins the file beside it while the grid has room.
+          const dropFile = (at: number, key: string | null) => {
+            if (key === null || !openFiles.some((file) => file.key === key)) return;
+            if (at === 0) {
+              setSplitKeys((current) =>
+                paneEntries.length < 4 && !current.includes(key) ? [...current, key].slice(0, 3) : current
+              );
+              return;
+            }
+            setSplitKeys((current) => {
+              const next = [...current];
+              next[at - 1] = key;
+              // One pane per file among the pinned: the replaced-in copy wins.
+              return next.filter((held, index) => held !== key || index === at - 1);
+            });
+          };
           return (
             <div className="file-grid" data-panes={paneEntries.length} data-testid="file-grid">
               {paneEntries.map((entry, at) => (
-                <FileView
+                <div
                   key={`pane-${at}-${entry.key}`}
-                  missionId={selectedMissionId}
-                  workstreamId={entry.workstreamId ?? undefined}
-                  path={entry.path}
-                  onAddContext={addContext(entry.path)}
-                  onSplit={
-                    at === 0 && paneEntries.length < 4
-                      ? () => setSplitKeys((current) => [...current, entry.key].slice(0, 3))
-                      : undefined
-                  }
-                  onClosePane={
-                    at > 0
-                      ? () => setSplitKeys((current) => current.filter((_, index) => index !== at - 1))
-                      : undefined
-                  }
-                />
+                  className={dropPane === at ? "file-pane drop-target" : "file-pane"}
+                  data-testid="file-pane"
+                  onDragOver={(event) => {
+                    if (dragFileRef.current === null) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    if (dropPane !== at) setDropPane(at);
+                  }}
+                  onDragLeave={() => setDropPane((current) => (current === at ? null : current))}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    dropFile(at, dragFileRef.current ?? event.dataTransfer.getData("text/novus-file") ?? null);
+                    setDropPane(null);
+                    dragFileRef.current = null;
+                  }}
+                >
+                  <FileView
+                    missionId={selectedMissionId}
+                    workstreamId={entry.workstreamId ?? undefined}
+                    path={entry.path}
+                    onAddContext={addContext(entry.path)}
+                    onSplit={
+                      at === 0 && paneEntries.length < 4
+                        ? () => setSplitKeys((current) => [...current, entry.key].slice(0, 3))
+                        : undefined
+                    }
+                    onClosePane={
+                      at > 0
+                        ? () => setSplitKeys((current) => current.filter((_, index) => index !== at - 1))
+                        : undefined
+                    }
+                  />
+                </div>
               ))}
             </div>
           );
@@ -2302,7 +2343,23 @@ export function ProjectRoom({
         </div>
       ) : (
       <div className="feed-holder">
-      <div className="feed-scroll" ref={scrollRef} onScroll={onScroll}>
+      <div
+        className="feed-scroll"
+        ref={(element) => {
+          const previous = scrollRef.current;
+          scrollRef.current = element;
+          // The conversation just came (back) on screen — a canvas switch
+          // unmounts this scroller, and a remount starts at the top, which
+          // stranded every return at the oldest words (owner-hit). Land at
+          // the latest, exactly where new words arrive; the worker-return
+          // restore below still wins for its own case, because it runs after.
+          if (element !== null && previous === null) {
+            element.scrollTop = element.scrollHeight;
+            pinnedRef.current = true;
+          }
+        }}
+        onScroll={onScroll}
+      >
         <div className="feed" data-testid="chat">
           {isDraft ? (
             <DraftCanvas draft={draft} project={project} onRetry={() => void resolveBase()} />

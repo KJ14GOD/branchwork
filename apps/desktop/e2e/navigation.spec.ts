@@ -1015,4 +1015,53 @@ describe("the strip at three window widths", () => {
     await page.getByTestId("pane-close").click();
     await expect.poll(async () => page.getByTestId("file-view").count()).toBe(1);
   }, 180_000);
+
+  it("a dragged tab moves a file into a pane, three panes stand tall-beside-stacked, and the chat lands at its latest (D-228 amended)", async () => {
+    await page.getByTestId("panel-toggle").waitFor({ timeout: 20_000 });
+
+    // Split the main file, then DRAG the other tab onto the pinned pane: the
+    // pane's content is replaced — moved, never twinned (owner-hit).
+    await page.getByTestId("file-split").click();
+    await expect.poll(async () => page.getByTestId("file-pane").count()).toBe(2);
+    const dropped = await page.evaluate(() => {
+      const tab = document.querySelector('[data-testid="file-tab"][data-path="src/probe.ts"]');
+      const pane = document.querySelectorAll('[data-testid="file-pane"]')[1];
+      if (!tab || !pane) return "missing";
+      const dataTransfer = new DataTransfer();
+      tab.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer }));
+      pane.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer }));
+      pane.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }));
+      return "ok";
+    });
+    expect(dropped).toBe("ok");
+    await expect
+      .poll(async () =>
+        page.getByTestId("file-pane").evaluateAll((panes) =>
+          panes.map((pane) => pane.querySelector('[data-testid="file-view"]')?.getAttribute("data-path"))
+        )
+      )
+      .toEqual(["README.md", "src/probe.ts"]);
+
+    // A third pane stands as a tall main beside two stacked — never a 2×2
+    // with an empty corner waiting for a fourth.
+    await page.getByTestId("file-split").click();
+    await expect.poll(async () => page.getByTestId("file-grid").getAttribute("data-panes")).toBe("3");
+    const spans = await page.evaluate(() => {
+      const first = document.querySelector('[data-testid="file-pane"]');
+      return first ? getComputedStyle(first).gridRowStart : "";
+    });
+    expect(spans).toContain("span 2");
+    await shot(page, "232-three-panes-no-hole.png");
+
+    // Back to the conversation: the feed lands at its latest, not its oldest.
+    await page.getByTestId("room-tab").click();
+    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
+    const nearBottom = await page.evaluate(() => {
+      const scroller = document.querySelector(".feed-scroll");
+      if (!scroller) return -1;
+      return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    });
+    expect(nearBottom).toBeGreaterThanOrEqual(0);
+    expect(nearBottom).toBeLessThan(120);
+  }, 180_000);
 });

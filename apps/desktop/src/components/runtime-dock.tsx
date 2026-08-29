@@ -243,6 +243,9 @@ export function RuntimeDock({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [heightVh, setHeightVh] = useState(DEFAULT_HEIGHT_VH);
+  // The right column's own size (D-228 amended): percent of the window,
+  // bounded to what the CSS also enforces.
+  const [widthPct, setWidthPct] = useState(40);
 
   const screenRef = useRef<HTMLDivElement>(null);
   const panes = usePanes(missionId, workstreamId);
@@ -491,11 +494,33 @@ export function RuntimeDock({
   return (
     <section
       className={side === "right" ? "terminal-dock dock-right" : "terminal-dock"}
-      style={side === "right" ? undefined : { height: `${heightVh}vh` }}
+      style={side === "right" ? { width: `${widthPct}%` } : { height: `${heightVh}vh` }}
       aria-label="Runtime"
       data-testid="terminal-dock"
       data-side={side}
     >
+      {side === "right" && (
+        <div
+          className="terminal-grip-vertical"
+          onPointerDown={(grab) => {
+            grab.preventDefault();
+            const move = (event: PointerEvent) => {
+              const fraction = ((window.innerWidth - event.clientX) / window.innerWidth) * 100;
+              setWidthPct(Math.min(60, Math.max(20, fraction)));
+            };
+            const release = () => {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", release);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", release);
+          }}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the terminal"
+          data-testid="terminal-grip-vertical"
+        />
+      )}
       {side === "bottom" && (
         <div
           className="terminal-grip"

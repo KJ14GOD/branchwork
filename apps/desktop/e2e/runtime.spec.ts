@@ -711,6 +711,18 @@ describe("the terminal, through the interface", () => {
     await expect
       .poll(async () => page.getByTestId("terminal-dock").getAttribute("data-side"), { timeout: 10_000 })
       .toBe("right");
+    // The right column resizes by its own grip (D-228 amended): drag the
+    // left edge toward the middle and the dock widens.
+    const before = await page.getByTestId("terminal-dock").evaluate((dock) => dock.getBoundingClientRect().width);
+    await page.getByTestId("terminal-grip-vertical").evaluate((grip) => {
+      const middle = Math.round(window.innerWidth * 0.5);
+      grip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: window.innerWidth - 100 }));
+      window.dispatchEvent(new PointerEvent("pointermove", { clientX: middle }));
+      window.dispatchEvent(new PointerEvent("pointerup", {}));
+    });
+    await expect
+      .poll(async () => page.getByTestId("terminal-dock").evaluate((dock) => dock.getBoundingClientRect().width))
+      .toBeGreaterThan(before + 40);
     await shot(page, "231b-terminal-docked-right.png");
     await page.getByTestId("terminal-side-toggle").click();
     await expect
