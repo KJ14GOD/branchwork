@@ -637,6 +637,9 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
             ? (PERMISSION_PROFILES.find((option) => option.id === profile)?.label ?? profile)
             : null;
         let base = model ? (effort ? `${model} · effort ${effort}` : model) : null;
+        // The paid-for speed tier is a fact about the turn (D-230): one quiet
+        // word on the machinery line, only when it is not the default.
+        if (base && event.payload.speed === "fast") base = `${base} · fast`;
         if (base && profileWord) base = `${base} · ${profileWord}`;
         block.machinery = base ? (readOnly ? `${base} · read-only` : base) : block.machinery;
         // What the turn was handed rides the event and reads in Extensions

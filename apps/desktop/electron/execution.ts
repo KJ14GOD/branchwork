@@ -18,7 +18,7 @@ import {
   type PermissionProfile,
   type RunnerEvent
 } from "@novus/contracts";
-import { CODEX_EFFORT, DEFAULT_CODEX_MODEL, harnessOf, type Effort, type HarnessId } from "@novus/contracts";
+import { DEFAULT_CODEX_MODEL, effortsFor, harnessOf, speedsFor, type HarnessId, type Speed } from "@novus/contracts";
 import { isBrowserToolFullName, isComputerToolFullName } from "./artifact-mcp";
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
 import { composeSkillsPlugin, removeComposedSkills, type ComposedSkills } from "./skills";
@@ -298,6 +298,9 @@ export interface TurnRequest {
   harness?: HarnessId;
   model: string;
   effort: string;
+  /** The speed tier the author chose (D-230): Codex's priority tier as
+   *  `fast`. Ignored by models that offer none, Claude's included. */
+  speed?: Speed;
   /** The session this workstream continues, or null for a fresh one. */
   resumeSessionId: string | null;
   /** Images the person attached to this direction (D-150), already fetched
@@ -944,7 +947,22 @@ export function startTurn(request: TurnRequest): RunningTurn {
         : harness === "codex"
           ? DEFAULT_CODEX_MODEL
           : DEFAULT_MODEL;
-    const effort: string = chosenEffort.success ? chosenEffort.data : DEFAULT_EFFORT;
+    // The effort is clamped to what THIS model advertises (D-230): `ultra`
+    // exists only on the Codex models whose model/list answer names it, and
+    // an effort outside the model's list falls to the default or the list's
+    // own ceiling rather than reaching a CLI as a string it never defined.
+    const offeredEfforts = effortsFor(model);
+    const wantedEffort = chosenEffort.success ? chosenEffort.data : DEFAULT_EFFORT;
+    const effort: string = offeredEfforts.includes(wantedEffort)
+      ? wantedEffort
+      : offeredEfforts.includes(DEFAULT_EFFORT)
+        ? DEFAULT_EFFORT
+        : (offeredEfforts[offeredEfforts.length - 1] ?? DEFAULT_EFFORT);
+    // A speed the model does not offer is standard, silently — the chip never
+    // offered it either.
+    const speed: Speed = speedsFor(model).includes(request.speed ?? "standard")
+      ? (request.speed ?? "standard")
+      : "standard";
 
     // The enabled skills, composed once per turn from the pinned list (D-118):
     // each file re-read and digest-checked against the approval, the verified
@@ -987,6 +1005,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         model,
         effort,
         permissionProfile: profile,
+        speed,
         skills: composedSkills?.carried ?? [],
         skillsDropped: composedSkills?.dropped ?? [],
         slashCommands: composedSkills?.carriedCommands ?? [],
@@ -1032,7 +1051,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
     if (harness === "codex" && !request.fakeHarness) {
       const codexStream = new CodexStream({ resumeThreadId: resumeSessionId, sanitize, onControl: handleControl });
       stream = codexStream;
-      outcome = await attemptCodex(worktreePath, model, effort, codexStream, resumeSessionId);
+      outcome = await attemptCodex(worktreePath, model, effort, speed, codexStream, resumeSessionId);
       cancelPending("The harness process ended before this was answered.");
     } else {
       let optional = true;
@@ -1745,10 +1764,11 @@ export function startTurn(request: TurnRequest): RunningTurn {
     worktreePath: string,
     model: string,
     effort: string,
+    speed: Speed,
     stream: CodexStream,
     resumeThreadId: string | null
   ): Promise<ProcessOutcome> {
-    const codexEffort = CODEX_EFFORT[(EffortSchema.safeParse(effort).success ? effort : DEFAULT_EFFORT) as Effort];
+    const codexEffort = effort;
     return new Promise<ProcessOutcome>((resolve) => {
       let settled = false;
       const settle = (outcome: ProcessOutcome): void => {
@@ -1804,7 +1824,15 @@ export function startTurn(request: TurnRequest): RunningTurn {
       const turnId = nextRpcId();
       const startTurnNow = (): void => {
         if (threadId === null) return;
-        writeRpc(turnStartLine(turnId, threadId, { direction: request.direction, model, effort: codexEffort }));
+        writeRpc(
+          turnStartLine(turnId, threadId, {
+            direction: request.direction,
+            model,
+            effort: codexEffort,
+            // Codex's priority tier, the vendor's own 1.5x (D-230).
+            serviceTier: speed === "fast" ? "priority" : null
+          })
+        );
         if (stopReason !== null) stop(stopReason);
       };
       const sequence = (id: string | number, result: unknown, error: { message?: string } | null): void => {

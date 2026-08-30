@@ -174,7 +174,7 @@ export async function dispatchQueuedForController(
   workstreamId: string
 ): Promise<DispatchResult | null> {
   const pending = await deps.db.query(
-    `select d.dir_id, d.mission_id, d.model, d.effort, u.user_id, u.login
+    `select d.dir_id, d.mission_id, d.model, d.effort, d.speed, u.user_id, u.login
        from directions d
        join control_leases l on l.wst_id = d.wst_id and l.state = 'held'
                             and l.holder_user_id = d.author_user_id
@@ -216,7 +216,8 @@ export async function dispatchQueuedForController(
     {
       directionId: row.dir_id as string,
       model: (row.model as string | null) ?? DEFAULT_MODEL,
-      effort: (row.effort as string | null) ?? DEFAULT_EFFORT
+      effort: (row.effort as string | null) ?? DEFAULT_EFFORT,
+      speed: (row.speed as string | null) ?? undefined
     }
   );
 }
@@ -231,7 +232,7 @@ export async function dispatchDirection(
   deps: { db: RouteDeps["db"] },
   access: MissionAccess,
   actor: { userId: string; login: string },
-  args: { directionId: string; model: string; effort: string }
+  args: { directionId: string; model: string; effort: string; speed?: string }
 ): Promise<DispatchResult> {
   const workstreamId = access.workstreamId;
   if (!workstreamId) {
@@ -318,6 +319,7 @@ export async function dispatchDirection(
           body,
           model: args.model,
           effort: args.effort,
+          speed: args.speed ?? "standard",
           // The conversation and its own resume point, stated outright. An
           // apply that reaches the runner after its turn already ended starts
           // a fresh process, and a payload that named no session fell back to
@@ -493,7 +495,7 @@ export async function dispatchDirection(
       actorLogin: actor.login,
       causeDirectionId: args.directionId,
       causeLeaseId: access.leaseId,
-      payload: { harness: harnessOf(args.model), model: args.model, effort: args.effort, sessionId }
+      payload: { harness: harnessOf(args.model), model: args.model, effort: args.effort, speed: args.speed ?? "standard", sessionId }
     });
     return { executionId, commandId, deferred: null };
   });
@@ -511,7 +513,7 @@ export async function dispatchAlongside(
   deps: { db: RouteDeps["db"] },
   access: MissionAccess,
   actor: { userId: string; login: string },
-  args: { directionId: string; model: string; effort: string }
+  args: { directionId: string; model: string; effort: string; speed?: string }
 ): Promise<DispatchResult> {
   const workstreamId = access.workstreamId;
   if (!workstreamId) {
@@ -707,7 +709,8 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
       body.data.body,
       {
         model: body.data.model,
-        effort: body.data.effort
+        effort: body.data.effort,
+        speed: body.data.speed
       },
       {
         ...(body.data.sessionId ? { sessionId: body.data.sessionId } : {}),
@@ -725,12 +728,14 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
         ? await dispatchAlongside(deps, access, actor, {
             directionId: submitted.direction.directionId,
             model: body.data.model,
-            effort: body.data.effort
+            effort: body.data.effort,
+            speed: body.data.speed
           })
         : await dispatchDirection(deps, access, actor, {
             directionId: submitted.direction.directionId,
             model: body.data.model,
-            effort: body.data.effort
+            effort: body.data.effort,
+            speed: body.data.speed
           });
 
     return {

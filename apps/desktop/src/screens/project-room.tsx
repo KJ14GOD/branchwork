@@ -11,7 +11,8 @@ import type {
   ModelId,
   RecordingStatus,
   Session,
-  Workstream
+  Workstream,
+  Speed
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { matchesChord, useKeybindings } from "../keybindings";
@@ -651,12 +652,14 @@ export function ProjectRoom({
     body,
     model,
     effort,
+    speed = "standard",
     alongside = false,
     attachmentIds = []
   }: {
     body: string;
     model: ModelId;
     effort: Effort;
+    speed?: Speed;
     alongside?: boolean;
     attachmentIds?: string[];
   }): Promise<SubmitOutcome> => {
@@ -688,6 +691,7 @@ export function ProjectRoom({
         body,
         model,
         effort,
+        speed,
         ...(attachmentIds.length > 0 ? { attachmentIds } : {})
       });
       setDraft(null);
@@ -747,6 +751,7 @@ export function ProjectRoom({
         body,
         model,
         effort,
+        speed,
         workstreamId: detail.workstream.workstreamId,
         newSession: true,
         ...(alongside ? { alongside: true } : {}),
@@ -770,6 +775,7 @@ export function ProjectRoom({
       body,
       model,
       effort,
+      speed,
       workstreamId: detail.workstream.workstreamId,
       ...(selectedSessionId !== null ? { sessionId: selectedSessionId } : {}),
       ...(alongside ? { alongside: true } : {}),

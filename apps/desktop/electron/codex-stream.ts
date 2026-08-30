@@ -471,7 +471,7 @@ export function threadResumeLine(
 export function turnStartLine(
   id: string,
   threadId: string,
-  input: { direction: string; model: string; effort: string }
+  input: { direction: string; model: string; effort: string; serviceTier?: string | null }
 ): object {
   return {
     jsonrpc: "2.0",
@@ -481,7 +481,8 @@ export function turnStartLine(
       threadId,
       input: [{ type: "text", text: input.direction }],
       model: input.model,
-      effort: input.effort
+      effort: input.effort,
+      ...(input.serviceTier ? { serviceTier: input.serviceTier } : {})
     }
   };
 }

@@ -364,6 +364,9 @@ create index if not exists directions_by_workstream on directions (wst_id, ordin
 -- as it was written rather than under whatever the last execution happened to use.
 alter table directions add column if not exists model text;
 alter table directions add column if not exists effort text;
+-- The speed tier the author chose (D-230): Codex's priority tier as `fast`;
+-- null is standard, and Claude directions never carry one.
+alter table directions add column if not exists speed text check (speed in ('standard', 'fast'));
 
 -- ---------------------------------------------------------------------------
 -- Durable command transport, control plane → host runner (D-035). Ordered per

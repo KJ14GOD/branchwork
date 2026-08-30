@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import type { RunnerEvent } from "@novus/contracts";
+import { CODEX_MODELS, type RunnerEvent } from "@novus/contracts";
+import { spawn } from "node:child_process";
 import { startTurn } from "../electron/execution";
 
 /**
@@ -28,6 +29,41 @@ const git = (cwd: string, args: string[]): string =>
     .trim();
 
 describe.skipIf(!LIVE)("a live Codex turn through the production path (D-230)", () => {
+  it("the contract's model list matches the CLI's own model/list answer", async () => {
+    // Vendor drift is real (the first shipped list was stale within a day):
+    // the CLI's own enumeration is the only honest source, so this stamp
+    // fails the probe when the menu would lie.
+    const listed = await new Promise<string[]>((resolve, reject) => {
+      const child = spawn("codex", ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
+      let out = "";
+      child.stdout?.on("data", (chunk) => {
+        out += String(chunk);
+      });
+      const write = (line: object) => child.stdin?.write(`${JSON.stringify(line)}\n`);
+      write({ jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: { name: "novus-probe", title: "probe", version: "0" } } });
+      setTimeout(() => {
+        write({ jsonrpc: "2.0", method: "initialized" });
+        write({ jsonrpc: "2.0", id: 2, method: "model/list", params: {} });
+      }, 600);
+      setTimeout(() => {
+        child.kill();
+        for (const line of out.split("\n")) {
+          try {
+            const parsed = JSON.parse(line) as { id?: number; result?: { data?: { id: string }[] } };
+            if (parsed.id === 2 && parsed.result?.data) {
+              resolve(parsed.result.data.map((entry) => entry.id));
+              return;
+            }
+          } catch {
+            /* noise */
+          }
+        }
+        reject(new Error("model/list never answered"));
+      }, 6000);
+    });
+    for (const model of CODEX_MODELS) expect(listed).toContain(model.id);
+  }, 30_000);
+
   it(
     "runs one pinned turn: session, speech, a completed result, and a checkpoint",
     async () => {
@@ -59,7 +95,7 @@ describe.skipIf(!LIVE)("a live Codex turn through the production path (D-230)", 
           direction:
             "Reply with exactly one short sentence describing this repository. Do not run commands, do not edit files.",
           harness: "codex",
-          model: "gpt-5.1-codex",
+          model: "gpt-5.6-sol",
           effort: "low",
           resumeSessionId: null,
           announceStart: true,

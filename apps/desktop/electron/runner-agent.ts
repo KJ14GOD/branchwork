@@ -26,7 +26,9 @@ import {
   attachmentForm,
   RunCommandSchema,
   WorkspaceSettingsSchema,
-  harnessOf
+  harnessOf,
+  SpeedSchema,
+  type Speed
 } from "@novus/contracts";
 import { z } from "zod";
 import { ApiError, type ControlPlaneClient } from "./api-client";
@@ -353,6 +355,7 @@ const StartPayloadSchema = z.object({
   body: z.string().default(""),
   model: z.string().default(""),
   effort: z.string().default(""),
+  speed: SpeedSchema.optional(),
   resumeSessionId: z.string().nullable().default(null),
   /** Which conversation this turn belongs to (D-083). Its presence is also a
    *  statement: the server chose `resumeSessionId` deliberately, so a null
@@ -1822,6 +1825,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       directionId: payload.data.directionId ?? null,
       model: payload.data.model,
       effort: payload.data.effort,
+      speed: payload.data.speed,
       // A session-aware server states the resume point outright, and a null
       // from it means this conversation genuinely has no history — falling
       // back to the workstream's would resume a *sibling's* transcript
@@ -1914,6 +1918,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     directionId: string | null;
     model: string;
     effort: string;
+    speed?: Speed;
     resumeSessionId: string | null;
     /** Files the person attached, already fetched (D-150): inlined bytes, or
      *  a worktree path for anything staged instead (D-153). */
@@ -2257,6 +2262,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       harness: harnessOf(args.model),
       model: args.model,
       effort: args.effort,
+      speed: args.speed,
       resumeSessionId: args.resumeSessionId,
       attachments: args.attachments,
       context: args.context,

@@ -1,7 +1,7 @@
 import { z } from "zod";
 export * from "./policy.js";
 export * from "./scope.js";
-import { DEFAULT_PERMISSION_PROFILE, PermissionProfileSchema, ModelIdSchema, EffortSchema, DEFAULT_MODEL, DEFAULT_EFFORT, type ModelId, type Effort, type PermissionProfile } from "./policy.js";
+import { DEFAULT_PERMISSION_PROFILE, PermissionProfileSchema, ModelIdSchema, EffortSchema, SpeedSchema, DEFAULT_MODEL, DEFAULT_EFFORT, DEFAULT_SPEED, type ModelId, type Effort, type Speed, type PermissionProfile } from "./policy.js";
 
 // Runtime-validated contracts shared by the control plane, the desktop main
 // process, and the renderer IPC boundary. Domain meanings live in PRODUCT.md;
@@ -1326,6 +1326,10 @@ export const DirectionInputSchema = z.object({
   body: z.string().trim().min(1, "Say what should happen").max(4000),
   model: ModelIdSchema.default(DEFAULT_MODEL),
   effort: EffortSchema.default(DEFAULT_EFFORT),
+  /** The speed tier the author chose (D-230): Codex's priority tier as
+   *  `fast` — "1.5x speed, increased usage" in the vendor's own words.
+   *  Standard for every model that offers no tier, Claude's included. */
+  speed: SpeedSchema.default(DEFAULT_SPEED),
   /** Which lane this is for. Absent means the lane the mission started with,
    *  which is every mission that never forked an approach (D-074). Control is
    *  per lane, so this also decides whose baton the direction is judged
@@ -3170,6 +3174,9 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
          *  line can say what supervision the turn ran with. Defaulted so an
          *  older runner's report still validates as what it was: manual. */
         permissionProfile: PermissionProfileSchema.default(DEFAULT_PERMISSION_PROFILE),
+        /** The speed tier this turn ran under (D-230) — Codex's priority as
+         *  `fast`; defaulted so an older runner's report still validates. */
+        speed: SpeedSchema.default(DEFAULT_SPEED),
         /** What this turn actually carried (D-193), each at the digest that
          *  ran — since every discovered skill is carried, the record rather
          *  than an approval is what says which bytes reached the harness.
@@ -3813,6 +3820,7 @@ export const IpcDirectInputSchema = z.object({
   body: z.string().trim().min(1).max(4000),
   model: ModelIdSchema.default(DEFAULT_MODEL),
   effort: EffortSchema.default(DEFAULT_EFFORT),
+  speed: SpeedSchema.default(DEFAULT_SPEED),
   /** Which lane to direct. Absent means the one the mission started with — so
    *  every mission that never forked is unchanged (D-074). */
   workstreamId: z.string().startsWith("wst_").optional(),
@@ -4034,6 +4042,8 @@ export interface NovusBridge {
       body: string;
       model: ModelId;
       effort: Effort;
+      /** The speed tier (D-230): Codex's priority tier as `fast`. */
+      speed?: Speed;
       /** The lane this is for; absent means the mission's first (D-074). */
       workstreamId?: string;
       /** The session this is for; absent means the lane's first (D-083). */

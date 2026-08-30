@@ -74,15 +74,20 @@ export const CLAUDE_MODELS = [
 /** Written literally so the type stays a union of exact ids; a contract test
  *  asserts it never drifts from CLAUDE_MODELS. */
 /**
- * The Codex allowlist (D-230). Each id is a real `-m` value; the list ships
- * from the vendor's current lineup and is stamped by the opt-in live-codex
- * turn — the one thing a deterministic build cannot verify is a vendor's
- * model list, so the probe is the verification, recorded in PROGRESS.
+ * The Codex allowlist (D-230, corrected the morning after): taken from the
+ * installed CLI's own `model/list` answer (app-server, 0.145.0) — ids,
+ * display names, per-model reasoning efforts, and speed tiers verbatim —
+ * after the first list shipped from stale knowledge and the owner caught it
+ * on sight. The live-codex probe asserts this list against `model/list`, so
+ * vendor drift fails a run instead of lying in a menu.
  */
 export const CODEX_MODELS = [
-  { id: "gpt-5.1-codex", label: "GPT-5.1 Codex" },
-  { id: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini" },
-  { id: "gpt-5.1", label: "GPT-5.1" }
+  { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], speeds: ["fast"] },
+  { id: "gpt-5.6-terra", label: "GPT-5.6-Terra", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], speeds: ["fast"] },
+  { id: "gpt-5.6-luna", label: "GPT-5.6-Luna", efforts: ["low", "medium", "high", "xhigh", "max"], speeds: ["fast"] },
+  { id: "gpt-5.5", label: "GPT-5.5", efforts: ["low", "medium", "high", "xhigh"], speeds: ["fast"] },
+  { id: "gpt-5.4", label: "GPT-5.4", efforts: ["low", "medium", "high", "xhigh"], speeds: ["fast"] },
+  { id: "gpt-5.4-mini", label: "GPT-5.4-Mini", efforts: ["low", "medium", "high", "xhigh"], speeds: [] }
 ] as const;
 
 /** Which harness a model belongs to (D-230): the model chip is the harness
@@ -102,9 +107,12 @@ export const ModelIdSchema = z.enum([
   "claude-opus-4-7",
   "claude-sonnet-5",
   "claude-haiku-4-5-20251001",
-  "gpt-5.1-codex",
-  "gpt-5.1-codex-mini",
-  "gpt-5.1"
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini"
 ]);
 export type ModelId = z.infer<typeof ModelIdSchema>;
 
@@ -114,24 +122,45 @@ export function harnessOf(model: string): HarnessId {
     : "claude-code";
 }
 
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+/** The effort universe across harnesses. `ultra` is Codex's own top rung
+ *  ("maximum reasoning with automatic task delegation", per model/list) and
+ *  exists on no Claude model — which is why the offered list is per-model
+ *  (`effortsFor`), never this universe raw. */
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export const EffortSchema = z.enum(EFFORTS);
 export type Effort = (typeof EFFORTS)[number];
 
-/** Novus effort → Codex reasoning effort (D-230). Codex advertises no
- *  `max`; the ceiling maps to its highest honest value rather than a string
- *  the vendor never defined. */
-export const CODEX_EFFORT: Record<Effort, string> = {
-  low: "low",
-  medium: "medium",
-  high: "high",
-  xhigh: "xhigh",
-  max: "xhigh"
-};
+/** What a Claude model accepts — the list verified live against the CLI
+ *  (PROGRESS.md, 2026-08-02), which never included `ultra`. */
+export const CLAUDE_EFFORTS: readonly Effort[] = ["low", "medium", "high", "xhigh", "max"];
+
+/** The efforts this exact model advertises (D-230): Codex per its own
+ *  `model/list` answer, Claude per the verified flag list. The composer
+ *  offers exactly this, and the runner clamps to it. */
+export function effortsFor(model: string): readonly Effort[] {
+  const codex = (CODEX_MODELS as readonly { id: string; efforts: readonly string[] }[]).find(
+    (entry) => entry.id === model
+  );
+  return codex ? (codex.efforts as readonly Effort[]) : CLAUDE_EFFORTS;
+}
+
+/** The speed tiers this model offers (D-230): Codex's `priority` tier reads
+ *  as `fast` ("1.5x speed, increased usage" — the vendor's own words);
+ *  everything else has none, and no chip renders where none exist. */
+export const SPEEDS = ["standard", "fast"] as const;
+export const SpeedSchema = z.enum(SPEEDS);
+export type Speed = (typeof SPEEDS)[number];
+export function speedsFor(model: string): readonly Speed[] {
+  const codex = (CODEX_MODELS as readonly { id: string; speeds: readonly string[] }[]).find(
+    (entry) => entry.id === model
+  );
+  return codex && codex.speeds.includes("fast") ? SPEEDS : ["standard"];
+}
 
 export const DEFAULT_MODEL: ModelId = "claude-fable-5";
-export const DEFAULT_CODEX_MODEL: ModelId = "gpt-5.1-codex";
+export const DEFAULT_CODEX_MODEL: ModelId = "gpt-5.6-sol";
 export const DEFAULT_EFFORT: Effort = "high";
+export const DEFAULT_SPEED: Speed = "standard";
 
 /** The one honest claim a screenshot makes, said wherever one is shown
  *  (D-122). One copy, so the capture surface, the inspector, and the agent's

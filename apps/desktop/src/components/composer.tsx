@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import {
   CLAUDE_MODELS,
   CODEX_MODELS,
+  effortsFor,
   harnessOf,
+  speedsFor,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
   EFFORTS,
@@ -13,7 +15,8 @@ import {
   type ModelId,
   type PermissionProfile,
   type DirectionContextRef,
-  type PreparedAttachment
+  type PreparedAttachment,
+  type Speed
 } from "@novus/contracts";
 import codexIcon from "../assets/codex-icon.png";
 import { Dialog, focusQuietly } from "./dialog";
@@ -193,6 +196,7 @@ export function Composer({
     body: string;
     model: ModelId;
     effort: Effort;
+    speed: Speed;
     alongside?: boolean;
     attachmentIds?: string[];
     /** Files chosen but not uploaded, because there was no mission to upload
@@ -265,7 +269,12 @@ export function Composer({
     const stored = localStorage.getItem("novus-effort");
     return isEffort(stored) ? stored : DEFAULT_EFFORT;
   });
-  const [openMenu, setOpenMenu] = useState<"model" | "effort" | "policy" | null>(null);
+  // The speed tier (D-230): only a model that offers one renders the chip,
+  // and switching to a model without it quietly returns to standard.
+  const [speed, setSpeed] = useState<Speed>(() =>
+    localStorage.getItem("novus-speed") === "fast" ? "fast" : "standard"
+  );
+  const [openMenu, setOpenMenu] = useState<"model" | "effort" | "speed" | "policy" | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [queuedNote, setQueuedNote] = useState<string | null>(null);
@@ -536,7 +545,8 @@ export function Composer({
     const outcome = await onSubmit({
       body,
       model,
-      effort,
+      effort: effortsFor(model).includes(effort) ? effort : DEFAULT_EFFORT,
+      speed: speedsFor(model).includes(speed) ? speed : "standard",
       alongside,
       attachmentIds: attachments.map((image) => image.artifactId),
       attachmentPaths: heldPaths
@@ -1033,11 +1043,13 @@ export function Composer({
               onClick={() => setOpenMenu(openMenu === "effort" ? null : "effort")}
               data-testid="effort-chip"
             >
-              Effort · {effort}
+              Effort · {effortsFor(model).includes(effort) ? effort : DEFAULT_EFFORT}
             </button>
             {openMenu === "effort" && (
               <div className="chip-menu" role="menu" data-testid="effort-menu">
-                {EFFORTS.map((option) => (
+                {/* Exactly what THIS model advertises (D-230): ultra appears
+                    only on the Codex models whose model/list names it. */}
+                {effortsFor(model).map((option) => (
                   <button
                     key={option}
                     className="chip-menu-row"
@@ -1055,6 +1067,44 @@ export function Composer({
               </div>
             )}
           </span>
+
+          {speedsFor(model).includes("fast") && (
+            <span className="chip-wrap">
+              {/* The vendor's own priority tier (D-230): "1.5x speed,
+                  increased usage" — offered only where the model offers it,
+                  never a dead control. */}
+              <button
+                className="chip-button"
+                disabled={!enabled}
+                aria-haspopup="menu"
+                aria-expanded={openMenu === "speed"}
+                onClick={() => setOpenMenu(openMenu === "speed" ? null : "speed")}
+                data-testid="speed-chip"
+              >
+                Speed · {speed}
+              </button>
+              {openMenu === "speed" && (
+                <div className="chip-menu" role="menu" data-testid="speed-menu">
+                  {(["standard", "fast"] as const).map((option) => (
+                    <button
+                      key={option}
+                      className="chip-menu-row"
+                      role="menuitem"
+                      onClick={() => {
+                        setSpeed(option);
+                        localStorage.setItem("novus-speed", option);
+                        setOpenMenu(null);
+                      }}
+                    >
+                      {option}
+                      {option === "fast" && <span className="chip-menu-note">1.5x, more usage</span>}
+                      {option === speed && <span className="chip-menu-note">current</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </span>
+          )}
 
           {policy && (
             <span className="chip-wrap">
