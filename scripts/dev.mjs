@@ -27,6 +27,23 @@ try {
   );
 }
 
+// A freshly started container accepts connections before it can serve them
+// (57P03, "the database system is starting up"), and the control plane
+// migrates on boot — so wait for pg_isready inside the container first.
+const started = Date.now();
+for (;;) {
+  try {
+    execSync("docker exec novus-pg pg_isready -U novus -d novus", { stdio: "ignore" });
+    break;
+  } catch {
+    if (Date.now() - started > 30_000) {
+      console.error("novus-pg did not become ready within 30s");
+      process.exit(1);
+    }
+    execSync(`${process.execPath} -e "setTimeout(()=>{},500)"`);
+  }
+}
+
 const controlPlane = spawn(
   process.execPath,
   ["--experimental-strip-types", resolve(root, "apps/control-plane/src/main.ts")],
