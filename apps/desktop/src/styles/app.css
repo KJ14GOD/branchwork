@@ -1496,6 +1496,10 @@ body {
 
 .state-line .state-name {
   font-weight: 500;
+  /* The state is one phrase; the detail beside it is what truncates. At 760
+     "Work finished" broke into two lines (owner-hit wrap sweep). */
+  white-space: nowrap;
+  flex: none;
 }
 
 .state-line .state-detail {
@@ -2502,7 +2506,12 @@ body {
   position: absolute;
   bottom: 32px;
   left: 0;
+  /* Sized by its longest row, never by a fixed width the rows then wrap
+     inside (owner-hit: "GPT-5.6-Sol" and "1.5x, more usage" broke onto two
+     lines). A menu row is one line by definition. */
+  width: max-content;
   min-width: 180px;
+  max-width: min(420px, calc(100vw - 2 * var(--s-4)));
   background: var(--surface-2);
   border: 1px solid var(--edge);
   border-radius: var(--r-control);
@@ -2525,6 +2534,7 @@ body {
   color: var(--text-1);
   cursor: pointer;
   text-align: left;
+  white-space: nowrap;
 }
 
 .chip-menu-row:hover:not(:disabled) {
@@ -2538,6 +2548,9 @@ body {
 
 .chip-menu-row .chip-menu-note {
   margin-left: auto;
+  padding-left: var(--s-3);
+  flex: none;
+  white-space: nowrap;
   font: var(--type-meta);
   color: var(--text-3);
 }
@@ -2554,8 +2567,12 @@ body {
    its name is. */
 .policy-menu {
   min-width: 400px;
-  max-width: 440px;
+  max-width: min(440px, calc(100vw - 2 * var(--s-4)));
   padding: var(--s-2);
+  /* Anchored to the chip's right edge: Permissions is the last chip, and
+     a left-anchored 400px menu ran off the window at 760 (wrap sweep). */
+  left: auto;
+  right: 0;
 }
 
 .policy-head {

@@ -1172,6 +1172,20 @@ export function Composer({
                 onClick={() => setOpenMenu(openMenu === "speed" ? null : "speed")}
                 data-testid="speed-chip"
               >
+                <svg
+                  className="chip-glyph"
+                  viewBox="0 0 20 20"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M11 3L5 11h4l-1 6 6-8h-4z" />
+                </svg>
                 Speed · {speed}
               </button>
               {openMenu === "speed" && (
@@ -1228,7 +1242,7 @@ export function Composer({
                       the dangerous one wearing the warn tone whole: glyph,
                       name, and meaning as one word. Choosing it still opens
                       the warning. */}
-                  <p className="policy-head">How should Claude Code's actions be approved?</p>
+                  <p className="policy-head">How should {harnessName(harnessOf(model))}&apos;s actions be approved?</p>
                   {PERMISSION_PROFILES.map((option) => {
                     const unsupervised = option.id === "dont_ask";
                     const withheld = unsupervised && !policy.maySetUnsupervised;
