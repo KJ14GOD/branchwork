@@ -755,7 +755,11 @@ describe("shared sessions inside one approach", () => {
 
     // Pick a Codex model: one sentence, no buttons, nothing opens yet.
     await page.getByTestId("model-chip").click();
-    await page.getByTestId("codex-option").first().click();
+    // Providers first (D-233): the Codex row opens its models to the right.
+    await page.getByTestId("provider-codex").click();
+    await page.getByTestId("model-submenu").waitFor({ timeout: 5000 });
+    await shot("235-provider-model-picker.png");
+    await page.getByTestId("model-option").first().click();
     const swap = page.getByTestId("composer-swap");
     await swap.waitFor({ timeout: 10_000 });
     expect(await swap.innerText()).toContain("This chat is Claude Code's");

@@ -2455,6 +2455,29 @@ body {
   color: var(--text-1);
 }
 
+/* Providers-first model picker (D-233): the flyout hangs off the menu's
+   right edge, bottom-aligned because the menu opens upward. */
+.chip-menu-providers {
+  overflow: visible;
+}
+
+.chip-submenu {
+  position: absolute;
+  left: calc(100% + 4px);
+  bottom: 0;
+  width: max-content;
+  min-width: 150px;
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  box-shadow: var(--elev-1);
+  padding: var(--s-1);
+}
+
+.provider-row.open {
+  background: var(--hover);
+}
+
 /* Whose harness a chat is (D-232): the vendor mark at the chat glyph's
    own size, on tabs and rail rows. */
 .harness-glyph {

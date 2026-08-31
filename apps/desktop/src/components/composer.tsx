@@ -289,6 +289,10 @@ export function Composer({
     localStorage.getItem("novus-speed") === "fast" ? "fast" : "standard"
   );
   const [openMenu, setOpenMenu] = useState<"model" | "effort" | "speed" | "policy" | null>(null);
+  /** Which provider's models the flyout shows (D-233). Opens on hover or
+   *  click of a provider row; the chip's open resets it to the current
+   *  model's own provider so the flyout starts where the person is. */
+  const [providerOpen, setProviderOpen] = useState<HarnessId | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [queuedNote, setQueuedNote] = useState<string | null>(null);
@@ -1073,7 +1077,10 @@ export function Composer({
               disabled={!enabled}
               aria-haspopup="menu"
               aria-expanded={openMenu === "model"}
-              onClick={() => setOpenMenu(openMenu === "model" ? null : "model")}
+              onClick={() => {
+                setProviderOpen(harnessOf(model));
+                setOpenMenu(openMenu === "model" ? null : "model");
+              }}
               data-testid="model-chip"
             >
               {harnessOf(model) === "codex" ? (
@@ -1084,43 +1091,63 @@ export function Composer({
               {[...CLAUDE_MODELS, ...CODEX_MODELS].find((option) => option.id === model)?.label ?? model}
             </button>
             {openMenu === "model" && (
-              <div className="chip-menu" role="menu" data-testid="model-menu">
-                {CLAUDE_MODELS.map((option) => (
-                  <button
-                    key={option.id}
-                    className="chip-menu-row"
-                    role="menuitem"
-                    onClick={() => {
-                      setModel(option.id);
-                      localStorage.setItem("novus-model", option.id);
-                      setOpenMenu(null);
-                    }}
-                  >
-                    <ClaudeGlyph className="chip-glyph" />
-                    {option.label}
-                    {option.id === model && <span className="chip-menu-note">current</span>}
-                  </button>
-                ))}
-                {/* Codex (D-230): the model chip is the harness picker —
-                    choosing a Codex model chooses Codex, the harness derived
-                    from it everywhere so no second control must agree. */}
-                {CODEX_MODELS.map((option) => (
-                  <button
-                    key={option.id}
-                    className="chip-menu-row"
-                    role="menuitem"
-                    data-testid="codex-option"
-                    onClick={() => {
-                      setModel(option.id);
-                      localStorage.setItem("novus-model", option.id);
-                      setOpenMenu(null);
-                    }}
-                  >
-                    <img className="chip-glyph chip-glyph-bitmap" src={codexIcon} alt="" />
-                    {option.label}
-                    {option.id === model && <span className="chip-menu-note">current</span>}
-                  </button>
-                ))}
+              /* Providers first, models in a flyout (D-233, owner-asked —
+                 Codex's own picker shape): a provider row shows the vendor
+                 mark, its name, and the current model where it is this
+                 provider's; hovering or clicking it opens that provider's
+                 models to the right. The chip stays the harness picker
+                 (D-230): choosing a model chooses its harness. */
+              <div className="chip-menu chip-menu-providers" role="menu" data-testid="model-menu">
+                {HARNESSES.map((provider) => {
+                  const models = provider.id === "codex" ? CODEX_MODELS : CLAUDE_MODELS;
+                  const owns = harnessOf(model) === provider.id;
+                  return (
+                    <button
+                      key={provider.id}
+                      className={
+                        providerOpen === provider.id ? "chip-menu-row provider-row open" : "chip-menu-row provider-row"
+                      }
+                      role="menuitem"
+                      aria-haspopup="menu"
+                      aria-expanded={providerOpen === provider.id}
+                      data-testid={`provider-${provider.id}`}
+                      onMouseEnter={() => setProviderOpen(provider.id)}
+                      onClick={() => setProviderOpen(provider.id)}
+                    >
+                      {provider.id === "codex" ? (
+                        <img className="chip-glyph chip-glyph-bitmap" src={codexIcon} alt="" />
+                      ) : (
+                        <ClaudeGlyph className="chip-glyph" />
+                      )}
+                      {provider.label}
+                      <span className="chip-menu-note">
+                        {owns ? (models.find((option) => option.id === model)?.label ?? "") : ""}
+                        {" ›"}
+                      </span>
+                    </button>
+                  );
+                })}
+                {providerOpen !== null && (
+                  <div className="chip-submenu" role="menu" data-testid="model-submenu">
+                    {(providerOpen === "codex" ? CODEX_MODELS : CLAUDE_MODELS).map((option) => (
+                      <button
+                        key={option.id}
+                        className="chip-menu-row"
+                        role="menuitem"
+                        data-testid="model-option"
+                        data-model={option.id}
+                        onClick={() => {
+                          setModel(option.id);
+                          localStorage.setItem("novus-model", option.id);
+                          setOpenMenu(null);
+                        }}
+                      >
+                        {option.label}
+                        {option.id === model && <span className="chip-menu-note">current</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </span>
