@@ -732,7 +732,13 @@ export class FakeRepositoryProvider implements RepositoryProvider {
    * is a real `git push` against a real HTTP remote that demands the token.
    * Refused honestly when no remote was configured, like every fake refusal.
    */
-  async mintPushCredential(providerRepoId: string): Promise<CloneCredential> {
+  async mintPushCredential(_actor: RepoActor, providerRepoId: string): Promise<CloneCredential> {
+    // The actor leads since D-223 (the person's own token everywhere); the
+    // fake ignores it, but the SHAPE must match — this method kept the old
+    // one-argument form after the change, so the caller's actor arrived as
+    // the repo id and every push in the deterministic suite failed with
+    // "No such repository is available to this organization" (owner-hit:
+    // the pr.spec regression that broke the publish road on main).
     this.repo(providerRepoId);
     const remote = process.env.NOVUS_FAKE_PUSH_REMOTE;
     if (!remote) {
