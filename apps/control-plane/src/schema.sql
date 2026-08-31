@@ -367,6 +367,9 @@ alter table directions add column if not exists effort text;
 -- The speed tier the author chose (D-230): Codex's priority tier as `fast`;
 -- null is standard, and Claude directions never carry one.
 alter table directions add column if not exists speed text check (speed in ('standard', 'fast'));
+-- A review direction (D-231): its turn opens as Codex's reviewer over the
+-- uncommitted changes instead of an ordinary directed turn.
+alter table directions add column if not exists review boolean not null default false;
 
 -- ---------------------------------------------------------------------------
 -- Durable command transport, control plane → host runner (D-035). Ordered per
@@ -788,6 +791,9 @@ create index if not exists workstream_sessions_by_lane
 -- write turns run in parallel with provably disjoint siblings and may write
 -- only inside the scope.
 alter table workstream_sessions add column if not exists scope jsonb;
+-- The chat this session natively continues (D-231): set at creation where
+-- both sides are Codex, read once when the first turn opens as a thread fork.
+alter table workstream_sessions add column if not exists fork_of text;
 -- What a scoped turn changed outside its scope, observed and deliberately not
 -- committed (D-097). Empty for every unscoped checkpoint.
 alter table checkpoints add column if not exists drift_paths jsonb not null default '[]'::jsonb;

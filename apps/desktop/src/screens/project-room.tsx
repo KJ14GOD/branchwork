@@ -99,7 +99,7 @@ function SessionGlyph() {
 
 import { RuntimeDock } from "../components/runtime-dock";
 import { clockTime, deriveGoal, elapsed, shortSha, truncateLabel, usd } from "../format";
-import { MAX_DIRECTION_CONTEXT, scopesDisjoint } from "@novus/contracts";
+import { MAX_DIRECTION_CONTEXT, harnessOf, scopesDisjoint } from "@novus/contracts";
 import type { Project } from "./project-shell";
 
 type BaseLoad =
@@ -654,6 +654,7 @@ export function ProjectRoom({
     effort,
     speed = "standard",
     alongside = false,
+    review = false,
     attachmentIds = []
   }: {
     body: string;
@@ -661,6 +662,8 @@ export function ProjectRoom({
     effort: Effort;
     speed?: Speed;
     alongside?: boolean;
+    /** A review turn (D-231): the / menu's row, Codex's reviewer. */
+    review?: boolean;
     attachmentIds?: string[];
   }): Promise<SubmitOutcome> => {
     setActionError(null);
@@ -722,8 +725,23 @@ export function ProjectRoom({
       // then carries. A transcript that cannot be carried refuses the send in
       // words: a chat that silently started without the context it promised
       // is worse than one that asks again.
+      // A native fork (D-231): where the one chosen source chat ran on Codex
+      // and this direction's model is Codex too, the new chat continues the
+      // source thread itself — no markdown reduction, nothing to upload. The
+      // executions on the detail say which harness a chat last ran; a chat
+      // that never ran has nothing to fork and keeps the transcript road.
+      const forkSource =
+        continueFrom.length === 1 && harnessOf(model) === "codex"
+          ? (detail.executions ?? [])
+              .filter((execution) => execution.sessionId === continueFrom[0])
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+          : undefined;
+      const forkOf =
+        forkSource?.harness === "codex" && forkSource.harnessSessionId !== null
+          ? continueFrom[0]
+          : undefined;
       const transcriptIds: string[] = [];
-      for (const sourceId of continueFrom) {
+      for (const sourceId of forkOf !== undefined ? [] : continueFrom) {
         const source = sessions.find((session) => session.sessionId === sourceId);
         if (!source) continue; // swept away since selection; nothing to carry
         const rendered = renderTranscript(
@@ -754,6 +772,8 @@ export function ProjectRoom({
         speed,
         workstreamId: detail.workstream.workstreamId,
         newSession: true,
+        ...(forkOf !== undefined ? { forkOf } : {}),
+        ...(review ? { review: true } : {}),
         ...(alongside ? { alongside: true } : {}),
         ...(allAttachmentIds.length > 0 ? { attachmentIds: allAttachmentIds } : {}),
         ...(pendingContext.length > 0 ? { context: pendingContext } : {})
@@ -778,6 +798,7 @@ export function ProjectRoom({
       speed,
       workstreamId: detail.workstream.workstreamId,
       ...(selectedSessionId !== null ? { sessionId: selectedSessionId } : {}),
+      ...(review ? { review: true } : {}),
       ...(alongside ? { alongside: true } : {}),
       ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
       ...(pendingContext.length > 0 ? { context: pendingContext } : {})

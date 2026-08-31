@@ -1359,7 +1359,16 @@ export const DirectionInputSchema = z.object({
     .max(MAX_DIRECTION_ATTACHMENTS)
     .default([]),
   /** Pinned references (D-182), snapshotted client-side at submit. */
-  context: z.array(DirectionContextRefSchema).max(MAX_DIRECTION_CONTEXT).default([])
+  context: z.array(DirectionContextRefSchema).max(MAX_DIRECTION_CONTEXT).default([]),
+  /** Opens this direction's turn as Codex's reviewer over the uncommitted
+   *  changes (D-231) — the / menu's "Review uncommitted changes" row. Codex
+   *  models only; refused elsewhere rather than silently ignored. */
+  review: z.boolean().default(false),
+  /** With `newSession`: fork the named source chat's native transcript into
+   *  the new session (D-231) instead of carrying a rendered markdown one.
+   *  Both sides must be Codex — the source's turns and this direction's
+   *  model — which the server verifies rather than trusts. */
+  forkOf: z.string().startsWith("csn_").optional()
 });
 export type DirectionInput = z.infer<typeof DirectionInputSchema>;
 
@@ -3304,7 +3313,14 @@ export const RunnerEventSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("direction.applied"),
-    payload: z.object({ directionId: z.string().startsWith("dir_") }).strict()
+    payload: z
+      .object({
+        directionId: z.string().startsWith("dir_"),
+        /** True when the words were steered into the already-running turn
+         *  (D-231) rather than opening one of their own. */
+        steered: z.boolean().optional()
+      })
+      .strict()
   }),
   z.object({
     kind: z.literal("boundary.reached"),
@@ -3839,7 +3855,11 @@ export const IpcDirectInputSchema = z.object({
     .default([]),
   /** Pinned references (D-182). Bounded here too: the bridge is a validation
    *  boundary in its own right. */
-  context: z.array(DirectionContextRefSchema).max(MAX_DIRECTION_CONTEXT).default([])
+  context: z.array(DirectionContextRefSchema).max(MAX_DIRECTION_CONTEXT).default([]),
+  /** Opens the turn as Codex's reviewer over the uncommitted changes (D-231). */
+  review: z.boolean().default(false),
+  /** With `newSession`: fork the named source chat natively (D-231). */
+  forkOf: z.string().startsWith("csn_").optional()
 });
 export type IpcDirectInput = z.infer<typeof IpcDirectInputSchema>;
 
@@ -4058,6 +4078,12 @@ export interface NovusBridge {
       attachmentIds?: string[];
       /** Pinned references — files and checks (D-182). */
       context?: DirectionContextRef[];
+      /** Opens the turn as Codex's reviewer over the uncommitted changes
+       *  (D-231) — the / menu's review row. */
+      review?: boolean;
+      /** With `newSession`: fork the named source chat's native transcript
+       *  into the new session (D-231) instead of a rendered markdown one. */
+      forkOf?: string;
     }): Promise<
       IpcResult<{
         directionId: string;

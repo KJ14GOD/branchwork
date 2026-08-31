@@ -497,7 +497,19 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       block = open ?? newTrace(null, event);
     }
 
-    if (ABSORBED_KINDS.has(event.kind)) continue;
+    if (ABSORBED_KINDS.has(event.kind)) {
+      // One absorbed kind keeps a single word (D-231): a direction steered
+      // into the already-running turn says so on its own row's machinery
+      // line — the "resumed" pattern — because words that landed mid-turn
+      // without opening a turn would otherwise look ignored.
+      if (event.kind === "direction.applied" && event.payload.steered === true) {
+        const steered = traces.get(text(event.payload.directionId) ?? "");
+        if (steered) {
+          steered.machinery = steered.machinery ? `${steered.machinery} · steered` : "steered";
+        }
+      }
+      continue;
+    }
 
     switch (event.kind) {
       case "harness.text": {

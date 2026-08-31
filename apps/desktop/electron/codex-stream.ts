@@ -76,6 +76,10 @@ export class CodexStream {
   private observedThreadId: string | null = null;
   private observedResumed = false;
   private observedResult: HarnessResult | null = null;
+  /** The live turn's own id (D-231): what turn/steer must name. Set at
+   *  turn/started, cleared at completion — a steer with no live turn is a
+   *  steer that honestly cannot happen. */
+  private liveTurnId: string | null = null;
   /** Which decision grammar answers each pending server request. */
   private readonly approvalKinds = new Map<string, CodexApprovalKind>();
   /** The latest token usage the thread reported; spoken once, at turn end. */
@@ -101,6 +105,11 @@ export class CodexStream {
 
   get result(): HarnessResult | null {
     return this.observedResult;
+  }
+
+  /** The running turn's id, while one runs (D-231). */
+  get activeTurnId(): string | null {
+    return this.liveTurnId;
   }
 
   /** The driver attaches its sequencer after construction — it needs the
@@ -275,7 +284,13 @@ export class CodexStream {
         }
         return [];
       }
+      case "turn/started": {
+        const turn = params.turn as { id?: unknown } | undefined;
+        if (typeof turn?.id === "string") this.liveTurnId = turn.id;
+        return [];
+      }
       case "turn/completed": {
+        this.liveTurnId = null;
         const turn = params.turn as Record<string, unknown> | undefined;
         const status = typeof turn?.status === "string" ? turn.status : "completed";
         const failure = turn?.error as { message?: unknown } | undefined;
@@ -431,7 +446,14 @@ export const initializedLine = { jsonrpc: "2.0", method: "initialized" };
  */
 export function threadStartLine(
   id: string,
-  input: { cwd: string; model: string; effort: string; readOnly: boolean; instructions: string | null }
+  input: {
+    cwd: string;
+    model: string;
+    effort: string;
+    readOnly: boolean;
+    instructions: string | null;
+    config?: Record<string, unknown> | null;
+  }
 ): object {
   return {
     jsonrpc: "2.0",
@@ -443,7 +465,8 @@ export function threadStartLine(
       approvalPolicy: "untrusted",
       approvalsReviewer: "user",
       sandbox: input.readOnly ? "read-only" : "workspace-write",
-      ...(input.instructions ? { developerInstructions: input.instructions } : {})
+      ...(input.instructions ? { developerInstructions: input.instructions } : {}),
+      ...(input.config ? { config: input.config } : {})
     }
   };
 }
@@ -451,7 +474,7 @@ export function threadStartLine(
 export function threadResumeLine(
   id: string,
   threadId: string,
-  input: { cwd: string; model: string; readOnly: boolean }
+  input: { cwd: string; model: string; readOnly: boolean; config?: Record<string, unknown> | null }
 ): object {
   return {
     jsonrpc: "2.0",
@@ -463,7 +486,8 @@ export function threadResumeLine(
       model: input.model,
       approvalPolicy: "untrusted",
       approvalsReviewer: "user",
-      sandbox: input.readOnly ? "read-only" : "workspace-write"
+      sandbox: input.readOnly ? "read-only" : "workspace-write",
+      ...(input.config ? { config: input.config } : {})
     }
   };
 }
@@ -489,6 +513,53 @@ export function turnStartLine(
 
 export function turnInterruptLine(id: string, threadId: string): object {
   return { jsonrpc: "2.0", id, method: "turn/interrupt", params: { threadId } };
+}
+
+/** A direction steered into the live turn (D-231): the send box's own
+ *  mid-turn meaning, delivered rather than queued. `expectedTurnId` is the
+ *  protocol's precondition — a stale steer fails instead of landing in a
+ *  turn the person never saw. */
+export function turnSteerLine(id: string, threadId: string, expectedTurnId: string, text: string): object {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: "turn/steer",
+    params: { threadId, expectedTurnId, input: [{ type: "text", text }] }
+  };
+}
+
+/** A native continuation (D-231): the new session's first turn opens on a
+ *  fork of the source thread, under the same pinned parameters. */
+export function threadForkLine(
+  id: string,
+  threadId: string,
+  input: { cwd: string; model: string; readOnly: boolean; config?: Record<string, unknown> | null }
+): object {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: "thread/fork",
+    params: {
+      threadId,
+      cwd: input.cwd,
+      model: input.model,
+      approvalPolicy: "untrusted",
+      approvalsReviewer: "user",
+      sandbox: input.readOnly ? "read-only" : "workspace-write",
+      ...(input.config ? { config: input.config } : {})
+    }
+  };
+}
+
+/** Codex's reviewer, inline on this thread (D-231): its findings stream as
+ *  ordinary items, so the room renders a review turn as the turn it is. */
+export function reviewStartLine(id: string, threadId: string): object {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: "review/start",
+    params: { threadId, target: { type: "uncommittedChanges" }, delivery: "inline" }
+  };
 }
 
 /**

@@ -31,11 +31,15 @@ import {
   initializeLine,
   initializedLine,
   nextRpcId,
+  reviewStartLine,
+  threadForkLine,
   threadResumeLine,
   threadStartLine,
   turnInterruptLine,
-  turnStartLine
+  turnStartLine,
+  turnSteerLine
 } from "./codex-stream";
+import { codexMcpOverride } from "./codex-mcp";
 import { harnessEnv } from "./workspace-env";
 import { redact } from "./secret-policy";
 
@@ -301,6 +305,13 @@ export interface TurnRequest {
   /** The speed tier the author chose (D-230): Codex's priority tier as
    *  `fast`. Ignored by models that offer none, Claude's included. */
   speed?: Speed;
+  /** Opens this turn as Codex's own reviewer over the worktree's uncommitted
+   *  changes (D-231) instead of an ordinary directed turn. Codex only. */
+  review?: boolean;
+  /** The source thread whose history this session's first turn forks from
+   *  (D-231): a native continuation where both sides are Codex. Resolved by
+   *  the control plane from the source session's recorded thread id. */
+  forkOfThreadId?: string | null;
   /** The session this workstream continues, or null for a fresh one. */
   resumeSessionId: string | null;
   /** Images the person attached to this direction (D-150), already fetched
@@ -435,6 +446,13 @@ export interface TurnResult {
 
 export interface RunningTurn {
   stop(reason: string): void;
+  /**
+   * Steers the live turn with a person's further words (D-231): delivered
+   * into the running Codex turn on its own protocol verb. Returns false when
+   * the dialect cannot steer or no turn is mid-flight — the caller leaves
+   * the direction queued, which is what sending always did.
+   */
+  steer(text: string): boolean;
   /**
    * Answers one harness permission question.
    *
@@ -666,7 +684,11 @@ export function startTurn(request: TurnRequest): RunningTurn {
         type: "control_request",
         request_id: randomUUID(),
         request: { subtype: "interrupt", cancel_queued: true }
-      })
+      }),
+    // Steering mid-turn is Codex's verb (D-231). The Claude dialect and the
+    // fake honestly cannot, so a steer against them reports false and the
+    // caller leaves the direction queued — exactly what sending always did.
+    steer: (_text: string): boolean => false
   };
 
   /** Every leftover question, settled, so nothing is left pending for ever. */
@@ -904,7 +926,13 @@ export function startTurn(request: TurnRequest): RunningTurn {
     }
   })();
 
-  return { stop, respondApproval, pendingApprovals: () => [...pending.keys()], finished };
+  return {
+    stop,
+    steer: (text: string) => wire.steer(text),
+    respondApproval,
+    pendingApprovals: () => [...pending.keys()],
+    finished
+  };
 
   async function run(): Promise<TurnResult> {
     if (request.announceStart) emit({ kind: "execution.starting", payload: {} });
@@ -972,10 +1000,11 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // Everything the project declares and everything the operator's own
     // directory holds (D-193): discovered fresh at spawn, composed, and named
     // on the record with the digest that ran.
-    // Skill and MCP composition is Claude's dialect (D-230): the plugin
-    // directory and the strict config are `claude` flags. A codex turn
-    // composes neither and its record states the absence rather than faking
-    // carriage — Codex reads the worktree's own AGENTS.md natively.
+    // Skill composition is Claude's dialect (D-230): the plugin directory is
+    // a `claude` flag, a codex turn composes none, and its record states the
+    // absence rather than faking carriage — Codex reads the worktree's own
+    // AGENTS.md natively. MCP, since D-231, crosses: the composed file below
+    // is translated into the codex thread's own mcp_servers override.
     composedSkills =
       harness === "codex"
         ? null
@@ -988,16 +1017,18 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // strict config only Novus authors — carrying, when the runner provided
     // one, the `novus` capture endpoint (D-123). A read turn carries no
     // endpoint: it may look and speak, never capture.
-    composedMcp =
-      harness === "codex"
-        ? null
-        : composeMcpConfig(
-            worktreePath,
-            request.mcpServers ?? [],
-            join(request.worktreeRoot, ".mcp-staging", `${request.executionId}.json`),
-            readOnly ? null : request.novusCapture ?? null,
-            resolveMachineMcp(request.machineMcpServers ?? [])
-          );
+    // A Codex turn composes the SAME reviewed config (D-231) — the whole
+    // digest-checked road — which its attempt translates into the thread's
+    // own mcp_servers override. The `novus` capture endpoint stays
+    // Claude-only (its tool flows assume that approval grammar), so codex
+    // passes null for it.
+    composedMcp = composeMcpConfig(
+      worktreePath,
+      request.mcpServers ?? [],
+      join(request.worktreeRoot, ".mcp-staging", `${request.executionId}.json`),
+      readOnly || harness === "codex" ? null : request.novusCapture ?? null,
+      resolveMachineMcp(request.machineMcpServers ?? [])
+    );
     emit({
       kind: "execution.running",
       payload: {
@@ -1805,7 +1836,12 @@ export function startTurn(request: TurnRequest): RunningTurn {
       };
 
       let threadId: string | null = null;
-      // This dialect's three sentences (D-230). A decline carries no words on
+      // The reviewed MCP world, translated (D-231): the same composed file a
+      // Claude turn mounts, read back as Codex's mcp_servers override. Always
+      // passed — an empty table when nothing was reviewed — so the user's own
+      // ~/.codex/config.toml servers never reach a Novus turn ungoverned.
+      const mcp = codexMcpOverride(composedMcp?.file ?? null);
+      // This dialect's sentences (D-230, D-231). A decline carries no words on
       // Codex's wire — the reason stays on Novus's own record, which is where
       // it was durable anyway.
       wire.decision = (requestId, allow) =>
@@ -1817,6 +1853,14 @@ export function startTurn(request: TurnRequest): RunningTurn {
           error: { code: -32601, message: "Novus does not implement this request." }
         });
       wire.interrupt = () => (threadId === null ? false : writeRpc(turnInterruptLine(nextRpcId(), threadId)));
+      wire.steer = (text) => {
+        // Steering needs a live turn to land in: the protocol's expectedTurnId
+        // precondition means a stale steer fails instead of hijacking a turn
+        // the person never saw. No live turn — the caller queues, as ever.
+        const liveTurn = stream.activeTurnId;
+        if (threadId === null || liveTurn === null) return false;
+        return writeRpc(turnSteerLine(nextRpcId(), threadId, liveTurn, text));
+      };
 
       const initId = nextRpcId();
       const openId = nextRpcId();
@@ -1825,13 +1869,17 @@ export function startTurn(request: TurnRequest): RunningTurn {
       const startTurnNow = (): void => {
         if (threadId === null) return;
         writeRpc(
-          turnStartLine(turnId, threadId, {
-            direction: request.direction,
-            model,
-            effort: codexEffort,
-            // Codex's priority tier, the vendor's own 1.5x (D-230).
-            serviceTier: speed === "fast" ? "priority" : null
-          })
+          request.review === true
+            ? // Codex's own reviewer over the uncommitted changes (D-231),
+              // inline on this thread: findings stream as ordinary items.
+              reviewStartLine(turnId, threadId)
+            : turnStartLine(turnId, threadId, {
+                direction: request.direction,
+                model,
+                effort: codexEffort,
+                // Codex's priority tier, the vendor's own 1.5x (D-230).
+                serviceTier: speed === "fast" ? "priority" : null
+              })
         );
         if (stopReason !== null) stop(stopReason);
       };
@@ -1839,24 +1887,41 @@ export function startTurn(request: TurnRequest): RunningTurn {
         if (id === initId) {
           writeRpc(initializedLine);
           writeRpc(
-            resumeThreadId === null
-              ? threadStartLine(openId, {
-                  cwd: worktreePath,
-                  model,
-                  effort: codexEffort,
-                  readOnly,
-                  instructions: null
-                })
-              : threadResumeLine(openId, resumeThreadId, { cwd: worktreePath, model, readOnly })
+            resumeThreadId !== null
+              ? threadResumeLine(openId, resumeThreadId, { cwd: worktreePath, model, readOnly, config: mcp.config })
+              : request.forkOfThreadId
+                ? // A native continuation (D-231): this session's first turn
+                  // opens on a fork of the source thread's history.
+                  threadForkLine(openId, request.forkOfThreadId, {
+                    cwd: worktreePath,
+                    model,
+                    readOnly,
+                    config: mcp.config
+                  })
+                : threadStartLine(openId, {
+                    cwd: worktreePath,
+                    model,
+                    effort: codexEffort,
+                    readOnly,
+                    instructions: null,
+                    config: mcp.config
+                  })
           );
           return;
         }
         if (id === openId) {
-          if (error !== null && resumeThreadId !== null) {
+          if (error !== null && (resumeThreadId !== null || request.forkOfThreadId)) {
             // The server no longer holds the thread: retry once, openly
             // fresh — the session event's `resumed: false` says so.
             writeRpc(
-              threadStartLine(freshId, { cwd: worktreePath, model, effort: codexEffort, readOnly, instructions: null })
+              threadStartLine(freshId, {
+                cwd: worktreePath,
+                model,
+                effort: codexEffort,
+                readOnly,
+                instructions: null,
+                config: mcp.config
+              })
             );
             return;
           }

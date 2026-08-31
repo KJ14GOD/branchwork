@@ -115,6 +115,34 @@ afterEach(() => {
 });
 
 describe("a complete turn", () => {
+  it("a dialect that cannot steer says false, so the words stay queued (D-231)", async () => {
+    // The fake and the Claude wire share the honest answer: steering is
+    // Codex's verb, and a steer against anything else reports false rather
+    // than pretending — the caller then queues, which is what sending
+    // always did.
+    let steered: boolean | null = null;
+    const running = startTurn({
+      executionId: "exe_steer",
+      missionId: MISSION_ID,
+      workstreamId: WORKSTREAM_ID,
+      repositoryPath: repo,
+      worktreeRoot,
+      missionBranch: MISSION_BRANCH,
+      direction: "Add a health check endpoint",
+      model: "claude-fable-5",
+      effort: "high",
+      resumeSessionId: null,
+      announceStart: true,
+      fakeHarness: true,
+      secretValues: () => [],
+      emit: (event) => {
+        if (event.kind === "harness.session" && steered === null) steered = running.steer("more words");
+      }
+    });
+    await running.finished;
+    expect(steered).toBe(false);
+  });
+
   it("reports the lifecycle, the boundary, and a committed checkpoint", async () => {
     const { events, result } = await runFakeTurn();
     const kinds = events.map((event) => event.kind);

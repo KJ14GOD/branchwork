@@ -198,6 +198,9 @@ export function Composer({
     effort: Effort;
     speed: Speed;
     alongside?: boolean;
+    /** Opens the turn as Codex's reviewer over the uncommitted changes
+     *  (D-231) — the / menu's review row, never typed words. */
+    review?: boolean;
     attachmentIds?: string[];
     /** Files chosen but not uploaded, because there was no mission to upload
      *  them to yet (D-201). The caller uploads them once there is one. */
@@ -392,10 +395,19 @@ export function Composer({
             command.name.toLowerCase().includes(slashToken.query.toLowerCase())
           )
           .slice(0, 8);
+  /** Codex's reviewer as a row (D-231): on a Codex model, / offers "Review
+   *  uncommitted changes" — picking it sends, it never inserts words. */
+  const reviewRow =
+    slashToken !== null &&
+    harnessOf(model) === "codex" &&
+    "review".includes(slashToken.query.toLowerCase());
   /** One more row when a dock exists (D-199): whatever was typed, in the
    *  person's own session. It also keeps / alive where nothing matches, so a
    *  terminal-only command like /mcp is never a dead end. */
-  const slashRows = terminal && slashToken !== null ? commandMatches.length + 1 : commandMatches.length;
+  const slashRows =
+    slashToken === null
+      ? 0
+      : commandMatches.length + (reviewRow ? 1 : 0) + (terminal ? 1 : 0);
 
   const pickTerminal = (): void => {
     if (!terminal || slashToken === null) return;
@@ -564,6 +576,33 @@ export function Composer({
     // The box returns to one row: a composer that stays tall after sending is
     // a blank canvas, which the room is not (DESIGN.md prohibited pattern 9).
     if (inputRef.current) inputRef.current.style.height = "";
+    setQueuedNote(
+      outcome.queued ? (outcome.deferred ?? "Queued — applies at the next safe point") : null
+    );
+  };
+
+  /** The review row's send (D-231): fixed words, flagged, no queue choice —
+   *  a review is this chat's own turn and queues exactly as sending does. */
+  const performReview = async () => {
+    if (sending || !enabled) return;
+    setSlashToken(null);
+    setTextValue("");
+    setPendingChoice(false);
+    setSending(true);
+    setError(null);
+    setQueuedNote(null);
+    const outcome = await onSubmit({
+      body: "Review the uncommitted changes.",
+      model,
+      effort: effortsFor(model).includes(effort) ? effort : DEFAULT_EFFORT,
+      speed: speedsFor(model).includes(speed) ? speed : "standard",
+      review: true
+    });
+    setSending(false);
+    if (!outcome.ok) {
+      setError(outcome.message ?? "That direction did not go through.");
+      return;
+    }
     setQueuedNote(
       outcome.queued ? (outcome.deferred ?? "Queued — applies at the next safe point") : null
     );
@@ -813,12 +852,31 @@ export function Composer({
                 )}
               </button>
             ))}
-            {terminal && (
+            {reviewRow && (
               <button
                 role="option"
                 aria-selected={slashIndex === commandMatches.length}
                 className={
                   slashIndex === commandMatches.length ? "mention-row selected" : "mention-row"
+                }
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  void performReview();
+                }}
+                data-testid="slash-review-row"
+              >
+                <span className="mono mention-path">/review</span>
+                <span className="mention-note">Review uncommitted changes — Codex&apos;s reviewer</span>
+              </button>
+            )}
+            {terminal && (
+              <button
+                role="option"
+                aria-selected={slashIndex === commandMatches.length + (reviewRow ? 1 : 0)}
+                className={
+                  slashIndex === commandMatches.length + (reviewRow ? 1 : 0)
+                    ? "mention-row selected"
+                    : "mention-row"
                 }
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -915,6 +973,7 @@ export function Composer({
                 event.preventDefault();
                 const chosen = commandMatches[slashIndex];
                 if (chosen) pickSlashCommand(chosen.insert);
+                else if (reviewRow && slashIndex === commandMatches.length) void performReview();
                 else pickTerminal();
                 return;
               }

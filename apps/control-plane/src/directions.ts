@@ -114,8 +114,8 @@ export async function submitDirection(
   access: MissionAccess,
   author: { userId: string; login: string },
   body: string,
-  harness: { model: string; effort: string; speed?: string },
-  session: { sessionId?: string; newSession: boolean },
+  harness: { model: string; effort: string; speed?: string; review?: boolean },
+  session: { sessionId?: string; newSession: boolean; forkOf?: string },
   /** Images this direction carries (D-150). Already uploaded and verified —
    *  the ids are resolved against this mission before anything is written, so
    *  a direction never exists claiming an image that does not. */
@@ -139,6 +139,7 @@ export async function submitDirection(
   const row = await withTransaction(db, async (client) => {
     const resolved = await resolveSessionForDirection(client, access, author, {
       ...(session.sessionId ? { sessionId: session.sessionId } : {}),
+      ...(session.forkOf ? { forkOf: session.forkOf } : {}),
       newSession: session.newSession,
       body
     });
@@ -148,8 +149,8 @@ export async function submitDirection(
       throw new AuthorizationError("not_found", "No such session in this workstream.", 404);
     }
     const inserted = await client.query(
-      `insert into directions (dir_id, org_id, mission_id, wst_id, session_id, author_user_id, body, state, model, effort, speed, context)
-       values ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9, $10, $11) returning dir_id`,
+      `insert into directions (dir_id, org_id, mission_id, wst_id, session_id, author_user_id, body, state, model, effort, speed, review, context)
+       values ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9, $10, $11, $12) returning dir_id`,
       [
         dirId,
         access.orgId,
@@ -161,6 +162,7 @@ export async function submitDirection(
         harness.model,
         harness.effort,
         harness.speed ?? null,
+        harness.review === true,
         context.length > 0 ? JSON.stringify(context) : null
       ]
     );

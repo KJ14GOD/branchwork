@@ -3,10 +3,13 @@ import type { RunnerEvent } from "@novus/contracts";
 import {
   CodexStream,
   approvalResponseLine,
+  reviewStartLine,
+  threadForkLine,
   threadResumeLine,
   threadStartLine,
   turnInterruptLine,
-  turnStartLine
+  turnStartLine,
+  turnSteerLine
 } from "../electron/codex-stream";
 import type { HarnessControlMessage } from "../electron/harness-stream";
 
@@ -330,5 +333,77 @@ describe("the pinned outbound lines (D-056's discipline, this dialect)", () => {
     const interrupt = turnInterruptLine("novus-6", "thr_9") as { method: string; params: { threadId: string } };
     expect(interrupt.method).toBe("turn/interrupt");
     expect(interrupt.params.threadId).toBe("thr_9");
+  });
+});
+
+describe("D-231: the live turn, steered, forked, reviewed", () => {
+  it("the active turn id is tracked from turn/started and cleared at completion", () => {
+    const stream = new CodexStream();
+    expect(stream.activeTurnId).toBeNull();
+    stream.push(
+      line({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "t", turn: { id: "trn_7" } } })
+    );
+    expect(stream.activeTurnId).toBe("trn_7");
+    stream.push(
+      line({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "t", turn: { id: "trn_7", status: "completed" } } })
+    );
+    expect(stream.activeTurnId).toBeNull();
+  });
+
+  it("a steer names the thread AND the expected turn, so a stale one fails instead of landing", () => {
+    expect(turnSteerLine("novus-7", "thr_9", "trn_7", "also update the docs")).toEqual({
+      jsonrpc: "2.0",
+      id: "novus-7",
+      method: "turn/steer",
+      params: {
+        threadId: "thr_9",
+        expectedTurnId: "trn_7",
+        input: [{ type: "text", text: "also update the docs" }]
+      }
+    });
+  });
+
+  it("a fork opens the source thread's history under the same pinned discipline", () => {
+    const fork = threadForkLine("novus-8", "thr_src", {
+      cwd: "/work/tree",
+      model: "gpt-5.6-sol",
+      readOnly: false,
+      config: { mcp_servers: {} }
+    }) as { method: string; params: Record<string, unknown> };
+    expect(fork.method).toBe("thread/fork");
+    expect(fork.params.threadId).toBe("thr_src");
+    expect(fork.params.approvalPolicy).toBe("untrusted");
+    expect(fork.params.approvalsReviewer).toBe("user");
+    expect(fork.params.sandbox).toBe("workspace-write");
+    expect(fork.params.config).toEqual({ mcp_servers: {} });
+  });
+
+  it("a review turn targets the uncommitted changes, inline on this thread", () => {
+    expect(reviewStartLine("novus-9", "thr_9")).toEqual({
+      jsonrpc: "2.0",
+      id: "novus-9",
+      method: "review/start",
+      params: { threadId: "thr_9", target: { type: "uncommittedChanges" }, delivery: "inline" }
+    });
+  });
+
+  it("the MCP override rides thread start and resume as the thread's own config", () => {
+    const start = threadStartLine("novus-10", {
+      cwd: "/work/tree",
+      model: "gpt-5.6-sol",
+      effort: "medium",
+      readOnly: false,
+      instructions: null,
+      config: { mcp_servers: { docs: { url: "https://docs.example/mcp" } } }
+    }) as { params: Record<string, unknown> };
+    expect(start.params.config).toEqual({ mcp_servers: { docs: { url: "https://docs.example/mcp" } } });
+
+    const resume = threadResumeLine("novus-11", "thr_9", {
+      cwd: "/work/tree",
+      model: "gpt-5.6-sol",
+      readOnly: true,
+      config: { mcp_servers: {} }
+    }) as { params: Record<string, unknown> };
+    expect(resume.params.config).toEqual({ mcp_servers: {} });
   });
 });

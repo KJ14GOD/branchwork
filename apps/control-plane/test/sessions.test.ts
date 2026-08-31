@@ -106,7 +106,15 @@ interface Directed {
 async function direct(
   lane: Lane,
   body: string,
-  options: { sessionId?: string; newSession?: boolean; as?: SignedIn } = {}
+  options: {
+    sessionId?: string;
+    newSession?: boolean;
+    as?: SignedIn;
+    model?: string;
+    effort?: string;
+    review?: boolean;
+    forkOf?: string;
+  } = {}
 ): Promise<Directed> {
   const submitted = await harness.app.inject({
     method: "POST",
@@ -114,11 +122,13 @@ async function direct(
     headers: bearer(options.as ?? kartik),
     payload: {
       body,
-      model: "claude-fable-5",
-      effort: "high",
+      model: options.model ?? "claude-fable-5",
+      effort: options.effort ?? "high",
       workstreamId: lane.workstreamId,
       ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-      ...(options.newSession ? { newSession: true } : {})
+      ...(options.newSession ? { newSession: true } : {}),
+      ...(options.review ? { review: true } : {}),
+      ...(options.forkOf ? { forkOf: options.forkOf } : {})
     }
   });
   expect(submitted.statusCode).toBe(200);
@@ -893,4 +903,113 @@ describe("a direction's pinned references", () => {
     });
     expect(submitted.statusCode).toBe(422);
   }, 30_000);
+});
+
+describe("Codex parity on the direction road (D-231)", () => {
+  /** One completed codex turn, so the session holds a native thread. */
+  async function codexBacked(lane: Lane): Promise<{ sessionId: string; threadId: string }> {
+    const first = await direct(lane, "Build the guard", { model: "gpt-5.6-sol", effort: "medium" });
+    const turn = await latestExecution(lane.workstreamId);
+    const threadId = `thr_${randomUUID().slice(0, 8)}`;
+    await report(lane.credential, turn.executionId, [
+      { originSeq: 1, event: { kind: "harness.session", payload: { sessionId: threadId, resumed: false } } },
+      completed(2)
+    ]);
+    return { sessionId: first.direction.sessionId, threadId };
+  }
+
+  it("a new chat forking a codex-backed sibling records it, and its first turn opens on that thread", async () => {
+    const lane = await mission();
+    const source = await codexBacked(lane);
+
+    const forked = await direct(lane, "Continue from there", {
+      model: "gpt-5.6-sol",
+      effort: "medium",
+      newSession: true,
+      forkOf: source.sessionId
+    });
+    expect(forked.dispatched).toBe(true);
+    expect(forked.direction.sessionId).not.toBe(source.sessionId);
+
+    // The new chat remembers what it continues…
+    const held = await harness.db.query(
+      "select fork_of from workstream_sessions where csn_id = $1",
+      [forked.direction.sessionId]
+    );
+    expect(held.rows[0].fork_of).toBe(source.sessionId);
+
+    // …and its first turn is told the source thread, not a rendered copy.
+    const turn = await latestExecution(lane.workstreamId);
+    const payload = await startCommand(turn.executionId);
+    expect((payload as { forkOfThreadId?: string }).forkOfThreadId).toBe(source.threadId);
+    expect((payload as { review?: boolean }).review).toBe(false);
+  });
+
+  it("a chat with no codex thread refuses the fork in words — the transcript road remains", async () => {
+    const lane = await mission();
+    // Claude-backed: a native fork would be a lie, and is refused, not faked.
+    const first = await direct(lane, "Build the guard");
+    const turn = await latestExecution(lane.workstreamId);
+    await report(lane.credential, turn.executionId, [harnessSession(1, "cli-claude"), completed(2)]);
+
+    const refused = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/direction`,
+      headers: bearer(kartik),
+      payload: {
+        body: "Continue from there",
+        model: "gpt-5.6-sol",
+        effort: "medium",
+        workstreamId: lane.workstreamId,
+        newSession: true,
+        forkOf: first.direction.sessionId
+      }
+    });
+    expect(refused.statusCode).toBe(409);
+    expect((refused.json() as { error: { message: string } }).error.message).toContain("transcript");
+  });
+
+  it("a fork outside a new chat, and a review off Codex, are refused rather than reinterpreted", async () => {
+    const lane = await mission();
+    const strayFork = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/direction`,
+      headers: bearer(kartik),
+      payload: {
+        body: "Continue",
+        model: "gpt-5.6-sol",
+        workstreamId: lane.workstreamId,
+        forkOf: "csn_nowhere"
+      }
+    });
+    expect(strayFork.statusCode).toBe(400);
+
+    const claudeReview = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/direction`,
+      headers: bearer(kartik),
+      payload: {
+        body: "Review the uncommitted changes.",
+        model: "claude-fable-5",
+        effort: "high",
+        workstreamId: lane.workstreamId,
+        review: true
+      }
+    });
+    expect(claudeReview.statusCode).toBe(400);
+    expect((claudeReview.json() as { error: { message: string } }).error.message).toContain("Codex");
+  });
+
+  it("a review direction dispatches with the flag on its start command", async () => {
+    const lane = await mission();
+    const sent = await direct(lane, "Review the uncommitted changes.", {
+      model: "gpt-5.6-sol",
+      effort: "medium",
+      review: true
+    });
+    expect(sent.dispatched).toBe(true);
+    const turn = await latestExecution(lane.workstreamId);
+    const payload = await startCommand(turn.executionId);
+    expect((payload as { review?: boolean }).review).toBe(true);
+  });
 });

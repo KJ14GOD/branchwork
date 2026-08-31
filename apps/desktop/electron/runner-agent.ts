@@ -392,7 +392,11 @@ const StartPayloadSchema = z.object({
   /** Pinned references (D-182): files and checks the person pointed this
    *  direction at, rendered into the turn's first message beside the words.
    *  Defaulted empty so a command from an older control plane carries none. */
-  context: z.array(DirectionContextRefSchema).default([])
+  context: z.array(DirectionContextRefSchema).default([]),
+  /** Opens the turn as Codex's reviewer over the uncommitted changes (D-231). */
+  review: z.boolean().default(false),
+  /** The source thread a forked chat's first turn continues (D-231). */
+  forkOfThreadId: z.string().nullable().default(null)
 });
 
 /** The push the control plane authorized (D-099): the branch, and the exact
@@ -1495,6 +1499,41 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
   ): void {
     if (inFlight.has(command.commandId)) return;
     inFlight.add(command.commandId);
+    // Steer before queueing (D-231): an apply aimed at this session's own
+    // live turn is what D-206's send control meant by "queues and steers" —
+    // and on a dialect that can, it now does. Words only: a direction
+    // carrying images or pinned references keeps the queue road, because a
+    // steer that silently dropped them would be worse than waiting. A false
+    // from `steer` — the dialect cannot, or the turn just ended — falls
+    // through to exactly what sending always did.
+    if (command.kind === "apply_direction" && command.executionId && !isSettled(command.commandId)) {
+      const running = active.get(command.executionId);
+      const words = StartPayloadSchema.safeParse(command.payload);
+      if (
+        running &&
+        words.success &&
+        words.data.attachments.length === 0 &&
+        words.data.context.length === 0 &&
+        !words.data.review &&
+        !stopRequested.has(command.executionId) &&
+        running.turn.steer(words.data.body)
+      ) {
+        // Settled in the persisted memory *before* the ack, exactly as the
+        // ordinary path does — a re-poll racing the ack must not steer the
+        // same words in twice.
+        rememberCommand(command.commandId, "settled");
+        if (words.data.directionId) {
+          report(workstream.workstreamId, command.executionId, {
+            kind: "direction.applied",
+            payload: { directionId: words.data.directionId, steered: true }
+          });
+        }
+        void ack(enrolment, command.commandId, { state: "completed" }).finally(() =>
+          inFlight.delete(command.commandId)
+        );
+        return;
+      }
+    }
     // An interrupt cannot queue behind the thing it interrupts. A running check
     // or a live dev server holds the lane for as long as it lasts, so a stop
     // that waited its turn would never arrive — and it must not take the lane
@@ -1848,6 +1887,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       permissionProfile: payload.data.permissionProfile,
       mcpServers: payload.data.mcpServers,
       machineMcpServers: payload.data.machineMcpServers,
+      review: payload.data.review,
+      forkOfThreadId: payload.data.forkOfThreadId,
       announceStart: command.kind === "start_execution" && !openExecutions.has(executionId),
       pendingApplies: () => pendingAppliesFor(workstreamId, executionId, command.commandId)
     });
@@ -1936,6 +1977,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
     mcpServers: EnabledMcpServer[];
     /** The machine's own enabled servers, pinned at dispatch (D-198). */
     machineMcpServers: EnabledMachineMcpServer[];
+    /** Opens the turn as Codex's reviewer over the uncommitted changes (D-231). */
+    review: boolean;
+    /** The source thread a forked chat's first turn continues (D-231). */
+    forkOfThreadId: string | null;
     announceStart: boolean;
     pendingApplies: () => Promise<boolean>;
   }
@@ -2263,6 +2308,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       model: args.model,
       effort: args.effort,
       speed: args.speed,
+      review: args.review,
+      forkOfThreadId: args.forkOfThreadId,
       resumeSessionId: args.resumeSessionId,
       attachments: args.attachments,
       context: args.context,

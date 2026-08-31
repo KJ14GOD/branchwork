@@ -258,7 +258,7 @@ export async function dispatchDirection(
     }
 
     const direction = await client.query(
-      `select d.body, d.session_id, d.context, s.scope, w.permission_profile, w.enabled_skills,
+      `select d.body, d.session_id, d.context, d.review, s.scope, s.fork_of, w.permission_profile, w.enabled_skills,
               w.enabled_mcp_servers, w.enabled_machine_mcp from directions d
          join workstream_sessions s on s.csn_id = d.session_id
          join workstreams w on w.wst_id = d.wst_id
@@ -268,6 +268,11 @@ export async function dispatchDirection(
     const body = direction.rows[0]?.body as string | undefined;
     const sessionId = direction.rows[0]?.session_id as string | undefined;
     const scope = scopeOf(direction.rows[0]?.scope);
+    // A review direction's turn opens as Codex's reviewer (D-231).
+    const review = direction.rows[0]?.review === true;
+    // The chat this session natively continues (D-231), read only when its
+    // first turn is about to open.
+    const forkOfSession = (direction.rows[0]?.fork_of as string | null | undefined) ?? null;
     // The lane's standing answer policy, read under the same lock and pinned
     // into this turn (D-115): a profile change mid-turn speaks from the next
     // dispatch, never into a running one (the D-043 pattern, as with scope).
@@ -320,6 +325,9 @@ export async function dispatchDirection(
           model: args.model,
           effort: args.effort,
           speed: args.speed ?? "standard",
+          // A review asked while the chat had a live or open execution still
+          // opens as a review when its turn actually runs (D-231).
+          review,
           // The conversation and its own resume point, stated outright. An
           // apply that reaches the runner after its turn already ended starts
           // a fresh process, and a payload that named no session fell back to
@@ -451,6 +459,15 @@ export async function dispatchDirection(
         effort: args.effort,
         sessionId,
         resumeSessionId,
+        // A review turn opens as Codex's reviewer (D-231).
+        review,
+        // A forked chat's first turn opens on the source thread's own history
+        // (D-231): the source's recorded thread id, only where this session
+        // has no history of its own yet — a resume point always wins.
+        forkOfThreadId:
+          resumeSessionId === null && forkOfSession !== null
+            ? await sessionResumePoint(client, forkOfSession)
+            : null,
         // What the person attached (D-150), by address — the first turn of a
         // direction sees the same images a later apply of it would.
         attachments: attachments.map((row) => ({
@@ -677,6 +694,31 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
         "Name a session or ask for a new one, not both."
       );
     }
+    // Review is Codex's verb (D-231): asked of a model that has none, it is
+    // refused in words rather than silently run as an ordinary turn.
+    if (body.data.review && harnessOf(body.data.model) !== "codex") {
+      return deps.sendError(
+        reply,
+        400,
+        "invalid_direction",
+        "Review turns are a Codex capability — pick a Codex model."
+      );
+    }
+    // A fork is a continuation into a new chat (D-231); naming one anywhere
+    // else has no meaning and is refused rather than ignored.
+    if (body.data.forkOf && !body.data.newSession) {
+      return deps.sendError(reply, 400, "invalid_direction", "A fork opens a new chat.");
+    }
+    // An alongside turn is read-only and opens neither a review nor a fork
+    // (D-231): a flag the turn would silently drop is refused instead.
+    if (body.data.alongside && (body.data.review || body.data.forkOf)) {
+      return deps.sendError(
+        reply,
+        400,
+        "invalid_direction",
+        "A review or fork runs as the chat's own turn, not alongside."
+      );
+    }
     // Resolved against the lane the direction names, so an approach's own
     // controller decides its queue rather than the first lane's (D-074).
     const access = await missionAccess(
@@ -710,10 +752,12 @@ export function registerExecutionRoutes(app: FastifyInstance, deps: RouteDeps): 
       {
         model: body.data.model,
         effort: body.data.effort,
-        speed: body.data.speed
+        speed: body.data.speed,
+        review: body.data.review
       },
       {
         ...(body.data.sessionId ? { sessionId: body.data.sessionId } : {}),
+        ...(body.data.forkOf ? { forkOf: body.data.forkOf } : {}),
         newSession: body.data.newSession
       },
       body.data.attachmentIds,

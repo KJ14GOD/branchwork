@@ -6,7 +6,7 @@ import type { Queryable } from "./db.ts";
 import { withTransaction } from "./db.ts";
 import { recordEvent } from "./events.ts";
 import { newWorkstreamSessionId } from "./ids.ts";
-import { missionAccess } from "./authz.ts";
+import { AuthorizationError, missionAccess } from "./authz.ts";
 import type { MissionAccess } from "./authz.ts";
 
 /**
@@ -125,10 +125,33 @@ export async function resolveSessionForDirection(
   client: pg.PoolClient,
   access: MissionAccess,
   author: { userId: string; login: string },
-  input: { sessionId?: string; newSession: boolean; body: string }
+  input: { sessionId?: string; newSession: boolean; body: string; forkOf?: string }
 ): Promise<ResolvedSession | null> {
   if (!access.workstreamId) return null;
   if (input.newSession) {
+    // A native continuation (D-231): the new chat records which sibling it
+    // forks, and its first turn opens on that thread's own history. Verified
+    // here rather than trusted — the source must be this lane's, must have a
+    // recorded harness thread, and that thread must be Codex's.
+    if (input.forkOf) {
+      const source = await client.query(
+        `select s.harness_session_id,
+                (select e.harness from executions e
+                  where e.session_id = s.csn_id order by e.created_at desc limit 1) as harness
+           from workstream_sessions s
+          where s.csn_id = $1 and s.wst_id = $2`,
+        [input.forkOf, access.workstreamId]
+      );
+      const row = source.rows[0] as { harness_session_id: string | null; harness: string | null } | undefined;
+      if (!row) return null;
+      if (row.harness !== "codex" || row.harness_session_id === null) {
+        throw new AuthorizationError(
+          "not_forkable",
+          "That chat has no Codex transcript to fork — carry it as a rendered transcript instead.",
+          409
+        );
+      }
+    }
     const sessionId = await insertSession(client, {
       orgId: access.orgId,
       missionId: access.missionId,
@@ -136,6 +159,12 @@ export async function resolveSessionForDirection(
       createdBy: author.userId,
       title: deriveSessionTitle(input.body)
     });
+    if (input.forkOf) {
+      await client.query("update workstream_sessions set fork_of = $2 where csn_id = $1", [
+        sessionId,
+        input.forkOf
+      ]);
+    }
     await recordEvent(client, {
       orgId: access.orgId,
       missionId: access.missionId,
