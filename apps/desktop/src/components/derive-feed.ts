@@ -1,4 +1,5 @@
-import { PERMISSION_PROFILES } from "@novus/contracts";
+import {
+  type HarnessId, PERMISSION_PROFILES } from "@novus/contracts";
 import type {
   Checkpoint,
   Direction,
@@ -167,6 +168,9 @@ export interface TraceBlock {
   at: string | null;
   /** Harness machinery for this turn: subordinate, never in the header. */
   machinery: string | null;
+  /** Which harness spoke this turn (D-232), from its running event; null
+   *  until the turn has said. The speaker row names and marks it. */
+  harness: HarnessId | null;
   /** What the harness reported this turn cost, when it reported anything. */
   usage: UsageTotals | null;
   segments: Segment[];
@@ -390,6 +394,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       body: direction?.body ?? null,
       at: direction?.submittedAt ?? event?.occurredAt ?? null,
       machinery: null,
+      harness: null,
       usage: null,
       segments: [],
       resolvedBy: null,
@@ -631,6 +636,7 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       case "execution.started":
       case "execution.running": {
         const model = text(event.payload.model);
+        block.harness = event.payload.harness === "codex" ? "codex" : "claude-code";
         const effort = text(event.payload.effort);
         // A read-alongside turn says so on its machinery line (D-095): the
         // trace reads normally, and the one word explains why this turn could

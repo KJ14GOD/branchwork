@@ -1,4 +1,5 @@
 import type { Direction, DirectionAttachment, DirectionContextRef, DirectionState } from "@novus/contracts";
+import { HARNESSES, harnessOf } from "@novus/contracts";
 import type pg from "pg";
 import type { Db, Queryable } from "./db.ts";
 import { withTransaction } from "./db.ts";
@@ -147,6 +148,27 @@ export async function submitDirection(
     // lane that is not this mission's: it does not exist for you.
     if (!resolved) {
       throw new AuthorizationError("not_found", "No such session in this workstream.", 404);
+    }
+    // A chat is one harness's (D-232): its continuity is that harness's own
+    // thread, which the other cannot read — a Codex turn would start blank
+    // and its thread id would lock Claude out of the chat for good. The
+    // room offers a new chat carrying the transcript; the server refuses
+    // the crossing outright so nothing that bypasses the room can do it.
+    if (!resolved.created) {
+      const ran = await client.query(
+        `select harness from executions where session_id = $1 order by created_at desc limit 1`,
+        [resolved.sessionId]
+      );
+      const owner = ran.rows[0]?.harness as string | undefined;
+      const asked = harnessOf(harness.model);
+      if (owner !== undefined && owner !== asked) {
+        const name = (id: string) => HARNESSES.find((entry) => entry.id === id)?.label ?? id;
+        throw new AuthorizationError(
+          "harness_mismatch",
+          `This chat is ${name(owner)}'s — start a new chat for ${name(asked)}, carrying its transcript.`,
+          409
+        );
+      }
     }
     const inserted = await client.query(
       `insert into directions (dir_id, org_id, mission_id, wst_id, session_id, author_user_id, body, state, model, effort, speed, review, context)

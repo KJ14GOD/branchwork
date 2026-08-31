@@ -1,8 +1,10 @@
 import {
+  HARNESSES,
   TERMINAL_EXECUTION_STATES,
   type EnabledSkill,
   type Decision,
   type Execution,
+  type HarnessId,
   type PullRequest,
   type FileChange,
   type Mission,
@@ -137,6 +139,17 @@ export function runningSession(detail: MissionDetailResponse): Session | null {
   const live = activeExecution(detail);
   if (!live) return null;
   return laneSessions(detail).find((session) => session.sessionId === live.sessionId) ?? null;
+}
+
+/** Which harness a chat belongs to (D-232): the one its latest turn ran on.
+ *  Null until it has run — an unwritten or never-dispatched chat is nobody's
+ *  yet, and takes whichever model its first send picks. */
+export function sessionHarness(detail: MissionDetailResponse, sessionId: string): HarnessId | null {
+  const latest = detail.executions
+    .filter((execution) => execution.sessionId === sessionId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const harness = latest?.harness;
+  return harness === "codex" || harness === "claude-code" ? harness : null;
 }
 
 /** Whether this session's turn is waiting on a person — the fact behind the
@@ -516,7 +529,9 @@ export function deriveStateLine(detail: MissionDetailResponse): StateLineView {
   const workingTitle =
     laneSessions(detail).length > 1 ? (runningSession(detail)?.title ?? null) : null;
 
-  const base = primaryStateLine(detail, files.length, checks, workingTitle);
+  const runningHarness = (activeExecution(detail) ?? [...detail.executions].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0])?.harness;
+  const harnessName = HARNESSES.find((entry) => entry.id === runningHarness)?.label ?? HARNESS_NAME;
+  const base = primaryStateLine(detail, files.length, checks, workingTitle, harnessName);
 
   // A queued direction that only the controller can apply is the room's real
   // state while nothing else is happening.
@@ -1090,7 +1105,10 @@ function primaryStateLine(
   checks: { total: number; passed: number; failed: number },
   /** The working session's title, only while the lane holds more than one
    *  conversation — the detail sentence names it then (D-083). */
-  workingTitle: string | null = null
+  workingTitle: string | null = null,
+  /** Whose harness the sentence names (D-232): the running turn's, else the
+   *  lane's latest, else Claude Code — never a name the lane has not used. */
+  harnessName: string = HARNESS_NAME
 ): StateLineView {
   const quiet = { suffix: null, action: null, working: false };
   switch (detail.state) {
@@ -1146,7 +1164,7 @@ function primaryStateLine(
         ...quiet,
         tone: "neutral",
         name: "Ready",
-        detail: `tell ${HARNESS_NAME} what to change`
+        detail: `tell ${harnessName} what to change`
       };
     case "agent_starting":
       return {
@@ -1168,8 +1186,8 @@ function primaryStateLine(
         tone: "active",
         name: "Running",
         detail: workingTitle
-          ? `${HARNESS_NAME} is working in "${workingTitle}"`
-          : `${HARNESS_NAME} is working`,
+          ? `${harnessName} is working in "${workingTitle}"`
+          : `${harnessName} is working`,
         suffix: null,
         action: { label: "Stop", kind: "stop" },
         working: true
@@ -1199,8 +1217,8 @@ function primaryStateLine(
         tone: "active",
         name: "Stopping",
         detail: workingTitle
-          ? `${HARNESS_NAME} was asked to stop in "${workingTitle}"`
-          : `${HARNESS_NAME} was asked to stop`,
+          ? `${harnessName} was asked to stop in "${workingTitle}"`
+          : `${harnessName} was asked to stop`,
         suffix: unanswered ? "the stop has gone unanswered" : null,
         // No action while the stop still has a claim to work: the one that
         // belongs here has been taken. The escalation appears only when
@@ -1214,7 +1232,7 @@ function primaryStateLine(
         ...quiet,
         tone: "warn",
         name: "Needs direction",
-        detail: `${HARNESS_NAME} is waiting at a safe boundary`
+        detail: `${harnessName} is waiting at a safe boundary`
       };
     case "needs_approval": {
       // DESIGN.md#state-presentation asks for "{Harness} asks to {action}", so
@@ -1229,10 +1247,10 @@ function primaryStateLine(
         // the thread, next to the work that raised it — saying it twice makes
         // the line long and the card redundant.
         detail: asking
-          ? `${HARNESS_NAME} asks to ${asking.displayName.toLowerCase()}${
+          ? `${harnessName} asks to ${asking.displayName.toLowerCase()}${
               workingTitle ? ` in "${workingTitle}"` : ""
             }`
-          : `${HARNESS_NAME} is waiting${
+          : `${harnessName} is waiting${
               workingTitle ? ` in "${workingTitle}"` : ""
             } for a decision it cannot make itself`,
         // A blocked turn is still a live turn, and the server's stop settles

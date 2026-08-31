@@ -642,6 +642,14 @@ describe("shared sessions inside one approach", () => {
   }, 120_000);
 
   it("typing @ offers the codebase, and picking a file pins it (D-185)", async () => {
+    // Compose from a conversation, explicitly, and pin there too: a pin
+    // belongs to the chat it was made in (D-215), so the chat is chosen
+    // before the @ is typed. (The canvas has been observed to land on the
+    // approach overview after the previous test's turn settles — not yet
+    // root-caused, recorded in PROGRESS — and an approval card only renders
+    // on the chat canvas.)
+    await page.getByTestId("rail-session-row").nth(1).click();
+    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
     // The token and its popover: git's own file list, filtered by the query.
     await page.getByTestId("composer-input").fill("look at @READ");
     await page.getByTestId("mention-popover").waitFor({ timeout: 10_000 });
@@ -657,13 +665,6 @@ describe("shared sessions inside one approach", () => {
     // And Enter now sends as it always did — the popover is gone.
     expect(await page.getByTestId("mention-popover").count()).toBe(0);
 
-    // Compose from a conversation, explicitly: in this suite's full sequence
-    // the canvas has been observed to land on the approach overview after the
-    // previous test's turn settles (not yet root-caused — recorded in
-    // PROGRESS), and an approval card only renders on the chat canvas. A
-    // person composes in a chat; so does this test.
-    await page.getByTestId("rail-session-row").nth(1).click();
-    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
     await compose("look at the mentioned file");
     await approvePending();
     const settled = await until(
@@ -745,5 +746,45 @@ describe("shared sessions inside one approach", () => {
         )
     );
     await shot("203-continued-chat-carries-the-transcript.png");
+  }, 180_000);
+
+  it("picking the other harness's model says so, and the send opens a new chat carrying the transcript (D-232)", async () => {
+    // The chat on screen has run on Claude Code: its tab wears the mark.
+    const tab = page.locator('[data-testid="session-tab"].active');
+    await tab.locator('img.harness-glyph[data-harness="claude-code"]').waitFor({ timeout: 30_000 });
+
+    // Pick a Codex model: one sentence, no buttons, nothing opens yet.
+    await page.getByTestId("model-chip").click();
+    await page.getByTestId("codex-option").first().click();
+    const swap = page.getByTestId("composer-swap");
+    await swap.waitFor({ timeout: 10_000 });
+    expect(await swap.innerText()).toContain("This chat is Claude Code's");
+    expect(await swap.innerText()).toContain("new Codex chat");
+    const before = await detail();
+    await shot("233-harness-swap-sentence.png");
+
+    // The send is the act: a fourth chat, carrying this one's transcript.
+    await compose("carry on in codex");
+    const four = await until("the swapped chat to exist", (value) => value.sessions.length === before.sessions.length + 1);
+    const swapped = four.sessions.find((session) => session.title === "carry on in codex")!;
+    expect(swapped).toBeDefined();
+    const directionD = four.directions.find((direction) => direction.sessionId === swapped.sessionId)!;
+    expect(directionD.attachments.length).toBe(1);
+    expect(directionD.attachments[0]!.mimeType).toBe("text/markdown");
+    // The source chat was never crossed: its own turns stay Claude's.
+    const source = four.sessions.find((session) => session.title === "review what the first chat built")!;
+    expect(
+      four.executions.filter((execution) => execution.sessionId === source.sessionId).every((execution) => execution.harness === "claude-code")
+    ).toBe(true);
+
+    await approvePending();
+    await until(
+      "the swapped chat's turn to complete",
+      (value) => value.executions.some((execution) => execution.sessionId === swapped.sessionId && execution.state === "completed")
+    );
+    // Its tab now wears Codex's mark, and the sentence is gone: the chat is Codex's.
+    await page.locator('[data-testid="session-tab"].active img.harness-glyph[data-harness="codex"]').waitFor({ timeout: 30_000 });
+    expect(await page.getByTestId("composer-swap").count()).toBe(0);
+    await shot("234-harness-swapped-chat.png");
   }, 180_000);
 });

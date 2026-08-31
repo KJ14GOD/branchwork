@@ -55,10 +55,12 @@ import {
   laneView,
   liveRunProcess,
   sessionActivity,
+  sessionHarness,
   sessionNeedsYou,
   type BoardColumnId,
   standingDecision
 } from "../components/derive";
+import { HarnessGlyph } from "../components/harness-glyph";
 import { HomeBoard } from "../components/home-board";
 import { PREVIEW_TAB_KEY, pullIdOfKey, pullTabKey, type OpenPreviewTab } from "../components/preview";
 import { deriveGoal, plural, truncateLabel } from "../format";
@@ -619,6 +621,10 @@ function MissionTree({
                           aria-current={focused && washed}
                           title={session.title ?? "New session"}
                         >
+                          <HarnessGlyph
+                            harness={sessionHarness(detail, session.sessionId)}
+                            fallback={null}
+                          />
                           <span
                             className={
                               session.title === null ? "side-name side-untitled" : "side-name"

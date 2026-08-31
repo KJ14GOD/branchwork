@@ -32,6 +32,7 @@ import {
   offerCountdownLabel,
   queuedPositionLabel,
   sessionActivity,
+  sessionHarness,
   sessionChangedFiles,
   sessionChecks,
   usageSoFar,
@@ -100,6 +101,7 @@ function SessionGlyph() {
 import { RuntimeDock } from "../components/runtime-dock";
 import { clockTime, deriveGoal, elapsed, shortSha, truncateLabel, usd } from "../format";
 import { MAX_DIRECTION_CONTEXT, harnessOf, scopesDisjoint } from "@novus/contracts";
+import { HarnessGlyph } from "../components/harness-glyph";
 import type { Project } from "./project-shell";
 
 type BaseLoad =
@@ -308,6 +310,8 @@ export function ProjectRoom({
    *  transcripts are projected and carried on the draft's first direction.
    *  Only meaningful while the draft surface is open; cleared when it closes. */
   const [continueFrom, setContinueFrom] = useState<string[]>([]);
+  /** The chat the box belongs to, readable from memoized callbacks. */
+  const chatKeyRef = useRef("");
   /** Pinned references the next send carries (D-182): worktree files and
    *  checks picked from the inspector, worn as chips on the composer's top
    *  edge and cleared once the direction lands. Held per conversation
@@ -655,6 +659,7 @@ export function ProjectRoom({
     speed = "standard",
     alongside = false,
     review = false,
+    swap = false,
     attachmentIds = []
   }: {
     body: string;
@@ -664,6 +669,9 @@ export function ProjectRoom({
     alongside?: boolean;
     /** A review turn (D-231): the / menu's row, Codex's reviewer. */
     review?: boolean;
+    /** The other harness's model in an existing chat (D-232): a new chat
+     *  carrying this one's transcript, never a crossing. */
+    swap?: boolean;
     attachmentIds?: string[];
   }): Promise<SubmitOutcome> => {
     setActionError(null);
@@ -717,8 +725,12 @@ export function ProjectRoom({
       return { ok: false, message: "This mission isn't ready to direct yet." };
     }
     // A new-session draft: these words create the session, title it, and land
-    // in it, in one transaction (D-083). Nothing existed until now.
-    if (sessionDraft) {
+    // in it, in one transaction (D-083). Nothing existed until now. A harness
+    // swap (D-232) takes the same road with the chat on screen as the one
+    // source: a chat is one harness's, so the other's model gets a new chat
+    // carrying this one's transcript — the send is the act that opens it.
+    const sources = sessionDraft ? continueFrom : swap && readingSessionId ? [readingSessionId] : null;
+    if (sources !== null) {
       // The chosen chats travel first (D-173): each is projected from the
       // detail already on screen — the one feed derivation, rendered to
       // markdown — and uploaded as a transcript artifact the first direction
@@ -731,17 +743,17 @@ export function ProjectRoom({
       // executions on the detail say which harness a chat last ran; a chat
       // that never ran has nothing to fork and keeps the transcript road.
       const forkSource =
-        continueFrom.length === 1 && harnessOf(model) === "codex"
+        sources.length === 1 && harnessOf(model) === "codex"
           ? (detail.executions ?? [])
-              .filter((execution) => execution.sessionId === continueFrom[0])
+              .filter((execution) => execution.sessionId === sources[0])
               .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
           : undefined;
       const forkOf =
         forkSource?.harness === "codex" && forkSource.harnessSessionId !== null
-          ? continueFrom[0]
+          ? sources[0]
           : undefined;
       const transcriptIds: string[] = [];
-      for (const sourceId of forkOf !== undefined ? [] : continueFrom) {
+      for (const sourceId of forkOf !== undefined ? [] : sources) {
         const source = sessions.find((session) => session.sessionId === sourceId);
         if (!source) continue; // swept away since selection; nothing to carry
         const rendered = renderTranscript(
@@ -780,7 +792,7 @@ export function ProjectRoom({
       });
       if (!created.ok) return { ok: false, message: offlineOr(created.code, created.message) };
       setPendingContext([]);
-      onSessionDraft(false);
+      if (sessionDraft) onSessionDraft(false);
       // The conversation exists now: its tab joins the working row, selected,
       // and its row the rail's tree (D-087).
       onOpenSession(created.value.sessionId);
@@ -931,8 +943,12 @@ export function ProjectRoom({
               });
               return found.ok ? found.value : [];
             },
+            // Through the ref, never the closure: this memo is keyed on the
+            // lane, and a closure over `setPendingContext` pinned into
+            // whichever chat was on screen when the room mounted (found by
+            // the D-185 spec after D-215 made pins per chat).
             add: (path: string) =>
-              setPendingContext((previous) =>
+              setPinsFor(chatKeyRef.current, (previous) =>
                 previous.some((held) => held.kind === "file" && held.path === path) ||
                 previous.length >= MAX_DIRECTION_CONTEXT
                   ? previous
@@ -956,6 +972,7 @@ export function ProjectRoom({
   const chatKey = sessionDraft
     ? `${selectedMissionId}:draft`
     : `${selectedMissionId}:${readingSessionId ?? "lane"}`;
+  chatKeyRef.current = chatKey;
   const pendingContext = usePins(chatKey);
   const setPendingContext = (
     next: DirectionContextRef[] | ((previous: DirectionContextRef[]) => DirectionContextRef[])
@@ -1622,7 +1639,10 @@ export function ProjectRoom({
                     {/* Whose conversation this is (D-088, amended D-133):
                         the lane is in the tab's title, and choosing the tab
                         moves the room there — words and behavior, no dot. */}
-                    <SessionGlyph />
+                    <HarnessGlyph
+                      harness={raw ? sessionHarness(raw, session.sessionId) : null}
+                      fallback={<SessionGlyph />}
+                    />
                     <span
                       className={
                         session.title === null
@@ -2668,6 +2688,11 @@ export function ProjectRoom({
         isController={isController || isDraft}
         placeholderOverride={sessionDraft ? "What should this session do?" : undefined}
         alongsideOffer={alongsideOffer}
+        chatHarness={
+          !isDraft && !sessionDraft && detail && readingSessionId
+            ? sessionHarness(detail, readingSessionId)
+            : null
+        }
         policy={isDraft ? null : policyControl}
         onStop={
           !isDraft && composerStop && detail

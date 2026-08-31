@@ -17,6 +17,7 @@ import {
   queuedPositionLabel,
   runningSession,
   sessionActivity,
+  sessionHarness,
   sessionChangedFiles,
   sessionChecks,
   sessionNeedsYou,
@@ -743,6 +744,17 @@ describe("each chat's own word and footprint (D-094)", () => {
       sessions: [session(), session({ sessionId: "csn_two", title: "Tests" })],
       ...overrides
     });
+
+  it("a chat belongs to its latest turn's harness; an unrun chat to nobody (D-232)", () => {
+    const room = twoChats({
+      executions: [
+        execution({ executionId: "exe_1", sessionId: "csn_two", harness: "claude-code", createdAt: T(2) }),
+        execution({ executionId: "exe_2", sessionId: "csn_two", harness: "codex", model: "gpt-5.6-sol", createdAt: T(5) })
+      ]
+    });
+    expect(sessionHarness(room, "csn_two")).toBe("codex");
+    expect(sessionHarness(room, "csn_one")).toBeNull();
+  });
 
   it("a live turn reads working, with the turn's freshest reported moment", () => {
     const room = twoChats({

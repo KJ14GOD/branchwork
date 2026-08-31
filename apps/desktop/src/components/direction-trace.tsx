@@ -4,6 +4,8 @@ import type { ApprovalRequest, Direction, DirectionAttachment, MissionDetailResp
 import { novus } from "../bridge";
 import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../format";
 import { FileBadge, HarnessMark, HumanMark } from "./identity";
+import { HarnessGlyph } from "./harness-glyph";
+import { HARNESSES, type HarnessId } from "@novus/contracts";
 import { Markdown } from "./markdown";
 import type { ControlBlock, Feed, FeedBlock, Segment, ToolStep, TraceBlock, UsageTotals, WorkerView } from "./derive-feed";
 import { buildFeed, HARNESS_NAME, workerFiles, workerState } from "./derive-feed";
@@ -213,10 +215,14 @@ function SegmentView({
   segment,
   continued = false,
   printout = false,
+  harness = null,
   onOpenChanges,
   onOpenVerification
 }: {
   segment: Segment;
+  /** Which harness spoke this turn (D-232); null names Claude Code, the
+   *  only speaker there was before harnesses were plural. */
+  harness?: HarnessId | null;
   /** True for harness speech that follows earlier speech in the same turn,
    *  so the identity is stated once per turn rather than per paragraph. */
   continued?: boolean;
@@ -241,8 +247,16 @@ function SegmentView({
               signature element 2 refuses. */}
           {!continued && (
             <span className="harness-identity">
-              <HarnessMark />
-              <span className="harness-name">{HARNESS_NAME}</span>
+              {harness === "codex" ? (
+                <span className="mark mark-harness" aria-hidden="true">
+                  <HarnessGlyph harness="codex" fallback={null} />
+                </span>
+              ) : (
+                <HarnessMark />
+              )}
+              <span className="harness-name">
+                {HARNESSES.find((entry) => entry.id === harness)?.label ?? HARNESS_NAME}
+              </span>
             </span>
           )}
           <div className="harness-body">
@@ -561,6 +575,7 @@ export function TraceView({
         return (
           <SegmentView
             key={segment.key}
+            harness={block.harness}
             segment={segment}
             continued={continued}
             printout={block.printout}
@@ -573,6 +588,7 @@ export function TraceView({
       {checkpoints.map((segment) => (
         <SegmentView
           key={segment.key}
+          harness={block.harness}
           segment={segment}
           onOpenChanges={onOpenChanges}
           onOpenVerification={onOpenVerification}
@@ -582,6 +598,7 @@ export function TraceView({
       {checkRuns.map((segment) => (
         <SegmentView
           key={segment.key}
+          harness={block.harness}
           segment={segment}
           onOpenChanges={onOpenChanges}
           onOpenVerification={onOpenVerification}
@@ -591,6 +608,7 @@ export function TraceView({
       {outcomes.map((segment) => (
         <SegmentView
           key={segment.key}
+          harness={block.harness}
           segment={segment}
           onOpenChanges={onOpenChanges}
           onOpenVerification={onOpenVerification}

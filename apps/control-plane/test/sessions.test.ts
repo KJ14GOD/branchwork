@@ -1013,3 +1013,34 @@ describe("Codex parity on the direction road (D-231)", () => {
     expect((payload as { review?: boolean }).review).toBe(true);
   });
 });
+
+describe("a chat is one harness's (D-232)", () => {
+  it("the other harness's model into an existing chat is refused in words toward a new chat", async () => {
+    const lane = await mission();
+    const first = await direct(lane, "Build the guard");
+    const turn = await latestExecution(lane.workstreamId);
+    await report(lane.credential, turn.executionId, [harnessSession(1, "cli-claude"), completed(2)]);
+
+    const crossed = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${lane.missionId}/direction`,
+      headers: bearer(kartik),
+      payload: {
+        body: "Now with Codex",
+        model: "gpt-5.6-sol",
+        effort: "medium",
+        workstreamId: lane.workstreamId,
+        sessionId: first.direction.sessionId
+      }
+    });
+    expect(crossed.statusCode).toBe(409);
+    const message = (crossed.json() as { error: { code: string; message: string } }).error;
+    expect(message.code).toBe("harness_mismatch");
+    expect(message.message).toContain("Claude Code");
+    expect(message.message).toContain("new chat");
+
+    // The same words into a NEW chat carrying the transcript road are fine.
+    const fresh = await direct(lane, "Now with Codex", { model: "gpt-5.6-sol", effort: "medium", newSession: true });
+    expect(fresh.direction.sessionId).not.toBe(first.direction.sessionId);
+  });
+});

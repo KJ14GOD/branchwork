@@ -3,7 +3,9 @@ import {
   CLAUDE_MODELS,
   CODEX_MODELS,
   effortsFor,
+  HARNESSES,
   harnessOf,
+  type HarnessId,
   speedsFor,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
@@ -143,6 +145,7 @@ export function Composer({
   isController,
   placeholderOverride,
   alongsideOffer,
+  chatHarness,
   policy,
   onEmptySubmit,
   onSubmit,
@@ -173,6 +176,11 @@ export function Composer({
    *  running chat, or run this one alongside, read-only. Null keeps the
    *  ordinary immediate submit. */
   alongsideOffer?: { runningTitle: string | null } | null;
+  /** Whose harness the chat on screen is (D-232) — the one its latest turn
+   *  ran on — or null for a chat that has not run yet. Picking the other
+   *  harness's model shows the swap sentence, and sending then starts a new
+   *  chat carrying this one's transcript instead of crossing it. */
+  chatHarness?: HarnessId | null;
   /** The lane's permission profile, worn on the foot beside model and effort
    *  (D-115) — visible to everyone who can read the composer, changeable by
    *  whoever the server says holds `policy.set`. Null hides the chip. */
@@ -201,6 +209,9 @@ export function Composer({
     /** Opens the turn as Codex's reviewer over the uncommitted changes
      *  (D-231) — the / menu's review row, never typed words. */
     review?: boolean;
+    /** The chosen model belongs to the other harness (D-232): start a new
+     *  chat for it, carrying this chat's transcript, rather than crossing. */
+    swap?: boolean;
     attachmentIds?: string[];
     /** Files chosen but not uploaded, because there was no mission to upload
      *  them to yet (D-201). The caller uploads them once there is one. */
@@ -387,14 +398,24 @@ export function Composer({
    *  command is the direction, so mid-sentence slashes stay paths. */
   const [slashToken, setSlashToken] = useState<{ query: string } | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
+  // The lane's slash commands are Claude's dialect (D-230): Codex composes
+  // none, so on a Codex model the rows are hidden rather than offered as
+  // words that invoke nothing (D-232).
   const commandMatches =
-    slashToken === null || !slashCommands || slashCommands.length === 0
+    slashToken === null || !slashCommands || slashCommands.length === 0 || harnessOf(model) === "codex"
       ? []
       : slashCommands
           .filter((command) =>
             command.name.toLowerCase().includes(slashToken.query.toLowerCase())
           )
           .slice(0, 8);
+  /** The chosen model is the other harness's (D-232): the send becomes a
+   *  new chat carrying this one's transcript, and the box says so first. */
+  const swapTo =
+    chatHarness !== undefined && chatHarness !== null && harnessOf(model) !== chatHarness
+      ? harnessOf(model)
+      : null;
+  const harnessName = (id: HarnessId): string => HARNESSES.find((entry) => entry.id === id)?.label ?? id;
   /** Codex's reviewer as a row (D-231): on a Codex model, / offers "Review
    *  uncommitted changes" — picking it sends, it never inserts words. */
   const reviewRow =
@@ -560,6 +581,7 @@ export function Composer({
       effort: effortsFor(model).includes(effort) ? effort : DEFAULT_EFFORT,
       speed: speedsFor(model).includes(speed) ? speed : "standard",
       alongside,
+      ...(swapTo !== null ? { swap: true } : {}),
       attachmentIds: attachments.map((image) => image.artifactId),
       attachmentPaths: heldPaths
     });
@@ -661,7 +683,7 @@ export function Composer({
       // only in a tooltip they may never hover.
       ? denialReason ?? "You can follow this mission — sending direction needs Contributor access"
       : isController
-        ? "Direct Claude Code…"
+        ? `Direct ${harnessName(harnessOf(model))}…`
         : "Add direction to the queue…");
 
   return (
@@ -1018,6 +1040,16 @@ export function Composer({
           aria-label="Direct Claude Code"
           data-testid="composer-input"
         />
+        {swapTo !== null && chatHarness && (
+          /* One sentence on its own line, no buttons (D-232): the send itself
+             is the act, and nothing opens until the person sends. Above the
+             foot rather than in it — a sentence in the chip row crushed the
+             chips and pushed the send control off the box. */
+          <div className="composer-swap" data-testid="composer-swap">
+            This chat is {harnessName(chatHarness)}&apos;s. Send starts a new {harnessName(swapTo)} chat with
+            its transcript.
+          </div>
+        )}
         <div className="composer-foot" ref={footRef}>
           {attach && (
             <button

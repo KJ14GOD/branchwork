@@ -2408,6 +2408,13 @@ body {
   min-height: 28px;
 }
 
+/* The harness-swap sentence (D-232): its own quiet line above the foot. */
+.composer-swap {
+  font: var(--type-meta);
+  color: var(--text-2);
+  padding-bottom: var(--s-2);
+}
+
 .chip-wrap {
   position: relative;
   display: inline-flex;
@@ -2442,6 +2449,21 @@ body {
   height: 14px;
   flex: none;
   color: var(--text-1);
+}
+
+/* Whose harness a chat is (D-232): the vendor mark at the chat glyph's
+   own size, on tabs and rail rows. */
+.harness-glyph {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+/* Inside the speaker's bordered mark the vendor glyph sits at the mark's
+   own inner size, so Codex's mark reads as Claude's does. */
+.mark-harness .harness-glyph {
+  width: 12px;
+  height: 12px;
 }
 
 :root[data-theme="dark"] .chip-glyph-bitmap {
