@@ -2497,6 +2497,16 @@ body {
   filter: invert(1);
 }
 
+/* A light-polarity bitmap (the Claude mark): the mirror rule — inverted in
+   light theme so it reads dark on light, left alone in dark. */
+.harness-glyph-light {
+  filter: invert(1);
+}
+
+:root[data-theme="dark"] .harness-glyph-light {
+  filter: none;
+}
+
 .composer-note {
   font: var(--type-meta);
   color: var(--text-2);

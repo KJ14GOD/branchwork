@@ -18,7 +18,10 @@ export function HarnessGlyph({
   if (harness === null) return <>{fallback}</>;
   return (
     <img
-      className="harness-glyph chip-glyph-bitmap"
+      // The two bitmaps have opposite polarity: Codex's mark is dark and
+      // inverts for dark theme; Claude's is light and inverts for light
+      // theme (owner-hit: dark-on-dark in the rail, light-on-light in light).
+      className={harness === "codex" ? "harness-glyph chip-glyph-bitmap" : "harness-glyph harness-glyph-light"}
       src={harness === "codex" ? codexIcon : claudeIcon}
       alt={harness === "codex" ? "Codex" : "Claude Code"}
       data-harness={harness}
