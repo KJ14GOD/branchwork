@@ -895,11 +895,85 @@ export const ReceiptSnapshotSchema = z.object({
    *  omit (PRODUCT.md#domain-model, Receipt). */
   remainingUncertain: z.array(z.string().max(300)).max(50),
   pullRequest: z
-    .object({ number: z.number().int().positive(), state: z.string().max(20) })
+    .object({
+      number: z.number().int().positive(),
+      state: z.string().max(20),
+      /** Where it lives on the host (D-234); null on snapshots from before. */
+      url: z.string().max(400).nullable().default(null),
+      mergedBy: z.string().max(120).nullable().default(null),
+      mergedAt: z.string().datetime().nullable().default(null)
+    })
     .strict()
     .nullable(),
   /** The event-log range this projects (ARCHITECTURE.md#event-model). */
-  eventRange: z.object({ fromSeq: z.number().int(), toSeq: z.number().int() }).strict()
+  eventRange: z.object({ fromSeq: z.number().int(), toSeq: z.number().int() }).strict(),
+  /** The conversations the work happened in (D-234): each lane's chats with
+   *  the harness they ran on. Empty on snapshots from before. */
+  sessions: z
+    .array(
+      z
+        .object({
+          workstreamName: z.string().min(1),
+          title: z.string().max(200).nullable(),
+          harness: z.string().max(40).nullable(),
+          createdByLogin: z.string().min(1),
+          directions: z.number().int().nonnegative()
+        })
+        .strict()
+    )
+    .max(50)
+    .default([]),
+  /** Every human direction, verbatim and attributed (D-234): the words that
+   *  steered the work, in the order they were given. Bounded. */
+  directions: z
+    .array(
+      z
+        .object({
+          authorLogin: z.string().min(1),
+          body: z.string().max(1000),
+          workstreamName: z.string().min(1),
+          sessionTitle: z.string().max(200).nullable(),
+          state: z.string().max(20),
+          submittedAt: z.string().datetime(),
+          appliedAt: z.string().datetime().nullable()
+        })
+        .strict()
+    )
+    .max(200)
+    .default([]),
+  /** Every permission question and its answer (D-234): who allowed what.
+   *  A policy-decided answer names the profile instead of a person. */
+  approvals: z
+    .array(
+      z
+        .object({
+          toolName: z.string().max(80),
+          displayName: z.string().max(120),
+          summary: z.string().max(400),
+          state: z.string().max(20),
+          respondedByLogin: z.string().max(120).nullable(),
+          respondedAt: z.string().datetime().nullable(),
+          requestedAt: z.string().datetime()
+        })
+        .strict()
+    )
+    .max(200)
+    .default([]),
+  /** The files the mission changed, one row per path with its final state
+   *  and summed arithmetic across checkpoints (D-234). Bounded. */
+  files: z
+    .array(
+      z
+        .object({
+          path: z.string().max(400),
+          state: z.string().max(20),
+          additions: z.number().int().nonnegative(),
+          deletions: z.number().int().nonnegative()
+        })
+        .strict()
+    )
+    .max(200)
+    .default([])
 });
 export type ReceiptSnapshot = z.infer<typeof ReceiptSnapshotSchema>;
 
@@ -4220,7 +4294,14 @@ export interface NovusBridge {
      *  markdown projection of the stored snapshot, written where the person
      *  chooses through the OS save dialog. Resolves `{ path }` on save, null
      *  when they cancel — a cancel is an answer, not an error. */
-    exportReceipt(input: { missionId: string; markdown: string }): Promise<IpcResult<{ path: string } | null>>;
+    /** Saves the receipt outside Novus (D-220, D-234): the deterministic
+     *  markdown for people, or the snapshot itself as JSON for systems —
+     *  compliance, review tooling, an archive. One dialog, one file. */
+    exportReceipt(input: {
+      missionId: string;
+      content: string;
+      format: "markdown" | "json";
+    }): Promise<IpcResult<{ path: string } | null>>;
     /** Takes it back out, into the ordinary list it left. */
     restore(missionId: string): Promise<IpcResult<null>>;
     respondApproval(input: {

@@ -34,6 +34,40 @@ export function renderReceipt(receipt: ReceiptSnapshot, missionId: string): stri
   }
   lines.push("", `Directions applied: ${receipt.directionsApplied}`);
 
+  if (receipt.sessions.length > 0) {
+    lines.push("", "## Chats", "");
+    for (const session of receipt.sessions) {
+      lines.push(
+        `- ${session.title ?? "untitled"} — ${session.workstreamName}` +
+          `${session.harness ? ` · ${session.harness}` : ""} · ${session.directions} ` +
+          `${session.directions === 1 ? "direction" : "directions"} · started by ${session.createdByLogin}`
+      );
+    }
+  }
+
+  if (receipt.directions.length > 0) {
+    lines.push("", "## Directions", "", "Every direction a person gave, in order, verbatim.");
+    for (const direction of receipt.directions) {
+      lines.push(
+        "",
+        `- **${direction.authorLogin}** · ${direction.submittedAt}` +
+          `${direction.sessionTitle ? ` · in "${direction.sessionTitle}"` : ""} · ${direction.state}`,
+        `  > ${direction.body.replace(/\n/g, "\n  > ")}`
+      );
+    }
+  }
+
+  if (receipt.approvals.length > 0) {
+    lines.push("", "## Approvals", "", "Every permission question the harness asked, and who answered.");
+    for (const approval of receipt.approvals) {
+      lines.push(
+        `- ${approval.displayName} — ${approval.state}` +
+          `${approval.respondedByLogin ? ` by ${approval.respondedByLogin}` : ""}` +
+          `${approval.respondedAt ? ` · ${approval.respondedAt}` : ""} · ${approval.summary}`
+      );
+    }
+  }
+
   if (receipt.decisions.length > 0) {
     lines.push("", "## Decisions");
     for (const decision of receipt.decisions) {
@@ -61,6 +95,12 @@ export function renderReceipt(receipt: ReceiptSnapshot, missionId: string): stri
     `${receipt.changes.filesChanged} ${receipt.changes.filesChanged === 1 ? "file" : "files"} changed, ` +
       `+${receipt.changes.additions} −${receipt.changes.deletions}`
   );
+  if (receipt.files.length > 0) {
+    lines.push("");
+    for (const file of receipt.files) {
+      lines.push(`- ${file.path} — ${file.state} +${file.additions} −${file.deletions}`);
+    }
+  }
 
   lines.push("", "## Verification", "");
   if (receipt.checks.length === 0) {
@@ -101,8 +141,24 @@ export function renderReceipt(receipt: ReceiptSnapshot, missionId: string): stri
   }
 
   if (receipt.pullRequest) {
-    lines.push("", `Pull request #${receipt.pullRequest.number} · ${receipt.pullRequest.state}`);
+    const pull = receipt.pullRequest;
+    lines.push(
+      "",
+      `Pull request #${pull.number} · ${pull.state}` +
+        `${pull.mergedBy ? ` · merged by ${pull.mergedBy}${pull.mergedAt ? ` ${pull.mergedAt}` : ""}` : ""}` +
+        `${pull.url ? ` · ${pull.url}` : ""}`
+    );
   }
 
   return lines.join("\n") + "\n";
+}
+
+/**
+ * The machine-readable export (D-234): the stored snapshot itself, keyed by
+ * mission, pretty-printed with stable key order — for compliance archives,
+ * review tooling, anything that reads rather than reads aloud. Deterministic
+ * for the same reason the markdown is: nothing here but the snapshot.
+ */
+export function renderReceiptJson(receipt: ReceiptSnapshot, missionId: string): string {
+  return `${JSON.stringify({ missionId, receipt }, null, 2)}\n`;
 }

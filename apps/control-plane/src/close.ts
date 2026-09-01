@@ -134,8 +134,54 @@ export async function projectReceipt(
     uncertain.push(`no check ran against ${row.name}'s latest work`.slice(0, 300));
   }
   const pull = await client.query(
-    `select provider_number, state from pull_requests
-      where mission_id = $1 order by created_at desc limit 1`,
+    `select p.provider_number, p.state, p.url, p.merged_by, p.merged_at from pull_requests p
+      where p.mission_id = $1 order by p.created_at desc limit 1`,
+    [missionId]
+  );
+  // The conversations the work happened in (D-234), each with the harness
+  // its latest turn ran on and how many directions it took.
+  const sessions = await client.query(
+    `select w.name as workstream_name, s.title, u.login,
+            (select e.harness from executions e where e.session_id = s.csn_id
+              order by e.created_at desc limit 1) as harness,
+            (select count(*)::int from directions d where d.session_id = s.csn_id) as directions
+       from workstream_sessions s
+       join workstreams w on w.wst_id = s.wst_id
+       join users u on u.user_id = s.created_by
+      where s.mission_id = $1 order by w.created_at, s.created_at, s.csn_id limit 50`,
+    [missionId]
+  );
+  // Every human direction, verbatim (D-234): the record of who steered what.
+  const directions = await client.query(
+    `select u.login, d.body, w.name as workstream_name, s.title as session_title,
+            d.state, d.submitted_at, d.applied_at
+       from directions d
+       join users u on u.user_id = d.author_user_id
+       join workstreams w on w.wst_id = d.wst_id
+       left join workstream_sessions s on s.csn_id = d.session_id
+      where d.mission_id = $1 order by d.ordinal limit 200`,
+    [missionId]
+  );
+  // Every permission question and its answer (D-234). A policy-decided
+  // answer has no responder; the resolution column says which profile.
+  const approvals = await client.query(
+    `select a.tool_name, a.display_name, a.summary, a.state, a.requested_at, a.responded_at,
+            u.login as responded_by_login, a.resolution
+       from approval_requests a
+       left join users u on u.user_id = a.responded_by
+      where a.mission_id = $1 order by a.requested_at, a.apr_id limit 200`,
+    [missionId]
+  );
+  // The files, one row per path (D-234): the last checkpoint's state for the
+  // path and the arithmetic summed across every checkpoint that touched it.
+  const files = await client.query(
+    `select fc.path,
+            (array_agg(fc.change_state order by c.created_at desc))[1] as state,
+            sum(fc.additions)::int as additions, sum(fc.deletions)::int as deletions
+       from file_changes fc
+       join checkpoints c on c.ckp_id = fc.ckp_id
+      where fc.mission_id = $1
+      group by fc.path order by fc.path limit 200`,
     [missionId]
   );
   const range = await client.query(
@@ -183,12 +229,53 @@ export async function projectReceipt(
     artifacts: await receiptArtifacts(client, missionId),
     remainingUncertain: uncertain.slice(0, 50),
     pullRequest: pull.rows[0]
-      ? { number: Number(pull.rows[0].provider_number), state: pull.rows[0].state as string }
+      ? {
+          number: Number(pull.rows[0].provider_number),
+          state: pull.rows[0].state as string,
+          url: ((pull.rows[0].url as string | null) ?? null)?.slice(0, 400) ?? null,
+          mergedBy: ((pull.rows[0].merged_by as string | null) ?? null)?.slice(0, 120) ?? null,
+          mergedAt: pull.rows[0].merged_at ? (pull.rows[0].merged_at as Date).toISOString() : null
+        }
       : null,
     eventRange: {
       fromSeq: Number(range.rows[0]?.from_seq ?? 0),
       toSeq: Number(range.rows[0]?.to_seq ?? 0)
-    }
+    },
+    sessions: sessions.rows.map((row) => ({
+      workstreamName: row.workstream_name as string,
+      title: ((row.title as string | null) ?? null)?.slice(0, 200) ?? null,
+      harness: (row.harness as string | null) ?? null,
+      createdByLogin: row.login as string,
+      directions: Number(row.directions ?? 0)
+    })),
+    directions: directions.rows.map((row) => ({
+      authorLogin: row.login as string,
+      body: (row.body as string).slice(0, 1000),
+      workstreamName: row.workstream_name as string,
+      sessionTitle: ((row.session_title as string | null) ?? null)?.slice(0, 200) ?? null,
+      state: row.state as string,
+      submittedAt: (row.submitted_at as Date).toISOString(),
+      appliedAt: row.applied_at ? (row.applied_at as Date).toISOString() : null
+    })),
+    approvals: approvals.rows.map((row) => ({
+      toolName: (row.tool_name as string).slice(0, 80),
+      displayName: (row.display_name as string).slice(0, 120),
+      summary: (row.summary as string).slice(0, 400),
+      state: row.state as string,
+      // A person's login, or the policy that answered for them (D-115),
+      // read off the resolution when no responder is recorded.
+      respondedByLogin:
+        ((row.responded_by_login as string | null) ?? (row.resolution as string | null) ?? null)?.slice(0, 120) ??
+        null,
+      respondedAt: row.responded_at ? (row.responded_at as Date).toISOString() : null,
+      requestedAt: (row.requested_at as Date).toISOString()
+    })),
+    files: files.rows.map((row) => ({
+      path: (row.path as string).slice(0, 400),
+      state: row.state as string,
+      additions: Number(row.additions ?? 0),
+      deletions: Number(row.deletions ?? 0)
+    }))
   });
 }
 

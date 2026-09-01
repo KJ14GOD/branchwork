@@ -1327,28 +1327,35 @@ function registerIpc(): void {
    */
   ipcMain.handle("novus:missions:export-receipt", async (_event, raw: unknown) => {
     const parsed = z
-      .object({ missionId: z.string().startsWith("msn_"), markdown: z.string().min(1).max(1_000_000) })
+      .object({
+        missionId: z.string().startsWith("msn_"),
+        content: z.string().min(1).max(4_000_000),
+        // Markdown for people, JSON for systems (D-234); the renderer chose
+        // the bytes, this only chooses the name.
+        format: z.enum(["markdown", "json"]).default("markdown")
+      })
       .safeParse(raw);
     if (!parsed.success) {
       return { ok: false, code: "invalid_export", message: "Nothing to export." };
     }
-    const fileName = `receipt-${parsed.data.missionId}.md`;
+    const json = parsed.data.format === "json";
+    const fileName = `receipt-${parsed.data.missionId}.${json ? "json" : "md"}`;
     try {
       // Test seam: the e2e cannot drive a native dialog, so a declared
       // directory stands in for the person's choice — same write, same result.
       const e2eDir = process.env.NOVUS_E2E_EXPORT_DIR;
       if (e2eDir) {
         const target = join(e2eDir, fileName);
-        writeFileSync(target, parsed.data.markdown, "utf8");
+        writeFileSync(target, parsed.data.content, "utf8");
         return { ok: true, value: { path: target } };
       }
       const chosen = await dialog.showSaveDialog({
         title: "Export receipt",
         defaultPath: join(app.getPath("downloads"), fileName),
-        filters: [{ name: "Markdown", extensions: ["md"] }]
+        filters: json ? [{ name: "JSON", extensions: ["json"] }] : [{ name: "Markdown", extensions: ["md"] }]
       });
       if (chosen.canceled || !chosen.filePath) return { ok: true, value: null };
-      writeFileSync(chosen.filePath, parsed.data.markdown, "utf8");
+      writeFileSync(chosen.filePath, parsed.data.content, "utf8");
       return { ok: true, value: { path: chosen.filePath } };
     } catch (error) {
       return {

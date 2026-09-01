@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { MissionDetailResponse, ReceiptSnapshot } from "@novus/contracts";
 import { ReceiptArtifactRow } from "./artifact-row";
 import { roleLabel } from "./identity";
-import { renderReceipt } from "./receipt-export";
+import { renderReceipt, renderReceiptJson } from "./receipt-export";
 import { novus } from "../bridge";
 import { shortSha } from "../format";
 
@@ -30,10 +30,14 @@ export function ReceiptView({
   // The one word this document says about the export: where it went, or why
   // it did not. A cancelled dialog says nothing — a cancel is an answer.
   const [exportWord, setExportWord] = useState<string | null>(null);
-  const exportReceipt = async () => {
+  const exportReceipt = async (format: "markdown" | "json") => {
     const result = await novus().missions.exportReceipt({
       missionId: detail.mission.missionId,
-      markdown: renderReceipt(receipt, detail.mission.missionId)
+      content:
+        format === "json"
+          ? renderReceiptJson(receipt, detail.mission.missionId)
+          : renderReceipt(receipt, detail.mission.missionId),
+      format
     });
     if (!result.ok) setExportWord(result.message);
     else if (result.value) setExportWord(`Saved to ${result.value.path}`);
@@ -49,10 +53,19 @@ export function ReceiptView({
         })}
         <button
           className="btn btn-text receipt-export"
-          onClick={() => void exportReceipt()}
+          onClick={() => void exportReceipt("markdown")}
           data-testid="export-receipt"
         >
           Export
+        </button>
+        {/* The same record for systems (D-234): the snapshot itself, for a
+            compliance archive or review tooling to read rather than a person. */}
+        <button
+          className="btn btn-text receipt-export"
+          onClick={() => void exportReceipt("json")}
+          data-testid="export-receipt-json"
+        >
+          Export JSON
         </button>
       </p>
       {exportWord && (
@@ -72,6 +85,84 @@ export function ReceiptView({
           </li>
         ))}
       </ul>
+
+      {/* The conversations the work happened in (D-234), each with the
+          harness it ran on — a receipt that names the room names the chats. */}
+      {receipt.sessions.length > 0 && (
+        <>
+          <h3 className="receipt-heading">Chats</h3>
+          <ul className="receipt-list" data-testid="receipt-sessions">
+            {receipt.sessions.map((session, index) => (
+              <li key={index} className="receipt-row">
+                <span>
+                  {session.title ?? "untitled"}
+                  <span className="receipt-quiet"> · {session.workstreamName}</span>
+                </span>
+                <span className="receipt-quiet">
+                  {session.harness ? `${session.harness} · ` : ""}
+                  {session.directions} {session.directions === 1 ? "direction" : "directions"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {/* Every direction a person gave, verbatim (D-234): the words are the
+          record of who steered the work, never a summary of them. */}
+      {receipt.directions.length > 0 && (
+        <>
+          <h3 className="receipt-heading">Directions</h3>
+          <div data-testid="receipt-directions">
+            {receipt.directions.map((direction, index) => (
+              <div className="receipt-decision" key={index}>
+                <p className="receipt-row">
+                  <span>
+                    {direction.authorLogin}
+                    {direction.sessionTitle && (
+                      <span className="receipt-quiet"> · in “{direction.sessionTitle}”</span>
+                    )}
+                  </span>
+                  <span className="receipt-quiet">{direction.state}</span>
+                </p>
+                <p className="receipt-rationale">“{direction.body}”</p>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Every permission question and its answer (D-234): who allowed what,
+          or which policy answered for them. */}
+      {receipt.approvals.length > 0 && (
+        <>
+          <h3 className="receipt-heading">Approvals</h3>
+          <ul className="receipt-list" data-testid="receipt-approvals">
+            {receipt.approvals.map((approval, index) => (
+              <li key={index} className="receipt-row">
+                <span>
+                  {approval.displayName}
+                  <span className="receipt-quiet"> · {approval.summary}</span>
+                </span>
+                <span
+                  className={
+                    approval.state === "approved"
+                      ? "tone-ok"
+                      : approval.state === "denied"
+                        ? "tone-danger"
+                        : "receipt-quiet"
+                  }
+                >
+                  {approval.state}
+                  {approval.respondedByLogin && (
+                    <span className="receipt-quiet"> · {approval.respondedByLogin}</span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       {receipt.decisions.length > 0 && (
         <>
@@ -109,6 +200,20 @@ export function ReceiptView({
           <span className="tone-danger">−{receipt.changes.deletions.toLocaleString()}</span>
         </span>
       </p>
+      {/* The paths themselves (D-234): the arithmetic above, itemised. */}
+      {receipt.files.length > 0 && (
+        <ul className="receipt-list" data-testid="receipt-files">
+          {receipt.files.map((file) => (
+            <li key={file.path} className="receipt-row mono">
+              <span>{file.path}</span>
+              <span className="receipt-quiet">
+                {file.state} <span className="tone-ok">+{file.additions}</span>{" "}
+                <span className="tone-danger">−{file.deletions}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <h3 className="receipt-heading">Verification</h3>
       {receipt.checks.length === 0 && <p className="receipt-quiet">No checks were observed.</p>}
@@ -165,6 +270,13 @@ export function ReceiptView({
       {receipt.pullRequest && (
         <p className="receipt-quiet">
           Pull request #{receipt.pullRequest.number} · {receipt.pullRequest.state}
+          {receipt.pullRequest.mergedBy && ` · merged by ${receipt.pullRequest.mergedBy}`}
+          {receipt.pullRequest.url && (
+            <>
+              {" · "}
+              <span className="mono">{receipt.pullRequest.url}</span>
+            </>
+          )}
         </p>
       )}
     </div>

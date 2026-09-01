@@ -363,6 +363,14 @@ describe("the receipt", () => {
     expect(snapshot.decisions).toHaveLength(1);
     expect(snapshot.decisions[0]?.rationale).toBe("It does the thing.");
     expect(snapshot.changes).toEqual({ filesChanged: 1, additions: 5, deletions: 1 });
+    // The D-234 record: the chats, the directions verbatim, and the files.
+    expect(snapshot.sessions.length).toBeGreaterThan(0);
+    expect(snapshot.sessions[0]?.directions).toBeGreaterThan(0);
+    expect(snapshot.directions.length).toBeGreaterThan(0);
+    expect(snapshot.directions[0]?.authorLogin).toBe("kartik");
+    expect(snapshot.directions.every((direction) => direction.body.length > 0)).toBe(true);
+    expect(snapshot.files.map((file) => file.path)).toHaveLength(1);
+    expect(snapshot.files[0]).toMatchObject({ additions: 5, deletions: 1 });
     // Nothing was verified, and the receipt says so rather than omitting it.
     expect(snapshot.remainingUncertain.join(" ")).toContain("no check ran against");
     expect(Number(stored.rows[0].to_seq)).toBeGreaterThan(Number(stored.rows[0].from_seq));
