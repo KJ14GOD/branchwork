@@ -190,7 +190,9 @@ export async function listExecutions(db: Queryable, missionId: string): Promise<
       cacheCreationTokens: numberOrNull(row.cache_creation_tokens),
       costUsd: numberOrNull(row.cost_usd),
       durationMs: numberOrNull(row.harness_duration_ms),
-      turns: numberOrNull(row.harness_turns)
+      turns: numberOrNull(row.harness_turns),
+      contextTokens: numberOrNull(row.context_tokens),
+      contextWindow: numberOrNull(row.context_window)
     }
   }));
 }

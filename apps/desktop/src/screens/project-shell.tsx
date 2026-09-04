@@ -20,6 +20,7 @@ import { Dialog } from "../components/dialog";
 import { GearGlyph, HumanMark, SignOutGlyph } from "../components/identity";
 import { SettingsDialog } from "../components/settings-dialog";
 import { CommandPalette, type PaletteCommand } from "../components/command-palette";
+import { pressDictationKey, releaseDictationKey, toggleDictationFromKeyboard } from "../components/dictation";
 import { applyTheme } from "../theme";
 import { chordLabel, matchesChord, useKeybindings } from "../keybindings";
 import { MissionTabs } from "../components/mission-tabs";
@@ -73,6 +74,90 @@ import { Inspector, type InspectorSection } from "../components/inspector";
  * project, no mission, and nothing to click — so this lives beside Add project
  * in the rail, which is the only place a person with an empty Novus looks.
  */
+/**
+ * Removing a project from the rail (D-235).
+ *
+ * One dialog with two honest states. While the project still lists a mission
+ * it cannot be removed — a project must not vanish while work in it can still
+ * be opened or asked a question — so the dialog says how many are listed and
+ * offers to archive them, each one judged by the server and any refusal said
+ * in words. Once nothing is listed, the consequence is one sentence and the
+ * act is one danger button: the folder or host repository is untouched, the
+ * archived missions stay in the record, and connecting it again brings the
+ * same project back. Nothing here deletes anything.
+ */
+function RemoveProjectDialog({
+  project,
+  archivedCount,
+  error,
+  busy,
+  onArchiveAll,
+  onRemove,
+  onClose
+}: {
+  project: Project;
+  /** Missions already filed away from this project — what stays. */
+  archivedCount: number;
+  error: string | null;
+  busy: boolean;
+  onArchiveAll: () => Promise<void>;
+  onRemove: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const listed = project.missions.length;
+  const kept =
+    archivedCount > 0
+      ? `${plural(archivedCount, "archived mission")} stay${archivedCount === 1 ? "s" : ""} in the record`
+      : null;
+  const stays =
+    project.provider === "local"
+      ? `The folder stays on this Mac${kept ? `, and its ${kept}` : ""}. Add the folder again to bring the project back.`
+      : `${kept ? `Its ${kept}. ` : ""}Starting a mission on it again brings the project back.`;
+  return (
+    <Dialog label={`Remove ${project.name}`} onClose={onClose} testId="remove-project-dialog">
+      <header className="dialog-head">
+        <h2>Remove {project.name}</h2>
+        <p className="dialog-sub" data-testid="remove-project-sentence">
+          {listed > 0
+            ? `${plural(listed, "mission is", "missions are")} still listed here. A project is removed only once its missions are archived — one still working, or waiting on an answer, will say so.`
+            : stays}
+        </p>
+      </header>
+      {error && (
+        <p className="inline-error remove-project-error" role="alert" data-testid="remove-project-error">
+          {error}
+        </p>
+      )}
+      <footer className="dialog-actions">
+        <button className="btn btn-text" onClick={onClose} disabled={busy} data-testid="remove-project-cancel">
+          Cancel
+        </button>
+        {listed > 0 ? (
+          <button
+            className="btn btn-primary"
+            onClick={() => void onArchiveAll()}
+            disabled={busy}
+            aria-busy={busy}
+            data-testid="remove-project-archive-all"
+          >
+            {busy ? "Archiving…" : `Archive ${plural(listed, "mission")}`}
+          </button>
+        ) : (
+          <button
+            className="btn btn-danger"
+            onClick={() => void onRemove()}
+            disabled={busy}
+            aria-busy={busy}
+            data-testid="remove-project-confirm"
+          >
+            {busy ? "Removing…" : "Remove"}
+          </button>
+        )}
+      </footer>
+    </Dialog>
+  );
+}
+
 /**
  * The missions that have been filed away.
  *
@@ -317,6 +402,10 @@ export interface Project {
   provider: "github" | "local";
   providerRepoId: string;
   name: string;
+  /** The control plane's row for it, once one exists — a local folder has
+   *  one from registration, a GitHub repository from its first mission; a
+   *  repository merely opened this session has none yet (D-235). */
+  repoId: string | null;
   /** Local repositories live on one machine; elsewhere they render dimmed. */
   onThisMachine: boolean;
   missions: Mission[];
@@ -329,6 +418,7 @@ interface OpenedRepo {
 }
 
 interface LocalRepo {
+  repoId: string;
   providerRepoId: string;
   name: string;
   defaultBranch: string;
@@ -769,6 +859,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** The Archived view: read on demand, because it is not the rail's job. */
   const [archived, setArchived] = useState<Mission[] | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
+  /** The project whose Remove dialog is open, by key (D-235). */
+  const [removingKey, setRemovingKey] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -979,26 +1073,34 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       provider: "github" | "local",
       providerRepoId: string,
       name: string,
-      onThisMachine: boolean
+      onThisMachine: boolean,
+      repoId: string | null
     ): Project => {
       const key = keyOf(provider, providerRepoId);
       const existing = map.get(key);
-      if (existing) return existing;
-      const project: Project = { key, provider, providerRepoId, name, onThisMachine, missions: [] };
+      if (existing) {
+        if (existing.repoId === null && repoId !== null) existing.repoId = repoId;
+        return existing;
+      }
+      const project: Project = { key, provider, providerRepoId, name, repoId, onThisMachine, missions: [] };
       map.set(key, project);
       return project;
     };
     const here = (providerRepoId: string): boolean => checkedOutHere.has(providerRepoId);
-    for (const repo of localRepos) ensure("local", repo.providerRepoId, repo.name, repo.onThisMachine);
+    for (const repo of localRepos) {
+      ensure("local", repo.providerRepoId, repo.name, repo.onThisMachine, repo.repoId);
+    }
     for (const mission of missions ?? []) {
       const repo = mission.repository;
       if (!repo) continue;
       // Whether the work can happen *here* is one question with one answer:
       // does this machine hold the checkout? A GitHub repository the runner has
       // not fetched yet honestly does not, and says so.
-      ensure(repo.provider, repo.providerRepoId, repo.name, here(repo.providerRepoId)).missions.push(mission);
+      ensure(repo.provider, repo.providerRepoId, repo.name, here(repo.providerRepoId), repo.repoId).missions.push(
+        mission
+      );
     }
-    for (const repo of opened) ensure(repo.provider, repo.providerRepoId, repo.name, here(repo.providerRepoId));
+    for (const repo of opened) ensure(repo.provider, repo.providerRepoId, repo.name, here(repo.providerRepoId), null);
     for (const project of map.values()) {
       project.missions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     }
@@ -1271,6 +1373,16 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
           }
           return lastSection.current ?? "overview";
         });
+      } else if (matchesChord(event, keys.dictate)) {
+        // Spoken direction (D-240, D-243): the chord starts or stops the take
+        // in the box a person is in — held, it is push-to-talk and the take
+        // ends on release; tapped, it runs until the next tap. Key repeat
+        // is ignored: a held key fires it many times a second.
+        if (event.repeat) {
+          event.preventDefault();
+          return;
+        }
+        if (pressDictationKey()) event.preventDefault();
       } else if (matchesChord(event, keys.openSettings)) {
         event.preventDefault();
         // The popover is anchored in the rail; the chord shows the rail
@@ -1309,8 +1421,19 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
         }
       }
     };
+    // The dictate chord's release (D-243): the key or its modifier lifting
+    // ends a held take; a tapped one keeps running.
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Meta" || event.key === "Control" || event.key.toLowerCase() === keys.dictate.key) {
+        releaseDictationKey();
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, [currentProject, currentProjectKey, projects, newMissionHere, openMissionTab, activeMissionId, keys]);
 
   // A dialog about one mission's workspace must not survive a move to
@@ -1344,6 +1467,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       name: picked.name,
       provider: picked.provider,
       providerRepoId: picked.providerRepoId,
+      repoId: null,
       missions: [],
       onThisMachine: true
     });
@@ -1488,6 +1612,73 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       await refresh();
     } finally {
       setRestoringMissionId(null);
+    }
+  };
+
+  /**
+   * Removing a project from the rail (D-235). The dialog reads the live
+   * project by key, so archiving its missions from inside it moves the dialog
+   * from "still listed" to "remove" on the next refresh without reopening.
+   */
+  const removingProject = removingKey ? (projects.find((project) => project.key === removingKey) ?? null) : null;
+
+  /** Archives every mission the project still lists, one server-judged act
+   *  per mission (`mission.archive` and its own refusals), and says which
+   *  refused rather than stopping at the first. */
+  const archiveAllIn = async (project: Project) => {
+    setRemoveError(null);
+    setRemoveBusy(true);
+    try {
+      const refused: { goal: string; message: string }[] = [];
+      for (const mission of project.missions) {
+        const result = await novus().missions.archive(mission.missionId);
+        if (!result.ok) {
+          refused.push({ goal: mission.goal, message: result.message });
+          continue;
+        }
+        setWorkingSet((previous) => {
+          const tab = previous.tabs.find((entry) => entry.missionId === mission.missionId);
+          return tab ? closeTab(previous, tab.id) : previous;
+        });
+      }
+      await refresh();
+      if (refused.length > 0) {
+        const first = refused[0]!;
+        setRemoveError(
+          `${refused.length === project.missions.length ? "None" : `${refused.length} of ${project.missions.length}`} could be archived — ${truncateLabel(first.goal, 40)}: ${first.message}`
+        );
+      }
+    } finally {
+      setRemoveBusy(false);
+    }
+  };
+
+  /** Disconnects the project: the server's decision (`org.repo.disconnect`),
+   *  refused while a mission is still listed. A repository this session only
+   *  opened, with no row behind it yet, simply leaves the session's list. */
+  const removeProject = async (project: Project) => {
+    setRemoveError(null);
+    setRemoveBusy(true);
+    try {
+      if (project.repoId !== null) {
+        const result = await novus().repos.disconnect(project.repoId);
+        if (!result.ok) {
+          setRemoveError(result.message);
+          return;
+        }
+      }
+      setOpened((previous) => previous.filter((candidate) => keyOf(candidate.provider, candidate.providerRepoId) !== project.key));
+      setExpanded((previous) => {
+        if (!previous.has(project.key)) return previous;
+        const next = new Set(previous);
+        next.delete(project.key);
+        return next;
+      });
+      setRailProject((previous) => (previous === project.key ? null : previous));
+      setRemovingKey(null);
+      await refresh();
+    } finally {
+      setRemoveBusy(false);
     }
   };
   const openFiles = active ? (filesByTab[active.id] ?? []) : [];
@@ -1722,6 +1913,22 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                         here deliberately: the row around it opens a project and
                         closes the one already showing, and starting a mission is
                         neither of those. */}
+                    {/* The project's own quiet control, the mission row's
+                        Archive one level up (D-235): a word on hover, never
+                        a permanent mark beside a project nobody is removing. */}
+                    <button
+                      className="side-remove-project"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setRemoveError(null);
+                        setRemovingKey(project.key);
+                      }}
+                      aria-label={`Remove ${project.name}`}
+                      title={`Remove ${project.name}`}
+                      data-testid="project-remove"
+                    >
+                      Remove
+                    </button>
                     <button
                       className="side-new-mission"
                       onClick={(event) => {
@@ -2130,6 +2337,13 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                   hint: chordLabel(keys.find),
                   run: () => setFindAsk((ask) => ask + 1)
                 });
+                commands.push({
+                  id: "dictate",
+                  group: "Mission",
+                  label: "Dictate into the box, or stop",
+                  hint: chordLabel(keys.dictate),
+                  run: () => void toggleDictationFromKeyboard()
+                });
                 const detail = openDetail;
                 if (detail && detail.control.holderUserId !== detail.viewerUserId) {
                   const may = detail.capabilities.includes("control.request");
@@ -2170,6 +2384,25 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             onSignOut={() => {
               setSettingsDialogOpen(false);
               void novus().auth.signOut();
+            }}
+          />
+        )}
+        {removingProject && (
+          <RemoveProjectDialog
+            project={removingProject}
+            archivedCount={
+              removingProject.repoId === null
+                ? 0
+                : (archived ?? []).filter((mission) => mission.repository?.repoId === removingProject.repoId).length
+            }
+            error={removeError}
+            busy={removeBusy}
+            onArchiveAll={() => archiveAllIn(removingProject)}
+            onRemove={() => removeProject(removingProject)}
+            onClose={() => {
+              if (removeBusy) return;
+              setRemovingKey(null);
+              setRemoveError(null);
             }}
           />
         )}
@@ -2737,6 +2970,9 @@ function NewMissionDialog({
           placeholderOverride="What should Claude Code work on?"
           onEmptySubmit={onClose}
           onSubmit={create}
+          /* Spoken direction (D-240): no worktree yet, so the repository's
+             own checkout — when this Mac holds one — lends its names. */
+          dictation={{ providerRepoId: target.providerRepoId }}
           /* No mission exists to upload to yet, so the composer holds what is
              picked and `create` uploads it the instant one does (D-201).
              Clipboard paste is deliberately absent: its bytes have no path to

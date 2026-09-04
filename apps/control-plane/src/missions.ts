@@ -122,11 +122,14 @@ async function upsertRepository(
     [ctx.orgId, available.providerRepoId, provider]
   );
   if (existing.rowCount && existing.rows[0]) {
-    await client.query("update repositories set name = $2, default_branch = $3 where repo_id = $1", [
-      existing.rows[0].repo_id,
-      available.name,
-      available.defaultBranch
-    ]);
+    // Connecting a repository that was disconnected reconnects it (D-235):
+    // the same row, the same identity, its archived missions still its own.
+    await client.query(
+      `update repositories
+          set name = $2, default_branch = $3, disconnected_at = null, disconnected_by = null
+        where repo_id = $1`,
+      [existing.rows[0].repo_id, available.name, available.defaultBranch]
+    );
     return existing.rows[0].repo_id as string;
   }
   const repoId = newRepoId();
@@ -898,9 +901,13 @@ export async function registerLocalRepository(
   };
 }
 
+/** The organization's connected local repositories. A disconnected one is
+ *  absent here and nowhere else (D-235): its missions still name it. */
 export async function listLocalRepositories(db: Db, ctx: AuthedContext): Promise<RepositoryRef[]> {
   const rows = await db.query(
-    "select repo_id, provider_repo_id, name, default_branch from repositories where org_id = $1 and provider = 'local' order by created_at desc",
+    `select repo_id, provider_repo_id, name, default_branch from repositories
+      where org_id = $1 and provider = 'local' and disconnected_at is null
+      order by created_at desc`,
     [ctx.orgId]
   );
   return rows.rows.map((row) => ({

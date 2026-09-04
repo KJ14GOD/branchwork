@@ -150,12 +150,52 @@ export function workerFiles(worker: WorkerView): string[] {
   return [...files];
 }
 
+/**
+ * How full a chat's context is, from its latest turn that said (D-236). The
+ * percentage exists only when the harness named both the prompt it carried and
+ * the window it fits in; with the window unknown the tokens stand alone, and
+ * with neither reported there is nothing to say.
+ */
+export interface ContextFill {
+  tokens: number;
+  window: number | null;
+  /** Whole percent, null when the window is unknown. */
+  percent: number | null;
+}
+
+export function contextFillOf(usage: UsageTotals | null | undefined): ContextFill | null {
+  if (!usage || usage.contextTokens === null) return null;
+  const window = usage.contextWindow;
+  return {
+    tokens: usage.contextTokens,
+    window,
+    percent: window !== null && window > 0 ? Math.min(100, Math.round((usage.contextTokens / window) * 100)) : null
+  };
+}
+
+/** The chat's current fill: the latest turn in the feed that reported one. */
+export function latestContextFill(blocks: readonly FeedBlock[]): ContextFill | null {
+  for (let at = blocks.length - 1; at >= 0; at -= 1) {
+    const block = blocks[at]!;
+    if (block.kind !== "trace") continue;
+    const fill = contextFillOf(block.usage);
+    if (fill) return fill;
+  }
+  return null;
+}
+
 /** What the harness said this turn cost, summed over the turns of one trace. */
 export interface UsageTotals {
   inputTokens: number;
   outputTokens: number;
   costUsd: number | null;
   durationMs: number | null;
+  /** How full the chat's context was at the turn's last model call (D-236):
+   *  the latest figure the harness reported, never a sum, null when it said
+   *  nothing. */
+  contextTokens: number | null;
+  /** The model's window as the harness named it; null when it did not. */
+  contextWindow: number | null;
 }
 
 export interface TraceBlock {
@@ -619,17 +659,29 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
         break;
       }
       case "harness.usage": {
-        const totals = block.usage ?? { inputTokens: 0, outputTokens: 0, costUsd: null, durationMs: null };
+        const totals = block.usage ?? {
+          inputTokens: 0,
+          outputTokens: 0,
+          costUsd: null,
+          durationMs: null,
+          contextTokens: null,
+          contextWindow: null
+        };
         const add = (current: number | null, value: unknown): number | null => {
           const parsed = typeof value === "number" && Number.isFinite(value) ? value : null;
           if (parsed === null) return current;
           return (current ?? 0) + parsed;
         };
+        const latest = (current: number | null, value: unknown): number | null =>
+          typeof value === "number" && Number.isFinite(value) ? value : current;
         block.usage = {
           inputTokens: add(totals.inputTokens, event.payload.inputTokens) ?? 0,
           outputTokens: add(totals.outputTokens, event.payload.outputTokens) ?? 0,
           costUsd: add(totals.costUsd, event.payload.costUsd),
-          durationMs: add(totals.durationMs, event.payload.durationMs)
+          durationMs: add(totals.durationMs, event.payload.durationMs),
+          // Context is a level, not a cost: the latest reading stands (D-236).
+          contextTokens: latest(totals.contextTokens, event.payload.contextTokens),
+          contextWindow: latest(totals.contextWindow, event.payload.contextWindow)
         };
         break;
       }

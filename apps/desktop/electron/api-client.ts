@@ -179,6 +179,12 @@ export class ControlPlaneClient {
     return this.request("POST", "/repositories/local", z.object({}).passthrough(), input);
   }
 
+  /** Disconnects a repository from the organization (D-235); the server judges
+   *  `org.repo.disconnect` and refuses while its missions are still listed. */
+  async disconnectRepository(repoId: string): Promise<void> {
+    await this.request("POST", `/repositories/${encodeURIComponent(repoId)}/disconnect`, OkResponseSchema, {});
+  }
+
   async localRepositories(): Promise<unknown[]> {
     const body = await this.request(
       "GET",

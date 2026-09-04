@@ -127,7 +127,18 @@ interface StreamLine {
   session_id?: string;
   is_error?: boolean;
   result?: unknown;
-  message?: { content?: unknown };
+  message?: {
+    content?: unknown;
+    /** The model this line's call ran on, and what the call carried
+     *  (observed on `claude 2.1.252`): `input_tokens` plus both cache counts
+     *  is the prompt of that call — how full the context was (D-236). */
+    model?: unknown;
+    usage?: {
+      input_tokens?: unknown;
+      cache_read_input_tokens?: unknown;
+      cache_creation_input_tokens?: unknown;
+    };
+  };
   request_id?: string;
   request?: ControlRequestBody;
   /** Present on the `system/init` line: everything this session can be asked
@@ -167,12 +178,33 @@ interface StreamLine {
     cache_read_input_tokens?: unknown;
     cache_creation_input_tokens?: unknown;
   };
+  /** Also on the final line (2.1.252): per-model totals, each naming the
+   *  model's `contextWindow` — the only place the CLI says how big it is. */
+  modelUsage?: unknown;
 }
 
 /** A count the harness reported, or null. Never a zero standing in for a
  *  figure that was not given: "not reported" and "none" are different. */
 function count(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+/** The context window off the final line's `modelUsage` (D-236): the entry
+ *  for the model that spoke last, or the one entry when only one model ran.
+ *  Two models and no name is nothing — a window picked by guess would turn
+ *  the percentage beside it into fiction. */
+function contextWindowOf(modelUsage: unknown, model: string | null): number | null {
+  if (!modelUsage || typeof modelUsage !== "object") return null;
+  const entries = Object.entries(modelUsage as Record<string, unknown>);
+  const windowOf = (entry: unknown): number | null =>
+    entry && typeof entry === "object"
+      ? count((entry as { contextWindow?: unknown }).contextWindow)
+      : null;
+  if (model !== null) {
+    const named = entries.find(([name]) => name === model);
+    if (named) return windowOf(named[1]);
+  }
+  return entries.length === 1 ? windowOf(entries[0]![1]) : null;
 }
 
 /** Same rule, for a figure that is not a whole number. */
@@ -535,11 +567,17 @@ export class HarnessStream {
       cacheCreationTokens: count(usage.cache_creation_input_tokens),
       costUsd: amount(parsed.total_cost_usd),
       durationMs: count(parsed.duration_ms),
-      turns: count(parsed.num_turns)
+      turns: count(parsed.num_turns),
+      contextTokens: this.lastContext?.tokens ?? null,
+      contextWindow: contextWindowOf(parsed.modelUsage, this.lastContext?.model ?? null)
     };
     if (Object.values(payload).every((value) => value === null)) return [];
     return [{ kind: "harness.usage", payload }];
   }
+
+  /** The prompt the main agent's latest call carried, and on which model —
+   *  read off each assistant line, spoken once with the turn's usage. */
+  private lastContext: { tokens: number; model: string | null } | null = null;
 
   private consumeSystem(parsed: StreamLine): RunnerEvent[] {
     const taskId = typeof parsed.task_id === "string" ? parsed.task_id : null;
@@ -626,6 +664,22 @@ export class HarnessStream {
     // stream when forwarding is on, and their text is *activity*, not the
     // answer the room is waiting for — so it is tagged rather than mixed in.
     const parentToolUseId = this.parentOf(parsed);
+    // The conversation's own context is the main agent's: a subagent's call
+    // carries its own prompt, which says nothing about how full this chat is.
+    if (parentToolUseId === null) {
+      const usage = parsed.message?.usage;
+      const carried = [
+        count(usage?.input_tokens),
+        count(usage?.cache_read_input_tokens),
+        count(usage?.cache_creation_input_tokens)
+      ];
+      if (carried.some((figure) => figure !== null)) {
+        this.lastContext = {
+          tokens: carried.reduce<number>((sum, figure) => sum + (figure ?? 0), 0),
+          model: typeof parsed.message?.model === "string" ? parsed.message.model : null
+        };
+      }
+    }
     const events: RunnerEvent[] = [];
     for (const raw of content) {
       const block = raw as StreamBlock;

@@ -156,6 +156,15 @@ export function registerArchiveRoutes(app: FastifyInstance, deps: RouteDeps): vo
         [missionId]
       );
       if ((restored.rowCount ?? 0) === 0) return;
+      // A listed mission's repository is connected by definition: restoring
+      // one into a repository that was disconnected reconnects it (D-235),
+      // or the rail would show a project the repository list denies.
+      await client.query(
+        `update repositories set disconnected_at = null, disconnected_by = null
+          where repo_id = (select repo_id from missions where mission_id = $1)
+            and disconnected_at is not null`,
+        [missionId]
+      );
       await recordEvent(client, {
         orgId: access.orgId,
         missionId,

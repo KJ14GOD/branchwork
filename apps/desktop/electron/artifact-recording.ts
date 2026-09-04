@@ -12,12 +12,10 @@ import {
 } from "@novus/contracts";
 import { ApiError } from "./api-client";
 import { captureProvenance, captureRefusal } from "./artifact-policy";
-import {
-  awaitReadyIfReloading,
+import { awaitReadyIfReloading,
   uploadCapturedArtifact,
   worktreeRevision,
-  type ArtifactUploader
-} from "./artifact-capture";
+  type ArtifactUploader, refuseIfSecretShown } from "./artifact-capture";
 import {
   capturePreviewImage,
   embeddedPreviewStatus,
@@ -75,6 +73,8 @@ interface RecorderWindow {
 interface ActiveRecording {
   missionId: string;
   workstreamId: string;
+  /** The execution whose turn started it, for an agent's recording (D-237). */
+  executionId: string | null;
   startedAtMs: number;
   status: RecordingStatus;
   filePath: string;
@@ -157,6 +157,15 @@ export async function startRecording(args: {
   logs: () => ProcessLog[];
   sanitize: (text: string) => string;
   uploader: ArtifactUploader;
+  /** A coding agent's recording (D-237) names its turn; a person's, the
+   *  default, names nothing. The uploader already decides the attribution
+   *  the server records — this is what the head says while it runs. */
+  initiator?: "person" | "agent";
+  executionId?: string | null;
+  /** The lane's known secrets, each named (D-238): a page showing one
+   *  refuses the start. Checked at the start only — what the page shows
+   *  later is under the pixels warning, stated in DESIGN. */
+  knownSecrets?: () => readonly { name: string; value: string }[];
 }): Promise<RecordingStatus> {
   const recorderHost = host;
   if (recorderHost === null) {
@@ -172,6 +181,11 @@ export async function startRecording(args: {
   await awaitReadyIfReloading(args.workstreamId);
   const refusal = captureRefusal(embeddedPreviewStatus(), args.workstreamId, args.logs());
   if (refusal !== null) throw new ApiError("recording_refused", refusal, 409);
+  try {
+    await refuseIfSecretShown(args.workstreamId, args.knownSecrets?.() ?? []);
+  } catch (error) {
+    throw error instanceof ApiError ? new ApiError("recording_refused", error.message, 409) : error;
+  }
   const source = previewContentsForRecording(args.workstreamId);
   if (source === null) {
     throw new ApiError("recording_refused", "The preview has no loaded page to record.", 409);
@@ -199,6 +213,7 @@ export async function startRecording(args: {
   const recording: ActiveRecording = {
     missionId: args.missionId,
     workstreamId: args.workstreamId,
+    executionId: args.executionId ?? null,
     startedAtMs: Date.now(),
     status: {
       missionId: args.missionId,
@@ -206,7 +221,9 @@ export async function startRecording(args: {
       state: "recording",
       startedAt: new Date().toISOString(),
       processName: source.status.processName.slice(0, 120),
-      maxDurationMs: MAX_RECORDING_MS
+      maxDurationMs: MAX_RECORDING_MS,
+      initiator: args.initiator ?? "person",
+      executionId: args.executionId ?? null
     },
     filePath,
     fileStream,
@@ -323,6 +340,19 @@ export async function stopRecording(): Promise<Artifact> {
     throw new ApiError("recording_refused", "The recording was cancelled.", 409);
   }
   return artifact;
+}
+
+/**
+ * Stops the recording a coding agent's turn started, if that is what is
+ * running (D-237): the agent's own `stop_recording`, and the turn's end when
+ * the agent never stopped it — a recording that outlived its turn would be
+ * nobody's. Preserved as evidence exactly as a person's Stop preserves one;
+ * null when the running recording is someone else's, or there is none.
+ */
+export async function stopRecordingOwnedBy(executionId: string): Promise<Artifact | null> {
+  const recording = active;
+  if (recording === null || recording.executionId !== executionId) return null;
+  return stopRecording();
 }
 
 /** Abandons the recording: no artifact, nothing durable, temp removed. */

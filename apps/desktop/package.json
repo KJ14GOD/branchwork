@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "main": "dist-electron/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.electron.json && vite build",
+    "build": "tsc -p tsconfig.electron.json && vite build && node native/speech/build.mjs",
     "typecheck": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "start": "electron .",
     "test": "vitest run --config vitest.config.ts",
@@ -24,12 +24,17 @@
       "package.json"
     ],
     "asarUnpack": [
-      "**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**"
+      "**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**",
+      "dist-electron/novus-speech"
     ],
     "mac": {
       "target": "dmg",
       "identity": null,
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Novus listens only while you dictate a direction, and only on this Mac.",
+        "NSSpeechRecognitionUsageDescription": "Novus turns what you dictate into text on this Mac, with Apple's on-device recognizer."
+      }
     },
     "npmRebuild": false,
     "win": {

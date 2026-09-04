@@ -8,8 +8,12 @@ import {
   protocol,
   session,
   shell,
+  systemPreferences,
   type WebContents
 } from "electron";
+import { execFile, spawn } from "node:child_process";
+import crossSpawn from "cross-spawn";
+import { homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openableExtensionOf, openRefusalFor } from "./artifact-open";
@@ -26,6 +30,13 @@ import {
 } from "./attachment-upload";
 import {
   APPROACH_INTENT_MAX,
+  DictationAccessInputSchema,
+  DictationPrefsInputSchema,
+  DictationStartInputSchema,
+  type DictationEngines,
+  type DictationEvent,
+  type DictationStartInput,
+  type MicrophoneAccess,
   CreateMissionInputSchema,
   DirectionResolutionSchema,
   ForgetSecretInputSchema,
@@ -143,6 +154,21 @@ import {
   stopRecording
 } from "./artifact-recording";
 import { SessionStore } from "./session-store";
+import {
+  createDictation,
+  DictationRefused,
+  type CaptureHost,
+  type Dictation,
+  type DictationSources,
+  type DictationVendor,
+  type MicrophoneHost
+} from "./dictation";
+import { createAppleSpeech, HELPER_NAME } from "./dictation-apple";
+import { CLAUDE_EDITOR_MODEL, codexEditorModel, openEditorSession, runEditor, type EditorKind } from "./dictation-editor";
+import { refineSystemPrompt } from "./dictation-refine";
+import { DictationStore } from "./dictation-store";
+import { fakeCapture, fakeVendor } from "./dictation-fake";
+import { pcm16FromBytes } from "./dictation-audio";
 
 // The main process logs diagnostics with console.*, and those writes go to
 // whatever stdio spawned this app. When that pipe is gone — the launching
@@ -205,6 +231,13 @@ let authStatus: IpcAuthStatus = { state: "signed_out" };
 let pollTimer: NodeJS.Timeout | null = null;
 let runner: RunnerAgent | null = null;
 let notifier: Notifier | null = null;
+/** Spoken direction (D-240): the listener, built at ready with this
+ *  machine's key store, capture page, and microphone answer. */
+let dictation: Dictation | null = null;
+const DICTATION_PARTITION = "dictation";
+/** Test-only, refused in packaged builds (D-027's rule): a scripted vendor
+ *  and a tone for a microphone, so a window can be driven without either. */
+const FAKE_DICTATION = process.env.NOVUS_FAKE_DICTATION === "1" && !app.isPackaged;
 
 function setAuthStatus(next: IpcAuthStatus): void {
   authStatus = next;
@@ -504,7 +537,9 @@ function registerIpc(): void {
     try {
       const repositories = await api.localRepositories();
       return ok(
-        (repositories as { providerRepoId: string; name: string; defaultBranch: string }[]).map((repo) => ({
+        (
+          repositories as { repoId: string; providerRepoId: string; name: string; defaultBranch: string }[]
+        ).map((repo) => ({
           ...repo,
           onThisMachine: pathForLocalRepo(repo.providerRepoId) !== null
         }))
@@ -515,6 +550,19 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("novus:repos:checked-out-here", () => ok(repositoriesOnThisMachine()));
+
+  // Removing a project from the rail is the server's decision (D-235):
+  // `org.repo.disconnect`, refused in words while the project still lists a
+  // mission. This machine keeps its folder path — the folder is the person's,
+  // and picking it again is how the same project comes back.
+  ipcMain.handle("novus:repos:disconnect", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("rep_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed repository id." };
+    return call(async () => {
+      await api.disconnectRepository(parsed.data);
+      return null;
+    });
+  });
 
   ipcMain.handle("novus:repos:base-local", async (_event, raw: unknown) => {
     const parsed = z
@@ -753,6 +801,49 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed connector." };
     return ok(setConnectorLent(app.getPath("userData"), parsed.data.name, parsed.data.lent));
   });
+
+  // Spoken direction (D-240, D-241): the listener lives here with the
+  // microphone, the on-device recognizer, and the editor CLI; the renderer
+  // asks to listen and is told words. A refusal — no helper, no on-device
+  // model, no microphone — is answered in words the settings page and the
+  // box can act on. No key exists on this road.
+  const dictationCall = async <T>(fn: (service: Dictation) => Promise<T> | T): Promise<IpcResult<T>> => {
+    if (!dictation) return { ok: false, code: "not_ready", message: "Dictation is not ready yet." };
+    try {
+      return ok(await fn(dictation));
+    } catch (error) {
+      if (error instanceof DictationRefused) return { ok: false, code: error.code, message: error.message };
+      return { ok: false, code: "dictation_failed", message: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  ipcMain.handle("novus:dictation:settings", async () => dictationCall((service) => service.settings()));
+  ipcMain.handle("novus:dictation:set-prefs", async (_event, raw: unknown) => {
+    const parsed = DictationPrefsInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed preferences." };
+    return dictationCall((service) => service.setPrefs(parsed.data));
+  });
+  ipcMain.handle("novus:dictation:request-access", async (_event, raw: unknown) => {
+    const parsed = DictationAccessInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    return dictationCall((service) => service.requestAccess(parsed.data.kind));
+  });
+  ipcMain.handle("novus:dictation:start", async (_event, raw: unknown) => {
+    const parsed = DictationStartInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed request." };
+    return dictationCall((service) => service.start(parsed.data));
+  });
+  ipcMain.handle("novus:dictation:stop", async () =>
+    dictationCall(async (service) => {
+      await service.stop();
+      return null;
+    })
+  );
+  ipcMain.handle("novus:dictation:cancel", async () =>
+    dictationCall(async (service) => {
+      await service.cancel();
+      return null;
+    })
+  );
 
   // Raw computer use opt-in (D-218): machine-local, off by default. The agent
   // never reads or writes this — it is the owner's own switch.
@@ -2349,6 +2440,316 @@ function registerIpc(): void {
   });
 }
 
+/**
+ * The capture page (D-240): a hidden Novus-owned window holding the
+ * microphone in its own session, exactly the recorder's shape (D-123). Its
+ * messages are accepted only from that session — the app window's renderer
+ * forging a frame lands nowhere — and only the microphone is ever granted
+ * to it: the permission handlers answer no to everything else.
+ */
+function createCaptureHost(): CaptureHost {
+  const frameListeners = new Set<(pcm: Int16Array) => void>();
+  const endedListeners = new Set<(reason: string) => void>();
+  let page: BrowserWindow | null = null;
+  let starting: { resolve: () => void; reject: (error: Error) => void } | null = null;
+  let stopping: (() => void) | null = null;
+  const own = (event: Electron.IpcMainEvent) => event.sender.session === session.fromPartition(DICTATION_PARTITION);
+  ipcMain.on("dictation:frame", (event, payload: unknown) => {
+    if (!own(event)) return;
+    const bytes = payload instanceof Uint8Array ? payload : payload instanceof ArrayBuffer ? new Uint8Array(payload) : null;
+    if (bytes === null) return;
+    const pcm = pcm16FromBytes(bytes);
+    for (const listener of frameListeners) listener(pcm);
+  });
+  ipcMain.on("dictation:started", (event) => {
+    if (!own(event)) return;
+    starting?.resolve();
+    starting = null;
+  });
+  ipcMain.on("dictation:error", (event, reason: unknown) => {
+    if (!own(event)) return;
+    const message = typeof reason === "string" ? reason : "The microphone could not be opened.";
+    if (starting) {
+      starting.reject(new Error(message));
+      starting = null;
+      return;
+    }
+    for (const listener of endedListeners) listener(message);
+  });
+  ipcMain.on("dictation:ended", (event, reason: unknown) => {
+    if (!own(event)) return;
+    for (const listener of endedListeners) listener(typeof reason === "string" ? reason : "The microphone stopped.");
+  });
+  ipcMain.on("dictation:stopped", (event) => {
+    if (!own(event)) return;
+    stopping?.();
+    stopping = null;
+  });
+  const ensurePage = async (): Promise<BrowserWindow> => {
+    if (page && !page.isDestroyed()) return page;
+    const captureSession = session.fromPartition(DICTATION_PARTITION);
+    captureSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
+      const kinds = (details as { mediaTypes?: string[] }).mediaTypes ?? [];
+      callback(permission === "media" && kinds.length > 0 && kinds.every((kind) => kind === "audio"));
+    });
+    captureSession.setPermissionCheckHandler(
+      (_contents, permission, _origin, details) =>
+        permission === "media" && (details as { mediaType?: string }).mediaType === "audio"
+    );
+    const created = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        preload: join(__dirname, "dictation-capture-preload.js"),
+        partition: DICTATION_PARTITION,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        backgroundThrottling: false
+      }
+    });
+    // A file: page, because about:blank is no secure context and has no
+    // mediaDevices. The page is Novus's own and empty; the preload is its
+    // whole behavior.
+    const capturePage = join(app.getPath("userData"), "dictation.html");
+    writeFileSync(capturePage, "<!doctype html><title>Novus dictation</title>", { mode: 0o600 });
+    await created.loadFile(capturePage);
+    created.on("closed", () => {
+      if (page === created) page = null;
+    });
+    page = created;
+    return created;
+  };
+  return {
+    start: async (sampleRate, frameMs) => {
+      const target = await ensurePage();
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          starting = null;
+          reject(new Error("The microphone did not answer in time."));
+        }, 20_000);
+        starting = {
+          resolve: () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          reject: (error) => {
+            clearTimeout(timer);
+            reject(error);
+          }
+        };
+        void target.webContents
+          .executeJavaScript(`__novusDictation.start(${Math.floor(sampleRate)}, ${Math.floor(frameMs)})`, true)
+          .catch((error: unknown) => {
+            starting?.reject(error instanceof Error ? error : new Error(String(error)));
+            starting = null;
+          });
+      });
+    },
+    stop: async () => {
+      if (!page || page.isDestroyed()) return;
+      const target = page;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          stopping = null;
+          resolve();
+        }, 2_000);
+        stopping = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        void target.webContents.executeJavaScript("__novusDictation.stop()", true).catch(() => {
+          clearTimeout(timer);
+          stopping = null;
+          resolve();
+        });
+      });
+    },
+    onFrame: (listener) => {
+      frameListeners.add(listener);
+      return () => frameListeners.delete(listener);
+    },
+    onEnded: (listener) => {
+      endedListeners.add(listener);
+      return () => endedListeners.delete(listener);
+    }
+  };
+}
+
+/** The operating system's answer about the microphone, and the two ways
+ *  to change it: its own prompt the first time, its privacy pane after. */
+function createMicrophoneHost(): MicrophoneHost {
+  const status = (): MicrophoneAccess => {
+    if (process.platform !== "darwin" && process.platform !== "win32") return "granted";
+    const word = systemPreferences.getMediaAccessStatus("microphone");
+    return word === "not-determined" ? "not_determined" : word;
+  };
+  return {
+    status,
+    ask: async () => {
+      if (process.platform === "darwin") {
+        try {
+          await systemPreferences.askForMediaAccess("microphone");
+        } catch {
+          /* the answer is whatever the status now says */
+        }
+      }
+      return status();
+    },
+    openSettings: async () => {
+      if (process.platform === "darwin") {
+        await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+      }
+    }
+  };
+}
+
+const gitLines = (cwd: string, args: string[]): Promise<string[]> =>
+  new Promise((resolve) => {
+    execFile("git", args, { cwd, maxBuffer: 10 * 1024 * 1024, timeout: 3_000 }, (error, stdout) =>
+      resolve(
+        error
+          ? []
+          : String(stdout)
+              .split("\n")
+              .map((line) => line.trimEnd())
+              .filter((line) => line.length > 0)
+      )
+    );
+  });
+
+/**
+ * What the vocabulary and the refinement are built from (D-240): the
+ * mission's own words from the control plane, and the worktree's census
+ * from git on this machine — the D-185 read, so build output never crowds
+ * the list. Every source is best-effort: a box with nothing behind it still
+ * hears the person.
+ */
+async function dictationSources(input: DictationStartInput): Promise<DictationSources> {
+  const out: DictationSources = { files: [], changed: [], words: [], goal: null, recent: [] };
+  let root: string | null = null;
+  if (input.missionId) {
+    try {
+      const detail = await api.getMission(input.missionId, input.workstreamId);
+      out.goal = detail.mission.goal;
+      out.words = detail.sessions.map((chat) => chat.title).filter((title): title is string => typeof title === "string" && title.length > 0);
+      const lane = detail.workstream?.workstreamId ?? input.workstreamId ?? null;
+      out.recent = detail.directions
+        .filter((direction) => lane === null || direction.workstreamId === lane)
+        .slice(-5)
+        .map((direction) => direction.body.slice(0, 500));
+      const repository = detail.mission.repository;
+      if (detail.workstream && repository && pathForLocalRepo(repository.providerRepoId) !== null) {
+        root = worktreeFor(app.getPath("userData"), detail.workstream.workstreamId);
+      }
+    } catch {
+      /* the room's record is unreadable right now; the box still hears */
+    }
+  } else if (input.providerRepoId) {
+    root = pathForLocalRepo(input.providerRepoId);
+  }
+  if (root !== null && existsSync(root)) {
+    out.files = await gitLines(root, ["ls-files", "--cached", "--others", "--exclude-standard"]);
+    out.changed = (await gitLines(root, ["status", "--porcelain"]))
+      .map((line) => line.slice(3).trim())
+      .map((path) => (path.includes(" -> ") ? (path.split(" -> ").pop() ?? path) : path))
+      .filter((path) => path.length > 0);
+  }
+  return out;
+}
+
+/** Where the CLIs and the helper are found: the login shell's PATH folded
+ *  in at ready (D-222), plus the places a person installs a CLI by hand. */
+const cliPath = (): string =>
+  [process.env.PATH ?? "", join(homedir(), ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"].join(":");
+
+/** The speech helper built beside the app (`native/speech`), which a
+ *  packaged build carries outside the asar because it is an executable. */
+const speechHelperPath = (): string => join(__dirname, HELPER_NAME).replace("app.asar", "app.asar.unpacked");
+
+/**
+ * The listener, assembled (D-241): the system's own on-device recognizer
+ * through Novus's helper, the machine's own coding agent CLI as the editor
+ * on the person's login, the capture page, and the two permissions — or the
+ * deterministic stand-ins under NOVUS_FAKE_DICTATION. No key anywhere.
+ */
+function createDictationService(): Dictation {
+  const store = new DictationStore({ userDataPath: app.getPath("userData") });
+  const speech = createAppleSpeech({
+    helperPath: speechHelperPath(),
+    helperPresent: () => existsSync(speechHelperPath()),
+    spawn: (command, args) => spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] }),
+    log: (line) => console.warn(line)
+  });
+  // Which CLI edits: Claude Code first, Codex when it is the one here. Read
+  // from the installs once per launch, as the setup probe reads them.
+  let editorProbe: DictationEngines["editor"] | null = null;
+  const probeEditor = async (): Promise<DictationEngines["editor"]> => {
+    if (editorProbe) return editorProbe;
+    const found = await probeHarnesses();
+    editorProbe = found.claudeCode.installed
+      ? { kind: "claude", model: CLAUDE_EDITOR_MODEL }
+      : found.codex.installed
+        ? { kind: "codex", model: codexEditorModel() }
+        : { kind: "none", model: null };
+    return editorProbe;
+  };
+  const engines = async (probeSpeech: () => ReturnType<typeof speech.probe>): Promise<DictationEngines> => ({
+    speech: { kind: "apple", ...(await probeSpeech()) },
+    editor: await probeEditor()
+  });
+  const apple: DictationVendor = {
+    probe: () => engines(() => speech.probe()),
+    authorizeSpeech: () => engines(() => speech.authorize()),
+    live: (args, handlers) => speech.live(args.vocabulary, args.sampleRate, handlers),
+    // One warm print-mode session per take (D-242): Claude only; Codex's
+    // exec is one run per segment through `refine` below.
+    openRefiner: async () => {
+      const editor = await probeEditor();
+      if (editor.kind !== "claude" || editor.model === null) return null;
+      return openEditorSession({
+        model: editor.model,
+        system: refineSystemPrompt(),
+        spawn: (command, args, env) =>
+          crossSpawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env, PATH: cliPath() } })
+      });
+    },
+    refine: async ({ system, user }) => {
+      const editor = await probeEditor();
+      if (editor.kind === "none" || editor.model === null) {
+        throw new Error("no coding agent CLI is installed on this Mac to refine with");
+      }
+      return runEditor({
+        kind: editor.kind as EditorKind,
+        model: editor.model,
+        system,
+        user,
+        // cross-spawn, not spawn (D-229): a Windows CLI is a .cmd shim.
+        spawn: (command, args, env) =>
+          crossSpawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env, PATH: cliPath() } })
+      });
+    }
+  };
+  return createDictation({
+    store,
+    vendor: FAKE_DICTATION ? fakeVendor() : apple,
+    capture: FAKE_DICTATION ? fakeCapture() : createCaptureHost(),
+    microphone: FAKE_DICTATION
+      ? { status: () => "granted", ask: async () => "granted", openSettings: async () => undefined }
+      : createMicrophoneHost(),
+    openSpeechSettings: async () => {
+      if (process.platform === "darwin") {
+        await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition");
+      }
+    },
+    sources: dictationSources,
+    emit: (event: DictationEvent) => {
+      if (event.kind === "error" || event.kind === "state") console.warn(`[dictation] ${JSON.stringify(event)}`);
+      window?.webContents.send("novus:dictation-event", event);
+    },
+    log: (line) => console.warn(line)
+  });
+}
+
 function createWindow(): void {
   window = new BrowserWindow({
     // Above DESIGN.md's 1200px threshold, so the app opens into the full shell
@@ -2550,6 +2951,7 @@ app.whenReady().then(async () => {
     }
   });
   onRecordingStatus((status) => window?.webContents.send("novus:recording-status", status));
+  dictation = createDictationService();
   registerIpc();
   await restoreSession();
   createWindow();
@@ -2573,6 +2975,7 @@ app.on("before-quit", (event) => {
   const exit = () => app.exit(0);
   Promise.allSettled([
     shutdownTerminals(),
+    dictation?.dispose() ?? Promise.resolve(),
     runner?.shutdown("The host desktop closed while the agent was working.") ?? Promise.resolve()
   ]).then(exit, exit);
 });

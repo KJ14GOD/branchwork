@@ -189,6 +189,25 @@ export function secretValuesFor(host: WorkspaceHost, providerRepoId: string): re
   }
 }
 
+/**
+ * The same values, each with its name, for the capture scan (D-238): a page
+ * showing one of these refuses the capture, naming the variable — a name
+ * travels with the branch (D-041) and says nothing; the value never leaves
+ * this function's callers, exactly as `secretValuesFor`'s never do.
+ */
+export function namedSecretsFor(
+  host: WorkspaceHost,
+  providerRepoId: string
+): readonly { name: string; value: string }[] {
+  try {
+    const store = secretStoreFor(host);
+    const values = store.values(providerRepoId, store.suppliedNames(providerRepoId));
+    return Object.entries(values).map(([name, value]) => ({ name, value }));
+  } catch {
+    return [];
+  }
+}
+
 function secretStoreFor(host: WorkspaceHost): SecretStore {
   if (host.secretStore) return host.secretStore;
   const store = fileSecretStore(join(host.userDataPath, "workspace-secrets"));

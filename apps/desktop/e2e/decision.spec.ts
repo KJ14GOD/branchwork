@@ -473,7 +473,8 @@ describe("competing approaches, compared and decided", () => {
     // The capture path is e2e/artifacts.spec.ts's; what this drives is the
     // decision dialog's own picker and the frozen citation.
     const seedToken = await mintToken();
-    const seedBytes = Buffer.from(`decision-evidence-${"x".repeat(48)}`);
+    // A real PNG of the real window, so the receipt's cited evidence renders as one.
+    const seedBytes = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 640, height: 400 } });
     const seedSha = createHash("sha256").update(seedBytes).digest("hex");
     const begun = await fetch(`${CP_URL}/missions/${missionId}/artifacts`, {
       method: "POST",

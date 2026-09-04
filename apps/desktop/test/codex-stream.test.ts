@@ -264,10 +264,38 @@ describe("usage and the turn's own end", () => {
           cacheCreationTokens: null,
           costUsd: null,
           durationMs: null,
-          turns: null
+          turns: null,
+          contextTokens: null,
+          contextWindow: null
         }
       }
     ]);
+  });
+
+  it("reads the last call's prompt and the window only when the server states them apart (D-236)", () => {
+    const stream = new CodexStream();
+    stream.push(
+      line({
+        jsonrpc: "2.0",
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "t",
+          turnId: "u",
+          tokenUsage: {
+            inputTokens: 5_000,
+            cachedInputTokens: 1_000,
+            outputTokens: 300,
+            last: { inputTokens: 2_500, cachedInputTokens: 1_000, outputTokens: 40 },
+            modelContextWindow: 272_000
+          }
+        }
+      })
+    );
+    const events = stream.push(
+      line({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "t", turn: { id: "u", status: "completed" } } })
+    );
+    const usage = events.find((event) => event.kind === "harness.usage");
+    expect(usage?.payload).toMatchObject({ contextTokens: 3_500, contextWindow: 272_000 });
   });
 
   it("a failed turn is an error result with the failure's own words", () => {

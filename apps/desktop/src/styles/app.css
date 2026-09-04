@@ -2424,6 +2424,20 @@ body {
   display: inline-flex;
 }
 
+/* How full the chat's context is (D-236): a word in the foot beside the
+   chips, not a chip — nothing to press, nothing to open. Warn colour from
+   four fifths, where the next turn starts costing what it forgets. */
+.composer-context {
+  font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+  padding: 0 var(--s-2);
+}
+
+.composer-context.composer-context-warn {
+  color: var(--warn);
+}
+
 .chip-button {
   display: inline-flex;
   align-items: center;
@@ -2453,6 +2467,50 @@ body {
   height: 14px;
   flex: none;
   color: var(--text-1);
+}
+
+/* The host's threads on the diff and their replies (D-239): a quiet block
+   under the line it was left on, the reply indented under its parent. */
+.pull-inline-threads {
+  padding: var(--s-1) var(--s-3) var(--s-2) var(--s-4);
+  background: var(--surface-2);
+  border-top: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
+  font: var(--type-body);
+}
+
+.pull-inline-thread + .pull-inline-thread {
+  margin-top: var(--s-2);
+  padding-top: var(--s-2);
+  border-top: 1px solid var(--edge);
+}
+
+.pull-inline-thread-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font: var(--type-meta);
+  color: var(--text-2);
+}
+
+.pull-card-hunk {
+  margin: var(--s-2) 0;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.pull-replies {
+  margin-top: var(--s-2);
+}
+
+.pull-reply {
+  margin-top: var(--s-2);
+  padding-left: var(--s-3);
+  border-left: 1px solid var(--edge-strong);
+}
+
+.pull-reply .pull-card-author {
+  font: var(--type-meta);
 }
 
 /* Providers-first model picker (D-233): the flyout hangs off the menu's
@@ -5328,6 +5386,48 @@ body {
   color: var(--text-1);
 }
 
+/* The project row's own quiet control (D-239): the mission row's Archive, one
+   level up — a word on hover beside the +, nothing while the pointer is away.
+   Unlike that Archive it reserves no width: the name is the control (D-077),
+   and a hidden word holding sixty pixels on every heading cut "sdlc-harness"
+   to "sdlc-h…" in a 240px rail. It takes its width on the hovered row and
+   when it holds keyboard focus (zero width is still tabbable), so the name
+   yields only while somebody is reaching for the control. Never taller than
+   the row: it mounts on every project heading, so a height of its own would
+   be the heading's. */
+.side-remove-project {
+  flex: none;
+  align-self: stretch;
+  min-height: 20px;
+  width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: none;
+  background: transparent;
+  opacity: 0;
+  color: var(--text-3);
+  font: var(--type-meta);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: opacity var(--m-press) var(--ease);
+}
+
+.side-parent:hover .side-remove-project,
+.side-remove-project:focus-visible {
+  width: auto;
+  padding: 0 var(--s-2);
+  opacity: 1;
+}
+
+.side-remove-project:hover {
+  color: var(--text-1);
+}
+
+.remove-project-error {
+  margin: 0;
+  padding: 0 var(--s-5);
+}
+
 /* The archived list, inside its dialog. Rows are names and one control: there
    is nothing to decide here beyond whether to put something back. */
 /* The archived list. Two columns on one baseline — what it was, and where it
@@ -7745,4 +7845,140 @@ span.trace-attachment-transcript:hover {
 .harness-printout {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* Dictation (D-240): the box listens. The chip wears the recording word's
+   warn tone while it does — the one state on this row that must be noticed —
+   the line under the input is the volatile tail in the meta voice, and the
+   note under the foot names what happened to the take. No meter and no
+   waveform: the words arriving are the signal (DESIGN.md#status-semantics). */
+/* A chip is one phrase, so it is one line (prohibited pattern 21); a foot
+   too narrow for its chips yields a second row rather than folded words. */
+.chip-button {
+  white-space: nowrap;
+}
+.composer-foot {
+  flex-wrap: wrap;
+  row-gap: var(--s-1);
+}
+/* The field and the microphone at its right edge: the text yields the
+   corner, so a long line never runs under the button. */
+.composer-field {
+  position: relative;
+}
+.composer-field-mic .composer-input {
+  padding-right: 32px;
+}
+.composer-mic {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--m-press) var(--ease);
+}
+.composer-mic:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text-1);
+}
+.composer-mic:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.composer-mic.composer-listening,
+.composer-mic.composer-listening:hover:not(:disabled) {
+  color: var(--warn);
+  background: var(--selected);
+}
+.composer-mic-glyph {
+  width: 15px;
+  height: 15px;
+}
+.composer-listening-word {
+  color: var(--warn);
+}
+.composer-elapsed {
+  font-variant-numeric: tabular-nums;
+}
+.composer-dictation-tail {
+  font: var(--type-body);
+  color: var(--text-3);
+  padding: 0 0 var(--s-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.composer-dictation-note {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  font: var(--type-meta);
+  color: var(--text-3);
+  padding-top: var(--s-1);
+}
+.composer-dictation-note span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-dictation-note.composer-listening-word {
+  color: var(--warn);
+}
+.composer-dictation-note .btn-text {
+  min-height: 24px;
+  padding: 0 var(--s-1);
+  font: var(--type-meta);
+  flex: none;
+}
+
+/* Settings → Voice (D-240): a key is typed once and never shown again; the
+   dictionary is one plain field, a word per line. */
+.settings-input {
+  width: 260px;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  background: var(--bg);
+  color: var(--text-1);
+  font: var(--type-row);
+  padding: var(--s-1) var(--s-2);
+  min-height: 28px;
+  outline: none;
+}
+.settings-input:focus {
+  border-color: var(--edge-strong);
+}
+.settings-key-form {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.settings-dictionary {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-control);
+  background: var(--bg);
+  color: var(--text-1);
+  font: var(--type-row);
+  padding: var(--s-2) var(--s-3);
+  outline: none;
+}
+.settings-dictionary:focus {
+  border-color: var(--edge-strong);
+}
+.settings-card-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4) var(--s-5);
 }

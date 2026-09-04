@@ -625,7 +625,12 @@ export class FakeRepositoryProvider implements RepositoryProvider {
       line: input.line ?? null,
       state: "open",
       url: `${pull.url}#discussion_r${this.nextThread}`,
-      postedAt: new Date().toISOString()
+      postedAt: new Date().toISOString(),
+      kind: input.path ? "line" : "conversation",
+      outdated: false,
+      reviewState: null,
+      diffHunk: null,
+      replies: []
     });
     this.nextThread += 1;
   }
@@ -659,16 +664,45 @@ export class FakeRepositoryProvider implements RepositoryProvider {
   fakeComment(
     providerRepoId: string,
     number: number,
-    comment: { author: string; body: string; path?: string | null }
+    comment: {
+      author: string;
+      body: string;
+      path?: string | null;
+      line?: number | null;
+      kind?: ReviewThread["kind"];
+      reviewState?: ReviewThread["reviewState"];
+      diffHunk?: string | null;
+    }
   ): void {
     const pull = this.pull(providerRepoId, number);
+    const kind = comment.kind ?? "line";
     pull.reviewThreads.push({
-      threadId: `thr_${this.nextThread}`,
+      // Only a line thread is resolvable on the host (D-239).
+      threadId: kind === "line" ? `thr_${this.nextThread}` : null,
       author: comment.author,
       body: comment.body,
       path: comment.path ?? null,
-      line: null,
+      line: comment.line ?? null,
       state: "open",
+      url: `${pull.url}#discussion_r${this.nextThread}`,
+      postedAt: new Date().toISOString(),
+      kind,
+      outdated: false,
+      reviewState: kind === "review" ? (comment.reviewState ?? "commented") : null,
+      diffHunk: comment.diffHunk ?? null,
+      replies: []
+    });
+    this.nextThread += 1;
+  }
+
+  /** The host side of a reply (D-239): somebody answered inside a thread. */
+  fakeReply(providerRepoId: string, number: number, threadId: string, reply: { author: string; body: string }): void {
+    const pull = this.pull(providerRepoId, number);
+    const thread = pull.reviewThreads.find((candidate) => candidate.threadId === threadId);
+    if (!thread) throw new UnknownPullRequestError();
+    thread.replies.push({
+      author: reply.author,
+      body: reply.body,
       url: `${pull.url}#discussion_r${this.nextThread}`,
       postedAt: new Date().toISOString()
     });

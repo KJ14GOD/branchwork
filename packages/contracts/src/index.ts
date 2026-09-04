@@ -580,6 +580,166 @@ export const LendConnectorInputSchema = z
   .strict();
 export type LendConnectorInput = z.infer<typeof LendConnectorInputSchema>;
 
+// --- Dictation (D-240, D-241) -------------------------------------------------
+// A direction may be spoken. The words are heard on this Mac by the system's
+// own speech recognizer, refined by the machine's own coding agent CLI on the
+// person's existing login, and land in the composer as ordinary drafted text:
+// nothing about the direction's lifecycle changes, the server never learns
+// that a direction was dictated, and no key exists anywhere. Nothing leaves
+// the machine but what the editor CLI itself sends to its vendor: the
+// transcript and the vocabulary, under the person's own account.
+
+export const MAX_DICTIONARY_WORDS = 200;
+export const DICTIONARY_WORD_MAX = 60;
+/** A word or short phrase the transcriber should spell as written — a product
+ *  name, a person, an identifier. One line, no surrounding whitespace. */
+export const DictionaryWordSchema = z
+  .string()
+  .min(1)
+  .max(DICTIONARY_WORD_MAX)
+  .regex(/^[^\u0000-\u001f]+$/u, "one line")
+  .refine((word) => word.trim() === word, "no surrounding whitespace");
+export const DictionarySchema = z.array(DictionaryWordSchema).max(MAX_DICTIONARY_WORDS);
+
+/** The operating system's answer about the microphone, in its own words. */
+export const MicrophoneAccessSchema = z.enum([
+  "granted",
+  "denied",
+  "not_determined",
+  "restricted",
+  "unknown"
+]);
+export type MicrophoneAccess = z.infer<typeof MicrophoneAccessSchema>;
+
+/** The operating system's answer about speech recognition — its own, second
+ *  permission beside the microphone's. */
+export const SpeechAuthorizationSchema = z.enum([
+  "authorized",
+  "denied",
+  "not_determined",
+  "restricted",
+  "unknown"
+]);
+export type SpeechAuthorization = z.infer<typeof SpeechAuthorizationSchema>;
+
+/** What this machine holds for hearing and for editing, as probed — never
+ *  assumed. Null until the first probe has answered. */
+export const DictationEnginesSchema = z
+  .object({
+    /** Apple's speech recognizer through Novus's own helper. */
+    speech: z
+      .object({
+        kind: z.literal("apple"),
+        /** Whether the helper binary is present beside the app. */
+        helper: z.boolean(),
+        available: z.boolean(),
+        /** Whether the locale's on-device model is installed; Novus never
+         *  lets the recognizer fall back to Apple's servers. */
+        onDevice: z.boolean(),
+        authorization: SpeechAuthorizationSchema,
+        locale: z.string().max(40).nullable()
+      })
+      .strict(),
+    /** The coding agent CLI that refines the transcript on the person's own
+     *  login, and the model it is asked for. */
+    editor: z
+      .object({
+        kind: z.enum(["claude", "codex", "none"]),
+        model: z.string().max(80).nullable()
+      })
+      .strict()
+  })
+  .strict();
+export type DictationEngines = z.infer<typeof DictationEnginesSchema>;
+
+export const DictationSettingsSchema = z
+  .object({
+    engines: DictationEnginesSchema.nullable(),
+    microphone: MicrophoneAccessSchema,
+    /** Whether the final pass runs: the whole take re-heard, then the words
+     *  refined against the vocabulary. Off leaves the live words as they came. */
+    refine: z.boolean(),
+    dictionary: DictionarySchema
+  })
+  .strict();
+export type DictationSettings = z.infer<typeof DictationSettingsSchema>;
+
+export const DictationPrefsInputSchema = z
+  .object({ refine: z.boolean().optional(), dictionary: DictionarySchema.optional() })
+  .strict();
+export type DictationPrefsInput = z.infer<typeof DictationPrefsInputSchema>;
+
+/** The two permissions a take needs, asked for one at a time: the system's
+ *  own prompt the first time, its privacy pane once refused. */
+export const DictationAccessInputSchema = z
+  .object({ kind: z.enum(["microphone", "speech"]) })
+  .strict();
+export type DictationAccessInput = z.infer<typeof DictationAccessInputSchema>;
+
+/** Where the words will go, so the vocabulary can be built from the lane's
+ *  worktree and the mission's own words. Everything optional: the ask-dialog
+ *  has a repository and no mission yet, and a box with nothing behind it
+ *  still hears the person. */
+export const DictationStartInputSchema = z
+  .object({
+    missionId: z.string().startsWith("msn_").optional(),
+    workstreamId: z.string().startsWith("wst_").optional(),
+    providerRepoId: z.string().min(1).max(400).optional(),
+    /** The words already in the box around the caret, so the refinement can
+     *  read the spoken words as the continuation they are — never stored,
+     *  never sent anywhere but the editor's refine call. */
+    draft: z.object({ before: z.string().max(4000), after: z.string().max(4000) }).optional()
+  })
+  .strict();
+export type DictationStartInput = z.infer<typeof DictationStartInputSchema>;
+
+export const DictationStateSchema = z.enum(["idle", "starting", "listening", "refining"]);
+export type DictationState = z.infer<typeof DictationStateSchema>;
+
+const DictationSessionIdSchema = z.string().startsWith("dct_");
+
+/** What the main process tells the box while it listens. `interim` replaces
+ *  the words of the open segment each time; `final` appends a settled
+ *  segment as heard; `segment` replaces one settled segment's words with
+ *  their refined form, in the background while the take goes on (D-242);
+ *  `refined` arrives once after stop, carrying both the raw words and the
+ *  refined ones so the box can offer either. */
+export const DictationEventSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("state"),
+      sessionId: DictationSessionIdSchema,
+      state: DictationStateSchema,
+      startedAtMs: z.number().int().nullable()
+    })
+    .strict(),
+  z.object({ kind: z.literal("interim"), sessionId: DictationSessionIdSchema, text: z.string() }).strict(),
+  z.object({ kind: z.literal("final"), sessionId: DictationSessionIdSchema, text: z.string() }).strict(),
+  z
+    .object({
+      kind: z.literal("segment"),
+      sessionId: DictationSessionIdSchema,
+      /** Which settled segment, in the order the finals arrived. */
+      index: z.number().int().nonnegative(),
+      raw: z.string(),
+      text: z.string()
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("refined"),
+      sessionId: DictationSessionIdSchema,
+      raw: z.string(),
+      text: z.string(),
+      /** Why the refined words are the raw ones, when they are — the pass
+       *  refused, the editor failed — or null when the refinement stood. */
+      note: z.string().nullable()
+    })
+    .strict(),
+  z.object({ kind: z.literal("error"), sessionId: DictationSessionIdSchema, message: z.string() }).strict()
+]);
+export type DictationEvent = z.infer<typeof DictationEventSchema>;
+
 export const WorkstreamSchema = z.object({
   workstreamId: z.string().startsWith("wst_"),
   missionId: z.string().startsWith("msn_"),
@@ -1497,7 +1657,14 @@ export const HarnessUsageSchema = z
     /** How long the harness says the turn took, wall clock. */
     durationMs: z.number().int().nonnegative().nullable().default(null),
     /** Model round trips inside the turn, as the harness counts them. */
-    turns: z.number().int().nonnegative().nullable().default(null)
+    turns: z.number().int().nonnegative().nullable().default(null),
+    /** How full the conversation's context was at the turn's last model call
+     *  (D-236): the prompt that call carried — input plus both cache counts —
+     *  as the harness reported it. Null when it said nothing, never a guess. */
+    contextTokens: z.number().int().nonnegative().nullable().default(null),
+    /** The model's context window, as the harness names it. Null when it did
+     *  not; a percentage exists only when both figures are the harness's own. */
+    contextWindow: z.number().int().positive().nullable().default(null)
   })
   .strict();
 export type HarnessUsage = z.infer<typeof HarnessUsageSchema>;
@@ -1723,7 +1890,36 @@ export const ReviewThreadSchema = z.object({
   line: z.number().int().positive().nullable().default(null),
   state: z.enum(["open", "resolved"]),
   url: z.string().max(600).nullable(),
-  postedAt: z.string().max(40)
+  postedAt: z.string().max(40),
+  /** What kind of comment this is (D-239): a `line` thread on the diff, a
+   *  `review` summary (the words beside an approve / request-changes), or a
+   *  `conversation` comment on the request itself. Only a line thread is
+   *  resolvable — the other two carry no host thread id. */
+  kind: z.enum(["line", "review", "conversation"]).default("line"),
+  /** True when the host says the line no longer exists in the diff the
+   *  request currently shows: the thread anchors to the line it was left
+   *  on, in the file as it was. */
+  outdated: z.boolean().default(false),
+  /** The verdict a `review` summary was left with. Null for other kinds. */
+  reviewState: z.enum(["approved", "changes_requested", "commented"]).nullable().default(null),
+  /** The diff hunk the host shows above a line comment — the code the words
+   *  were written over, as it was when they were written (D-239). Bounded;
+   *  null for anything that anchors to no line. */
+  diffHunk: z.string().max(4_000).nullable().default(null),
+  /** Every further comment in the thread after the first (D-239). */
+  replies: z
+    .array(
+      z
+        .object({
+          author: z.string().max(120),
+          body: z.string().max(2_000),
+          url: z.string().max(600).nullable(),
+          postedAt: z.string().max(40)
+        })
+        .strict()
+    )
+    .max(50)
+    .default([])
 });
 export type ReviewThread = z.infer<typeof ReviewThreadSchema>;
 
@@ -1854,7 +2050,7 @@ export const PullRequestSchema = z.object({
    *  remote-head guarantee's receipt (D-099). */
   headSha: ShaSchema.nullable(),
   requestedReviewers: z.array(z.string().max(120)).max(15),
-  reviewThreads: z.array(ReviewThreadSchema).max(50),
+  reviewThreads: z.array(ReviewThreadSchema).max(150),
   labels: z.array(z.string().max(100)).max(20).default([]),
   /** The aggregated gate (D-100), refreshed by the same poll that carries
    *  everything else the host says. Null until the first refresh. */
@@ -2338,7 +2534,14 @@ export const RecordingStatusSchema = z.object({
   startedAt: z.string().datetime(),
   processName: z.string().max(120),
   /** The stated bound the recording stops itself at. */
-  maxDurationMs: z.number().int().positive()
+  maxDurationMs: z.number().int().positive(),
+  /** Who started it (D-237): a person from the preview head, or a coding
+   *  agent through the governed `start_recording` tool. The head names the
+   *  agent's, and either way a person may stop or cancel it. */
+  initiator: ArtifactInitiatorSchema.default("person"),
+  /** The execution whose turn asked, for an agent's recording; null for a
+   *  person's. The recording ends with that turn if the agent never stops it. */
+  executionId: z.string().nullable().default(null)
 });
 export type RecordingStatus = z.infer<typeof RecordingStatusSchema>;
 
@@ -4026,8 +4229,16 @@ export interface NovusBridge {
       IpcResult<{ providerRepoId: string; name: string; defaultBranch: string; provider: "local" } | null>
     >;
     localList(): Promise<
-      IpcResult<{ providerRepoId: string; name: string; defaultBranch: string; onThisMachine: boolean }[]>
+      IpcResult<
+        { repoId: string; providerRepoId: string; name: string; defaultBranch: string; onThisMachine: boolean }[]
+      >
     >;
+    /** Disconnects a repository from the organization (D-239): it leaves the
+     *  rail and nothing else changes — its archived missions, their receipts,
+     *  branches and folders stay exactly where they were. The server judges
+     *  `org.repo.disconnect` and refuses, in words, while any of its missions
+     *  is still listed; adding the repository again reconnects it. */
+    disconnect(repoId: string): Promise<IpcResult<null>>;
     baseLocal(localId: string, ref?: string): Promise<IpcResult<BaseRevision>>;
     /** The repository's branches for the base picker (D-139): GitHub answers
      *  through the control plane, a local repository through this machine's
@@ -4622,5 +4833,27 @@ export interface NovusBridge {
     rename(input: { sessionId: string; name: string }): Promise<IpcResult<TerminalSession>>;
     close(sessionId: string): Promise<IpcResult<null>>;
     onOutput(listener: (chunk: TerminalChunk) => void): () => void;
+  };
+  /**
+   * Spoken direction (D-240, D-241). The renderer asks to listen and is told
+   * words; the microphone, the on-device recognizer, and the editor CLI are
+   * the main process's — a hidden Novus-owned page captures the audio, so the
+   * room's renderer never holds the microphone. The words are a draft like
+   * any typed ones. No key exists on this surface or behind it.
+   */
+  dictation: {
+    settings(): Promise<IpcResult<DictationSettings>>;
+    setPrefs(input: DictationPrefsInput): Promise<IpcResult<DictationSettings>>;
+    /** Asks macOS for the microphone or for speech recognition — the
+     *  system's own prompt the first time — or opens the privacy pane once it
+     *  was refused. Answers with the settings as they now stand. */
+    requestAccess(input: DictationAccessInput): Promise<IpcResult<DictationSettings>>;
+    start(input: DictationStartInput): Promise<IpcResult<{ sessionId: string }>>;
+    /** Stops listening and, when the final pass is on, refines what was
+     *  heard; the `refined` event follows. */
+    stop(): Promise<IpcResult<null>>;
+    /** Stops and discards: no refinement, no further events but the state. */
+    cancel(): Promise<IpcResult<null>>;
+    onEvent(listener: (event: DictationEvent) => void): () => void;
   };
 }

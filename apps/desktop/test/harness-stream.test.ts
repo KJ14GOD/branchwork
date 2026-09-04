@@ -412,7 +412,9 @@ describe("what the turn cost, and who was speaking", () => {
       cacheCreationTokens: 6459,
       costUsd: 0.013929,
       durationMs: 2379,
-      turns: 1
+      turns: 1,
+      contextTokens: null,
+      contextWindow: null
     });
     // The verdict itself is unchanged: usage is metadata beside it, never a
     // replacement for it.
@@ -637,5 +639,90 @@ describe("what the turn cost, and who was speaking", () => {
       report: "Summary of the renderer.",
       usage: null
     });
+  });
+});
+
+/**
+ * How full the context is (D-236). Shapes copied from a real `claude 2.1.252`
+ * transcript: each assistant line's `message.usage` carries what that call
+ * was handed, and the final line's `modelUsage` names the window per model.
+ */
+describe("how full the context is", () => {
+  const assistant = (extra: Record<string, unknown>) =>
+    line({ type: "assistant", message: { content: [{ type: "text", text: "ok" }], ...extra } });
+  const result = (extra: Record<string, unknown>) =>
+    line({ type: "result", subtype: "success", is_error: false, result: "Done.", ...extra });
+
+  it("reports the main agent's last prompt and the model's window off the CLI's own lines", () => {
+    const stream = new HarnessStream();
+    stream.push(
+      assistant({
+        model: "claude-fable-5",
+        usage: { input_tokens: 2, cache_creation_input_tokens: 8959, cache_read_input_tokens: 10121, output_tokens: 4 }
+      })
+    );
+    // A later, fuller call is the one that counts: the level, not a sum.
+    stream.push(
+      assistant({
+        model: "claude-fable-5",
+        usage: { input_tokens: 40, cache_creation_input_tokens: 500, cache_read_input_tokens: 19080, output_tokens: 9 }
+      })
+    );
+    const events = stream.push(
+      result({
+        usage: { input_tokens: 42, output_tokens: 13 },
+        modelUsage: {
+          "claude-fable-5": { inputTokens: 42, outputTokens: 13, contextWindow: 1_000_000, maxOutputTokens: 64_000 }
+        }
+      })
+    );
+    const payload = payloadOf(events, "harness.usage");
+    expect(payload.contextTokens).toBe(19_620);
+    expect(payload.contextWindow).toBe(1_000_000);
+  });
+
+  it("ignores a subagent's calls, and names no window it would have to guess", () => {
+    const stream = new HarnessStream();
+    stream.push(
+      assistant({
+        model: "claude-fable-5",
+        usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 990 }
+      })
+    );
+    // A worker's own prompt says nothing about this chat's context. The
+    // parent id rides the line itself, beside `message`, as the CLI sends it.
+    stream.push(
+      line({
+        type: "assistant",
+        parent_tool_use_id: "toolu_worker",
+        message: {
+          content: [{ type: "text", text: "worker" }],
+          model: "claude-haiku-4-5-20251001",
+          usage: { input_tokens: 70_000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
+        }
+      })
+    );
+    const events = stream.push(
+      result({
+        usage: { input_tokens: 5, output_tokens: 1 },
+        // Two models, and the main agent's is not among them by name: no window.
+        modelUsage: {
+          "claude-haiku-4-5-20251001": { contextWindow: 200_000 },
+          "claude-opus-5": { contextWindow: 1_000_000 }
+        }
+      })
+    );
+    const payload = payloadOf(events, "harness.usage");
+    expect(payload.contextTokens).toBe(1_000);
+    expect(payload.contextWindow).toBeNull();
+  });
+
+  it("says nothing about context when the CLI said nothing", () => {
+    const stream = new HarnessStream();
+    stream.push(assistant({}));
+    const events = stream.push(result({ usage: { input_tokens: 5, output_tokens: 1 } }));
+    const payload = payloadOf(events, "harness.usage");
+    expect(payload.contextTokens).toBeNull();
+    expect(payload.contextWindow).toBeNull();
   });
 });

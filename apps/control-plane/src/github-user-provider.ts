@@ -338,15 +338,23 @@ export class GithubUserRepositoryProvider
     if (!response.ok) throw new ProviderTransientError(`pull request lookup failed (${response.status})`);
     const raw = (await response.json()) as Parameters<typeof this.toHostPull>[0] & { node_id?: string };
     const pull = this.toHostPull(raw);
-    // Review threads ride the same poll — the GraphQL threads API, which is
-    // the one place resolution state and thread ids live (D-100; it also
-    // retires D-099's REST limitation of every comment reading as open).
+    // Everything people said on the request rides the same poll (D-239), in
+    // one GraphQL read — the one place resolution state and thread ids live
+    // (D-100): every line thread WITH its replies (the first read took only
+    // the opening comment and every reply vanished — owner-hit), the review
+    // summaries people leave beside an approve or a change request, and the
+    // comments on the conversation itself. An outdated thread keeps the line
+    // it was left on, so the diff can still place it.
     if (raw.node_id) {
       try {
         const data = (await this.graphql(
           actor,
-          `query($id: ID!) { node(id: $id) { ... on PullRequest { reviewThreads(first: 50) { nodes {
-             id isResolved comments(first: 1) { nodes { author { login } body path line url createdAt } } } } } } }`,
+          `query($id: ID!) { node(id: $id) { ... on PullRequest {
+             reviewThreads(first: 100) { nodes { id isResolved isOutdated
+               comments(first: 50) { nodes { author { login } body path line originalLine diffHunk url createdAt } } } }
+             reviews(first: 100) { nodes { author { login } state body url submittedAt } }
+             comments(first: 100) { nodes { author { login } body url createdAt } }
+           } } }`,
           { id: raw.node_id }
         )) as {
           node?: {
@@ -354,37 +362,108 @@ export class GithubUserRepositoryProvider
               nodes?: {
                 id?: string;
                 isResolved?: boolean;
+                isOutdated?: boolean;
                 comments?: {
                   nodes?: {
                     author?: { login?: string } | null;
                     body?: string;
                     path?: string | null;
                     line?: number | null;
+                    originalLine?: number | null;
+                    diffHunk?: string | null;
                     url?: string;
                     createdAt?: string;
                   }[];
                 };
               }[];
             };
+            reviews?: {
+              nodes?: {
+                author?: { login?: string } | null;
+                state?: string;
+                body?: string;
+                url?: string;
+                submittedAt?: string | null;
+              }[];
+            };
+            comments?: {
+              nodes?: { author?: { login?: string } | null; body?: string; url?: string; createdAt?: string }[];
+            };
           };
         };
-        const nodes = data.node?.reviewThreads?.nodes ?? [];
-        pull.reviewThreads = nodes.slice(0, 50).flatMap((thread): ReviewThread[] => {
-          const first = thread.comments?.nodes?.[0];
-          if (!first) return [];
-          return [
-            {
-              threadId: thread.id?.slice(0, 200) ?? null,
-              author: (first.author?.login ?? "unknown").slice(0, 120),
-              body: (first.body ?? "").slice(0, 2_000),
-              path: first.path?.slice(0, 300) ?? null,
-              line: first.line ?? null,
-              state: thread.isResolved ? "resolved" : "open",
-              url: first.url?.slice(0, 600) ?? null,
-              postedAt: first.createdAt ?? new Date().toISOString()
-            }
-          ];
-        });
+        const now = new Date().toISOString();
+        const threads: ReviewThread[] = [];
+        for (const thread of data.node?.reviewThreads?.nodes ?? []) {
+          const comments = thread.comments?.nodes ?? [];
+          const first = comments[0];
+          if (!first) continue;
+          threads.push({
+            threadId: thread.id?.slice(0, 200) ?? null,
+            author: (first.author?.login ?? "unknown").slice(0, 120),
+            body: (first.body ?? "").slice(0, 2_000),
+            path: first.path?.slice(0, 300) ?? null,
+            line: first.line ?? first.originalLine ?? null,
+            state: thread.isResolved ? "resolved" : "open",
+            url: first.url?.slice(0, 600) ?? null,
+            postedAt: first.createdAt ?? now,
+            kind: "line",
+            outdated: Boolean(thread.isOutdated),
+            reviewState: null,
+            diffHunk: first.diffHunk?.slice(-4_000) ?? null,
+            replies: comments.slice(1, 51).map((reply) => ({
+              author: (reply.author?.login ?? "unknown").slice(0, 120),
+              body: (reply.body ?? "").slice(0, 2_000),
+              url: reply.url?.slice(0, 600) ?? null,
+              postedAt: reply.createdAt ?? now
+            }))
+          });
+        }
+        for (const review of data.node?.reviews?.nodes ?? []) {
+          // A review with no words is a verdict the readiness gate already
+          // counts; only the words are a comment somebody should read.
+          const body = (review.body ?? "").trim();
+          if (body.length === 0) continue;
+          const verdict =
+            review.state === "APPROVED"
+              ? "approved"
+              : review.state === "CHANGES_REQUESTED"
+                ? "changes_requested"
+                : "commented";
+          threads.push({
+            threadId: null,
+            author: (review.author?.login ?? "unknown").slice(0, 120),
+            body: body.slice(0, 2_000),
+            path: null,
+            line: null,
+            state: "open",
+            url: review.url?.slice(0, 600) ?? null,
+            postedAt: review.submittedAt ?? now,
+            kind: "review",
+            outdated: false,
+            reviewState: verdict,
+            diffHunk: null,
+            replies: []
+          });
+        }
+        for (const comment of data.node?.comments?.nodes ?? []) {
+          threads.push({
+            threadId: null,
+            author: (comment.author?.login ?? "unknown").slice(0, 120),
+            body: (comment.body ?? "").slice(0, 2_000),
+            path: null,
+            line: null,
+            state: "open",
+            url: comment.url?.slice(0, 600) ?? null,
+            postedAt: comment.createdAt ?? now,
+            kind: "conversation",
+            outdated: false,
+            reviewState: null,
+            diffHunk: null,
+            replies: []
+          });
+        }
+        threads.sort((a, b) => a.postedAt.localeCompare(b.postedAt));
+        pull.reviewThreads = threads.slice(0, 150);
       } catch {
         // Threads are enrichment on this read; the pull itself already
         // answered. The next poll asks again.

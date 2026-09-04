@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
+  ReviewThread,
   Decision,
   HostCheck,
   MergeMethod,
@@ -15,6 +16,15 @@ import { Dialog } from "./dialog";
 import { GatedAction } from "./gated";
 import { HumanMark } from "./identity";
 import { Markdown } from "./markdown";
+import {
+  directionTarget,
+  hunkTail,
+  openLineThreads,
+  threadAnchorLabel,
+  threadAsDirection,
+  threadsAtLine
+} from "./pull-threads";
+import { CLAUDE_MODELS, CODEX_MODELS, effortsFor, type Effort, type ModelId } from "@novus/contracts";
 
 /**
  * Publishing a decision, and the page that operates the pull request it
@@ -192,7 +202,8 @@ export function pullStateWord(pull: PullRequest): string {
 export function PullRequestPage({
   detail,
   decision,
-  pull
+  pull,
+  preferredSessionId = null
 }: {
   detail: MissionDetailResponse;
   /** The decision that opened it — null for a request adopted from the host
@@ -201,6 +212,9 @@ export function PullRequestPage({
   /** The request this page is about. A mission holds as many as its work
    *  earned (D-207), each with its own tab, so the page is told which. */
   pull: PullRequest | null;
+  /** The chat the person is reading (D-239): where Send to chat sends when
+   *  that chat belongs to the request's lane. */
+  preferredSessionId?: string | null;
 }) {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -343,8 +357,8 @@ export function PullRequestPage({
           data-testid="pull-tab-comments"
         >
           Conversation
-          {pull.reviewThreads.filter((thread) => thread.state === "open").length > 0
-            ? ` · ${pull.reviewThreads.filter((thread) => thread.state === "open").length}`
+          {openLineThreads(pull).length > 0
+            ? ` · ${openLineThreads(pull).length}`
             : ""}
         </button>
         <button
@@ -368,7 +382,15 @@ export function PullRequestPage({
       </div>
 
       {section === "comments" && (
-        <PullReview detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} setNote={setNote} />
+        <PullReview
+          detail={detail}
+          pull={pull}
+          decision={decision}
+          busy={busy}
+          onAct={act}
+          setNote={setNote}
+          preferredSessionId={preferredSessionId}
+        />
       )}
       {section === "checks" && (
         <>
@@ -603,7 +625,7 @@ function ReadinessLedger({
   onAct: (call: Act) => Promise<boolean>;
 }) {
   const readiness = pull.readiness;
-  const openThreads = pull.reviewThreads.filter((thread) => thread.state === "open").length;
+  const openThreads = openLineThreads(pull).length;
   const chosen = detail.approaches.find((approach) => approach.workstreamId === pull.workstreamId);
   return (
     <section className="pull-readiness" data-testid="pull-readiness">
@@ -715,29 +737,73 @@ interface PatchLine {
   tone: "add" | "del" | "ctx" | "hunk" | "meta";
   /** The line's number in the new file — what an inline comment anchors to. */
   newLine: number | null;
+  /** The line's number in the old file — where an outdated thread still
+   *  anchors (D-239). */
+  oldLine: number | null;
 }
 
 function parsePatch(patch: string): PatchLine[] {
   const out: PatchLine[] = [];
   let newLine = 0;
+  let oldLine = 0;
   for (const text of patch.replace(/\n+$/, "").split("\n")) {
     if (text.startsWith("@@")) {
-      const match = /\+(\d+)/.exec(text);
-      newLine = match ? Number(match[1]) : newLine;
-      out.push({ text, tone: "hunk", newLine: null });
+      const plus = /\+(\d+)/.exec(text);
+      const minus = /-(\d+)/.exec(text);
+      newLine = plus ? Number(plus[1]) : newLine;
+      oldLine = minus ? Number(minus[1]) : oldLine;
+      out.push({ text, tone: "hunk", newLine: null, oldLine: null });
       continue;
     }
     if (text.startsWith("+")) {
-      out.push({ text, tone: "add", newLine });
+      out.push({ text, tone: "add", newLine, oldLine: null });
       newLine += 1;
     } else if (text.startsWith("-")) {
-      out.push({ text, tone: "del", newLine: null });
+      out.push({ text, tone: "del", newLine: null, oldLine });
+      oldLine += 1;
     } else {
-      out.push({ text, tone: "ctx", newLine });
+      out.push({ text, tone: "ctx", newLine, oldLine });
       newLine += 1;
+      oldLine += 1;
     }
   }
   return out;
+}
+
+/** The host's threads under one diff line (D-239): who said what, where the
+ *  reviewer left it — replies beneath, the state in a word. */
+function InlineThreads({ threads }: { threads: ReviewThread[] }) {
+  if (threads.length === 0) return null;
+  return (
+    <div className="pull-inline-threads" data-testid="pull-inline-thread">
+      {threads.map((thread, index) => (
+        <div key={thread.threadId ?? index} className="pull-inline-thread" data-state={thread.state}>
+          <p className="pull-inline-thread-head">
+            <span className="pull-card-author">
+              <Person login={thread.author} />
+            </span>
+            <span className="quiet">
+              {thread.state === "open" ? "open" : "resolved"}
+              {thread.outdated ? " · outdated" : ""}
+            </span>
+          </p>
+          <div className="pull-card-body">
+            <Markdown source={thread.body} />
+          </div>
+          {thread.replies.map((reply, at) => (
+            <div key={at} className="pull-reply">
+              <span className="pull-card-author">
+                <Person login={reply.author} />
+              </span>
+              <div className="pull-card-body">
+                <Markdown source={reply.body} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /** Split rows: deletions pair with the additions that replaced them. */
@@ -870,19 +936,22 @@ function PullChanges({
                   <div className="diff" data-testid="pull-diff-unified">
                     <div className="diff-body">
                       {parsePatch(file.patch).map((line, index) => (
-                        <div key={index} className={`diff-line diff-${line.tone} pull-diff-line`}>
-                          {line.newLine !== null && (
-                            <button
-                              className="pull-line-comment"
-                              title={`Comment on line ${line.newLine}`}
-                              aria-label={`Comment on ${file.path} line ${line.newLine}`}
-                              onClick={() => setCommenting({ path: file.path, line: line.newLine! })}
-                              data-testid="line-comment"
-                            >
-                              +
-                            </button>
-                          )}
-                          <span>{line.text === "" ? " " : line.text}</span>
+                        <div key={index}>
+                          <div className={`diff-line diff-${line.tone} pull-diff-line`}>
+                            {line.newLine !== null && (
+                              <button
+                                className="pull-line-comment"
+                                title={`Comment on line ${line.newLine}`}
+                                aria-label={`Comment on ${file.path} line ${line.newLine}`}
+                                onClick={() => setCommenting({ path: file.path, line: line.newLine! })}
+                                data-testid="line-comment"
+                              >
+                                +
+                              </button>
+                            )}
+                            <span>{line.text === "" ? " " : line.text}</span>
+                          </div>
+                          <InlineThreads threads={threadsAtLine(pull.reviewThreads, file.path, line)} />
                         </div>
                       ))}
                     </div>
@@ -891,7 +960,8 @@ function PullChanges({
                   <div className="diff pull-split" data-testid="pull-diff-split">
                     <div className="diff-body pull-split-body">
                     {splitRows(parsePatch(file.patch)).map((row, index) => (
-                      <div key={index} className="pull-split-row">
+                      <div key={index}>
+                      <div className="pull-split-row">
                         <div
                           className={`diff-line diff-${row.left ? (row.left.tone === "add" ? "ctx" : row.left.tone) : "ctx"}`}
                         >
@@ -902,6 +972,13 @@ function PullChanges({
                         >
                           {row.right && row.right.tone !== "del" ? row.right.text || " " : " "}
                         </div>
+                      </div>
+                      <InlineThreads
+                        threads={threadsAtLine(pull.reviewThreads, file.path, {
+                          oldLine: row.left?.oldLine ?? null,
+                          newLine: row.right?.newLine ?? null
+                        })}
+                      />
                       </div>
                     ))}
                     </div>
@@ -1004,7 +1081,8 @@ function PullReview({
   decision,
   busy,
   onAct,
-  setNote
+  setNote,
+  preferredSessionId
 }: {
   detail: MissionDetailResponse;
   pull: PullRequest;
@@ -1012,24 +1090,41 @@ function PullReview({
   busy: boolean;
   onAct: (call: Act) => Promise<boolean>;
   setNote: (note: string | null) => void;
+  preferredSessionId: string | null;
 }) {
   const [reviewers, setReviewers] = useState("");
   const [comment, setComment] = useState("");
+  /** Threads picked for one batched send (D-239), keyed by their position. */
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const names = reviewers
     .split(",")
     .map((name) => name.trim())
     .filter((name) => name.length > 0);
   const openState = pull.state === "draft" || pull.state === "ready";
-  const openThreads = pull.reviewThreads.filter((thread) => thread.state === "open");
+  const openThreads = openLineThreads(pull);
 
   const direct = (body: string) =>
     void onAct(async () => {
+      // The chat being read, under its own model (D-239) — never the
+      // default, which crossed harnesses into a Codex chat (D-232 refuses
+      // that now, so the button would have simply failed).
+      const laneId = decision?.workstreamId ?? pull.workstreamId;
+      const remembered = localStorage.getItem("novus-model");
+      const known = [...CLAUDE_MODELS, ...CODEX_MODELS].some((option) => option.id === remembered);
+      const target = directionTarget(detail, laneId, preferredSessionId, {
+        model: known && remembered ? remembered : DEFAULT_MODEL,
+        effort: DEFAULT_EFFORT
+      });
+      const effort = (effortsFor(target.model) as readonly string[]).includes(target.effort)
+        ? target.effort
+        : DEFAULT_EFFORT;
       const result = await novus().missions.direct({
         missionId: detail.mission.missionId,
-        workstreamId: decision?.workstreamId ?? pull.workstreamId,
+        workstreamId: laneId,
+        ...(target.sessionId ? { sessionId: target.sessionId } : {}),
         body,
-        model: DEFAULT_MODEL,
-        effort: DEFAULT_EFFORT
+        model: target.model as ModelId,
+        effort: effort as Effort
       });
       if (result.ok) {
         setNote(
@@ -1042,23 +1137,28 @@ function PullReview({
     });
 
   const sendToChat = (thread: PullRequest["reviewThreads"][number]) => {
-    const quoted = thread.body.length > 400 ? `${thread.body.slice(0, 399)}…` : thread.body;
-    direct(
-      `Address this review comment from ${thread.author}${thread.path ? ` on ${thread.path}` : ""}: "${quoted}"`
-    );
+    direct(`Address this review comment from ${threadAsDirection(thread)}`);
   };
 
-  /** Conductor's own move, asked for by name (D-100): every open comment as
-   *  one direction, so a round of review becomes one turn of fixes. */
-  const sendAllToChat = () => {
-    const listed = openThreads.slice(0, 20).map((thread, index) => {
-      const quoted = thread.body.length > 300 ? `${thread.body.slice(0, 299)}…` : thread.body;
-      return `${index + 1}. ${thread.author}${thread.path ? ` on ${thread.path}${thread.line !== null ? `:${thread.line}` : ""}` : ""}: "${quoted}"`;
-    });
-    const truncated =
-      openThreads.length > 20 ? `\n(and ${openThreads.length - 20} more on the pull request)` : "";
+  /** Several comments as one direction (D-239): every open line thread, or
+   *  exactly the ones the person selected — one turn of fixes either way
+   *  (Conductor's own move, D-100). Bounded at twenty. */
+  const sendManyToChat = (threads: PullRequest["reviewThreads"]) => {
+    const listed = threads.slice(0, 20).map((thread, index) => `${index + 1}. ${threadAsDirection(thread, 300)}`);
+    const truncated = threads.length > 20 ? `\n(and ${threads.length - 20} more on the pull request)` : "";
     direct(`Address these review comments from the pull request:\n${listed.join("\n")}${truncated}`);
+    setSelected(new Set());
   };
+  const sendAllToChat = () => sendManyToChat(openThreads);
+  const sendSelectedToChat = () =>
+    sendManyToChat(pull.reviewThreads.filter((_thread, index) => selected.has(index)));
+  const toggleSelected = (index: number) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
 
   return (
     <section className="pull-review" data-testid="pull-review">
@@ -1079,6 +1179,14 @@ function PullReview({
           </>
         )}
         {openThreads.length > 0 ? ` ${plural(openThreads.length, "comment")} open.` : ""}
+        {openState && selected.size > 0 && (
+          <>
+            {" "}
+            <button className="btn btn-text" onClick={sendSelectedToChat} data-testid="send-selected-to-chat">
+              Send {selected.size} selected to chat
+            </button>
+          </>
+        )}
         {openState && openThreads.length > 1 && (
           <>
             {" "}
@@ -1103,25 +1211,59 @@ function PullReview({
                 <span className="pull-card-author">
                   <Person login={thread.author} />
                 </span>
-                {thread.path ? (
-                  <span className="mono pull-thread-anchor">
-                    {thread.path}
-                    {thread.line !== null ? `:${thread.line}` : ""}
-                  </span>
-                ) : (
-                  <span className="pull-thread-anchor">on the conversation</span>
-                )}
+                <span className={thread.kind === "line" && thread.path ? "mono pull-thread-anchor" : "pull-thread-anchor"}>
+                  {threadAnchorLabel(thread)}
+                </span>
                 <span className="pull-card-meta">
-                  {thread.state === "open" ? "open" : "resolved"}
-                  {" · "}
+                  {/* Only a line thread has a resolution state (D-239); the
+                      others are read, and say when. */}
+                  {thread.kind === "line" ? `${thread.state === "open" ? "open" : "resolved"} · ` : ""}
                   {agoLabel(thread.postedAt, Date.now())}
                 </span>
               </div>
+              {/* The code the words were written over (D-239): the host's
+                  own hunk, its tail, so the comment reads in context here
+                  and not only on the diff. */}
+              {hunkTail(thread.diffHunk).length > 0 && (
+                <div className="diff pull-card-hunk" data-testid="pull-thread-hunk">
+                  <div className="diff-body">
+                    {hunkTail(thread.diffHunk).map((line, at) => (
+                      <div key={at} className={`diff-line diff-${line.tone}`}>
+                        {line.text === "" ? " " : line.text}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="pull-card-body">
                 <Markdown source={thread.body} />
               </div>
+              {thread.replies.length > 0 && (
+                <div className="pull-replies" data-testid="pull-thread-replies">
+                  {thread.replies.map((reply, at) => (
+                    <div key={at} className="pull-reply">
+                      <span className="pull-card-author">
+                        <Person login={reply.author} />
+                      </span>
+                      <div className="pull-card-body">
+                        <Markdown source={reply.body} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
               {openState && thread.state === "open" && (
                 <span className="inline-actions pull-card-foot">
+                  {/* Pick several for one send (D-239): a word, not a box —
+                      the D-175 lesson. */}
+                  <button
+                    className="btn btn-text"
+                    aria-pressed={selected.has(index)}
+                    onClick={() => toggleSelected(index)}
+                    data-testid="select-thread"
+                  >
+                    {selected.has(index) ? "Selected ✓" : "Select"}
+                  </button>
                   {thread.threadId && (
                     <GatedAction
                       capability="pr.manage"
@@ -1243,7 +1385,7 @@ export function namedBlockers(pull: PullRequest): string[] {
   if (readiness.changesRequested > 0) {
     blockers.push(`${plural(readiness.changesRequested, "change request")} outstanding`);
   }
-  const openThreads = pull.reviewThreads.filter((thread) => thread.state === "open").length;
+  const openThreads = openLineThreads(pull).length;
   if (openThreads > 0) blockers.push(`${plural(openThreads, "review comment")} unresolved`);
   for (const check of readiness.checks.filter((entry) => !entry.required && entry.status === "failed").slice(0, 5)) {
     blockers.push(`check ${check.name} failing`);

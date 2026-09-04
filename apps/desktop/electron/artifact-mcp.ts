@@ -29,6 +29,14 @@ export const PUSH_TOOL_NAME = "push_branch";
 export const PUSH_TOOL_FULL_NAME = `mcp__novus__${PUSH_TOOL_NAME}`;
 export const DECLARE_RUN_TOOL_NAME = "declare_run_command";
 export const DECLARE_RUN_TOOL_FULL_NAME = `mcp__novus__${DECLARE_RUN_TOOL_NAME}`;
+/** The agent's own recording of the preview (D-237): starting is a one-shot
+ *  grant like a screenshot; stopping rides the start's approval as a per-turn
+ *  session, because stopping is the safe direction and a second card for it
+ *  would be a question with only one honest answer. */
+export const START_RECORDING_TOOL_NAME = "start_recording";
+export const START_RECORDING_TOOL_FULL_NAME = `mcp__novus__${START_RECORDING_TOOL_NAME}`;
+export const STOP_RECORDING_TOOL_NAME = "stop_recording";
+export const STOP_RECORDING_TOOL_FULL_NAME = `mcp__novus__${STOP_RECORDING_TOOL_NAME}`;
 
 /** The fenced-browser tools (D-218): the agent's hands on the preview. Unlike
  *  the one-shot tools above, these share a per-turn **session** grant — one
@@ -74,6 +82,12 @@ interface RegisteredTurn {
    *  structural fence, and the native backend. Behind its own per-turn
    *  session, separate from the browser's. */
   computer: (tool: ComputerTool, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean; image?: string }>;
+  /** Starts recording the lane's preview for this turn (D-237), under every
+   *  check a person's Start recording faces. One-shot grant, like capture. */
+  startRecording: () => Promise<{ text: string; isError: boolean }>;
+  /** Stops the turn's own recording and preserves it as evidence (D-237).
+   *  Behind the recording session the start's approval opened. */
+  stopRecording: () => Promise<{ text: string; isError: boolean }>;
 }
 
 interface ToolGrant {
@@ -105,6 +119,21 @@ export function revokeBrowserSession(executionId: string): void {
 /** What the router reads to decide ask / allow / deny for a browser tool. */
 export function browserSessionState(executionId: string): "granted" | "revoked" | null {
   return browserSessions.get(executionId) ?? null;
+}
+
+/** The recording session per execution (D-237): opened by the allow that
+ *  started the turn's recording, so the agent's `stop_recording` needs no
+ *  second card. A person's own Stop on the preview head ends the recording
+ *  itself; the agent's later stop then finds nothing running, in words. */
+const recordingSessions = new Map<string, "granted">();
+
+export function grantRecordingSession(executionId: string): void {
+  recordingSessions.set(executionId, "granted");
+}
+
+/** What the router reads to allow the turn's own `stop_recording` silently. */
+export function recordingSessionState(executionId: string): "granted" | null {
+  return recordingSessions.get(executionId) ?? null;
 }
 
 /** The raw computer-use session per execution (D-218), the browser session's
@@ -287,6 +316,18 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
               required: ["name", "command"],
               additionalProperties: false
             }
+          },
+          {
+            name: START_RECORDING_TOOL_NAME,
+            description:
+              "Start recording this mission's live preview as evidence — a WebM of exactly what the page displays, no audio, stopping itself after five minutes or when this turn ends. A person approves the start; call stop_recording when the flow you want on record is done. A recording shows what the preview displayed; it never proves the application is correct.",
+            inputSchema: { type: "object", properties: {}, additionalProperties: false }
+          },
+          {
+            name: STOP_RECORDING_TOOL_NAME,
+            description:
+              "Stop the recording this turn started and keep it as evidence in the mission's Evidence section. Needs no further approval.",
+            inputSchema: { type: "object", properties: {}, additionalProperties: false }
           },
           {
             name: "browser_navigate",
@@ -474,6 +515,38 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       return;
     }
 
+    // Stopping the turn's own recording (D-237) rides the start's approval:
+    // the session the allow opened is the receipt, and a person's own Stop
+    // on the head is answered by the recorder itself, in words.
+    if (params.name === STOP_RECORDING_TOOL_NAME) {
+      if (recordingSessions.get(turn.executionId) !== "granted") {
+        json(
+          response,
+          200,
+          result(id, {
+            content: [
+              {
+                type: "text",
+                text: "Stop refused: this turn started no recording. Start one with start_recording, which a person approves."
+              }
+            ],
+            isError: true
+          })
+        );
+        return;
+      }
+      const outcome = await turn.stopRecording().catch((error: unknown) => ({
+        text: `Stop failed: ${error instanceof Error ? error.message : "unknown error"}`,
+        isError: true
+      }));
+      json(
+        response,
+        200,
+        result(id, { content: [{ type: "text", text: outcome.text }], isError: outcome.isError })
+      );
+      return;
+    }
+
     const tool =
       params.name === CAPTURE_TOOL_NAME
         ? { name: CAPTURE_TOOL_NAME, run: turn.capture, verb: "Capture" }
@@ -485,7 +558,9 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
                 run: () => turn.declareRun(params.arguments ?? {}),
                 verb: "Declare"
               }
-            : null;
+            : params.name === START_RECORDING_TOOL_NAME
+              ? { name: START_RECORDING_TOOL_NAME, run: turn.startRecording, verb: "Record" }
+              : null;
     if (!tool) {
       json(response, 200, rpcError(id, -32602, `No such tool: ${params.name ?? "(none)"}`));
       return;
@@ -561,11 +636,19 @@ export async function registerCaptureTurn(
   computer: RegisteredTurn["computer"] = async () => ({
     text: "This turn has no computer driver.",
     isError: true
+  }),
+  startRecording: RegisteredTurn["startRecording"] = async () => ({
+    text: "This turn has no recorder.",
+    isError: true
+  }),
+  stopRecording: RegisteredTurn["stopRecording"] = async () => ({
+    text: "This turn has no recorder.",
+    isError: true
   })
 ): Promise<{ url: string; token: string; release: () => void }> {
   const listeningPort = await ensureServer();
   const token = randomBytes(24).toString("base64url");
-  turns.set(token, { executionId, capture, push, declareRun, browser, computer });
+  turns.set(token, { executionId, capture, push, declareRun, browser, computer, startRecording, stopRecording });
   return {
     url: `http://127.0.0.1:${listeningPort}/mcp`,
     token,
@@ -574,8 +657,10 @@ export async function registerCaptureTurn(
       grants.delete(grantKey(executionId, CAPTURE_TOOL_NAME));
       grants.delete(grantKey(executionId, PUSH_TOOL_NAME));
       grants.delete(grantKey(executionId, DECLARE_RUN_TOOL_NAME));
+      grants.delete(grantKey(executionId, START_RECORDING_TOOL_NAME));
       browserSessions.delete(executionId);
       computerSessions.delete(executionId);
+      recordingSessions.delete(executionId);
     }
   };
 }
@@ -586,6 +671,7 @@ export function resetCaptureEndpoint(): void {
   grants.clear();
   browserSessions.clear();
   computerSessions.clear();
+  recordingSessions.clear();
   server?.close();
   server = null;
   port = null;

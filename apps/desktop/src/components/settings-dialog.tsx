@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { SetupProbeResponse } from "@novus/contracts";
+import type { DictationSettings, SetupProbeResponse } from "@novus/contracts";
 import { novus } from "../bridge";
 import { focusQuietly } from "./dialog";
 import { applyTheme, themePreference, THEME_CHOICES, type ThemePreference } from "../theme";
@@ -33,7 +33,7 @@ import { ConnectorRows, useConnectors } from "./connectors";
  * that exists. A knob lands here the day its behavior does.
  */
 
-type Page = "account" | "appearance" | "notifications" | "agents" | "machine" | "keyboard" | "about";
+type Page = "account" | "appearance" | "notifications" | "agents" | "voice" | "machine" | "keyboard" | "about";
 
 function PersonGlyph() {
   return (
@@ -67,6 +67,15 @@ function AgentGlyph() {
     <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
       <rect x="3" y="5" width="10" height="7.5" rx="1.6" />
       <path d="M8 5V2.8M6 8.4h.01M10 8.4h.01" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MicGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="5.6" y="1.9" width="4.8" height="7.2" rx="2.4" />
+      <path d="M3.8 7.4a4.2 4.2 0 0 0 8.4 0M8 11.6v2M6 13.9h4" />
     </svg>
   );
 }
@@ -120,6 +129,7 @@ const NAV: { group: string; pages: { key: Page; label: string; glyph: () => Reac
     group: "This machine",
     pages: [
       { key: "agents", label: "Agents", glyph: AgentGlyph },
+      { key: "voice", label: "Voice", glyph: MicGlyph },
       { key: "machine", label: "Repositories", glyph: MachineGlyph }
     ]
   },
@@ -134,6 +144,7 @@ const PAGE_LABEL: Record<Page, string> = {
   appearance: "Appearance",
   notifications: "Notifications",
   agents: "Agents",
+  voice: "Voice",
   machine: "Repositories",
   keyboard: "Keyboard",
   about: "About"
@@ -218,6 +229,11 @@ export function SettingsDialog({
   const [notif, setNotif] = useState<{ turns: boolean; needsYou: boolean } | null>(null);
   const { data: connectors, setLent } = useConnectors();
   const [computerUse, setComputerUse] = useState<boolean | null>(null);
+  // Voice (D-240, D-241): what this Mac holds for dictation — the engines it
+  // found, the two permissions, and the person's own preferences.
+  const [voice, setVoice] = useState<DictationSettings | null>(null);
+  const [voiceProblem, setVoiceProblem] = useState<string | null>(null);
+  const [dictionaryDraft, setDictionaryDraft] = useState<string | null>(null);
   const [accessibility, setAccessibility] = useState<boolean | null>(null);
   const [screenRec, setScreenRec] = useState<boolean | null>(null);
   const bindings = useKeybindings();
@@ -231,6 +247,7 @@ export function SettingsDialog({
     void novus().system.version().then((result) => setVersion(result.ok ? result.value : null));
     void novus().notifications.get().then((result) => setNotif(result.ok ? result.value : null));
     void novus().computerUse.enabled().then((result) => setComputerUse(result.ok ? result.value.enabled : false));
+    void novus().dictation.settings().then((result) => setVoice(result.ok ? result.value : null));
     void novus().computerUse.accessibility().then((result) => setAccessibility(result.ok ? result.value.trusted : false));
     void novus().computerUse.screenRecording().then((result) => setScreenRec(result.ok ? result.value.granted : false));
   }, []);
@@ -314,6 +331,11 @@ export function SettingsDialog({
       { page: "agents", title: "Claude Code", description: probe?.claudeCode.installed ? `${probe.claudeCode.version ?? "installed"}${probe.claudeCode.account ? ` · ${probe.claudeCode.account}` : ""}` : "not found on this machine" },
       { page: "agents", title: "Codex", description: probe?.codex.installed ? `${probe.codex.version ?? "installed"}${probe.codex.account ? ` · ${probe.codex.account}` : ""}` : "not found on this machine" },
       { page: "agents", title: "Let agents control this Mac", description: computerUse ? "on — agents may operate your screen" : "off — the safe default" },
+      { page: "voice", title: "Speech recognition", description: voice?.engines?.speech.onDevice ? "on this Mac, on-device" : "not ready on this Mac" },
+      { page: "voice", title: "Editor", description: voice?.engines?.editor.kind === "claude" ? "Claude Code refines each take" : voice?.engines?.editor.kind === "codex" ? "Codex refines each take" : "no coding agent CLI installed" },
+      { page: "voice", title: "Microphone", description: voice?.microphone ?? "" },
+      { page: "voice", title: "Final pass", description: voice?.refine === false ? "off — the words stand as heard" : "on — each take is refined against your repository's names" },
+      { page: "voice", title: "Dictionary", description: "Names the recognizer should spell as you do" },
       ...(connectors?.connectors ?? []).map((c) => ({
         page: "agents" as Page,
         title: c.name.replace(/^claude\.ai /, ""),
@@ -324,7 +346,7 @@ export function SettingsDialog({
       { page: "about", title: "Electron", description: version?.electron ?? "" }
     ];
     return rows;
-  }, [user, probe, repos, version, bindings, connectors, computerUse]);
+  }, [user, probe, repos, version, bindings, connectors, computerUse, voice]);
 
   const needle = query.trim().toLowerCase();
   const hits = needle.length === 0
@@ -622,6 +644,197 @@ export function SettingsDialog({
             <p className="settings-hint">
               A lent account acts only on the turns this Mac runs, only when you approve, and only you
               can answer its questions. Claude Code's own connectors — nothing is stored here.
+            </p>
+          </>
+        ) : page === "voice" ? (
+          <>
+            <h2 className="settings-page-title">Voice</h2>
+            <Card heading="Dictation">
+              <CardRow
+                title="Speech recognition"
+                description={
+                  voice === null
+                    ? "Reading…"
+                    : !voice.engines
+                      ? "This Mac could not be read."
+                      : !voice.engines.speech.helper
+                        ? "This build of Novus has no speech helper beside it, so it cannot listen."
+                        : !voice.engines.speech.available
+                          ? `Speech recognition is not available for ${voice.engines.speech.locale ?? "this language"} on this Mac.`
+                          : !voice.engines.speech.onDevice
+                            ? `The on-device model for ${voice.engines.speech.locale ?? "this language"} is not installed. Turn on Dictation for it under System Settings → Keyboard.`
+                            : "Apple's recognizer, on this Mac and only on this Mac: audio never leaves it. Your repository's names and your dictionary guide it."
+                }
+                testid="voice-speech"
+                trailing={
+                  voice === null || !voice.engines ? (
+                    <span className="settings-card-value">…</span>
+                  ) : voice.engines.speech.helper && voice.engines.speech.available && voice.engines.speech.onDevice ? (
+                    <span className="settings-card-value">on-device · {voice.engines.speech.locale ?? "system language"}</span>
+                  ) : (
+                    <span className="settings-card-value tone-warn">not ready</span>
+                  )
+                }
+              />
+              {voice?.engines && voice.engines.speech.authorization !== "authorized" && (
+                <CardRow
+                  title="Speech recognition permission"
+                  description={
+                    voice.engines.speech.authorization === "denied"
+                      ? "macOS has refused Novus speech recognition. Allow it under Privacy & Security → Speech Recognition."
+                      : voice.engines.speech.authorization === "restricted"
+                        ? "This Mac restricts speech recognition."
+                        : "macOS asks the first time you dictate; you can ask now."
+                  }
+                  testid="voice-speech-permission"
+                  trailing={
+                    voice.engines.speech.authorization === "restricted" ? (
+                      <span className="settings-card-value tone-warn">restricted</span>
+                    ) : (
+                      <button
+                        className="btn btn-secondary"
+                        onClick={() => {
+                          void novus().dictation.requestAccess({ kind: "speech" }).then((result) => {
+                            if (result.ok) setVoice(result.value);
+                            else setVoiceProblem(result.message);
+                          });
+                        }}
+                        data-testid="voice-speech-ask"
+                      >
+                        {voice.engines.speech.authorization === "denied" ? "Open settings" : "Allow"}
+                      </button>
+                    )
+                  }
+                />
+              )}
+              <CardRow
+                title="Editor"
+                description={
+                  voice === null || !voice.engines
+                    ? ""
+                    : voice.engines.editor.kind === "claude"
+                      ? "Claude Code, on your own login, refines each take against your repository's names — the fast model, no tools, nothing kept."
+                      : voice.engines.editor.kind === "codex"
+                        ? "Codex, on your own login, refines each take against your repository's names — read-only, nothing kept."
+                        : "Install Claude Code or Codex to refine takes; without one the words stand as heard."
+                }
+                testid="voice-editor"
+                trailing={
+                  voice === null || !voice.engines ? (
+                    <span className="settings-card-value">…</span>
+                  ) : voice.engines.editor.kind === "none" ? (
+                    <span className="settings-card-value tone-warn">none installed</span>
+                  ) : (
+                    <span className="settings-card-value">
+                      {voice.engines.editor.kind === "claude" ? "Claude Code" : "Codex"}
+                      {voice.engines.editor.model ? ` · ${voice.engines.editor.model}` : ""}
+                    </span>
+                  )
+                }
+              />
+              <CardRow
+                title="Microphone"
+                description={
+                  voice === null
+                    ? ""
+                    : voice.microphone === "granted"
+                      ? "macOS allows Novus to listen. The microphone is open only while you dictate."
+                      : voice.microphone === "denied"
+                        ? "macOS has not allowed Novus. Allow it under Privacy & Security → Microphone, then relaunch Novus."
+                        : voice.microphone === "restricted"
+                          ? "This Mac restricts the microphone, so Novus cannot listen."
+                          : "macOS will ask the first time you dictate; you can ask now."
+                }
+                testid="voice-microphone"
+                trailing={
+                  voice === null ? (
+                    <span className="settings-card-value">…</span>
+                  ) : voice.microphone === "granted" ? (
+                    <span className="settings-card-value">granted</span>
+                  ) : voice.microphone === "restricted" ? (
+                    <span className="settings-card-value tone-warn">restricted</span>
+                  ) : (
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        void novus().dictation.requestAccess({ kind: "microphone" }).then((result) => {
+                          if (result.ok) setVoice(result.value);
+                          else setVoiceProblem(result.message);
+                        });
+                      }}
+                      data-testid="voice-microphone-ask"
+                    >
+                      {voice.microphone === "denied" ? "Open settings" : "Allow"}
+                    </button>
+                  )
+                }
+              />
+              <CardRow
+                title="Final pass"
+                description="After you stop, the take is refined against your repository's names, your dictionary, and the words already in the box, and every edit is checked against what you said. Off keeps the words as heard."
+                trailing={
+                  voice === null ? (
+                    <span className="settings-card-value">…</span>
+                  ) : (
+                    <div className="settings-theme" role="group" aria-label="Final pass">
+                      {[true, false].map((value) => (
+                        <button
+                          key={String(value)}
+                          className={voice.refine === value ? "segment-tab active" : "segment-tab"}
+                          aria-pressed={voice.refine === value}
+                          onClick={() => {
+                            setVoice({ ...voice, refine: value });
+                            void novus().dictation.setPrefs({ refine: value }).then((result) => {
+                              if (result.ok) setVoice(result.value);
+                            });
+                          }}
+                          data-testid={`voice-refine-${value ? "on" : "off"}`}
+                        >
+                          {value ? "On" : "Off"}
+                        </button>
+                      ))}
+                    </div>
+                  )
+                }
+              />
+            </Card>
+            {voiceProblem !== null && (
+              <p className="inline-error" role="alert" data-testid="voice-problem">
+                {voiceProblem}
+              </p>
+            )}
+            <Card heading="Your words">
+              <div className="settings-card-block">
+                <span className="settings-card-title">Dictionary</span>
+                <span className="settings-card-desc">
+                  Names the recognizer should spell as you do — people, products, identifiers. One per line, up to two hundred.
+                </span>
+                <textarea
+                  className="settings-dictionary"
+                  value={dictionaryDraft ?? voice?.dictionary.join("\n") ?? ""}
+                  onChange={(event) => setDictionaryDraft(event.target.value)}
+                  onBlur={() => {
+                    if (dictionaryDraft === null) return;
+                    const words = dictionaryDraft
+                      .split("\n")
+                      .map((word) => word.trim())
+                      .filter((word) => word.length > 0)
+                      .slice(0, 200);
+                    void novus().dictation.setPrefs({ dictionary: words }).then((result) => {
+                      if (result.ok) {
+                        setVoice(result.value);
+                        setDictionaryDraft(null);
+                      }
+                    });
+                  }}
+                  spellCheck={false}
+                  aria-label="Dictionary"
+                  data-testid="voice-dictionary"
+                />
+              </div>
+            </Card>
+            <p className="settings-hint">
+              Audio never leaves this Mac. The transcript and the names above go only where your coding agent already sends its work, on your own account. No key is stored anywhere.
             </p>
           </>
         ) : page === "machine" ? (

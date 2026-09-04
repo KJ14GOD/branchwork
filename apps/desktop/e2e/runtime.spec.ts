@@ -440,6 +440,20 @@ afterAll(async () => {
 });
 
 describe("the room reads as a conversation (D-162)", () => {
+  it("says how full the chat's context is, as the harness's own figure (D-236)", async () => {
+    // The fake turn's last call carried 42,012 tokens against a 200,000
+    // window: the composer's word and the turn's meta line both derive 21%
+    // from the same recorded usage, and neither invents a figure.
+    const fill = page.getByTestId("context-fill");
+    await fill.waitFor({ timeout: 30_000 });
+    expect((await fill.textContent()) ?? "").toBe("Context · 21%");
+    expect((await fill.getAttribute("title")) ?? "").toContain("42,012 of 200,000 tokens");
+    const meta = page.getByTestId("trace-machinery").filter({ hasText: "context" }).first();
+    await meta.waitFor({ timeout: 30_000 });
+    expect((await meta.textContent()) ?? "").toContain("context 42k (21%)");
+    await page.screenshot({ path: join(evidenceDir, "239-context-fill.png") });
+  });
+
   it("centres its column and puts the person's words on the right", async () => {
     const feed = page.locator(".feed").first();
     await feed.waitFor({ timeout: 30_000 });

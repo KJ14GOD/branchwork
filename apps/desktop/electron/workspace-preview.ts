@@ -651,6 +651,32 @@ export async function readPreview(
 }
 
 /**
+ * What a capture would photograph, as text (D-238): the page's visible text
+ * and the values in its visible fields — a password field excepted, which
+ * the browser already masks. Read for one purpose: to refuse a capture whose
+ * page shows a value this machine knows to be a secret. Bounded, and never
+ * returned across the bridge.
+ */
+export async function previewVisibleText(
+  workstreamId: string
+): Promise<{ ok: true; text: string } | { ok: false; refusal: string }> {
+  const gate = drivableOnOrigin(workstreamId);
+  if ("refusal" in gate) return { ok: false, refusal: gate.refusal };
+  const snapshot = (await gate.contents.executeJavaScript(
+    `(function () {
+       var text = (document.body && document.body.innerText) || "";
+       var fields = Array.prototype.slice
+         .call(document.querySelectorAll("input:not([type=password]):not([type=hidden]), textarea"))
+         .map(function (el) { return el.value || ""; })
+         .join("\\n");
+       return (text + "\\n" + fields).slice(0, 200000);
+     })()`,
+    true
+  )) as unknown;
+  return { ok: true, text: typeof snapshot === "string" ? snapshot : "" };
+}
+
+/**
  * The capture authority's one window onto pixels (D-123): the active tab of
  * the embedded preview, photographed by the main process. The renderer never
  * names a target — the only thing this can capture is a page this module

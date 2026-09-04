@@ -17,7 +17,8 @@ export type BindingAction =
   | "openSettings"
   | "find"
   | "nextProject"
-  | "previousProject";
+  | "previousProject"
+  | "dictate";
 
 /** One chord. ⌘ (or Ctrl elsewhere) is always implied — these are global
  *  chords, and a global binding without a modifier would eat plain typing. */
@@ -38,7 +39,10 @@ export const BINDING_ACTIONS: { action: BindingAction; does: string }[] = [
   // Moving along the rail's projects (D-212): the rail is a ring, Tab walks
   // it, and ⌘1–9 then reach the chosen project's missions.
   { action: "nextProject", does: "Select the next project in the rail" },
-  { action: "previousProject", does: "Select the previous project in the rail" }
+  { action: "previousProject", does: "Select the previous project in the rail" },
+  // Spoken direction (D-240): the same chord starts and stops a take in the
+  // box a person is in, so a hand on the keys never has to find the chip.
+  { action: "dictate", does: "Dictate into the box, or stop" }
 ];
 
 const DEFAULTS: Record<BindingAction, Chord> = {
@@ -50,7 +54,8 @@ const DEFAULTS: Record<BindingAction, Chord> = {
   openSettings: { key: ",", shift: false, alt: false },
   find: { key: "f", shift: false, alt: false },
   nextProject: { key: "tab", shift: false, alt: false },
-  previousProject: { key: "tab", shift: true, alt: false }
+  previousProject: { key: "tab", shift: true, alt: false },
+  dictate: { key: "d", shift: false, alt: false }
 };
 
 const STORAGE_KEY = "novus.keybindings";

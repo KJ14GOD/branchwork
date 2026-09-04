@@ -83,7 +83,13 @@ export class CodexStream {
   /** Which decision grammar answers each pending server request. */
   private readonly approvalKinds = new Map<string, CodexApprovalKind>();
   /** The latest token usage the thread reported; spoken once, at turn end. */
-  private usage: { input: number | null; cached: number | null; output: number | null } | null = null;
+  private usage: {
+    input: number | null;
+    cached: number | null;
+    output: number | null;
+    contextTokens: number | null;
+    contextWindow: number | null;
+  } | null = null;
   /** Tool items already announced as started, so completion does not repeat
    *  the row (`item/started` is the announcement; completion is evidence). */
   private readonly announced = new Set<string>();
@@ -276,10 +282,20 @@ export class CodexStream {
       case "thread/tokenUsage/updated": {
         const usage = params.tokenUsage as Record<string, unknown> | undefined;
         if (usage) {
+          // The thread's last call, when the server states one apart from the
+          // running total (D-236): its input plus cached input is the prompt
+          // it carried. A flat shape names no last call, and nothing is read
+          // into it.
+          const last = (usage.last ?? null) as Record<string, unknown> | null;
+          const lastInput = last ? count(last.inputTokens ?? last.input_tokens) : null;
+          const lastCached = last ? count(last.cachedInputTokens ?? last.cached_input_tokens) : null;
           this.usage = {
             input: count(usage.inputTokens ?? usage.input_tokens),
             cached: count(usage.cachedInputTokens ?? usage.cached_input_tokens),
-            output: count(usage.outputTokens ?? usage.output_tokens)
+            output: count(usage.outputTokens ?? usage.output_tokens),
+            contextTokens:
+              lastInput === null && lastCached === null ? null : (lastInput ?? 0) + (lastCached ?? 0),
+            contextWindow: count(usage.modelContextWindow ?? usage.model_context_window)
           };
         }
         return [];
@@ -311,7 +327,9 @@ export class CodexStream {
               cacheCreationTokens: null,
               costUsd: null,
               durationMs: null,
-              turns: null
+              turns: null,
+              contextTokens: this.usage.contextTokens,
+              contextWindow: this.usage.contextWindow
             }
           }
         ];

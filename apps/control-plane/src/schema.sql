@@ -61,6 +61,11 @@ create table if not exists repositories (
 -- Provider set widened for local repositories (D-032); rerunnable.
 alter table repositories drop constraint if exists repositories_provider_check;
 alter table repositories add constraint repositories_provider_check check (provider in ('github', 'local'));
+-- Disconnection (D-235): a repository leaves the organization's rail by one
+-- column set and cleared, never by a delete — its missions reference it, and
+-- their record outlives the connection. Connecting it again clears the column.
+alter table repositories add column if not exists disconnected_at timestamptz;
+alter table repositories add column if not exists disconnected_by text references users(user_id);
 
 create table if not exists missions (
   mission_id        text primary key,
@@ -317,6 +322,11 @@ alter table executions add column if not exists output_tokens bigint;
 alter table executions add column if not exists cache_read_tokens bigint;
 alter table executions add column if not exists cache_creation_tokens bigint;
 alter table executions add column if not exists cost_usd numeric(12, 6);
+-- Context fill (D-236): the level at the turn's last model call and the model's
+-- window, both the harness's own figures, the latest report standing rather
+-- than a sum — a level is not a cost.
+alter table executions add column if not exists context_tokens bigint;
+alter table executions add column if not exists context_window bigint;
 alter table executions add column if not exists harness_duration_ms bigint;
 alter table executions add column if not exists harness_turns integer;
 -- What the turn may do to the worktree (D-095). 'write' is the ordinary

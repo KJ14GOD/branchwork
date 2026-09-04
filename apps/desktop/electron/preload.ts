@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
+  DictationEvent,
   IpcAuthStatus,
   MissionChange,
   NovusBridge,
@@ -34,6 +35,22 @@ const novus: NovusBridge = {
   connectors: {
     list: () => ipcRenderer.invoke("novus:connectors:list"),
     setLent: (name, lent) => ipcRenderer.invoke("novus:connectors:setLent", { name, lent })
+  },
+  // Spoken direction (D-240, D-241). The renderer asks to listen and is told
+  // words; the microphone, the on-device recognizer, and the editor CLI stay
+  // in the main process. No key exists on this surface.
+  dictation: {
+    settings: () => ipcRenderer.invoke("novus:dictation:settings"),
+    setPrefs: (input) => ipcRenderer.invoke("novus:dictation:set-prefs", input),
+    requestAccess: (input) => ipcRenderer.invoke("novus:dictation:request-access", input),
+    start: (input) => ipcRenderer.invoke("novus:dictation:start", input),
+    stop: () => ipcRenderer.invoke("novus:dictation:stop"),
+    cancel: () => ipcRenderer.invoke("novus:dictation:cancel"),
+    onEvent: (listener) => {
+      const wrapped = (_event: unknown, event: DictationEvent) => listener(event);
+      ipcRenderer.on("novus:dictation-event", wrapped);
+      return () => ipcRenderer.removeListener("novus:dictation-event", wrapped);
+    }
   },
   computerUse: {
     enabled: () => ipcRenderer.invoke("novus:computer:enabled"),
@@ -71,7 +88,8 @@ const novus: NovusBridge = {
       ipcRenderer.invoke("novus:repos:base-local", ref === undefined ? localId : { localId, ref }),
     branches: (input) => ipcRenderer.invoke("novus:repos:branches", input),
     baseStatusLocal: (input) => ipcRenderer.invoke("novus:repos:base-status-local", input),
-    checkedOutHere: () => ipcRenderer.invoke("novus:repos:checked-out-here")
+    checkedOutHere: () => ipcRenderer.invoke("novus:repos:checked-out-here"),
+    disconnect: (repoId) => ipcRenderer.invoke("novus:repos:disconnect", repoId)
   },
   missions: {
     list: (filter) => ipcRenderer.invoke("novus:missions:list", filter),

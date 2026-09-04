@@ -181,4 +181,4 @@ export const TRANSCRIPT_CLAIM =
 /** The standing warning at the capture controls: pixels are the application's
  *  own output, and Novus does not scan them (ARCHITECTURE.md#secret-placement). */
 export const PIXELS_WARNING =
-  "Captured pixels are the application's own output and may contain sensitive data. Novus redacts known secrets from text, never from pixels.";
+  "Captured pixels are the application's own output and may contain sensitive data. Novus refuses to photograph a page showing a value it holds as a secret and redacts known secrets from text; anything else in the pixels is the page's own.";

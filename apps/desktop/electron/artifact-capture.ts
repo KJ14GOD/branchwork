@@ -10,8 +10,16 @@ import type {
   ProcessLog
 } from "@novus/contracts";
 import { ApiError } from "./api-client";
-import { captureProvenance, captureRefusal } from "./artifact-policy";
-import { capturePreviewImage, embeddedPreviewStatus } from "./workspace-preview";
+import {
+  SECRET_SCAN_MIN_LENGTH,
+  captureProvenance,
+  captureRefusal,
+  secretOnPage,
+  secretOnPageRefusal
+} from "./artifact-policy";
+import { capturePreviewImage, embeddedPreviewStatus, previewVisibleText } from "./workspace-preview";
+
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
  * The capture pipeline (D-123): pixels from the validated preview, provenance
@@ -168,6 +176,30 @@ export async function awaitReadyIfReloading(workstreamId: string): Promise<void>
   }
 }
 
+/**
+ * A page showing a value this machine knows to be a secret is not
+ * photographed (D-238): the visible text and field values are read at the
+ * moment of capture and compared in this process against the lane's own
+ * secret values — the values never reach the page, the renderer, or the wire.
+ * A page that cannot be read is refused too: a check that cannot run must not
+ * pass by silence.
+ */
+export async function refuseIfSecretShown(
+  workstreamId: string,
+  secrets: readonly { name: string; value: string }[]
+): Promise<void> {
+  if (secrets.every((secret) => secret.value.length < SECRET_SCAN_MIN_LENGTH)) return;
+  const shown = await previewVisibleText(workstreamId).catch(
+    (error: unknown): { ok: false; refusal: string } => ({
+      ok: false,
+      refusal: `The page could not be read for known secrets (${messageOf(error)}), so it was not captured.`
+    })
+  );
+  if (!shown.ok) throw new ApiError("capture_refused", shown.refusal, 409);
+  const hit = secretOnPage(shown.text, secrets);
+  if (hit !== null) throw new ApiError("capture_refused", secretOnPageRefusal(hit), 409);
+}
+
 export async function captureScreenshot(args: {
   workstreamId: string;
   worktreePath: string;
@@ -176,10 +208,14 @@ export async function captureScreenshot(args: {
    *  every textual metadata field before it leaves this machine. */
   sanitize: (text: string) => string;
   uploader: ArtifactUploader;
+  /** The values this machine holds as the lane's secrets, each with its name
+   *  (D-238): a page showing one refuses the capture. Absent means none. */
+  knownSecrets?: () => readonly { name: string; value: string }[];
 }): Promise<Artifact> {
   await awaitReadyIfReloading(args.workstreamId);
   const refusal = captureRefusal(embeddedPreviewStatus(), args.workstreamId, args.logs);
   if (refusal !== null) throw new ApiError("capture_refused", refusal, 409);
+  await refuseIfSecretShown(args.workstreamId, args.knownSecrets?.() ?? []);
 
   const shot = await capturePreviewImage(args.workstreamId);
   if (!shot.ok) throw new ApiError("capture_refused", shot.refusal, 409);

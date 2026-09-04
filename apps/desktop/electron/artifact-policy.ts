@@ -58,6 +58,35 @@ export function captureRefusal(
   return null;
 }
 
+/** A value shorter than this is not scanned for: a two-letter "secret" would
+ *  match ordinary prose and refuse every capture of an ordinary page. */
+export const SECRET_SCAN_MIN_LENGTH = 8;
+
+/**
+ * Whether the page a capture would photograph shows a value this machine
+ * knows to be a secret (D-238): the name of the first that does, or null.
+ * Exact, case-sensitive substring — a secret is a string, not a word — over
+ * the page's visible text and its visible field values. Novus can keep this
+ * claim because it holds the values (D-044); what it does not hold, it cannot
+ * see in pixels, and the capture controls say so.
+ */
+export function secretOnPage(
+  visibleText: string,
+  secrets: readonly { name: string; value: string }[]
+): string | null {
+  if (visibleText.length === 0) return null;
+  for (const secret of secrets) {
+    if (secret.value.length < SECRET_SCAN_MIN_LENGTH) continue;
+    if (visibleText.includes(secret.value)) return secret.name;
+  }
+  return null;
+}
+
+/** The refusal, naming the variable and never its value. */
+export function secretOnPageRefusal(name: string): string {
+  return `The page shows the value of ${name}, a secret this machine holds. Novus does not photograph a known secret: take it off the screen, then capture.`;
+}
+
 /** The capture's process-side provenance, read from the same log row that
  *  justified the preview: declared readiness and the process's own name. */
 export function captureProvenance(

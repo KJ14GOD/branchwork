@@ -112,7 +112,11 @@ export function summarizeApproaches(input: ApproachInputs): ApproachSummary[] {
         cacheCreationTokens: add(total.cacheCreationTokens, execution.usage.cacheCreationTokens),
         costUsd: add(total.costUsd, execution.usage.costUsd),
         durationMs: add(total.durationMs, execution.usage.durationMs),
-        turns: add(total.turns, execution.usage.turns)
+        turns: add(total.turns, execution.usage.turns),
+        // A level, not a cost (D-236): the lane's latest reported reading, in
+        // creation order, never a sum across its turns.
+        contextTokens: execution.usage.contextTokens ?? total.contextTokens,
+        contextWindow: execution.usage.contextWindow ?? total.contextWindow
       }),
       {
         inputTokens: null,
@@ -121,7 +125,9 @@ export function summarizeApproaches(input: ApproachInputs): ApproachSummary[] {
         cacheCreationTokens: null,
         costUsd: null,
         durationMs: null,
-        turns: null
+        turns: null,
+        contextTokens: null,
+        contextWindow: null
       } as ApproachSummary["usage"]
     );
 
@@ -257,6 +263,14 @@ export async function listDecisions(db: Queryable, missionId: string): Promise<D
  * because a pull request that omitted the last one would be the claim this
  * product exists to not make.
  */
+/** A receipt travels across time zones, so its instant is written in full
+ *  with its zone — `2026-09-04 00:20 UTC` — never as a bare day, which
+ *  read a day ahead in the owner's evening (found 2026-09-03). */
+function instantInWords(iso: string): string {
+  const minute = iso.slice(0, 16);
+  return minute.length === 16 ? `${minute.replace("T", " ")} UTC` : iso;
+}
+
 export function preparePullRequest(
   goal: string,
   decision: Decision | null,
@@ -296,7 +310,7 @@ export function preparePullRequest(
   lines.push("");
   if (decision.acceptedRisks) lines.push(`## Accepted risk`, "", decision.acceptedRisks, "");
   lines.push(
-    `Decided by ${decision.decidedByLogin} on ${decision.decidedAt.slice(0, 10)} in Novus. Prepared, not published: nothing here has been sent to a repository host, and no merge has happened.`
+    `Decided by ${decision.decidedByLogin} at ${instantInWords(decision.decidedAt)} in Novus. Prepared, not published: nothing here has been sent to a repository host, and no merge has happened.`
   );
   return {
     title: goal.length > 72 ? `${goal.slice(0, 71)}…` : goal,

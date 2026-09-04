@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CAPTURE_TOOL_FULL_NAME,
   CAPTURE_TOOL_NAME,
+  START_RECORDING_TOOL_NAME,
+  grantRecordingSession,
+  recordingSessionState,
   DECLARE_RUN_TOOL_FULL_NAME,
   DECLARE_RUN_TOOL_NAME,
   PUSH_TOOL_FULL_NAME,
@@ -59,6 +62,8 @@ describe("the capture endpoint (D-123)", () => {
       "capture_screenshot",
       "push_branch",
       "declare_run_command",
+      "start_recording",
+      "stop_recording",
       "browser_navigate",
       "browser_click",
       "browser_type",
@@ -381,5 +386,80 @@ describe("raw computer use's turn session (D-218)", () => {
     expect((click.body.result?.content ?? []).some((b) => b.type === "image")).toBe(false);
 
     turn.release();
+  });
+});
+
+/**
+ * The agent's own recording (D-237): starting spends a one-shot grant exactly
+ * as a screenshot does; stopping rides the session that start's allow opened,
+ * and nothing else — a stop with no start behind it is refused in words, and
+ * the session dies with the turn.
+ */
+describe("the agent's own recording (D-237)", () => {
+  const noop = async () => ({ text: "unused", isError: false });
+  const register = (executionId: string, started: string[], stopped: string[]) =>
+    registerCaptureTurn(
+      executionId,
+      noop,
+      noop,
+      declareStub,
+      undefined,
+      undefined,
+      async () => {
+        started.push(executionId);
+        return { text: "Recording the live preview.", isError: false };
+      },
+      async () => {
+        stopped.push(executionId);
+        return { text: "Recording saved as \"Recording · app\" (art_1), 3s — in Evidence.", isError: false };
+      }
+    );
+
+  it("starts only on a standing grant, once, and refuses a stop the turn never earned", async () => {
+    const started: string[] = [];
+    const stopped: string[] = [];
+    const turn = await register("exe_rec", started, stopped);
+    const cold = await rpc(turn.url, turn.token, "tools/call", { name: "start_recording", arguments: {} });
+    expect(cold.body.result?.isError).toBe(true);
+    expect(cold.body.result?.content?.[0]?.text).toContain("no approval stands");
+    const stopCold = await rpc(turn.url, turn.token, "tools/call", { name: "stop_recording", arguments: {} });
+    expect(stopCold.body.result?.isError).toBe(true);
+    expect(stopCold.body.result?.content?.[0]?.text).toContain("started no recording");
+    expect(started).toEqual([]);
+    expect(stopped).toEqual([]);
+
+    mintToolGrant("exe_rec", START_RECORDING_TOOL_NAME);
+    const first = await rpc(turn.url, turn.token, "tools/call", { name: "start_recording", arguments: {} });
+    expect(first.body.result?.isError).toBe(false);
+    expect(started).toEqual(["exe_rec"]);
+    const replay = await rpc(turn.url, turn.token, "tools/call", { name: "start_recording", arguments: {} });
+    expect(replay.body.result?.isError).toBe(true);
+    expect(started).toEqual(["exe_rec"]);
+    turn.release();
+  });
+
+  it("stops on the session the start's allow opened, with no second grant, and the session dies with the turn", async () => {
+    const started: string[] = [];
+    const stopped: string[] = [];
+    const turn = await register("exe_rec", started, stopped);
+    // What the router does on the allow (D-237): the grant, and the session.
+    mintToolGrant("exe_rec", START_RECORDING_TOOL_NAME);
+    grantRecordingSession("exe_rec");
+    expect(recordingSessionState("exe_rec")).toBe("granted");
+    await rpc(turn.url, turn.token, "tools/call", { name: "start_recording", arguments: {} });
+    const stop = await rpc(turn.url, turn.token, "tools/call", { name: "stop_recording", arguments: {} });
+    expect(stop.body.result?.isError).toBe(false);
+    expect(stop.body.result?.content?.[0]?.text).toContain("in Evidence");
+    expect(stopped).toEqual(["exe_rec"]);
+
+    // Another turn's token never rides this turn's session.
+    const other = await register("exe_other", started, stopped);
+    const crossed = await rpc(other.url, other.token, "tools/call", { name: "stop_recording", arguments: {} });
+    expect(crossed.body.result?.isError).toBe(true);
+    expect(stopped).toEqual(["exe_rec"]);
+    other.release();
+
+    turn.release();
+    expect(recordingSessionState("exe_rec")).toBeNull();
   });
 });

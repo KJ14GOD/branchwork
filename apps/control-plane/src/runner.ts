@@ -828,7 +828,10 @@ async function applySideEffects(
                 harness_duration_ms = case when $7::bigint is null then harness_duration_ms
                                            else coalesce(harness_duration_ms, 0) + $7::bigint end,
                 harness_turns = case when $8::int is null then harness_turns
-                                     else coalesce(harness_turns, 0) + $8::int end
+                                     else coalesce(harness_turns, 0) + $8::int end,
+                -- A level, not a cost (D-236): the latest report stands.
+                context_tokens = coalesce($9::bigint, context_tokens),
+                context_window = coalesce($10::bigint, context_window)
           where exe_id = $1`,
         [
           execution.exe_id,
@@ -838,7 +841,9 @@ async function applySideEffects(
           event.payload.cacheCreationTokens,
           event.payload.costUsd,
           event.payload.durationMs,
-          event.payload.turns
+          event.payload.turns,
+          event.payload.contextTokens,
+          event.payload.contextWindow
         ]
       );
       return;

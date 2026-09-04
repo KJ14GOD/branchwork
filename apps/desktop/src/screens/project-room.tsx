@@ -46,6 +46,7 @@ import {
   TraceView,
   buildFeed
 } from "../components/direction-trace";
+import { latestContextFill } from "../components/derive-feed";
 import { GatedAction } from "../components/gated";
 import { HumanMark } from "../components/identity";
 import { ArtifactView } from "../components/artifact-view";
@@ -512,6 +513,24 @@ export function ProjectRoom({
     });
     observer.observe(element);
     return () => observer.disconnect();
+  }, []);
+
+  // The conversation just came (back) on screen — a canvas switch unmounts
+  // this scroller, and a remount starts at the top, which stranded every
+  // return at the oldest words (owner-hit). Land at the latest, exactly
+  // where new words arrive; the worker-return restore still wins for its own
+  // case, because it runs after. STABLE identity on purpose (owner-hit
+  // twice): an inline closure here is a new function every render, React
+  // detaches and reattaches it each time, and the land-at-bottom branch then
+  // fired on every 2-second poll — yanking the reader back down whenever
+  // they scrolled up.
+  const feedScrollRef = useCallback((element: HTMLDivElement | null) => {
+    const previous = scrollRef.current;
+    scrollRef.current = element;
+    if (element !== null && previous === null) {
+      element.scrollTop = element.scrollHeight;
+      pinnedRef.current = true;
+    }
   }, []);
 
   const [awayFromLatest, setAwayFromLatest] = useState(false);
@@ -2284,7 +2303,12 @@ export function ProjectRoom({
       ) : pullSelected && detail ? (
         <div className="feed-scroll">
           <div className="feed">
-            <PullRequestPage detail={detail} decision={selectedPullDecision} pull={selectedPull} />
+            <PullRequestPage
+              detail={detail}
+              decision={selectedPullDecision}
+              pull={selectedPull}
+              preferredSessionId={selectedSessionId}
+            />
           </div>
         </div>
       ) : detail && detail.receipt && (detail.state === "completed" || detail.state === "cancelled") ? (
@@ -2392,19 +2416,7 @@ export function ProjectRoom({
       <div className="feed-holder">
       <div
         className="feed-scroll"
-        ref={(element) => {
-          const previous = scrollRef.current;
-          scrollRef.current = element;
-          // The conversation just came (back) on screen — a canvas switch
-          // unmounts this scroller, and a remount starts at the top, which
-          // stranded every return at the oldest words (owner-hit). Land at
-          // the latest, exactly where new words arrive; the worker-return
-          // restore below still wins for its own case, because it runs after.
-          if (element !== null && previous === null) {
-            element.scrollTop = element.scrollHeight;
-            pinnedRef.current = true;
-          }
-        }}
+        ref={feedScrollRef}
         onScroll={onScroll}
       >
         <div className="feed" data-testid="chat">
@@ -2694,6 +2706,15 @@ export function ProjectRoom({
             : null
         }
         policy={isDraft ? null : policyControl}
+        /* How full this chat's context is, from its latest turn (D-236). */
+        context={feed ? latestContextFill(feed.blocks) : null}
+        /* Spoken direction (D-240): the take's vocabulary is this lane's
+           worktree and this mission's own words. */
+        dictation={
+          isDraft || !detail
+            ? {}
+            : { missionId: detail.mission.missionId, ...(activeLaneId ? { workstreamId: activeLaneId } : {}) }
+        }
         onStop={
           !isDraft && composerStop && detail
             ? () =>

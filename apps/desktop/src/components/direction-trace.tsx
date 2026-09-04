@@ -8,6 +8,7 @@ import { HarnessGlyph } from "./harness-glyph";
 import { HARNESSES, type HarnessId } from "@novus/contracts";
 import { Markdown } from "./markdown";
 import type { ControlBlock, Feed, FeedBlock, Segment, ToolStep, TraceBlock, UsageTotals, WorkerView } from "./derive-feed";
+import { contextFillOf } from "./derive-feed";
 import { buildFeed, HARNESS_NAME, workerFiles, workerState } from "./derive-feed";
 
 /** The rendering half of the direction thread; the projection lives in
@@ -313,6 +314,16 @@ function usageLine(usage: UsageTotals | null): string | null {
   }
   if (usage.costUsd !== null) parts.push(usd(usage.costUsd));
   if (usage.durationMs !== null) parts.push(elapsed(usage.durationMs));
+  // How full the context was when this turn ended (D-236): the level the
+  // harness stated, with a percentage only where it also named the window.
+  const fill = contextFillOf(usage);
+  if (fill) {
+    parts.push(
+      fill.percent !== null
+        ? `context ${compactCount(fill.tokens)} (${fill.percent}%)`
+        : `context ${compactCount(fill.tokens)}`
+    );
+  }
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 

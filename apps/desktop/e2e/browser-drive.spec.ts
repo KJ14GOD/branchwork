@@ -333,6 +333,59 @@ describe("the agent drives the fenced browser (D-218)", () => {
     await page.evaluate(async () => window.novus.computerUse.setEnabled(false));
   }, 180_000);
 
+  it("the agent records the preview through the novus tool: one approval, a person sees it, the video is the turn's own (D-237)", async () => {
+    await page.getByTestId("room-tab").click();
+    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
+    // The scripted turn asks to start, records for a few seconds, and stops
+    // through the same endpoint — the stop riding the start's approval.
+    await page
+      .getByTestId("composer-input")
+      .fill("[fake-ask:mcp__novus__start_recording] [record:4000] record the page for the room");
+    await page.keyboard.press("Enter");
+    await approveOnce();
+
+    // While it runs, the preview head says whose recording it is, and the
+    // person's own Stop and Cancel stand beside it.
+    await page.getByTestId("preview-tab").first().click();
+    const word = page.getByTestId("recording-word");
+    await word.waitFor({ timeout: 30_000 });
+    expect((await word.textContent()) ?? "").toContain("Agent is recording");
+    expect(await word.getAttribute("data-initiator")).toBe("agent");
+    await page.getByTestId("recording-stop").waitFor({ timeout: 5_000 });
+    await page.screenshot({ path: join(evidenceDir, "240-agent-is-recording.png") });
+
+    // The turn ends with the agent's own stop, and its reply carries the
+    // recorder's honest sentence.
+    await page.getByTestId("room-tab").click();
+    await page
+      .getByTestId("chat")
+      .getByText("in Evidence", { exact: false })
+      .first()
+      .waitFor({ timeout: 90_000 });
+    await page.getByTestId("trace-outcome").filter({ hasText: "Turn completed" }).last().waitFor({ timeout: 90_000 });
+
+    // The artifact is a real video, attributed to the execution that asked and
+    // its own conversation — derived server-side, never claimed.
+    const recording = await page.evaluate(async () => {
+      const listed = await window.novus.missions.list();
+      if (!listed.ok) throw new Error(`${listed.code}: ${listed.message}`);
+      const mission = listed.value[0];
+      if (!mission) throw new Error("no mission on the wire");
+      const result = await window.novus.missions.get(mission.missionId);
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      return result.value.artifacts.find((artifact) => artifact.kind === "recording") ?? null;
+    });
+    expect(recording).not.toBeNull();
+    expect(recording!.initiator).toBe("agent");
+    expect(recording!.state).toBe("available");
+    expect(recording!.mimeType).toBe("video/webm");
+    expect(recording!.executionId).toBeTruthy();
+    expect(recording!.sessionId).toMatch(/^csn_/);
+    expect(recording!.createdByLogin).toBeNull();
+    expect((recording!.durationMs ?? 0) >= 3_000).toBe(true);
+    expect(await page.getByTestId("recording-word").count()).toBe(0);
+  });
+
   it("the agent reads the page as text through the same session", async () => {
     await page.getByTestId("room-tab").click();
     await page.getByTestId("chat").waitFor({ timeout: 20_000 });
@@ -346,4 +399,65 @@ describe("the agent drives the fenced browser (D-218)", () => {
     await page.getByTestId("chat").getByText("TYPED:hello", { exact: false }).last().waitFor({ timeout: 90_000 });
     await page.getByTestId("trace-outcome").filter({ hasText: "Turn completed" }).last().waitFor({ timeout: 90_000 });
   }, 180_000);
+
+  it("a page showing a value this machine holds as a secret is not photographed, in words naming it (D-238)", async () => {
+    // A secret this Mac holds for the project: declared, then supplied — the
+    // value never leaves the machine (D-044).
+    const value = "hunter2-hunter2-secret-value";
+    await page.evaluate(async (secret) => {
+      const listed = await window.novus.missions.list();
+      if (!listed.ok) throw new Error(`${listed.code}: ${listed.message}`);
+      const missionId = listed.value[0]!.missionId;
+      const declared = await window.novus.workspace.addSecretName({ missionId, name: "DEMO_API_KEY" });
+      if (!declared.ok) throw new Error(`${declared.code}: ${declared.message}`);
+      const supplied = await window.novus.workspace.supplySecret({ missionId, name: "DEMO_API_KEY", value: secret });
+      if (!supplied.ok) throw new Error(`${supplied.code}: ${supplied.message}`);
+    }, value);
+
+    // The agent types the value into the page's field — a page now showing it.
+    await page.getByTestId("room-tab").click();
+    await page.getByTestId("chat").waitFor({ timeout: 20_000 });
+    await page
+      .getByTestId("composer-input")
+      .fill(`[fake-ask:mcp__novus__browser_navigate] [browser:navigate /][browser:click 120 95][browser:type ${value}]`);
+    await page.keyboard.press("Enter");
+    await approveOnce();
+    const embedded = await previewPage();
+    await expect
+      .poll(async () => embedded.locator("#out").textContent(), { timeout: 60_000 })
+      .toBe(`TYPED:${value}`);
+    await page.getByTestId("trace-outcome").filter({ hasText: "Turn completed" }).last().waitFor({ timeout: 90_000 });
+
+    // A person's own capture is refused — the variable named, the value never.
+    await page.getByTestId("preview-tab").first().click();
+    const artifactsBefore = await page.evaluate(async () => {
+      const listed = await window.novus.missions.list();
+      if (!listed.ok) throw new Error(listed.message);
+      const detail = await window.novus.missions.get(listed.value[0]!.missionId);
+      if (!detail.ok) throw new Error(detail.message);
+      return detail.value.artifacts.length;
+    });
+    await page.getByTestId("preview-capture").click();
+    const note = page.getByTestId("preview-note");
+    await note.waitFor({ timeout: 20_000 });
+    const said = (await note.textContent()) ?? "";
+    expect(said).toContain("DEMO_API_KEY");
+    expect(said).toContain("a secret this machine holds");
+    expect(said).not.toContain(value);
+    await page.screenshot({ path: join(evidenceDir, "241-capture-refused-known-secret.png") });
+
+    // Off the screen, the same capture proceeds: the page reloaded empty.
+    await page.getByTestId("preview-reload").click();
+    await expect.poll(async () => (await previewPage()).locator("#out").textContent(), { timeout: 30_000 }).toBe("steady");
+    await page.getByTestId("preview-capture").click();
+    await page.getByTestId("preview-captured").waitFor({ timeout: 30_000 });
+    const artifactsAfter = await page.evaluate(async () => {
+      const listed = await window.novus.missions.list();
+      if (!listed.ok) throw new Error(listed.message);
+      const detail = await window.novus.missions.get(listed.value[0]!.missionId);
+      if (!detail.ok) throw new Error(detail.message);
+      return detail.value.artifacts.length;
+    });
+    expect(artifactsAfter).toBe(artifactsBefore + 1);
+  });
 });

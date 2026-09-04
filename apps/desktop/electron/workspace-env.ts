@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceSettings } from "@novus/contracts";
@@ -177,19 +177,73 @@ export function mergedPath(current: string, loginPath: string, separator = ":"):
  * a terminal launch already has the right PATH, and a broken rc file must
  * not stop the app from opening.
  */
+/** How long the login shell may take before the app opens without its PATH. */
+export const LOGIN_SHELL_TIMEOUT_MS = 4_000;
+
+/** The shell and everything it forked: it was started as its own process
+ *  group so the deadline reaches the subshells an rc file left behind. */
+function killGroup(child: ChildProcess): void {
+  try {
+    if (child.pid) process.kill(-child.pid, "SIGKILL");
+    else child.kill("SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
 export async function amendPathFromLoginShell(
   environment: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  timeoutMs: number = LOGIN_SHELL_TIMEOUT_MS
 ): Promise<"amended" | "already-complete" | "unavailable"> {
   if (platform === "win32") return "already-complete";
   const shell = environment.SHELL && environment.SHELL !== "" ? environment.SHELL : "/bin/zsh";
+  // The shell is asked for one line and held to it (D-245): the value is
+  // taken the moment it arrives, and the deadline is real — an interactive
+  // shell ignores SIGTERM, an rc file may fork subshells that hold the pipe
+  // open, and on the owner's Mac a login shell deadlocked in its own stdio
+  // flush and the app never opened a window. So: its own process group,
+  // nothing to read, SIGKILL to the whole group once the value is in or the
+  // deadline passes, and whatever was printed by then is the answer.
   const printed = await new Promise<string | null>((resolve) => {
-    execFile(
-      shell,
-      ["-ilc", `printf '%s%s%s' '${LOGIN_PATH_MARKER}' "$PATH" '${LOGIN_PATH_MARKER}'`],
-      { timeout: 4000 },
-      (error, stdout) => resolve(error ? null : stdout)
-    );
+    let child: ChildProcess;
+    try {
+      child = spawn(shell, ["-ilc", `printf '%s%s%s' '${LOGIN_PATH_MARKER}' "$PATH" '${LOGIN_PATH_MARKER}'`], {
+        stdio: ["ignore", "pipe", "ignore"],
+        detached: true
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let output = "";
+    let settled = false;
+    let grace: NodeJS.Timeout | null = null;
+    const settle = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      if (grace) clearTimeout(grace);
+      resolve(value);
+    };
+    const deadline = setTimeout(() => {
+      // The pipe closes once the group is dead; what it held is read first.
+      killGroup(child);
+      grace = setTimeout(() => settle(output), 250);
+    }, timeoutMs);
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      output += chunk;
+      // The fenced value is the whole answer: the shell's own exit — on the
+      // owner's Mac two to four seconds after it printed, when it came at
+      // all — is not waited for.
+      if (pathFromShellOutput(output) !== null) {
+        killGroup(child);
+        settle(output);
+      }
+    });
+    child.on("error", () => settle(null));
+    child.on("close", () => settle(output));
   });
   const loginPath = printed === null ? null : pathFromShellOutput(printed);
   if (loginPath === null) return "unavailable";

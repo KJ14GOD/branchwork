@@ -54,6 +54,10 @@ import {
   revokeComputerSession,
   mintToolGrant,
   registerCaptureTurn,
+  START_RECORDING_TOOL_FULL_NAME,
+  START_RECORDING_TOOL_NAME,
+  grantRecordingSession,
+  recordingSessionState,
   type BrowserTool,
   type ComputerTool
 } from "./artifact-mcp";
@@ -75,8 +79,8 @@ import {
   SHARED_SETTINGS_PATH,
   WorkspaceConfigError
 } from "./workspace-config";
-import { startRecording } from "./artifact-recording";
-import { SCREENSHOT_CLAIM } from "./artifact-policy";
+import { startRecording, stopRecordingOwnedBy } from "./artifact-recording";
+import { RECORDING_CLAIM, SCREENSHOT_CLAIM } from "./artifact-policy";
 import { ATTACHMENT_DIR, redact } from "./secret-policy";
 import { processLogsFor } from "./workspace";
 import { startTurn, type RunningTurn, type TurnResult } from "./execution";
@@ -88,7 +92,8 @@ import {
   releaseWorkspaceWorktree,
   secretValuesFor,
   type PinnedCommand,
-  type WorkspaceCommandContext
+  type WorkspaceCommandContext,
+  namedSecretsFor
 } from "./workspace";
 import { gitExec } from "./workspace-git";
 import { mergeBaseIntoLanes, resetLanes, type SyncLane } from "./workspace-sync";
@@ -593,6 +598,12 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       redact(text, providerRepoId === null ? [] : secretValuesFor(host, providerRepoId));
   }
 
+  /** The lane's known secrets, named, for the capture scan (D-238). */
+  function knownSecretsFor(workstreamId: string): () => readonly { name: string; value: string }[] {
+    const providerRepoId = laneInfo.get(workstreamId)?.providerRepoId ?? null;
+    return () => (providerRepoId === null ? [] : namedSecretsFor(host, providerRepoId));
+  }
+
   /** A refusal from an artifact route, surfaced in the server's own words. */
   async function artifactRefusal(response: Response): Promise<ApiError> {
     const parsed = ApiErrorSchema.safeParse(await response.json().catch(() => null));
@@ -642,7 +653,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       worktreePath: join(worktreeRoot, workstreamId),
       logs: processLogsFor(workstreamId),
       sanitize: captureSanitizer(workstreamId),
-      uploader: personUploader(missionId, workstreamId)
+      uploader: personUploader(missionId, workstreamId),
+      knownSecrets: knownSecretsFor(workstreamId)
     });
   }
 
@@ -817,7 +829,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       worktreePath: join(worktreeRoot, workstreamId),
       logs: () => processLogsFor(workstreamId),
       sanitize: captureSanitizer(workstreamId),
-      uploader: personUploader(missionId, workstreamId)
+      uploader: personUploader(missionId, workstreamId),
+      knownSecrets: knownSecretsFor(workstreamId)
     });
   }
 
@@ -2028,7 +2041,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
               worktreePath: join(worktreeRoot, args.workstreamId),
               logs: processLogsFor(args.workstreamId),
               sanitize: captureSanitizer(args.workstreamId),
-              uploader: runnerUploader(args.executionId, enrolment)
+              uploader: runnerUploader(args.executionId, enrolment),
+              knownSecrets: knownSecretsFor(args.workstreamId)
             });
             return {
               text:
@@ -2264,6 +2278,57 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
           } catch (error) {
             return { text: `Computer action failed: ${error instanceof Error ? error.message : "unknown error"}`, isError: true };
           }
+        }, async () => {
+          // The agent's own recording of the preview (D-237): the same
+          // recorder, bounds, and refusals a person's Start recording has,
+          // uploaded under this runner's credential so the server attributes
+          // it to the requesting execution and its conversation.
+          const enrolment = enrolments.get(args.workstreamId);
+          if (!enrolment) {
+            return { text: "Recording refused: this machine is no longer enrolled for the lane.", isError: true };
+          }
+          try {
+            await startRecording({
+              missionId: args.missionId,
+              workstreamId: args.workstreamId,
+              worktreePath: join(worktreeRoot, args.workstreamId),
+              logs: () => processLogsFor(args.workstreamId),
+              sanitize: captureSanitizer(args.workstreamId),
+              uploader: runnerUploader(args.executionId, enrolment),
+              initiator: "agent",
+              executionId: args.executionId,
+              knownSecrets: knownSecretsFor(args.workstreamId)
+            });
+            return {
+              text:
+                "Recording the live preview. Call stop_recording when the flow you want on record is done; " +
+                "it stops itself after five minutes, at the size bound, or when this turn ends, and what it " +
+                "captured is kept as evidence either way. A person can stop or cancel it from the preview.",
+              isError: false
+            };
+          } catch (error) {
+            return { text: `Recording refused: ${messageOf(error)}`, isError: true };
+          }
+        }, async () => {
+          try {
+            const artifact = await stopRecordingOwnedBy(args.executionId);
+            if (artifact === null) {
+              return {
+                text: "No recording of this turn's is running — a person may have stopped or cancelled it.",
+                isError: true
+              };
+            }
+            const seconds = Math.round((artifact.durationMs ?? 0) / 1000);
+            return {
+              text:
+                `Recording saved as "${artifact.label}" (${artifact.artifactId}), ${seconds}s` +
+                `${artifact.state === "interrupted" ? ", marked interrupted" : ""} — in Evidence. ` +
+                RECORDING_CLAIM,
+              isError: false
+            };
+          } catch (error) {
+            return { text: `Stop failed: ${messageOf(error)}`, isError: true };
+          }
         });
         releaseCapture = endpoint.release;
         novusCapture = { url: endpoint.url, token: endpoint.token };
@@ -2338,6 +2403,13 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
         if (toolName === CAPTURE_TOOL_FULL_NAME) mintToolGrant(args.executionId, CAPTURE_TOOL_NAME);
         if (toolName === PUSH_TOOL_FULL_NAME) mintToolGrant(args.executionId, PUSH_TOOL_NAME);
         if (toolName === DECLARE_RUN_TOOL_FULL_NAME) mintToolGrant(args.executionId, DECLARE_RUN_TOOL_NAME);
+        // A person allowed the turn's recording to start (D-237): the grant
+        // starts it once, and the session lets the agent stop it without a
+        // second card.
+        if (toolName === START_RECORDING_TOOL_FULL_NAME) {
+          mintToolGrant(args.executionId, START_RECORDING_TOOL_NAME);
+          grantRecordingSession(args.executionId);
+        }
         // A person allowed the turn's first browse (D-218): the session stands
         // for the rest of the turn, and the room shows the preview is being
         // driven so the cut-off is one click away.
@@ -2354,6 +2426,8 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       // (a person already said yes this turn) auto-allows, revoked (a person
       // cut it off) denies, absent asks (D-218).
       browserSession: () => browserSessionState(args.executionId),
+      // The turn's own recording, once a person allowed its start (D-237).
+      recordingSession: () => recordingSessionState(args.executionId),
       // Raw computer use's own gates (D-218): the machine-local opt-in, and the
       // per-turn session — read live so the opt-in and a cut-off both bite at
       // once.
@@ -2389,6 +2463,10 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       result = await turn.finished;
     } finally {
       active.delete(args.executionId);
+      // A recording the agent started and never stopped ends with its turn,
+      // preserved (D-237): a recording that outlived its turn would be
+      // nobody's, and the bytes are real either way.
+      await stopRecordingOwnedBy(args.executionId).catch(() => undefined);
       // The endpoint token and any unspent grant die with the turn.
       releaseCapture?.();
       setPreviewAgentDriving(args.workstreamId, false);

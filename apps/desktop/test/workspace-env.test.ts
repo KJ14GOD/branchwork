@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { homedir } from "node:os";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkspaceSettingsSchema } from "@novus/contracts";
 import {
@@ -7,7 +8,7 @@ import {
   novusPath,
   projectEnv,
   proxyCredentials,
-  terminalEnv, pathFromShellOutput, mergedPath 
+  terminalEnv, pathFromShellOutput, mergedPath, amendPathFromLoginShell 
 } from "../electron/workspace-env";
 
 /**
@@ -253,5 +254,42 @@ describe("the login shell's PATH, folded in at launch (D-222)", () => {
     // Nothing new: the string is returned untouched, not rebuilt.
     expect(mergedPath("/usr/bin:/bin", "/usr/bin")).toBe("/usr/bin:/bin");
     expect(mergedPath("/usr/bin", "")).toBe("/usr/bin");
+  });
+});
+
+describe("the login shell's PATH, bounded (D-245)", () => {
+  /** A stand-in login shell: prints what it is told, then hangs for ever
+   *  the way the owner's did, in a subshell of its own. */
+  const fakeShell = (body: string): { shell: string; dispose: () => void } => {
+    const dir = mkdtempSync(join(tmpdir(), "novus-login-shell-"));
+    const shell = join(dir, "shell");
+    writeFileSync(shell, `#!/bin/sh\n${body}\n`);
+    chmodSync(shell, 0o755);
+    return { shell, dispose: () => rmSync(dir, { recursive: true, force: true }) };
+  };
+
+  it("takes the PATH a shell printed before it hung, and opens on time", async () => {
+    const fake = fakeShell("/usr/bin/printf '%s%s%s' __NOVUS_LOGIN_PATH__ /fake/login/bin:/usr/bin __NOVUS_LOGIN_PATH__; (sleep 30) & sleep 30");
+    const environment: NodeJS.ProcessEnv = { SHELL: fake.shell, PATH: "/usr/bin:/bin" };
+    const started = Date.now();
+    // A generous deadline: the value settles the moment it is printed, so the
+    // deadline only matters under a loaded machine, where a spawn alone can
+    // take longer than a tight one (the gate's full suite caught that).
+    const outcome = await amendPathFromLoginShell(environment, "darwin", 2_000);
+    fake.dispose();
+    expect(outcome).toBe("amended");
+    expect(environment.PATH).toBe("/usr/bin:/bin:/fake/login/bin");
+    expect(Date.now() - started).toBeLessThan(1_800);
+  });
+
+  it("opens without a PATH when the shell prints nothing and never returns", async () => {
+    const fake = fakeShell("(sleep 30) & sleep 30");
+    const environment: NodeJS.ProcessEnv = { SHELL: fake.shell, PATH: "/usr/bin:/bin" };
+    const started = Date.now();
+    const outcome = await amendPathFromLoginShell(environment, "darwin", 600);
+    fake.dispose();
+    expect(outcome).toBe("unavailable");
+    expect(environment.PATH).toBe("/usr/bin:/bin");
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });

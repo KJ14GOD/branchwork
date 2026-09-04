@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { PreviewStatus, ProcessLog } from "@novus/contracts";
-import { artifactLabel, captureProvenance, captureRefusal } from "../electron/artifact-policy";
+import {
+  SECRET_SCAN_MIN_LENGTH,
+  artifactLabel,
+  captureProvenance,
+  captureRefusal,
+  secretOnPage,
+  secretOnPageRefusal
+} from "../electron/artifact-policy";
 
 /**
  * The capture policy (D-123), in plain Node: the only pixels Novus may
@@ -89,5 +96,37 @@ describe("capture policy (D-123)", () => {
   it("generates a concise label that is never a filename", () => {
     expect(artifactLabel("screenshot", "web")).toBe("Screenshot · web");
     expect(artifactLabel("recording", "app")).toBe("Recording · app");
+  });
+});
+
+/**
+ * A page showing a known secret is not photographed (D-238). The scan is
+ * exact and case-sensitive over what the page shows, names the variable and
+ * never the value, and ignores values too short to be anything but prose.
+ */
+describe("a known secret on the page (D-238)", () => {
+  const secrets = [
+    { name: "STRIPE_KEY", value: "novus-fixture-SecretValue-Only" },
+    { name: "SHORT", value: "abc" }
+  ];
+
+  it("names the secret the page shows, and never its value", () => {
+    const hit = secretOnPage("Settings\nAPI key: novus-fixture-SecretValue-Only\nSave", secrets);
+    expect(hit).toBe("STRIPE_KEY");
+    const refusal = secretOnPageRefusal(hit!);
+    expect(refusal).toContain("STRIPE_KEY");
+    expect(refusal).not.toContain("novus-fixture");
+  });
+
+  it("is exact: a different case or a fragment is not the secret", () => {
+    expect(secretOnPage("NOVUS-FIXTURE-SECRETVALUE-ONLY", secrets)).toBeNull();
+    expect(secretOnPage("novus-fixture-Secret", secrets)).toBeNull();
+  });
+
+  it("ignores a value too short to be anything but prose, and an empty page", () => {
+    expect(SECRET_SCAN_MIN_LENGTH).toBe(8);
+    expect(secretOnPage("abc is in this sentence", secrets)).toBeNull();
+    expect(secretOnPage("", secrets)).toBeNull();
+    expect(secretOnPage("anything", [])).toBeNull();
   });
 });

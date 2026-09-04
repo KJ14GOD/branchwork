@@ -588,6 +588,31 @@ describe("a profiled turn (D-115)", () => {
     expect(asked.events.some((event) => event.kind === "approval.requested")).toBe(true);
   });
 
+  it("the turn's own stop_recording rides the start's approval; without one it is a question (D-237)", async () => {
+    // A person allowed the start this turn: the stop is allowed silently.
+    const granted = await runFakeTurn({
+      direction: "[fake-ask:mcp__novus__stop_recording] stop the recording",
+      recordingSession: () => "granted",
+      fakeApproval: true
+    });
+    expect(granted.events.some((event) => event.kind === "approval.requested")).toBe(false);
+
+    // No start behind it: the ordinary ask, like any MCP tool.
+    const asked = await runFakeTurn(
+      {
+        direction: "[fake-ask:mcp__novus__stop_recording] stop the recording",
+        recordingSession: () => null,
+        fakeApproval: true
+      },
+      (event, _stop, respond) => {
+        if (event.kind === "approval.requested") {
+          respond((event.payload as { requestId: string }).requestId, "deny");
+        }
+      }
+    );
+    expect(asked.events.some((event) => event.kind === "approval.requested")).toBe(true);
+  });
+
   it("dont_ask answers a shell command too — and the grant is still recorded", async () => {
     const { events, result } = await runFakeTurn({
       direction: "[fake-ask:Bash] run the script",

@@ -19,7 +19,11 @@ import {
   type RunnerEvent
 } from "@novus/contracts";
 import { DEFAULT_CODEX_MODEL, effortsFor, harnessOf, speedsFor, type HarnessId, type Speed } from "@novus/contracts";
-import { isBrowserToolFullName, isComputerToolFullName } from "./artifact-mcp";
+import {
+  STOP_RECORDING_TOOL_FULL_NAME,
+  isBrowserToolFullName,
+  isComputerToolFullName
+} from "./artifact-mcp";
 import { captureCheckpoint, createSanitizer, type GitRunner } from "./evidence";
 import { composeSkillsPlugin, removeComposedSkills, type ComposedSkills } from "./skills";
 import { resolveMachineMcp } from "./machine-mcp";
@@ -397,6 +401,9 @@ export interface TurnRequest {
    *  call: `granted` auto-allows without a card (one approval covers the
    *  turn), `revoked` denies (a person cut it off mid-turn), null asks. */
   browserSession?: (() => "granted" | "revoked" | null) | null;
+  /** The turn's own recording session (D-237): `granted` once a person
+   *  allowed its start, so the agent's stop needs no second card. */
+  recordingSession?: (() => "granted" | null) | null;
   /** Whether this Mac's owner has turned on raw computer use (D-218). When
    *  false, a computer tool is refused outright — never even asked, because
    *  the machine has not consented to hands at all. */
@@ -805,6 +812,18 @@ export function startTurn(request: TurnRequest): RunningTurn {
       // it — deny in words; absent falls through to the ordinary ask (a card
       // under manual, the profile's own answer under dont_ask), whose allow
       // mints the session so the rest of the turn's browsing is silent.
+      // The turn's own recording (D-237): stopping it is the safe direction
+      // and rides the approval that started it — no second card. A stop with
+      // no start behind it falls through to the ordinary ask, where the
+      // endpoint will refuse it in words anyway.
+      if (
+        message.toolName === STOP_RECORDING_TOOL_FULL_NAME &&
+        (request.recordingSession?.() ?? null) === "granted"
+      ) {
+        policyDecided.add(message.requestId);
+        wire.decision(message.requestId, true, "The turn's own recording stops on the approval that started it.");
+        return;
+      }
       if (isBrowserToolFullName(message.toolName)) {
         const browser = request.browserSession?.() ?? null;
         if (browser === "granted" || browser === "revoked") {
@@ -1604,6 +1623,42 @@ export function startTurn(request: TurnRequest): RunningTurn {
             emit(event);
           }
         }
+        // An allowed recording ask (D-237) starts the recording through the
+        // endpoint, lets it run for `[record:ms]` (default 1500, at most ten
+        // seconds), and stops it through the same endpoint — the stop riding
+        // the start's session, never a second card — so the production
+        // recorder, grant, and attribution are what the test drives.
+        if (allowed && askTool === "mcp__novus__start_recording" && request.novusCapture) {
+          const endpoint = request.novusCapture;
+          const callTool = async (name: string): Promise<string> => {
+            const called = await fetch(endpoint.url, {
+              method: "POST",
+              headers: { "content-type": "application/json", authorization: `Bearer ${endpoint.token}` },
+              body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {} } })
+            })
+              .then(
+                (response) =>
+                  response.json() as Promise<{ result?: { content?: { text?: string }[]; isError?: boolean } }>
+              )
+              .catch((error: unknown) => ({
+                result: { content: [{ text: `${name} failed: ${messageOf(error)}` }], isError: true }
+              }));
+            return called.result?.content?.[0]?.text ?? "The recording endpoint said nothing.";
+          };
+          const say = (text: string) => {
+            for (const event of stream.push(
+              `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } })}\n`
+            )) {
+              emit(event);
+            }
+          };
+          say(await callTool("start_recording"));
+          const wanted = Number.parseInt(/\[record:(\d+)\]/.exec(request.direction)?.[1] ?? "", 10);
+          const holdMs = Number.isFinite(wanted) && wanted > 0 ? Math.min(wanted, 10_000) : 1_500;
+          const until = Date.now() + holdMs;
+          while (Date.now() < until && stopReason === null) await delay(100);
+          say(await callTool("stop_recording"));
+        }
         // A browser ask, once allowed, is followed by a sequence of browser
         // tool calls the direction encodes (D-218) — the first is the one
         // just approved, and the rest ride the turn's session grant, proving
@@ -1760,7 +1815,13 @@ export function startTurn(request: TurnRequest): RunningTurn {
       for (const event of stream.push(
         `${JSON.stringify({
           type: "assistant",
-          message: { content: [{ type: "text", text: "Done. The change is in the worktree." }] }
+          message: {
+            content: [{ type: "text", text: "Done. The change is in the worktree." }],
+            // What the call carried, in the CLI's own shape (D-236): a fixed
+            // figure so a test can assert the percentage the room derives.
+            model: "fake-harness",
+            usage: { input_tokens: 12, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 2_000 }
+          }
         })}\n`
       )) {
         emit(event);
@@ -1771,7 +1832,15 @@ export function startTurn(request: TurnRequest): RunningTurn {
         writeFileSync(filePath, `# Fake turn\n\n${request.direction}\n`);
       }
       // No trailing newline: the flush path is part of what is being exercised.
-      stream.push(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Done." }));
+      stream.push(
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "Done.",
+          modelUsage: { "fake-harness": { contextWindow: 200_000 } }
+        })
+      );
       return { code: 0, signal: null, stderr: "", spawnError: null };
     } catch (error) {
       // An exception in the double must still end the turn, or a test run

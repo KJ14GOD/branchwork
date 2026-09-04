@@ -523,6 +523,11 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
       author: z.string().min(1).max(120).optional(),
       body: z.string().max(2_000).optional(),
       path: z.string().max(300).optional(),
+      /** A line comment's anchor and the code it was written over (D-239). */
+      line: z.number().int().positive().optional(),
+      diffHunk: z.string().max(4_000).optional(),
+      /** The thread a `reply` answers inside (D-239). */
+      threadId: z.string().max(200).optional(),
       checkName: z.string().max(200).optional(),
       checkStatus: z.enum(["pending", "passed", "failed", "skipped"]).optional(),
       required: z.boolean().optional(),
@@ -538,7 +543,16 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
           provider.fakeComment(body.data.providerRepoId, body.data.number, {
             author: body.data.author ?? "reviewer",
             body: body.data.body ?? "Looks close — one question.",
-            path: body.data.path ?? null
+            path: body.data.path ?? null,
+            line: body.data.line ?? null,
+            diffHunk: body.data.diffHunk ?? null
+          });
+        } else if (action === "reply") {
+          // The host side of a reply inside a thread (D-239).
+          if (!body.data.threadId) return deps.sendError(reply, 400, "bad_fake_act", "A reply names its thread.");
+          provider.fakeReply(body.data.providerRepoId, body.data.number, body.data.threadId, {
+            author: body.data.author ?? "reviewer",
+            body: body.data.body ?? "Answered."
           });
         } else if (action === "resolve") {
           provider.fakeResolveComments(body.data.providerRepoId, body.data.number);

@@ -452,7 +452,8 @@ describe("shipping a decision through GitHub (D-099)", () => {
       // mission runs no preview; the capture path itself is proven in
       // e2e/artifacts.spec.ts. What this proves is the relationship: the
       // exact id preserved on the tracked record and shown on the page.
-      const seededBytes = Buffer.from(`pr-evidence-${"x".repeat(64)}`);
+      // A real PNG of the real window, so the receipt's thumbnail renders as one.
+      const seededBytes = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 640, height: 400 } });
       const seedToken = await mintToken();
       const begun = await fetch(`${CP_URL}/missions/${missionId}/artifacts`, {
         method: "POST",
@@ -525,13 +526,41 @@ describe("shipping a decision through GitHub (D-099)", () => {
         .poll(async () => page.getByTestId("pull-reviewers").innerText(), { timeout: 30_000 })
         .toContain("maya");
 
-      await hostActs("comment", { number: pull.number, author: "maya", body: "Is the guard bounded?", path: "README.md" });
-      await until(
+      // A reviewer's line comment carries the code it was written over
+      // (D-239): the host's hunk, and a reply inside the same thread.
+      await hostActs("comment", {
+        number: pull.number,
+        author: "maya",
+        body: "Is the guard bounded?",
+        path: "README.md",
+        line: 3,
+        diffHunk: "@@ -1,2 +1,4 @@\n # fixture\n+guard = True\n+limit = 100"
+      });
+      const ingested = await until(
         "the comment to be ingested",
         (value) => (value.pullRequest?.reviewThreads.length ?? 0) === 1,
         60_000
       );
       expect(await page.getByTestId("pull-threads").innerText()).toContain("Is the guard bounded?");
+      await hostActs("reply", {
+        number: pull.number,
+        threadId: ingested.pullRequest!.reviewThreads[0]!.threadId,
+        author: "kartik",
+        body: "Yes — capped at 100."
+      });
+      await until(
+        "the reply to be ingested",
+        (value) => (value.pullRequest?.reviewThreads[0]?.replies.length ?? 0) === 1,
+        60_000
+      );
+      // The card: the code above the words, the reply beneath them.
+      const hunk = page.getByTestId("pull-thread-hunk");
+      await hunk.waitFor({ timeout: 30_000 });
+      expect(await hunk.innerText()).toContain("+limit = 100");
+      expect(await page.getByTestId("pull-thread-replies").innerText()).toContain("Yes — capped at 100.");
+      expect(await page.getByTestId("pull-threads").innerText()).toContain("README.md:3");
+      await page.getByTestId("pull-thread-replies").scrollIntoViewIfNeeded();
+      await shot("242-review-comment-with-code.png");
       // The conversation as cards (D-210): who, where, state, then the words.
       await shot("216-pull-conversation.png");
       expect(await page.getByTestId("pull-reviewers").innerText()).toContain("1 comment open");
@@ -548,6 +577,22 @@ describe("shipping a decision through GitHub (D-099)", () => {
       const sent = withSent.directions[withSent.directions.length - 1]!;
       expect(sent.body).toContain("Is the guard bounded?");
       expect(sent.body).toContain("maya");
+      // The code the comment was about rides along (D-239)…
+      expect(sent.body).toContain("+limit = 100");
+      // …into the lane's own chat, under that chat's own model, never the default.
+      const laneSessions = withSent.sessions
+        .filter((session) => session.workstreamId === decision.workstreamId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      expect(sent.sessionId).toBe(laneSessions[0]!.sessionId);
+      const priorModel = withSent.executions
+        .filter((execution) => execution.sessionId === sent.sessionId && execution.startingDirectionId !== sent.directionId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.model;
+      const sentModel = await until(
+        "the sent direction's turn to exist",
+        (value) => value.executions.some((execution) => execution.startingDirectionId === sent.directionId),
+        60_000
+      );
+      expect(sentModel.executions.find((execution) => execution.startingDirectionId === sent.directionId)?.model).toBe(priorModel);
       await until(
         "the chat's turn to finish",
         (value) =>

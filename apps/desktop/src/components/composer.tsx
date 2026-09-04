@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { compactCount } from "../format";
+import type { ContextFill } from "./derive-feed";
 import {
   CLAUDE_MODELS,
   CODEX_MODELS,
@@ -24,6 +26,41 @@ import codexIcon from "../assets/codex-icon.png";
 import { Dialog, focusQuietly } from "./dialog";
 import { ClaudeGlyph, DocumentGlyph, ImageGlyph } from "./identity";
 import { FileBadge } from "./file-badge";
+import {
+  elapsedLabel,
+  registerComposer,
+  releaseDictation,
+  startDictation,
+  stopDictation,
+  useDictation
+} from "./dictation";
+import type { DictationStartInput } from "@novus/contracts";
+
+/** Where a take's vocabulary comes from (D-240): the lane's worktree and the
+ *  mission's words, or a repository alone, or nothing. The words the box
+ *  already holds ride along as the draft; the composer adds those itself. */
+export type DictationTarget = Omit<DictationStartInput, "draft">;
+
+/** The microphone, in the stroke set (DESIGN.md#icons). */
+function MicGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 20 20"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="7" y="2.75" width="6" height="9" rx="3" />
+      <path d="M4.75 9.5a5.25 5.25 0 0 0 10.5 0M10 14.75v2.5M7.5 17.25h5" />
+    </svg>
+  );
+}
 
 /** One short line on what each profile answers, keyed to the vocabulary the
  *  server enforces (D-115). The wire never changes: the harness always asks,
@@ -157,6 +194,8 @@ export function Composer({
   slashCommands,
   terminal,
   onStop,
+  context = null,
+  dictation: dictationTarget = {},
   scratchKey,
   onRemoveTranscript
 }: {
@@ -194,6 +233,13 @@ export function Composer({
    *  to send, because a message typed mid-turn queues and steers. Never set
    *  for another chat's turn; stopping that from here would be a misfire. */
   onStop?: (() => void) | null;
+  /** How full this chat's context is (D-236), from its latest turn that said;
+   *  null renders nothing. A word beside the chips, never a control. */
+  context?: ContextFill | null;
+  /** Spoken direction (D-240): what the take's vocabulary is built from.
+   *  Defaults to nothing behind the box — the chip still listens; null
+   *  removes the chip from a surface that must not dictate. */
+  dictation?: DictationTarget | null;
   /** Which conversation this box belongs to (D-215). The box's words, files,
    *  and held paths are remembered under it while the app runs, so a switch
    *  to another chat leaves them here and a return finds them. Absent where
@@ -301,6 +347,141 @@ export function Composer({
   const [settingProfile, setSettingProfile] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const footRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Spoken direction (D-240). The take lives in the main process; this box
+  // owns where its words land — the text around the caret when it began —
+  // shows the settled segments in the field with the volatile tail beneath,
+  // and swaps in the refined words once the take settles, unless the person
+  // edited meanwhile, in which case they are offered instead. While the box
+  // listens the field is read-only: the person is speaking, and two writers
+  // in one box would fight.
+  const composerId = useRef(`composer-${Math.random().toString(36).slice(2, 10)}`).current;
+  const dictationSnapshot = useDictation();
+  const take = dictationSnapshot.take?.owner === composerId ? dictationSnapshot.take : null;
+  const listening = take !== null && (take.state === "starting" || take.state === "listening");
+  const refining = take !== null && take.state === "refining";
+  const someoneElseListening =
+    dictationSnapshot.take !== null &&
+    dictationSnapshot.take.owner !== composerId &&
+    dictationSnapshot.take.state !== "idle";
+  const dictationAnchor = useRef<{ before: string; after: string } | null>(null);
+  /** What this box last wrote from the take, so an edit since is known. */
+  const lastWritten = useRef<string | null>(null);
+  const [dictationNote, setDictationNote] = useState<{
+    anchor: { before: string; after: string };
+    raw: string;
+    text: string;
+    note: string | null;
+    showing: "refined" | "raw" | "offered";
+  } | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!listening) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [listening]);
+
+  const composeTake = (anchor: { before: string; after: string }, words: string): string => {
+    const joint = anchor.before.length > 0 && !/\s$/.test(anchor.before) && words.length > 0 ? " " : "";
+    const tail = anchor.after.length > 0 && !/^\s/.test(anchor.after) && words.length > 0 ? " " : "";
+    return `${anchor.before}${joint}${words}${tail}${anchor.after}`;
+  };
+
+  // Settled segments land in the field as they arrive, and each one is
+  // replaced by its refined words the moment the editor answers (D-242),
+  // so the text cleans itself up while the person is still speaking.
+  const committedText = take ? take.segments.map((segment) => segment.text).join(" ") : "";
+  useEffect(() => {
+    const anchor = dictationAnchor.current;
+    if (!take || anchor === null || !listening) return;
+    const next = composeTake(anchor, committedText);
+    lastWritten.current = next;
+    setTextValue(next);
+    if (inputRef.current) grow(inputRef.current);
+    // Keyed on the words and the state; the anchor is the take's own.
+  }, [committedText, listening]);
+
+  // The take settles: the refined words replace the heard ones when the box
+  // is as the take left it, and are offered when the person edited meanwhile.
+  const settled = take?.refined ?? null;
+  useEffect(() => {
+    if (!take || settled === null) return;
+    const anchor = dictationAnchor.current;
+    releaseDictation(take.sessionId);
+    dictationAnchor.current = null;
+    if (anchor === null) return; // sent, or cleared, before the words settled
+    const untouched = lastWritten.current === null || textValue === lastWritten.current;
+    lastWritten.current = null;
+    const differs = settled.text !== settled.raw;
+    if (untouched) {
+      const next = composeTake(anchor, settled.text);
+      setTextValue(next);
+      if (settled.note !== null || differs) {
+        setDictationNote({ anchor, raw: settled.raw, text: settled.text, note: settled.note, showing: "refined" });
+      }
+      requestAnimationFrame(() => {
+        const box = inputRef.current;
+        if (!box) return;
+        grow(box);
+        box.focus();
+        const at = next.length - anchor.after.length;
+        box.setSelectionRange(at, at);
+      });
+    } else if (differs || settled.note !== null) {
+      setDictationNote({ anchor, raw: settled.raw, text: settled.text, note: settled.note, showing: "offered" });
+    }
+  }, [settled]);
+
+  // A take's trouble is the box's error line, where every refusal lands.
+  const takeError = take?.error ?? null;
+  useEffect(() => {
+    if (takeError !== null) setError(takeError);
+  }, [takeError]);
+
+  const toggleDictation = () => {
+    if (!enabled || sending) return;
+    if (listening) {
+      void stopDictation();
+      return;
+    }
+    if (dictationSnapshot.starting || refining || someoneElseListening) return;
+    const box = inputRef.current;
+    const at = box?.selectionStart ?? textValue.length;
+    const end = box?.selectionEnd ?? at;
+    const anchor = { before: textValue.slice(0, at), after: textValue.slice(end) };
+    dictationAnchor.current = anchor;
+    lastWritten.current = null;
+    setDictationNote(null);
+    setError(null);
+    void startDictation(composerId, {
+      ...(dictationTarget ?? {}),
+      draft: { before: anchor.before.slice(-4000), after: anchor.after.slice(0, 4000) }
+    }).then((outcome) => {
+      if (!outcome.ok) {
+        dictationAnchor.current = null;
+        setError(outcome.message);
+      }
+    });
+  };
+  // The chord's target (D-240): registered while mounted, reading the live
+  // handler through a ref so a stale closure never toggles a stale take.
+  const toggleRef = useRef(toggleDictation);
+  toggleRef.current = toggleDictation;
+  // Direction is the gate on dictating too: whoever may direct may speak it.
+  const mayDictate = (capabilities?.includes("direction.submit") ?? false) && !sending && dictationTarget !== null;
+  const enabledRef = useRef(mayDictate);
+  enabledRef.current = mayDictate;
+  useEffect(
+    () =>
+      registerComposer({
+        id: composerId,
+        toggle: () => toggleRef.current(),
+        enabled: () => enabledRef.current,
+        hasFocus: () => rootRef.current?.contains(document.activeElement) ?? false
+      }),
+    [composerId]
+  );
 
   // Direction is a server-enforced verb, and nothing else gates this box.
   // Whether a runner exists is the state line's business: a participant whose
@@ -599,6 +780,10 @@ export function Composer({
     setTextValue("");
     setAttachments([]);
     setHeldPaths([]);
+    // Words sent are words read: a take still refining has nothing to swap into.
+    dictationAnchor.current = null;
+    lastWritten.current = null;
+    setDictationNote(null);
     // The box returns to one row: a composer that stays tall after sending is
     // a blank canvas, which the room is not (DESIGN.md prohibited pattern 9).
     if (inputRef.current) inputRef.current.style.height = "";
@@ -691,7 +876,7 @@ export function Composer({
         : "Add direction to the queue…");
 
   return (
-    <div className="composer" data-testid="composer">
+    <div className="composer" data-testid="composer" ref={rootRef}>
       {error && (
         <p className="inline-error composer-error" role="alert" data-testid="send-error">
           {error}
@@ -942,6 +1127,7 @@ export function Composer({
             ))}
           </div>
         )}
+        <div className={dictationTarget !== null ? "composer-field composer-field-mic" : "composer-field"}>
         <textarea
           ref={inputRef}
           className="composer-input"
@@ -949,9 +1135,11 @@ export function Composer({
           value={textValue}
           rows={1}
           disabled={!enabled || sending}
+          readOnly={listening}
           onChange={(event) => {
             setTextValue(event.target.value);
             setQueuedNote(null);
+            setDictationNote(null);
             // Editing the words withdraws the question: the choice was about
             // the direction as it stood (D-095).
             setPendingChoice(false);
@@ -1035,6 +1223,15 @@ export function Composer({
                 return;
               }
             }
+            if (listening && (event.key === "Escape" || (event.key === "Enter" && !event.shiftKey))) {
+              // Stopping is the key's act while the box listens (D-240): Enter
+              // does not send words the person has not read yet, and Esc does
+              // not also close the dialog the box may sit in — a second Esc does.
+              event.preventDefault();
+              event.stopPropagation();
+              void stopDictation();
+              return;
+            }
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               void send();
@@ -1044,6 +1241,94 @@ export function Composer({
           aria-label="Direct Claude Code"
           data-testid="composer-input"
         />
+          {dictationTarget !== null && (
+            /* Spoken direction (D-240): the microphone at the field's own
+               right edge, where every chat box keeps it — an icon button with
+               its tooltip, the one sanctioned wordless control — so the foot
+               row does not grow by a control. It starts and stops; while it
+               listens it wears the warn tone, and the chord (Keyboard page)
+               does the same from anywhere in the window. */
+            <button
+              className={listening ? "composer-mic composer-listening" : "composer-mic"}
+              disabled={!enabled || sending || refining || dictationSnapshot.starting || someoneElseListening}
+              aria-pressed={listening}
+              aria-label={listening ? "Stop dictating" : "Dictate into the box"}
+              onClick={toggleDictation}
+              title={
+                listening
+                  ? "Stop dictating — Esc or Enter stops too"
+                  : refining
+                    ? "Finishing the words"
+                    : dictationSnapshot.starting
+                      ? "Starting to listen"
+                      : "Dictate into the box"
+              }
+              data-testid="dictate"
+            >
+              <MicGlyph className="composer-mic-glyph" />
+            </button>
+          )}
+        </div>
+        {take && listening && take.interim.length > 0 && (
+          /* The volatile tail (D-240): the open segment's words so far, in
+             the meta voice under the field, replaced as the vendor revises
+             them and settled into the field at the next pause. */
+          <div className="composer-dictation-tail" data-testid="dictation-tail">
+            {take.interim}
+          </div>
+        )}
+        {dictationTarget !== null && (listening || refining) && take && (
+          /* The take's word (D-240) on the box's own status line, above the
+             foot so the chip row never wraps for it: status is words, and
+             the elapsed time is the recording word's own form (D-237). */
+          <div
+            className={listening ? "composer-dictation-note composer-listening-word" : "composer-dictation-note"}
+            data-testid="dictation-state"
+          >
+            <span>
+              {listening ? (
+                <>
+                  Listening · <span className="composer-elapsed">{elapsedLabel(take.startedAtMs, nowMs)}</span>
+                </>
+              ) : (
+                "Refining…"
+              )}
+            </span>
+          </div>
+        )}
+        {dictationNote && (
+          /* What happened to the take (D-240): the refined words stand and the
+             heard ones are one click away, or the other way round, or — when
+             the box changed while the take was refining — the refined words
+             are offered rather than applied. */
+          <div className="composer-dictation-note" data-testid="dictation-note">
+            <span>
+              {dictationNote.showing === "refined"
+                ? dictationNote.note !== null
+                  ? dictationNote.note
+                  : "Refined against this repository's names"
+                : dictationNote.showing === "raw"
+                  ? "As heard"
+                  : "Refined words are ready; the box changed meanwhile"}
+            </span>
+            {dictationNote.text !== dictationNote.raw && (
+              <button
+                className="btn btn-text"
+                onClick={() => {
+                  const useRaw = dictationNote.showing === "refined";
+                  setTextValue(composeTake(dictationNote.anchor, useRaw ? dictationNote.raw : dictationNote.text));
+                  setDictationNote({ ...dictationNote, showing: useRaw ? "raw" : "refined" });
+                  requestAnimationFrame(() => {
+                    if (inputRef.current) grow(inputRef.current);
+                  });
+                }}
+                data-testid="dictation-swap"
+              >
+                {dictationNote.showing === "refined" ? "Use as heard" : dictationNote.showing === "raw" ? "Use refined" : "Use them"}
+              </button>
+            )}
+          </div>
+        )}
         {swapTo !== null && chatHarness && (
           /* One sentence on its own line, no buttons (D-232): the send itself
              is the act, and nothing opens until the person sends. Above the
@@ -1361,6 +1646,26 @@ export function Composer({
               >
                 Run alongside · read-only
               </button>
+            </span>
+          )}
+
+          {/* How full this chat's context is (D-236): the harness's own
+              figure, a word and never a meter. Absent until a turn has said. */}
+          {context && (
+            <span
+              className={`composer-context${
+                context.percent !== null && context.percent >= 80 ? " composer-context-warn" : ""
+              }`}
+              title={
+                context.window !== null
+                  ? `${context.tokens.toLocaleString()} of ${context.window.toLocaleString()} tokens in this chat's context after its last turn`
+                  : `${context.tokens.toLocaleString()} tokens in this chat's context after its last turn`
+              }
+              data-testid="context-fill"
+            >
+              {context.percent !== null
+                ? `Context · ${context.percent}%`
+                : `Context · ${compactCount(context.tokens)}`}
             </span>
           )}
 

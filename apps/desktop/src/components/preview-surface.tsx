@@ -382,8 +382,19 @@ export function PreviewSurface({
         )}
         {recording !== null ? (
           <>
-            <span className="recording-word" data-testid="recording-word">
-              {recording.state === "finalizing" ? "Saving recording…" : `Recording · ${elapsedLabel}`}
+            {/* Whose recording it is (D-237): an agent's says so, in the same
+                warn tone, and the person's Stop and Cancel stand either way —
+                the room keeps its hand on what is being photographed. */}
+            <span
+              className="recording-word"
+              data-testid="recording-word"
+              data-initiator={recording.initiator}
+            >
+              {recording.state === "finalizing"
+                ? "Saving recording…"
+                : recording.initiator === "agent"
+                  ? `Agent is recording · ${elapsedLabel}`
+                  : `Recording · ${elapsedLabel}`}
             </span>
             <button
               className="btn btn-secondary"
@@ -466,7 +477,7 @@ export function PreviewSurface({
         </button>
       </header>
       {note && (
-        <p className="inline-error preview-note" role="alert">
+        <p className="inline-error preview-note" role="alert" data-testid="preview-note">
           {note}
           <button className="btn btn-text" onClick={() => setNote(null)}>
             Dismiss
