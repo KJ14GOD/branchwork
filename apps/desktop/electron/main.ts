@@ -1,3 +1,4 @@
+import { DeploymentReviewInputSchema, PullReviewInputSchema } from "@novus/contracts";
 import {
   BrowserWindow,
   Notification,
@@ -87,6 +88,7 @@ import { ApiError, ControlPlaneClient } from "./api-client";
 import { avatarFor } from "./avatars";
 import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
+import { shutdownOpenCode } from "./opencode-server";
 import { amendPathFromLoginShell } from "./workspace-env";
 import {
   listLocalBranches,
@@ -988,6 +990,26 @@ function registerIpc(): void {
     return call(() => api.createPullRequest(parsed.data.missionId, parsed.data.workstreamId));
   });
 
+  ipcMain.handle("novus:pulls:delivery", async (_event, raw: unknown) => {
+    const parsed = z.string().startsWith("pr_").safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed pull request id." };
+    return call(() => api.delivery(parsed.data));
+  });
+  ipcMain.handle("novus:pulls:workflow", async (_event, raw: unknown) => {
+    const parsed = z.object({ pullRequestId: z.string().startsWith("pr_"), runId: z.number().int().positive().safe() }).safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed workflow id." };
+    return call(() => api.workflow(parsed.data.pullRequestId, parsed.data.runId));
+  });
+  ipcMain.handle("novus:pulls:review-deployment", async (_event, raw: unknown) => {
+    const parsed = DeploymentReviewInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed deployment review." };
+    return call(async () => { await api.reviewDeployment(parsed.data); return null; });
+  });
+  ipcMain.handle("novus:pulls:submit-review", async (_event, raw: unknown) => {
+    const parsed = PullReviewInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false, code: "invalid_input", message: "Malformed pull request review." };
+    return call(async () => { await api.submitReview(parsed.data); return null; });
+  });
   ipcMain.handle("novus:pulls:request-review", async (_event, raw: unknown) => {
     const parsed = z
       .object({
@@ -1020,6 +1042,7 @@ function registerIpc(): void {
     return call(() =>
       api.mergePullRequest(parsed.data.pullRequestId, {
         method: parsed.data.method,
+        expectedSha: parsed.data.expectedSha,
         acknowledgeBlockers: parsed.data.acknowledgeBlockers
       })
     );
@@ -2976,7 +2999,8 @@ app.on("before-quit", (event) => {
   Promise.allSettled([
     shutdownTerminals(),
     dictation?.dispose() ?? Promise.resolve(),
-    runner?.shutdown("The host desktop closed while the agent was working.") ?? Promise.resolve()
+    runner?.shutdown("The host desktop closed while the agent was working.") ?? Promise.resolve(),
+    shutdownOpenCode()
   ]).then(exit, exit);
 });
 

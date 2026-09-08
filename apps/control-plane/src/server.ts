@@ -1,3 +1,4 @@
+import { registerDeliveryRoutes } from "./delivery.ts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
   CreateMissionInputSchema,
@@ -351,6 +352,7 @@ export function buildServer(
   registerExtensionLabelRoutes(app, deps);
   registerPolicyRoutes(app, deps);
   registerSkillsRoutes(app, deps);
+  registerDeliveryRoutes(app, { db, config, provider, requireAuth, sendError });
   registerPullRequestRoutes(app, deps);
   registerBaseSyncRoutes(app, deps);
   registerMissionStreamRoutes(app, deps, bus);

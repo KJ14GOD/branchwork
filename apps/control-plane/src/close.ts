@@ -144,6 +144,8 @@ export async function projectReceipt(
     `select w.name as workstream_name, s.title, u.login,
             (select e.harness from executions e where e.session_id = s.csn_id
               order by e.created_at desc limit 1) as harness,
+            (select e.model from executions e where e.session_id = s.csn_id
+              order by e.created_at desc limit 1) as model,
             (select count(*)::int from directions d where d.session_id = s.csn_id) as directions
        from workstream_sessions s
        join workstreams w on w.wst_id = s.wst_id
@@ -245,6 +247,7 @@ export async function projectReceipt(
       workstreamName: row.workstream_name as string,
       title: ((row.title as string | null) ?? null)?.slice(0, 200) ?? null,
       harness: (row.harness as string | null) ?? null,
+      model: (row.model as string | null) ?? null,
       createdByLogin: row.login as string,
       directions: Number(row.directions ?? 0)
     })),

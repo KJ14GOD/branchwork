@@ -21,6 +21,7 @@ import {
   MAX_APPROVAL_SUMMARY,
   MissionSchema,
   ModelIdSchema,
+  StaticModelIdSchema,
   ReportRunnerEventsInputSchema,
   RespondApprovalInputSchema,
   RunnerEventSchema,
@@ -187,7 +188,7 @@ describe("the model allowlist", () => {
   // renderer, the IPC boundary, and the execution adapter must all read the
   // same list, or a menu entry becomes a flag the CLI rejects.
   it("keeps the labelled list and the validated enum identical and in order", () => {
-    expect(ModelIdSchema.options).toEqual([
+    expect(StaticModelIdSchema.options).toEqual([
       ...CLAUDE_MODELS.map((model) => model.id),
       ...CODEX_MODELS.map((model) => model.id)
     ]);
@@ -196,6 +197,14 @@ describe("the model allowlist", () => {
     // the safe default, because a fallback model is a claude model.
     for (const model of CODEX_MODELS) expect(harnessOf(model.id)).toBe("codex");
     for (const model of CLAUDE_MODELS) expect(harnessOf(model.id)).toBe("claude-code");
+  });
+
+  it("namespaces discovered OpenCode models without admitting arbitrary CLI arguments", () => {
+    for (const model of ["opencode:ollama/llama3.2:3b", "opencode:openrouter/meta-llama/llama-4", "opencode:openai/gpt-5"]) {
+      expect(ModelIdSchema.safeParse(model).success).toBe(true);
+      expect(harnessOf(model)).toBe("opencode");
+    }
+    for (const model of ["opencode:--model/foo", "opencode:p/../../x", "opencode:p/x\n--auto", "opencode:p/", "opencode:p/with space"]) expect(ModelIdSchema.safeParse(model).success).toBe(false);
   });
 
   it("refuses a model id that is not on the list", () => {
@@ -209,7 +218,7 @@ describe("the model allowlist", () => {
     if (!parsed.success) return;
     expect(parsed.data.model).toBe(DEFAULT_MODEL);
     expect(parsed.data.effort).toBe(DEFAULT_EFFORT);
-    expect(ModelIdSchema.options).toContain(DEFAULT_MODEL);
+    expect(StaticModelIdSchema.options).toContain(DEFAULT_MODEL);
   });
 });
 

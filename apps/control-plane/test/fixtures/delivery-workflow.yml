@@ -1,0 +1,20 @@
+name: Novus delivery proof
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: novus-delivery-proof
+    timeout-minutes: 2
+    steps:
+      - name: Verify the approval path
+        run: echo 'Novus deployment review integration test. No application is deployed.'
+  reject:
+    runs-on: ubuntu-latest
+    environment: novus-delivery-rejection
+    timeout-minutes: 2
+    steps:
+      - name: This step must never execute after rejection
+        run: echo 'The rejection test did not hold.'

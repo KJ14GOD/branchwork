@@ -248,9 +248,9 @@ function SegmentView({
               signature element 2 refuses. */}
           {!continued && (
             <span className="harness-identity">
-              {harness === "codex" ? (
+              {harness === "codex" || harness === "opencode" ? (
                 <span className="mark mark-harness" aria-hidden="true">
-                  <HarnessGlyph harness="codex" fallback={null} />
+                  <HarnessGlyph harness={harness} fallback={null} />
                 </span>
               ) : (
                 <HarnessMark />

@@ -1,3 +1,5 @@
+import { GithubDelivery } from "./github-delivery.ts";
+import type { DeploymentReviewInput, PullReviewInput } from "@novus/contracts";
 import type { BranchInfo, BaseStatus,
   AvailableRepository,
   BaseRevision,
@@ -82,6 +84,15 @@ export class GithubUserRepositoryProvider
     this.repoCache.set(cached.providerRepoId, cached);
     return cached;
   }
+
+  private async deliveryClient(actor: RepoActor, repoId: string) {
+    const repo = await this.cachedRepo(actor, repoId);
+    return new GithubDelivery((path, init) => this.authed(actor, path, init), `/repos/${repo.fullName}`);
+  }
+  async delivery(actor: RepoActor, repoId: string, number: number) { return (await this.deliveryClient(actor, repoId)).list(number); }
+  async workflow(actor: RepoActor, repoId: string, number: number, runId: number) { return (await this.deliveryClient(actor, repoId)).detail(number, runId); }
+  async reviewDeployment(actor: RepoActor, repoId: string, number: number, input: DeploymentReviewInput) { await (await this.deliveryClient(actor, repoId)).reviewDeployment(number, input); }
+  async submitReview(actor: RepoActor, repoId: string, number: number, input: PullReviewInput) { await (await this.deliveryClient(actor, repoId)).reviewPull(number, input); }
 
   /**
    * The clone credential is the owner's own token (D-223): the same
@@ -614,13 +625,14 @@ export class GithubUserRepositoryProvider
     actor: RepoActor,
     providerRepoId: string,
     number: number,
-    method: MergeMethod
+    method: MergeMethod,
+    expectedSha?: string
   ): Promise<{ sha: string | null }> {
     const repo = await this.cachedRepo(actor, providerRepoId);
     const response = await this.authed(actor, `/repos/${repo.fullName}/pulls/${number}/merge`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ merge_method: method })
+      body: JSON.stringify({ merge_method: method, sha: expectedSha })
     });
     if (response.status === 404) throw new UnknownPullRequestError();
     if (response.status === 405 || response.status === 409 || response.status === 422) {

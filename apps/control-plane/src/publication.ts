@@ -575,7 +575,7 @@ export async function mergePull(
   provider: RepositoryProvider,
   pull: PullContext,
   by: Steward,
-  input: { method: "merge" | "squash" | "rebase"; acknowledgeBlockers: boolean }
+  input: { method: "merge" | "squash" | "rebase"; acknowledgeBlockers: boolean; expectedSha?: string }
 ): Promise<MergeOutcome> {
   if (pull.state === "merged") return { kind: "resolved", state: "merged" };
   if (pull.state === "closed") return { kind: "resolved", state: "closed" };
@@ -583,17 +583,20 @@ export async function mergePull(
 
   // Fresh readiness at the moment of asking, never a stale row.
   const actor = await repoActorOf(db, by.userId);
+  const fresh = await provider.getPullRequest(actor, pull.providerRepoId, pull.number);
+  const expectedSha = input.expectedSha ?? fresh.headSha;
+  if (!expectedSha || fresh.headSha !== expectedSha) return { kind: "host_refuses", reason: "The pull request head changed. Refresh and review the new revision before merging." };
   const readiness = await provider.getMergeReadiness(actor, pull.providerRepoId, pull.number);
   if (!readiness.allowedMergeMethods.includes(input.method)) {
     return { kind: "method_not_allowed", allowed: [...readiness.allowedMergeMethods] };
   }
   const requiredFailing = readiness.checks.filter(
-    (check) => check.required && check.status === "failed"
+    (check) => check.required && check.status !== "passed" && check.status !== "skipped"
   );
   if (requiredFailing.length > 0) {
     return {
       kind: "host_refuses",
-      reason: `A required check is failing (${requiredFailing[0]?.name}); branch protection refuses the merge.`
+      reason: `A required check has not passed (${requiredFailing[0]?.name}); branch protection refuses the merge.`
     };
   }
   const row = await pullRequestById(db, pull.pullRequestId);
@@ -609,7 +612,7 @@ export async function mergePull(
 
   let merged: { sha: string | null };
   try {
-    merged = await provider.mergePullRequest(actor, pull.providerRepoId, pull.number, input.method);
+    merged = await provider.mergePullRequest(actor, pull.providerRepoId, pull.number, input.method, expectedSha);
   } catch (error) {
     if (error instanceof MergeRefusedError) return { kind: "host_refuses", reason: error.message };
     throw error;

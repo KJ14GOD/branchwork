@@ -2,13 +2,13 @@ Purpose: Entry point to the Novus repository. Says what Novus is, who it is for,
 Authoritative for: the one-sentence definition, the intended user, the wedge, the Golden V0 workflow narrative, the repository map.
 Not authoritative for: product scope and domain model (PRODUCT.md), visual system (DESIGN.md), system design (ARCHITECTURE.md), status (PROGRESS.md), recorded decisions (DECISIONS.md), agent working rules (AGENTS.md).
 Update when: the definition, wedge, or Golden V0 workflow changes, or a file is added to or removed from the repository root.
-Last reviewed: 2026-08-17
+Last reviewed: 2026-09-07
 
 # Novus
 
 Novus is the multiplayer control plane where teams launch, direct, review, and ship work produced by coding agents.
 
-A software team gets one shared mission room in which people operate a coding harness together: they see what is happening, contribute context, submit direction, request and transfer control, inspect changes, understand verification, and keep a durable record of how the result was produced. Claude Code is the harness operable today; Codex and other harnesses follow the same runner protocol but are not yet built — see [PROGRESS.md](PROGRESS.md) for what actually works right now, not just what this file describes as the destination.
+A software team gets one shared mission room in which people operate a coding harness together: they see what is happening, contribute context, submit direction, request and transfer control, inspect changes, understand verification, and keep a durable record of how the result was produced. Claude Code, Codex, and OpenCode use the same runner protocol. See [PROGRESS.md](PROGRESS.md) for what actually works right now, not just what this file describes as the destination.
 
 Novus does not compete with the coding intelligence of the harnesses it operates. The harness owns its reasoning, context, models, tools, and implementation loop. Novus owns the room around it: identity, missions, participants, control, direction, evidence, review, and history. The full boundary is defined in [PRODUCT.md](PRODUCT.md#the-harness-boundary).
 
@@ -29,7 +29,7 @@ The first implementation is not complete until two real clients can execute this
 1. Kartik signs in.
 2. Kartik connects a repository — a GitHub repository or a folder on his own machine.
 3. Kartik creates a mission with a goal and success criteria.
-4. Kartik chooses Claude Code or Codex.
+4. Kartik chooses a Claude Code, Codex, or OpenCode model.
 5. Novus creates a dedicated mission branch from an exact base commit and provisions or connects to its execution workspace.
 6. The coding harness begins working.
 7. Maya joins through a mission invitation.
@@ -72,7 +72,7 @@ What exists versus what is planned is recorded only in [PROGRESS.md](PROGRESS.md
 
 ## Run it locally
 
-Prerequisites: [pnpm](https://pnpm.io), [Docker](https://www.docker.com) (runs the local PostgreSQL container `pnpm dev` starts and migrates automatically), and the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) installed and signed in — without it the harness has nothing real to operate.
+Prerequisites: [pnpm](https://pnpm.io), [Docker](https://www.docker.com) (runs the local PostgreSQL container `pnpm dev` starts and migrates automatically), and a supported coding CLI installed with an available model: [Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://developers.openai.com/codex/cli/), or [OpenCode](https://opencode.ai/docs/). OpenCode uses its own provider login, available free models, or a configured local provider such as Ollama. Novus does not collect provider keys.
 
 1. `pnpm install`
 2. Create a GitHub OAuth App at [github.com/settings/developers](https://github.com/settings/developers) with callback URL `http://127.0.0.1:4460/auth/github/callback`, then copy `.env.example` to `.env` and fill in `NOVUS_GITHUB_CLIENT_ID` / `NOVUS_GITHUB_CLIENT_SECRET`.

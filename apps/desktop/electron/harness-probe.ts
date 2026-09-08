@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupProbeResponse, HarnessProbe } from "@novus/contracts";
+import type { OpenCodeCatalogue } from "@novus/contracts";
+import { discoverOpenCode } from "./opencode-adapter";
 
 /**
  * Read-only observation of harness CLIs on this machine (D-029). Everything
@@ -17,7 +19,7 @@ import type { SetupProbeResponse, HarnessProbe } from "@novus/contracts";
  *  load-time snapshot would freeze the bare Finder PATH and miss every
  *  version-manager install — exactly the staleness the fold-in exists to fix. */
 const probePath = (): string =>
-  [process.env.PATH ?? "", join(homedir(), ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"].join(":");
+  [process.env.PATH ?? "", join(homedir(), ".local", "bin"), join(homedir(), ".opencode", "bin"), "/opt/homebrew/bin", "/usr/local/bin"].join(":");
 
 function cliVersion(binary: string): Promise<string | null> {
   return new Promise((resolve) => {
@@ -100,7 +102,7 @@ function codexAccount(): string | null {
 }
 
 export async function probeHarnesses(): Promise<SetupProbeResponse> {
-  const [claudeVersion, codexVersion] = await Promise.all([cliVersion("claude"), cliVersion("codex")]);
+  const [claudeVersion, codexVersion, opencode] = await Promise.all([cliVersion("claude"), cliVersion("codex"), probeOpenCode()]);
   const claudeCode: HarnessProbe = {
     installed: claudeVersion !== null,
     version: claudeVersion,
@@ -111,5 +113,22 @@ export async function probeHarnesses(): Promise<SetupProbeResponse> {
     version: codexVersion,
     account: codexVersion !== null ? codexAccount() : null
   };
-  return { claudeCode, codex };
+  return { claudeCode, codex, opencode };
+}
+
+let openCodeProbe: { at: number; value: Promise<OpenCodeCatalogue> } | null = null;
+export function probeOpenCode(): Promise<OpenCodeCatalogue> {
+  if (openCodeProbe && Date.now() - openCodeProbe.at < 30_000) return openCodeProbe.value;
+  const value = (async (): Promise<OpenCodeCatalogue> => {
+    const version = await cliVersion("opencode");
+    if (!version) return { installed: false, version: null, account: null, error: null, models: [] };
+    try {
+      const models = await discoverOpenCode(homedir());
+      return { installed: true, version, account: models.length ? `${new Set(models.map((model) => model.provider)).size} providers available` : null, error: null, models };
+    } catch (error) {
+      return { installed: true, version, account: null, models: [], error: (error instanceof Error ? error.message : "OpenCode's model catalogue could not be read.").slice(0, 400) };
+    }
+  })();
+  openCodeProbe = { at: Date.now(), value };
+  return value;
 }

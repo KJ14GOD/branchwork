@@ -330,6 +330,7 @@ export function SettingsDialog({
       ...FIXED_KEYS.map((entry) => ({ page: "keyboard" as Page, title: entry.keys, description: entry.does })),
       { page: "agents", title: "Claude Code", description: probe?.claudeCode.installed ? `${probe.claudeCode.version ?? "installed"}${probe.claudeCode.account ? ` · ${probe.claudeCode.account}` : ""}` : "not found on this machine" },
       { page: "agents", title: "Codex", description: probe?.codex.installed ? `${probe.codex.version ?? "installed"}${probe.codex.account ? ` · ${probe.codex.account}` : ""}` : "not found on this machine" },
+      { page: "agents", title: "OpenCode", description: probe?.opencode?.error ?? probe?.opencode?.account ?? "Hosted and local models on this machine" },
       { page: "agents", title: "Let agents control this Mac", description: computerUse ? "on — agents may operate your screen" : "off — the safe default" },
       { page: "voice", title: "Speech recognition", description: voice?.engines?.speech.onDevice ? "on this Mac, on-device" : "not ready on this Mac" },
       { page: "voice", title: "Editor", description: voice?.engines?.editor.kind === "claude" ? "Claude Code refines each take" : voice?.engines?.editor.kind === "codex" ? "Codex refines each take" : "no coding agent CLI installed" },
@@ -551,6 +552,7 @@ export function SettingsDialog({
                 description="OpenAI's coding agent, read from its own install"
                 trailing={agentTrailing(probe?.codex)}
               />
+              <CardRow title="OpenCode" description={probe?.opencode?.error ?? "Provider login stays in OpenCode on this machine"} trailing={agentTrailing(probe?.opencode)} />
             </Card>
             {connectors !== null && connectors.connectors.length > 0 && (
               <Card heading="Lend your accounts">

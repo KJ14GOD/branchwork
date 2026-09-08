@@ -203,9 +203,12 @@ const novus: NovusBridge = {
     revealLocal: (artifactId) => ipcRenderer.invoke("novus:artifacts:reveal-local", artifactId),
     detach: (input) => ipcRenderer.invoke("novus:artifacts:detach", input)
   },
-  // Publishing a decision as a pull request (D-099). No merge verb exists on
-  // this bridge, on the server, or in the runner vocabulary.
+  // GitHub publication and explicit review/merge acts (D-099, D-100, D-247).
   pulls: {
+    delivery: (id) => ipcRenderer.invoke("novus:pulls:delivery", id),
+    workflow: (input) => ipcRenderer.invoke("novus:pulls:workflow", input),
+    reviewDeployment: (input) => ipcRenderer.invoke("novus:pulls:review-deployment", input),
+    submitReview: (input) => ipcRenderer.invoke("novus:pulls:submit-review", input),
     push: (input) => ipcRenderer.invoke("novus:pulls:push", input),
     create: (input) => ipcRenderer.invoke("novus:pulls:create", input),
     requestReview: (input) => ipcRenderer.invoke("novus:pulls:request-review", input),

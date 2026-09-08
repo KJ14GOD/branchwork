@@ -39,7 +39,7 @@ export function renderReceipt(receipt: ReceiptSnapshot, missionId: string): stri
     for (const session of receipt.sessions) {
       lines.push(
         `- ${session.title ?? "untitled"} — ${session.workstreamName}` +
-          `${session.harness ? ` · ${session.harness}` : ""} · ${session.directions} ` +
+          `${session.harness ? ` · ${session.harness}` : ""}${session.model ? ` · ${session.model}` : ""} · ${session.directions} ` +
           `${session.directions === 1 ? "direction" : "directions"} · started by ${session.createdByLogin}`
       );
     }

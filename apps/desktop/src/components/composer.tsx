@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { compactCount } from "../format";
 import type { ContextFill } from "./derive-feed";
 import {
+  ModelIdSchema,
+  type OpenCodeCatalogue,
   CLAUDE_MODELS,
   CODEX_MODELS,
   effortsFor,
@@ -22,6 +24,8 @@ import {
   type PreparedAttachment,
   type Speed
 } from "@novus/contracts";
+import { novus } from "../bridge";
+import { OpenCodeGlyph } from "./harness-glyph";
 import codexIcon from "../assets/codex-icon.png";
 import { Dialog, focusQuietly } from "./dialog";
 import { ClaudeGlyph, DocumentGlyph, ImageGlyph } from "./identity";
@@ -156,10 +160,8 @@ interface Scratch {
 }
 const scratchByKey = new Map<string, Scratch>();
 
-const MODEL_IDS = [...CLAUDE_MODELS, ...CODEX_MODELS].map((model) => model.id);
-
 function isModelId(value: string | null): value is ModelId {
-  return value !== null && (MODEL_IDS as readonly string[]).includes(value);
+  return value !== null && ModelIdSchema.safeParse(value).success;
 }
 
 function isEffort(value: string | null): value is Effort {
@@ -338,7 +340,44 @@ export function Composer({
   /** Which provider's models the flyout shows (D-233). Opens on hover or
    *  click of a provider row; the chip's open resets it to the current
    *  model's own provider so the flyout starts where the person is. */
-  const [providerOpen, setProviderOpen] = useState<HarnessId | null>(null);
+  const [providerOpen, setProviderOpen] = useState<string | null>(null);
+  const [openCode, setOpenCode] = useState<OpenCodeCatalogue | null>(null);
+  const providerMenu = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const place = () => {
+      const menu = providerMenu.current;
+      const submenu = menu?.querySelector<HTMLElement>(".chip-submenu");
+      if (!menu || !submenu) return;
+      menu.style.maxWidth = `calc(100vw - ${menu.getBoundingClientRect().left}px - var(--s-4))`;
+      submenu.style.left = "";
+      submenu.style.bottom = "";
+      if (submenu.getBoundingClientRect().right > window.innerWidth) {
+        submenu.style.left = "0";
+        submenu.style.bottom = "calc(100% + var(--s-1))";
+      }
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [openMenu, providerOpen, openCode]);
+  useEffect(() => {
+    let alive = true;
+    void novus().setup.probe().then((result) => {
+      if (alive && result.ok) setOpenCode(result.value.opencode ?? null);
+    });
+    return () => { alive = false; };
+  }, [openMenu === "model"]);
+  const modelGroups: { id: string; label: string; harness: HarnessId; models: { id: ModelId; label: string }[] }[] = [
+    { id: "claude-code", label: "Claude Code", harness: "claude-code", models: [...CLAUDE_MODELS] },
+    { id: "codex", label: "Codex", harness: "codex", models: [...CODEX_MODELS] },
+    ...[...new Set(openCode?.models.map((entry) => entry.provider) ?? [])].map((provider) => ({
+      id: `opencode:${provider}`, label: `${openCode!.models.find((entry) => entry.provider === provider)!.providerLabel} · OpenCode`,
+      harness: "opencode" as const, models: openCode!.models.filter((entry) => entry.provider === provider)
+    }))
+  ];
+  const modelGroup = modelGroups.find((group) => group.models.some((entry) => entry.id === model));
+  const modelLabel = modelGroup?.models.find((entry) => entry.id === model)?.label ?? model.replace(/^opencode:/, "");
+
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [queuedNote, setQueuedNote] = useState<string | null>(null);
@@ -587,7 +626,7 @@ export function Composer({
   // none, so on a Codex model the rows are hidden rather than offered as
   // words that invoke nothing (D-232).
   const commandMatches =
-    slashToken === null || !slashCommands || slashCommands.length === 0 || harnessOf(model) === "codex"
+    slashToken === null || !slashCommands || slashCommands.length === 0 || harnessOf(model) !== "claude-code"
       ? []
       : slashCommands
           .filter((command) =>
@@ -610,13 +649,14 @@ export function Composer({
   /** One more row when a dock exists (D-199): whatever was typed, in the
    *  person's own session. It also keeps / alive where nothing matches, so a
    *  terminal-only command like /mcp is never a dead end. */
+  const terminalRow = terminal && harnessOf(model) !== "opencode";
   const slashRows =
     slashToken === null
       ? 0
-      : commandMatches.length + (reviewRow ? 1 : 0) + (terminal ? 1 : 0);
+      : commandMatches.length + (reviewRow ? 1 : 0) + (terminalRow ? 1 : 0);
 
   const pickTerminal = (): void => {
-    if (!terminal || slashToken === null) return;
+    if (!terminalRow || !terminal || slashToken === null) return;
     terminal(slashToken.query);
     setTextValue((value) => value.slice(1 + slashToken.query.length).trimStart());
     setSlashToken(null);
@@ -1080,7 +1120,7 @@ export function Composer({
                 <span className="mention-note">Review uncommitted changes — Codex&apos;s reviewer</span>
               </button>
             )}
-            {terminal && (
+            {terminalRow && (
               <button
                 role="option"
                 aria-selected={slashIndex === commandMatches.length + (reviewRow ? 1 : 0)}
@@ -1363,17 +1403,17 @@ export function Composer({
               aria-haspopup="menu"
               aria-expanded={openMenu === "model"}
               onClick={() => {
-                setProviderOpen(harnessOf(model));
+                setProviderOpen(modelGroup?.id ?? harnessOf(model));
                 setOpenMenu(openMenu === "model" ? null : "model");
               }}
               data-testid="model-chip"
             >
-              {harnessOf(model) === "codex" ? (
+              {harnessOf(model) === "opencode" ? <OpenCodeGlyph className="chip-glyph" /> : harnessOf(model) === "codex" ? (
                 <img className="chip-glyph chip-glyph-bitmap" src={codexIcon} alt="" />
               ) : (
                 <ClaudeGlyph className="chip-glyph" />
               )}
-              {[...CLAUDE_MODELS, ...CODEX_MODELS].find((option) => option.id === model)?.label ?? model}
+              {modelLabel}
             </button>
             {openMenu === "model" && (
               /* Providers first, models in a flyout (D-233, owner-asked —
@@ -1382,10 +1422,11 @@ export function Composer({
                  provider's; hovering or clicking it opens that provider's
                  models to the right. The chip stays the harness picker
                  (D-230): choosing a model chooses its harness. */
-              <div className="chip-menu chip-menu-providers" role="menu" data-testid="model-menu">
-                {HARNESSES.map((provider) => {
-                  const models = provider.id === "codex" ? CODEX_MODELS : CLAUDE_MODELS;
-                  const owns = harnessOf(model) === provider.id;
+              <div ref={providerMenu} className="chip-menu chip-menu-providers" role="menu" data-testid="model-menu">
+                <div className="provider-list">
+                {modelGroups.map((provider) => {
+                  const models = provider.models;
+                  const owns = modelGroup?.id === provider.id;
                   return (
                     <button
                       key={provider.id}
@@ -1399,7 +1440,7 @@ export function Composer({
                       onMouseEnter={() => setProviderOpen(provider.id)}
                       onClick={() => setProviderOpen(provider.id)}
                     >
-                      {provider.id === "codex" ? (
+                      {provider.harness === "opencode" ? <OpenCodeGlyph className="chip-glyph" /> : provider.id === "codex" ? (
                         <img className="chip-glyph chip-glyph-bitmap" src={codexIcon} alt="" />
                       ) : (
                         <ClaudeGlyph className="chip-glyph" />
@@ -1412,9 +1453,16 @@ export function Composer({
                     </button>
                   );
                 })}
+                {(openCode?.models.length ?? 0) === 0 && (
+                  <button className="chip-menu-row" role="menuitem" disabled title={openCode?.error ?? "Install OpenCode and connect a provider with opencode auth login, or configure a local model."}>
+                    <OpenCodeGlyph className="chip-glyph" />OpenCode
+                    <span className="chip-menu-note">{openCode === null ? "checking" : !openCode.installed ? "not installed" : openCode.error ? "setup needs attention" : "connect a provider"}</span>
+                  </button>
+                )}
+                </div>
                 {providerOpen !== null && (
                   <div className="chip-submenu" role="menu" data-testid="model-submenu">
-                    {(providerOpen === "codex" ? CODEX_MODELS : CLAUDE_MODELS).map((option) => (
+                    {(modelGroups.find((group) => group.id === providerOpen)?.models ?? []).map((option) => (
                       <button
                         key={option.id}
                         className="chip-menu-row"
@@ -1437,7 +1485,7 @@ export function Composer({
             )}
           </span>
 
-          <span className="chip-wrap">
+          {effortsFor(model).length > 0 && <span className="chip-wrap">
             <button
               className="chip-button"
               disabled={!enabled}
@@ -1469,7 +1517,7 @@ export function Composer({
                 ))}
               </div>
             )}
-          </span>
+          </span>}
 
           {speedsFor(model).includes("fast") && (
             <span className="chip-wrap">

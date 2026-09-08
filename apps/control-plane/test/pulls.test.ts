@@ -15,10 +15,8 @@ import { bearer, createHarness, type Harness, type SignedIn } from "./harness.ts
  * PostgreSQL and the fake host. What these tests are for, in order of how
  * badly it would matter if they stopped holding:
  *
- *  - **Novus never merges.** There is no merge route, and the suite asks for
- *    one and requires a 404 — the D-063 absent-verb pattern, because "we
- *    chose not to expose it" and "it does not exist" are different
- *    guarantees.
+ *  - **Only explicit, authorized merges.** The host enforces protection,
+ *    and an expected head prevents merging a revision that changed.
  *  - **The remote-head guarantee.** A pull request is refused until the host
  *    serves exactly the decided checkpoint. A request naming a revision the
  *    host does not have would be the product's central lie.
@@ -1008,4 +1006,105 @@ describe("publishing a decision (D-099)", () => {
     expect(list).toContain("pr.close_performed");
     expect(list).toContain("pr.branch_deleted");
   });
+});
+
+// D-247: the Actions road uses the same real auth, database and mission scopes.
+async function deliveryFixture() {
+  const lane = await githubMission();
+  await decide(lane);
+  await reportPushed(lane, lane.checkpointSha);
+  const created = await createPull(lane);
+  expect(created.statusCode).toBe(201);
+  const pull = created.json().pullRequest as PullRequest;
+  await provider.markPullRequestReady({ token: null, login: kartik.login }, "9001", pull.number);
+  provider.fakeHead("9001", pull.number, lane.checkpointSha);
+  provider.fakeWorkflows.set(pull.number, {
+    run: { id: pull.number, name: "Deploy production", sha: lane.checkpointSha, attempt: 1, status: "waiting", conclusion: null, event: "push", url: `https://github.com/demo/app/actions/runs/${pull.number}`, updatedAt: new Date().toISOString() },
+    jobs: [], jobsTruncated: false,
+    pending: [{ environmentId: 42, name: "production", canApprove: true, waitMinutes: 0, waitStartedAt: null, reviewers: ["kartik"] }]
+  });
+  const input = { requestId: randomUUID(), expectedSha: lane.checkpointSha, runId: pull.number, attempt: 1, environmentId: 42, decision: "approved", comment: "The exact revision was checked." };
+  return { lane, pull, input, url: `/pull-requests/${pull.pullRequestId}` };
+}
+
+it("reads scoped Actions and records deployment approval once without merging the PR", async () => {
+  const f = await deliveryFixture();
+  const list = await harness.app.inject({ method: "GET", url: `${f.url}/delivery`, headers: bearer(kartik) });
+  expect(list.statusCode).toBe(200);
+  expect(list.json().runs.map((r: { id: number }) => r.id)).toContain(f.pull.number);
+  const review = () => harness.app.inject({ method: "POST", url: `${f.url}/review-deployment`, headers: bearer(kartik), payload: f.input });
+  expect((await review()).statusCode).toBe(200);
+  expect((await review()).statusCode).toBe(200);
+  const events = await harness.db.query("select kind, actor_login, payload from events where mission_id = $1 and kind like 'delivery.%' order by seq", [f.lane.missionId]);
+  expect(events.rows.map(e => e.kind)).toEqual(["delivery.review_requested", "delivery.review_result"]);
+  expect(events.rows[0].actor_login).toBe(kartik.login);
+  expect(events.rows[0].payload.expectedSha).toBe(f.lane.checkpointSha);
+  expect(events.rows[1].payload.status).toBe("succeeded");
+  expect((await provider.getPullRequest({ token: null, login: null }, "9001", f.pull.number)).state).toBe("ready");
+});
+
+it("refuses strangers, contributors, foreign workflow IDs, stale attempts and ineligible reviewers", async () => {
+  const f = await deliveryFixture();
+  const stranger = await harness.signIn("delivery-stranger");
+  expect((await harness.app.inject({ method: "GET", url: `${f.url}/delivery`, headers: bearer(stranger) })).statusCode).toBe(404);
+  const invitation = await harness.app.inject({ method: "POST", url: `/missions/${f.lane.missionId}/invitations`, headers: bearer(kartik), payload: { role: "contributor" } });
+  await harness.app.inject({ method: "POST", url: "/invitations/redeem", headers: bearer(stranger), payload: { token: invitation.json().token } });
+  expect((await harness.app.inject({ method: "POST", url: `${f.url}/review-deployment`, headers: bearer(stranger), payload: f.input })).statusCode).toBe(403);
+  expect((await harness.app.inject({ method: "GET", url: `${f.url}/workflow?runId=999999`, headers: bearer(kartik) })).statusCode).toBe(409);
+  for (const change of [{ attempt: 2 }, { expectedSha: "f".repeat(40) }, { environmentId: 999 }]) {
+    expect((await harness.app.inject({ method: "POST", url: `${f.url}/review-deployment`, headers: bearer(kartik), payload: { ...f.input, ...change, requestId: randomUUID() } })).statusCode).toBe(409);
+  }
+  provider.fakeWorkflows.get(f.pull.number)!.pending[0]!.canApprove = false;
+  expect((await harness.app.inject({ method: "POST", url: `${f.url}/review-deployment`, headers: bearer(kartik), payload: f.input })).statusCode).toBe(409);
+});
+
+it("submits formal PR reviews at an exact commit and refuses stale reviews and merges", async () => {
+  const f = await deliveryFixture();
+  const review = { requestId: randomUUID(), expectedSha: f.lane.checkpointSha, decision: "APPROVE", comment: "Reviewed the revision." };
+  expect((await harness.app.inject({ method: "POST", url: `${f.url}/submit-review`, headers: bearer(kartik), payload: review })).statusCode).toBe(200);
+  expect((await provider.getMergeReadiness({ token: null, login: null }, "9001", f.pull.number)).approvals).toBe(1);
+  expect((await harness.app.inject({ method: "POST", url: `${f.url}/submit-review`, headers: bearer(kartik), payload: { ...review, expectedSha: "f".repeat(40), requestId: randomUUID() } })).statusCode).toBe(409);
+  await sweepPullRequestsOnce(harness.db, provider);
+  const merged = await harness.app.inject({ method: "POST", url: `${f.url}/merge`, headers: bearer(kartik), payload: { method: "squash", expectedSha: "f".repeat(40), acknowledgeBlockers: true } });
+  expect(merged.statusCode).toBe(409);
+  expect(merged.json().error.message).toContain("head changed");
+});
+
+it("keeps an uncertain review outcome durable and never repeats the host mutation", async () => {
+  const f = await deliveryFixture();
+  const original = provider.reviewDeployment;
+  let calls = 0;
+  provider.reviewDeployment = async () => { calls++; throw new Error("lost response"); };
+  try {
+    const review = () => harness.app.inject({ method: "POST", url: `${f.url}/review-deployment`, headers: bearer(kartik), payload: f.input });
+    const first = await review();
+    expect(first.statusCode).toBe(502);
+    expect(first.json().error.code).toBe("review_outcome_unknown");
+    expect((await review()).statusCode).toBe(409);
+    expect(calls).toBe(1);
+    expect((await harness.db.query("select status from delivery_operations where pr_id = $1", [f.pull.pullRequestId])).rows[0].status).toBe("unknown");
+  } finally { provider.reviewDeployment = original; }
+});
+
+it("does not let acknowledgment override a pending required check", async () => {
+  const f = await deliveryFixture();
+  await sweepPullRequestsOnce(harness.db, provider);
+  provider.fakeCheck("9001", f.pull.number, { name: "release-check", status: "pending", required: true, kind: "check", url: null });
+  const response = await harness.app.inject({ method: "POST", url: `${f.url}/merge`, headers: bearer(kartik), payload: { method: "squash", expectedSha: f.lane.checkpointSha, acknowledgeBlockers: true } });
+  expect(response.statusCode).toBe(409);
+  expect(response.json().error.message).toContain("has not passed");
+});
+
+it("recovers abandoned reservations as unknown and rejects a changed request under the same id", async () => {
+  const f = await deliveryFixture();
+  const original = provider.reviewDeployment;
+  provider.reviewDeployment = async () => { throw new Error("process lost"); };
+  try { await harness.app.inject({ method: "POST", url: `${f.url}/review-deployment`, headers: bearer(kartik), payload: f.input }); }
+  finally { provider.reviewDeployment = original; }
+  await harness.db.query("update delivery_operations set status = 'pending', started_at = now() - interval '3 minutes' where pr_id = $1", [f.pull.pullRequestId]);
+  const repeat = await harness.app.inject({ method: "POST", url: `${f.url}/review-deployment`, headers: bearer(kartik), payload: { ...f.input, decision: "rejected" } });
+  expect(repeat.statusCode).toBe(409);
+  expect((await harness.db.query("select status from delivery_operations where pr_id = $1", [f.pull.pullRequestId])).rows[0].status).toBe("unknown");
+  const newRequest = await harness.app.inject({ method: "POST", url: `${f.url}/review-deployment`, headers: bearer(kartik), payload: { ...f.input, requestId: randomUUID() } });
+  expect(newRequest.statusCode).toBe(200);
 });

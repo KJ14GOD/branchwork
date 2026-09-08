@@ -16,6 +16,7 @@ export function HarnessGlyph({
   fallback: React.ReactNode;
 }) {
   if (harness === null) return <>{fallback}</>;
+  if (harness === "opencode") return <OpenCodeGlyph />;
   return (
     <img
       // The two bitmaps have opposite polarity: Codex's mark is dark and
@@ -27,4 +28,11 @@ export function HarnessGlyph({
       data-harness={harness}
     />
   );
+}
+
+/** A neutral terminal mark until a vendor asset is introduced (D-246). */
+export function OpenCodeGlyph({ className = "harness-glyph" }: { className?: string }) {
+  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" role="img" aria-label="OpenCode" data-harness="opencode">
+    <path d="M4 6h16v12H4zM7 10l2 2-2 2m5 0h4" />
+  </svg>;
 }

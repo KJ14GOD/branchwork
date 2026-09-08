@@ -366,6 +366,7 @@ describe("the receipt", () => {
     // The D-234 record: the chats, the directions verbatim, and the files.
     expect(snapshot.sessions.length).toBeGreaterThan(0);
     expect(snapshot.sessions[0]?.directions).toBeGreaterThan(0);
+    expect(snapshot.sessions[0]).toMatchObject({ harness: "claude-code", model: "claude-fable-5" });
     expect(snapshot.directions.length).toBeGreaterThan(0);
     expect(snapshot.directions[0]?.authorLogin).toBe("kartik");
     expect(snapshot.directions.every((direction) => direction.body.length > 0)).toBe(true);

@@ -1146,3 +1146,14 @@ alter table workstreams add column if not exists enabled_machine_mcp jsonb not n
 -- tell a lent account's question — answerable by its lender alone — from
 -- every other tool's. Names only; the credential never leaves the CLI.
 alter table executions add column if not exists connectors jsonb not null default '[]'::jsonb;
+
+-- D-247: durable review requests prevent automatic repeats after a lost reply.
+create table if not exists delivery_operations (
+  pr_id text not null references pull_requests(pr_id),
+  request_id uuid not null,
+  digest text not null,
+  status text not null check (status in ('pending', 'succeeded', 'refused', 'unknown')),
+  primary key (pr_id, request_id)
+);
+
+alter table delivery_operations add column if not exists started_at timestamptz not null default now();

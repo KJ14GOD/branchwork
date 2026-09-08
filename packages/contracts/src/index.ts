@@ -1,6 +1,8 @@
 import { z } from "zod";
 export * from "./policy.js";
 export * from "./scope.js";
+export * from "./delivery.js";
+import type { DeliveryResponse, WorkflowDetail, DeploymentReviewInput, PullReviewInput } from "./delivery.js";
 import { DEFAULT_PERMISSION_PROFILE, PermissionProfileSchema, ModelIdSchema, EffortSchema, SpeedSchema, DEFAULT_MODEL, DEFAULT_EFFORT, DEFAULT_SPEED, type ModelId, type Effort, type Speed, type PermissionProfile } from "./policy.js";
 
 // Runtime-validated contracts shared by the control plane, the desktop main
@@ -1076,6 +1078,7 @@ export const ReceiptSnapshotSchema = z.object({
           workstreamName: z.string().min(1),
           title: z.string().max(200).nullable(),
           harness: z.string().max(40).nullable(),
+          model: z.string().max(300).nullable().default(null),
           createdByLogin: z.string().min(1),
           directions: z.number().int().nonnegative()
         })
@@ -2000,6 +2003,7 @@ export const PullFilesResponseSchema = z.object({
 export type PullFilesResponse = z.infer<typeof PullFilesResponseSchema>;
 
 export const MergeInputSchema = z.object({
+  expectedSha: z.string().regex(/^[a-f0-9]{40}$/).optional(),
   pullRequestId: z.string().startsWith("pr_"),
   method: MergeMethodSchema,
   /** Deliberate acceptance of the stated non-host blockers. Absent or false,
@@ -4102,9 +4106,24 @@ export const HarnessProbeSchema = z.object({
 });
 export type HarnessProbe = z.infer<typeof HarnessProbeSchema>;
 
+export const OpenCodeCatalogueSchema = z.object({
+  installed: z.boolean(),
+  version: z.string().nullable(),
+  account: z.string().nullable(),
+  error: z.string().max(400).nullable(),
+  models: z.array(z.object({
+    id: ModelIdSchema,
+    label: z.string().min(1).max(200),
+    provider: z.string().min(1).max(100),
+    providerLabel: z.string().min(1).max(200)
+  })).max(10000)
+});
+export type OpenCodeCatalogue = z.infer<typeof OpenCodeCatalogueSchema>;
+
 export const SetupProbeResponseSchema = z.object({
   claudeCode: HarnessProbeSchema,
-  codex: HarnessProbeSchema
+  codex: HarnessProbeSchema,
+  opencode: OpenCodeCatalogueSchema.optional()
 });
 export type SetupProbeResponse = z.infer<typeof SetupProbeResponseSchema>;
 
@@ -4597,9 +4616,13 @@ export interface NovusBridge {
    * Publishing a decision as a pull request, and stewarding it (D-099).
    * Every verb is a server request gated on `pr.manage`; there is no merge
    * verb here, on the server, or in the runner vocabulary — merging happens
-   * on GitHub, by humans, and Novus tracks it.
+   * on GitHub under the acting person's credential, and Novus tracks it.
    */
   pulls: {
+    delivery(pullRequestId: string): Promise<IpcResult<DeliveryResponse>>;
+    workflow(input: { pullRequestId: string; runId: number }): Promise<IpcResult<WorkflowDetail>>;
+    reviewDeployment(input: DeploymentReviewInput): Promise<IpcResult<null>>;
+    submitReview(input: PullReviewInput): Promise<IpcResult<null>>;
     /** Pushes the mission branch to the host, up to the decided checkpoint —
      *  the remote-head guarantee (D-099). Enqueued to the runner holding the
      *  worktree; progress is read from the mission detail's branchPush. */

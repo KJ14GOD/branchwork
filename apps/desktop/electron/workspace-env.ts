@@ -131,6 +131,7 @@ const VERTEX_VARS = ["GOOGLE_APPLICATION_CREDENTIALS", "CLOUD_ML_REGION", "GOOGL
  *  project command either, so its tools have to be findable the same way. */
 const EXTRA_UNIX_PATH = (home: string): string[] => [
   join(home, ".local", "bin"),
+  join(home, ".opencode", "bin"),
   join(home, "bin"),
   "/opt/homebrew/bin",
   "/usr/local/bin",

@@ -94,13 +94,14 @@ export const CODEX_MODELS = [
  *  picker, so the harness is derived, never a second control that must agree. */
 export const HARNESSES = [
   { id: "claude-code", label: "Claude Code" },
-  { id: "codex", label: "Codex" }
+  { id: "codex", label: "Codex" },
+  { id: "opencode", label: "OpenCode" }
 ] as const;
-export const HarnessIdSchema = z.enum(["claude-code", "codex"]);
+export const HarnessIdSchema = z.enum(["claude-code", "codex", "opencode"]);
 export type HarnessId = z.infer<typeof HarnessIdSchema>;
 
 /** One allowlist across harnesses; a value outside it never reaches a CLI. */
-export const ModelIdSchema = z.enum([
+export const StaticModelIdSchema = z.enum([
   "claude-fable-5",
   "claude-opus-5",
   "claude-opus-4-8",
@@ -114,9 +115,18 @@ export const ModelIdSchema = z.enum([
   "gpt-5.4",
   "gpt-5.4-mini"
 ]);
+/** OpenCode owns its model catalogue. Namespace it so an OpenAI model driven
+ * by OpenCode can never resume a Codex thread (D-246). The runner verifies
+ * availability with OpenCode before sending a direction. */
+export const OpenCodeModelIdSchema = z.string().max(300)
+  .regex(/^opencode:[a-zA-Z0-9][a-zA-Z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$/)
+  .refine((value) => !value.includes(".."), "Invalid OpenCode model ID")
+  .transform((value) => value as `opencode:${string}/${string}`);
+export const ModelIdSchema = z.union([StaticModelIdSchema, OpenCodeModelIdSchema]);
 export type ModelId = z.infer<typeof ModelIdSchema>;
 
 export function harnessOf(model: string): HarnessId {
+  if (OpenCodeModelIdSchema.safeParse(model).success) return "opencode";
   return (CODEX_MODELS as readonly { id: string }[]).some((entry) => entry.id === model)
     ? "codex"
     : "claude-code";
@@ -138,6 +148,7 @@ export const CLAUDE_EFFORTS: readonly Effort[] = ["low", "medium", "high", "xhig
  *  `model/list` answer, Claude per the verified flag list. The composer
  *  offers exactly this, and the runner clamps to it. */
 export function effortsFor(model: string): readonly Effort[] {
+  if (harnessOf(model) === "opencode") return [];
   const codex = (CODEX_MODELS as readonly { id: string; efforts: readonly string[] }[]).find(
     (entry) => entry.id === model
   );

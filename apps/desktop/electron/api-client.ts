@@ -1,3 +1,4 @@
+import { DeliveryResponseSchema, WorkflowDetailSchema, type DeploymentReviewInput, type PullReviewInput } from "@novus/contracts";
 import {
   BranchInfoSchema,
   ApiErrorSchema,
@@ -811,6 +812,11 @@ export class ControlPlaneClient {
     );
   }
 
+  delivery(pullRequestId: string) { return this.request("GET", `/pull-requests/${encodeURIComponent(pullRequestId)}/delivery`, DeliveryResponseSchema); }
+  workflow(pullRequestId: string, runId: number) { return this.request("GET", `/pull-requests/${encodeURIComponent(pullRequestId)}/workflow?runId=${runId}`, WorkflowDetailSchema); }
+  async reviewDeployment(input: DeploymentReviewInput) { await this.request("POST", `/pull-requests/${encodeURIComponent(input.pullRequestId)}/review-deployment`, OkResponseSchema, input); }
+  async submitReview(input: PullReviewInput) { await this.request("POST", `/pull-requests/${encodeURIComponent(input.pullRequestId)}/submit-review`, OkResponseSchema, input); }
+
   async requestReview(pullRequestId: string, reviewers: string[]): Promise<void> {
     await this.request(
       "POST",
@@ -830,7 +836,7 @@ export class ControlPlaneClient {
 
   async mergePullRequest(
     pullRequestId: string,
-    input: { method: MergeMethod; acknowledgeBlockers: boolean }
+    input: { method: MergeMethod; acknowledgeBlockers: boolean; expectedSha?: string }
   ): Promise<{ sha: string | null }> {
     return this.request(
       "POST",

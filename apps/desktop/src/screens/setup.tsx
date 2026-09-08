@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { siClaudecode, siGithub } from "simple-icons";
+import { OpenCodeGlyph } from "../components/harness-glyph";
 import codexIcon from "../assets/codex-icon.png";
 import type { HarnessProbe, IpcAuthStatus, SetupProbeResponse } from "@novus/contracts";
 import { novus } from "../bridge";
@@ -71,6 +72,7 @@ export function SetupSurface({
 
   const claude = harnessStatus(probe?.claudeCode ?? null);
   const codex = harnessStatus(probe?.codex ?? null);
+  const opencode = harnessStatus(probe?.opencode ?? null);
   // The lend page is offered only when the CLI is here and holds at least one
   // account — an empty page would be a control over nothing (prohibited
   // pattern 11).
@@ -149,6 +151,13 @@ export function SetupSurface({
             <div className="card-desc">OpenAI&apos;s coding agent. Cloud runs arrive with missions.</div>
             <div className={codex.muted ? "card-status muted" : "card-status"}>
               {codex.muted ? <span>{codex.text}</span> : <TypedFact text={codex.text} />}
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-head"><OpenCodeGlyph className="card-glyph" />OpenCode</div>
+            <div className="card-desc">Hosted and local models. Provider login stays on this machine.</div>
+            <div className={opencode.muted ? "card-status muted" : "card-status"}>
+              {probe?.opencode?.error ?? opencode.text}
             </div>
           </div>
         </div>

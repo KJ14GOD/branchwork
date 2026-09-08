@@ -2,7 +2,7 @@ Purpose: The append-only record of decisions that shape Novus. Anyone asking "wh
 Authoritative for: the context, alternatives, consequences, and revisit conditions of every recorded decision, including vendor selections when they are made.
 Not authoritative for: the current state of the product (PRODUCT.md, ARCHITECTURE.md, DESIGN.md describe the present; this file describes how we got here), status (PROGRESS.md).
 Update when: a decision is made that constrains future work — architectural interfaces, vendor picks, scope changes, new root documents, new primitives or tokens, governance changes. Append only.
-Last reviewed: 2026-08-01
+Last reviewed: 2026-09-08
 
 # Decisions
 
@@ -3484,3 +3484,29 @@ The scope is owned by the shell beside the section itself. Every other way into 
 **Consequences.** `workspace-env.ts` spawns the shell detached, settles on the fenced value, kills the group at the value or at the deadline, and exposes the deadline to tests; `test/workspace-env.test.ts` proves a shell that prints and then hangs yields its PATH at once, and one that never prints yields nothing on time, with no process left behind.
 
 **Revisit when.** Startup is still slow on a Mac whose rc files take seconds before printing — then the window should open first and the PATH fold in behind it.
+
+## D-246 — OpenCode runs under the existing approval contract
+
+**Context.** The owner requested an OpenCode adapter, installation on this Mac, provider discovery including local models, and a live turn. OpenCode 1.18.29 exposes an authenticated HTTP server, SSE events and an external permission reply endpoint. Its plain headless stream alone is insufficient for the approval contract. This third implementation earns the adapter interface deferred in D-230.
+
+**Decision.** Use one owned loopback server per attempt, with an unrecorded random password and the existing shared permission ladder. Subscribe before sending the prompt. Route every privileged request to that ladder and answer only once or reject. Pin the final session permission suffix at creation and continuation; PATCH appends rules and the last matching rule wins. Canonicalize the saved workspace path before resuming. Kill the owned process group on stop, failure, completion or quit. A broken approval protocol fails explicitly.
+
+Read provider configuration locally and discover connected tool-capable models from the installed server. Namespace model ids with OpenCode and the provider. Keep credentials in OpenCode's own login store. Carry supported built-in provider SDKs and local endpoints; refuse unsupported options rather than inherit executable configuration. Disable external plugins, project configuration, LSP and formatters, and carry only reviewed MCP servers. This deliberately excludes arbitrary plugin-backed providers until their executable configuration has a governed mapping. No new account or provider key is required for the available OpenCode free model used in the live check.
+
+Use the existing checkpoint and evidence paths. Record reported usage and priced cost without inventing missing figures, and include the latest model in each receipt conversation. The provider menu uses the existing flyout and token system with bounded scrolling. Unsupported effort, native steering/review/fork, composed Claude skills, lent accounts and first-party computer/browser tools remain absent.
+
+**Alternatives.** Plain `run --format json` cannot supply the required external approval response channel. An existing personal server cannot be owned or have its configuration pinned. Inheriting user and project plugins would admit programs outside the repository's reviewed execution boundary. None is used.
+
+**Consequences.** `jsonc-parser` reads the provider JSONC declarations. The native transports share `HarnessAdapter`; server, stream, provider projection and protocol tests are separate modules. Dynamic namespaced models do not require database changes. Old receipts parse with a null model. Deterministic doubles cover the policy and failure paths, and opt-in tests exercise real OpenCode against a real model. Status and captured evidence belong in PROGRESS.md.
+
+**Sources.** [OpenCode server API](https://opencode.ai/docs/server/), [permissions](https://opencode.ai/docs/permissions/), [configuration](https://opencode.ai/docs/config/), and the installed 1.18.29 server's `/doc` schema. The live server confirmed permission routing and the append-on-PATCH behavior.
+
+**Revisit when.** OpenCode changes its server grammar or permission ordering, or a requested provider requires executable plugins or additional credential/configuration options.
+
+## D-247 — GitHub reviews and deployments are separate, revision-bound acts
+
+**Context.** The owner requested Actions visibility, deployment approvals, and PR review and merge controls before enterprise SSO. PR comments, readiness, and merges existed; formal GitHub reviews and deployment reviews did not. A merge call omitted GitHub's expected head SHA.
+**Decision.** Extend the existing repository-provider boundary with Actions reads, deployment history, pending deployment review, and formal PR review. The PR page gains an Actions section with runs, attempts, jobs, steps, environment status, and links to GitHub logs. Reads are scoped to the tracked request's current head and merge revision. Both review verbs require `pr.manage` and the acting person's GitHub token; GitHub enforces reviewer eligibility and protection. Deployment review names one run attempt, revision, environment, decision, and reason. PR review names the reviewed commit. Neither review merges anything. Merge pins the head presented at confirmation and sends it to GitHub. Downstream PRs remain reviewable but their deployment and merge controls remain on GitHub, preserving D-209.
+**Alternatives.** A presentation-only approval card would not stop workflows started outside Novus. GitHub environment protection is the actual gate. Copying raw logs into the event store would duplicate potentially sensitive output; the app shows job and step outcomes and links to GitHub logs instead.
+**Consequences.** A durable request record and attributed request/result events surround each review. Repeating the same request id never repeats the remote mutation; lost responses are stated as unknown, with no automatic retry. A reserved act with no outcome after two minutes becomes unknown on the next review request; the recovery is event-recorded and never repeats the act. Reads poll only while the Actions section is mounted, every fifteen seconds after the previous read settles. Lists have explicit bounds and disclose truncation. GitHub plan and repository rules determine whether deployment review exists; no rule is configured or bypassed automatically. Enterprise SSO and cloud execution remain deferred.
+**Revisit when.** Customers need repository-wide history, in-app raw log storage, protection-rule administration, or automatic reconciliation of uncertain review outcomes. GitHub does not offer a compare-and-swap attempt parameter on deployment review: Novus rechecks the attempt before posting, and GitHub's pending-review gate remains authoritative during the remaining race window.

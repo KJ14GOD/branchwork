@@ -23,8 +23,8 @@ declare global {
  * does: work a lane, fork an alternative, decide with a rationale, push the
  * branch from the receipt, open the draft, request review, watch a comment
  * arrive and resolve, mark it ready — and watch a human's merge on the host
- * land in the room with their name on it. What never exists: a merge
- * control, asserted by looking.
+ * land in the room with their name on it. Merges require an explicit
+ * confirmation against the reviewed head (D-100, D-247).
  *
  * The live GitHub half of the adapter is deliberately not exercised here;
  * the fake proves the pipeline (AGENTS.md rule 11), and PROGRESS.md says so.
@@ -618,6 +618,40 @@ describe("shipping a decision through GitHub (D-099)", () => {
         .poll(async () => page.getByTestId("pull-state-word").innerText(), { timeout: 30_000 })
         .toBe("Open");
 
+      // D-247: real window, IPC and server, with a scripted GitHub workflow.
+      await hostActs("workflow", { number: pull.number, workflow: {
+        run: { id: 77, name: "Deploy production", sha: pull.headSha, attempt: 1, status: "waiting", conclusion: null, event: "push", url: "https://github.com/novus/demo-app/actions/runs/77", updatedAt: new Date().toISOString() },
+        jobs: [{ id: 78, name: "Deploy application", status: "queued", conclusion: null, url: "https://github.com/novus/demo-app/actions/runs/77/job/78", steps: [{ name: "Publish release", status: "queued", conclusion: null }] }], jobsTruncated: false,
+        pending: [{ environmentId: 42, name: "production", canApprove: true, waitMinutes: 0, waitStartedAt: null, reviewers: ["kartik"] }]
+      } });
+      await page.getByTestId("pull-tab-actions").click();
+      await page.getByRole("button", { name: "Deploy production", exact: true }).click();
+      await page.getByRole("button", { name: "Approve deployment", exact: true }).waitFor();
+      await page.getByTestId("pull-delivery").scrollIntoViewIfNeeded();
+      await shot("254-github-actions.png");
+      const dimensions = page.viewportSize();
+      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().find(w => w.isVisible())?.setSize(760, 900); });
+      await page.waitForTimeout(350);
+      await page.getByTestId("pull-delivery").scrollIntoViewIfNeeded();
+      await shot("257-github-actions-narrow.png");
+      expect(await page.getByTestId("pull-delivery").evaluate(element => { const r = element.getBoundingClientRect(); return r.left >= 0 && r.right <= window.innerWidth; })).toBe(true);
+      await app.evaluate(({ BrowserWindow }, size) => { BrowserWindow.getAllWindows().find(w => w.isVisible())?.setSize(size.width, size.height); }, dimensions ?? { width: 1440, height: 900 });
+      await page.waitForTimeout(350);
+      await page.getByRole("button", { name: "Approve deployment", exact: true }).click();
+      await page.getByLabel("Reason", { exact: true }).fill("Checks passed at this revision.");
+      await shot("255-deployment-review.png");
+      await page.getByRole("button", { name: "Confirm deployment review" }).click();
+      await page.getByText("GitHub accepted the deployment review.", { exact: false }).waitFor();
+      await expect.poll(() => page.getByRole("button", { name: "Approve deployment", exact: true }).count()).toBe(0);
+      expect(await page.getByTestId("pull-state-word").innerText()).toBe("Open");
+      await page.getByRole("button", { name: "Submit GitHub review", exact: true }).click();
+      await page.getByLabel("Decision", { exact: true }).selectOption("COMMENT");
+      await page.getByLabel("Review", { exact: true }).fill("The deployment review was separate from this PR review.");
+      await shot("256-github-pr-review.png");
+      await page.getByRole("button", { name: "Send review to GitHub" }).click();
+      await page.getByText("GitHub accepted your review.", { exact: false }).waitFor();
+      await page.getByTestId("pull-tab-checks").click();
+
       // --- The readiness gate fills from the host's own story ---------------
       await hostActs("check", { number: pull.number, checkName: "ci", checkStatus: "passed", required: true });
       await hostActs("check", { number: pull.number, checkName: "lint", checkStatus: "failed", required: false });
@@ -752,6 +786,7 @@ describe("shipping a decision through GitHub (D-099)", () => {
         "PR #2 to open",
         (value) => value.pullRequests.length === 2 && value.pullRequest?.state === "draft"
       );
+      await hostActs("head", { number: republished.pullRequest!.number, headSha: second.checkpointSha });
       expect(republished.pullRequest!.number).not.toBe(pull.number);
       expect(republished.pullRequest!.headRef).toBe(pull.headRef);
       expect(republished.pullRequests.map((entry) => entry.state)).toEqual(["merged", "draft"]);

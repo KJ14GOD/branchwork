@@ -98,8 +98,9 @@ export function ReceiptView({
                   {session.title ?? "untitled"}
                   <span className="receipt-quiet"> · {session.workstreamName}</span>
                 </span>
-                <span className="receipt-quiet">
+                <span className="receipt-quiet receipt-session-meta" title={[session.harness, session.model].filter(Boolean).join(" · ")}>
                   {session.harness ? `${session.harness} · ` : ""}
+                  {session.model ? `${session.model} · ` : ""}
                   {session.directions} {session.directions === 1 ? "direction" : "directions"}
                 </span>
               </li>

@@ -1,3 +1,4 @@
+import { PullDelivery, FormalPullReview } from "./pull-delivery";
 import { useEffect, useState } from "react";
 import type {
   ReviewThread,
@@ -218,7 +219,7 @@ export function PullRequestPage({
 }) {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [section, setSection] = useState<"comments" | "checks" | "changes">("comments");
+  const [section, setSection] = useState<"comments" | "checks" | "changes" | "actions">("comments");
   const missionId = detail.mission.missionId;
   // The request's commits and files, asked for once per request (D-210): the
   // head sentence counts the commits and the Commits block lists them, the
@@ -237,7 +238,7 @@ export function PullRequestPage({
     return () => {
       stale = true;
     };
-  }, [pullRequestId]);
+  }, [pullRequestId, pull?.headSha]);
 
   const act = async (call: Act) => {
     setBusy(true);
@@ -348,7 +349,9 @@ export function PullRequestPage({
         <Completion detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} missionId={missionId} />
       )}
 
+      <FormalPullReview key={pull.pullRequestId} pull={pull} canManage={detail.capabilities.includes("pr.manage")} />
       <div className="segment" role="tablist" aria-label="Pull request sections">
+        <button role="tab" aria-selected={section === "actions"} className={section === "actions" ? "segment-tab active" : "segment-tab"} onClick={() => setSection("actions")} data-testid="pull-tab-actions">Actions</button>
         <button
           role="tab"
           aria-selected={section === "comments"}
@@ -381,6 +384,7 @@ export function PullRequestPage({
         </button>
       </div>
 
+      {section === "actions" && <PullDelivery key={pull.pullRequestId} pull={pull} canManage={detail.capabilities.includes("pr.manage")} />}
       {section === "comments" && (
         <PullReview
           detail={detail}
@@ -1422,13 +1426,14 @@ function Completion({
   void decision;
   const [confirming, setConfirming] = useState<"merge" | "close" | "delete" | null>(null);
   const [method, setMethod] = useState<MergeMethod | null>(null);
+  const [mergeSha, setMergeSha] = useState<string | null>(null);
   const methods = pull.readiness?.allowedMergeMethods ?? [];
   const blockers = namedBlockers(pull);
   const hostRefuses =
     pull.mergeable === "conflict"
       ? `conflicts with ${pull.baseRef} must be resolved first`
-      : pull.readiness?.checks.some((check) => check.required && check.status === "failed")
-        ? "a required check is failing"
+      : pull.readiness?.checks.some((check) => check.required && check.status !== "passed" && check.status !== "skipped")
+        ? "a required check has not passed"
         : null;
 
   return (
@@ -1471,6 +1476,7 @@ function Completion({
             holderLogin={detail.control.holderLogin}
             onClick={() => {
               setMethod(methods[0] ?? "merge");
+              setMergeSha(pull.headSha);
               setConfirming("merge");
             }}
             variant="primary"
@@ -1572,12 +1578,13 @@ function Completion({
             </button>
             <button
               className="btn btn-danger"
-              disabled={busy || method === null}
+              disabled={busy || method === null || mergeSha === null}
               onClick={() =>
                 void onAct(async () => {
                   const result = await novus().pulls.merge({
                     pullRequestId: pull.pullRequestId,
                     method: method ?? "merge",
+                    expectedSha: mergeSha ?? undefined,
                     acknowledgeBlockers: blockers.length > 0
                   });
                   if (result.ok) setConfirming(null);

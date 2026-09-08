@@ -141,6 +141,12 @@ describe("renderReceipt", () => {
     expect(doc).toContain("- src/auth/guard.ts — modified +100 −30");
   });
 
+  it("exports the recorded OpenCode model and keeps old snapshots readable", () => {
+    const receipt = ReceiptSnapshotSchema.parse({ ...snapshot, sessions: [{ ...snapshot.sessions[0], harness: "opencode", model: "opencode:ollama/llama3.1" }] });
+    expect(renderReceipt(receipt, "msn_x")).toContain("opencode · opencode:ollama/llama3.1");
+    expect(ReceiptSnapshotSchema.parse({ ...snapshot, sessions: [{ ...snapshot.sessions[0], model: undefined }] }).sessions[0]?.model).toBeNull();
+  });
+
   it("exports the snapshot itself as JSON, deterministically and losslessly (D-234)", () => {
     const first = renderReceiptJson(snapshot, "msn_x");
     expect(first).toBe(renderReceiptJson(snapshot, "msn_x"));

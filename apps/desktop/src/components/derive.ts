@@ -149,7 +149,7 @@ export function sessionHarness(detail: MissionDetailResponse, sessionId: string)
     .filter((execution) => execution.sessionId === sessionId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const harness = latest?.harness;
-  return harness === "codex" || harness === "claude-code" ? harness : null;
+  return harness === "codex" || harness === "claude-code" || harness === "opencode" ? harness : null;
 }
 
 /** Whether this session's turn is waiting on a person — the fact behind the

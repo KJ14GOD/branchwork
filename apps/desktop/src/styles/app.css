@@ -2521,15 +2521,27 @@ body {
 
 .chip-submenu {
   position: absolute;
-  left: calc(100% + 4px);
+  left: calc(100% + var(--s-1));
   bottom: 0;
   width: max-content;
-  min-width: 150px;
+  max-width: calc(50vw - var(--s-5));
+  max-height: 40vh;
+  overflow: auto;
   background: var(--surface-2);
   border: 1px solid var(--edge);
   border-radius: var(--r-control);
   box-shadow: var(--elev-1);
   padding: var(--s-1);
+}
+
+.provider-list {
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.chip-menu-providers .chip-menu-row {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .provider-row.open {
@@ -6651,6 +6663,14 @@ body.resizing {
   font: var(--type-meta);
 }
 
+.receipt-session-meta {
+  max-width: 50%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .receipt-decision {
   display: flex;
   flex-direction: column;
@@ -7981,4 +8001,19 @@ span.trace-attachment-transcript:hover {
   flex-direction: column;
   gap: var(--s-2);
   padding: var(--s-4) var(--s-5);
+}
+
+/* D-247: Actions details stay in the page's vertical flow. */
+.delivery-list {
+  width: 100%;
+}
+.delivery-list > li {
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.delivery-list > li > section,
+.delivery-list > li > p {
+  flex-basis: 100%;
+  min-width: 0;
 }

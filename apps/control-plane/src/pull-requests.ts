@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   MergeInputSchema,
+  WorkflowDetailSchema,
   PullCommentInputSchema,
   PullMetadataInputSchema,
   RequestReviewInputSchema
@@ -351,6 +352,7 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
     try {
       outcome = await mergePull(deps.db, deps.provider, acted.pull, acted.by, {
         method: body.data.method,
+        expectedSha: body.data.expectedSha,
         acknowledgeBlockers: body.data.acknowledgeBlockers ?? false
       });
     } catch (error) {
@@ -532,6 +534,8 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
       checkStatus: z.enum(["pending", "passed", "failed", "skipped"]).optional(),
       required: z.boolean().optional(),
       verdict: z.enum(["approve", "request_changes"]).optional(),
+      workflow: WorkflowDetailSchema.optional(),
+      headSha: z.string().regex(/^[a-f0-9]{40}$/).optional(),
       behindBy: z.number().int().nonnegative().optional()
     });
     app.post("/fake/github/pulls/:action", async (request, reply) => {
@@ -539,7 +543,12 @@ export function registerPullRequestRoutes(app: FastifyInstance, deps: RouteDeps)
       const body = FakeActSchema.safeParse(request.body);
       if (!body.success) return deps.sendError(reply, 400, "bad_fake_act", "Malformed fake host act.");
       try {
-        if (action === "comment") {
+        if (action === "workflow" && body.data.workflow) {
+          provider.fakeHead(body.data.providerRepoId, body.data.number, body.data.workflow.run.sha);
+          provider.fakeWorkflows.set(body.data.workflow.run.id, body.data.workflow);
+        } else if (action === "head" && body.data.headSha) {
+          provider.fakeHead(body.data.providerRepoId, body.data.number, body.data.headSha);
+        } else if (action === "comment") {
           provider.fakeComment(body.data.providerRepoId, body.data.number, {
             author: body.data.author ?? "reviewer",
             body: body.data.body ?? "Looks close — one question.",

@@ -1044,3 +1044,27 @@ describe("a chat is one harness's (D-232)", () => {
     expect(fresh.direction.sessionId).not.toBe(first.direction.sessionId);
   });
 });
+
+
+describe("OpenCode dispatch and session ownership (D-246)", () => {
+  it("records provider-qualified models, resumes within OpenCode and refuses crossing to Codex", async () => {
+    const lane = await mission();
+    const first = await direct(lane, "Use a local model", { model: "opencode:ollama/llama3.2:3b" });
+    const turn = await latestExecution(lane.workstreamId);
+    const payload = await startCommand(turn.executionId);
+    expect(payload).toMatchObject({ model: "opencode:ollama/llama3.2:3b" });
+    const row = await harness.db.query("select harness, model from executions where exe_id = $1", [turn.executionId]);
+    expect(row.rows[0]).toMatchObject({ harness: "opencode", model: "opencode:ollama/llama3.2:3b" });
+    await report(lane.credential, turn.executionId, [harnessSession(1, "ses_opencode"), completed(2)]);
+    const crossed = await harness.app.inject({ method: "POST", url: `/missions/${lane.missionId}/direction`, headers: bearer(kartik), payload: {
+      body: "Wrong harness", model: "gpt-5.6-sol", workstreamId: lane.workstreamId, sessionId: first.direction.sessionId
+    } });
+    expect(crossed.statusCode).toBe(409);
+    expect(crossed.json().error.code).toBe("harness_mismatch");
+    expect(crossed.json().error.message).toContain("OpenCode");
+    await direct(lane, "Continue through another OpenCode provider", { model: "opencode:openrouter/meta-llama/llama-4", sessionId: first.direction.sessionId });
+    const continued = await latestExecution(lane.workstreamId);
+    const next = await startCommand(continued.executionId);
+    expect(JSON.stringify(next)).toContain("ses_opencode");
+  });
+});

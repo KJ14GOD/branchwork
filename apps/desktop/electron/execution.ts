@@ -43,6 +43,8 @@ import {
   turnStartLine,
   turnSteerLine
 } from "./codex-stream";
+import { createOpenCodeAdapter } from "./opencode-adapter";
+import type { HarnessAdapter, HarnessEventStream, HarnessWire, HarnessProcessOutcome } from "./harness-adapter";
 import { codexMcpOverride } from "./codex-mcp";
 import { harnessEnv } from "./workspace-env";
 import { redact } from "./secret-policy";
@@ -527,12 +529,7 @@ const AUTH_HINTS =
  *  different fix, so it never wears the "sign in again" sentence (D-109). */
 const BILLING_HINTS = /(credit balance|billing|payment required|usage limit|quota (?:exceeded|reached))/i;
 
-interface ProcessOutcome {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  stderr: string;
-  spawnError: string | null;
-}
+type ProcessOutcome = HarnessProcessOutcome;
 
 export function startTurn(request: TurnRequest): RunningTurn {
   const worktree = join(request.worktreeRoot, request.workstreamId);
@@ -667,7 +664,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
    * never changes with the harness — only these three sentences do. Claude's
    * shapes are the default; a codex attempt swaps them in for its duration.
    */
-  const wire = {
+  const wire: HarnessWire = {
     decision: (requestId: string, allow: boolean, message?: string): boolean =>
       writeControl({
         type: "control_response",
@@ -984,7 +981,10 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // harness rides the model (D-230): a model outside the requested
     // harness's own list falls back to that harness's default, so a mixed-up
     // pair can never spawn the wrong binary with the right-looking flag.
-    const harness: HarnessId = request.harness ?? "claude-code";
+    const harness: HarnessId = request.harness ?? harnessOf(request.model);
+    if (harness === "opencode" && (!ModelIdSchema.safeParse(request.model).success || harnessOf(request.model) !== harness)) {
+      return terminate({ kind: "execution.failed", payload: { classification: "unsupported_harness", reason: "Choose an available OpenCode model before directing this chat." } });
+    }
     const chosenModel = ModelIdSchema.safeParse(request.model);
     const chosenEffort = EffortSchema.safeParse(request.effort);
     const parsedModel = chosenModel.success ? chosenModel.data : null;
@@ -1000,7 +1000,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // own ceiling rather than reaching a CLI as a string it never defined.
     const offeredEfforts = effortsFor(model);
     const wantedEffort = chosenEffort.success ? chosenEffort.data : DEFAULT_EFFORT;
-    const effort: string = offeredEfforts.includes(wantedEffort)
+    const effort: string = harness === "opencode" ? "default" : offeredEfforts.includes(wantedEffort)
       ? wantedEffort
       : offeredEfforts.includes(DEFAULT_EFFORT)
         ? DEFAULT_EFFORT
@@ -1025,7 +1025,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
     // AGENTS.md natively. MCP, since D-231, crosses: the composed file below
     // is translated into the codex thread's own mcp_servers override.
     composedSkills =
-      harness === "codex"
+      harness !== "claude-code"
         ? null
         : composeSkillsPlugin(
             worktreePath,
@@ -1045,7 +1045,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
       worktreePath,
       request.mcpServers ?? [],
       join(request.worktreeRoot, ".mcp-staging", `${request.executionId}.json`),
-      readOnly || harness === "codex" ? null : request.novusCapture ?? null,
+      readOnly || harness !== "claude-code" ? null : request.novusCapture ?? null,
       resolveMachineMcp(request.machineMcpServers ?? [])
     );
     emit({
@@ -1068,7 +1068,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         machineMcpServersDropped: composedMcp?.machineDropped ?? [],
         // The owner's own accounts this turn carried (D-217): read turns and
         // codex turns none — lending is composed through Claude's flags.
-        connectors: readOnly || harness === "codex" ? [] : [...(request.connectors ?? [])]
+        connectors: readOnly || harness !== "claude-code" ? [] : [...(request.connectors ?? [])]
       }
     });
 
@@ -1087,57 +1087,62 @@ export function startTurn(request: TurnRequest): RunningTurn {
     let resumeSessionId = request.resumeSessionId;
     // The two dialects converge on this shape: what the post-attempt half —
     // events flush, boundary, checkpoint, classification — actually reads.
-    let stream: {
-      end(): RunnerEvent[];
-      readonly sessionId: string | null;
-      readonly resumed: boolean;
-      readonly result: HarnessResult | null;
-    };
-    let outcome: ProcessOutcome;
-
-    // The deterministic fake is one dialect-less double for "a harness"
-    // (D-230): it drives the shared pipeline whatever the harness choice, so
-    // every governed path stays provable without either vendor's binary.
-    if (harness === "codex" && !request.fakeHarness) {
-      const codexStream = new CodexStream({ resumeThreadId: resumeSessionId, sanitize, onControl: handleControl });
-      stream = codexStream;
-      outcome = await attemptCodex(worktreePath, model, effort, speed, codexStream, resumeSessionId);
-      cancelPending("The harness process ended before this was answered.");
-    } else {
-      let optional = true;
-      let claude = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
-      outcome = await attempt(worktreePath, model, effort, claude, resumeSessionId, optional);
-      cancelPending("The harness process ended before this was answered.");
-
-      // An older CLI that does not know an optional flag refused before it did
-      // anything, so there is nothing to undo: drop the niceties and run the turn
-      // it was actually asked for. The pinned permission flags are never in this
-      // set, so this can never quietly become an unsupervised run.
-      if (stopReason === null && refusedOptionalFlag(outcome)) {
-        optional = false;
-        claude = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
+    const adapters: Record<HarnessId, HarnessAdapter> = {
+      "claude-code": { run: async () => {
+        let outcome: ProcessOutcome;
+        let optional = true;
+        let claude = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
         outcome = await attempt(worktreePath, model, effort, claude, resumeSessionId, optional);
         cancelPending("The harness process ended before this was answered.");
-      }
 
-      // A session the CLI no longer holds must not silently become a fresh
-      // conversation presented as continuous: retry once, openly fresh. A CLI
-      // that refused a flag is excluded — the second spawn would refuse the same
-      // flag, and the reason is not the session.
-      if (
-        resumeSessionId !== null &&
-        stopReason === null &&
-        claude.sessionId === null &&
-        !UNSUPPORTED_FLAG.test(outcome.stderr) &&
-        (outcome.spawnError !== null || outcome.code !== 0)
-      ) {
-        resumeSessionId = null;
-        claude = new HarnessStream({ resumeSessionId: null, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
-        outcome = await attempt(worktreePath, model, effort, claude, null, optional);
-        cancelPending("The harness process ended before this was answered.");
-      }
-      stream = claude;
-    }
+        // An older CLI that does not know an optional flag refused before it did
+        // anything, so there is nothing to undo: drop the niceties and run the turn
+        // it was actually asked for. The pinned permission flags are never in this
+        // set, so this can never quietly become an unsupervised run.
+        if (stopReason === null && refusedOptionalFlag(outcome)) {
+          optional = false;
+          claude = new HarnessStream({ resumeSessionId, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
+          outcome = await attempt(worktreePath, model, effort, claude, resumeSessionId, optional);
+          cancelPending("The harness process ended before this was answered.");
+        }
+
+        // A session the CLI no longer holds must not silently become a fresh
+        // conversation presented as continuous: retry once, openly fresh. A CLI
+        // that refused a flag is excluded — the second spawn would refuse the same
+        // flag, and the reason is not the session.
+        if (
+          resumeSessionId !== null &&
+          stopReason === null &&
+          claude.sessionId === null &&
+          !UNSUPPORTED_FLAG.test(outcome.stderr) &&
+          (outcome.spawnError !== null || outcome.code !== 0)
+        ) {
+          resumeSessionId = null;
+          claude = new HarnessStream({ resumeSessionId: null, sanitize, onControl: handleControl, onSlashCommands: request.onSlashCommands });
+          outcome = await attempt(worktreePath, model, effort, claude, null, optional);
+          cancelPending("The harness process ended before this was answered.");
+        }
+
+        return { stream: claude, outcome };
+      } },
+      codex: { run: async () => {
+        const stream = new CodexStream({ resumeThreadId: resumeSessionId, sanitize, onControl: handleControl });
+        const outcome = await attemptCodex(worktreePath, model, effort, speed, stream, resumeSessionId);
+        return { stream, outcome };
+      } },
+      opencode: createOpenCodeAdapter({
+        cwd: worktreePath, model, direction: openCodeDirection(request), resumeSessionId,
+        mcpFile: composedMcp?.file ?? null,
+        attachments: request.attachments?.filter((file) => file.path === null).map((file) => ({ mediaType: file.mimeType, base64: file.base64 })),
+        sanitize, onControl: handleControl, emit, wire,
+        setChild: (running) => { child = running; }, stopped: () => stopReason !== null
+      })
+    };
+    // The general fake exercises Novus orchestration. Protocol-specific tests
+    // launch a separate fake OpenCode server through the real adapter.
+    const selected = request.fakeHarness ? adapters["claude-code"] : adapters[harness];
+    const { stream, outcome }: { stream: HarnessEventStream; outcome: ProcessOutcome } = await selected.run();
+    cancelPending("The harness process ended before this was answered.");
 
     for (const event of stream.end()) emit(event);
 
@@ -2052,6 +2057,8 @@ export function startTurn(request: TurnRequest): RunningTurn {
     stream: { readonly sessionId: string | null; readonly result: HarnessResult | null },
     checkpointFailed: string | null
   ): TerminalEvent {
+    const harness = request.harness ?? harnessOf(request.model);
+    const harnessName = harness === "opencode" ? "OpenCode" : harness === "codex" ? "Codex" : "Claude Code";
     if (stopReason !== null) {
       return {
         kind: "execution.stopped",
@@ -2063,7 +2070,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         kind: "execution.failed",
         payload: {
           classification: "spawn_failed",
-          reason: bounded(sanitize(`Claude Code could not start: ${outcome.spawnError}`), MAX_REASON)
+          reason: bounded(sanitize(`${harnessName} could not start: ${outcome.spawnError}`), MAX_REASON)
         }
       };
     }
@@ -2079,7 +2086,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
           classification: "unsupported_harness",
           reason: bounded(
             sanitize(
-              `This machine's Claude Code can't route approvals to Novus (${outcome.stderr.trim().split("\n")[0] ?? "unknown option"}). Update the CLI and direct again.`
+              `This machine's ${harnessName} can't route approvals to Novus (${outcome.stderr.trim().split("\n")[0] ?? "unknown option"}). Update the CLI and direct again.`
             ),
             MAX_REASON
           )
@@ -2100,8 +2107,8 @@ export function startTurn(request: TurnRequest): RunningTurn {
           reason: bounded(
             sanitize(
               detail
-                ? `Claude Code reports a spending or usage limit: ${detail}`
-                : "Claude Code reports a spending or usage limit on this machine."
+                ? `${harnessName} reports a spending or usage limit: ${detail}`
+                : `${harnessName} reports a spending or usage limit on this machine.`
             ),
             MAX_REASON
           )
@@ -2113,7 +2120,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         kind: "execution.failed",
         payload: {
           classification: "authentication",
-          reason: "Claude Code isn't signed in on this machine. Sign in to the CLI and direct again."
+          reason: `${harnessName} is not signed in on this machine. Sign in to the CLI and direct again.`
         }
       };
     }
@@ -2126,7 +2133,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         kind: "execution.interrupted",
         payload: {
           reason: bounded(
-            "Claude Code ran out of its turn budget before finishing. Direct it again to continue from where it stopped.",
+            `${harnessName} ran out of its turn budget before finishing. Direct it again to continue from where it stopped.`,
             MAX_REASON
           )
         }
@@ -2138,7 +2145,7 @@ export function startTurn(request: TurnRequest): RunningTurn {
         kind: "execution.failed",
         payload: {
           classification: "nonzero_exit",
-          reason: bounded(sanitize(`Claude Code exited unsuccessfully: ${detail}`), MAX_REASON)
+          reason: bounded(sanitize(`${harnessName} exited unsuccessfully: ${detail}`), MAX_REASON)
         }
       };
     }
@@ -2221,4 +2228,15 @@ function bounded(text: string, limit: number): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown failure.";
+}
+
+/** Staged attachments and references use the existing direction road. Their
+ * bytes remain in the worktree; inline media uses OpenCode file parts. */
+function openCodeDirection(request: TurnRequest): string {
+  const context = (request.context ?? []).map((entry) => entry.kind === "file"
+    ? `Referenced file: ${entry.path}`
+    : `Referenced check: ${entry.name} (${entry.outcome})\n${entry.command}\n${entry.output ?? ""}`);
+  const staged = (request.attachments ?? []).filter((file) => file.path !== null)
+    .map((file) => `Attached file: ${file.path} (${file.label}, ${file.mimeType}). Open with your tools when needed.`);
+  return [...context, ...staged, request.direction].join("\n\n");
 }

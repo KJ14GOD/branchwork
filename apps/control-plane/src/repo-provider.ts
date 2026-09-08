@@ -1,3 +1,4 @@
+import type { DeliveryResponse, WorkflowDetail, DeploymentReviewInput, PullReviewInput } from "@novus/contracts";
 import { createHash } from "node:crypto";
 import type { BranchInfo, BaseStatus,
   AvailableRepository,
@@ -121,6 +122,11 @@ export interface HostPullRequestListing extends HostPullRequest {
 }
 
 export interface RepositoryProvider {
+  delivery(actor: RepoActor, repoId: string, number: number): Promise<DeliveryResponse>;
+  workflow(actor: RepoActor, repoId: string, number: number, runId: number): Promise<WorkflowDetail>;
+  reviewDeployment(actor: RepoActor, repoId: string, number: number, input: DeploymentReviewInput): Promise<void>;
+  submitReview(actor: RepoActor, repoId: string, number: number, input: PullReviewInput): Promise<void>;
+
   /** `github` is the live App adapter saying so honestly; the union carried
    *  only the other two while nothing branched on it (D-099). Nothing should
    *  branch on it now either — repository rows carry the provider that
@@ -143,10 +149,8 @@ export interface RepositoryProvider {
    * Opens a pull request — always as a draft, which is the only way Novus
    * opens one: readiness is a person's own later claim (D-099).
    *
-   * There is deliberately no merge method on this interface, and there never
-   * will be: Novus can put a branch on a host and open a request from it, and
-   * can never combine one branch with another. Merging happens on the host,
-   * by humans, and ingestion records who.
+   * Merging is a separate explicit act, performed by the host under the
+   * acting person's token (D-100, D-223).
    */
   createPullRequest(
     actor: RepoActor,
@@ -178,7 +182,8 @@ export interface RepositoryProvider {
     actor: RepoActor,
     providerRepoId: string,
     number: number,
-    method: MergeMethod
+    method: MergeMethod,
+    expectedSha?: string
   ): Promise<{ sha: string | null }>;
   /** Brings the branch up to date with its base, host-side. */
   updatePullRequestBranch(actor: RepoActor, providerRepoId: string, number: number): Promise<void>;
@@ -211,6 +216,11 @@ export interface RepositoryProvider {
 
 export class UnconfiguredRepositoryProvider implements RepositoryProvider {
   readonly kind = "unconfigured" as const;
+  async delivery(): Promise<DeliveryResponse> { throw new ProviderUnconfiguredError(); }
+  async workflow(): Promise<WorkflowDetail> { throw new ProviderUnconfiguredError(); }
+  async reviewDeployment(): Promise<void> { throw new ProviderUnconfiguredError(); }
+  async submitReview(): Promise<void> { throw new ProviderUnconfiguredError(); }
+
   async listRepositories(): Promise<AvailableRepository[]> {
     throw new ProviderUnconfiguredError();
   }
@@ -289,6 +299,33 @@ interface FakeRepo {
  */
 export class FakeRepositoryProvider implements RepositoryProvider {
   readonly kind = "fake" as const;
+  fakeHead(repoId: string, number: number, sha: string) { this.pull(repoId, number).headSha = sha; }
+  readonly fakeWorkflows = new Map<number, WorkflowDetail>();
+  async delivery(_actor: RepoActor, repoId: string, number: number): Promise<DeliveryResponse> {
+    const pull = this.pull(repoId, number);
+    return { headSha: pull.headSha!, mergeSha: null, deployments: [], deploymentsTruncated: false, runs: [...this.fakeWorkflows.values()].filter(w => w.run.sha === pull.headSha).map(w => w.run), truncated: false, observedAt: new Date().toISOString() };
+  }
+  async workflow(actor: RepoActor, repoId: string, number: number, runId: number): Promise<WorkflowDetail> {
+    const list = await this.delivery(actor, repoId, number);
+    const run = this.fakeWorkflows.get(runId);
+    if (!run || !list.runs.some(r => r.id === runId)) throw new MergeRefusedError("Workflow is not this request's current revision.");
+    return structuredClone(run);
+  }
+  async reviewDeployment(actor: RepoActor, repoId: string, number: number, input: DeploymentReviewInput): Promise<void> {
+    const run = await this.workflow(actor, repoId, number, input.runId);
+    if (run.run.sha !== input.expectedSha || run.run.attempt !== input.attempt || !run.pending.some(p => p.environmentId === input.environmentId && p.canApprove)) throw new MergeRefusedError("Deployment changed or reviewer is ineligible.");
+    run.pending = run.pending.filter(p => p.environmentId !== input.environmentId);
+    run.run.status = input.decision === "approved" ? "in_progress" : "completed";
+    run.run.conclusion = input.decision === "rejected" ? "failure" : null;
+    this.fakeWorkflows.set(input.runId, run);
+  }
+  async submitReview(actor: RepoActor, repoId: string, number: number, input: PullReviewInput): Promise<void> {
+    const pull = this.pull(repoId, number);
+    if (pull.headSha !== input.expectedSha || pull.state !== "ready") throw new MergeRefusedError("Pull request changed or is not ready.");
+    if (input.decision !== "COMMENT") this.fakeReview(repoId, number, input.decision === "APPROVE" ? "approve" : "request_changes");
+    this.fakeComment(repoId, number, { author: actor.login ?? "unknown", body: input.comment, kind: "review", reviewState: input.decision === "APPROVE" ? "approved" : input.decision === "REQUEST_CHANGES" ? "changes_requested" : "commented" });
+  }
+
   private readonly repos: FakeRepo[];
 
   /**
@@ -401,8 +438,8 @@ export class FakeRepositoryProvider implements RepositoryProvider {
   // side" — a reviewer commenting, a human merging or closing, a thread being
   // resolved — is driven by the `fake*` methods below, exposed as test-only
   // routes under NOVUS_FAKE_GITHUB so a deterministic suite can *be* GitHub.
-  // There is no merge on the RepositoryProvider interface; `fakeMerge` is the
-  // host's own act, which is exactly the distinction the product draws.
+  // `fakeMerge` models an external host act; `mergePullRequest` models the
+  // explicit request Novus relays to the host.
 
   private readonly pulls = new Map<string, Map<number, FakePull>>();
   private nextNumber = 1;
@@ -557,7 +594,8 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     _actor: RepoActor,
     providerRepoId: string,
     number: number,
-    method: MergeMethod
+    method: MergeMethod,
+    expectedSha?: string
   ): Promise<{ sha: string | null }> {
     const pull = this.pull(providerRepoId, number);
     // The host's own refusals, mirrored, or host-tier bugs pass silently: a
@@ -569,9 +607,10 @@ export class FakeRepositoryProvider implements RepositoryProvider {
     if (pull.mergeable === "conflict") {
       throw new MergeRefusedError("The branch has conflicts with its base that must be resolved.");
     }
-    if (pull.checks.some((check) => check.required && check.status === "failed")) {
-      throw new MergeRefusedError("A required check is failing; branch protection refuses the merge.");
+    if (pull.checks.some((check) => check.required && check.status !== "passed" && check.status !== "skipped")) {
+      throw new MergeRefusedError("A required check has not passed; branch protection refuses the merge.");
     }
+    if (expectedSha && pull.headSha !== expectedSha) throw new MergeRefusedError("The pull request head changed.");
     void method;
     pull.state = "merged";
     // The token's identity performs the merge, which for Novus is the App.

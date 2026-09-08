@@ -688,8 +688,8 @@ export function buildFeed(detail: MissionDetailResponse): Feed {
       case "execution.started":
       case "execution.running": {
         const model = text(event.payload.model);
-        block.harness = event.payload.harness === "codex" ? "codex" : "claude-code";
-        const effort = text(event.payload.effort);
+        block.harness = event.payload.harness === "opencode" ? "opencode" : event.payload.harness === "codex" ? "codex" : "claude-code";
+        const effort = event.payload.harness === "opencode" ? null : text(event.payload.effort);
         // A read-alongside turn says so on its machinery line (D-095): the
         // trace reads normally, and the one word explains why this turn could
         // only ever answer — never change the worktree.
