@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { expectPrivateFile } from "./fixtures/private-file";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -81,7 +82,7 @@ describe("recording consents", () => {
 
   it("keeps the store private to this user", () => {
     recordFileConsents(store, "repo-a", [copied(".env")]);
-    expect(statSync(store).mode & 0o777).toBe(0o600);
+    expectPrivateFile(store);
   });
 });
 

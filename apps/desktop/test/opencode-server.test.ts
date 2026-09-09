@@ -1,3 +1,4 @@
+import crossSpawn from "cross-spawn";
 import { expect, it } from "vitest";
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,11 +10,13 @@ it("app shutdown kills catalogue probes too and prevents a late probe spawning",
   const pathBefore = process.env.PATH;
   const servers: OpenCodeServer[] = [];
   try {
-    copyFileSync(join(__dirname, "fixtures/opencode.cjs"), join(root, "opencode"));
-    chmodSync(join(root, "opencode"), 0o755);
-    if (process.platform === "win32") writeFileSync(join(root, "opencode.cmd"), `@echo off\r\n"${process.execPath}" "${join(root, "opencode")}" %*\r\n`);
+    copyFileSync(join(__dirname, "fixtures/opencode.cjs"), join(root, process.platform === "win32" ? "opencode.cjs" : "opencode"));
+    if (process.platform !== "win32") chmodSync(join(root, "opencode"), 0o755);
+    if (process.platform === "win32") writeFileSync(join(root, "opencode.cmd"), `@echo off\r\n"${process.execPath}" "${join(root, "opencode.cjs")}" %*\r\n`);
     writeFileSync(join(root, "mode"), "approval");
     process.env.PATH = `${root}${delimiter}${pathBefore ?? ""}`;
+    const probe = crossSpawn.sync("opencode", ["--version"], { encoding: "utf8", timeout: 5000 });
+    expect(probe.stdout?.trim(), probe.stderr || probe.error?.message).toBe("1.18.29-test");
     servers.push(new OpenCodeServer(root, {}, {}));
     await servers[0]!.ready;
     const configHome = JSON.parse(readFileSync(join(root, "launch.json"), "utf8")).configHome;

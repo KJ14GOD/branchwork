@@ -1,5 +1,6 @@
+import { expectPrivateFile } from "./fixtures/private-file";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkspaceSettingsSchema } from "@novus/contracts";
@@ -231,7 +232,7 @@ describe("writing configuration", () => {
     const ignore = await gitExec(worktree, ["check-ignore", "-q", "--", LOCAL_SETTINGS_PATH]);
     expect(ignore.code).toBe(0);
     expect(readFileSync(join(worktree, ".gitignore"), "utf8")).toContain(LOCAL_SETTINGS_PATH);
-    expect(statSync(join(worktree, LOCAL_SETTINGS_PATH)).mode & 0o777).toBe(0o600);
+    expectPrivateFile(join(worktree, LOCAL_SETTINGS_PATH));
 
     // git agrees the file is invisible to a careless `git add -A`.
     await git(["add", "-A"]);

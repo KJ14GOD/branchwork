@@ -3521,4 +3521,6 @@ Use the existing checkpoint and evidence paths. Record reported usage and priced
 
 **Consequences.** GitHub Actions uses read-only permissions and no account secrets. Superseded runs cancel, jobs time out after 30 minutes, and installer/evidence artifacts expire after seven days. Packaging never publishes a release. The Windows result belongs in PROGRESS.md independently of live-provider proof. Product roles, state transitions and design tokens are unchanged.
 
+**First Windows run.** Build, static checks and contract/server suites passed. OpenCode fixture startup and Unix mode assertions failed. The fixture uses a distinct `.cjs` target behind its Windows shim and a version preflight; file privacy is tested through native ACL grants on Windows. Later independent checks run even after test failures so one failure does not conceal packaging evidence.
+
 **Revisit when.** A Windows 11 machine is available for the real login and agent run, or additional Unix-dependent suites are made portable.

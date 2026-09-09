@@ -1,3 +1,4 @@
+import crossSpawn from "cross-spawn";
 import { beforeEach, afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -26,12 +27,14 @@ beforeEach(() => {
   git(repo, "add", ".");
   git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@local", "commit", "-m", "base");
   git(repo, "branch", "novus/m-opencodetest");
-  copyFileSync(join(__dirname, "fixtures/opencode.cjs"), join(root, "opencode"));
-  chmodSync(join(root, "opencode"), 0o755);
-  if (process.platform === "win32") writeFileSync(join(root, "opencode.cmd"), `@echo off\r\n"${process.execPath}" "${join(root, "opencode")}" %*\r\n`);
+  copyFileSync(join(__dirname, "fixtures/opencode.cjs"), join(root, process.platform === "win32" ? "opencode.cjs" : "opencode"));
+  if (process.platform !== "win32") chmodSync(join(root, "opencode"), 0o755);
+  if (process.platform === "win32") writeFileSync(join(root, "opencode.cmd"), `@echo off\r\n"${process.execPath}" "${join(root, "opencode.cjs")}" %*\r\n`);
   writeFileSync(join(root, "mode"), "approval");
   originalPath = process.env.PATH; originalConfig = process.env.XDG_CONFIG_HOME;
   process.env.PATH = `${root}${delimiter}${originalPath ?? ""}`;
+  const probe = crossSpawn.sync("opencode", ["--version"], { encoding: "utf8", timeout: 5000 });
+  expect(probe.stdout?.trim(), probe.stderr || probe.error?.message).toBe("1.18.29-test");
   process.env.XDG_CONFIG_HOME = join(root, "config");
   mkdirSync(process.env.XDG_CONFIG_HOME);
 });
