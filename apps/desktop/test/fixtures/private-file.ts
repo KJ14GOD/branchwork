@@ -9,6 +9,9 @@ export function expectPrivateFile(path: string): void {
     expect(statSync(path).mode & 0o777).toBe(0o600);
     return;
   }
+  // PowerShell 7 can export its module path to Windows PowerShell 5.1.
+  // Let the child discover its own built-in modules.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath"));
   const result = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `
     $ErrorActionPreference = 'Stop'
     $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -18,6 +21,6 @@ export function expectPrivateFile(path: string): void {
       $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -notin $allowed
     } | ForEach-Object { $_.IdentityReference.Value })
     ConvertTo-Json -Compress -InputObject $unexpected
-  `], { env: { ...process.env, NOVUS_TEST_PRIVATE_FILE: path }, encoding: "utf8", timeout: 10_000 });
+  `], { env: { ...env, NOVUS_TEST_PRIVATE_FILE: path }, encoding: "utf8", timeout: 10_000 });
   expect(JSON.parse(result)).toEqual([]);
 }

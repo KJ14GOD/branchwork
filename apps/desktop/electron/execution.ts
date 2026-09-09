@@ -2207,6 +2207,11 @@ function refusedOptionalFlag(outcome: ProcessOutcome): boolean {
 }
 
 function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (process.platform === "win32") {
+    // Killing only cmd.exe first loses the parent needed to find descendants.
+    if (child.pid) crossSpawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }).on("error", () => undefined);
+    return;
+  }
   try {
     if (child.pid) process.kill(-child.pid, signal);
   } catch {
