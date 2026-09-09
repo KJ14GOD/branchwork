@@ -251,7 +251,12 @@ export function buildServer(
     if (!ctx) return;
     const parsed = RegisterLocalRepoInputSchema.safeParse(request.body);
     if (!parsed.success) return sendError(reply, 422, "invalid_repo", "Malformed local repository.");
-    return { repository: await registerLocalRepository(db, ctx, parsed.data) };
+    try {
+      return { repository: await registerLocalRepository(db, ctx, parsed.data) };
+    } catch (error) {
+      if (error instanceof MissionCreationError) return sendError(reply, error.status, error.code, error.message);
+      throw error;
+    }
   });
 
   app.get("/repositories/local", async (request, reply) => {
@@ -302,7 +307,7 @@ export function buildServer(
         return sendError(reply, 503, "repo_unconfigured", error.message);
       }
       if (error instanceof MissionCreationError) {
-        return sendError(reply, 422, error.code, error.message);
+        return sendError(reply, error.status, error.code, error.message);
       }
       throw error;
     }

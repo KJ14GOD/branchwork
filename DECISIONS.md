@@ -3524,3 +3524,15 @@ Use the existing checkpoint and evidence paths. Record reported usage and priced
 **First Windows run.** Build, static checks and contract/server suites passed. OpenCode fixture startup and Unix mode assertions failed. The fixture uses a distinct `.cjs` target behind its Windows shim and a version preflight; file privacy is tested through native ACL grants on Windows. Later independent checks run even after test failures so one failure does not conceal packaging evidence.
 
 **Revisit when.** A Windows 11 machine is available for the real login and agent run, or additional Unix-dependent suites are made portable.
+
+## D-249 — Credentials that announce themselves by shape are removed too, and the limits are written down
+
+**Context.** Redaction removed only the values Novus was explicitly handed (D-044, D-052) and stated plainly that it detected nothing. A release to other people's machines changes what passes through the reported path: a project's `.env` printed by a setup command, a token an agent mints mid-turn, a key pasted into a direction. None of those are values Novus holds, and the old promise — "remove what we were given" — leaves every one of them in a durable event.
+
+**Decision.** A third protection behind `redact`, narrower than the other two and applied to every reported text after the value pass: **shapes**. A vendor's documented prefix (GitHub `ghp_`/`github_pat_`, OpenAI and Anthropic `sk-`, Stripe `sk_live_`, AWS `AKIA`, Slack `xox`, Google `AIza`), a universal envelope (a JSON web token's three parts, a private-key block with its fences), and a value wrapped by something that names it — an `Authorization` header, credentials in a URL, an assignment whose key ends in *key*, *secret*, *token*, or *password*. Where a shape wraps a value the wrapping stays and only the value goes, so the line still says what it was. What it is not: detection. No entropy, no guessing. An AWS secret key, a database password in prose, a hex digest, a UUID, and a git revision have no shape and pass through, and ARCHITECTURE.md says so in the same breath.
+
+**Alternatives.** Entropy-based detection (rejected: it redacts digests, revisions, and ordinary base64 by the dozen, and a redaction that fires on noise trains people to ignore it). A vendor secret-scanning service (rejected: the reported path must not leave the machine to be cleaned). Leaving it as it was (rejected: the stated limit was honest for one person's machine and becomes a liability on a stranger's).
+
+**Consequences.** `secret-policy.ts` carries the shape list and `redactShapes`, run by `redact` after the value pass, so every surface that already redacts — process output, the harness transcript, pushes and clones, captures — gains it without a call-site change. `secret-policy.test.ts` proves each shape, the envelopes, the near-misses left alone, and the two things it cannot see. The floor for a bare assigned value is eight characters, the same as `MIN_SECRET_LENGTH`.
+
+**Revisit when.** A vendor changes a prefix, or a false positive is reported on a real project's output — then the shape is narrowed, never the promise widened.

@@ -118,9 +118,21 @@ async function upsertRepository(
   provider: "github" | "local" = "github"
 ): Promise<string> {
   const existing = await client.query(
-    "select repo_id from repositories where org_id = $1 and provider = $3 and provider_repo_id = $2",
+    "select repo_id, disconnected_at from repositories where org_id = $1 and provider = $3 and provider_repo_id = $2",
     [ctx.orgId, available.providerRepoId, provider]
   );
+  // Connecting is `org.repo.connect`, the organization owner's alone
+  // (PRODUCT.md#roles-and-capabilities): a repository the organization does
+  // not hold yet, and one it let go of (D-235), are connected here; a member
+  // may create a mission on one already connected, and on nothing else.
+  const connecting = !existing.rows[0] || existing.rows[0].disconnected_at !== null;
+  if (connecting && (await orgRoleOf(client, ctx)) !== "owner") {
+    throw new MissionCreationError(
+      "repo_connect_forbidden",
+      "Connecting a repository is the organization owner's; ask them to add it first.",
+      403
+    );
+  }
   if (existing.rowCount && existing.rows[0]) {
     // Connecting a repository that was disconnected reconnects it (D-235):
     // the same row, the same identity, its archived missions still its own.
@@ -143,10 +155,24 @@ async function upsertRepository(
 
 export class MissionCreationError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  /** The HTTP status the route answers with: 422 for a malformed or
+   *  unavailable input, 403 for a capability the caller does not hold. */
+  readonly status: number;
+  constructor(code: string, message: string, status = 422) {
     super(message);
     this.code = code;
+    this.status = status;
   }
+}
+
+/** The caller's role in their organization, read at the moment it matters. */
+async function orgRoleOf(client: pg.PoolClient, ctx: AuthedContext): Promise<"owner" | "member" | null> {
+  const found = await client.query("select org_role from organization_members where org_id = $1 and user_id = $2", [
+    ctx.orgId,
+    ctx.userId
+  ]);
+  const role = found.rows[0]?.org_role;
+  return role === "owner" || role === "member" ? role : null;
 }
 
 /**

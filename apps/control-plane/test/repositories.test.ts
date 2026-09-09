@@ -217,3 +217,115 @@ describe("disconnecting a repository (D-235)", () => {
     expect(await listedLocal()).toContain(repo.repoId);
   });
 });
+
+describe("connecting a repository is the organization owner's (PRODUCT.md: org.repo.connect)", () => {
+  /** A member of the owner's organization: invited into a mission (D-036). */
+  async function member(login: string): Promise<SignedIn> {
+    const repo = await connectLocal(`novus/for-${login}`);
+    const missionId = await createMission(repo);
+    const person = await harness.signIn(login);
+    const invitation = await harness.app.inject({
+      method: "POST",
+      url: `/missions/${missionId}/invitations`,
+      headers: bearer(owner),
+      payload: { role: "operator" }
+    });
+    expect(invitation.statusCode).toBe(201);
+    const redeemed = await harness.app.inject({
+      method: "POST",
+      url: "/invitations/redeem",
+      headers: bearer(person),
+      payload: { token: invitation.json().token }
+    });
+    expect(redeemed.statusCode).toBe(200);
+    // A session acts in its oldest membership's organization, which for an
+    // invited person is their own personal org, where they are the owner.
+    // The member under test acts in the owner's organization, so their
+    // membership there is made the older one.
+    await harness.db.query(
+      `update organization_members set created_at = now() - interval '1 day'
+        where org_id = $1 and user_id = (select user_id from users where login = $2)`,
+      [owner.orgId, login]
+    );
+    return person;
+  }
+
+  const missionAs = (as: SignedIn, localId: string, headSha: string) =>
+    harness.app.inject({
+      method: "POST",
+      url: "/missions",
+      headers: bearer(as),
+      payload: {
+        goal: "Try the member's own folder",
+        successCriteria: "It is refused or it is not",
+        provider: "local",
+        providerRepoId: localId,
+        baseRef: "main",
+        baseSha: headSha,
+        creationKey: randomUUID()
+      }
+    });
+
+  it("refuses a member's connection by name, and leaves nothing behind", async () => {
+    const maya = await member("maya-connect");
+    const localId = randomUUID();
+    const refused = await harness.app.inject({
+      method: "POST",
+      url: "/repositories/local",
+      headers: bearer(maya),
+      payload: { localId, name: "maya/own-folder", defaultBranch: "main", headSha: sha(localId) }
+    });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error.code).toBe("repo_connect_forbidden");
+    expect(refused.json().error.message).toMatch(/organization owner/);
+    const names = await harness.app.inject({ method: "GET", url: "/repositories/local", headers: bearer(maya) });
+    expect((names.json().repositories as { name: string }[]).map((repo) => repo.name)).not.toContain("maya/own-folder");
+  });
+
+  it("lets a member create a mission on a connected repository, and refuses the connection hidden in a mission on an unconnected one", async () => {
+    const maya = await member("maya-missions");
+    const connected = await connectLocal("novus/shared");
+    const allowed = await missionAs(maya, connected.localId, connected.headSha);
+    expect(allowed.statusCode).toBe(201);
+
+    // A GitHub repository the organization has not connected yet: a mission
+    // on it would connect it, which is the owner's act — refused for the
+    // member, and open to them once the owner's own mission connected it.
+    const githubMission = (as: SignedIn) =>
+      harness.app.inject({
+        method: "POST",
+        url: "/missions",
+        headers: bearer(as),
+        payload: {
+          goal: "First mission on the demo app",
+          successCriteria: "It connects, or it is refused",
+          provider: "github",
+          providerRepoId: "9001",
+          baseRef: "main",
+          baseSha: sha("demo-app@main"),
+          creationKey: randomUUID()
+        }
+      });
+    const refused = await githubMission(maya);
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error.code).toBe("repo_connect_forbidden");
+    expect((await githubMission(owner)).statusCode).toBe(201);
+    expect((await githubMission(maya)).statusCode).toBe(201);
+  });
+
+  it("counts reconnecting a disconnected repository as connecting it", async () => {
+    const maya = await member("maya-reconnect");
+    const repo = await connectLocal("novus/let-go");
+    const missionId = await createMission(repo);
+    expect((await archive(missionId)).statusCode).toBe(200);
+    expect((await disconnect(repo.repoId)).statusCode).toBe(200);
+
+    const refused = await missionAs(maya, repo.localId, repo.headSha);
+    expect(refused.statusCode).toBe(403);
+    expect(await listedLocal()).not.toContain(repo.repoId);
+
+    const ownerReconnects = await missionAs(owner, repo.localId, repo.headSha);
+    expect(ownerReconnects.statusCode).toBe(201);
+    expect(await listedLocal()).toContain(repo.repoId);
+  });
+});
