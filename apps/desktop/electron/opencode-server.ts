@@ -50,7 +50,7 @@ export class OpenCodeServer {
       if (/^(ANTHROPIC_|CLAUDE_|CODEX_|OPENAI_|OPENCODE_)/.test(key)) delete env[key];
     }
     this.child = crossSpawn("opencode", ["serve", "--pure", "--hostname", "127.0.0.1", "--port", "0"], {
-      cwd, detached: true, stdio: ["ignore", "pipe", "pipe"], env: {
+      cwd, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: {
         ...env,
         XDG_CONFIG_HOME: this.staging,
         OPENCODE_TEST_HOME: this.staging,

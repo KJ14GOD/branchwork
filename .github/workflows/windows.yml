@@ -41,6 +41,8 @@ jobs:
         run: pnpm --filter @novus/contracts test
       - name: Control-plane tests
         run: pnpm --filter @novus/control-plane test
+      - name: OpenCode managed Windows startup
+        run: pnpm --filter @novus/desktop exec vitest run test/opencode-server.test.ts --reporter=verbose
       - name: Desktop logic and OpenCode protocol tests
         run: pnpm --filter @novus/desktop exec vitest run --config vitest.windows.config.ts --reporter=verbose
       - name: Windows mission, approval, terminal and reopen

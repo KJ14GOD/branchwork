@@ -1,3 +1,4 @@
+import { harnessEnv } from "../electron/workspace-env";
 import crossSpawn from "cross-spawn";
 import { expect, it } from "vitest";
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -17,8 +18,13 @@ it("app shutdown kills catalogue probes too and prevents a late probe spawning",
     process.env.PATH = `${root}${delimiter}${pathBefore ?? ""}`;
     const probe = crossSpawn.sync("opencode", ["--version"], { encoding: "utf8", timeout: 5000 });
     expect(probe.stdout?.trim(), probe.stderr || probe.error?.message).toBe("1.18.29-test");
+    const managed = crossSpawn.sync("opencode", ["--version"], { cwd: root, env: harnessEnv(), encoding: "utf8", timeout: 5000 });
+    expect(managed.stdout?.trim(), managed.stderr || managed.error?.message).toBe("1.18.29-test");
     servers.push(new OpenCodeServer(root, {}, {}));
-    await servers[0]!.ready;
+    let stderr = "";
+    servers[0]!.child.stderr?.on("data", chunk => { stderr = (stderr + String(chunk)).slice(-2000); });
+    try { await servers[0]!.ready; }
+    catch (error) { throw new Error(`${String(error)}; fixtureStarted=${existsSync(join(root, "launch.json"))}; stderr=${stderr}`); }
     const configHome = JSON.parse(readFileSync(join(root, "launch.json"), "utf8")).configHome;
     await shutdownOpenCode();
     expect(() => process.kill(servers[0]!.child.pid!, 0)).toThrow();
