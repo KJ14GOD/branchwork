@@ -5,8 +5,9 @@
 import { spawn, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(new URL(".", import.meta.url).pathname, "..");
+const root = fileURLToPath(new URL("../", import.meta.url));
 
 const envFile = resolve(root, ".env");
 if (existsSync(envFile)) {

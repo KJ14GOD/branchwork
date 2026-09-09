@@ -1,0 +1,67 @@
+name: Windows checks
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    name: Windows build, tests and desktop
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Install pnpm
+        run: npm install --global pnpm@10.12.1
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Start isolated PostgreSQL
+        run: ./scripts/ci/windows-postgres.ps1
+      - name: Build
+        run: pnpm build
+      - name: Type check
+        run: pnpm typecheck
+      - name: Lint
+        run: pnpm lint
+      - name: Contract tests
+        run: pnpm --filter @novus/contracts test
+      - name: Control-plane tests
+        run: pnpm --filter @novus/control-plane test
+      - name: Desktop logic and OpenCode protocol tests
+        run: pnpm --filter @novus/desktop exec vitest run --config vitest.windows.config.ts
+      - name: Windows mission, approval, terminal and reopen
+        run: pnpm --filter @novus/desktop e2e e2e/windows.spec.ts
+      - name: Build unsigned Windows installer
+        run: pnpm --filter @novus/desktop package:win --publish never
+      - name: Launch packaged Windows app
+        env:
+          NOVUS_PACKAGED_BINARY: release/win-unpacked/Novus.exe
+        run: pnpm --filter @novus/desktop e2e e2e/packaged.spec.ts
+      - name: Save Windows evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-evidence-${{ github.run_id }}
+          path: apps/desktop/e2e/evidence/25[8-9]-windows-*.png
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Save unsigned installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: novus-windows-unsigned-${{ github.run_id }}
+          path: apps/desktop/release/*.exe
+          if-no-files-found: error
+          retention-days: 7

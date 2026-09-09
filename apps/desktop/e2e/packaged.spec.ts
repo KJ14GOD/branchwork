@@ -17,7 +17,9 @@ import { join, resolve } from "node:path";
 
 const desktopRoot = resolve(__dirname, "..");
 const evidenceDir = join(desktopRoot, "e2e", "evidence");
-const packagedBinary = join(desktopRoot, "release", "mac-arm64", "Novus.app", "Contents", "MacOS", "Novus");
+const packagedBinary = process.env.NOVUS_PACKAGED_BINARY ? resolve(desktopRoot, process.env.NOVUS_PACKAGED_BINARY) : join(desktopRoot, "release", "mac-arm64", "Novus.app", "Contents", "MacOS", "Novus");
+
+if (process.env.NOVUS_PACKAGED_BINARY && !existsSync(packagedBinary)) throw new Error("Requested packaged binary does not exist");
 
 describe.skipIf(!existsSync(packagedBinary))("the packaged app", () => {
   it("launches from the built bundle and lands on a real surface", async () => {
@@ -37,7 +39,7 @@ describe.skipIf(!existsSync(packagedBinary))("the packaged app", () => {
       // Evidence only for the signed-out landing: a signed-in shell here is
       // somebody's real missions, and the evidence directory is the repo's.
       if ((await page.getByTestId("sign-in-button").count()) > 0) {
-        await page.screenshot({ path: join(evidenceDir, "230-packaged-app-signed-out.png") });
+        await page.screenshot({ path: join(evidenceDir, process.platform === "win32" ? "259-windows-packaged-sign-in.png" : "230-packaged-app-signed-out.png") });
       }
     } finally {
       await app.close();

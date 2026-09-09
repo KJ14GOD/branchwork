@@ -2,7 +2,7 @@ Purpose: Entry point to the Novus repository. Says what Novus is, who it is for,
 Authoritative for: the one-sentence definition, the intended user, the wedge, the Golden V0 workflow narrative, the repository map.
 Not authoritative for: product scope and domain model (PRODUCT.md), visual system (DESIGN.md), system design (ARCHITECTURE.md), status (PROGRESS.md), recorded decisions (DECISIONS.md), agent working rules (AGENTS.md).
 Update when: the definition, wedge, or Golden V0 workflow changes, or a file is added to or removed from the repository root.
-Last reviewed: 2026-09-07
+Last reviewed: 2026-09-08
 
 # Novus
 
@@ -74,10 +74,12 @@ What exists versus what is planned is recorded only in [PROGRESS.md](PROGRESS.md
 
 Prerequisites: [pnpm](https://pnpm.io), [Docker](https://www.docker.com) (runs the local PostgreSQL container `pnpm dev` starts and migrates automatically), and a supported coding CLI installed with an available model: [Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://developers.openai.com/codex/cli/), or [OpenCode](https://opencode.ai/docs/). OpenCode uses its own provider login, available free models, or a configured local provider such as Ollama. Novus does not collect provider keys.
 
-1. `pnpm install`
+1. Install Node.js 22 or newer and pnpm 10.12.1, then run `pnpm install`.
 2. Create a GitHub OAuth App at [github.com/settings/developers](https://github.com/settings/developers) with callback URL `http://127.0.0.1:4460/auth/github/callback`, then copy `.env.example` to `.env` and fill in `NOVUS_GITHUB_CLIENT_ID` / `NOVUS_GITHUB_CLIENT_SECRET`.
-3. `pnpm dev` — starts PostgreSQL in Docker, the control plane, and the desktop app.
+3. `pnpm build`, then `pnpm dev` — starts PostgreSQL in Docker, the control plane, and the desktop app.
 
 This runs one participant on one machine against a local Postgres instance. Trying the multiplayer flow (a second person joining a mission, requesting and receiving control) needs a second machine signed in with the same GitHub OAuth App pointed at the same control plane. Cloud-hosted execution is not built yet — see [PROGRESS.md](PROGRESS.md) for current status.
+
+Windows checks run in GitHub Actions on each pull request and pushes to main or codex branches. Successful runs provide an unsigned Windows installer as a seven-day artifact. See [PROGRESS.md](PROGRESS.md) for the tested coverage and remaining Windows limitations.
 
 Do not add root Markdown files without a recorded decision; see [AGENTS.md](AGENTS.md#rules).

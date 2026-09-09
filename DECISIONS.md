@@ -3510,3 +3510,15 @@ Use the existing checkpoint and evidence paths. Record reported usage and priced
 **Alternatives.** A presentation-only approval card would not stop workflows started outside Novus. GitHub environment protection is the actual gate. Copying raw logs into the event store would duplicate potentially sensitive output; the app shows job and step outcomes and links to GitHub logs instead.
 **Consequences.** A durable request record and attributed request/result events surround each review. Repeating the same request id never repeats the remote mutation; lost responses are stated as unknown, with no automatic retry. A reserved act with no outcome after two minutes becomes unknown on the next review request; the recovery is event-recorded and never repeats the act. Reads poll only while the Actions section is mounted, every fifteen seconds after the previous read settles. Lists have explicit bounds and disclose truncation. GitHub plan and repository rules determine whether deployment review exists; no rule is configured or bypassed automatically. Enterprise SSO and cloud execution remain deferred.
 **Revisit when.** Customers need repository-wide history, in-app raw log storage, protection-rule administration, or automatic reconciliation of uncertain review outcomes. GitHub does not offer a compare-and-swap attempt parameter on deployment review: Novus rechecks the attempt before posting, and GitHub's pending-review gate remains authoritative during the remaining race window.
+
+## D-248 — Windows checks run on an actual hosted Windows machine
+
+**Context.** The owner requested GitHub Actions and Windows checks before sharing Novus with a Windows user. D-229 added Windows paths without a live Windows run. The development launcher still interpreted a file URL pathname as an OS path.
+
+**Decision.** Add a bounded Windows Server 2025 workflow with build, static checks, all contract/server tests, an explicitly listed portable desktop suite, a real Electron mission/approval/terminal/reopen test using fake providers, and unsigned NSIS packaging plus a packaged launch. Use `fileURLToPath` in the development launcher so drive letters and escaped spaces resolve correctly. Keep Unix and Apple fixtures in the existing full gate; do not disguise them as Windows tests or weaken their assertions.
+
+**Alternatives.** Simulating a platform flag on macOS cannot exercise Windows spawning, native dependencies or paths. A Windows CI pass cannot replace a Windows 11 user running the installer and authenticating a real provider.
+
+**Consequences.** GitHub Actions uses read-only permissions and no account secrets. Superseded runs cancel, jobs time out after 30 minutes, and installer/evidence artifacts expire after seven days. Packaging never publishes a release. The Windows result belongs in PROGRESS.md independently of live-provider proof. Product roles, state transitions and design tokens are unchanged.
+
+**Revisit when.** A Windows 11 machine is available for the real login and agent run, or additional Unix-dependent suites are made portable.

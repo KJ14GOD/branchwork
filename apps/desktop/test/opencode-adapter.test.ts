@@ -28,6 +28,7 @@ beforeEach(() => {
   git(repo, "branch", "novus/m-opencodetest");
   copyFileSync(join(__dirname, "fixtures/opencode.cjs"), join(root, "opencode"));
   chmodSync(join(root, "opencode"), 0o755);
+  if (process.platform === "win32") writeFileSync(join(root, "opencode.cmd"), `@echo off\r\n"${process.execPath}" "${join(root, "opencode")}" %*\r\n`);
   writeFileSync(join(root, "mode"), "approval");
   originalPath = process.env.PATH; originalConfig = process.env.XDG_CONFIG_HOME;
   process.env.PATH = `${root}${delimiter}${originalPath ?? ""}`;

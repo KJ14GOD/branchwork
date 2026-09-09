@@ -11,6 +11,7 @@ it("app shutdown kills catalogue probes too and prevents a late probe spawning",
   try {
     copyFileSync(join(__dirname, "fixtures/opencode.cjs"), join(root, "opencode"));
     chmodSync(join(root, "opencode"), 0o755);
+    if (process.platform === "win32") writeFileSync(join(root, "opencode.cmd"), `@echo off\r\n"${process.execPath}" "${join(root, "opencode")}" %*\r\n`);
     writeFileSync(join(root, "mode"), "approval");
     process.env.PATH = `${root}${delimiter}${pathBefore ?? ""}`;
     servers.push(new OpenCodeServer(root, {}, {}));

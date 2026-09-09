@@ -306,3 +306,9 @@ Named failure modes with defined behavior — these are contracts, not aspiratio
 - **Integration tests** with a fake harness adapter (scripted activity, boundaries, approvals) so multiplayer flows are tested without model calls.
 - **Repository-continuity tests**: branch creation from an exact SHA, checkpoint/push guards, update detection, explicit sync at a boundary, conflict preservation, and reconstruction in a replacement workspace.
 - **Live proof**: the Golden V0 workflow executed by two real clients against a real deployment is the only thing that marks M1 complete ([PROGRESS.md](PROGRESS.md)); deterministic suites never substitute for it.
+
+### Windows continuous integration
+
+D-248 adds `.github/workflows/windows.yml` on pushes to main and codex branches, pull requests, and manual dispatch. One Windows Server 2025 runner builds, typechecks and lints the workspace; runs all contract and control-plane tests against an isolated loopback PostgreSQL cluster; runs the explicit portable desktop suite in `vitest.windows.config.ts`; exercises Electron sign-in with fake OAuth, a mission approval, a real worktree/checkpoint, native terminal execution and session restoration; builds the unsigned NSIS installer and launches the packaged executable. The packaged test fails if an explicitly requested binary is missing. Unix process fixtures and Apple speech tests remain in the full repository gate and are not claimed as Windows coverage.
+
+The workflow has read-only repository permission, no provider or OAuth secrets, SHA-pinned actions, a 30-minute deadline, cancellation of superseded runs, and seven-day artifact retention. CI does not publish releases or deploy applications. Screenshots remain under `apps/desktop/e2e/evidence/`. Hosted Windows Server coverage does not establish Windows 11 installer behavior, real browser OAuth, real agent-provider authentication, or macOS-only capabilities.
