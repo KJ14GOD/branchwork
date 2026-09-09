@@ -96,7 +96,7 @@ it("creates a mission, approves a write, runs a native terminal and restores the
     expect(realpathSync(readFileSync(join(worktree, "terminal-proof.txt"), "utf8"))).toBe(realpathSync(worktree));
     if (process.platform === "win32") {
       mkdirSync(evidence, { recursive: true });
-      await page.screenshot({ path: join(evidence, "258-windows-mission-terminal.png") });
+      await page.screenshot({ animations: "disabled", path: join(evidence, "258-windows-mission-terminal.png") });
     }
     await app.close();
     app = await launch();

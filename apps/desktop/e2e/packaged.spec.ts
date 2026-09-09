@@ -39,7 +39,7 @@ describe.skipIf(!existsSync(packagedBinary))("the packaged app", () => {
       // Evidence only for the signed-out landing: a signed-in shell here is
       // somebody's real missions, and the evidence directory is the repo's.
       if ((await page.getByTestId("sign-in-button").count()) > 0) {
-        await page.screenshot({ path: join(evidenceDir, process.platform === "win32" ? "259-windows-packaged-sign-in.png" : "230-packaged-app-signed-out.png") });
+        await page.screenshot({ animations: "disabled", path: join(evidenceDir, process.platform === "win32" ? "259-windows-packaged-sign-in.png" : "230-packaged-app-signed-out.png") });
       }
     } finally {
       await app.close();

@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22'
+      - name: Clear prior Windows evidence
+        run: Remove-Item -Path apps/desktop/e2e/evidence/25[8-9]-windows-*.png -ErrorAction SilentlyContinue
       - name: Install pnpm
         run: npm install --global pnpm@10.12.1
       - name: Install dependencies
