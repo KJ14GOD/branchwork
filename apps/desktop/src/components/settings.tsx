@@ -5,7 +5,8 @@ import {
   themePreference,
   THEME_CHOICES,
   THEME_EVENT,
-  type ThemePreference
+  type ThemePreference,
+  type BuiltInTheme
 } from "../theme";
 
 /** The resolved theme as the document root wears it, kept live so the
@@ -52,7 +53,7 @@ function DisplayGlyph() {
   );
 }
 
-const CHOICE_GLYPHS: Record<ThemePreference, () => React.ReactElement> = {
+const CHOICE_GLYPHS: Record<BuiltInTheme, () => React.ReactElement> = {
   light: SunGlyph,
   dark: MoonGlyph,
   system: DisplayGlyph

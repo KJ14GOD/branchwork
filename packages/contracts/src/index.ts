@@ -4245,6 +4245,11 @@ export interface NovusBridge {
     diagnostics(): Promise<IpcResult<Diagnostics>>;
     openLogs(): Promise<IpcResult<null>>;
     openCrashReports(): Promise<IpcResult<null>>;
+    /** A theme file the person chose (D-254): its text and file name, or
+     *  null when the dialog was dismissed. Read only; the renderer judges it. */
+    importTheme(): Promise<IpcResult<{ text: string; name: string } | null>>;
+    /** Writes a theme file where the person chooses; null when dismissed. */
+    exportTheme(input: { name: string; text: string }): Promise<IpcResult<{ path: string } | null>>;
   };
   /** Lent accounts (D-217): the machine's own claude.ai connectors, and the
    *  person's own On/Off per connector — the first-run Lend page and the

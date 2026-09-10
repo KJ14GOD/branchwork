@@ -64,8 +64,9 @@ truth_leak=$(grep -rlE '^(Mission|Workstream|Execution|Direction|ControlLease|Re
 grads=$(grep -rln 'linear-gradient\|radial-gradient\|conic-gradient' --include='*.css' --include='*.tsx' --include='*.ts' apps/ packages/ src/ services/ clients/ 2>/dev/null || true)
 [ -z "$grads" ] || { echo "$grads" | sed 's/^/GATE FAIL: gradient in source: /'; FAIL=1; }
 
-# 10. No raw color values in component source (tokens only; token definition files exempt via 'tokens' in path).
-rawhex=$(grep -rlnE '#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(' --include='*.tsx' --include='*.ts' apps/ packages/ src/ services/ clients/ 2>/dev/null | grep -v tokens || true)
+# 10. No raw color values in component source (tokens only; token definition files exempt via 'tokens' in path;
+#     tests and specs exempt since D-254 — a theme fixture is a colour by definition, and neither is component code).
+rawhex=$(grep -rlnE '#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(' --include='*.tsx' --include='*.ts' apps/ packages/ src/ services/ clients/ 2>/dev/null | grep -v tokens | grep -v '/test/\|/e2e/' || true)
 [ -z "$rawhex" ] || { echo "$rawhex" | sed 's/^/GATE FAIL: raw color value in component source: /'; FAIL=1; }
 
 # 11. Any implementation change requires a PROGRESS.md reconciliation in the same working change.

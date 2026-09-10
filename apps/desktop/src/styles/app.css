@@ -8106,3 +8106,52 @@ span.trace-attachment-transcript:hover {
   flex-basis: 100%;
   min-width: 0;
 }
+
+/* ---------- The kit (D-254) ---------- */
+/* The primitives in the theme in use, on the Appearance page: samples laid
+   in rows with a quiet label, every sample the real class it is elsewhere. */
+.kit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+}
+
+.kit-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  min-height: 32px;
+}
+
+.kit-label {
+  flex: none;
+  width: 9ch;
+  font: var(--type-meta);
+  color: var(--text-3);
+}
+
+.kit-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.kit-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.kit-rail .side-row {
+  width: auto;
+  margin: 0;
+  padding: var(--s-1) var(--s-3);
+  border-radius: var(--r-control);
+  background: var(--surface-1);
+}
+
+.kit-input {
+  max-width: 320px;
+}

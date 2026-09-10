@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { NovusBridge } from "@novus/contracts";
@@ -106,6 +106,10 @@ async function launch(dataDir: string, paceMs?: number): Promise<{ app: Electron
       NOVUS_FAKE_HARNESS: "1",
       NOVUS_FAKE_CONNECTORS: "[]",
       NOVUS_USER_DATA_DIR: dataDir,
+      // The theme dialogs stand aside under test (D-254): import reads this
+      // file, export writes beside it.
+      NOVUS_E2E_THEME_FILE: join(dataDir, "ink.novus-theme.json"),
+      NOVUS_E2E_EXPORT_DIR: dataDir,
       ...(paceMs ? { NOVUS_FAKE_HARNESS_PACE_MS: String(paceMs) } : {})
     }
   });
@@ -419,6 +423,32 @@ describe("the missions a person has open", () => {
     await expect.poll(async () => await pane.innerText(), { timeout: 10_000 }).toMatch(/Crash reports[\s\S]*None on this Mac[\s\S]*Log[\s\S]*KB/);
     expect(await page.getByTestId("settings-diagnostics-log").isVisible()).toBe(true);
     await shot(page, "261-settings-about-updates.png");
+    // Appearance (D-254): a theme file imported, applied over the base, listed
+    // beside the built-ins, exported back as the same file; and the kit.
+    writeFileSync(
+      join(userDataDir, "ink.novus-theme.json"),
+      JSON.stringify({ novusTheme: 1, name: "Ink", base: "dark", tokens: { "--accent": "#ff8800", "--bg": "#050507" } })
+    );
+    await page.locator(".settings-nav-item").filter({ hasText: "Appearance" }).click();
+    await page.getByTestId("theme-import").click();
+    await expect.poll(async () => pane.innerText(), { timeout: 10_000 }).toContain("Ink");
+    await expect
+      .poll(async () => page.evaluate(() => document.documentElement.style.getPropertyValue("--accent").trim()), { timeout: 10_000 })
+      .toBe("#ff8800");
+    expect(await page.locator("[data-testid^='theme-use-']").first().innerText()).toBe("In use");
+    await shot(page, "262-settings-appearance-themes.png");
+    await page.getByTestId("settings-kit").scrollIntoViewIfNeeded();
+    await shot(page, "263-settings-kit.png");
+    await page.getByTestId("theme-export").click();
+    await expect.poll(async () => existsSync(join(userDataDir, "ink.novus-theme.json")), { timeout: 10_000 }).toBe(true);
+    const exported = JSON.parse(readFileSync(join(userDataDir, "ink.novus-theme.json"), "utf8")) as { name: string; tokens: Record<string, string> };
+    expect(exported.name).toBe("Ink");
+    expect(exported.tokens["--accent"]).toBe("#ff8800");
+    // Back to the reference, so nothing after this test is themed.
+    await page.locator(".settings-theme .segment-tab").filter({ hasText: "Dark" }).first().click();
+    await expect
+      .poll(async () => page.evaluate(() => document.documentElement.style.getPropertyValue("--accent").trim()), { timeout: 10_000 })
+      .toBe("");
     await page.keyboard.press("Escape");
     await page.getByTestId("settings-dialog").waitFor({ state: "detached", timeout: 10_000 });
   }, 180_000);

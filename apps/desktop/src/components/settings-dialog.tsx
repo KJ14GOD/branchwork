@@ -3,6 +3,8 @@ import type { DictationSettings, SetupProbeResponse, Diagnostics, UpdateStatus }
 import { novus } from "../bridge";
 import { focusQuietly } from "./dialog";
 import { applyTheme, themePreference, THEME_CHOICES, type ThemePreference } from "../theme";
+import { currentThemeFile, listThemes, parseThemeFile, removeTheme, saveTheme, themeFileOf, type CustomTheme } from "../themes";
+import { ClaudeGlyph } from "./identity";
 import {
   BINDING_ACTIONS,
   chordFromEvent,
@@ -246,6 +248,35 @@ export function SettingsDialog({
   const [page, setPage] = useState<Page>("account");
   const [query, setQuery] = useState("");
   const [preference, setPreference] = useState<ThemePreference>(() => themePreference());
+  // This machine's custom themes (D-254), re-read after an import or a removal.
+  const [themes, setThemes] = useState<CustomTheme[]>(() => listThemes());
+  const [themeNote, setThemeNote] = useState<string | null>(null);
+  const importTheme = async () => {
+    setThemeNote(null);
+    const picked = await novus().system.importTheme();
+    if (!picked.ok) {
+      setThemeNote(picked.message);
+      return;
+    }
+    if (picked.value === null) return;
+    const read = parseThemeFile(picked.value.text);
+    if (!read.ok) {
+      setThemeNote(read.reason);
+      return;
+    }
+    const saved = saveTheme(read.theme);
+    setThemes(listThemes());
+    choose(`custom:${saved.id}`);
+  };
+  const exportTheme = async () => {
+    setThemeNote(null);
+    const current = preference.startsWith("custom:") ? themes.find((theme) => `custom:${theme.id}` === preference) ?? null : null;
+    const base = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+    const text = current ? themeFileOf(current) : currentThemeFile(document.documentElement, base === "light" ? "Light" : "Dark", base);
+    const written = await novus().system.exportTheme({ name: current?.name ?? (base === "light" ? "Light" : "Dark"), text });
+    if (!written.ok) setThemeNote(written.message);
+    else if (written.value) setThemeNote(`Saved to ${written.value.path}`);
+  };
   const [probe, setProbe] = useState<SetupProbeResponse | null>(null);
   const [repos, setRepos] = useState<
     { name: string; defaultBranch: string; onThisMachine: boolean }[] | null
@@ -523,7 +554,125 @@ export function SettingsDialog({
             <h2 className="settings-page-title">Appearance</h2>
             <Card heading="Theme">
               <CardRow title="Theme" description="Light, dark, or follow the system" trailing={themeSegment} />
+              {themes.map((theme) => (
+                <CardRow
+                  key={theme.id}
+                  title={theme.name}
+                  description={`Custom · over ${theme.base}`}
+                  trailing={
+                    <span className="settings-key-controls">
+                      <button
+                        className={preference === `custom:${theme.id}` ? "chip-button active" : "chip-button"}
+                        aria-pressed={preference === `custom:${theme.id}`}
+                        onClick={() => choose(`custom:${theme.id}`)}
+                        data-testid={`theme-use-${theme.id}`}
+                      >
+                        {preference === `custom:${theme.id}` ? "In use" : "Use"}
+                      </button>
+                      <button
+                        className="chip-button"
+                        onClick={() => {
+                          removeTheme(theme.id);
+                          setThemes(listThemes());
+                          if (preference === `custom:${theme.id}`) choose("dark");
+                        }}
+                        data-testid={`theme-remove-${theme.id}`}
+                      >
+                        Remove
+                      </button>
+                    </span>
+                  }
+                />
+              ))}
+              <CardRow
+                title="Theme files"
+                description="A theme is one JSON file: a name, a base of dark or light, and the colour tokens it changes. Nothing else — spacing, type and motion stay Novus's own."
+                trailing={
+                  <span className="settings-key-controls">
+                    <button className="chip-button" onClick={() => void importTheme()} data-testid="theme-import">
+                      Import theme…
+                    </button>
+                    <button className="chip-button" onClick={() => void exportTheme()} data-testid="theme-export">
+                      Export current…
+                    </button>
+                  </span>
+                }
+              />
             </Card>
+            {themeNote !== null && (
+              <p className="settings-hint" data-testid="theme-note">
+                {themeNote}
+              </p>
+            )}
+            <Card heading="Kit">
+              {/* The primitives every surface is built from, in the theme in
+                  use (D-254): the reference a person can come back to, live. */}
+              <div className="kit" data-testid="settings-kit">
+                <div className="kit-row">
+                  <span className="kit-label">Buttons</span>
+                  <button className="btn btn-primary">Primary</button>
+                  <button className="btn btn-secondary">Secondary</button>
+                  <button className="btn btn-text">Text</button>
+                  <button className="btn btn-secondary" disabled>Disabled</button>
+                </div>
+                <div className="kit-row">
+                  <span className="kit-label">Chips</span>
+                  <button className="chip-button"><ClaudeGlyph className="chip-glyph" />Fable 5.1</button>
+                  <button className="chip-button">Effort · high</button>
+                  <button className="chip-button">Permissions · Ask every time</button>
+                  <button className="chip-button active">In use</button>
+                </div>
+                <div className="kit-row">
+                  <span className="kit-label">Segments</span>
+                  <div className="settings-theme" role="group" aria-label="Sample">
+                    <button className="segment-tab active">On</button>
+                    <button className="segment-tab">Off</button>
+                  </div>
+                </div>
+                <div className="kit-row">
+                  <span className="kit-label">State line</span>
+                  <span className="state-line kit-inline">
+                    <span className="state-name">Agent running</span>
+                    <span className="state-detail">— writing the fake turn file</span>
+                  </span>
+                </div>
+                <div className="kit-row">
+                  <span className="kit-label">Rail rows</span>
+                  <span className="kit-rail">
+                    <span className="side-row side-child kit-inline">
+                      <span className="side-name">Ship the session guard</span>
+                      <span className="side-approaches tone-warn side-needs">needs your approval</span>
+                    </span>
+                    <span className="side-row side-session kit-inline">
+                      <span className="side-name">write the fake turn file</span>
+                      <span className="side-needs side-state"> · working</span>
+                    </span>
+                    <span className="side-row side-session kit-inline">
+                      <span className="side-name">add tests</span>
+                      <span className="side-unread" title="Finished since you last looked" />
+                    </span>
+                  </span>
+                </div>
+                <div className="kit-row">
+                  <span className="kit-label">Words</span>
+                  <span className="tone-warn">needs you</span>
+                  <span className="quiet">· queued · 2</span>
+                  <span className="inline-error kit-inline" role="presentation">1 mission is still working — stop it first.</span>
+                </div>
+                <div className="kit-row">
+                  <span className="kit-label">Diff</span>
+                  <span className="change-counts mono">
+                    <span className="count-add">+3</span> <span className="count-del">−1</span>
+                  </span>
+                  <span className="mono">a4b1429b</span>
+                </div>
+                <div className="kit-row">
+                  <span className="kit-label">Field</span>
+                  <input className="settings-input kit-input" defaultValue="Direct Claude Code…" readOnly />
+                </div>
+              </div>
+            </Card>
+            <p className="settings-hint">Every surface is built from these. A theme changes their colours and nothing else.</p>
           </>
         ) : page === "notifications" ? (
           <>

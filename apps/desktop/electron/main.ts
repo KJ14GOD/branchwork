@@ -15,7 +15,7 @@ import { execFile, spawn } from "node:child_process";
 import crossSpawn from "cross-spawn";
 import { homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { openableExtensionOf, openRefusalFor } from "./artifact-open";
 import { createNotifier, type NotificationPrefs, type Notifier } from "./notifications";
 import { discoverConnectors, setConnectorLent } from "./connectors";
@@ -859,6 +859,49 @@ function registerIpc(): void {
     mkdirSync(diagnostics.summary().crashReportsPath, { recursive: true });
     const failure = await shell.openPath(diagnostics.summary().crashReportsPath);
     return failure ? { ok: false as const, code: "open_failed", message: failure } : ok(null);
+  });
+
+  // Theme files (D-254): the main process only opens and saves the file the
+  // person points at; what it holds is the renderer's to judge and keep.
+  ipcMain.handle("novus:system:import-theme", async () => {
+    const e2eFile = process.env.NOVUS_E2E_THEME_FILE;
+    let path: string | undefined = e2eFile;
+    if (!path) {
+      const chosen = await dialog.showOpenDialog({
+        title: "Import theme",
+        properties: ["openFile"],
+        filters: [{ name: "Novus theme", extensions: ["json"] }]
+      });
+      path = chosen.canceled ? undefined : chosen.filePaths[0];
+    }
+    if (!path) return ok(null);
+    try {
+      return ok({ text: readFileSync(path, "utf8").slice(0, 64_000), name: basename(path) });
+    } catch (error) {
+      return { ok: false as const, code: "import_failed", message: error instanceof Error ? error.message : "The theme could not be read." };
+    }
+  });
+  ipcMain.handle("novus:system:export-theme", async (_event, raw: unknown) => {
+    const parsed = z.object({ name: z.string().min(1).max(60), text: z.string().max(64_000) }).safeParse(raw);
+    if (!parsed.success) return { ok: false as const, code: "invalid_input", message: "Malformed theme." };
+    const fileName = `${parsed.data.name.replace(/[^a-z0-9-]+/gi, "-").toLowerCase()}.novus-theme.json`;
+    const e2eDir = process.env.NOVUS_E2E_EXPORT_DIR;
+    let target: string | undefined = e2eDir ? join(e2eDir, fileName) : undefined;
+    if (!target) {
+      const chosen = await dialog.showSaveDialog({
+        title: "Export theme",
+        defaultPath: join(app.getPath("downloads"), fileName),
+        filters: [{ name: "Novus theme", extensions: ["json"] }]
+      });
+      target = chosen.canceled ? undefined : chosen.filePath;
+    }
+    if (!target) return ok(null);
+    try {
+      writeFileSync(target, parsed.data.text, "utf8");
+      return ok({ path: target });
+    } catch (error) {
+      return { ok: false as const, code: "export_failed", message: error instanceof Error ? error.message : "The theme could not be written." };
+    }
   });
 
   // Lent accounts (D-217): the machine's own claude.ai connectors, enumerated

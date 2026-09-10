@@ -37,7 +37,9 @@ const novus: NovusBridge = {
     setUpdatePrefs: (input) => ipcRenderer.invoke("novus:system:set-update-prefs", input),
     diagnostics: () => ipcRenderer.invoke("novus:system:diagnostics"),
     openLogs: () => ipcRenderer.invoke("novus:system:open-logs"),
-    openCrashReports: () => ipcRenderer.invoke("novus:system:open-crash-reports")
+    openCrashReports: () => ipcRenderer.invoke("novus:system:open-crash-reports"),
+    importTheme: () => ipcRenderer.invoke("novus:system:import-theme"),
+    exportTheme: (input) => ipcRenderer.invoke("novus:system:export-theme", input)
   },
   connectors: {
     list: () => ipcRenderer.invoke("novus:connectors:list"),
