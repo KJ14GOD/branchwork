@@ -3597,6 +3597,8 @@ Use the existing checkpoint and evidence paths. Record reported usage and priced
 
 **Revisit when.** The first tag is cut — the release job is proven only then — or a load run crosses the bar, which is the moment the bar is either raised with a reason or the route made faster.
 
+**Amended 2026-09-10 — the bar crossed on the first run, and was raised with its reason.** The first hosted run (run 34511127802, two vCPUs, fifty connections, twenty seconds, no think time): health p95 10 ms at 7,608 requests/s, the mission list p95 92 ms at 624/s, one mission's detail p95 268 ms at 203/s, no errors. By Little's law fifty clients over 203/s is 246 ms of queueing for about 5 ms of server time per detail read; the route assembles fourteen reads, most one after another, which is a later gain of a few milliseconds, not the cause. A desktop polls every two seconds, so fifty real clients would put a tenth of this load on the server. The bar becomes 500 ms — twice the slowest baseline, so a real regression trips it — and the packaging steps carry the workflow token, which electron-builder demands to resolve the publish config even with publishing off. The first push after D-250 had failed both hosted jobs on that, and on git's newer worktree wording (D-074's retirement), before either was proven.
+
 ## D-254 — Themes are files, and the kit is on the page
 
 **Context.** The owner (2026-09-10): "there is no theme I used to create this, like a doc I can go back to, a UI toolkit"; "I want customized themes how VS Code and Cursor do it; I have light and dark, that's cool." DESIGN.md held the tokens, and `tokens.css` held their values, but nothing let a person see the primitives together or change the colours without editing the product.

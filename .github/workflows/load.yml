@@ -8,6 +8,9 @@ on:
       seconds:
         description: Seconds per route
         default: '20'
+      p95_ms:
+        description: The p95 bar in milliseconds, per route
+        default: '500'
   schedule:
     - cron: '17 6 * * 1'
 permissions:
@@ -44,6 +47,13 @@ jobs:
         env:
           NOVUS_LOAD_CONNECTIONS: ${{ github.event.inputs.connections || '50' }}
           NOVUS_LOAD_SECONDS: ${{ github.event.inputs.seconds || '20' }}
+          # The bar is a regression tripwire, not a promise (D-253 amended
+          # 2026-09-10). Baseline on the two-core hosted runner at fifty
+          # connections with no think time: health p95 10 ms, the mission
+          # list 92 ms, one mission's detail 268 ms — saturation, not a slow
+          # route (about 5 ms of server time per detail read). Twice the
+          # slowest baseline trips it.
+          NOVUS_LOAD_P95_MS: ${{ github.event.inputs.p95_ms || '500' }}
         run: node scripts/ci/load.mjs
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
