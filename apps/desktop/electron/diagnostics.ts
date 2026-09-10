@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { redactShapes } from "./secret-policy";
 
 /**
  * What the machine keeps about its own failures (D-250): the main process's
@@ -87,7 +88,10 @@ export function createDiagnostics(deps: DiagnosticsDeps): Diagnostics {
       try {
         mkdirSync(deps.logsPath, { recursive: true });
         if (sizeOf(logFile) >= maxBytes) rotate();
-        appendFileSync(logFile, `${now().toISOString()} ${line.replace(/\r?\n/g, "\n    ")}\n`);
+        // The console's words are not redacted at their source; the shape pass
+        // (D-249) runs here so a token quoted in a warning never lands on disk,
+        // and the file is the person's own (the review of 2026-09-10).
+        appendFileSync(logFile, `${now().toISOString()} ${redactShapes(line).replace(/\r?\n/g, "\n    ")}\n`, { mode: 0o600 });
       } catch {
         /* a log that cannot be written must never take the app with it */
       }

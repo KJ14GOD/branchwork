@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LOG_NAME, countCrashReports, createDiagnostics, rotatedName } from "../electron/diagnostics";
@@ -30,6 +30,19 @@ describe("the diagnostics kept on this machine (D-250)", () => {
     expect(summary.logsPath).toBe(logs);
     expect(summary.logBytes).toBeGreaterThan(120);
     expect(summary.crashReports).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps a quoted credential off the disk, and keeps the file to its owner", () => {
+    const dir = mkdtempSync(join(tmpdir(), "novus-diagnostics-private-"));
+    const diagnostics = createDiagnostics({ logsPath: join(dir, "logs"), crashReportsPath: join(dir, "crashes") });
+    diagnostics.record("warn the harness said: GITHUB_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef012345 and Authorization: Bearer abc.def-ghi_jkl==");
+    const written = readFileSync(diagnostics.logFile, "utf8");
+    expect(written).not.toContain("ghp_");
+    expect(written).not.toContain("abc.def-ghi_jkl");
+    expect(written).toContain("GITHUB_TOKEN=[redacted]");
+    expect(written).toContain("Authorization: Bearer [redacted]");
+    if (process.platform !== "win32") expect(statSync(diagnostics.logFile).mode & 0o777).toBe(0o600);
     rmSync(dir, { recursive: true, force: true });
   });
 
