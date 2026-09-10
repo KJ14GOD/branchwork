@@ -279,6 +279,15 @@ export function closeTabs(set: WorkingSet, ids: readonly string[]): WorkingSet {
   return ids.reduce((current, id) => closeTab(current, id), set);
 }
 
+/** The tabs beside one, for the strip's menu (D-251): everything else, the
+ *  ones to its left, the ones to its right — in the order the strip shows. */
+export function tabsBeside(set: WorkingSet, id: string): { others: string[]; left: string[]; right: string[] } {
+  const index = set.tabs.findIndex((tab) => tab.id === id);
+  if (index === -1) return { others: [], left: [], right: [] };
+  const ids = set.tabs.map((tab) => tab.id);
+  return { others: ids.filter((other) => other !== id), left: ids.slice(0, index), right: ids.slice(index + 1) };
+}
+
 /**
  * Whether a failure to read a mission means the tab should go.
  *

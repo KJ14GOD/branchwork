@@ -309,12 +309,12 @@ describe("the missions a person has open", () => {
     expect((await tabLabels(page)).join("|")).toContain("Alpha one");
     expect((await tabLabels(page)).join("|")).toContain("Alpha two");
 
-    // Every tab names its project, whether or not a second project is open
-    // (D-066): a label that appears and disappears as siblings come and go
-    // makes a tab's meaning depend on its neighbours.
-    expect(await page.locator(".mission-tab-project").count()).toBe(
-      await page.getByTestId("mission-tab").count()
-    );
+    // Every tab sits in a group that names its project, whether or not a
+    // second project is open (D-066, regrouped by D-251): the name is said
+    // once per run of neighbours, and never disappears as siblings come and go.
+    expect(await page.getByTestId("mission-tab-group").count()).toBe(1);
+    expect(await page.getByTestId("mission-tab-group-label").count()).toBe(1);
+    expect((await page.getByTestId("mission-tab-group").first().getAttribute("data-project")) ?? "").not.toBe("");
 
     // Selecting a mission that is already open moves to its tab rather than
     // making a second one.
@@ -341,11 +341,17 @@ describe("the missions a person has open", () => {
     await openProject(page, betaName);
     await projectGroup(page, betaName).getByTestId("mission-row").filter({ hasText: "Beta one" }).click();
     await expect.poll(async () => (await tabLabels(page)).length, { timeout: 20_000 }).toBe(3);
-    await expect
-      .poll(async () => page.locator(".mission-tab-project").count(), { timeout: 20_000 })
-      .toBe(3);
-    const projectsNamed = await page.locator(".mission-tab-project").allInnerTexts();
+    // Two projects open: two groups, each named once.
+    await expect.poll(async () => page.getByTestId("mission-tab-group").count(), { timeout: 20_000 }).toBe(2);
+    const projectsNamed = await page.getByTestId("mission-tab-group-label").allInnerTexts();
     expect(projectsNamed.join("|")).toContain(betaName.slice(0, 12));
+    // The tab's menu (D-251): a right click offers the browser's own closes.
+    await page.getByTestId("mission-tab").first().click({ button: "right" });
+    await page.getByTestId("tab-menu").waitFor({ timeout: 5_000 });
+    expect(await page.getByTestId("tab-menu-close-left").isDisabled()).toBe(true);
+    expect(await page.getByTestId("tab-menu-close-right").isDisabled()).toBe(false);
+    await page.keyboard.press("Escape");
+    await expect.poll(async () => page.getByTestId("tab-menu").count(), { timeout: 5_000 }).toBe(0);
 
     // Mission tabs are not file tabs: nothing has opened a file, so the room
     // carries no strip of its own (D-048, D-055).

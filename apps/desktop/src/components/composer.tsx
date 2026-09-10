@@ -1380,16 +1380,6 @@ export function Composer({
             )}
           </div>
         )}
-        {swapTo !== null && chatHarness && (
-          /* One sentence on its own line, no buttons (D-232): the send itself
-             is the act, and nothing opens until the person sends. Above the
-             foot rather than in it — a sentence in the chip row crushed the
-             chips and pushed the send control off the box. */
-          <div className="composer-swap" data-testid="composer-swap">
-            This chat is {harnessName(chatHarness)}&apos;s. Send starts a new {harnessName(swapTo)} chat with
-            its transcript.
-          </div>
-        )}
         <div className="composer-foot" ref={footRef}>
           {attach && (
             <button
@@ -1426,6 +1416,19 @@ export function Composer({
               )}
               {modelLabel}
             </button>
+            {swapTo !== null && chatHarness && (
+              /* The other harness's model is chosen (D-232): the send starts a
+                 new chat with this one's transcript. Said in three words
+                 beside the chip, with the whole sentence on hover — the line
+                 of prose it used to be read as clutter (D-251, owner-hit). */
+              <span
+                className="composer-swap-note"
+                title={`This chat is ${harnessName(chatHarness)}'s. Send starts a new ${harnessName(swapTo)} chat with its transcript.`}
+                data-testid="composer-swap"
+              >
+                New {harnessName(swapTo)} chat
+              </span>
+            )}
             {openMenu === "model" && (
               /* Providers first, models in a flyout (D-233, owner-asked —
                  Codex's own picker shape): a provider row shows the vendor
@@ -1729,6 +1732,23 @@ export function Composer({
             </span>
           )}
 
+          {onStop && textValue.trim().length > 0 && !sending && (
+            /* Typing used to swap the square out for send, and the person
+               reaching for Stop mid-sentence found nothing (D-251, owner-hit:
+               "sometimes that stop button not working"). The square stays,
+               quieter, beside the send that queues the words. */
+            <button
+              className="send-button send-button-stop"
+              onClick={() => onStop()}
+              aria-label="Stop the running turn"
+              title="Stop the running turn"
+              data-testid="composer-stop"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+                <rect x="4.5" y="4.5" width="15" height="15" rx="2.5" />
+              </svg>
+            </button>
+          )}
           {onStop && textValue.trim().length === 0 && !sending ? (
             /* The running turn's own control, in the send position (D-206):
                a filled square reads as stop everywhere, and it sits where the

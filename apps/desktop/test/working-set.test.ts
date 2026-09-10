@@ -17,6 +17,7 @@ import {
   selectSession,
   selectTab,
   tabIsGone,
+  tabsBeside,
   type WorkingSet
 } from "../src/components/working-set";
 
@@ -422,4 +423,20 @@ describe("opening a mission AT a place (D-120)", () => {
   });
 });
 
-
+describe("the tabs beside one (D-251)", () => {
+  it("names the others, the left, and the right in strip order, and nothing for a stranger", () => {
+    let set = emptyWorkingSet;
+    let n = 0;
+    const mint = () => `t${(n += 1)}`;
+    set = openMission(set, "m1", "p", mint);
+    set = openMission(set, "m2", "p", mint);
+    set = openMission(set, "m3", "q", mint);
+    const ids = set.tabs.map((tab) => tab.id);
+    expect(tabsBeside(set, ids[1]!)).toEqual({ others: [ids[0], ids[2]], left: [ids[0]], right: [ids[2]] });
+    expect(tabsBeside(set, ids[0]!)).toEqual({ others: [ids[1], ids[2]], left: [], right: [ids[1], ids[2]] });
+    expect(tabsBeside(set, "nope")).toEqual({ others: [], left: [], right: [] });
+    // Closing to the right leaves the left and the tab itself.
+    const closed = closeTabs(set, tabsBeside(set, ids[0]!).right);
+    expect(closed.tabs.map((tab) => tab.id)).toEqual([ids[0]]);
+  });
+});

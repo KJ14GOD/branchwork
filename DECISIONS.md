@@ -3552,3 +3552,21 @@ Use the existing checkpoint and evidence paths. Record reported usage and priced
 **Amended 2026-09-10, after the security review.** The log is written through the shape redaction of D-249 and created private to its owner: the console's words are not redacted at their source, and a future warning that quotes a harness line must not put a token on disk. The unsigned Windows update path is an accepted risk until D-222's signing lands — no Windows release before it.
 
 **Revisit when.** The first signed release is made — then the channel is proven end to end from one build to the next, and the standing's words are checked against what the updater actually says; or when someone asks for crash reports to reach the team, which is an opt-in decision of its own.
+
+## D-251 — The first overhaul batch: what the owner saw, and what the walk found
+
+**Context.** The owner's audit of 2026-09-10 ("all I see is flaws"): a red line in the rail that never went away; the archived dialog growing with its list; the tab strip with no way to close the tabs beside one and no sign of which tabs share a project; the composer's other-harness sentence reading as clutter; a Stop that was sometimes not there; phrases folded and cut in places that should never fold. A click-everything walk of every surface at three widths (`e2e/audit.spec.ts`, opt-in) added what a person cannot see at once: the Overview's values running eighty pixels past the window, the login cut to *spike-u…* in the rail's corner, and every mission row losing seventy-eight pixels of its goal to an Archive control that was not showing.
+
+**Decision.** Each in its owner's terms, all in one batch:
+- **Strip.** Tabs of one project group under the project's name, said once per run of neighbours; a right click offers Close, Close others, Close to the left, Close to the right. The per-tab project label goes: the group is the indicator (D-066's "always name the project" holds at the group).
+- **Composer.** The stop square stays beside the send while the person types, quieter; the other-harness sentence becomes three words beside the model chip with the sentence on hover.
+- **State line.** Two rows: the sentence and its action on the first, the workspace's standing and the baton on the second.
+- **Rail.** A refusal about a moment leaves after eight seconds or the next attempt; the mission row's Archive takes no width until hovered (D-239's rule, one level down); the account corner's marks are 28px.
+- **Archived.** One height, the list scrolling inside without a scrollbar.
+- **Overview.** Values wrap inside the panel.
+
+**Alternatives.** A dot on same-project tabs (rejected: the rail retired dots for structure, D-133, and a second colour system is what "vibe coded" looks like). Keeping the per-tab project label beside the group's (rejected: the same name twice, both cut short). A universal timeout for every inline error (rejected: a refusal about standing state — a denied capability — must stay until the state changes).
+
+**Consequences.** `mission-tabs.tsx` groups and carries the menu over `tabsBeside` in `working-set.ts`; `composer.tsx` keeps the square and folds the sentence into a note; `project-room.tsx` moves the authority block to the workspace row, which now renders under every detail; `project-shell.tsx` times the refusal out, sizes the dialog, and puts the project row's `+` before its Remove so the keyboard reaches it first (the navigation spec's expectation since 2026-08-29, broken by D-235's control and left red); `app.css` carries each rule. `navigation.spec.ts` asserts groups and the menu deliberately in place of the per-tab label. The audit itself stays opt-in beside the specs, writes a punch list rather than asserting one, and is how the next batch is found.
+
+**Revisit when.** The owner's next walk names what this one missed — the audit's report is where to start.

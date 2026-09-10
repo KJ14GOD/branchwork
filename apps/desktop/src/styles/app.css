@@ -799,17 +799,39 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Which project this room is in — shown only when more than one is open, so a
-   working set inside one project never says its name on every tab, and capped
-   so context can never crowd out the thing it is context for. */
-.mission-tab-project {
-  flex: 0 1 auto;
-  min-width: 0;
+/* Tabs of one project sit together under its name, said once (D-251): the
+   group is the indicator, a hairline apart from the next group, and the
+   name is capped so context never crowds out the rooms it is context for. */
+.mission-tab-group {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: var(--s-1);
+  padding-left: var(--s-2);
+  border-left: 1px solid var(--edge);
+}
+
+.mission-tab-group:first-child {
+  padding-left: 0;
+  border-left: none;
+}
+
+.mission-tab-group-label {
+  flex: none;
   max-width: 11ch;
   font: var(--type-meta);
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: var(--s-1);
+}
+
+/* The tab's menu, where the right click landed. */
+.tab-menu {
+  position: fixed;
+  bottom: auto;
+  z-index: 40;
 }
 
 .mission-tab-close {
@@ -1176,7 +1198,7 @@ body {
 .sidebar-identity {
   display: flex;
   align-items: center;
-  gap: var(--s-2);
+  gap: var(--s-1);
   padding: var(--s-2) var(--s-3) 0;
   margin-top: var(--s-2);
   border-top: 1px solid var(--edge);
@@ -1184,9 +1206,18 @@ body {
   position: relative;
 }
 
+/* The three marks at the corner are smaller than a toolbar's, so a
+   ten-letter login is not cut to "spike-u…" in a 240px rail (D-251, found
+   by the audit at every width). */
+.sidebar-identity .icon-button {
+  width: 28px;
+  height: 28px;
+}
+
 .sidebar-login {
   flex: 1;
   min-width: 0;
+  margin-right: var(--s-1);
   font: var(--type-meta);
   color: var(--text-2);
   overflow: hidden;
@@ -1719,6 +1750,13 @@ body {
   margin: 0;
   font: var(--type-meta);
   color: var(--text-2);
+  min-width: 0;
+}
+
+/* The baton sits at the end of the second row (D-251); the first row is
+   the state's sentence and its one action, and nothing else competes. */
+.workspace-row .state-authority {
+  margin-left: auto;
 }
 
 .workspace-row.danger {
@@ -2413,10 +2451,27 @@ body {
 }
 
 /* The harness-swap sentence (D-232): its own quiet line above the foot. */
-.composer-swap {
+/* The other harness's model is chosen: three words beside the chip (D-251). */
+.composer-swap-note {
+  flex: none;
   font: var(--type-meta);
+  color: var(--text-3);
+  white-space: nowrap;
+  align-self: center;
+}
+
+/* The stop square that stays while the person types (D-251): quieter than
+   the send beside it, never the accent, still a square. */
+.send-button.send-button-stop {
+  background: transparent;
   color: var(--text-2);
-  padding-bottom: var(--s-2);
+  border: 1px solid var(--edge);
+  margin-right: var(--s-1);
+}
+
+.send-button.send-button-stop:hover {
+  background: var(--hover);
+  color: var(--text-1);
 }
 
 .chip-wrap {
@@ -2912,7 +2967,10 @@ body {
 
 .kv {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  /* The value column may be narrower than its longest word: a branch name
+     or a machine's hostname wraps inside the panel rather than running past
+     the window (D-251, found by the audit at 1440). */
+  grid-template-columns: max-content minmax(0, 1fr);
   column-gap: var(--s-4);
   row-gap: var(--s-2);
   align-items: baseline;
@@ -2933,6 +2991,13 @@ body {
   align-items: center;
   gap: var(--s-2);
   flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.kv-value .kv-action {
+  white-space: normal;
+  text-align: left;
 }
 
 .participant-list {
@@ -5378,19 +5443,31 @@ body {
   white-space: nowrap;
 }
 
+/* The mission row's Archive takes no width until the pointer is on the row
+   (D-251, the D-239 rule applied one level down): a hidden word holding
+   seventy-eight pixels on every mission row cut every goal to fourteen
+   characters in a 240px rail. */
 .side-row-archive {
   flex: none;
-  padding: 0 var(--s-2);
+  align-self: stretch;
+  min-height: 20px;
+  width: 0;
+  padding: 0;
+  overflow: hidden;
   border: none;
   background: transparent;
   opacity: 0;
   color: var(--text-3);
   font: var(--type-meta);
+  white-space: nowrap;
   cursor: pointer;
+  transition: opacity var(--m-press) var(--ease);
 }
 
 .side-row:hover .side-row-archive,
 .side-row-archive:focus-visible {
+  width: auto;
+  padding: 0 var(--s-2);
   opacity: 1;
 }
 
@@ -5446,11 +5523,23 @@ body {
    came from — with the one thing you can do about it at the end of the row and
    no weight of its own. Rows share the dialog's inset, so the head, the list
    and the actions sit on one axis instead of three (D-065). */
+/* The dialog keeps one size however many missions were filed (D-251,
+   owner-hit: "gets massiver and massiver"): the list scrolls inside it,
+   without a scrollbar to say so. */
+.archived-dialog {
+  height: min(560px, calc(100vh - var(--s-8)));
+}
+
 .archived-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: var(--s-2) 0;
+  scrollbar-width: none;
+}
+
+.archived-list::-webkit-scrollbar {
+  display: none;
 }
 
 .archived-entry {

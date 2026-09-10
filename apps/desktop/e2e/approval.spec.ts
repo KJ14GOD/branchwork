@@ -758,6 +758,11 @@ describe("filing a mission away", () => {
     const before = await detail(kartik, missionId);
     expect(before.events.length).toBeGreaterThan(0);
 
+    // The row's Archive takes its width only under the pointer (D-251, the
+    // D-239 rule one level down), so the row is hovered first.
+    const missionRow = kartik.page.getByTestId("mission-row").first();
+    await missionRow.waitFor({ timeout: 30_000 });
+    await missionRow.hover();
     const archiveControl = kartik.page.getByTestId("mission-archive").first();
     await archiveControl.waitFor({ timeout: 30_000 });
     await archiveControl.click();

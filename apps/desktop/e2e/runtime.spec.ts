@@ -1216,18 +1216,25 @@ describe("stopping a running harness, through the interface", () => {
       await stopApp.page.screenshot({ path: join(evidenceDir, "59-running-with-stop.png") });
 
       // The composer wears the same verb in the send control's own position
-      // (D-206), and the swap is the behavior worth proving: text in the box
-      // means queue-and-steer, so the square must yield to send the moment
-      // there is anything to send, and return when there is not.
+      // (D-206). Text in the box means queue-and-steer, so the send appears
+      // the moment there is anything to send — and the square stays beside
+      // it, quieter, because a Stop that vanished while the person typed was
+      // a Stop that "sometimes did not work" (D-251). Empty again, the
+      // square is the send control itself once more.
       const square = stopApp.page.getByTestId("composer-stop");
       await square.waitFor({ timeout: 30_000 });
       expect(await stopApp.page.getByTestId("send").count()).toBe(0);
+      expect(((await square.getAttribute("class")) ?? "").includes("send-button-stop")).toBe(false);
       await stopApp.page.getByTestId("composer-input").fill("steer, do not stop");
       await expect
-        .poll(async () => stopApp.page.getByTestId("composer-stop").count(), { timeout: 10_000 })
-        .toBe(0);
-      expect(await stopApp.page.getByTestId("send").count()).toBe(1);
+        .poll(async () => stopApp.page.getByTestId("send").count(), { timeout: 10_000 })
+        .toBe(1);
+      expect(await stopApp.page.getByTestId("composer-stop").count()).toBe(1);
+      expect(((await stopApp.page.getByTestId("composer-stop").getAttribute("class")) ?? "").includes("send-button-stop")).toBe(true);
       await stopApp.page.getByTestId("composer-input").fill("");
+      await expect
+        .poll(async () => stopApp.page.getByTestId("send").count(), { timeout: 10_000 })
+        .toBe(0);
       await square.waitFor({ timeout: 10_000 });
 
       // Magnified evidence. Window zoom is deliberately not used: it relayouts

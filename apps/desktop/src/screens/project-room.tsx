@@ -2019,6 +2019,53 @@ export function ProjectRoom({
               )}
             </>
           )}
+
+        </div>
+        {/* The workspace row lives in the persistent header, not the
+            scrolling feed (D-166, owner-hit): the base's standing and its
+            one Sync action are exactly the kind of thing that must not
+            require scrolling to the top of a long conversation to reach. */}
+        {detail && (
+          <div
+            className={feed?.setup?.danger ? "workspace-row danger" : "workspace-row"}
+            data-testid="setup-row"
+          >
+            {feed?.setup && <span>{feed.setup.label}</span>}
+            {/* The base's standing, in words, where the base is named
+                (D-139): silent while current, and silent while the answer is
+                merely unknown — absence of a check is not an alarm, it is
+                Overview's to state. */}
+            {baseDriftWords(baseStatus) && (
+              <span className="tone-warn workspace-drift" data-testid="base-drift">
+                · {baseDriftWords(baseStatus)}
+              </span>
+            )}
+            {/* Syncing is offered only for a base that moved forward: a
+                rewritten or vanished base is a rethink, not a merge. */}
+            {baseStatus?.state === "moved" && (
+              <button
+                className="btn btn-text workspace-row-action"
+                onClick={() => void syncBase()}
+                disabled={syncingBase}
+                data-testid="base-sync"
+              >
+                {syncingBase ? "Syncing…" : "Sync"}
+              </button>
+            )}
+            {feed?.setup && (
+              <button
+                className="btn btn-text workspace-row-action"
+                onClick={() => onInspector("overview")}
+                data-testid="setup-overview"
+              >
+                Overview
+              </button>
+            )}
+            {/* Who holds the baton, and the one control over it, at the end
+                of the second row (D-251, owner-hit): on the first row the
+                words crowded the state's own sentence into an ellipsis at
+                every width. The sentence gets its row; the baton gets the
+                end of the row beneath, where the workspace facts already are. */}
           <span className="state-authority">
           <span className="controller-slot" data-testid="controller">
             <span className="controller-name">
@@ -2060,45 +2107,6 @@ export function ProjectRoom({
             </GatedAction>
           )}
           </span>
-        </div>
-        {/* The workspace row lives in the persistent header, not the
-            scrolling feed (D-166, owner-hit): the base's standing and its
-            one Sync action are exactly the kind of thing that must not
-            require scrolling to the top of a long conversation to reach. */}
-        {detail && feed?.setup && (
-          <div
-            className={feed.setup.danger ? "workspace-row danger" : "workspace-row"}
-            data-testid="setup-row"
-          >
-            <span>{feed.setup.label}</span>
-            {/* The base's standing, in words, where the base is named
-                (D-139): silent while current, and silent while the answer is
-                merely unknown — absence of a check is not an alarm, it is
-                Overview's to state. */}
-            {baseDriftWords(baseStatus) && (
-              <span className="tone-warn workspace-drift" data-testid="base-drift">
-                · {baseDriftWords(baseStatus)}
-              </span>
-            )}
-            {/* Syncing is offered only for a base that moved forward: a
-                rewritten or vanished base is a rethink, not a merge. */}
-            {baseStatus?.state === "moved" && (
-              <button
-                className="btn btn-text workspace-row-action"
-                onClick={() => void syncBase()}
-                disabled={syncingBase}
-                data-testid="base-sync"
-              >
-                {syncingBase ? "Syncing…" : "Sync"}
-              </button>
-            )}
-            <button
-              className="btn btn-text workspace-row-action"
-              onClick={() => onInspector("overview")}
-              data-testid="setup-overview"
-            >
-              Overview
-            </button>
           </div>
         )}
       </header>

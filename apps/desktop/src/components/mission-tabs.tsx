@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { truncateLabel } from "../format";
-import type { OpenTab } from "./working-set";
+import { tabsBeside, type OpenTab, type WorkingSet } from "./working-set";
 
 /**
  * The open missions, across the top of the window.
@@ -23,6 +23,7 @@ export function MissionTabs({
   projectOf,
   onSelect,
   onClose,
+  onCloseMany,
   onNew
 }: {
   tabs: OpenTab[];
@@ -31,8 +32,46 @@ export function MissionTabs({
   projectOf: (tab: OpenTab) => string;
   onSelect: (tab: OpenTab) => void;
   onClose: (tab: OpenTab) => void;
+  onCloseMany: (ids: string[]) => void;
   onNew: () => void;
 }) {
+  // The tab's menu (D-251), where a right click lands: close this one, the
+  // others, the ones to its left, the ones to its right — the browser's own
+  // vocabulary, so nobody has to learn it.
+  const [menu, setMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+    };
+  }, [menu]);
+  const set: WorkingSet = { tabs, activeId };
+  const beside = menu ? tabsBeside(set, menu.tabId) : null;
+  const menuTab = menu ? (tabs.find((tab) => tab.id === menu.tabId) ?? null) : null;
+  const closeIds = (ids: string[]) => {
+    setMenu(null);
+    if (ids.length > 0) onCloseMany(ids);
+  };
+
+  // Tabs of one project sit together under its name, said once (D-251): a
+  // run of neighbours sharing a project is one group with one label, so the
+  // strip says which rooms belong together instead of repeating a name that
+  // was cut to eleven characters on every tab.
+  const groups: { key: string; project: string; tabs: OpenTab[] }[] = [];
+  for (const tab of tabs) {
+    const last = groups[groups.length - 1];
+    if (last && last.key === tab.projectKey) last.tabs.push(tab);
+    else groups.push({ key: tab.projectKey, project: projectOf(tab), tabs: [tab] });
+  }
 
   // The room you are reading has to be visible in the strip that says which
   // room you are reading. In a narrow window, or after a relaunch restored more
@@ -58,45 +97,51 @@ export function MissionTabs({
         role="tablist"
         aria-label="Open missions"
       >
-        {tabs.map((tab) => {
-          const label = labelOf(tab);
-          const project = projectOf(tab);
-          const active = tab.id === activeId;
-          return (
-            <span
-              key={tab.id}
-              ref={active ? selectedRef : undefined}
-              className={active ? "mission-tab active" : "mission-tab"}
-              data-testid="mission-tab"
-              data-active={active}
-              data-project={tab.projectKey}
-            >
-              <button
-                role="tab"
-                aria-selected={active}
-                className="mission-tab-open"
-                onClick={() => onSelect(tab)}
-                title={`${label} — ${project}`}
-                data-testid="mission-tab-open"
-              >
-                <span className="mission-tab-name">{truncateLabel(label, 18)}</span>
-                {/* Always, not only when two projects are open: a tab that
-                    gains and loses its project label as siblings come and go is
-                    a tab whose meaning changes without it changing (D-066). */}
-                <span className="mission-tab-project">{truncateLabel(project, 14)}</span>
-              </button>
-              <button
-                className="mission-tab-close"
-                onClick={() => onClose(tab)}
-                aria-label={`Close ${label}`}
-                title={`Close ${label}`}
-                data-testid="mission-tab-close"
-              >
-                ×
-              </button>
+        {groups.map((group, at) => (
+          <span key={`${group.key}:${at}`} className="mission-tab-group" data-project={group.key} data-testid="mission-tab-group">
+            <span className="mission-tab-group-label" title={group.project} data-testid="mission-tab-group-label">
+              {truncateLabel(group.project, 14)}
             </span>
-          );
-        })}
+            {group.tabs.map((tab) => {
+              const label = labelOf(tab);
+              const active = tab.id === activeId;
+              return (
+                <span
+                  key={tab.id}
+                  ref={active ? selectedRef : undefined}
+                  className={active ? "mission-tab active" : "mission-tab"}
+                  data-testid="mission-tab"
+                  data-active={active}
+                  data-project={tab.projectKey}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setMenu({ tabId: tab.id, x: event.clientX, y: event.clientY });
+                  }}
+                >
+                  <button
+                    role="tab"
+                    aria-selected={active}
+                    className="mission-tab-open"
+                    onClick={() => onSelect(tab)}
+                    title={`${label} — ${group.project}`}
+                    data-testid="mission-tab-open"
+                  >
+                    <span className="mission-tab-name">{truncateLabel(label, 18)}</span>
+                  </button>
+                  <button
+                    className="mission-tab-close"
+                    onClick={() => onClose(tab)}
+                    aria-label={`Close ${label}`}
+                    title={`Close ${label}`}
+                    data-testid="mission-tab-close"
+                  >
+                    ×
+                  </button>
+                </span>
+              );
+            })}
+          </span>
+        ))}
         {/* Directly after the last tab, inside the scroller: it makes the next
             one, so it belongs where the next one will be (D-066). */}
         <button
@@ -109,6 +154,28 @@ export function MissionTabs({
           +
         </button>
       </div>
+      {menu && menuTab && beside && (
+        <div
+          className="chip-menu tab-menu"
+          role="menu"
+          style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 160) }}
+          onMouseDown={(event) => event.stopPropagation()}
+          data-testid="tab-menu"
+        >
+          <button className="chip-menu-row" role="menuitem" onClick={() => closeIds([menuTab.id])} data-testid="tab-menu-close">
+            Close
+          </button>
+          <button className="chip-menu-row" role="menuitem" disabled={beside.others.length === 0} onClick={() => closeIds(beside.others)} data-testid="tab-menu-close-others">
+            Close others
+          </button>
+          <button className="chip-menu-row" role="menuitem" disabled={beside.left.length === 0} onClick={() => closeIds(beside.left)} data-testid="tab-menu-close-left">
+            Close to the left
+          </button>
+          <button className="chip-menu-row" role="menuitem" disabled={beside.right.length === 0} onClick={() => closeIds(beside.right)} data-testid="tab-menu-close-right">
+            Close to the right
+          </button>
+        </div>
+      )}
     </div>
   );
 }

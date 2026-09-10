@@ -193,7 +193,7 @@ function ArchivedDialog({
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <div className="dialog" role="dialog" aria-label="Archived missions" data-testid="archived-dialog">
+      <div className="dialog archived-dialog" role="dialog" aria-label="Archived missions" data-testid="archived-dialog">
         <div className="dialog-head">
           <h2 className="dialog-title">Archived</h2>
           <p className="quiet">
@@ -857,6 +857,13 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   const [panelWidth, setPanelWidth] = useColumnWidth("novus-panel-width", 380, 320, 760);
   /** Why filing one away was refused — most often because it is still working. */
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  /** A refusal in the rail is about a moment — *still working*, *not yet
+   *  synced* — and it leaves with the moment (D-251, owner-hit: red text
+   *  that "doesn't go away"): eight seconds, or the next attempt. */
+  const showArchiveError = useCallback((message: string) => {
+    setArchiveError(message);
+    window.setTimeout(() => setArchiveError((current) => (current === message ? null : current)), 8_000);
+  }, []);
   const [restoringMissionId, setRestoringMissionId] = useState<string | null>(null);
   /** The Archived view: read on demand, because it is not the rail's job. */
   const [archived, setArchived] = useState<Mission[] | null>(null);
@@ -1591,7 +1598,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     setArchiveError(null);
     const result = await novus().missions.archive(mission.missionId);
     if (!result.ok) {
-      setArchiveError(result.message);
+      showArchiveError(result.message);
       return;
     }
     setWorkingSet((previous) => {
@@ -1608,7 +1615,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     try {
       const result = await novus().missions.restore(missionId);
       if (!result.ok) {
-        setArchiveError(result.message);
+        showArchiveError(result.message);
         return;
       }
       await refresh();
@@ -1915,9 +1922,23 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                         here deliberately: the row around it opens a project and
                         closes the one already showing, and starting a mission is
                         neither of those. */}
+                    <button
+                      className="side-new-mission"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openNewMission(project);
+                      }}
+                      aria-label={`New mission in ${project.name}`}
+                      title={`New mission in ${project.name}`}
+                      data-testid="repo-new-mission"
+                    >
+                      +
+                    </button>
                     {/* The project's own quiet control, the mission row's
                         Archive one level up (D-235): a word on hover, never
-                        a permanent mark beside a project nobody is removing. */}
+                        a permanent mark beside a project nobody is removing.
+                        After the +, so the keyboard reaches the making
+                        control before the removing one (D-251). */}
                     <button
                       className="side-remove-project"
                       onClick={(event) => {
@@ -1930,18 +1951,6 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                       data-testid="project-remove"
                     >
                       Remove
-                    </button>
-                    <button
-                      className="side-new-mission"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        openNewMission(project);
-                      }}
-                      aria-label={`New mission in ${project.name}`}
-                      title={`New mission in ${project.name}`}
-                      data-testid="repo-new-mission"
-                    >
-                      +
                     </button>
                   </div>
                   {/* An open project discloses its missions inline, and this is
@@ -2458,6 +2467,12 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               projectOf={projectNameOf}
               onSelect={(tab) => setWorkingSet((previous) => selectTab(previous, tab.id))}
               onClose={closeMissionTab}
+              onCloseMany={(ids) => {
+                for (const id of ids) {
+                  const tab = workingSet.tabs.find((entry) => entry.id === id);
+                  if (tab) closeMissionTab(tab);
+                }
+              }}
               onNew={newMissionHere}
             />
           )}
