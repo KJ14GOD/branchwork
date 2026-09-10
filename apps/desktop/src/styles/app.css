@@ -570,6 +570,16 @@ body {
 .segment {
   display: flex;
   gap: var(--s-1);
+  /* A row of one-line names: below its room it scrolls sideways, quietly
+     (DESIGN.md#overflow), rather than folding a name. */
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.segment::-webkit-scrollbar {
+  display: none;
 }
 
 .setup-finish {
@@ -818,7 +828,7 @@ body {
 
 .mission-tab-group-label {
   flex: none;
-  max-width: 11ch;
+  max-width: 16ch;
   font: var(--type-meta);
   color: var(--text-3);
   overflow: hidden;
@@ -1750,6 +1760,17 @@ body {
   margin: 0;
   font: var(--type-meta);
   color: var(--text-2);
+  min-width: 0;
+}
+
+/* The workspace fact is one phrase (DESIGN.md rule 21): it yields with an
+   ellipsis when the row is short, never a second line. */
+.workspace-row-label {
+  min-width: 0;
+  flex: 0 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   min-width: 0;
 }
 
@@ -3640,6 +3661,10 @@ body {
   padding: var(--s-1) var(--s-3);
   min-height: 28px;
   cursor: pointer;
+  /* A tab name is one phrase (DESIGN.md rule 21): the row scrolls before a
+     name folds. */
+  white-space: nowrap;
+  flex: none;
 }
 
 .segment-tab:hover {

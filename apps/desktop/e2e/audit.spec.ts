@@ -232,7 +232,19 @@ async function auditDom(surface: string, width: number): Promise<void> {
       // A box entirely left of the window is the rail as an overlay, parked
       // off-canvas by design at narrow widths; what matters is the right edge.
       if (rect.right > window.innerWidth + 1) {
-        if (style.position !== "fixed" && style.position !== "absolute") {
+        // Inside a strip that scrolls sideways — terminal tabs, a wide ledger —
+        // a box past the edge is reached by scrolling, which is the design
+        // (DESIGN.md#overflow); only a box no scroll can reach is lost.
+        let scrolls = false;
+        for (let parent = el.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+          const overflowX = getComputedStyle(parent).overflowX;
+          if (overflowX === "auto" || overflowX === "scroll") {
+            const box = parent.getBoundingClientRect();
+            if (rect.right <= box.left + parent.scrollWidth + 1) scrolls = true;
+            break;
+          }
+        }
+        if (!scrolls && style.position !== "fixed" && style.position !== "absolute") {
           out.push({ kind: "offscreen", where: describe(el), detail: `left ${Math.round(rect.left)}, right ${Math.round(rect.right)}, window ${window.innerWidth}` });
         }
       }
@@ -246,15 +258,28 @@ async function auditDom(surface: string, width: number): Promise<void> {
       if (singleLine && ownText.length > 0 && !ownText.includes("\n") && style.whiteSpace !== "pre-wrap") {
         // The text's own line boxes, not the element's height: a padded tab
         // is tall and still one line; a folded phrase has two boxes.
+        // Boxes on one line can still differ in top by a few pixels — a
+        // glyph centred beside its text, a caret — so tops are clustered by
+        // the line height before they count as lines.
         const range = document.createRange();
         range.selectNodeContents(el);
-        const tops = new Set(Array.from(range.getClientRects()).filter((box) => box.width > 0).map((box) => Math.round(box.top)));
-        if (tops.size > 1) {
-          out.push({ kind: "folded", where: describe(el), detail: `${tops.size} lines` });
+        const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4 || 16;
+        const tops = Array.from(range.getClientRects())
+          .filter((box) => box.width > 0 && box.height > 0)
+          .map((box) => box.top)
+          .sort((a, b) => a - b);
+        let lines = tops.length > 0 ? 1 : 0;
+        for (let i = 1; i < tops.length; i += 1) {
+          if (tops[i] - tops[i - 1] > lineHeight * 0.6) lines += 1;
+        }
+        if (lines > 1) {
+          out.push({ kind: "folded", where: describe(el), detail: `${lines} lines` });
         }
       }
     }
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("[role='alert'], .inline-error"))) {
+      // The kit shows an inline refusal as a sample (D-254); it is not standing.
+      if (el.classList.contains("kit-inline")) continue;
       if (visible(el)) out.push({ kind: "lingering", where: describe(el), detail: "an error line is standing" });
     }
     return out;
@@ -309,8 +334,10 @@ async function pressEverything(surface: string, deny: RegExp, keepOpen = false):
       // Under a scrim, or already the active one: a click would do nothing by design.
       const centre = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
       if (centre && !el.contains(centre) && !centre.contains(el)) continue;
-      if (el.getAttribute("aria-selected") === "true" || el.getAttribute("aria-pressed") === "true") continue;
+      if (el.getAttribute("aria-selected") === "true" || el.getAttribute("aria-pressed") === "true" || el.getAttribute("aria-current") === "page") continue;
       const id = el.getAttribute("data-testid");
+      // A native folder picker would block the window; the walk cannot see it.
+      if (id === "open-repository" || id === "attach-image") continue;
       const label = (el.getAttribute("aria-label") ?? el.getAttribute("title") ?? el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 50);
       const key = id ? `testid:${id}` : `text:${label}`;
       if (seen.has(key) || label.length === 0 && !id) continue;

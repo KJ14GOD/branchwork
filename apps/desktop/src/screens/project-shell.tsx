@@ -1843,6 +1843,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               // never costs the working set. Before the board this wiped the
               // tabs, which made Home and "close everything" one control.
               onClick={() => setWorkingSet((previous) => ({ ...previous, activeId: null }))}
+              aria-current={activeMissionId === null && active === null ? "page" : undefined}
               data-testid="rail-home"
             >
               <HomeGlyph />

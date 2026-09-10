@@ -2035,7 +2035,7 @@ export function ProjectRoom({
             className={feed?.setup?.danger ? "workspace-row danger" : "workspace-row"}
             data-testid="setup-row"
           >
-            {feed?.setup && <span>{feed.setup.label}</span>}
+            {feed?.setup && <span className="workspace-row-label">{feed.setup.label}</span>}
             {/* The base's standing, in words, where the base is named
                 (D-139): silent while current, and silent while the answer is
                 merely unknown — absence of a check is not an alarm, it is
