@@ -725,9 +725,11 @@ function DecisionReceipt({
             {prepared.headRef} → {prepared.baseRef}
           </p>
           <p className="receipt-line">{prepared.title}</p>
-          <pre className="prepared-body" data-testid="prepared-body">
-            {prepared.body}
-          </pre>
+          {/* The body is the request's description as GitHub will render it,
+              so the receipt reads as the document, not its source. */}
+          <div className="prepared-body" data-testid="prepared-body">
+            <Markdown source={prepared.body} />
+          </div>
           <button
             className="btn btn-secondary"
             onClick={() => {

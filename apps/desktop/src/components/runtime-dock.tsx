@@ -234,7 +234,7 @@ export function RuntimeDock({
   onPrimed?: () => void;
   /** Where the dock stands (D-228): the room's bottom edge, or its right as a
    *  full-height column — the inspector's own posture. */
-  side?: "bottom" | "right";
+  side?: "bottom" | "right" | "left";
   /** Moves the dock to the other edge; absent hides the control. */
   onToggleSide?: () => void;
 }) {
@@ -493,19 +493,20 @@ export function RuntimeDock({
 
   return (
     <section
-      className={side === "right" ? "terminal-dock dock-right" : "terminal-dock"}
-      style={side === "right" ? { width: `${widthPct}%` } : { height: `${heightVh}vh` }}
+      className={side === "right" ? "terminal-dock dock-right" : side === "left" ? "terminal-dock dock-left" : "terminal-dock"}
+      style={side === "bottom" ? { height: `${heightVh}vh` } : { width: `${widthPct}%` }}
       aria-label="Runtime"
       data-testid="terminal-dock"
       data-side={side}
     >
-      {side === "right" && (
+      {side !== "bottom" && (
         <div
           className="terminal-grip-vertical"
           onPointerDown={(grab) => {
             grab.preventDefault();
             const move = (event: PointerEvent) => {
-              const fraction = ((window.innerWidth - event.clientX) / window.innerWidth) * 100;
+              const across = side === "left" ? event.clientX : window.innerWidth - event.clientX;
+              const fraction = (across / window.innerWidth) * 100;
               setWidthPct(Math.min(60, Math.max(20, fraction)));
             };
             const release = () => {
@@ -594,10 +595,10 @@ export function RuntimeDock({
           <button
             className="btn btn-text terminal-side-toggle"
             onClick={onToggleSide}
-            title={side === "right" ? "Dock the terminal at the bottom" : "Dock the terminal on the right"}
+            title={side === "bottom" ? "Dock the terminal on the right" : "Dock the terminal at the bottom"}
             data-testid="terminal-side-toggle"
           >
-            {side === "right" ? "Dock bottom" : "Dock right"}
+            {side === "bottom" ? "Dock right" : "Dock bottom"}
           </button>
         )}
       </div>

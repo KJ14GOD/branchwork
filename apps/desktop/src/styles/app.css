@@ -6117,9 +6117,7 @@ body.resizing {
    line. */
 .prepared-body {
   font: var(--type-row);
-  font-family: var(--font-mono);
   color: var(--text-2);
-  white-space: pre-wrap;
   overflow-x: auto;
   width: 100%;
 }
@@ -8154,4 +8152,56 @@ span.trace-attachment-transcript:hover {
 
 .kit-input {
   max-width: 320px;
+}
+
+/* ---------- Layout preferences (D-257) ---------- */
+/* The person's arrangement, read from the root: density scales the
+   spacing steps and the row type one step down,
+   the dock and the panel sides are the room's to honour, and reduced
+   motion switches the product's durations off. */
+:root[data-density="compact"] {
+  --s-2: 6px;
+  --s-3: 10px;
+  --s-4: 12px;
+  --s-5: 18px;
+  --type-row: 400 12px/18px var(--font-ui);
+  --type-body: 400 13px/20px var(--font-ui);
+}
+
+:root[data-motion="reduced"] * {
+  transition-duration: 0ms !important;
+  animation-duration: 0ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root * {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}
+
+/* The left dock and the left panel (D-257): the same columns, mirrored.
+   The room is a row; `order` moves the column to the other edge and the
+   dividing edge moves with it. The grip stays on the edge that faces the
+   conversation. */
+.terminal-dock.dock-left {
+  order: -1;
+  min-width: 320px;
+  max-width: 60%;
+  min-height: 0;
+  max-height: none;
+  height: auto;
+  border-top: none;
+  border-right: 1px solid var(--edge);
+}
+
+.terminal-dock.dock-left .terminal-grip-vertical {
+  left: auto;
+  right: 0;
+}
+
+:root[data-panel="left"] .shell-split > .inspector {
+  order: -1;
+  border-left: none;
+  border-right: 1px solid var(--edge);
 }

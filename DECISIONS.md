@@ -3623,3 +3623,15 @@ Use the existing checkpoint and evidence paths. Record reported usage and priced
 **Consequences.** `apps/control-plane/src/learning/` — `rewards.ts` (pure), `pairs.ts`, `export.ts` and a route `POST /orgs/:orgId/learning/exports` returning a dataset id and a manifest, guarded by `org.policy.configure`; `packages/contracts` gains the dataset schemas and `redactShapes` moves there so both processes share one list; `training/` holds the Python package with its pyproject, recipes and configs. Tests: `rewards.test.ts`, `pairs.test.ts`, `export.test.ts` against a real database; `novus-train plan` over an exported fixture. PROGRESS carries a row and says exactly which stage is proven.
 
 **Revisit when.** The first tuned adapter is evaluated — then the reward's weights meet real outcomes; or an organization asks for the export to leave for a training provider, which is a retention and consent decision of its own.
+
+## D-257 — The interface is the person's to arrange, and remembers it
+
+**Context.** The owner (2026-09-10): "I want this whole IDE to customize itself based on the user — maybe they don't like the kanban board, maybe they want their terminal somewhere else, full customizability." Where the terminal docked was a choice that lasted one session; everything else was fixed.
+
+**Decision.** A layout is five facts a person sets on a Layout page in Settings and the product remembers on their machine: where the terminal docks (bottom, right, left), which edge the evidence panel stands against, the density of rows, whether Home is the board or a quiet canvas, and whether motion runs. The rail's and the panel's widths are already the person's by dragging and already remembered, so the page says so instead of duplicating them. Applied before first paint as attributes on the root so surfaces read them from CSS; a change made in the room — *Dock right* — is the same fact as the one on the page. What does not move: the state line, the composer, and the baton's words, which are the product's identity. Remembering is the whole of "adapting" for now: the app records what the person changed and offers it back; learning from many people's clicks is D-255's business and needs many people.
+
+**Alternatives.** Free-form drag-and-drop panels (rejected: a layout engine is a product of its own, and every arrangement it allows is one the design cannot vouch for). Per-mission layouts (rejected: the room's furniture is the person's, not the mission's).
+
+**Consequences.** `layout.ts` (store, validation, paint, init before first paint), the Layout page, `app.css` keyed on the root's attributes, the room's dock side read from and written to the layout, the shell's Home honouring the choice. Tests: `layout.test.ts`; the Layout page and a compact, left-docked room in `navigation.spec.ts`.
+
+**Revisit when.** A team wants one arrangement shared — then it is a repository setting beside the workspace's, read like `.novus/settings.toml`.

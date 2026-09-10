@@ -4,6 +4,7 @@ import { novus } from "../bridge";
 import { focusQuietly } from "./dialog";
 import { applyTheme, themePreference, THEME_CHOICES, type ThemePreference } from "../theme";
 import { currentThemeFile, listThemes, parseThemeFile, removeTheme, saveTheme, themeFileOf, type CustomTheme } from "../themes";
+import { layout, setLayout, type Layout } from "../layout";
 import { ClaudeGlyph } from "./identity";
 import {
   BINDING_ACTIONS,
@@ -35,7 +36,7 @@ import { ConnectorRows, useConnectors } from "./connectors";
  * that exists. A knob lands here the day its behavior does.
  */
 
-type Page = "account" | "appearance" | "notifications" | "agents" | "voice" | "machine" | "keyboard" | "about";
+type Page = "account" | "appearance" | "layout" | "notifications" | "agents" | "voice" | "machine" | "keyboard" | "about";
 
 function PersonGlyph() {
   return (
@@ -51,6 +52,15 @@ function SwatchGlyph() {
     <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
       <circle cx="8" cy="8" r="5.9" />
       <path d="M8 2.1v11.8M8 8l4.2-4.2" />
+    </svg>
+  );
+}
+
+function LayoutGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <rect x="2.2" y="2.7" width="11.6" height="10.6" rx="1.6" />
+      <path d="M6.4 2.7v10.6M6.4 9.2h7.4" />
     </svg>
   );
 }
@@ -123,6 +133,7 @@ const NAV: { group: string; pages: { key: Page; label: string; glyph: () => Reac
     pages: [
       { key: "account", label: "Account", glyph: PersonGlyph },
       { key: "appearance", label: "Appearance", glyph: SwatchGlyph },
+      { key: "layout", label: "Layout", glyph: LayoutGlyph },
       { key: "notifications", label: "Notifications", glyph: BellGlyph },
       { key: "keyboard", label: "Keyboard", glyph: KeysGlyph }
     ]
@@ -144,6 +155,7 @@ const NAV: { group: string; pages: { key: Page; label: string; glyph: () => Reac
 const PAGE_LABEL: Record<Page, string> = {
   account: "Account",
   appearance: "Appearance",
+  layout: "Layout",
   notifications: "Notifications",
   agents: "Agents",
   voice: "Voice",
@@ -246,6 +258,23 @@ export function SettingsDialog({
   onSignOut: () => void;
 }) {
   const [page, setPage] = useState<Page>("account");
+  // The person's arrangement (D-257), read on open and written as it changes.
+  const [arrangement, setArrangement] = useState<Layout>(() => layout());
+  const segment = <K extends keyof Layout>(key: K, choices: [Layout[K], string][]) => (
+    <div className="settings-theme" role="group" aria-label={String(key)}>
+      {choices.map(([value, label]) => (
+        <button
+          key={String(value)}
+          className={arrangement[key] === value ? "segment-tab active" : "segment-tab"}
+          aria-pressed={arrangement[key] === value}
+          onClick={() => setArrangement(setLayout({ [key]: value } as Partial<Layout>))}
+          data-testid={`layout-${key}-${String(value)}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
   const [query, setQuery] = useState("");
   const [preference, setPreference] = useState<ThemePreference>(() => themePreference());
   // This machine's custom themes (D-254), re-read after an import or a removal.
@@ -399,6 +428,9 @@ export function SettingsDialog({
       { page: "account", title: user.name ?? user.login, description: `Signed in with GitHub as ${user.login}` },
       { page: "account", title: "Sign out", description: "Leave this machine signed out" },
       { page: "appearance", title: "Theme", description: "Light, dark, or follow the system" },
+      { page: "layout", title: "Terminal docks", description: "Bottom, right, or left" },
+      { page: "layout", title: "Density", description: "Comfortable or compact rows" },
+      { page: "layout", title: "Home", description: "The board, or a quiet canvas" },
       { page: "notifications", title: "Turn completions", description: "Tell me when a turn finishes while I am elsewhere" },
       { page: "notifications", title: "Needs you", description: "Tell me when the agent asks a question while I am elsewhere" },
       ...BINDING_ACTIONS.map(({ action, does }) => ({
@@ -548,6 +580,20 @@ export function SettingsDialog({
                 }
               />
             </Card>
+          </>
+        ) : page === "layout" ? (
+          <>
+            <h2 className="settings-page-title">Layout</h2>
+            <Card heading="The room">
+              <CardRow title="Terminal docks" description="Where the terminal opens in the room" trailing={segment("dock", [["bottom", "Bottom"], ["right", "Right"], ["left", "Left"]])} />
+              <CardRow title="Evidence panel" description="Which edge the panel stands against" trailing={segment("panel", [["right", "Right"], ["left", "Left"]])} />
+              <CardRow title="Home" description="With no mission open: the board, or a quiet canvas" trailing={segment("home", [["board", "Board"], ["quiet", "Quiet"]])} />
+            </Card>
+            <Card heading="The shell">
+              <CardRow title="Density" description="Row height and spacing" trailing={segment("density", [["comfortable", "Comfortable"], ["compact", "Compact"]])} />
+              <CardRow title="Motion" description="Reduced motion is always honoured when the system asks for it" trailing={segment("motion", [["full", "Full"], ["reduced", "Reduced"]])} />
+            </Card>
+            <p className="settings-hint">Remembered on this Mac. The rail and the panel are resized by dragging their edges, and remembered the same way. The state line, the composer and the baton keep their places whatever else moves.</p>
           </>
         ) : page === "appearance" ? (
           <>

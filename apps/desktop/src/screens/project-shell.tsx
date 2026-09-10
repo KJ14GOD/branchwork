@@ -65,6 +65,7 @@ import {
 } from "../components/derive";
 import { HarnessGlyph } from "../components/harness-glyph";
 import { HomeBoard } from "../components/home-board";
+import { useLayout } from "../layout";
 import { PREVIEW_TAB_KEY, pullIdOfKey, pullTabKey, type OpenPreviewTab } from "../components/preview";
 import { deriveGoal, plural, truncateLabel } from "../format";
 import { markSeen, unseenSince } from "../components/seen";
@@ -925,6 +926,8 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** The docked evidence panel. Held here because its toggle lives in the top
    *  bar and because the panel outlives the mission selected beside it. */
   const [inspector, setInspector] = useState<InspectorSection | null>(null);
+  // The person's arrangement (D-257): Home as the board or a quiet canvas.
+  const arrangement = useLayout();
   /** Changes narrowed to one turn's checkpoint (D-213): set when a turn's
    *  CHECKPOINT row opened the section, cleared by "Whole mission", by any
    *  other way into the section, and by leaving the mission. */
@@ -2620,8 +2623,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
               openArtifactId={openArtifact?.tabId === active.id ? openArtifact.artifactId : null}
               onCloseArtifact={() => setOpenArtifact(null)}
             />
-          ) : (missions?.length ?? 0) > 0 ? (
-            // Home (D-120): every active mission, grouped by what it needs.
+          ) : (missions?.length ?? 0) > 0 && arrangement.home === "board" ? (
+            // Home (D-120): every active mission, grouped by what it needs;
+            // a person who wants a quiet canvas instead (D-257) gets the
+            // words below and the rail.
             // Rendered only once a mission exists at all — a board over
             // nothing is prohibited pattern 11 — and the card's click is its
             // one action: open at the thing that is asking.

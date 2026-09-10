@@ -661,6 +661,42 @@ describe("the missions a person has open", () => {
     await page.getByTestId("state-line").waitFor({ timeout: 30_000 });
     await shot(page, "66-restored-minus-the-refused.png");
   }, 300_000);
+  it("the layout is the person's: set on the page, applied at once, and remembered (D-257)", async () => {
+    const rootFacts = () =>
+      page.evaluate(() => ({
+        dock: document.documentElement.dataset.dock,
+        panel: document.documentElement.dataset.panel,
+        density: document.documentElement.dataset.density,
+        home: document.documentElement.dataset.home
+      }));
+    await page.getByTestId("open-settings").click();
+    await page.getByTestId("settings-dialog").waitFor({ timeout: 10_000 });
+    await page.locator(".settings-nav-item").filter({ hasText: "Layout" }).click();
+    await page.getByTestId("layout-density-compact").click();
+    await page.getByTestId("layout-dock-left").click();
+    await page.getByTestId("layout-home-quiet").click();
+    await expect.poll(rootFacts, { timeout: 10_000 }).toMatchObject({ dock: "left", density: "compact", home: "quiet" });
+    expect(await page.getByTestId("layout-dock-left").getAttribute("aria-pressed")).toBe("true");
+    await shot(page, "264-settings-layout.png");
+    await page.keyboard.press("Escape");
+    await expect.poll(async () => page.getByTestId("settings-dialog").count(), { timeout: 10_000 }).toBe(0);
+
+    // Remembered: a reload paints the same arrangement before anything else.
+    await page.reload();
+    await page.getByTestId("project-shell").waitFor({ timeout: 60_000 });
+    await expect.poll(rootFacts, { timeout: 10_000 }).toMatchObject({ dock: "left", density: "compact", home: "quiet" });
+
+    // Back to the reference, so nothing after this test is arranged.
+    await page.getByTestId("open-settings").click();
+    await page.getByTestId("settings-dialog").waitFor({ timeout: 10_000 });
+    await page.locator(".settings-nav-item").filter({ hasText: "Layout" }).click();
+    await page.getByTestId("layout-density-comfortable").click();
+    await page.getByTestId("layout-dock-bottom").click();
+    await page.getByTestId("layout-home-board").click();
+    await expect.poll(rootFacts, { timeout: 10_000 }).toMatchObject({ dock: "bottom", density: "comfortable", home: "board" });
+    await page.keyboard.press("Escape");
+    await expect.poll(async () => page.getByTestId("settings-dialog").count(), { timeout: 10_000 }).toBe(0);
+  }, 180_000);
 });
 
 describe("starting a mission", () => {
@@ -1118,4 +1154,5 @@ describe("the strip at three window widths", () => {
     expect(nearBottom).toBeGreaterThanOrEqual(0);
     expect(nearBottom).toBeLessThan(120);
   }, 180_000);
+
 });

@@ -53,6 +53,7 @@ import { HumanMark } from "../components/identity";
 import { ArtifactView } from "../components/artifact-view";
 import { renderTranscript } from "../components/transcript";
 import { WorkerInspector } from "../components/worker-inspector";
+import { setLayout, useLayout, type Layout } from "../layout";
 import type { InspectorSection } from "../components/inspector";
 import { DecisionRoom } from "../components/decision-room";
 import { Dialog } from "../components/dialog";
@@ -457,7 +458,11 @@ export function ProjectRoom({
 
   // Where the terminal docks (D-228): the room's bottom, or its right edge as
   // a full-height column — the inspector's own posture.
-  const [dockSide, setDockSide] = useState<"bottom" | "right">("bottom");
+  // Where the terminal docks is the person's arrangement (D-257): read from
+  // the layout and written back, so the room and the Layout page agree.
+  const arrangement = useLayout();
+  const dockSide = arrangement.dock;
+  const setDockSide = (dock: Layout["dock"]) => setLayout({ dock });
 
   // Which pane a dragged file tab is over (D-228 amended): the accent ring
   // says where the drop would land before the hand commits.
@@ -2943,14 +2948,14 @@ export function ProjectRoom({
       {/* The right dock (D-228): the terminal as a full-height column against
           the room's right edge — the inspector's own posture — chosen from
           the dock's own head and undone the same way. */}
-      {terminalOpen && executionAvailable && selectedMissionId !== null && dockSide === "right" && (
+      {terminalOpen && executionAvailable && selectedMissionId !== null && (dockSide === "right" || dockSide === "left") && (
         <RuntimeDock
-          key={`${activeLaneId ?? "default"}-right`}
+          key={`${activeLaneId ?? "default"}-${dockSide}`}
           missionId={selectedMissionId}
           workstreamId={activeLaneId ?? undefined}
           prime={dockPrime}
           onPrimed={() => setDockPrime(null)}
-          side="right"
+          side={dockSide}
           onToggleSide={() => setDockSide("bottom")}
         />
       )}

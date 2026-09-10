@@ -169,13 +169,17 @@ The room keeps Novus's identity inside Conductor-adjacent patterns: state line, 
 ## Layout
 
 - Each surface declares one **primary region** occupying ≥55% of width. Sidebars ≤320px. No two regions may have equal visual weight.
-- The Mission Room's evidence inspector **docks to the right edge** as a toggleable column, not an overlay (D-039): ≤420px and ≤40% of width, so the room keeps its majority. It is closed by default, opened and closed by the same control, and never traps focus — a docked region is beside the work, not over it. Below 900px it takes the surface, as a full-screen view.
+- The Mission Room's evidence inspector **docks to the right edge** as a toggleable column, not an overlay (D-039) — the person may stand it against the left edge instead (D-257): ≤420px and ≤40% of width, so the room keeps its majority. It is closed by default, opened and closed by the same control, and never traps focus — a docked region is beside the work, not over it. Below 900px it takes the surface, as a full-screen view.
 - Machinery is subordinate: model names, repo refs, workspace ids render at the 11–12px steps in `--text-2/3`, inside inspectors — never in the mission header. The mission, not the machinery, is the room's subject.
 - Navigation rails contain nouns and counts only. Explanatory prose lives in tooltips or empty states, two sentences maximum.
 
+### Layout preferences (D-257)
+
+The interface is the person's to arrange, within the identity above. Settings › Layout holds five facts, remembered on the machine and applied before first paint: where the terminal docks (bottom, right, left), which edge the evidence panel stands against, the density (comfortable, or compact: the spacing steps and row type one step down), whether Home with nothing open is the board or a quiet canvas, and whether motion runs — reduced motion is always honoured when the system asks. A choice made in the room (*Dock right*) is the same fact as the one on the page; the rail's and the panel's widths are dragged, and remembered the same way. What does not move: the state line, the composer, and the baton's words.
+
 ### Density
 
-Dense where content is (lists, activity, diff: 32–36px rows, 13/20 type); relaxed where chrome is (24–32px outer margins, 16–24px section gaps). Density never comes from shrinking type below the scale, and softness never comes from inflating rows.
+Dense where content is (lists, activity, diff: 32–36px rows, 13/20 type); relaxed where chrome is (24–32px outer margins, 16–24px section gaps). Density never comes from shrinking type below the scale, and softness never comes from inflating rows. Compact density (D-257) steps the spacing scale and the row type down one step each — still the scale, chosen by the person.
 
 ### Overflow
 
