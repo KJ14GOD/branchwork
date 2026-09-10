@@ -219,7 +219,7 @@ export function PullRequestPage({
 }) {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [section, setSection] = useState<"comments" | "checks" | "changes" | "actions">("comments");
+  const [section, setSection] = useState<"comments" | "commits" | "checks" | "changes" | "actions">("comments");
   const missionId = detail.mission.missionId;
   // The request's commits and files, asked for once per request (D-210): the
   // head sentence counts the commits and the Commits block lists them, the
@@ -276,7 +276,9 @@ export function PullRequestPage({
           description as a document, the commits, and the conversation as
           cards. Words carry state; the only colour is the diff's. */}
       <header className="pull-head" data-testid="pull-head">
-        <h2 className="pull-title" data-testid="pull-title">{pull.title}</h2>
+        <h2 className="pull-title" data-testid="pull-title">
+          {pull.title} <span className="pull-number">#{pull.number}</span>
+        </h2>
         <PullHeadline detail={detail} pull={pull} busy={busy} onAct={act} opener={opener} commitCount={commitCount} />
         <p className="quiet" data-testid="pull-approach">
           Publishes <strong>{chosen?.name ?? "the chosen approach"}</strong>
@@ -290,6 +292,52 @@ export function PullRequestPage({
         </p>
       </header>
 
+      <div className="segment" role="tablist" aria-label="Pull request sections">
+        <button
+          role="tab"
+          aria-selected={section === "comments"}
+          className={section === "comments" ? "segment-tab active" : "segment-tab"}
+          onClick={() => setSection("comments")}
+          data-testid="pull-tab-comments"
+        >
+          Conversation
+          {openLineThreads(pull).length > 0
+            ? ` · ${openLineThreads(pull).length}`
+            : ""}
+        </button>
+        <button
+          role="tab"
+          aria-selected={section === "commits"}
+          className={section === "commits" ? "segment-tab active" : "segment-tab"}
+          onClick={() => setSection("commits")}
+          data-testid="pull-tab-commits"
+        >
+          Commits{commitCount !== null ? ` · ${commitCount}` : ""}
+        </button>
+        <button
+          role="tab"
+          aria-selected={section === "checks"}
+          className={section === "checks" ? "segment-tab active" : "segment-tab"}
+          onClick={() => setSection("checks")}
+          data-testid="pull-tab-checks"
+        >
+          {checksLabel}
+        </button>
+        <button
+          role="tab"
+          aria-selected={section === "changes"}
+          className={section === "changes" ? "segment-tab active" : "segment-tab"}
+          onClick={() => setSection("changes")}
+          data-testid="pull-tab-changes"
+        >
+          Files changed{files ? ` · ${files.files.length}` : ""}
+        </button>
+        <button role="tab" aria-selected={section === "actions"} className={section === "actions" ? "segment-tab active" : "segment-tab"} onClick={() => setSection("actions")} data-testid="pull-tab-actions">Actions</button>
+      </div>
+
+      <div className="pull-columns">
+      <div className="pull-main">
+      {section === "comments" && (
       <article className="pull-card" data-testid="pull-body">
         <div className="pull-card-head">
           <span className="pull-card-author">
@@ -309,7 +357,9 @@ export function PullRequestPage({
           <Markdown source={pull.body} />
         </div>
       </article>
+      )}
 
+      {section === "commits" && (
       <section className="pull-commits" data-testid="pull-commits-block">
         <h3 className="field-label">
           Commits{commitCount !== null ? ` · ${commitCount}` : ""}
@@ -333,7 +383,23 @@ export function PullRequestPage({
           </ul>
         )}
       </section>
+      )}
 
+
+      {section === "actions" && <PullDelivery key={pull.pullRequestId} pull={pull} canManage={detail.capabilities.includes("pr.manage")} />}
+      {section === "comments" && (
+        <PullReview
+          detail={detail}
+          pull={pull}
+          decision={decision}
+          busy={busy}
+          onAct={act}
+          setNote={setNote}
+          preferredSessionId={preferredSessionId}
+        />
+      )}
+      {section === "comments" && (
+        <>
       {/* A downstream request (D-209) is completed where it was opened —
           the reviewer's process, not this room's. The server refuses the
           completion verbs on it; the page says so instead of offering them.
@@ -349,52 +415,7 @@ export function PullRequestPage({
         <Completion detail={detail} pull={pull} decision={decision} busy={busy} onAct={act} missionId={missionId} />
       )}
 
-      <FormalPullReview key={pull.pullRequestId} pull={pull} canManage={detail.capabilities.includes("pr.manage")} />
-      <div className="segment" role="tablist" aria-label="Pull request sections">
-        <button role="tab" aria-selected={section === "actions"} className={section === "actions" ? "segment-tab active" : "segment-tab"} onClick={() => setSection("actions")} data-testid="pull-tab-actions">Actions</button>
-        <button
-          role="tab"
-          aria-selected={section === "comments"}
-          className={section === "comments" ? "segment-tab active" : "segment-tab"}
-          onClick={() => setSection("comments")}
-          data-testid="pull-tab-comments"
-        >
-          Conversation
-          {openLineThreads(pull).length > 0
-            ? ` · ${openLineThreads(pull).length}`
-            : ""}
-        </button>
-        <button
-          role="tab"
-          aria-selected={section === "checks"}
-          className={section === "checks" ? "segment-tab active" : "segment-tab"}
-          onClick={() => setSection("checks")}
-          data-testid="pull-tab-checks"
-        >
-          {checksLabel}
-        </button>
-        <button
-          role="tab"
-          aria-selected={section === "changes"}
-          className={section === "changes" ? "segment-tab active" : "segment-tab"}
-          onClick={() => setSection("changes")}
-          data-testid="pull-tab-changes"
-        >
-          Changes
-        </button>
-      </div>
-
-      {section === "actions" && <PullDelivery key={pull.pullRequestId} pull={pull} canManage={detail.capabilities.includes("pr.manage")} />}
-      {section === "comments" && (
-        <PullReview
-          detail={detail}
-          pull={pull}
-          decision={decision}
-          busy={busy}
-          onAct={act}
-          setNote={setNote}
-          preferredSessionId={preferredSessionId}
-        />
+        </>
       )}
       {section === "checks" && (
         <>
@@ -443,6 +464,51 @@ export function PullRequestPage({
           {note}
         </p>
       )}
+      </div>
+
+      {/* The side column (D-210 amended): the facts the host keeps beside
+          the conversation — reviewers, labels, the branches, and the
+          approach this request publishes — as words, never as chrome. */}
+      <aside className="pull-side" data-testid="pull-side" aria-label="Request facts">
+        <div className="pull-side-block">
+          <h3 className="field-label">Reviewers</h3>
+          {pull.requestedReviewers.length === 0 ? (
+            <p className="quiet">No reviews yet</p>
+          ) : (
+            <ul className="pull-side-list" data-testid="pull-side-reviewers">
+              {pull.requestedReviewers.map((login) => (
+                <li key={login}>
+                  <Person login={login} />
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* The formal review is submitted from beside the reviewers, whatever
+              section is open — the host keeps its review control at hand too. */}
+          <FormalPullReview key={pull.pullRequestId} pull={pull} canManage={detail.capabilities.includes("pr.manage")} />
+        </div>
+        <div className="pull-side-block">
+          <h3 className="field-label">Labels</h3>
+          {pull.labels.length === 0 ? (
+            <p className="quiet">None yet</p>
+          ) : (
+            <p className="receipt-line" data-testid="pull-side-labels">
+              {pull.labels.join(", ")}
+            </p>
+          )}
+        </div>
+        <div className="pull-side-block">
+          <h3 className="field-label">Branches</h3>
+          <p className="mono pull-side-branches">
+            {pull.headRef} → {pull.baseRef}
+          </p>
+        </div>
+        <div className="pull-side-block">
+          <h3 className="field-label">Approach</h3>
+          <p className="quiet">{chosen?.name ?? "The chosen approach"}</p>
+        </div>
+      </aside>
+      </div>
     </section>
   );
 }

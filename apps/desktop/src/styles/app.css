@@ -8205,3 +8205,61 @@ span.trace-attachment-transcript:hover {
   border-left: none;
   border-right: 1px solid var(--edge);
 }
+
+/* The request page's two columns (D-210 amended): the conversation at
+   least 55% wide, the side column of facts beside it at the host's
+   proportion, stacked below the single-column threshold. The tab row sits
+   under the head, before the description, as the host's does. */
+.pull-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: var(--s-5);
+  width: 100%;
+  align-items: start;
+}
+
+.pull-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+}
+
+.pull-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-1);
+}
+
+.pull-side-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.pull-side-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+.pull-side-branches {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.pull-number {
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+@media (max-width: 900px) {
+  .pull-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

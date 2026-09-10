@@ -2962,6 +2962,8 @@ A downstream request is never the lane's own publication. It blocks no Publish a
 
 **Revisit when.** A thread wants its diff hunk in the card; or the host's timeline (reviews, approvals, force-pushes) wants listing between description and conversation, which is the next block the host's page has and this one does not.
 
+**Amended 2026-09-10 — the whole anatomy, in the host's order.** The owner, on the page beside GitHub's: "copy GitHub style fully." What the page still had backwards: the section control sat below the description, the commits were always on, and the merge box stood between the description and the conversation. Now the row of sections sits under the head as the host's does — Conversation, Commits (counted), Checks (counted), Files changed (counted), Actions — and the description, the conversation, and then the completion (the host's merge box, at the foot of the conversation) are the Conversation section's content; Commits and Files changed are their own. A side column beside the conversation carries what the host keeps beside it: reviewers, labels, the branches, the approach this request publishes — words, not chrome; it stacks below the single-column threshold. The title carries the number at its end in the quiet colour, as the host writes it. Same words, same actions, same tests; the order is the host's.
+
 ## D-211 — People on the request page wear their picture
 
 **Context.** On the restructured page (D-210) the owner, immediately: "where my GitHub username is and where the reviewers' GitHub usernames are, there is no icon to represent — makes it so much easier to see frankly." GitHub puts a face beside every name on a request, and a conversation scans by faces before it scans by names.

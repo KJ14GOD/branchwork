@@ -444,7 +444,20 @@ describe("shipping a decision through GitHub (D-099)", () => {
       expect(await page.getByTestId("pull-no-silent-merge").innerText()).toContain(
         "nothing ever merges silently"
       );
+      // The host's order (D-210 amended): the section row under the head
+      // with its counts, the side column of facts, and the commits behind
+      // their own section — the description stays the conversation's first
+      // card.
+      expect(await page.getByTestId("pull-tab-commits").innerText()).toMatch(/^Commits/);
+      expect(await page.getByTestId("pull-tab-changes").innerText()).toMatch(/^Files changed/);
+      expect(await page.getByTestId("pull-side").isVisible()).toBe(true);
+      expect(await page.getByTestId("pull-title").innerText()).toMatch(/#\d+$/);
       await shot("109-pull-request-page.png");
+      await page.getByTestId("pull-tab-commits").click();
+      await page.getByTestId("pull-commits-block").waitFor({ timeout: 10_000 });
+      expect(await page.getByTestId("pull-body").count()).toBe(0);
+      await page.getByTestId("pull-tab-comments").click();
+      await page.getByTestId("pull-body").waitFor({ timeout: 10_000 });
 
       // --- Visual evidence on the request (D-122) ---------------------------
       // The artifact is seeded over the real API — begin, upload against the
@@ -612,6 +625,9 @@ describe("shipping a decision through GitHub (D-099)", () => {
       );
 
       // --- Ready is a person's own claim ------------------------------------
+      // The completion lives at the foot of Conversation, where the host keeps
+      // its merge box (D-210 amended); come back to it before the verb.
+      await page.getByTestId("pull-tab-comments").click();
       await page.getByTestId("mark-ready").click();
       await until("ready to land", (value) => value.pullRequest?.state === "ready");
       await expect
@@ -690,6 +706,9 @@ describe("shipping a decision through GitHub (D-099)", () => {
       // --- The merge is Novus's control and GitHub's act (D-100) ------------
       // The confirm restates the one remaining blocker (lint, non-required)
       // and proceeding accepts exactly it — never silently.
+      // The completion lives at the foot of Conversation, where the host keeps
+      // its merge box (D-210 amended); come back to it before the verb.
+      await page.getByTestId("pull-tab-comments").click();
       await page.getByTestId("merge-open").click();
       await page.getByTestId("merge-blockers").waitFor({ timeout: 20_000 });
       // The label renders in the house micro-caps; the words are what matter.
@@ -804,12 +823,18 @@ describe("shipping a decision through GitHub (D-099)", () => {
 
       // PR #2 goes the same road to its merge, so completion's tail below
       // closes the mission's last request rather than its first.
+      // The completion lives at the foot of Conversation, where the host keeps
+      // its merge box (D-210 amended); come back to it before the verb.
+      await page.getByTestId("pull-tab-comments").click();
       await page.getByTestId("mark-ready").click();
       await until(
         "PR #2 to be ready",
         (value) => value.pullRequest?.state === "ready",
         60_000
       );
+      // The completion lives at the foot of Conversation, where the host keeps
+      // its merge box (D-210 amended); come back to it before the verb.
+      await page.getByTestId("pull-tab-comments").click();
       await page.getByTestId("merge-open").click();
       await page.getByTestId("merge-confirm").waitFor({ timeout: 20_000 });
       await page.getByTestId("merge-confirm").click();
