@@ -27,6 +27,7 @@ import {
   RunCommandSchema,
   WorkspaceSettingsSchema,
   harnessOf,
+  type HarnessId,
   SpeedSchema,
   type Speed
 } from "@novus/contracts";
@@ -202,6 +203,8 @@ export interface RunnerAgentDeps {
   notify?: (note: {
     kind: "turn_completed" | "turn_failed" | "needs_you";
     missionId: string;
+    /** Whose question it is, so the title names the harness that asked. */
+    harness?: HarnessId;
   }) => void;
   /** The pixels the agent just looked at during raw computer use (D-218), so
    *  the room can show what it sees. Host-local and ephemeral — never stored,
@@ -2005,7 +2008,7 @@ export function startRunnerAgent(deps: RunnerAgentDeps): RunnerAgent {
       // The harness asked a person's question: the one moment nothing moves
       // until somebody comes back (D-180).
       if (event.kind === "approval.requested") {
-        deps.notify?.({ kind: "needs_you", missionId: args.missionId });
+        deps.notify?.({ kind: "needs_you", missionId: args.missionId, harness: harnessOf(args.model) });
       }
       // Applied means the harness has it. The session event is the moment the
       // harness actually took the turn, so that is when it is marked.

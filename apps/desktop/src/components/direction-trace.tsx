@@ -5,11 +5,11 @@ import { novus } from "../bridge";
 import { clockTime, compactCount, elapsed, plural, shortSha, usd } from "../format";
 import { FileBadge, HarnessMark, HumanMark } from "./identity";
 import { HarnessGlyph } from "./harness-glyph";
-import { HARNESSES, type HarnessId } from "@novus/contracts";
+import type { HarnessId } from "@novus/contracts";
 import { Markdown } from "./markdown";
 import type { ControlBlock, Feed, FeedBlock, Segment, ToolStep, TraceBlock, UsageTotals, WorkerView } from "./derive-feed";
 import { contextFillOf } from "./derive-feed";
-import { buildFeed, HARNESS_NAME, workerFiles, workerState } from "./derive-feed";
+import { buildFeed, harnessLabel, workerFiles, workerState } from "./derive-feed";
 
 /** The rendering half of the direction thread; the projection lives in
  *  derive-feed.ts. Re-exported so existing importers keep one entry point. */
@@ -256,7 +256,7 @@ function SegmentView({
                 <HarnessMark />
               )}
               <span className="harness-name">
-                {HARNESSES.find((entry) => entry.id === harness)?.label ?? HARNESS_NAME}
+                {harnessLabel(harness)}
               </span>
             </span>
           )}

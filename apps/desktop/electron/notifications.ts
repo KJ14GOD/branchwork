@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { HARNESSES, type HarnessId } from "@novus/contracts";
 
 /**
  * Native notifications (D-180): the machine tells a person the room needs
@@ -59,14 +60,18 @@ export interface NotifierDeps {
   missionWords: (missionId: string) => Promise<string | null>;
 }
 
-const TITLES: Record<NotificationKind, string> = {
-  turn_completed: "Turn completed",
-  turn_failed: "Turn failed",
-  needs_you: "Claude Code needs you"
-};
+/** The title names the harness that asked (D-230): a note without one —
+ *  older callers, tests — reads as Claude Code, the harness before there were
+ *  two. */
+function titleOf(kind: NotificationKind, harness: HarnessId | undefined): string {
+  if (kind === "turn_completed") return "Turn completed";
+  if (kind === "turn_failed") return "Turn failed";
+  const id = harness ?? "claude-code";
+  return `${HARNESSES.find((entry) => entry.id === id)?.label ?? id} needs you`;
+}
 
 export interface Notifier {
-  notify(note: { kind: NotificationKind; missionId: string }): void;
+  notify(note: { kind: NotificationKind; missionId: string; harness?: HarnessId }): void;
   prefs(): NotificationPrefs;
   setPrefs(next: NotificationPrefs): void;
 }
@@ -89,7 +94,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
         .missionWords(note.missionId)
         .catch(() => null)
         .then((words) => {
-          deps.show(TITLES[note.kind], words ?? "", () => deps.open(note.missionId));
+          deps.show(titleOf(note.kind, note.harness), words ?? "", () => deps.open(note.missionId));
         });
     }
   };

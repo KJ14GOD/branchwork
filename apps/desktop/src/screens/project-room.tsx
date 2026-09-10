@@ -20,6 +20,7 @@ import { setPinsFor, usePins } from "../components/pins";
 import {
   Composer,
   profileLabel,
+  storedModel,
   type PolicyControl,
   type SubmitOutcome
 } from "../components/composer";
@@ -46,7 +47,7 @@ import {
   TraceView,
   buildFeed
 } from "../components/direction-trace";
-import { latestContextFill } from "../components/derive-feed";
+import { harnessLabel, latestContextFill } from "../components/derive-feed";
 import { GatedAction } from "../components/gated";
 import { HumanMark } from "../components/identity";
 import { ArtifactView } from "../components/artifact-view";
@@ -1078,7 +1079,7 @@ export function ProjectRoom({
     );
     if (!block || block.kind !== "trace") return null;
     const worker = block.workers.find((candidate) => candidate.id === openWorker.workerId);
-    return worker ? { worker, settled: block.settled } : null;
+    return worker ? { worker, settled: block.settled, harness: block.harness } : null;
   }, [openWorker, feed]);
 
   /** A live recording's machine-local state, for the preview tab's word
@@ -1131,7 +1132,11 @@ export function ProjectRoom({
     const element = scrollRef.current;
     if (element && pinnedRef.current) element.scrollTop = element.scrollHeight;
   }, [eventCount, selectedMissionId, readingSessionId]);
-  const stateLine = detail ? deriveStateLine(detail) : null;
+  // The chip's own choice names the harness wherever no turn has yet (the
+  // draft lead, the first state line); it starts where the composer starts.
+  const [chipModel, setChipModel] = useState<ModelId>(storedModel);
+  const chipHarness = harnessOf(chipModel);
+  const stateLine = detail ? deriveStateLine(detail, chipHarness) : null;
   const controller = detail ? controllerOf(detail) : null;
   const isController = detail ? viewerIsController(detail) : false;
   /** Every live write turn — several at once when scoped chats run in
@@ -2408,6 +2413,7 @@ export function ProjectRoom({
             <WorkerInspector
               worker={openWorkerView.worker}
               settled={openWorkerView.settled}
+              harnessName={harnessLabel(openWorkerView.harness)}
               onBack={closeWorker}
             />
           </div>
@@ -2421,7 +2427,12 @@ export function ProjectRoom({
       >
         <div className="feed" data-testid="chat">
           {isDraft ? (
-            <DraftCanvas draft={draft} project={project} onRetry={() => void resolveBase()} />
+            <DraftCanvas
+              draft={draft}
+              project={project}
+              harnessName={harnessLabel(chipHarness)}
+              onRetry={() => void resolveBase()}
+            />
           ) : detail && feed ? (
             <>
               {feed.blocks.map((block) =>
@@ -2728,6 +2739,7 @@ export function ProjectRoom({
             : null
         }
         onSubmit={submit}
+        onModelChange={setChipModel}
         attach={
           isDraft || !detail
             ? undefined
@@ -3177,10 +3189,13 @@ function ScopeDialog({
 function DraftCanvas({
   draft,
   project,
+  harnessName,
   onRetry
 }: {
   draft: Draft | null;
   project: Project;
+  /** The chip's harness, by name: what the first direction will start. */
+  harnessName: string;
   onRetry: () => void;
 }) {
   if (draft === null || draft.base.kind === "resolving") {
@@ -3200,7 +3215,7 @@ function DraftCanvas({
   }
   return (
     <div className="draft-canvas">
-      <p className="draft-lead">The first direction creates this mission and starts Claude Code.</p>
+      <p className="draft-lead">The first direction creates this mission and starts {harnessName}.</p>
       <p className="quiet" data-testid="draft-base">
         Pinned to {project.name} · <span className="mono">{draft.base.base.ref}</span> ·{" "}
         <span className="mono">{shortSha(draft.base.base.sha)}</span>

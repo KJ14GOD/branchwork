@@ -5,6 +5,7 @@ import {
   type DirectionContextRef,
   type Effort,
   type Mission,
+  harnessOf,
   type ModelId,
   type MissionDetailResponse,
   type Organization,
@@ -15,7 +16,8 @@ import {
 } from "@novus/contracts";
 import { novus } from "../bridge";
 import { AddProjectDialog, type PickedRepository } from "../components/add-project-dialog";
-import { Composer, DONT_ASK_WARNING } from "../components/composer";
+import { Composer, dontAskWarning } from "../components/composer";
+import { harnessLabel } from "../components/derive-feed";
 import { Dialog } from "../components/dialog";
 import { GearGlyph, HumanMark, SignOutGlyph } from "../components/identity";
 import { SettingsDialog } from "../components/settings-dialog";
@@ -2826,7 +2828,7 @@ function NewMissionDialog({
         missionId,
         workstreamId,
         profile,
-        acknowledged: profile === "dont_ask" ? DONT_ASK_WARNING : null
+        acknowledged: profile === "dont_ask" ? dontAskWarning(harnessLabel(harnessOf(model))) : null
       });
       // The mission exists either way. A refused profile is said out loud
       // rather than swallowed, and nothing is started under a policy the
@@ -2967,7 +2969,7 @@ function NewMissionDialog({
         <Composer
           capabilities={["direction.submit"]}
           isController
-          placeholderOverride="What should Claude Code work on?"
+          placeholderOverride={(harness) => `What should ${harness} work on?`}
           onEmptySubmit={onClose}
           onSubmit={create}
           /* Spoken direction (D-240): no worktree yet, so the repository's

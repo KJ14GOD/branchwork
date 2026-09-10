@@ -82,8 +82,16 @@ const PROFILE_MEANINGS: Record<PermissionProfile, string> = {
 /** The sentence a Mission Admin confirms to set Don't ask — sent to the server
  *  verbatim as the acknowledgement and recorded on `policy.changed`, the
  *  D-100 accepted-blockers pattern. */
-export const DONT_ASK_WARNING =
-  "Every act Claude asks about will be approved by this policy — shell commands included — until the profile changes.";
+export function dontAskWarning(harness: string): string {
+  return `Every act ${harness} asks about will be approved by this policy — shell commands included — until the profile changes.`;
+}
+
+/** The model the chip opens on: the last one chosen on this machine. Shared
+ *  with the surfaces that speak the harness's name before a turn has run. */
+export function storedModel(): ModelId {
+  const stored = localStorage.getItem("novus-model");
+  return isModelId(stored) ? stored : DEFAULT_MODEL;
+}
 
 export function profileLabel(profile: PermissionProfile): string {
   return PERMISSION_PROFILES.find((option) => option.id === profile)?.label ?? profile;
@@ -183,6 +191,7 @@ export function Composer({
   denialReason,
   isController,
   placeholderOverride,
+  onModelChange,
   alongsideOffer,
   chatHarness,
   policy,
@@ -211,7 +220,10 @@ export function Composer({
   isController: boolean;
   /** Overrides the state-derived placeholder — the ask-dialog is a question,
    *  not a room, and its placeholder is the question (D-077). */
-  placeholderOverride?: string;
+  /** A fixed placeholder, or one written for the chip's harness by name. */
+  placeholderOverride?: string | ((harness: string) => string);
+  /** The chip moved: surfaces outside the box that name the harness follow. */
+  onModelChange?: (model: ModelId) => void;
   /** Set while the workspace's turn belongs to another chat and this person
    *  holds the baton (D-095): sending then asks — queue behind the named
    *  running chat, or run this one alongside, read-only. Null keeps the
@@ -323,10 +335,7 @@ export function Composer({
 }) {
   const scratch = scratchKey !== undefined ? scratchByKey.get(scratchKey) : undefined;
   const [textValue, setTextValue] = useState(scratch?.text ?? "");
-  const [model, setModel] = useState<ModelId>(() => {
-    const stored = localStorage.getItem("novus-model");
-    return isModelId(stored) ? stored : DEFAULT_MODEL;
-  });
+  const [model, setModel] = useState<ModelId>(storedModel);
   const [effort, setEffort] = useState<Effort>(() => {
     const stored = localStorage.getItem("novus-effort");
     return isEffort(stored) ? stored : DEFAULT_EFFORT;
@@ -905,7 +914,9 @@ export function Composer({
     // reads the current state when it runs.
   }, [pendingChoice, alongsideOffer]);
 
-  const placeholder = placeholderOverride ?? (!known
+  const overridden =
+    typeof placeholderOverride === "function" ? placeholderOverride(harnessName(harnessOf(model))) : placeholderOverride;
+  const placeholder = overridden ?? (!known
     ? "Loading this mission…"
     : !mayDirect
       // A refusal the person can act on belongs where they are looking, not
@@ -1278,7 +1289,7 @@ export function Composer({
             }
             if (event.key === "Escape" && pendingChoice) setPendingChoice(false);
           }}
-          aria-label="Direct Claude Code"
+          aria-label={`Direct ${harnessName(harnessOf(model))}`}
           data-testid="composer-input"
         />
           {dictationTarget !== null && (
@@ -1471,6 +1482,7 @@ export function Composer({
                         data-model={option.id}
                         onClick={() => {
                           setModel(option.id);
+                          onModelChange?.(option.id);
                           localStorage.setItem("novus-model", option.id);
                           setOpenMenu(null);
                         }}
@@ -1771,7 +1783,7 @@ export function Composer({
         >
           <header className="dialog-head">
             <h2>Don't ask</h2>
-            <p className="dialog-sub">{DONT_ASK_WARNING}</p>
+            <p className="dialog-sub">{dontAskWarning(harnessName(harnessOf(model)))}</p>
           </header>
           <div className="dialog-body">
             <div className="confirm-field">
@@ -1798,7 +1810,7 @@ export function Composer({
             <button
               className="btn btn-danger"
               disabled={settingProfile}
-              onClick={() => void chooseProfile("dont_ask", DONT_ASK_WARNING)}
+              onClick={() => void chooseProfile("dont_ask", dontAskWarning(harnessName(harnessOf(model))))}
               data-testid="policy-confirm-set"
             >
               Set Don't ask, accepting this

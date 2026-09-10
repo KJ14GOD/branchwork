@@ -194,4 +194,29 @@ describe("what can be decided before the first turn (D-201)", () => {
     },
     240_000
   );
+
+  it(
+    "names the harness the chip has chosen, never one by habit",
+    async () => {
+      await openAsk();
+      const ask = page.getByTestId("new-mission-dialog");
+      const input = ask.getByTestId("composer-input");
+      // A fresh box opens on the stored model, which the first test left on
+      // Claude Code; the words say so and only so.
+      await expect.poll(async () => input.getAttribute("placeholder")).toBe("What should Claude Code work on?");
+
+      // Pick a Codex model: the placeholder follows the chip the moment it
+      // moves, before any mission exists to have run on anything.
+      await ask.getByTestId("model-chip").click();
+      await ask.getByTestId("provider-codex").click();
+      await ask.getByTestId("model-submenu").waitFor({ timeout: 5000 });
+      await ask.getByTestId("model-option").first().click();
+      await expect.poll(async () => input.getAttribute("placeholder")).toBe("What should Codex work on?");
+      expect(await input.getAttribute("aria-label")).toBe("Direct Codex");
+      await page.screenshot({ path: join(evidenceDir, "260-ask-dialog-names-the-harness.png") });
+      await page.keyboard.press("Escape");
+      await ask.waitFor({ state: "detached", timeout: 10_000 });
+    },
+    120_000
+  );
 });

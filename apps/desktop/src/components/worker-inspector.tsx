@@ -26,11 +26,14 @@ export function collapseRepeats(steps: ToolStep[]): { step: ToolStep; count: num
 export function WorkerInspector({
   worker,
   settled,
+  harnessName,
   onBack
 }: {
   worker: WorkerView;
   /** Whether the parent turn has settled, so the state word stays honest. */
   settled: boolean;
+  /** The turn's harness by name — the thing that forwarded, or did not. */
+  harnessName: string;
   onBack: () => void;
 }) {
   const state = workerState(worker, settled);
@@ -106,7 +109,7 @@ export function WorkerInspector({
         <p className="quiet">
           {state === "working"
             ? "Nothing forwarded yet — the worker is still going."
-            : "Claude Code forwarded none of this worker's activity."}
+            : `${harnessName} forwarded none of this worker's activity.`}
         </p>
       )}
 

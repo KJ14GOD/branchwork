@@ -1,5 +1,4 @@
 import {
-  HARNESSES,
   TERMINAL_EXECUTION_STATES,
   type EnabledSkill,
   type Decision,
@@ -15,12 +14,12 @@ import {
   type WorkspaceProcess
 } from "@novus/contracts";
 import { clockTime, plural } from "../format";
+import { harnessLabel } from "./derive-feed";
 
 /** Pure projections of one poll (`MissionDetailResponse`) into what the room
  *  shows. No fetching, no fabrication: everything here is derived from state
  *  the server actually sent. */
 
-const HARNESS_NAME = "Claude Code";
 
 /**
  * One lane's view of the mission (D-080).
@@ -501,7 +500,10 @@ export interface StateLineView {
  * renderer never invents one, and it never claims an action the bridge cannot
  * perform.
  */
-export function deriveStateLine(detail: MissionDetailResponse): StateLineView {
+/** `chipHarness` is the composer's current choice: the name the sentence
+ *  uses before any turn has run, so a fresh mission never names a harness the
+ *  person did not pick. Once a turn exists, the turn's own harness wins. */
+export function deriveStateLine(detail: MissionDetailResponse, chipHarness: HarnessId | null = null): StateLineView {
   const overlays = new Set(detail.overlays);
   const files = changedFiles(detail);
   const checks = checkTallies(detail);
@@ -530,7 +532,7 @@ export function deriveStateLine(detail: MissionDetailResponse): StateLineView {
     laneSessions(detail).length > 1 ? (runningSession(detail)?.title ?? null) : null;
 
   const runningHarness = (activeExecution(detail) ?? [...detail.executions].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0])?.harness;
-  const harnessName = HARNESSES.find((entry) => entry.id === runningHarness)?.label ?? HARNESS_NAME;
+  const harnessName = harnessLabel(runningHarness ?? chipHarness);
   const base = primaryStateLine(detail, files.length, checks, workingTitle, harnessName);
 
   // A queued direction that only the controller can apply is the room's real
@@ -1107,8 +1109,8 @@ function primaryStateLine(
    *  conversation — the detail sentence names it then (D-083). */
   workingTitle: string | null = null,
   /** Whose harness the sentence names (D-232): the running turn's, else the
-   *  lane's latest, else Claude Code — never a name the lane has not used. */
-  harnessName: string = HARNESS_NAME
+   *  lane's latest, else the composer's chip — never a name nobody chose. */
+  harnessName: string = harnessLabel(null)
 ): StateLineView {
   const quiet = { suffix: null, action: null, working: false };
   switch (detail.state) {

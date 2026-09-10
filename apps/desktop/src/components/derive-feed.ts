@@ -1,5 +1,5 @@
 import {
-  type HarnessId, PERMISSION_PROFILES } from "@novus/contracts";
+  HARNESSES, type HarnessId, PERMISSION_PROFILES } from "@novus/contracts";
 import type {
   Checkpoint,
   Direction,
@@ -23,7 +23,13 @@ import { shortSha } from "../format";
  * a lone centred fragment.
  */
 
-export const HARNESS_NAME = "Claude Code";
+/** The harness's own name for a sentence, read from the one table the
+ *  composer's chip reads (D-230). Null — a turn that never stated one — reads
+ *  as Claude Code, the harness every pre-D-230 turn ran on. */
+export function harnessLabel(id: HarnessId | string | null | undefined): string {
+  const known = id ?? "claude-code";
+  return HARNESSES.find((entry) => entry.id === known)?.label ?? known;
+}
 
 /** Events that describe getting ready, not doing the work. They collapse into
  *  one subordinate row above the first trace. */
