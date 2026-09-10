@@ -1,4 +1,4 @@
-import { DeploymentReviewInputSchema, PullReviewInputSchema } from "@novus/contracts";
+import { DeploymentReviewInputSchema, PullReviewInputSchema, UpdatePrefsInputSchema } from "@novus/contracts";
 import {
   BrowserWindow,
   Notification,
@@ -10,8 +10,7 @@ import {
   session,
   shell,
   systemPreferences,
-  type WebContents
-} from "electron";
+  type WebContents, crashReporter } from "electron";
 import { execFile, spawn } from "node:child_process";
 import crossSpawn from "cross-spawn";
 import { homedir } from "node:os";
@@ -90,6 +89,9 @@ import { TOKEN_BG } from "./design-tokens";
 import { probeHarnesses } from "./harness-probe";
 import { shutdownOpenCode } from "./opencode-server";
 import { amendPathFromLoginShell } from "./workspace-env";
+import { autoUpdater } from "electron-updater";
+import { createAppUpdates, fileUpdatePrefs, type AppUpdates } from "./app-updates";
+import { createDiagnostics } from "./diagnostics";
 import {
   listLocalBranches,
   localBaseStatus,
@@ -192,6 +194,44 @@ const FAKE_IDENTITY = !app.isPackaged ? process.env.NOVUS_FAKE_IDENTITY : undefi
 if (process.env.NOVUS_USER_DATA_DIR && !app.isPackaged) {
   app.setPath("userData", process.env.NOVUS_USER_DATA_DIR);
 }
+
+// What the machine keeps about its own failures (D-250): crash reports
+// written beside userData and never uploaded, and the main process's own
+// log, rotated, with the console's warnings and errors mirrored into it and
+// every process that dies recorded — so a crash on someone else's machine
+// has a file behind it. Started before anything else runs.
+crashReporter.start({ productName: "Novus", uploadToServer: false, compress: true });
+const diagnostics = createDiagnostics({
+  logsPath: join(app.getPath("userData"), "logs"),
+  crashReportsPath: app.getPath("crashDumps")
+});
+{
+  const mirror = (level: "warn" | "error", original: (...args: unknown[]) => void) =>
+    (...args: unknown[]) => {
+      original(...args);
+      diagnostics.record(`${level} ${args.map((arg) => (arg instanceof Error ? (arg.stack ?? arg.message) : String(arg))).join(" ")}`);
+    };
+  console.warn = mirror("warn", console.warn.bind(console));
+  console.error = mirror("error", console.error.bind(console));
+}
+// The monitor observes an uncaught exception without changing what Electron
+// does with it; a rejection nobody handled is recorded the same way.
+process.on("uncaughtExceptionMonitor", (error, origin) => {
+  diagnostics.record(`${origin}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+});
+process.on("unhandledRejection", (reason) => {
+  diagnostics.record(`unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
+});
+app.on("render-process-gone", (_event, contents, details) => {
+  diagnostics.record(`renderer gone (${details.reason}, exit ${details.exitCode}): ${contents.getURL().slice(0, 120)}`);
+});
+app.on("child-process-gone", (_event, details) => {
+  diagnostics.record(`child process gone (${details.type}${details.name ? ` ${details.name}` : ""}, ${details.reason}, exit ${details.exitCode})`);
+});
+diagnostics.record(`novus ${app.getVersion()} starting (electron ${process.versions.electron}, ${process.platform} ${process.arch}, packaged ${app.isPackaged})`);
+
+/** The update channel (D-250), wired once the app is ready. */
+let updates: AppUpdates | null = null;
 
 /**
  * Which control plane this client speaks to (D-222). A Finder launch carries
@@ -791,6 +831,34 @@ function registerIpc(): void {
 
   ipcMain.handle("novus:system:version", async () => {
     return ok({ app: app.getVersion(), electron: process.versions.electron });
+  });
+
+  // The update channel and the diagnostics (D-250): read by the About page,
+  // acted on by the person alone.
+  const updatesOff = () => ({ ok: false as const, code: "unavailable", message: "Updates are not wired in this build." });
+  ipcMain.handle("novus:system:updates", async () => (updates ? ok(updates.status()) : updatesOff()));
+  ipcMain.handle("novus:system:check-updates", async () => (updates ? ok(await updates.check()) : updatesOff()));
+  ipcMain.handle("novus:system:install-update", async () => {
+    if (!updates) return updatesOff();
+    const outcome = updates.install();
+    return outcome.ok ? ok(null) : { ok: false as const, code: "not_ready", message: outcome.message };
+  });
+  ipcMain.handle("novus:system:set-update-prefs", async (_event, raw: unknown) => {
+    if (!updates) return updatesOff();
+    const parsed = UpdatePrefsInputSchema.safeParse(raw);
+    if (!parsed.success) return { ok: false as const, code: "invalid_input", message: "Malformed preferences." };
+    return ok(updates.setPrefs(parsed.data));
+  });
+  ipcMain.handle("novus:system:diagnostics", async () => ok(diagnostics.summary()));
+  ipcMain.handle("novus:system:open-logs", async () => {
+    mkdirSync(diagnostics.summary().logsPath, { recursive: true });
+    const failure = await shell.openPath(diagnostics.summary().logsPath);
+    return failure ? { ok: false as const, code: "open_failed", message: failure } : ok(null);
+  });
+  ipcMain.handle("novus:system:open-crash-reports", async () => {
+    mkdirSync(diagnostics.summary().crashReportsPath, { recursive: true });
+    const failure = await shell.openPath(diagnostics.summary().crashReportsPath);
+    return failure ? { ok: false as const, code: "open_failed", message: failure } : ok(null);
   });
 
   // Lent accounts (D-217): the machine's own claude.ai connectors, enumerated
@@ -2978,6 +3046,23 @@ app.whenReady().then(async () => {
   registerIpc();
   await restoreSession();
   createWindow();
+  // The channel asks GitHub Releases only from a packaged build, and only
+  // when the person's switch is on; the updater's own words go to the log.
+  autoUpdater.logger = {
+    info: (message: unknown) => diagnostics.record(`updater: ${String(message)}`),
+    warn: (message: unknown) => diagnostics.record(`updater warn: ${String(message)}`),
+    error: (message: unknown) => diagnostics.record(`updater error: ${String(message)}`),
+    debug: () => undefined
+  };
+  updates = createAppUpdates({
+    updater: app.isPackaged ? autoUpdater : null,
+    packaged: app.isPackaged,
+    version: app.getVersion(),
+    repository: "KJ14GOD/branchwork",
+    store: fileUpdatePrefs(join(app.getPath("userData"), "updates.json")),
+    log: (line) => diagnostics.record(line)
+  });
+  updates.start();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -2999,6 +3084,7 @@ app.on("before-quit", (event) => {
   Promise.allSettled([
     shutdownTerminals(),
     dictation?.dispose() ?? Promise.resolve(),
+    Promise.resolve(updates?.dispose()),
     runner?.shutdown("The host desktop closed while the agent was working.") ?? Promise.resolve(),
     shutdownOpenCode()
   ]).then(exit, exit);

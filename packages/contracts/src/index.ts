@@ -4179,6 +4179,48 @@ export type IpcResult<T> =
  * Every privileged verb here is enforced again on the server; this interface
  * is a way to ask, never a grant (AGENTS.md rule 13).
  */
+// --- Updates and diagnostics (D-250) -----------------------------------------
+// A packaged Novus keeps itself current from GitHub Releases when the person
+// allows it, downloads in the background, and installs only when the person
+// restarts for it; a development build never checks. Crashes and the main
+// process's log stay on the machine, and the About page says where.
+
+export const UpdateStateSchema = z.enum(["off", "idle", "checking", "up_to_date", "available", "downloading", "ready", "failed"]);
+export type UpdateState = z.infer<typeof UpdateStateSchema>;
+
+export const UpdateStatusSchema = z.object({
+  /** Where builds come from: the releases of one GitHub repository. */
+  channel: z.object({ provider: z.literal("github"), repository: z.string() }),
+  /** Only a packaged build checks; a development build reads `off`. */
+  packaged: z.boolean(),
+  /** The person's own switch: check on launch and every six hours. */
+  automatic: z.boolean(),
+  state: UpdateStateSchema,
+  /** The build running now. */
+  current: z.string(),
+  /** The newer build the channel offers, once one is known. */
+  available: z.string().nullable(),
+  /** Download progress in whole percent while `downloading`. */
+  progress: z.number().int().min(0).max(100).nullable(),
+  error: z.string().nullable(),
+  /** When the channel last answered, ISO-8601. */
+  checkedAt: z.string().nullable()
+});
+export type UpdateStatus = z.infer<typeof UpdateStatusSchema>;
+
+export const UpdatePrefsInputSchema = z.object({ automatic: z.boolean().optional() });
+export type UpdatePrefsInput = z.infer<typeof UpdatePrefsInputSchema>;
+
+export const DiagnosticsSchema = z.object({
+  /** The folder holding the main process's rotating log. */
+  logsPath: z.string(),
+  /** The folder the crash reporter writes minidumps to; nothing is uploaded. */
+  crashReportsPath: z.string(),
+  crashReports: z.number().int().nonnegative(),
+  logBytes: z.number().int().nonnegative()
+});
+export type Diagnostics = z.infer<typeof DiagnosticsSchema>;
+
 export interface NovusBridge {
   auth: {
     status(): Promise<IpcAuthStatus>;
@@ -4192,6 +4234,17 @@ export interface NovusBridge {
   system: {
     /** The build a person is running, for the settings About page (D-174). */
     version(): Promise<IpcResult<{ app: string; electron: string }>>;
+    /** The update channel's standing (D-250), read by the About page. */
+    updates(): Promise<IpcResult<UpdateStatus>>;
+    /** Asks the channel now, whatever the automatic switch says. */
+    checkForUpdates(): Promise<IpcResult<UpdateStatus>>;
+    /** Restarts into the downloaded build; refused in words unless one is ready. */
+    installUpdate(): Promise<IpcResult<null>>;
+    setUpdatePrefs(input: UpdatePrefsInput): Promise<IpcResult<UpdateStatus>>;
+    /** Where crashes and the log are kept on this machine, and how much. */
+    diagnostics(): Promise<IpcResult<Diagnostics>>;
+    openLogs(): Promise<IpcResult<null>>;
+    openCrashReports(): Promise<IpcResult<null>>;
   };
   /** Lent accounts (D-217): the machine's own claude.ai connectors, and the
    *  person's own On/Off per connector — the first-run Lend page and the

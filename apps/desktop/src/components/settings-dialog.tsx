@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { DictationSettings, SetupProbeResponse } from "@novus/contracts";
+import type { DictationSettings, SetupProbeResponse, Diagnostics, UpdateStatus } from "@novus/contracts";
 import { novus } from "../bridge";
 import { focusQuietly } from "./dialog";
 import { applyTheme, themePreference, THEME_CHOICES, type ThemePreference } from "../theme";
@@ -200,6 +200,31 @@ function CardRow({
   );
 }
 
+/** The update channel's standing as one sentence (D-250), never a badge. */
+function updateWords(status: UpdateStatus): string {
+  const at = status.checkedAt ? new Date(status.checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
+  switch (status.state) {
+    case "off":
+      return "A development build never checks.";
+    case "idle":
+      return "Not checked yet.";
+    case "checking":
+      return "Checking GitHub Releases…";
+    case "up_to_date":
+      return at ? `Up to date · checked ${at}` : "Up to date";
+    case "available":
+      return `${status.available ?? "A newer build"} is available · downloading`;
+    case "downloading":
+      return `Downloading ${status.available ?? "a newer build"}${status.progress !== null ? ` · ${status.progress}%` : ""}`;
+    case "ready":
+      return `${status.available ?? "A newer build"} is downloaded · restart to update`;
+    case "failed":
+      return `Could not update: ${status.error ?? "the channel did not answer"}`;
+    default:
+      return "";
+  }
+}
+
 function Card({ heading, children }: { heading?: string; children: React.ReactNode }) {
   return (
     <section className="settings-section">
@@ -226,6 +251,29 @@ export function SettingsDialog({
     { name: string; defaultBranch: string; onThisMachine: boolean }[] | null
   >(null);
   const [version, setVersion] = useState<{ app: string; electron: string } | null>(null);
+  // The update channel and the diagnostics (D-250): read while About is open,
+  // and re-read every two seconds so a check or a download is watched.
+  const [updates, setUpdates] = useState<UpdateStatus | null>(null);
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [updateNote, setUpdateNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (page !== "about") return;
+    let alive = true;
+    const read = () => {
+      void novus().system.updates().then((result) => {
+        if (alive) setUpdates(result.ok ? result.value : null);
+      });
+      void novus().system.diagnostics().then((result) => {
+        if (alive) setDiagnostics(result.ok ? result.value : null);
+      });
+    };
+    read();
+    const timer = window.setInterval(read, 2_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [page]);
   const [notif, setNotif] = useState<{ turns: boolean; needsYou: boolean } | null>(null);
   const { data: connectors, setLent } = useConnectors();
   const [computerUse, setComputerUse] = useState<boolean | null>(null);
@@ -941,6 +989,104 @@ export function SettingsDialog({
               <CardRow title="Novus" trailing={<span className="settings-card-value">{version?.app ?? "…"}</span>} />
               <CardRow title="Electron" trailing={<span className="settings-card-value">{version?.electron ?? "…"}</span>} />
             </Card>
+            <Card heading="Updates">
+              <CardRow
+                title="Standing"
+                description={updates === null ? "…" : updateWords(updates)}
+                trailing={
+                  updates !== null && updates.packaged ? (
+                    <span className="settings-key-controls">
+                      {updates.state === "ready" ? (
+                        <button
+                          className="chip-button"
+                          onClick={() => {
+                            void novus().system.installUpdate().then((result) => {
+                              if (!result.ok) setUpdateNote(result.message);
+                            });
+                          }}
+                          data-testid="settings-updates-install"
+                        >
+                          Restart to update
+                        </button>
+                      ) : (
+                        <button
+                          className="chip-button"
+                          disabled={updates.state === "checking" || updates.state === "downloading"}
+                          onClick={() => {
+                            setUpdateNote(null);
+                            void novus().system.checkForUpdates().then((result) => {
+                              if (result.ok) setUpdates(result.value);
+                              else setUpdateNote(result.message);
+                            });
+                          }}
+                          data-testid="settings-updates-check"
+                        >
+                          Check now
+                        </button>
+                      )}
+                    </span>
+                  ) : undefined
+                }
+              />
+              {updates !== null && updates.packaged && (
+                <CardRow
+                  title="Check automatically"
+                  description="At launch, then every six hours while Novus is open. A build downloads in the background and installs only when you restart for it."
+                  trailing={
+                    <div className="settings-theme" role="group" aria-label="Check automatically">
+                      {[true, false].map((value) => (
+                        <button
+                          key={String(value)}
+                          className={updates.automatic === value ? "segment-tab active" : "segment-tab"}
+                          aria-pressed={updates.automatic === value}
+                          onClick={() => {
+                            void novus().system.setUpdatePrefs({ automatic: value }).then((result) => {
+                              if (result.ok) setUpdates(result.value);
+                            });
+                          }}
+                          data-testid={`settings-updates-automatic-${value ? "on" : "off"}`}
+                        >
+                          {value ? "On" : "Off"}
+                        </button>
+                      ))}
+                    </div>
+                  }
+                />
+              )}
+            </Card>
+            {updateNote !== null && (
+              <p className="settings-hint" data-testid="settings-updates-note">
+                {updateNote}
+              </p>
+            )}
+            <p className="settings-hint" data-testid="settings-updates-state">
+              {updates === null
+                ? "…"
+                : updates.packaged
+                  ? `Builds come from GitHub Releases of ${updates.channel.repository}. The check sends the version you run and nothing else leaves this Mac.`
+                  : `Builds come from GitHub Releases of ${updates.channel.repository}; only a packaged Novus checks.`}
+            </p>
+            <Card heading="Diagnostics">
+              <CardRow
+                title="Crash reports"
+                description={diagnostics === null ? "…" : diagnostics.crashReports === 0 ? "None on this Mac" : `${diagnostics.crashReports} on this Mac`}
+                trailing={
+                  <button className="chip-button" onClick={() => void novus().system.openCrashReports()} data-testid="settings-diagnostics-crashes">
+                    Open folder
+                  </button>
+                }
+              />
+              <CardRow
+                title="Log"
+                description={diagnostics === null ? "…" : `${Math.max(1, Math.round(diagnostics.logBytes / 1024))} KB, the main process's own record`}
+                trailing={
+                  <button className="chip-button" onClick={() => void novus().system.openLogs()} data-testid="settings-diagnostics-log">
+                    Open folder
+                  </button>
+                }
+              />
+            </Card>
+            <p className="settings-hint">Kept on this Mac and never uploaded. Send them along when you report a problem.</p>
             <p className="settings-hint">
               The multiplayer control plane for coding agents. Missions, evidence, and decisions live in the room; the record is the product.
             </p>

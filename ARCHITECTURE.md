@@ -291,11 +291,14 @@ Named failure modes with defined behavior — these are contracts, not aspiratio
 
 **The packaged desktop client (D-222).** `pnpm package` in `apps/desktop` produces the installable app with electron-builder — the same `dist-electron`/`dist-renderer` bytes `pnpm start` runs, plus production `node_modules`, with the pty's prebuilt binary unpacked from the asar. The build is deliberately unsigned (`identity: null`): Gatekeeper shows its warning and the README's right-click-Open note is the answer, until a Developer ID exists. Test hooks (`NOVUS_AUTH_AUTOVISIT`, `NOVUS_FAKE_IDENTITY`, `NOVUS_USER_DATA_DIR`) refuse packaged builds by construction (D-027), so a packaged app is always the real product against the machine's own userData.
 
+**The update channel and the machine's diagnostics (D-250).** A packaged client carries electron-updater pointed at the GitHub Releases of `KJ14GOD/branchwork` (`publish` in the builder config writes the channel into the bundle; packaging itself never publishes — a release is a tag with the installers and their manifests uploaded by hand). The main process asks the channel thirty seconds after launch and every six hours while the person's switch is on, lets the updater download in the background, and never installs on its own: `quitAndInstall` runs only from the About page's *Restart to update*. A development build is never wired to the updater at all. Until the app is signed (D-222's open item), macOS refuses to apply a downloaded build and the standing reads *failed* with the updater's words; the channel is wired and unproven until then. Crash reporting is Electron's own crash reporter started before anything else with uploads off, so minidumps land under the app's crash-reports folder and nowhere else; the main process also keeps a rotating log under `userData/logs` — its own start line, the console's warnings and errors, every renderer or child process that died, uncaught exceptions observed without changing what Electron does with them, and the updater's messages. Settings → About reports both folders and opens them.
+
 ## Observability
 
 - Every protocol edge (client command, runner command, runner event) is traced with mission-scoped correlation ids.
 - Control-plane metrics: command latency, event lag (runner `occurred_at` → client visibility), lease-transition outcomes, transfer-timeout rate, reconnection/backfill counts, gap-marker rate.
 - The event log is itself the primary audit surface; operational logging never becomes a second source of product truth.
+- The desktop's main process keeps a rotating local log and Electron's crash reports on the machine (D-250); neither is uploaded, and neither is product truth.
 - No customer code, secrets, or harness transcripts in operational logs.
 
 ## Testing strategy

@@ -399,6 +399,17 @@ describe("the missions a person has open", () => {
     expect(await pane.textContent()).toContain("⌃⇥");
     expect(await pane.textContent()).toContain("⌃⇧⇥");
     await shot(page, "201-settings-keyboard.png");
+    // About (D-250): the update channel's standing in words — a development
+    // build says it never checks — and the diagnostics kept on this machine.
+    await page.locator(".settings-nav-item").filter({ hasText: "About" }).click();
+    await expect.poll(async () => await page.getByTestId("settings-updates-state").innerText(), { timeout: 10_000 }).toContain(
+      "only a packaged Novus checks"
+    );
+    expect(await pane.innerText()).toContain("A development build never checks.");
+    expect(await page.getByTestId("settings-updates-check").count()).toBe(0);
+    await expect.poll(async () => await pane.innerText(), { timeout: 10_000 }).toMatch(/Crash reports[\s\S]*None on this Mac[\s\S]*Log[\s\S]*KB/);
+    expect(await page.getByTestId("settings-diagnostics-log").isVisible()).toBe(true);
+    await shot(page, "261-settings-about-updates.png");
     await page.keyboard.press("Escape");
     await page.getByTestId("settings-dialog").waitFor({ state: "detached", timeout: 10_000 });
   }, 180_000);

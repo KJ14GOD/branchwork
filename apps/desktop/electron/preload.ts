@@ -30,7 +30,14 @@ const novus: NovusBridge = {
     probe: () => ipcRenderer.invoke("novus:setup:probe")
   },
   system: {
-    version: () => ipcRenderer.invoke("novus:system:version")
+    version: () => ipcRenderer.invoke("novus:system:version"),
+    updates: () => ipcRenderer.invoke("novus:system:updates"),
+    checkForUpdates: () => ipcRenderer.invoke("novus:system:check-updates"),
+    installUpdate: () => ipcRenderer.invoke("novus:system:install-update"),
+    setUpdatePrefs: (input) => ipcRenderer.invoke("novus:system:set-update-prefs", input),
+    diagnostics: () => ipcRenderer.invoke("novus:system:diagnostics"),
+    openLogs: () => ipcRenderer.invoke("novus:system:open-logs"),
+    openCrashReports: () => ipcRenderer.invoke("novus:system:open-crash-reports")
   },
   connectors: {
     list: () => ipcRenderer.invoke("novus:connectors:list"),
