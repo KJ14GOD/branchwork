@@ -58,11 +58,12 @@ export const ADMIN_ONLY_PERMISSION_PROFILES: readonly PermissionProfile[] = ["do
 
 // --- Harness selection ------------------------------------------------------
 // The single allowlist for models. Each id is a real `--model` value verified
-// live against the Claude Code CLI (PROGRESS.md, 2026-08-02). The renderer,
+// live against the Claude Code CLI (PROGRESS.md, 2026-08-02; Fable 5.1 on 2026-09-10). The renderer,
 // the IPC boundary, and the execution adapter all read this one list; adding a
 // value here without live verification is how a fictional model ships.
 
 export const CLAUDE_MODELS = [
+  { id: "claude-fable-5-1", label: "Fable 5.1" },
   { id: "claude-fable-5", label: "Fable 5" },
   { id: "claude-opus-5", label: "Opus 5" },
   { id: "claude-opus-4-8", label: "Opus 4.8" },
@@ -102,6 +103,7 @@ export type HarnessId = z.infer<typeof HarnessIdSchema>;
 
 /** One allowlist across harnesses; a value outside it never reaches a CLI. */
 export const StaticModelIdSchema = z.enum([
+  "claude-fable-5-1",
   "claude-fable-5",
   "claude-opus-5",
   "claude-opus-4-8",
@@ -168,7 +170,7 @@ export function speedsFor(model: string): readonly Speed[] {
   return codex && codex.speeds.includes("fast") ? SPEEDS : ["standard"];
 }
 
-export const DEFAULT_MODEL: ModelId = "claude-fable-5";
+export const DEFAULT_MODEL: ModelId = "claude-fable-5-1";
 export const DEFAULT_CODEX_MODEL: ModelId = "gpt-5.6-sol";
 export const DEFAULT_EFFORT: Effort = "high";
 export const DEFAULT_SPEED: Speed = "standard";

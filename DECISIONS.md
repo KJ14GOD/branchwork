@@ -3319,6 +3319,8 @@ The scope is owned by the shell beside the section itself. Every other way into 
 
 **Consequences.** `composer.tsx` reshapes the model menu (provider rows + `chip-submenu` flyout; `model-option` rows carry `data-model`); `app.css` adds the flyout beside the upward-opening menu; the D-232 spec picks provider-then-model; DESIGN's composer entry reshapes. Proven in the window by the sessions spec and its screenshots.
 
+**Amended 2026-09-10, owner-hit ("why is Fable 5.1 not available").** Fable 5.1 joins the Claude list at the top and is the default, verified live on the owner's login that day. The Codex list stays what the installed CLI's `model/list` answers; this account's catalogue carries no Astra model, so none is offered until the CLI offers one — a menu entry the CLI would refuse is the drift D-230's correction forbade.
+
 **Revisit when.** A third harness joins (the two-row list earns headers or search), or keyboard users need arrow-key traversal into the flyout beyond the hover/click road.
 
 ## D-234 — The receipt is the whole account: chats, directions, approvals, files, and a machine-readable export
