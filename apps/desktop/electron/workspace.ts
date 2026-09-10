@@ -152,6 +152,14 @@ export function worktreeRootFor(userDataPath: string): string {
 }
 
 /**
+ * Git's refusal to check a branch out twice. The wording changed in git 2.4x
+ * from "is already checked out at '…'" to "is already used by worktree at
+ * '…'" — the CI runner's git said the second and the retirement below never
+ * recognised its own worktree — so both are read.
+ */
+const CHECKED_OUT_ELSEWHERE = /already (?:checked out|used by worktree) at '([^']+)'/;
+
+/**
  * One worktree per **workstream**, the same one the harness turn uses.
  *
  * Keyed by the lane rather than the mission since D-074: a mission may hold a
@@ -288,7 +296,7 @@ async function prepareWorktree(
   // above: without that, this line is what deletes another caller's worktree.
   if (existsSync(worktree)) rmSync(worktree, { recursive: true, force: true });
   let added = await git(repositoryPath, ["worktree", "add", "--", worktree, missionBranch]);
-  if (added.code !== 0 && /already checked out at/.test(added.stderr)) {
+  if (added.code !== 0 && CHECKED_OUT_ELSEWHERE.test(added.stderr)) {
     // The pre-approaches layout keyed worktrees by *mission* (D-074 rekeyed
     // them by workstream), so a mission from before that change still holds
     // its branch checked out under the old name and git rightly refuses a
@@ -416,7 +424,7 @@ async function retireLegacyWorktree(
   root: string,
   stderr: string
 ): Promise<boolean> {
-  const conflict = /already checked out at '([^']+)'/.exec(stderr)?.[1];
+  const conflict = CHECKED_OUT_ELSEWHERE.exec(stderr)?.[1];
   if (!conflict) return false;
   // Real paths on both sides: git reports the physical path, and on macOS the
   // user-data directory usually sits behind a symlink (`/var` → `/private/var`).

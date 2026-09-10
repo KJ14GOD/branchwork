@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureWorkspaceWorktree } from "../electron/workspace";
-import { gitExec } from "../electron/workspace-git";
+import { gitExec, type GitExec } from "../electron/workspace-git";
 
 /**
  * Migrating off the pre-approaches worktree layout (D-074, found in a real
@@ -73,6 +73,33 @@ describe("the pre-approaches worktree layout", () => {
     ).rejects.toThrow(/uncommitted/i);
     // Nothing was deleted: the dirty file is exactly where it was.
     expect(existsSync(join(legacy, "half-finished.ts"))).toBe(true);
+  });
+
+  it("reads git 2.4x's wording for the same refusal (found by the CI runner's git)", async () => {
+    // Git changed "is already checked out at '…'" to "is already used by
+    // worktree at '…'"; this machine's git may still say the first, so the
+    // newer wording is produced here and must be read the same way.
+    const newerGit: GitExec = async (cwd, args) => {
+      const out = await gitExec(cwd, args);
+      return { ...out, stderr: out.stderr.replace(/already checked out at/g, "already used by worktree at") };
+    };
+    const legacy = legacyWorktree("msn_legacymission03");
+    const worktree = await ensureWorkspaceWorktree(newerGit, repo, userData, "wst_freshlane03", BRANCH);
+    expect(worktree).toBe(join(userData, "worktrees", "wst_freshlane03"));
+    expect(existsSync(legacy)).toBe(false);
+  });
+
+  it("refuses a dirty legacy worktree under git 2.4x's wording too", async () => {
+    const newerGit: GitExec = async (cwd, args) => {
+      const out = await gitExec(cwd, args);
+      return { ...out, stderr: out.stderr.replace(/already checked out at/g, "already used by worktree at") };
+    };
+    const dirty = legacyWorktree("msn_legacymission04");
+    writeFileSync(join(dirty, "half-finished.ts"), "// not committed anywhere\n");
+    await expect(
+      ensureWorkspaceWorktree(newerGit, repo, userData, "wst_freshlane04", BRANCH)
+    ).rejects.toThrow(/uncommitted/i);
+    expect(existsSync(join(dirty, "half-finished.ts"))).toBe(true);
   });
 
   it("never touches a conflicting checkout that is not Novus's own", async () => {

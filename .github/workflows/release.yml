@@ -28,6 +28,11 @@ jobs:
       - run: pnpm build
       - name: Package
         run: pnpm --filter @novus/desktop package --publish never
+        # electron-builder resolves the GitHub Releases publish config (D-250)
+        # even with publishing off, and refuses without a token; the workflow
+        # token is enough to resolve it, and nothing is uploaded here.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-mac
@@ -56,6 +61,11 @@ jobs:
       - run: pnpm build
       - name: Package
         run: pnpm --filter @novus/desktop package:win --publish never
+        # electron-builder resolves the GitHub Releases publish config (D-250)
+        # even with publishing off, and refuses without a token; the workflow
+        # token is enough to resolve it, and nothing is uploaded here.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-windows
