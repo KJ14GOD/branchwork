@@ -16,6 +16,13 @@ describe("a private file's DACL, read as SDDL", () => {
     expect(unexpectedAllows("D:PAI(D;;FR;;;BU)(A;;FA;;;SY)(A;;FA;;;S-1-5-21-1111111111-2222222222-3333333333-1001)", owner)).toEqual([]);
   });
 
+  it("reads SDDL's abbreviation for the built-in Administrator as the owner only when the owner is that account", () => {
+    const admin = "S-1-5-21-1111111111-2222222222-3333333333-500";
+    expect(unexpectedAllows("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;LA)", admin)).toEqual([]);
+    expect(unexpectedAllows("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;LA)", owner)).toEqual(["LA"]);
+    expect(unexpectedAllows("D:PAI(A;;FA;;;SY)(A;;FA;;;OW)(A;;FA;;;S-1-5-21-1111111111-2222222222-3333333333-1001)", owner)).toEqual([]);
+  });
+
   it("reads nothing into a string with no DACL", () => {
     expect(unexpectedAllows("", owner)).toEqual([]);
     expect(unexpectedAllows("O:BAG:BA", owner)).toEqual([]);

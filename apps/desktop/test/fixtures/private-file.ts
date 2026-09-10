@@ -23,8 +23,22 @@ export function expectPrivateFile(path: string): void {
   expect(unexpectedAllowsByPowerShell(path)).toEqual([]);
 }
 
-/** SIDs that may read a private file: SYSTEM, the Administrators group, and the owner. */
-const PRIVILEGED = new Set(["SY", "S-1-5-18", "BA", "S-1-5-32-544"]);
+/** SIDs that may read a private file: SYSTEM, the Administrators group, the
+ * owner's own rights, and the owner. */
+const PRIVILEGED = new Set(["SY", "S-1-5-18", "BA", "S-1-5-32-544", "OW", "S-1-3-4"]);
+
+/**
+ * Whether an ACE's SID is the owner. SDDL abbreviates a few accounts — the
+ * built-in local Administrator (RID 500) is `LA` — while `whoami` always
+ * spells the full SID; the hosted Windows runner runs as exactly that
+ * account, and the first native-path run read `LA` as a stranger.
+ */
+function isOwner(sid: string, ownerSid: string): boolean {
+  if (sid === ownerSid) return true;
+  if (sid === "LA") return ownerSid.endsWith("-500");
+  if (sid === "LG") return ownerSid.endsWith("-501");
+  return false;
+}
 
 /**
  * The principals an SDDL DACL grants access to beyond the privileged ones and
@@ -38,7 +52,7 @@ export function unexpectedAllows(sddl: string, ownerSid: string): string[] {
     const parts = ace[1].split(";");
     if (parts[0] !== "A") continue;
     const sid = parts[5] ?? "";
-    if (PRIVILEGED.has(sid) || sid === ownerSid) continue;
+    if (PRIVILEGED.has(sid) || isOwner(sid, ownerSid)) continue;
     out.push(sid);
   }
   return out;
