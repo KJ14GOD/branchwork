@@ -1,0 +1,53 @@
+name: Checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  mac:
+    name: macOS build, static checks, and every deterministic suite
+    runs-on: macos-14
+    timeout-minutes: 40
+    env:
+      CI: 'true'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Install pnpm
+        run: npm install --global pnpm@10.12.1
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Start isolated PostgreSQL
+        run: ./scripts/ci/mac-postgres.sh
+      - name: Build
+        run: pnpm build
+      - name: Type check
+        run: pnpm typecheck
+      - name: Lint
+        run: pnpm lint
+      - name: Contract tests
+        run: pnpm --filter @novus/contracts test
+      - name: Control-plane tests
+        run: pnpm --filter @novus/control-plane test
+      - name: Desktop tests
+        run: pnpm --filter @novus/desktop test
+      - name: Build unsigned macOS disk image
+        run: pnpm --filter @novus/desktop package --publish never
+      - name: Save the disk image
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: novus-mac-${{ github.run_id }}
+          path: apps/desktop/release/*.dmg
+          if-no-files-found: error
+          retention-days: 7

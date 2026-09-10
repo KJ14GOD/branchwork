@@ -299,6 +299,7 @@ Named failure modes with defined behavior — these are contracts, not aspiratio
 - Control-plane metrics: command latency, event lag (runner `occurred_at` → client visibility), lease-transition outcomes, transfer-timeout rate, reconnection/backfill counts, gap-marker rate.
 - The event log is itself the primary audit surface; operational logging never becomes a second source of product truth.
 - The desktop's main process keeps a rotating local log and Electron's crash reports on the machine (D-250); neither is uploaded, and neither is product truth.
+- **Continuous integration and release (D-253).** Four workflows, read-only by default: *Checks* on every push and pull request — macOS build, type check, lint, every deterministic suite against an isolated PostgreSQL, and an unsigned disk image kept seven days; *Windows checks* (D-248) on the same triggers; *Release* on a `v*` tag — the unsigned macOS disk image and Windows installer built on their own runners, then one job with `contents: write` creating the GitHub Release from the tag with both installers and the update manifests (`latest.yml`, `latest-mac.yml`) the D-250 channel reads; and *Control-plane load* on a schedule and on demand — one node against a real PostgreSQL, the read routes a client hits every few seconds driven at N connections for S seconds each, latencies reported and the run failed past a p95 bar. Packaging itself never publishes.
 - No customer code, secrets, or harness transcripts in operational logs.
 
 ## Testing strategy

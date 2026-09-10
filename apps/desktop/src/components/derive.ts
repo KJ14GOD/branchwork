@@ -218,6 +218,21 @@ export function sessionActivity(
 }
 
 /**
+ * When one conversation's latest turn ended (D-252), or null while it has
+ * never finished one or is mid-turn. The fact behind the unread mark: a chat
+ * that finished after the person last looked at it has something to read.
+ */
+export function sessionFinishedAt(detail: MissionDetailResponse, sessionId: string): string | null {
+  let latest: string | null = null;
+  for (const execution of detail.executions) {
+    if (execution.sessionId !== sessionId || !execution.endedAt) continue;
+    if (!TERMINAL_EXECUTION_STATES.includes(execution.state)) continue;
+    if (latest === null || execution.endedAt > latest) latest = execution.endedAt;
+  }
+  return latest;
+}
+
+/**
  * The files one conversation's turns have changed, latest checkpoint winning
  * per path — the chat's own footprint in the shared worktree (D-094). Derived
  * entirely from checkpoints, which are git's account, so a chat is credited

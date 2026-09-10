@@ -1,0 +1,89 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  mac:
+    name: macOS disk image (unsigned, D-222)
+    runs-on: macos-14
+    timeout-minutes: 40
+    env:
+      CI: 'true'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - run: npm install --global pnpm@10.12.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Package
+        run: pnpm --filter @novus/desktop package --publish never
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-mac
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.dmg.blockmap
+            apps/desktop/release/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 7
+  windows:
+    name: Windows installer (unsigned, D-250 accepted risk)
+    runs-on: windows-2025
+    timeout-minutes: 40
+    env:
+      CI: 'true'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - run: npm install --global pnpm@10.12.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Package
+        run: pnpm --filter @novus/desktop package:win --publish never
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-windows
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.exe.blockmap
+            apps/desktop/release/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    name: GitHub Release with both installers and the update manifests
+    needs: [mac, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          path: dist
+      - name: Create the release from the tag, with the installers and manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ls -R dist
+          gh release create "$TAG" --title "Novus $TAG" --notes "Unsigned builds (D-222, D-250): macOS opens with right-click → Open; Windows shows SmartScreen. The update channel reads latest.yml and latest-mac.yml from this release." dist/release-mac/* dist/release-windows/*

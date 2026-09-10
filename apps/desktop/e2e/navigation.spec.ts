@@ -309,6 +309,9 @@ describe("the missions a person has open", () => {
     expect((await tabLabels(page)).join("|")).toContain("Alpha one");
     expect((await tabLabels(page)).join("|")).toContain("Alpha two");
 
+    // The rail has no lens above the projects any more (D-252): what needs a
+    // person is a word on the mission's own row.
+    expect(await page.getByTestId("attention-row").count()).toBe(0);
     // Every tab sits in a group that names its project, whether or not a
     // second project is open (D-066, regrouped by D-251): the name is said
     // once per run of neighbours, and never disappears as siblings come and go.
@@ -495,7 +498,7 @@ describe("the missions a person has open", () => {
 
     // The rail also keeps *reporting* a mission whose tab is closed. A failed
     // check against the revision the worktree is on is what a mission needing
-    // somebody looks like, and the attention lens is where the rail says so.
+    // somebody looks like, and the mission's own row is where the rail says so.
     const checkpoints = await sql(
       `select sha from checkpoints where mission_id = $1 and sha is not null
         order by created_at desc limit 1`,
@@ -517,9 +520,13 @@ describe("the missions a person has open", () => {
     );
 
     await closeEveryTab(page);
+    // Since D-252 the rail says so on the mission's own row — its word while
+    // a person is needed — and no lens repeats the list above the projects.
+    const closedRow = projectGroup(page, alphaName).getByTestId("mission-row").filter({ hasText: RUNNING_GOAL.slice(0, 14) });
     await expect
-      .poll(async () => page.getByTestId("attention-row").allInnerTexts(), { timeout: 60_000 })
-      .toContainEqual(expect.stringContaining(RUNNING_GOAL.slice(0, 14)));
+      .poll(async () => closedRow.getByTestId("mission-needs").allInnerTexts(), { timeout: 60_000 })
+      .toContainEqual(expect.stringContaining("checks failed"));
+    expect(await page.getByTestId("attention-row").count()).toBe(0);
     await shot(page, "64-attention-with-no-tab-open.png");
   }, 300_000);
 

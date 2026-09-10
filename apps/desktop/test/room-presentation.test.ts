@@ -17,6 +17,7 @@ import {
   queuedPositionLabel,
   runningSession,
   sessionActivity,
+  sessionFinishedAt,
   sessionHarness,
   sessionChangedFiles,
   sessionChecks,
@@ -770,6 +771,18 @@ describe("each chat's own word and footprint (D-094)", () => {
       lastHeardAt: T(6)
     });
     expect(sessionActivity(room, "csn_one")).toEqual({ state: "idle", label: null, lastHeardAt: null });
+  });
+
+  it("a chat finished when its latest terminal turn ended, and never while mid-turn (D-252)", () => {
+    const room = twoChats({
+      executions: [
+        execution({ executionId: "exe_1", sessionId: "csn_two", state: "completed", createdAt: T(2), endedAt: T(3) }),
+        execution({ executionId: "exe_2", sessionId: "csn_two", state: "failed", createdAt: T(4), endedAt: T(5) }),
+        execution({ executionId: "exe_3", sessionId: "csn_two", state: "running", createdAt: T(6) })
+      ]
+    });
+    expect(sessionFinishedAt(room, "csn_two")).toBe(T(5));
+    expect(sessionFinishedAt(room, "csn_one")).toBeNull();
   });
 
   it("a blocked turn reads needs you, outranking working", () => {

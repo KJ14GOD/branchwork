@@ -54,19 +54,20 @@ import {
 } from "../components/working-set";
 import { cycleKey } from "../components/rail-cycle";
 import {
-  boardColumnOf,
   laneView,
   liveRunProcess,
   sessionActivity,
   sessionHarness,
   sessionNeedsYou,
   type BoardColumnId,
-  standingDecision
+  standingDecision,
+  sessionFinishedAt
 } from "../components/derive";
 import { HarnessGlyph } from "../components/harness-glyph";
 import { HomeBoard } from "../components/home-board";
 import { PREVIEW_TAB_KEY, pullIdOfKey, pullTabKey, type OpenPreviewTab } from "../components/preview";
 import { deriveGoal, plural, truncateLabel } from "../format";
+import { markSeen, unseenSince } from "../components/seen";
 import { ProjectRoom } from "./project-room";
 import { Inspector, type InspectorSection } from "../components/inspector";
 
@@ -88,6 +89,31 @@ import { Inspector, type InspectorSection } from "../components/inspector";
  * archived missions stay in the record, and connecting it again brings the
  * same project back. Nothing here deletes anything.
  */
+/** The mission's own word while a person is needed (D-252): the lens's
+ *  states, said on the row. Null when nothing is waiting on anyone. */
+function missionNeedsWord(mission: Mission): string | null {
+  switch (mission.primaryState) {
+    case "needs_approval":
+      return "needs your approval";
+    case "needs_direction":
+      return "needs direction";
+    case "verification_failed":
+      return "checks failed";
+    case "execution_interrupted":
+      return "interrupted";
+    case "workspace_failed":
+      return "workspace failed";
+    default:
+      return null;
+  }
+}
+
+/** Whether the mission's work has stopped — the mark means "finished since
+ *  you looked", never "still going". */
+function missionFinished(mission: Mission): boolean {
+  return !["agent_running", "agent_starting", "agent_stopping", "workspace_preparing"].includes(mission.primaryState);
+}
+
 function RemoveProjectDialog({
   project,
   archivedCount,
@@ -730,6 +756,11 @@ function MissionTree({
                               · {activity.label}
                             </span>
                           )}
+                          {activity?.state === "idle" &&
+                            !(selected && session.sessionId === selectedSessionId) &&
+                            unseenSince(session.sessionId, sessionFinishedAt(detail, session.sessionId)) && (
+                              <span className="side-unread" title="Finished since you last looked" data-testid="session-unread" />
+                            )}
                         </button>
                       </div>
                     );
@@ -1116,37 +1147,24 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     return [...map.values()];
   }, [missions, localRepos, opened, checkedOutHere]);
 
-  // Needs attention: only states the server actually reports. The state read
-  // is the mission list's own, which the server projects over **every lane**
-  // with attention first (PRODUCT.md#the-mission-state-model) — so a closed
-  // mission whose background Alternative is waiting on an approval surfaces
-  // here, not only in its own room. Any lane's failed branch counts too, from
-  // the detail where one has been read; a detail is no longer required for the
-  // state part, so the lens works from the list alone after a reconnect.
+  // Which mission is being read (D-126): its own rows say nothing about
+  // needing a person or having finished — its state is on screen.
   const readingMissionId = activeTabOf(workingSet)?.missionId ?? null;
-  const attention = useMemo(
-    () =>
-      (missions ?? []).filter((mission) => {
-        // The mission being read never queues in the lens beside its own rail
-        // row (D-126): its state is on screen, and a lens exists for what is
-        // NOT being looked at.
-        if (mission.missionId === readingMissionId) return false;
-        if (
-          mission.primaryState === "needs_direction" ||
-          mission.primaryState === "needs_approval" ||
-          mission.primaryState === "verification_failed" ||
-          mission.primaryState === "execution_interrupted"
-        ) {
-          return true;
-        }
-        const detail = details[mission.missionId];
-        if (!detail) return false;
-        return (detail.workstreams.length > 0 ? detail.workstreams : [detail.workstream]).some(
-          (lane) => lane?.branchStatus === "failed"
-        );
-      }),
-    [missions, details, readingMissionId]
-  );
+  // A look records itself (D-252): the mission on screen and the chat on
+  // its screen are seen as of their latest moment, so their marks clear the
+  // moment they are looked at and return only when something new finishes.
+  const readingTab = activeTabOf(workingSet);
+  const readingMission = readingMissionId ? ((missions ?? []).find((mission) => mission.missionId === readingMissionId) ?? null) : null;
+  const readingDetail = readingMissionId ? (details[readingMissionId] ?? null) : null;
+  const readingSessionId = readingTab?.sessionId ?? null;
+  const readingFinishedAt = readingDetail && readingSessionId ? sessionFinishedAt(readingDetail, readingSessionId) : null;
+  const readingActivityAt = readingMission?.lastActivityAt ?? null;
+  useEffect(() => {
+    if (readingMissionId && readingActivityAt) markSeen(readingMissionId, readingActivityAt);
+  }, [readingMissionId, readingActivityAt]);
+  useEffect(() => {
+    if (readingSessionId && readingFinishedAt) markSeen(readingSessionId, readingFinishedAt);
+  }, [readingSessionId, readingFinishedAt]);
 
   const storageKey = `novus-open-missions:${user.userId}`;
 
@@ -1502,11 +1520,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
     toggleExpanded(project.key);
   };
 
-  const openAttention = (mission: Mission) => {
-    const repo = mission.repository;
-    if (!repo) return;
-    openBoardMission(mission, boardColumnOf(mission));
-  };
+
 
   /** A board card's one action (D-120): open the mission AT the thing that is
    *  asking — the attention's lane and chat, the running lane's chat, or (for
@@ -1837,43 +1851,10 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
             </button>
           </div>
           <div className="sidebar-scroll">
-            {attention.length > 0 && (
-              <>
-                <div className="group-label">
-                  Needs attention <span className="side-count">{attention.length}</span>
-                </div>
-                {attention.map((mission) => {
-                  // Where the attention actually is (D-093): the lane, named
-                  // only while the mission holds more than one, and the exact
-                  // conversation whose turn is blocked, when it has a title.
-                  // A one-lane mission whose one conversation is untitled has
-                  // nothing further to name, and the row stays one line.
-                  const where = [
-                    mission.workstreamCount > 1 ? mission.attention?.workstreamName : null,
-                    mission.attention?.sessionTitle
-                  ]
-                    .filter((part): part is string => Boolean(part))
-                    .join(" · ");
-                  return (
-                    <button
-                      key={mission.missionId}
-                      className="side-row attention-row"
-                      onClick={() => openAttention(mission)}
-                      title={mission.goal}
-                      data-testid="attention-row"
-                    >
-                      <span className="side-name">{truncateLabel(mission.goal, 24)}</span>
-                      {where && (
-                        <span className="attention-where" data-testid="attention-where">
-                          {truncateLabel(where, 28)}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </>
-            )}
-
+            {/* No lens of its own any more (D-252): what needs a person, and
+                what finished since they looked, is said on the mission's and
+                the chat's own rows below — a word and a mark, not a second
+                list of the same missions. */}
             <div className="group-label">Projects</div>
             {missions === null && !offline && (
               <div data-testid="sidebar-loading">
@@ -1998,7 +1979,19 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                                   {mission.workstreamCount} approaches
                                 </span>
                               )}
+                              {/* What the lens used to say, on the row itself
+                                  (D-252): the mission's own word while a
+                                  person is needed, for every mission but the
+                                  one being read. */}
+                              {mission.missionId !== readingMissionId && missionNeedsWord(mission) && (
+                                <span className="side-approaches tone-warn side-needs" data-testid="mission-needs">
+                                  {missionNeedsWord(mission)}
+                                </span>
+                              )}
                             </button>
+                            {mission.missionId !== readingMissionId && missionFinished(mission) && unseenSince(mission.missionId, mission.lastActivityAt) && (
+                              <span className="side-unread" title="Finished since you last looked" data-testid="mission-unread" />
+                            )}
                             {/* Who is in this mission, on its own row (D-126):
                                 the participants' marks, the controller ringed —
                                 presence where the mission is named, the aggregate

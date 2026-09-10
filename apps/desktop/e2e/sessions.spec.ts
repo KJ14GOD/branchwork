@@ -762,8 +762,10 @@ describe("shared sessions inside one approach", () => {
     await page.getByTestId("model-option").first().click();
     const swap = page.getByTestId("composer-swap");
     await swap.waitFor({ timeout: 10_000 });
-    expect(await swap.innerText()).toContain("This chat is Claude Code's");
-    expect(await swap.innerText()).toContain("new Codex chat");
+    // Three words beside the chip, the whole sentence on hover (D-251).
+    expect(await swap.innerText()).toBe("New Codex chat");
+    expect((await swap.getAttribute("title")) ?? "").toContain("This chat is Claude Code's");
+    expect((await swap.getAttribute("title")) ?? "").toContain("new Codex chat");
     const before = await detail();
     await shot("233-harness-swap-sentence.png");
 

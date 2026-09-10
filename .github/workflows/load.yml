@@ -1,0 +1,54 @@
+name: Control-plane load
+on:
+  workflow_dispatch:
+    inputs:
+      connections:
+        description: Concurrent connections
+        default: '50'
+      seconds:
+        description: Seconds per route
+        default: '20'
+  schedule:
+    - cron: '17 6 * * 1'
+permissions:
+  contents: read
+jobs:
+  load:
+    name: Read routes under concurrency, one node, real PostgreSQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: novus
+          POSTGRES_PASSWORD: novus
+          POSTGRES_DB: novus
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U novus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - run: npm install --global pnpm@10.12.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @novus/contracts build
+      - name: Load
+        env:
+          NOVUS_LOAD_CONNECTIONS: ${{ github.event.inputs.connections || '50' }}
+          NOVUS_LOAD_SECONDS: ${{ github.event.inputs.seconds || '20' }}
+        run: node scripts/ci/load.mjs
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: load-report-${{ github.run_id }}
+          path: load-report.json
+          if-no-files-found: warn
+          retention-days: 30
