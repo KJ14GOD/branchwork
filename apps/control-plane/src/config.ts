@@ -35,6 +35,7 @@ export interface Config {
    */
   artifactStoreKind: "local" | "s3" | "";
   artifactLocalDir: string;
+  learningDir: string;
   /** Signs the local store's expiring URLs. Random per boot when unset —
    *  grants are short-lived, so surviving a restart buys nothing. */
   artifactLocalSecret: string;
@@ -63,6 +64,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubWebhookSecret: env.NOVUS_GITHUB_WEBHOOK_SECRET ?? "",
     artifactStoreKind: (env.NOVUS_ARTIFACT_STORE ?? "local") as "local" | "s3" | "",
     artifactLocalDir: env.NOVUS_ARTIFACT_DIR ?? ".novus-artifacts",
+    /** Where learning exports are written (D-255), one directory per dataset. */
+    learningDir: env.NOVUS_LEARNING_DIR ?? ".novus-learning",
     artifactLocalSecret: env.NOVUS_ARTIFACT_SECRET ?? randomBytes(32).toString("hex"),
     s3Bucket: env.NOVUS_ARTIFACT_S3_BUCKET ?? "",
     s3Region: env.NOVUS_ARTIFACT_S3_REGION ?? "",

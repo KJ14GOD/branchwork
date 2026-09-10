@@ -4221,6 +4221,92 @@ export const DiagnosticsSchema = z.object({
 });
 export type Diagnostics = z.infer<typeof DiagnosticsSchema>;
 
+// --- Secret shapes (D-249, shared since D-255) ------------------------------
+/**
+ * Credentials that announce themselves by form (D-249), removed from reported
+ * text whether or not Novus holds their value. Each entry is one vendor's
+ * documented prefix or one universal envelope, never a guess at randomness:
+ * a hex digest, a UUID, a git revision, and a forty-character AWS secret key
+ * all look like nothing in particular and are left alone. Where a shape wraps
+ * a value — a header, an assignment, a URL — the wrapping stays and only the
+ * value goes, so the line still says what it was.
+ */
+export const SECRET_SHAPES: readonly {
+  readonly name: string;
+  readonly pattern: RegExp;
+  readonly replacement: string | ((match: string, ...groups: (string | undefined)[]) => string);
+}[] = [
+  // A private key of any kind, the whole block including its fences.
+  { name: "private key block", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, replacement: "[redacted]" },
+  // GitHub: classic tokens (ghp_, gho_, ghu_, ghs_, ghr_) and fine-grained ones.
+  { name: "GitHub token", pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, replacement: "[redacted]" },
+  { name: "GitHub fine-grained token", pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, replacement: "[redacted]" },
+  // OpenAI and Anthropic keys share the sk- prefix; Stripe's carry a mode.
+  { name: "sk- key", pattern: /\bsk-(?:ant-|proj-|svcacct-)?[A-Za-z0-9_-]{20,}\b/g, replacement: "[redacted]" },
+  { name: "Stripe key", pattern: /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}\b/g, replacement: "[redacted]" },
+  // AWS access key ids; the paired secret key has no shape and is not seen.
+  { name: "AWS access key id", pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, replacement: "[redacted]" },
+  { name: "Slack token", pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, replacement: "[redacted]" },
+  { name: "Google API key", pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g, replacement: "[redacted]" },
+  { name: "JSON web token", pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, replacement: "[redacted]" },
+  // Envelopes: the scheme, the name, or the URL stays; the value goes.
+  { name: "authorization header", pattern: /(\bauthorization\s*:\s*(?:bearer|basic|token)\s+)[A-Za-z0-9._~+/=-]{8,}/gi, replacement: "$1[redacted]" },
+  { name: "URL credentials", pattern: /(\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:)[^\s/@]+@/gi, replacement: "$1[redacted]@" },
+  {
+    name: "named assignment",
+    // A quoted value may hold spaces and ends at its quote; a bare one ends at
+    // whitespace or punctuation. The quotes stay so the line still parses.
+    pattern: /(\b[A-Za-z0-9_.-]*?(?:api[_-]?key|secret[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|refresh[_-]?token|private[_-]?key|secret|token|password|passwd)\s*[:=]\s*)(?:"([^"\n]{8,})"|'([^'\n]{8,})'|(?!\[redacted\])([^\s"',;]{8,}))/gi,
+    replacement: (_match: string, ...groups: (string | undefined)[]) => {
+      const [lead = "", doubleQuoted, singleQuoted] = groups;
+      if (doubleQuoted !== undefined) return `${lead}"[redacted]"`;
+      if (singleQuoted !== undefined) return `${lead}'[redacted]'`;
+      return `${lead}[redacted]`;
+    }
+  }
+];
+
+/** The shape pass alone, for text that carries no held values. */
+export function redactShapes(text: string): string {
+  let out = text;
+  for (const shape of SECRET_SHAPES) {
+    out = typeof shape.replacement === "string" ? out.replace(shape.pattern, shape.replacement) : out.replace(shape.pattern, shape.replacement);
+  }
+  return out;
+}
+
+// --- Learning (D-255) --------------------------------------------------------
+// An organization's record as a training dataset: one trajectory per turn
+// with its verified and human outcomes as a reward, and preference pairs
+// from decisions between lanes forked at one checkpoint. Exported on
+// request by the organization's owner; nothing leaves without that act.
+
+export const DATASET_SCHEMA_VERSION = 1;
+
+export const LearningExportInputSchema = z.object({
+  /** Only missions created at or before this moment; the whole record when absent. */
+  until: z.string().datetime().optional()
+});
+export type LearningExportInput = z.infer<typeof LearningExportInputSchema>;
+
+export const LearningManifestSchema = z.object({
+  datasetId: z.string().startsWith("ds_"),
+  schemaVersion: z.literal(DATASET_SCHEMA_VERSION),
+  orgId: z.string(),
+  writtenAt: z.string().datetime(),
+  fromEvent: z.string().nullable(),
+  toEvent: z.string().nullable(),
+  counts: z.object({
+    missions: z.number().int().nonnegative(),
+    trajectories: z.number().int().nonnegative(),
+    pairs: z.number().int().nonnegative(),
+    rewarded: z.number().int().nonnegative()
+  }),
+  /** File name → SHA-256 of its bytes. */
+  shards: z.record(z.string(), z.string())
+});
+export type LearningManifest = z.infer<typeof LearningManifestSchema>;
+
 export interface NovusBridge {
   auth: {
     status(): Promise<IpcAuthStatus>;

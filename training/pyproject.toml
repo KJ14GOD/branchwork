@@ -1,0 +1,18 @@
+[project]
+name = "novus-train"
+version = "0.1.0"
+description = "Post-training of open coding models from Novus's own record: trajectories, verifiable rewards, and human preferences (D-255)."
+requires-python = ">=3.10"
+dependencies = [
+  "trl>=0.19",
+  "transformers>=4.50",
+  "datasets>=3.0",
+  "peft>=0.15",
+  "accelerate>=1.0",
+]
+
+[project.scripts]
+novus-train = "novus_train.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]

@@ -1,4 +1,4 @@
-import { MIN_SECRET_LENGTH } from "@novus/contracts";
+import { MIN_SECRET_LENGTH, redactShapes } from "@novus/contracts";
 
 /**
  * What must not leave this machine (D-052).
@@ -148,55 +148,6 @@ export function redact(text: string, secrets: readonly string[]): string {
   return redactShapes(out);
 }
 
-/**
- * Credentials that announce themselves by form (D-249), removed from reported
- * text whether or not Novus holds their value. Each entry is one vendor's
- * documented prefix or one universal envelope, never a guess at randomness:
- * a hex digest, a UUID, a git revision, and a forty-character AWS secret key
- * all look like nothing in particular and are left alone. Where a shape wraps
- * a value — a header, an assignment, a URL — the wrapping stays and only the
- * value goes, so the line still says what it was.
- */
-const SECRET_SHAPES: readonly {
-  readonly name: string;
-  readonly pattern: RegExp;
-  readonly replacement: string | ((match: string, ...groups: (string | undefined)[]) => string);
-}[] = [
-  // A private key of any kind, the whole block including its fences.
-  { name: "private key block", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, replacement: "[redacted]" },
-  // GitHub: classic tokens (ghp_, gho_, ghu_, ghs_, ghr_) and fine-grained ones.
-  { name: "GitHub token", pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, replacement: "[redacted]" },
-  { name: "GitHub fine-grained token", pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, replacement: "[redacted]" },
-  // OpenAI and Anthropic keys share the sk- prefix; Stripe's carry a mode.
-  { name: "sk- key", pattern: /\bsk-(?:ant-|proj-|svcacct-)?[A-Za-z0-9_-]{20,}\b/g, replacement: "[redacted]" },
-  { name: "Stripe key", pattern: /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}\b/g, replacement: "[redacted]" },
-  // AWS access key ids; the paired secret key has no shape and is not seen.
-  { name: "AWS access key id", pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, replacement: "[redacted]" },
-  { name: "Slack token", pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, replacement: "[redacted]" },
-  { name: "Google API key", pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g, replacement: "[redacted]" },
-  { name: "JSON web token", pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, replacement: "[redacted]" },
-  // Envelopes: the scheme, the name, or the URL stays; the value goes.
-  { name: "authorization header", pattern: /(\bauthorization\s*:\s*(?:bearer|basic|token)\s+)[A-Za-z0-9._~+/=-]{8,}/gi, replacement: "$1[redacted]" },
-  { name: "URL credentials", pattern: /(\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:)[^\s/@]+@/gi, replacement: "$1[redacted]@" },
-  {
-    name: "named assignment",
-    // A quoted value may hold spaces and ends at its quote; a bare one ends at
-    // whitespace or punctuation. The quotes stay so the line still parses.
-    pattern: /(\b[A-Za-z0-9_.-]*?(?:api[_-]?key|secret[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|refresh[_-]?token|private[_-]?key|secret|token|password|passwd)\s*[:=]\s*)(?:"([^"\n]{8,})"|'([^'\n]{8,})'|(?!\[redacted\])([^\s"',;]{8,}))/gi,
-    replacement: (_match: string, ...groups: (string | undefined)[]) => {
-      const [lead = "", doubleQuoted, singleQuoted] = groups;
-      if (doubleQuoted !== undefined) return `${lead}"[redacted]"`;
-      if (singleQuoted !== undefined) return `${lead}'[redacted]'`;
-      return `${lead}[redacted]`;
-    }
-  }
-];
-
-/** The shape pass alone, for text that carries no held values. */
-export function redactShapes(text: string): string {
-  let out = text;
-  for (const shape of SECRET_SHAPES) {
-    out = typeof shape.replacement === "string" ? out.replace(shape.pattern, shape.replacement) : out.replace(shape.pattern, shape.replacement);
-  }
-  return out;
-}
+/** The shape pass (D-249) lives in the contracts since D-255, so the control
+ *  plane's export and this process's reported text pass through one list. */
+export { redactShapes, SECRET_SHAPES } from "@novus/contracts";

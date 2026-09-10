@@ -1,0 +1,11 @@
+{
+  "recipe": "grpo",
+  "base_model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+  "dataset": "./datasets/ds_example",
+  "output": "./runs/grpo-example",
+  "lora_rank": 16,
+  "learning_rate": 0.00001,
+  "max_steps": 1000,
+  "batch_size": 4,
+  "checkpoint_every": 100
+}

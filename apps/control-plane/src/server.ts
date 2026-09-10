@@ -35,6 +35,7 @@ import { registerApproachRoutes } from "./approaches.ts";
 import { registerArtifactRoutes } from "./artifacts.ts";
 import { registerArchiveRoutes } from "./archive.ts";
 import { registerRepositoryRoutes } from "./repositories.ts";
+import { registerLearningRoutes } from "./learning/routes.ts";
 import { registerCloseRoutes } from "./close.ts";
 import { registerAllMissionsStreamRoute, registerMissionStreamRoutes, registerRunnerStreamRoutes } from "./mission-stream.ts";
 import { registerAttachmentRoutes } from "./attachments.ts";
@@ -351,6 +352,7 @@ export function buildServer(
   registerAttachmentRoutes(app, deps);
   registerArchiveRoutes(app, deps);
   registerRepositoryRoutes(app, deps);
+  registerLearningRoutes(app, deps);
   registerCloseRoutes(app, deps);
   registerAuthorityRoutes(app, deps);
   registerExecutionRoutes(app, deps);

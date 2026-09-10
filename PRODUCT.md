@@ -118,7 +118,7 @@ Capabilities are the enforcement unit, and they live in two scopes that never mi
 | `org.repo.disconnect` (remove a connected repository from the organization's rail — D-235; refused while any of its missions is still listed, and never a deletion) | ✓ | — |
 | `org.harness.credentials` (configure provider/harness credentials) | ✓ | — |
 | `org.members.manage` | ✓ | — |
-| `org.policy.configure` (execution policy, retention) | ✓ | — |
+| `org.policy.configure` (execution policy, retention; and the learning export of D-255 — the organization's record as a dataset leaves only by the owner's own act) | ✓ | — |
 
 **Mission capabilities.** A participant's effective mission capabilities are **role capabilities ∪ lease-granted capabilities**: holding a workstream's control lease temporarily grants the operating verbs for that workstream, whatever the holder's role. This formula is the crux of server-enforced multiplayer; enforcement mechanics are in [ARCHITECTURE.md](ARCHITECTURE.md#authorization). Each capability is one separately enforceable verb — steering, pausing, and resuming are distinct actions with distinct server routes, never bundled.
 

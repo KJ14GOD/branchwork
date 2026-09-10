@@ -1,0 +1,11 @@
+{
+  "recipe": "dpo",
+  "base_model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+  "dataset": "./datasets/ds_example",
+  "output": "./runs/dpo-example",
+  "lora_rank": 16,
+  "learning_rate": 0.000005,
+  "max_steps": 500,
+  "batch_size": 4,
+  "checkpoint_every": 50
+}
