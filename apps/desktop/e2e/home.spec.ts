@@ -211,9 +211,9 @@ describe("the Home board (D-120)", () => {
         .filter({ hasText: "ship the health endpoint" });
       await waitingCard.waitFor({ timeout: 20_000 });
       expect(await waitingCard.textContent()).toContain("+3");
-      expect(await page.getByTestId("board-column-running").textContent()).toContain(
-        "Nothing is running."
-      );
+      // An empty column is its head and its zero (D-259): no sentence.
+      expect(await page.getByTestId("board-column-running").getAttribute("data-empty")).toBe("true");
+      expect(await page.getByTestId("board-column-running").getByTestId("board-card").count()).toBe(0);
       await page.screenshot({ path: join(evidenceDir, "127-home-board.png") });
 
       // The card's one action: open AT the asking thing. The room lands in
@@ -294,9 +294,8 @@ describe("the Home board (D-120)", () => {
         .filter({ hasText: "ship the health endpoint" });
       await completeCard.waitFor({ timeout: 20_000 });
       expect(await completeCard.textContent()).toContain("cancelled by spike-user");
-      expect(await page.getByTestId("board-column-waiting").textContent()).toContain(
-        "Nothing is waiting."
-      );
+      expect(await page.getByTestId("board-column-waiting").getAttribute("data-empty")).toBe("true");
+      expect(await page.getByTestId("board-column-waiting").getByTestId("board-card").count()).toBe(0);
       await page.screenshot({ path: join(evidenceDir, "127-home-board.png") });
     },
     180_000

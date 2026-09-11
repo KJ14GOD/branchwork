@@ -220,6 +220,8 @@ These are the only primitives. Feature components compose primitives; they never
 
 **Control (D-259).** Three sizes and no others: 32px for a control that stands on its own — a button, an icon button, the rail's twisty — 28px for one that sits in a row or a strip, 24px for one inside a row's text — a chip, a mic, a plus. One radius, the row type; the small size keeps the meta type. A family keeps only what makes it itself, such as the jump button's circle. The palette's query field and the text areas are fields, not controls, and keep their own heights.
 
+**Board column (D-259).** On Home, an empty column is its head and its zero, no wider than that, and the columns with cards take the room; no sentence repeats what the count says. A board with no missions at all is still never rendered (prohibited pattern 11).
+
 Composition rules:
 
 - Primary Button: `--accent` background, `--bg` text — a light control on a dark product, never a colored one. Secondary: `--surface-1` with a 1px edge. Text buttons: `--text-2`, lifting to `--text-1` on hover.

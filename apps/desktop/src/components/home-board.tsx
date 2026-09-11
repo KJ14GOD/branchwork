@@ -88,13 +88,20 @@ export function HomeBoard({
   return (
     <div className="home-board" data-testid="home-board">
       {columns.map((column) => (
-        <section className="board-column" key={column.id} data-testid={`board-column-${column.id}`}>
+        <section
+          className="board-column"
+          key={column.id}
+          data-testid={`board-column-${column.id}`}
+          data-empty={column.missions.length === 0 ? "true" : "false"}
+        >
           <h2 className="board-column-head">
             {column.label}
             <span className="board-column-count">{column.missions.length}</span>
           </h2>
           <div className="board-column-scroll">
-            {column.missions.length === 0 && <p className="board-empty">{column.empty}</p>}
+            {/* An empty column is its head and its zero (D-259): the sentence that
+                said the same thing again is gone, and the column gives its width
+                to the ones with cards. */}
             {column.missions.map((mission) => {
               const line = boardCardLine(mission);
               const facts = [

@@ -2355,6 +2355,10 @@ body {
   align-items: center;
   gap: var(--s-2);
   min-height: 28px;
+  /* One line of chips (D-259): the row scrolls sideways before a chip folds. */
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 /* The harness-swap sentence (D-232): its own quiet line above the foot. */
@@ -2408,6 +2412,8 @@ body {
   font: var(--type-meta);
   color: var(--text-2);
   cursor: pointer;
+  white-space: nowrap;
+  flex: none;
 }
 
 .chip-button:hover:not(:disabled) {
@@ -6380,6 +6386,15 @@ body.resizing {
   flex-direction: column;
   min-height: 0;
 }
+
+/* An empty column (D-259) is its head and its zero, no wider than that;
+   the columns with cards take the room. */
+.board-column[data-empty="true"] {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: none;
+}
+
 
 /* The heading sits on the cards' own text axis (owner-directed on sight,
    D-121's polish): inset by the card's padding + border so "Needs you" and
