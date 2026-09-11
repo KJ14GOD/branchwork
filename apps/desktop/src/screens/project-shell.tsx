@@ -751,7 +751,7 @@ function MissionTree({
                               session.title === null ? "side-name side-untitled" : "side-name"
                             }
                           >
-                            {truncateLabel(session.title ?? "New session", 24)}
+                            {session.title ?? "New session"}
                           </span>
                           {activity?.label && (
                             <span className={rowNeeds ? "tone-warn side-needs" : "side-needs side-state"}>
@@ -2108,7 +2108,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
                               aria-expanded={isActive ? !foldedTrees.has(mission.missionId) : undefined}
                               title={mission.goal}
                             >
-                              <span className="side-name">{truncateLabel(mission.goal, 26)}</span>
+                              <span className="side-name">{mission.goal}</span>
                               {/* A count, for every mission whose tree is not
                                   the disclosed one (D-084). */}
                               {mission.workstreamCount > 1 && (

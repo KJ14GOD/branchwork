@@ -948,16 +948,11 @@ body {
 }
 
 .side-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
   width: 100%;
-  min-height: 32px;
   padding: 0 var(--s-3);
   border: none;
   border-radius: 0; /* rails are sharp: selection is a highlight, nothing more */
   background: transparent;
-  font: var(--type-row);
   color: var(--text-2);
   cursor: pointer;
   text-align: left;
@@ -1050,16 +1045,11 @@ body {
 }
 
 .side-open {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
   flex: 1;
   min-width: 0;
-  min-height: 32px;
   padding: 0 var(--s-3) 0 var(--s-1);
   border: none;
   background: transparent;
-  font: var(--type-row);
   color: inherit;
   cursor: pointer;
   text-align: left;
@@ -1403,13 +1393,9 @@ body {
 }
 
 .repo-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-3);
   padding: var(--s-2) var(--s-3);
   border-radius: var(--r-control);
   cursor: pointer;
-  min-height: 32px;
   box-sizing: border-box;
 }
 
@@ -1846,11 +1832,6 @@ body {
 }
 
 .trace-waiting-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: 32px;
-  font: var(--type-row);
   color: var(--text-1);
 }
 
@@ -1948,7 +1929,6 @@ body {
   background: transparent;
   text-align: left;
   cursor: pointer;
-  min-height: 28px;
 }
 
 .worker-line:hover .worker-purpose {
@@ -2038,14 +2018,9 @@ body {
    hairline above, the micro label, the facts inline, the action at the end —
    a divider that states its fact rather than a stage in a timeline. */
 .milestone {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  min-height: 32px;
   margin-top: var(--s-2);
   padding-top: var(--s-2);
   border-top: 1px solid var(--edge);
-  font: var(--type-row);
   color: var(--text-1);
 }
 
@@ -2072,11 +2047,6 @@ body {
 
 .trace-note,
 .trace-outcome {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: 28px;
-  font: var(--type-row);
   color: var(--text-2);
 }
 
@@ -2099,11 +2069,6 @@ body {
 
 /* Control lives in the stream, never in a toast or a modal. */
 .control-event {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: 32px;
-  font: var(--type-row);
   color: var(--text-2);
 }
 
@@ -2700,16 +2665,11 @@ body {
 }
 
 .chip-menu-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
   width: 100%;
-  min-height: 28px;
   padding: 0 var(--s-2);
   border: none;
   border-radius: var(--r-control);
   background: transparent;
-  font: var(--type-row);
   color: var(--text-1);
   cursor: pointer;
   text-align: left;
@@ -2910,13 +2870,11 @@ body {
 }
 
 .inspector-tab {
-  font: var(--type-row);
   color: var(--text-2);
   background: transparent;
   border: none;
   border-radius: var(--r-control);
   padding: var(--s-1) var(--s-2);
-  min-height: 28px;
   cursor: pointer;
   /* A tab's name is one word-shape however tight the row gets: "All files"
      wrapping into a two-line tab read as a different control (D-160 batch). */
@@ -3028,11 +2986,6 @@ body {
 }
 
 .participant-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: 32px;
-  font: var(--type-row);
 }
 
 .participant-name {
@@ -3076,18 +3029,13 @@ body {
 }
 
 .change-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
   flex: 1;
   min-width: 0;
-  min-height: 32px;
   padding: 0 var(--s-2);
   border: none;
   border-radius: var(--r-control);
   background: transparent;
   color: var(--text-1);
-  font: var(--type-row);
   cursor: pointer;
   text-align: left;
 }
@@ -3520,10 +3468,6 @@ body {
 }
 
 .setup-command {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  min-height: 32px;
 }
 
 .setup-command-name {
@@ -3563,13 +3507,8 @@ body {
 }
 
 .file-row {
-  display: flex;
-  align-items: center;
   flex-wrap: wrap;
-  gap: var(--s-2);
-  min-height: 32px;
   padding: var(--s-1) 0;
-  font: var(--type-row);
 }
 
 .file-path {
@@ -3653,13 +3592,11 @@ body {
 }
 
 .segment-tab {
-  font: var(--type-row);
   color: var(--text-2);
   background: transparent;
   border: none;
   border-radius: var(--r-control);
   padding: var(--s-1) var(--s-3);
-  min-height: 28px;
   cursor: pointer;
   /* A tab name is one phrase (DESIGN.md rule 21): the row scrolls before a
      name folds. */
@@ -3952,10 +3889,6 @@ body {
 }
 
 .invite-item {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: 32px;
 }
 
 .invite-state {
@@ -4120,9 +4053,6 @@ body {
    state were words nobody reads twice, sitting on the row with the least room
    (D-047). */
 .terminal-tab {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
   border-radius: var(--r-control);
   padding-right: 2px;
   white-space: nowrap;
@@ -4384,15 +4314,10 @@ body {
 }
 
 .tree-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: 30px;
   padding-right: var(--s-3);
   border: none;
   background: transparent;
   color: var(--text-1);
-  font: var(--type-row);
   text-align: left;
   cursor: pointer;
   white-space: nowrap;
@@ -5836,11 +5761,9 @@ body.resizing {
    value is right-aligned so the eye reads a column of names and finds the
    context only when it wants it. */
 .palette-hit {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-3);
   width: 100%;
-  padding: var(--s-2) var(--s-3);
+  /* Horizontal inset only: the height is the row's (D-259). */
+  padding: 0 var(--s-3);
   border: none;
   border-radius: var(--r-control);
   background: transparent;
@@ -6104,12 +6027,8 @@ body.resizing {
 }
 
 .contested-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
   font: var(--type-meta);
   color: var(--text-2);
-  min-height: 32px;
 }
 
 /* The receipt: the room, frozen, at prose measure. */
@@ -6304,12 +6223,8 @@ body.resizing {
 }
 
 .pull-commit {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-3);
-  padding: var(--s-2) 0;
+  padding: 0;
   border-top: 1px solid var(--edge);
-  font: var(--type-row);
 }
 
 .pull-commit:first-child {
@@ -6816,9 +6731,6 @@ body.resizing {
 }
 
 .evidence-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
   padding: var(--s-1) var(--s-2);
   border: none;
   border-radius: var(--r-control);
@@ -6826,7 +6738,6 @@ body.resizing {
   color: var(--text-1);
   text-align: left;
   cursor: pointer;
-  min-height: 36px;
 }
 
 .evidence-row:hover {
@@ -8141,11 +8052,7 @@ span.trace-attachment-transcript:hover {
 }
 
 .kit-row {
-  display: flex;
-  align-items: center;
   flex-wrap: wrap;
-  gap: var(--s-2);
-  min-height: 32px;
 }
 
 .kit-label {
@@ -8305,4 +8212,64 @@ span.trace-attachment-transcript:hover {
 .habit-note-words {
   min-width: 0;
   flex: 1 1 auto;
+}
+
+/* ---------- The row (D-259) ---------- */
+/* One geometry for every list row in the product. A row is a flex line of
+   32px (28px in a tree, a menu, a tab strip) with one gap and the row type;
+   what a family keeps is what makes it itself: its inset, its tone, its
+   borders, the rail's sharp corners. The shared rules carry no specificity
+   (`:where`), so a family's own exception wins wherever it sits in the file.
+   Inside a row the name yields last: a trailing note shrinks first, then the
+   name truncates with an ellipsis (DESIGN.md rule 21). */
+:where(.side-row, .change-row, .evidence-row, .palette-hit, .repo-row, .side-open, .file-row, .participant-row, .invite-item, .milestone, .setup-command, .control-event, .contested-row, .kit-row, .pull-commit, .trace-waiting-row, .tree-row, .chip-menu-row, .worker-line, .trace-outcome, .terminal-tab, .inspector-tab, .segment-tab) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  min-height: 32px;
+  font: var(--type-row);
+}
+
+:where(.tree-row, .chip-menu-row, .worker-line, .trace-outcome, .terminal-tab, .inspector-tab, .segment-tab) {
+  min-height: 28px;
+}
+
+/* Padding and radius stay with each family for now: the rail is sharp and
+   flush, a menu row is inset by one step, a palette hit by two — the next
+   slices settle those on the control scale, one family at a time. */
+
+.terminal-tab,
+.inspector-tab,
+.segment-tab {
+  display: inline-flex;
+}
+
+.side-row > .side-name,
+.palette-hit > .palette-name,
+.change-row > .change-path,
+.pull-commit > .pull-commit-message {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-decision-note,
+.side-approaches,
+.side-needs,
+.side-state,
+.pull-commit-meta,
+.palette-where {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-count,
+.palette-hint {
+  flex: none;
 }

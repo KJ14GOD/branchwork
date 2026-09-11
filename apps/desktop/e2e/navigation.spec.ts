@@ -752,6 +752,22 @@ describe("the missions a person has open", () => {
     });
   }, 300_000);
 
+  it("the palette's rows are the rail's rows (D-259): one height, one type, captured", async () => {
+    await page.getByTestId("rail-search").click();
+    await page.getByTestId("palette-command-input").waitFor({ timeout: 10_000 });
+    const hits = page.getByTestId("palette-command");
+    await expect.poll(async () => hits.count(), { timeout: 10_000 }).toBeGreaterThan(2);
+    const heights = await hits.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
+    const railHeights = await page.locator(".side-row").evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
+    // Every palette row and every single-line rail row stand 32px tall; a
+    // rail row carrying its second line ("2 approaches") is taller by design.
+    expect(new Set(heights)).toEqual(new Set([32]));
+    expect(railHeights.filter((height) => height === 32).length).toBeGreaterThan(0);
+    await shot(page, "266-command-palette-rows.png");
+    await page.keyboard.press("Escape");
+    await expect.poll(async () => page.getByTestId("palette-command-input").count(), { timeout: 10_000 }).toBe(0);
+  }, 60_000);
+
   it("the layout is the person's: set on the page, applied at once, and remembered (D-257)", async () => {
     const rootFacts = () =>
       page.evaluate(() => ({

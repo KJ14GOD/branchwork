@@ -3652,3 +3652,22 @@ Use the existing checkpoint and evidence paths. Record reported usage and priced
 
 **Revisit when.** A fourth habit is wanted — which tab a person returns to, whether the board is used — or a team wants one room's habits shared, which is a repository setting like D-257's.
 
+## D-259 — The overhaul: one row, one header, one tab, one control set, less on screen
+
+**Context.** The owner, after every fix of the past week still: "It still feels vibe coded … it's time to do the whole UI overhaul." Measured on 2026-09-11 before any change: the token discipline held (one raw font size and one non-token padding in 8,308 lines of stylesheet), but the shapes did not — 778 distinct class names for 33 components and 13 distinct control heights. Every feature had drawn its own row, header, chip, and tab; the palette's rows were taller than the rail's, Settings titles were twice the size of any other title, the mission strip and the lane strip were two tab systems, and the rail carried five kinds of row.
+
+**Decision.** The overhaul is six slices, each committed with screenshots and the click-everything walk, each measured against a number stated here:
+
+1. *One row.* Every list row in the product shares one geometry — 32px, or 28px in a tree, a menu, or a tab strip — one gap, the row type, and one truncation order: a trailing note yields before the name, the name truncates with an ellipsis, and nothing is cut in code at a character count. Insets stay with their families until the control slice: a blanket inset on the rail's rows shifted the tree by one step on the first try, because the family rules that set it sat earlier in the cascade. Target: list-row heights are exactly 28 and 32.
+2. *One header.* Every surface opens the same way: a title at one size, one sentence, actions on the right. Settings, Home, the request page, the panel's sections, dialogs.
+3. *One tab.* Mission tabs and lane tabs are the same tab; the top-right cluster is one control height.
+4. *One control set.* Buttons, icon buttons, chips, and segments at three sizes. Target: 13 heights to 3; class names from 778 to under 550.
+5. *Less on screen.* Empty board columns collapse to one quiet line; the rail's row kinds go from five to three; the composer's chips keep one line.
+6. *The walk and the record.* A full re-walk at three widths, every surface screenshot re-captured, and DESIGN.md's primitives rewritten to match what the app does.
+
+**Alternatives.** A visual redesign from a mockup (rejected: the owner's complaint is consistency, not direction — Grok-minimal dark monochrome is settled — and a mockup would restart the argument). Reworking component by component as bugs arrive (rejected: that is how it got here).
+
+**Consequences.** Slice 1 landed with this entry: a row primitive in `app.css` carries the geometry for twenty-three row families, whose own rules lost ninety-four duplicated declarations; the rail's mission and session labels are no longer cut at 26 and 24 characters in code. Each further slice appends a dated line here with its measurement.
+
+**Revisit when.** A slice's number is not met — then the slice is not done, whatever the screenshots say.
+

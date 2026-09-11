@@ -212,6 +212,8 @@ These are the only primitives. Feature components compose primitives; they never
 
 `Button` (primary/secondary/text/danger) · `IconButton` · `TextButton` · `Input` · `Textarea` · `Select` · `Menu` · `Tooltip` · `Popover` · `Dialog` · `Drawer` · `Tabs` · `IdentityMark` · `Row` · `Section` · `Separator` · `ScrollArea` · `Composer` · `EvidenceItem` · `DiffRow` · `CheckRow`
 
+**Row (D-259).** One geometry for every list row: a flex line of 32px — 28px in a tree, a menu, or a tab strip — with one gap and the row type. What a family keeps is what makes it itself: its inset, its tone, its borders, the rail's sharp corners; the insets converge on the control scale in the later slices, one family at a time. Inside a row the name yields last: a trailing note shrinks first, then the name truncates with an ellipsis. No label is cut in code at a character count.
+
 Composition rules:
 
 - Primary Button: `--accent` background, `--bg` text — a light control on a dark product, never a colored one. Secondary: `--surface-1` with a 1px edge. Text buttons: `--text-2`, lifting to `--text-1` on hover.
