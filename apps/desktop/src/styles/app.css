@@ -768,23 +768,11 @@ body {
   align-items: center;
   flex: none;
   max-width: 22ch;
-  margin: var(--s-2) 0;
-  border-radius: var(--r-control);
-  color: var(--text-3);
-}
-
-.mission-tab:hover {
-  color: var(--text-2);
 }
 
 /* The only tab that gets a plane is the one you are reading. The rest are
    words on the window — a row of eight filled shapes is a row of eight things
    asking for attention, and seven of them have nothing to say. */
-.mission-tab.active {
-  background: var(--selected);
-  color: var(--text-1);
-}
-
 .mission-tab-open {
   display: inline-flex;
   align-items: center;
@@ -794,7 +782,8 @@ body {
   background: transparent;
   color: inherit;
   font: var(--type-row);
-  padding: var(--s-1) var(--s-1) var(--s-1) var(--s-3);
+  /* The tab carries the inset (D-259); the open button is flush inside it. */
+  padding: 0;
   cursor: pointer;
   white-space: nowrap;
 }

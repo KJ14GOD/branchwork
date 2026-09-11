@@ -109,7 +109,7 @@ export function MissionTabs({
                 <span
                   key={tab.id}
                   ref={active ? selectedRef : undefined}
-                  className={active ? "mission-tab active" : "mission-tab"}
+                  className={active ? "tab mission-tab active" : "tab mission-tab"}
                   data-testid="mission-tab"
                   data-active={active}
                   data-project={tab.projectKey}

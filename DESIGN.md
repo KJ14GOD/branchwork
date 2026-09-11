@@ -216,6 +216,8 @@ These are the only primitives. Feature components compose primitives; they never
 
 **Header (D-259).** Every surface opens the same way: a title at the title step — the request page, a decision, a dialog, a worker's view, a Settings page — then one sentence of meta, with the surface's actions on the right; section heads inside a surface take the section step. The display step belongs to the first-run greeting alone (D-147), and nothing inside the working shell uses it.
 
+**Tab (D-259).** One tab for every strip: the row type, the quiet colour until hovered, and the accent underline under the one that is open — the mission strip above the room and the lane strip inside it are the same tab, with a name, a glyph where the kind matters, and a close where closing is allowed. No chip, no filled background: the underline is the whole of "open".
+
 Composition rules:
 
 - Primary Button: `--accent` background, `--bg` text — a light control on a dark product, never a colored one. Secondary: `--surface-1` with a 1px edge. Text buttons: `--text-2`, lifting to `--text-1` on hover.
