@@ -556,7 +556,6 @@ body {
 }
 
 .setup-row .setup-row-label {
-  font: var(--type-section);
 }
 
 .setup-row .setup-row-desc {
@@ -1980,8 +1979,6 @@ body {
 }
 
 .worker-inspector-title {
-  font: var(--type-title);
-  color: var(--text-1);
 }
 
 .worker-inspector-sub {
@@ -2899,7 +2896,6 @@ body {
 }
 
 .inspector-heading {
-  font: var(--type-section);
   margin: var(--s-5) 0 var(--s-2);
 }
 
@@ -3588,7 +3584,6 @@ body {
 }
 
 .dialog-title {
-  font: var(--type-title);
 }
 
 .segment-tab {
@@ -5846,8 +5841,6 @@ body.resizing {
 }
 
 .decision-title {
-  font: var(--type-title);
-  color: var(--text-1);
   margin: 0;
 }
 
@@ -5923,8 +5916,6 @@ body.resizing {
 /* The name is the identity (D-137, retiring the lane hues finally):
    weight and step carry it, nothing colored does. */
 .approach-name {
-  font: var(--type-section);
-  color: var(--text-1);
 }
 
 /* Standing in words, colored within its meaning — never a pill. */
@@ -6119,8 +6110,6 @@ body.resizing {
 }
 
 .pull-title {
-  font: var(--type-title);
-  color: var(--text-1);
   overflow-wrap: anywhere;
 }
 
@@ -6388,8 +6377,6 @@ body.resizing {
 }
 
 .dialog-head h2 {
-  font: var(--type-title);
-  color: var(--text-1);
 }
 
 /* The theme control at the rail's foot (D-103): a block anchored where the
@@ -6448,8 +6435,6 @@ body.resizing {
 }
 
 .section-title {
-  font: var(--type-section);
-  color: var(--text-1);
 }
 
 /* ---------- The ask-dialog (D-077), Conductor-shaped ---------- */
@@ -6541,8 +6526,6 @@ body.resizing {
    D-121's polish): inset by the card's padding + border so "Needs you" and
    the goal beneath it start on one line. */
 .board-column-head {
-  font: var(--type-section);
-  color: var(--text-1);
   display: flex;
   align-items: baseline;
   gap: var(--s-2);
@@ -6812,8 +6795,6 @@ body.resizing {
 }
 
 .artifact-view-title {
-  font: var(--type-section);
-  color: var(--text-1);
 }
 
 .artifact-media {
@@ -7549,8 +7530,6 @@ span.trace-attachment-transcript:hover {
 }
 
 .settings-page-title {
-  font: var(--type-display);
-  color: var(--text-1);
   margin: 0 0 var(--s-3);
 }
 
@@ -8272,4 +8251,19 @@ span.trace-attachment-transcript:hover {
 .side-count,
 .palette-hint {
   flex: none;
+}
+
+/* ---------- The header (D-259) ---------- */
+/* One title size for every surface — the request page, a decision, a
+   dialog, a worker's view, Settings, whose page title had taken the display
+   step D-147 reserved for the first-run greeting alone — and one size for
+   every section head. Zero specificity: a family's own exception wins. */
+:where(.settings-page-title, .pull-title, .decision-title, .dialog-title, .dialog-head h2, .worker-inspector-title) {
+  font: var(--type-title);
+  color: var(--text-1);
+}
+
+:where(.section-title, .board-column-head, .inspector-heading, .approach-name, .artifact-view-title, .setup-row .setup-row-label) {
+  font: var(--type-section);
+  color: var(--text-1);
 }

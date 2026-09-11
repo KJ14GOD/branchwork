@@ -3669,5 +3669,7 @@ Use the existing checkpoint and evidence paths. Record reported usage and priced
 
 **Consequences.** Slice 1 landed with this entry: a row primitive in `app.css` carries the geometry for twenty-three row families, whose own rules lost ninety-four duplicated declarations; the rail's mission and session labels are no longer cut at 26 and 24 characters in code. Each further slice appends a dated line here with its measurement.
 
+*Slice 2, 2026-09-11 — one header.* Six surface titles share the title step and six section heads the section step through one zero-specificity rule, and their families lost twenty-one duplicated declarations. Settings had set its page title at the display step D-147 reserved for the first-run greeting; the display step is now used by exactly one selector, the greeting.
+
 **Revisit when.** A slice's number is not met — then the slice is not done, whatever the screenshots say.
 

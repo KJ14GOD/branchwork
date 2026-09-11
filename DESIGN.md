@@ -214,6 +214,8 @@ These are the only primitives. Feature components compose primitives; they never
 
 **Row (D-259).** One geometry for every list row: a flex line of 32px — 28px in a tree, a menu, or a tab strip — with one gap and the row type. What a family keeps is what makes it itself: its inset, its tone, its borders, the rail's sharp corners; the insets converge on the control scale in the later slices, one family at a time. Inside a row the name yields last: a trailing note shrinks first, then the name truncates with an ellipsis. No label is cut in code at a character count.
 
+**Header (D-259).** Every surface opens the same way: a title at the title step — the request page, a decision, a dialog, a worker's view, a Settings page — then one sentence of meta, with the surface's actions on the right; section heads inside a surface take the section step. The display step belongs to the first-run greeting alone (D-147), and nothing inside the working shell uses it.
+
 Composition rules:
 
 - Primary Button: `--accent` background, `--bg` text — a light control on a dark product, never a colored one. Secondary: `--surface-1` with a 1px edge. Text buttons: `--text-2`, lifting to `--text-1` on hover.
