@@ -169,15 +169,9 @@ body {
    secondary beside it reads as two unrelated controls. 32px is also the
    pointer-target floor DESIGN.md#density has always asked for. */
 .btn {
-  font: var(--type-row);
   font-weight: 500;
   border: 1px solid transparent;
-  border-radius: var(--r-control);
   padding: var(--s-2) var(--s-3);
-  min-height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   gap: var(--s-1);
   cursor: pointer;
   transition: background var(--m-press) var(--ease);
@@ -854,12 +848,9 @@ body {
   flex: none;
   align-self: center;
   width: 28px;
-  height: 24px;
   border: none;
-  border-radius: var(--r-control);
   background: transparent;
   color: var(--text-3);
-  font: var(--type-row);
   cursor: pointer;
 }
 
@@ -954,23 +945,6 @@ body {
 /* A needs-attention row says where: the goal, then the lane and conversation
    that are actually asking, one quiet line beneath it (D-093). Column layout
    only here — every other side row stays one line. */
-.attention-row {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0;
-  padding-top: var(--s-1);
-  padding-bottom: var(--s-1);
-}
-
-.attention-where {
-  font: var(--type-meta);
-  color: var(--text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-}
-
 /* A project row is two controls in one line: disclose, and open. It is the
    list's heading, and reads as one: the name carries weight and --text-1
    while the missions under it sit quieter (D-077). It also never takes the
@@ -1002,11 +976,7 @@ body {
 }
 
 .side-twisty {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 20px;
-  min-height: 32px;
   flex: none;
   border: none;
   background: transparent;
@@ -1046,14 +1016,9 @@ body {
 /* An icon control with no adjacent text: it carries a tooltip and a label,
    and it is the only shape in the product allowed to (DESIGN.md#icons). */
 .icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 32px;
-  height: 32px;
   flex: none;
   border: 1px solid transparent;
-  border-radius: var(--r-control);
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
@@ -1097,22 +1062,17 @@ body {
    counts. It is transparent rather than absent, so it keeps its place in the
    tab order and can be reached without a mouse. */
 .side-new-mission {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 24px;
   /* Never taller than the row's own line: this control mounts only on the
      ACTIVE row, so any height of its own becomes a selected-vs-hover size
      difference — the selected chip grew to 40px while hover stayed 28px. The
      row's min-height rules alone decide the chip's height. */
-  min-height: 20px;
   align-self: stretch;
   flex: none;
   padding: 0;
   border: none;
   background: transparent;
   color: var(--text-3);
-  font: var(--type-row);
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--m-press) var(--ease);
@@ -1312,12 +1272,6 @@ body {
 .tab.active {
   color: var(--text-1);
   border-bottom-color: var(--accent);
-}
-
-.tab.tab-new {
-  font-weight: 500;
-  min-width: 32px;
-  text-align: center;
 }
 
 /* A lane tab is a room of its own inside the mission (D-080). The dot is the
@@ -1548,17 +1502,6 @@ body {
   color: var(--text-2);
 }
 
-.inspector-triggers .btn-text.active {
-  color: var(--text-1);
-  background: var(--selected);
-}
-
-.inspector-triggers {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-1);
-}
-
 .room-error {
   flex: none;
   padding: 0 var(--s-6) var(--s-2);
@@ -1610,10 +1553,7 @@ body {
   transform: translateX(-50%);
   bottom: var(--s-4);
   width: 32px;
-  height: 32px;
   display: flex;
-  align-items: center;
-  justify-content: center;
   border-radius: 50%;
   border: 1px solid var(--edge);
   background: var(--surface-2);
@@ -1992,11 +1932,6 @@ body {
   font: var(--type-body);
   color: var(--text-2);
   white-space: pre-wrap;
-}
-
-.worker-inspector-foot {
-  border-top: 1px solid var(--edge);
-  padding-top: var(--s-3);
 }
 
 /* Evidence milestones: dense rows, tabular numbers, no cards. */
@@ -2466,13 +2401,9 @@ body {
 }
 
 .chip-button {
-  display: inline-flex;
-  align-items: center;
   gap: var(--s-2);
-  height: 24px;
   padding: 0 var(--s-2);
   border: 1px solid transparent;
-  border-radius: var(--r-control);
   background: transparent;
   font: var(--type-meta);
   color: var(--text-2);
@@ -2614,14 +2545,9 @@ body {
 
 .send-button {
   margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 28px;
-  height: 28px;
   flex: none;
   border: none;
-  border-radius: var(--r-control);
   background: var(--accent);
   color: var(--bg);
   cursor: pointer;
@@ -2813,33 +2739,6 @@ body {
 /* The panel's own top row: who is here, who holds the baton, and the control
    that hides it. It sits at the window's top edge, so it clears the traffic
    lights the way the top bar does. */
-.inspector-identity {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  height: var(--topbar-h);
-  padding: 0 var(--s-2) 0 var(--s-4);
-  -webkit-app-region: drag;
-}
-
-.inspector-identity > * {
-  -webkit-app-region: no-drag;
-}
-
-.inspector-controller {
-  flex: 1;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  font: var(--type-meta);
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .inspector-head {
   flex: none;
   display: flex;
@@ -3028,16 +2927,11 @@ body {
 /* The pin: quiet until the line is hovered or the pin itself is focused —
    the rail's `+` idiom — so eighteen rows do not wear eighteen controls. */
 .change-pin {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 28px;
-  height: 28px;
   flex: none;
   margin-right: var(--s-1);
   padding: 0;
   border: none;
-  border-radius: var(--r-control);
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
@@ -3645,13 +3539,6 @@ body {
   cursor: default;
 }
 
-.row-glyph {
-  width: 16px;
-  height: 16px;
-  flex: none;
-  color: var(--text-2);
-}
-
 .repo-row-text {
   display: flex;
   flex-direction: column;
@@ -3782,14 +3669,6 @@ body {
     z-index: 50;
     border-left: none;
     background: var(--surface-2);
-  }
-
-  .inspector-identity {
-    -webkit-app-region: no-drag;
-  }
-
-  .authority-row {
-    flex-wrap: wrap;
   }
 }
 
@@ -4051,16 +3930,11 @@ body {
 }
 
 .terminal-tab-open {
-  display: inline-flex;
-  align-items: center;
   gap: var(--s-2);
   border: none;
   background: transparent;
   color: var(--text-2);
-  font: var(--type-row);
   padding: 0 var(--s-2);
-  min-height: 28px;
-  border-radius: var(--r-control);
   cursor: pointer;
 }
 
@@ -4102,13 +3976,11 @@ body {
 .terminal-new {
   flex: none;
   width: 24px;
-  height: 24px;
   border: none;
   background: transparent;
   color: var(--text-2);
   font: var(--type-body);
   line-height: 1;
-  border-radius: var(--r-control);
   cursor: pointer;
 }
 
@@ -5667,8 +5539,6 @@ body.resizing {
 
 .input-inline {
   width: 100%;
-  height: 28px;
-  font: var(--type-row);
 }
 
 /* --- Find a mission (D-069) ---------------------------------------------------
@@ -7620,7 +7490,6 @@ span.trace-attachment-transcript:hover {
 
 .settings-key-action {
   width: 24px;
-  height: 24px;
   color: var(--text-3);
 }
 
@@ -7884,14 +7753,9 @@ span.trace-attachment-transcript:hover {
   position: absolute;
   top: 0;
   right: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 24px;
-  height: 24px;
   flex: none;
   border: 1px solid transparent;
-  border-radius: var(--r-control);
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
@@ -7956,21 +7820,13 @@ span.trace-attachment-transcript:hover {
 .settings-input {
   width: 260px;
   border: 1px solid var(--edge);
-  border-radius: var(--r-control);
   background: var(--bg);
   color: var(--text-1);
-  font: var(--type-row);
   padding: var(--s-1) var(--s-2);
-  min-height: 28px;
   outline: none;
 }
 .settings-input:focus {
   border-color: var(--edge-strong);
-}
-.settings-key-form {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
 }
 .settings-dictionary {
   width: 100%;
@@ -8255,4 +8111,31 @@ span.trace-attachment-transcript:hover {
 :where(.section-title, .board-column-head, .inspector-heading, .approach-name, .artifact-view-title, .setup-row .setup-row-label) {
   font: var(--type-section);
   color: var(--text-1);
+}
+
+/* ---------- The control (D-259) ---------- */
+/* Three sizes and no others: 32px for a control that stands on its own —
+   a button, an icon button, the rail's twisty — 28px for one that sits in a
+   row or a strip, 24px for one inside a row's text: a chip, a mic, a plus.
+   One radius, the row type (the small size keeps the meta type). Zero
+   specificity: a family's own exception — the jump button's circle — wins. */
+:where(.btn, .icon-button, .side-twisty, .feed-jump, .change-pin, .input-inline, .send-button, .settings-input, .terminal-tab-open, .chip-button, .composer-mic, .mission-tab-new, .settings-key-action, .terminal-new, .side-new-mission) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-control);
+  font: var(--type-row);
+}
+
+:where(.btn, .icon-button, .side-twisty, .feed-jump) {
+  min-height: 32px;
+}
+
+:where(.change-pin, .input-inline, .send-button, .settings-input, .terminal-tab-open) {
+  min-height: 28px;
+}
+
+:where(.chip-button, .composer-mic, .mission-tab-new, .settings-key-action, .terminal-new, .side-new-mission) {
+  min-height: 24px;
+  font: var(--type-meta);
 }

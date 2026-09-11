@@ -3661,13 +3661,15 @@ Use the existing checkpoint and evidence paths. Record reported usage and priced
 1. *One row.* Every list row in the product shares one geometry — 32px, or 28px in a tree, a menu, or a tab strip — one gap, the row type, and one truncation order: a trailing note yields before the name, the name truncates with an ellipsis, and nothing is cut in code at a character count. Insets stay with their families until the control slice: a blanket inset on the rail's rows shifted the tree by one step on the first try, because the family rules that set it sat earlier in the cascade. Target: list-row heights are exactly 28 and 32.
 2. *One header.* Every surface opens the same way: a title at one size, one sentence, actions on the right. Settings, Home, the request page, the panel's sections, dialogs.
 3. *One tab.* Mission tabs and lane tabs are the same tab; the top-right cluster is one control height.
-4. *One control set.* Buttons, icon buttons, chips, and segments at three sizes. Target: 13 heights to 3; class names from 778 to under 550.
+4. *One control set.* Buttons, icon buttons, chips, and segments at three sizes. Target: 13 heights to 3. (The class-name target first written here was against a wrong count; see the slice 4 line.)
 5. *Less on screen.* Empty board columns collapse to one quiet line; the rail's row kinds go from five to three; the composer's chips keep one line.
 6. *The walk and the record.* A full re-walk at three widths, every surface screenshot re-captured, and DESIGN.md's primitives rewritten to match what the app does.
 
 **Alternatives.** A visual redesign from a mockup (rejected: the owner's complaint is consistency, not direction — Grok-minimal dark monochrome is settled — and a mockup would restart the argument). Reworking component by component as bugs arrive (rejected: that is how it got here).
 
 **Consequences.** Slice 1 landed with this entry: a row primitive in `app.css` carries the geometry for twenty-three row families, whose own rules lost ninety-four duplicated declarations; the rail's mission and session labels are no longer cut at 26 and 24 characters in code. Each further slice appends a dated line here with its measurement.
+
+*Slice 4, 2026-09-11 — one control set, and a corrected number.* Fifteen control families share three sizes (32, 28, 24) through one zero-specificity rule and lost fifty-eight duplicated declarations; thirteen dead rule blocks went. The class-name target above was set against a wrong baseline: the first count saw 778 rule-leading names, a full count finds 831 distinct names, and after this slice 820 — most of what remains is used, either directly or built at runtime from file kinds, label colours, and check outcomes. The honest target is the one the slices actually pursue: fewer shapes, not fewer names. One lesson cost a rebuild: removing a dead rule indented inside a media block by a pattern that only knew flat blocks swallowed the block's closing brace and a live rule after it; the build's own CSS warning caught it.
 
 *Slice 3, 2026-09-11 — one tab.* The mission strip's chip tabs — a filled selection, a radius, their own margin — become the underline tab the lane strip already used; the mission tab is now the tab with a group label and a close. The top-right cluster was already one height (32px). The strip tests and the relaunch capture (65) hold.
 

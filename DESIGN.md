@@ -218,6 +218,8 @@ These are the only primitives. Feature components compose primitives; they never
 
 **Tab (D-259).** One tab for every strip: the row type, the quiet colour until hovered, and the accent underline under the one that is open — the mission strip above the room and the lane strip inside it are the same tab, with a name, a glyph where the kind matters, and a close where closing is allowed. No chip, no filled background: the underline is the whole of "open".
 
+**Control (D-259).** Three sizes and no others: 32px for a control that stands on its own — a button, an icon button, the rail's twisty — 28px for one that sits in a row or a strip, 24px for one inside a row's text — a chip, a mic, a plus. One radius, the row type; the small size keeps the meta type. A family keeps only what makes it itself, such as the jump button's circle. The palette's query field and the text areas are fields, not controls, and keep their own heights.
+
 Composition rules:
 
 - Primary Button: `--accent` background, `--bg` text — a light control on a dark product, never a colored one. Secondary: `--surface-1` with a 1px edge. Text buttons: `--text-2`, lifting to `--text-1` on hover.
