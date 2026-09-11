@@ -53,10 +53,13 @@ jobs:
       - name: Build unsigned Windows installer
         id: package
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: pnpm --filter @novus/desktop package:win --publish never
-        # electron-builder resolves the GitHub Releases publish config (D-250)
-        # even with publishing off, and refuses without a token; the workflow
-        # token is enough to resolve it, and nothing is uploaded here.
+        run: pnpm --filter @novus/desktop package:win
+        # The package scripts already say --publish never; passing it here
+        # again doubled the flag, and on the first tag build electron-builder
+        # read the doubled option as unset and published (403, read-only
+        # token). electron-builder still resolves the GitHub Releases publish
+        # config (D-250) to write the update manifest and wants a token for
+        # that; the workflow token is enough, and nothing is uploaded here.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Launch packaged Windows app

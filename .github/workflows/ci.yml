@@ -43,10 +43,13 @@ jobs:
       - name: Desktop tests
         run: pnpm --filter @novus/desktop test
       - name: Build unsigned macOS disk image
-        run: pnpm --filter @novus/desktop package --publish never
-        # electron-builder resolves the GitHub Releases publish config (D-250)
-        # even with publishing off, and refuses without a token; the workflow
-        # token is enough to resolve it, and nothing is uploaded here.
+        run: pnpm --filter @novus/desktop package
+        # The package scripts already say --publish never; passing it here
+        # again doubled the flag, and on the first tag build electron-builder
+        # read the doubled option as unset and published (403, read-only
+        # token). electron-builder still resolves the GitHub Releases publish
+        # config (D-250) to write the update manifest and wants a token for
+        # that; the workflow token is enough, and nothing is uploaded here.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Save the disk image
