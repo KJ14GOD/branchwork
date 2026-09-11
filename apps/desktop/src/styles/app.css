@@ -8288,3 +8288,21 @@ span.trace-attachment-transcript:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---------- The room's habits (D-258) ---------- */
+/* One line under the strip, said once: the words, then Undo and OK as text
+   buttons. It is a notice bar like the offline one, never a toast. */
+.habit-note {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  /* A notice, not a warning: the offline bar's tone is for trouble. */
+  color: var(--text-1);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--edge);
+}
+
+.habit-note-words {
+  min-width: 0;
+  flex: 1 1 auto;
+}

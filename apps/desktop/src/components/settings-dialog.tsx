@@ -5,6 +5,7 @@ import { focusQuietly } from "./dialog";
 import { applyTheme, themePreference, THEME_CHOICES, type ThemePreference } from "../theme";
 import { currentThemeFile, listThemes, parseThemeFile, removeTheme, saveTheme, themeFileOf, type CustomTheme } from "../themes";
 import { layout, setLayout, type Layout } from "../layout";
+import { forgetHabits, habitWords, setNoticing, undo as undoHabit, useHabits, type HabitKey } from "../habits";
 import { ClaudeGlyph } from "./identity";
 import {
   BINDING_ACTIONS,
@@ -260,6 +261,9 @@ export function SettingsDialog({
   const [page, setPage] = useState<Page>("account");
   // The person's arrangement (D-257), read on open and written as it changes.
   const [arrangement, setArrangement] = useState<Layout>(() => layout());
+  // What the room noticed and adopted (D-258), for the Habits card.
+  const habitsState = useHabits();
+  const adoptedHabits = (Object.entries(habitsState.adopted) as [HabitKey, { value: import("../habits").HabitValue; told: boolean }][]).filter(([, entry]) => entry);
   const segment = <K extends keyof Layout>(key: K, choices: [Layout[K], string][]) => (
     <div className="settings-theme" role="group" aria-label={String(key)}>
       {choices.map(([value, label]) => (
@@ -592,6 +596,52 @@ export function SettingsDialog({
             <Card heading="The shell">
               <CardRow title="Density" description="Row height and spacing" trailing={segment("density", [["comfortable", "Comfortable"], ["compact", "Compact"]])} />
               <CardRow title="Motion" description="Reduced motion is always honoured when the system asks for it" trailing={segment("motion", [["full", "Full"], ["reduced", "Reduced"]])} />
+            </Card>
+            <Card heading="Habits">
+              <CardRow
+                title="Notice what I do"
+                description="Which evidence section you open first, whether you open the panel after a turn, whether you open the terminal on a run — adopted when it wins five of the last seven times, said once, undone in one click"
+                trailing={
+                  <div className="settings-theme" role="group" aria-label="Notice what I do">
+                    {([true, false] as const).map((value) => (
+                      <button
+                        key={String(value)}
+                        className={habitsState.noticing === value ? "segment-tab active" : "segment-tab"}
+                        aria-pressed={habitsState.noticing === value}
+                        onClick={() => setNoticing(value)}
+                        data-testid={`habits-${value ? "on" : "off"}`}
+                      >
+                        {value ? "On" : "Off"}
+                      </button>
+                    ))}
+                  </div>
+                }
+              />
+              {adoptedHabits.length === 0 ? (
+                <CardRow title="Nothing adopted yet" description="The room says so here, and under the tab strip, when it adopts something" testid="habits-none" />
+              ) : (
+                adoptedHabits.map(([key, entry]) => (
+                  <CardRow
+                    key={key}
+                    title={habitWords(key, entry.value)}
+                    trailing={
+                      <button className="btn btn-text" onClick={() => undoHabit(key)} data-testid={`habit-undo-${key}`}>
+                        Undo
+                      </button>
+                    }
+                    testid={`habit-adopted-${key}`}
+                  />
+                ))
+              )}
+              <CardRow
+                title="Forget what you noticed"
+                description="Every observation, adoption, and undo — the switch stays as it is"
+                trailing={
+                  <button className="btn btn-secondary" onClick={() => forgetHabits()} data-testid="habits-forget">
+                    Forget
+                  </button>
+                }
+              />
             </Card>
             <p className="settings-hint">Remembered on this Mac. The rail and the panel are resized by dragging their edges, and remembered the same way. The state line, the composer and the baton keep their places whatever else moves.</p>
           </>

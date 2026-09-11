@@ -661,6 +661,97 @@ describe("the missions a person has open", () => {
     await page.getByTestId("state-line").waitFor({ timeout: 30_000 });
     await shot(page, "66-restored-minus-the-refused.png");
   }, 300_000);
+  it("the room notices: an adopted habit opens the panel when a turn finishes, says so once, and is undone (D-258)", async () => {
+    await closeEveryTab(page);
+    await openProject(page, alphaName);
+    const habitsOnDisk = () =>
+      page.evaluate(() => JSON.parse(localStorage.getItem("novus-habits") ?? "null") as { observed?: { panelOnFinish?: string[] }; adopted?: Record<string, unknown> } | null);
+    // Five of the last seven times this person opened the panel after a turn
+    // finished — seeded, since the rule itself is unit-tested — and the
+    // adoption not yet told.
+    await page.evaluate(() => {
+      localStorage.setItem(
+        "novus-habits",
+        JSON.stringify({
+          noticing: true,
+          observed: { firstSection: [], panelOnFinish: ["yes", "no", "yes", "yes", "yes", "yes"], terminalOnRun: [] },
+          adopted: { panelOnFinish: { value: "yes", told: false } },
+          pinned: {}
+        })
+      );
+      window.dispatchEvent(new Event("novus:habits"));
+    });
+    await page.getByTestId("habit-note").waitFor({ timeout: 10_000 });
+    expect(await page.getByTestId("habit-note").innerText()).toContain("The evidence panel opens when a turn finishes");
+    expect(await page.getByTestId("habit-note").innerText()).toContain("5 of the last 7");
+
+    // A turn finishes on screen with the panel closed: the room opens it.
+    const alphaParent = page.locator(".side-parent", {
+      has: page.getByTestId("project-row").filter({ hasText: alphaName })
+    });
+    await alphaParent.hover();
+    await alphaParent.getByTestId("repo-new-mission").click();
+    await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
+    await page.getByTestId("new-mission-dialog").getByTestId("composer-input").fill("adopt the panel habit");
+    await page.keyboard.press("Enter");
+    await page.getByTestId("new-mission-dialog").waitFor({ state: "detached", timeout: 30_000 });
+    expect(await page.locator(".inspector").count()).toBe(0);
+    const habitMissionId = await missionIdByGoal(page, "adopt the panel habit");
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(async (mission) => {
+            const result = await window.novus.missions.get(mission);
+            return result.ok ? result.value.executions.map((execution) => execution.state).join(",") : "";
+          }, habitMissionId),
+        { timeout: 90_000 }
+      )
+      .toContain("completed");
+    await page.locator(".inspector").waitFor({ timeout: 20_000 });
+    await shot(page, "265-habit-adopted.png");
+
+    // Undo from the line: the panel closes, the adoption is gone, the habit is pinned.
+    await page.getByTestId("habit-undo").click();
+    await expect.poll(async () => page.locator(".inspector").count(), { timeout: 10_000 }).toBe(0);
+    await expect.poll(async () => page.getByTestId("habit-note").count(), { timeout: 10_000 }).toBe(0);
+    await page.getByTestId("open-settings").click();
+    await page.getByTestId("settings-dialog").waitFor({ timeout: 10_000 });
+    await page.locator(".settings-nav-item").filter({ hasText: "Layout" }).click();
+    await page.getByTestId("habits-none").waitFor({ timeout: 10_000 });
+    // Forget, so the habit is watched again, then the observation path itself:
+    // a finish with the panel closed, opened by hand inside the window, counts.
+    await page.getByTestId("habits-forget").click();
+    await page.keyboard.press("Escape");
+    await expect.poll(async () => page.getByTestId("settings-dialog").count(), { timeout: 10_000 }).toBe(0);
+    await alphaParent.hover();
+    await alphaParent.getByTestId("repo-new-mission").click();
+    await page.getByTestId("new-mission-dialog").waitFor({ timeout: 30_000 });
+    await page.getByTestId("new-mission-dialog").getByTestId("composer-input").fill("notice the panel habit");
+    await page.keyboard.press("Enter");
+    await page.getByTestId("new-mission-dialog").waitFor({ state: "detached", timeout: 30_000 });
+    const noticedMissionId = await missionIdByGoal(page, "notice the panel habit");
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(async (mission) => {
+            const result = await window.novus.missions.get(mission);
+            return result.ok ? result.value.executions.map((execution) => execution.state).join(",") : "";
+          }, noticedMissionId),
+        { timeout: 90_000 }
+      )
+      .toContain("completed");
+    await page.getByTestId("panel-toggle").click();
+    await page.locator(".inspector").waitFor({ timeout: 10_000 });
+    await expect.poll(async () => (await habitsOnDisk())?.observed?.panelOnFinish?.at(-1) ?? null, { timeout: 10_000 }).toBe("yes");
+    expect((await habitsOnDisk())?.adopted?.panelOnFinish).toBeUndefined();
+    await page.getByTestId("panel-toggle").click();
+    await expect.poll(async () => page.locator(".inspector").count(), { timeout: 10_000 }).toBe(0);
+    await page.evaluate(() => {
+      localStorage.removeItem("novus-habits");
+      window.dispatchEvent(new Event("novus:habits"));
+    });
+  }, 300_000);
+
   it("the layout is the person's: set on the page, applied at once, and remembered (D-257)", async () => {
     const rootFacts = () =>
       page.evaluate(() => ({

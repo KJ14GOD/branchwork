@@ -177,6 +177,10 @@ The room keeps Novus's identity inside Conductor-adjacent patterns: state line, 
 
 The interface is the person's to arrange, within the identity above. Settings › Layout holds five facts, remembered on the machine and applied before first paint: where the terminal docks (bottom, right, left), which edge the evidence panel stands against, the density (comfortable, or compact: the spacing steps and row type one step down), whether Home with nothing open is the board or a quiet canvas, and whether motion runs — reduced motion is always honoured when the system asks. A choice made in the room (*Dock right*) is the same fact as the one on the page; the rail's and the panel's widths are dragged, and remembered the same way. What does not move: the state line, the composer, and the baton's words.
 
+### Habits (D-258)
+
+The room notices three things and adopts a clear habit: the evidence section opened first, the panel opened within twenty seconds of a turn finishing, the terminal opened within twenty seconds of a run starting. Five of the last seven decide. An adoption is announced once as a notice bar under the strip — the words of what the room now does, the count, Undo, OK — never a toast and never silently; what the room opened itself is never counted. Settings › Layout carries the switch, the adopted list with Undo on each, and Forget.
+
 ### Density
 
 Dense where content is (lists, activity, diff: 32–36px rows, 13/20 type); relaxed where chrome is (24–32px outer margins, 16–24px section gaps). Density never comes from shrinking type below the scale, and softness never comes from inflating rows. Compact density (D-257) steps the spacing scale and the row type down one step each — still the scale, chosen by the person.

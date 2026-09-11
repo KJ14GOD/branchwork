@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_PERMISSION_PROFILE,
+  TERMINAL_EXECUTION_STATES,
   type BranchInfo,
   type DirectionContextRef,
   type Effort,
@@ -66,6 +67,7 @@ import {
 import { HarnessGlyph } from "../components/harness-glyph";
 import { HomeBoard } from "../components/home-board";
 import { useLayout } from "../layout";
+import { acknowledge, habitWords, observe, RESPONSE_WINDOW_MS, undo as undoHabit, useHabits, WINDOW, type HabitValue } from "../habits";
 import { PREVIEW_TAB_KEY, pullIdOfKey, pullTabKey, type OpenPreviewTab } from "../components/preview";
 import { deriveGoal, plural, truncateLabel } from "../format";
 import { markSeen, unseenSince } from "../components/seen";
@@ -932,10 +934,40 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
    *  CHECKPOINT row opened the section, cleared by "Whole mission", by any
    *  other way into the section, and by leaving the mission. */
   const [changesScope, setChangesScope] = useState<string | null>(null);
+  // The room notices (D-258): the first section opened per room visit, and
+  // an opening within the window after a turn finished. An opening the room
+  // did itself is never counted, so an adoption cannot feed itself.
+  const habitsState = useHabits();
+  const firstSectionSeenFor = useRef<string | null>(null);
+  const finishWindow = useRef<{ at: number; answered: boolean } | null>(null);
+  const runWindow = useRef<{ at: number; answered: boolean } | null>(null);
+  const roomDidIt = useRef(false);
   const openSection = (section: InspectorSection | null) => {
     if (section !== "changes") setChangesScope(null);
     setInspector(section);
   };
+  // Every way of opening the panel — the toggle, its chord, the palette, a
+  // row's own link — lands here as the state's closed→open transition.
+  const inspectorBefore = useRef<InspectorSection | null>(null);
+  useEffect(() => {
+    const was = inspectorBefore.current;
+    inspectorBefore.current = inspector;
+    if (inspector === null || was !== null) return;
+    if (roomDidIt.current) {
+      roomDidIt.current = false;
+      return;
+    }
+    const room = activeTabOf(workingSet)?.missionId ?? null;
+    if (room && firstSectionSeenFor.current !== room) {
+      firstSectionSeenFor.current = room;
+      if (inspector === "overview" || inspector === "changes" || inspector === "verification") observe("firstSection", inspector);
+    }
+    const window_ = finishWindow.current;
+    if (window_ && !window_.answered && Date.now() - window_.at < RESPONSE_WINDOW_MS) {
+      window_.answered = true;
+      observe("panelOnFinish", "yes");
+    }
+  }, [inspector]);
   /** One artifact taking the active tab's canvas (D-122) — the worker-view
    *  shape: opened from the Evidence section, closed with Esc or Back. */
   const [openArtifact, setOpenArtifact] = useState<{ tabId: string; artifactId: string } | null>(
@@ -944,6 +976,7 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   /** The bottom terminal dock, closed by default. Held here for the same
    *  reason: its toggle sits with the other workspace controls. */
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const terminalByRoom = useRef(false);
   /** Reopening returns to whatever section you were last reading. */
   const lastSection = useRef<InspectorSection>("overview");
   /**
@@ -1168,6 +1201,84 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
   useEffect(() => {
     if (readingSessionId && readingFinishedAt) markSeen(readingSessionId, readingFinishedAt);
   }, [readingSessionId, readingFinishedAt]);
+  // A turn just finished on screen (D-258): the window in which opening the
+  // panel counts as a response opens; an adopted habit opens it itself.
+  // The mission's own latest finished turn, whichever chat ran it: a fresh
+  // tab may not name a chat yet, and the finish is the room's either way.
+  const readingTurnEndedAt = (() => {
+    let latest: string | null = null;
+    for (const execution of readingDetail?.executions ?? []) {
+      if (!execution.endedAt || !TERMINAL_EXECUTION_STATES.includes(execution.state)) continue;
+      if (latest === null || execution.endedAt > latest) latest = execution.endedAt;
+    }
+    return latest;
+  })();
+  const lastFinishSeen = useRef<string | null>(null);
+  useEffect(() => {
+    if (!readingTurnEndedAt || readingTurnEndedAt === lastFinishSeen.current) return;
+    const fresh = Date.now() - Date.parse(readingTurnEndedAt) < 60_000;
+    lastFinishSeen.current = readingTurnEndedAt;
+    if (!fresh) return;
+    const adopted = habitsState.adopted.panelOnFinish?.value === "yes";
+    if (adopted && inspector === null) {
+      roomDidIt.current = true;
+      const first = habitsState.adopted.firstSection?.value;
+      openSection(first === "overview" || first === "verification" ? first : "changes");
+      return;
+    }
+    if (!habitsState.noticing || habitsState.pinned.panelOnFinish) return;
+    const window_ = { at: Date.now(), answered: false };
+    finishWindow.current = window_;
+    const timer = setTimeout(() => {
+      if (!window_.answered) observe("panelOnFinish", inspector !== null ? "yes" : "no");
+      if (finishWindow.current === window_) finishWindow.current = null;
+    }, RESPONSE_WINDOW_MS);
+    return () => clearTimeout(timer);
+  }, [readingTurnEndedAt]);
+  // A run just started on screen (D-258): the same window for the terminal.
+  const readingRunStartedAt = (() => {
+    let latest: string | null = null;
+    for (const execution of readingDetail?.executions ?? []) {
+      if ((execution.state === "running" || execution.state === "starting") && execution.startedAt && (latest === null || execution.startedAt > latest)) latest = execution.startedAt;
+    }
+    return latest;
+  })();
+  const lastRunSeen = useRef<string | null>(null);
+  useEffect(() => {
+    if (!readingRunStartedAt || readingRunStartedAt === lastRunSeen.current) return;
+    lastRunSeen.current = readingRunStartedAt;
+    if (Date.now() - Date.parse(readingRunStartedAt) > 60_000) return;
+    if (habitsState.adopted.terminalOnRun?.value === "yes") {
+      if (!terminalOpen) {
+        terminalByRoom.current = true;
+        setTerminalOpen(true);
+      }
+      return;
+    }
+    if (!habitsState.noticing || habitsState.pinned.terminalOnRun) return;
+    const window_ = { at: Date.now(), answered: terminalOpen };
+    runWindow.current = window_;
+    const timer = setTimeout(() => {
+      if (!window_.answered) observe("terminalOnRun", "no");
+      if (runWindow.current === window_) runWindow.current = null;
+    }, RESPONSE_WINDOW_MS);
+    return () => clearTimeout(timer);
+  }, [readingRunStartedAt]);
+  useEffect(() => {
+    if (!terminalOpen) return;
+    if (terminalByRoom.current) {
+      terminalByRoom.current = false;
+      return;
+    }
+    const window_ = runWindow.current;
+    if (window_ && !window_.answered && Date.now() - window_.at < RESPONSE_WINDOW_MS) {
+      window_.answered = true;
+      observe("terminalOnRun", "yes");
+    }
+  }, [terminalOpen]);
+  /** The one adoption not yet told, for the line under the strip. */
+  const untold = (["firstSection", "panelOnFinish", "terminalOnRun"] as const).find((key) => habitsState.adopted[key] && !habitsState.adopted[key]?.told) ?? null;
+  const untoldCount = untold ? habitsState.observed[untold].filter((value) => value === habitsState.adopted[untold]?.value).length : 0;
 
   const storageKey = `novus-open-missions:${user.userId}`;
 
@@ -1812,6 +1923,28 @@ export function ProjectShell({ user, org }: { user: User; org: Organization }) {
       {offline && (
         <div className="notice-bar" data-testid="offline" aria-live="polite">
           Can&apos;t reach Novus — retrying.
+        </div>
+      )}
+      {/* The room says what it adopted, once, with the way back (D-258). */}
+      {untold && (
+        <div className="notice-bar habit-note" data-testid="habit-note" aria-live="polite">
+          <span className="habit-note-words">
+            {habitWords(untold, habitsState.adopted[untold]?.value as HabitValue)} — you did that {untoldCount} of the last {WINDOW} times.
+          </span>
+          <button
+            className="btn btn-text habit-note-undo"
+            onClick={() => {
+              undoHabit(untold);
+              if (untold === "panelOnFinish" || untold === "firstSection") setInspector(null);
+              if (untold === "terminalOnRun") setTerminalOpen(false);
+            }}
+            data-testid="habit-undo"
+          >
+            Undo
+          </button>
+          <button className="btn btn-text" onClick={() => acknowledge(untold)} data-testid="habit-ok">
+            OK
+          </button>
         </div>
       )}
 

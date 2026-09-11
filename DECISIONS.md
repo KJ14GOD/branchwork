@@ -3639,3 +3639,16 @@ Use the existing checkpoint and evidence paths. Record reported usage and priced
 **Consequences.** `layout.ts` (store, validation, paint, init before first paint), the Layout page, `app.css` keyed on the root's attributes, the room's dock side read from and written to the layout, the shell's Home honouring the choice. Tests: `layout.test.ts`; the Layout page and a compact, left-docked room in `navigation.spec.ts`.
 
 **Revisit when.** A team wants one arrangement shared — then it is a repository setting beside the workspace's, read like `.novus/settings.toml`.
+
+## D-258 — The room notices what a person does, adopts it, and says so
+
+**Context.** The owner, on D-257's Layout page: "what I need is that the agent sort of understands what I look at and starts moving it around … based on what I feel like over time it changes how I view my stuff." Remembering a setting is not that; a room that rearranges itself silently is worse than that.
+
+**Decision.** Three habits are watched on this machine, each a ring of the last seven observations: which evidence section a person opens first in a room; whether they open the evidence panel within twenty seconds of a turn finishing on screen; whether they open the terminal within twenty seconds of a run starting on screen. When one choice wins five of the last seven, the room adopts it — the panel opens on that section first, opens itself when a turn finishes, the terminal opens itself when a run starts, or the room keeps its hands off when "no" won — and says so once, in a line under the strip: what it now does, how many of the last seven times the person did it, Undo, OK. An opening the room did itself is never counted, so an adoption cannot feed itself. Undo drops the adoption and pins the habit until the person chooses Forget on the Layout page, which also carries the switch (Notice what I do) and the adopted list. Nothing leaves the machine, and nothing here is product truth: another person on the same mission has their own habits. Learning from many people is D-255's business.
+
+**Alternatives.** Adopt silently (rejected: a room that moves furniture unannounced reads as broken, and the owner's own word was "understands", not "surprises"). A model over clicks (rejected for now: five of seven is legible, explainable in one sentence, and undone in one click; a model would be none of those). Server-side habits shared across machines (deferred: the habits are about one screen's arrangement, and D-257's layout is per machine too).
+
+**Consequences.** `habits.ts` (the store, the majority rule, the words, `useHabits`); `project-shell.tsx` observes at the panel's one opener and on the finish and run moments it already derives, and renders the line; Settings › Layout gains the Habits card; `habits.test.ts` proves the rule and the lenient read; `navigation.spec.ts` seeds an adoption, sees the panel open itself when a turn finishes, sees the line, undoes it, and captures `265-habit-adopted.png`.
+
+**Revisit when.** A fourth habit is wanted — which tab a person returns to, whether the board is used — or a team wants one room's habits shared, which is a repository setting like D-257's.
+
