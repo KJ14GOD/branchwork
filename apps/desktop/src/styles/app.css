@@ -5262,7 +5262,6 @@ body {
 .side-row-archive {
   flex: none;
   align-self: stretch;
-  min-height: 20px;
   width: 0;
   padding: 0;
   overflow: hidden;
@@ -5299,7 +5298,6 @@ body {
 .side-remove-project {
   flex: none;
   align-self: stretch;
-  min-height: 20px;
   width: 0;
   padding: 0;
   overflow: hidden;
@@ -8150,7 +8148,7 @@ span.trace-attachment-transcript:hover {
   min-height: 28px;
 }
 
-:where(.chip-button, .composer-mic, .mission-tab-new, .settings-key-action, .terminal-new, .side-new-mission) {
+:where(.chip-button, .composer-mic, .mission-tab-new, .settings-key-action, .terminal-new, .side-new-mission, .side-row-archive, .side-remove-project) {
   min-height: 24px;
   font: var(--type-meta);
 }

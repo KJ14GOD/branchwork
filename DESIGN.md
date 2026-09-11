@@ -183,7 +183,7 @@ The room notices three things and adopts a clear habit: the evidence section ope
 
 ### Density
 
-Dense where content is (lists, activity, diff: 32–36px rows, 13/20 type); relaxed where chrome is (24–32px outer margins, 16–24px section gaps). Density never comes from shrinking type below the scale, and softness never comes from inflating rows. Compact density (D-257) steps the spacing scale and the row type down one step each — still the scale, chosen by the person.
+Dense where content is (lists, activity, diff: 32px rows, 28px in trees, menus, and tab strips, 13/20 type — the Row primitive, D-259); relaxed where chrome is (24–32px outer margins, 16–24px section gaps). Density never comes from shrinking type below the scale, and softness never comes from inflating rows. Compact density (D-257) steps the spacing scale and the row type down one step each — still the scale, chosen by the person.
 
 ### Overflow
 
@@ -212,7 +212,7 @@ These are the only primitives. Feature components compose primitives; they never
 
 `Button` (primary/secondary/text/danger) · `IconButton` · `TextButton` · `Input` · `Textarea` · `Select` · `Menu` · `Tooltip` · `Popover` · `Dialog` · `Drawer` · `Tabs` · `IdentityMark` · `Row` · `Section` · `Separator` · `ScrollArea` · `Composer` · `EvidenceItem` · `DiffRow` · `CheckRow`
 
-**Row (D-259).** One geometry for every list row: a flex line of 32px — 28px in a tree, a menu, or a tab strip — with one gap and the row type. What a family keeps is what makes it itself: its inset, its tone, its borders, the rail's sharp corners; the insets converge on the control scale in the later slices, one family at a time. Inside a row the name yields last: a trailing note shrinks first, then the name truncates with an ellipsis. No label is cut in code at a character count.
+**Row (D-259).** One geometry for every list row: a flex line of 32px — 28px in a tree, a menu, or a tab strip — with one gap and the row type. A row that carries two lines by design — a repository with its path — is 40px. What a family keeps is what makes it itself: its inset, its tone, its borders, the rail's sharp corners. Inside a row the name yields last: a trailing note shrinks first, then the name truncates with an ellipsis. No label is cut in code at a character count.
 
 **Header (D-259).** Every surface opens the same way: a title at the title step — the request page, a decision, a dialog, a worker's view, a Settings page — then one sentence of meta, with the surface's actions on the right; section heads inside a surface take the section step. The display step belongs to the first-run greeting alone (D-147), and nothing inside the working shell uses it.
 
