@@ -820,7 +820,11 @@ body {
 }
 
 /* The tab's menu, where the right click landed. */
-.tab-menu {
+/* The tab's menu opens at the pointer, not above a chip: fixed, top-anchored,
+   sized by its four verbs. Both class names, because `.chip-menu` is declared
+   later in this file and re-applied `bottom: 32px` over a bare `.tab-menu` —
+   the box then ran from the pointer to the dock (owner-hit, 2026-09-11). */
+.chip-menu.tab-menu {
   position: fixed;
   bottom: auto;
   z-index: 40;
@@ -2388,6 +2392,12 @@ body {
 .chip-wrap {
   position: relative;
   display: inline-flex;
+}
+
+/* The composer's chips: their menus are placed against the composer box
+   instead (menuPlacement), so the wrap must not be a containing block. */
+.chip-wrap-flat {
+  position: static;
 }
 
 /* How full the chat's context is (D-236): a word in the foot beside the

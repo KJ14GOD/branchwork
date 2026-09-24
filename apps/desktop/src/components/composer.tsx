@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { compactCount } from "../format";
 import type { ContextFill } from "./derive-feed";
 import {
@@ -91,6 +91,27 @@ export function dontAskWarning(harness: string): string {
 export function storedModel(): ModelId {
   const stored = localStorage.getItem("novus-model");
   return isModelId(stored) ? stored : DEFAULT_MODEL;
+}
+
+/** Where a chip's menu goes: 4px above the chip's own rectangle, anchored to
+ *  the side the menu reads from. Positioned inside
+ *  the foot it was clipped — the foot scrolls sideways (D-259), and a scroll
+ *  box clips every descendant that opens out of it, so the model, effort,
+ *  speed, and permissions menus vanished behind a 28px strip (owner-hit,
+ *  2026-09-11; the ask's body had met the same class under D-201). The rect
+ *  is read at render, on the open that asked for it. */
+function menuPlacement(anchor: HTMLElement | null, box: HTMLElement | null, side: "left" | "right"): CSSProperties {
+  if (!anchor || !box) return {};
+  const chip = anchor.getBoundingClientRect();
+  const frame = box.getBoundingClientRect();
+  // Absolute against the composer box, whose position the chip wraps leave
+  // alone (`chip-wrap-flat`): a box above the scrolling foot is a containing
+  // block the foot's overflow cannot clip, and — unlike `fixed` — it still
+  // holds inside a dialog, whose transform would re-root a fixed menu.
+  const bottom = frame.bottom - chip.top + 4;
+  return side === "left"
+    ? { bottom, left: chip.left - frame.left, right: "auto" }
+    : { bottom, right: frame.right - chip.right, left: "auto" };
 }
 
 export function profileLabel(profile: PermissionProfile): string {
@@ -352,6 +373,12 @@ export function Composer({
   const [providerOpen, setProviderOpen] = useState<string | null>(null);
   const [openCode, setOpenCode] = useState<OpenCodeCatalogue | null>(null);
   const providerMenu = useRef<HTMLDivElement>(null);
+  // The chips' own rectangles, read when a menu opens (see menuPlacement).
+  const modelWrap = useRef<HTMLSpanElement>(null);
+  const effortWrap = useRef<HTMLSpanElement>(null);
+  const speedWrap = useRef<HTMLSpanElement>(null);
+  const policyWrap = useRef<HTMLSpanElement>(null);
+  const composerBox = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const place = () => {
       const menu = providerMenu.current;
@@ -934,6 +961,7 @@ export function Composer({
         </p>
       )}
       <div
+        ref={composerBox}
         className={dropping ? "composer-box composer-box-dropping" : "composer-box"}
         // Dropping onto the box (D-152). The whole box is the target rather
         // than a strip inside it: a person dragging a screenshot at a text
@@ -1397,7 +1425,7 @@ export function Composer({
               {attaching ? "Attaching" : "Attach"}
             </button>
           )}
-          <span className="chip-wrap">
+          <span className="chip-wrap chip-wrap-flat" ref={modelWrap}>
             <button
               className="chip-button"
               disabled={!enabled}
@@ -1436,7 +1464,7 @@ export function Composer({
                  provider's; hovering or clicking it opens that provider's
                  models to the right. The chip stays the harness picker
                  (D-230): choosing a model chooses its harness. */
-              <div ref={providerMenu} className="chip-menu chip-menu-providers" role="menu" data-testid="model-menu">
+              <div ref={providerMenu} className="chip-menu chip-menu-providers" role="menu" style={menuPlacement(modelWrap.current, composerBox.current, "left")} data-testid="model-menu">
                 <div className="provider-list">
                 {modelGroups.map((provider) => {
                   const models = provider.models;
@@ -1500,7 +1528,7 @@ export function Composer({
             )}
           </span>
 
-          {effortsFor(model).length > 0 && <span className="chip-wrap">
+          {effortsFor(model).length > 0 && <span className="chip-wrap chip-wrap-flat" ref={effortWrap}>
             <button
               className="chip-button"
               disabled={!enabled}
@@ -1512,7 +1540,7 @@ export function Composer({
               Effort · {effortsFor(model).includes(effort) ? effort : DEFAULT_EFFORT}
             </button>
             {openMenu === "effort" && (
-              <div className="chip-menu" role="menu" data-testid="effort-menu">
+              <div className="chip-menu" role="menu" style={menuPlacement(effortWrap.current, composerBox.current, "left")} data-testid="effort-menu">
                 {/* Exactly what THIS model advertises (D-230): ultra appears
                     only on the Codex models whose model/list names it. */}
                 {effortsFor(model).map((option) => (
@@ -1535,7 +1563,7 @@ export function Composer({
           </span>}
 
           {speedsFor(model).includes("fast") && (
-            <span className="chip-wrap">
+            <span className="chip-wrap chip-wrap-flat" ref={speedWrap}>
               {/* The vendor's own priority tier (D-230): "1.5x speed,
                   increased usage" — offered only where the model offers it,
                   never a dead control. */}
@@ -1564,7 +1592,7 @@ export function Composer({
                 Speed · {speed}
               </button>
               {openMenu === "speed" && (
-                <div className="chip-menu" role="menu" data-testid="speed-menu">
+                <div className="chip-menu" role="menu" style={menuPlacement(speedWrap.current, composerBox.current, "left")} data-testid="speed-menu">
                   {(["standard", "fast"] as const).map((option) => (
                     <button
                       key={option}
@@ -1587,7 +1615,7 @@ export function Composer({
           )}
 
           {policy && (
-            <span className="chip-wrap">
+            <span className="chip-wrap chip-wrap-flat" ref={policyWrap}>
               {/* The lane's answer policy, worn where directing happens (D-115).
                   The word is a fact for everyone; changing it is policy.set,
                   which the server enforces — this chip only asks. */}
@@ -1610,7 +1638,7 @@ export function Composer({
                 </span>
               </button>
               {openMenu === "policy" && (
-                <div className="chip-menu policy-menu" data-testid="policy-menu">
+                <div className="chip-menu policy-menu" style={menuPlacement(policyWrap.current, composerBox.current, "right")} data-testid="policy-menu">
                   {/* The question, then the answers (D-117, the owner's shape,
                       named from Codex's picker): one row per profile — glyph,
                       name, one line of meaning — the current one checked, and

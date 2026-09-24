@@ -355,6 +355,12 @@ describe("the missions a person has open", () => {
     // The tab's menu (D-251): a right click offers the browser's own closes.
     await page.getByTestId("mission-tab").first().click({ button: "right" });
     await page.getByTestId("tab-menu").waitFor({ timeout: 5_000 });
+    // Sized by its four verbs, never stretched to the dock: the generic menu
+    // rule once re-applied a bottom edge over the fixed one (2026-09-11).
+    const menuBox = await page.getByTestId("tab-menu").boundingBox();
+    expect(menuBox?.height ?? 0).toBeLessThan(160);
+    expect(menuBox?.width ?? 0).toBeLessThan(260);
+    await shot(page, "267-tab-menu.png");
     expect(await page.getByTestId("tab-menu-close-left").isDisabled()).toBe(true);
     expect(await page.getByTestId("tab-menu-close-right").isDisabled()).toBe(false);
     await page.keyboard.press("Escape");
